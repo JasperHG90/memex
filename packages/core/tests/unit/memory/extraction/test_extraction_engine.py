@@ -333,8 +333,7 @@ class TestClassifyAndFilterMetricsGating:
         pf.risk_class = RiskClass(risk)
         return pf
 
-    @pytest.mark.asyncio
-    async def test_metrics_skipped_when_classifier_disabled(
+    def test_metrics_skipped_when_classifier_disabled(
         self, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
     ) -> None:
         from memex_core.metrics import (
@@ -361,7 +360,7 @@ class TestClassifyAndFilterMetricsGating:
         before_risk = _snap_total(CLASSIFIER_RISK_DISTRIBUTION)
 
         facts = [self._processed('ephemeral', 'none'), self._processed('permanent', 'none')]
-        out = await engine._classify_and_filter(facts)
+        out = engine._classify_and_filter(facts)
 
         after_intent = _snap_total(CLASSIFIER_INTENT_DISTRIBUTION)
         after_risk = _snap_total(CLASSIFIER_RISK_DISTRIBUTION)
@@ -382,8 +381,7 @@ class TestClassifyAndFilterMetricsGating:
             'intent_risk_classifier_enabled=False'
         )
 
-    @pytest.mark.asyncio
-    async def test_metrics_emit_when_classifier_enabled(
+    def test_metrics_emit_when_classifier_enabled(
         self, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
     ) -> None:
         from memex_core.metrics import (
@@ -401,7 +399,7 @@ class TestClassifyAndFilterMetricsGating:
         before_risk = CLASSIFIER_RISK_DISTRIBUTION.labels(risk_class='none')._value.get()
 
         facts = [self._processed('ephemeral', 'none')]
-        out = await engine._classify_and_filter(facts)
+        out = engine._classify_and_filter(facts)
 
         after_intent = CLASSIFIER_INTENT_DISTRIBUTION.labels(intent_class='ephemeral')._value.get()
         after_risk = CLASSIFIER_RISK_DISTRIBUTION.labels(risk_class='none')._value.get()

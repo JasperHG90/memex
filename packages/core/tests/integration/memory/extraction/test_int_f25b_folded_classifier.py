@@ -32,6 +32,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 
 from memex_core.config import ExtractionConfig, ModelConfig, SimpleTextSplitting
 from memex_core.memory.entity_resolver import EntityResolver
+from memex_common.schemas import RiskClass
 from memex_core.memory.extraction.classifier import (
     DEFAULT_INTENT,
     DEFAULT_RISK,
@@ -119,7 +120,10 @@ def _make_processed_fact(text: str, vault_id, risk_class: str = 'none') -> Proce
         vault_id=vault_id,
     )
     if risk_class != 'none':
-        fact.risk_class = risk_class
+        # Use the enum constructor explicitly — assigning a bare ``str`` to an
+        # ``RiskClass``-typed field works via SQLModel coercion, but is
+        # inconsistent with the field type and was flagged by Hermes round-1.
+        fact.risk_class = RiskClass(risk_class)
     return fact
 
 

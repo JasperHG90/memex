@@ -219,7 +219,7 @@ class ExtractionEngine:
         self.semaphore = asyncio.Semaphore(config.max_concurrency)
         self.page_index_lm = page_index_lm
 
-    async def _classify_and_filter(
+    def _classify_and_filter(
         self,
         processed_facts: list[ProcessedFact],
         intent_override: str | None = None,
@@ -434,7 +434,7 @@ class ExtractionEngine:
                     if ef.chunk_index is not None and ef.chunk_index in chunk_map:
                         pf.chunk_id = chunk_map[ef.chunk_index]
 
-            processed_facts = await self._classify_and_filter(
+            processed_facts = self._classify_and_filter(
                 processed_facts, intent_override=intent_override, risk_override=risk_override
             )
             if not processed_facts:
@@ -694,7 +694,7 @@ class ExtractionEngine:
                         if ef.chunk_index is not None and ef.chunk_index in chunk_map:
                             pf.chunk_id = chunk_map[ef.chunk_index]
 
-                    final_processed = await self._classify_and_filter(
+                    final_processed = self._classify_and_filter(
                         final_processed,
                         intent_override=intent_override,
                         risk_override=risk_override,
@@ -1009,7 +1009,7 @@ class ExtractionEngine:
                             if ef.chunk_index is not None and ef.chunk_index in block_chunk_map:
                                 pf.chunk_id = block_chunk_map[ef.chunk_index]
 
-                        final_processed = await self._classify_and_filter(
+                        final_processed = self._classify_and_filter(
                             final_processed,
                             intent_override=intent_override,
                             risk_override=risk_override,
@@ -1318,7 +1318,7 @@ class ExtractionEngine:
             if ef.chunk_index is not None and ef.chunk_index in block_chunk_map:
                 pf.chunk_id = block_chunk_map[ef.chunk_index]
 
-        final_processed = await self._classify_and_filter(
+        final_processed = self._classify_and_filter(
             final_processed, intent_override=intent_override, risk_override=risk_override
         )
         if not final_processed:
@@ -1794,7 +1794,7 @@ class ExtractionEngine:
         for pf in final_processed:
             pf.note_id = note_id
 
-        final_processed = await self._classify_and_filter(
+        final_processed = self._classify_and_filter(
             final_processed, intent_override=intent_override, risk_override=risk_override
         )
         if not final_processed:
