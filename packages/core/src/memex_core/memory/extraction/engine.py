@@ -261,23 +261,29 @@ class ExtractionEngine:
         if not processed_facts:
             return processed_facts
 
+        # Kill-switch first: when intent/risk handling is disabled the
+        # explicit intent is "ignore intent/risk entirely" — we shouldn't
+        # validate (let alone honor) overrides the caller supplies because
+        # we'd just discard them. This avoids surprising a caller who sets
+        # the kill-switch at the config level and then passes a stale
+        # override from a call site that shouldn't matter.
+        if not self.config.intent_risk_classifier_enabled:
+            for f in processed_facts:
+                f.intent_class = IntentClass.DURABLE
+                f.risk_class = RiskClass.NONE
+            # No fact can carry ``risk='safety'`` after this loop, so
+            # ``filter_safety_blocked`` would be a no-op — skip it for
+            # clarity (and a trivial perf win). Distribution metrics are
+            # also skipped: emitting them would paint a misleading 100%
+            # durable / none picture on dashboards.
+            return processed_facts
+
         if intent_override is not None and intent_override not in {c.value for c in IntentClass}:
             allowed = [c.value for c in IntentClass]
             raise ValueError(f'intent_override must be one of {allowed}, got {intent_override!r}')
         if risk_override is not None and risk_override not in {c.value for c in RiskClass}:
             allowed = [c.value for c in RiskClass]
             raise ValueError(f'risk_override must be one of {allowed}, got {risk_override!r}')
-
-        if not self.config.intent_risk_classifier_enabled:
-            for f in processed_facts:
-                f.intent_class = IntentClass.DURABLE
-                f.risk_class = RiskClass.NONE
-            # Skip distribution metrics when the kill-switch is engaged: every
-            # fact is force-overwritten to durable/none, so emitting the
-            # distribution would paint a misleading 100% durable/none picture
-            # on dashboards. ``filter_safety_blocked`` is still safe to run —
-            # it's a no-op once everything is risk=none.
-            return filter_safety_blocked(processed_facts)
 
         if intent_override:
             intent_value = IntentClass(intent_override)

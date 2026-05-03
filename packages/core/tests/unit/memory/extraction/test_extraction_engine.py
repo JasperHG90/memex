@@ -564,3 +564,32 @@ class TestPartialOverrideSemantics:
         # Force-defaults win over the overrides.
         assert out[0].intent_class == IntentClass.DURABLE
         assert out[0].risk_class == RiskClass.NONE
+
+    def test_kill_switch_does_not_validate_ignored_overrides(
+        self, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+    ) -> None:
+        """Hermes round-5 LOW: when the kill-switch is engaged we discard
+        overrides anyway, so validating them and raising ValueError on a bad
+        value is a confusing user-experience for the caller (especially if
+        the kill-switch is set at the config level by another call site).
+        Validate-after-kill-switch ordering means a stale-or-bad override
+        passes silently in this configuration.
+        """
+        from memex_common.schemas import IntentClass, RiskClass
+
+        cfg = ExtractionConfig()
+        cfg.intent_risk_classifier_enabled = False
+        engine = ExtractionEngine(
+            cfg, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
+        )
+
+        facts = [self._processed('permanent', 'private')]
+        # Garbage overrides — should NOT raise because the kill-switch
+        # short-circuits before validation.
+        out = engine._classify_and_filter(
+            facts, intent_override='nonsense', risk_override='also-nonsense'
+        )
+
+        assert len(out) == 1
+        assert out[0].intent_class == IntentClass.DURABLE
+        assert out[0].risk_class == RiskClass.NONE
