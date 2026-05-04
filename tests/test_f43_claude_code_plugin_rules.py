@@ -29,14 +29,14 @@ def _read(path: Path) -> str:
 @pytest.mark.parametrize(
     'kw',
     [
-        'Disambiguate first',
+        'Disambiguate',
         'Route by info quality',
-        'Option A',
-        'Option B',
-        'Option C',
+        'A: entity-anchored',
+        'B: cross-note semantic',
+        'C: single-note PageIndex',
         '`top_k`',
         '≥30',
-        'Mandatory LLM judgment',
+        'LLM-judge',
         'memex_record_outcome',
         'memex_memory_deprioritize',
         'exploration is the safety net',
@@ -65,15 +65,14 @@ def test_resolution_flow_rule_carries_keyword(kw: str) -> None:
 def test_remember_skill_references_resolution_flow() -> None:
     """The /remember skill description points at the resolution flow."""
     text = _read(_REMEMBER_SKILL)
-    assert 'When the user reports an issue resolved' in text
+    assert 'user reports issue fixed' in text
     assert 'memex_record_outcome' in text
     assert 'memex_memory_deprioritize' in text
     # The skill uses short-form `(A)/(B)/(C)` references back to the rule file.
-    assert 'Option A' in text or '(A)' in text
-    assert 'Option B' in text or '(B)' in text
-    assert 'Option C' in text or '(C)' in text
+    assert '(A)' in text
+    assert '(B)' in text
+    assert '(C)' in text
     assert 'top_k' in text
-    assert 'exploration is the safety net' in text
     assert 'memex_get_unit_history' in text
     assert 'apply_pre_filter=False' in text
 
