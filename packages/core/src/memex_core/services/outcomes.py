@@ -25,7 +25,7 @@ from sqlmodel import select, update
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from memex_core.memory.retrieval.mw_ema import compute_mw_ema_score
-from memex_core.memory.sql_models import MWMode
+from memex_core.memory.sql_models import MWMode, Vault
 from memex_core.metrics import OUTCOME_RECORDED_TOTAL, MW_SCORE_DISTRIBUTION
 
 logger = structlog.get_logger(__name__)
@@ -63,8 +63,6 @@ def compute_mw_boost(
     posterior, so old evidence fades toward the prior mean of 0.5.
     """
     if mw_mode == MWMode.EMA:
-        from memex_core.memory.retrieval.mw_ema import compute_mw_ema_score
-
         resolved_now = now or datetime.now(timezone.utc)
         mw_score = compute_mw_ema_score(
             success=success_co_count,
@@ -96,6 +94,7 @@ class OutcomeService:
         *,
         target_type: str = 'memory_unit',
         kv_key: str | None = None,
+        mw_ema_half_life_days: float = 60.0,
     ) -> dict[str, Any]:
         """Record an outcome.
 
@@ -282,7 +281,6 @@ class OutcomeService:
         refreshed = await session.exec(
             select(MU).where(MU.id.in_(parsed_ids), MU.vault_id == vault_uuid)
         )
-        from memex_core.memory.sql_models import Vault
 
         vault_row = await session.get(Vault, vault_uuid)
         mw_mode_val = vault_row.mw_mode if vault_row else MWMode.STATIONARY
@@ -292,7 +290,8 @@ class OutcomeService:
                     unit.success_co_count,
                     unit.failure_co_count,
                     unit.last_outcome_at,
-                    half_life_days=60.0,
+                    half_life_days=mw_ema_half_life_days,
+                    now=now,
                 )
             else:
                 mw_score = compute_mw_score(unit.success_co_count, unit.failure_co_count)

@@ -12,7 +12,7 @@ from sqlmodel import col
 
 from memex_common.exceptions import VaultNotFoundError, AmbiguousResourceError
 
-from memex_core.memory.sql_models import Vault
+from memex_core.memory.sql_models import Vault, MWMode
 
 from memex_core.services.audit import audit_event
 from memex_core.services.base import BaseService
@@ -248,8 +248,6 @@ class VaultService(BaseService):
 
     async def set_mw_mode(self, vault_id: UUID, mw_mode: str) -> Vault:
         """Set the MW mode for a vault."""
-        from memex_core.memory.sql_models import Vault, MWMode
-
         if mw_mode not in (MWMode.STATIONARY, MWMode.EMA):
             raise ValueError(f"mw_mode must be 'stationary' or 'ema', got '{mw_mode}'")
 

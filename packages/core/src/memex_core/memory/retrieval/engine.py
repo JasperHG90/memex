@@ -1439,7 +1439,7 @@ class RetrievalEngine:
         results: list[MemoryUnit],
         min_score: float | None = None,
         *,
-        mw_mode: str = 'stationary',
+        mw_mode: MWMode = MWMode.STATIONARY,
     ) -> list[MemoryUnit]:
         """Re-rank results using a cross-encoder with multiplicative boosts.
 

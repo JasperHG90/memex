@@ -1357,6 +1357,7 @@ class MemexAPI:
         instead of memory units. See
         :meth:`OutcomeService.record_outcome` for the full contract.
         """
+        half_life = self.config.memory.retrieval.mw_ema_half_life_days
         async with self.metastore.session() as session:
             return await self._outcomes.record_outcome(
                 session=session,
@@ -1367,6 +1368,7 @@ class MemexAPI:
                 reason=reason,
                 target_type=target_type,
                 kv_key=kv_key,
+                mw_ema_half_life_days=half_life,
             )
 
     async def create_vault(self, name: str, description: str | None = None) -> Any:

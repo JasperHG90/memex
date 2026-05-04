@@ -295,7 +295,7 @@ async def show_vault(
     table.add_row('ID', str(vault.id))
     table.add_row('Name', vault.name)
     table.add_row('Description', vault.description or '—')
-    table.add_row('MW Mode', getattr(vault, 'mw_mode', 'stationary'))
+    table.add_row('MW Mode', vault.mw_mode)
     table.add_row('Created', str(vault.created_at))
     console.print(table)
 
