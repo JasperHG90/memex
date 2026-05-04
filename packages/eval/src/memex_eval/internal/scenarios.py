@@ -7,6 +7,20 @@ from dataclasses import dataclass, field
 
 
 @dataclass
+class SetupAction:
+    """Post-ingest, pre-query side effect for a benchmark check."""
+
+    kind: str  # 'record_outcome', 'deprioritize', 'kv_write', 'consolidation_tick'
+    search_query: str | None = None  # discover units via memory search
+    unit_ids: list[str] | None = None  # explicit IDs (overrides search_query)
+    success: bool = True  # for record_outcome
+    reason: str | None = None  # for deprioritize
+    kv_key: str | None = None  # for kv_write
+    kv_value: str | None = None  # for kv_write
+    count: int = 1  # repeat count for record_outcome
+
+
+@dataclass
 class GroundTruthCheck:
     """A single verifiable assertion against Memex results."""
 
@@ -16,12 +30,18 @@ class GroundTruthCheck:
     check_type: str  # 'keyword_in_results', 'keyword_absent_from_results',
     #   'entity_exists', 'entity_type_check',
     #   'entity_cooccurrence_check', 'entity_mention_check',
-    #   'result_ordering', 'llm_judge'
+    #   'result_ordering', 'llm_judge',
+    #   'unit_metadata_matches', 'excluded_by_default',
+    #   'ranking_after_outcomes', 'summary_nonempty',
+    #   'kv_roundtrip', 'lint_finding_present', 'llm_lint_flags_unit'
     expected: str | list[str]
     expected_entity_type: str | None = None  # for entity_type_check
     search_type: str = 'memory'  # 'memory' or 'note'
     strategies: list[str] | None = None
     include_superseded: bool | None = None
+    include_deprioritized: bool | None = None  # for excluded_by_default
+    expected_metadata: dict[str, str] | None = None  # for unit_metadata_matches
+    setup_actions: list[SetupAction] | None = None  # pre-query side effects
     top_k: int = 10
     vault_name: str | None = None  # for multi-vault checks
     max_duration_ms: float | None = None  # timing assertion
@@ -1213,6 +1233,468 @@ GROUP_ASSETS = ScenarioGroup(
 )
 
 # ---------------------------------------------------------------------------
+# Group 10: Outcomes & Memory Worth (F1a + F1c)
+# ---------------------------------------------------------------------------
+
+_DOC_ZETA_ACHIEVEMENT = SyntheticDoc(
+    filename='project-zeta-achievement.md',
+    title='Project Zeta Achievement Report',
+    description='Project Zeta quarterly achievement metrics.',
+    tags=['project', 'zeta', 'achievement'],
+    content="""\
+# Project Zeta — Q3 Achievement Report
+
+**Date:** October 15, 2025
+**Team:** Infrastructure Reliability
+
+## Metrics
+
+Project Zeta achieved a 99.99% uptime in Q3 2025, exceeding the 99.95% SLA target.
+The team reduced mean time to recovery from 45 minutes to 12 minutes through automated
+failover. Customer satisfaction scores reached 4.8 out of 5.
+
+## Infrastructure
+
+The achievement was enabled by migrating to Kubernetes with auto-scaling, reducing
+incident response time by 73%. The platform now handles 50,000 requests per second
+during peak load. The reliability engineering team led by Jordan Park continues to
+improve observability and automation.
+""",
+)
+
+_DOC_ZETA_INCIDENT = SyntheticDoc(
+    filename='project-zeta-incident.md',
+    title='Project Zeta Incident Report',
+    description='Project Zeta Q3 outage incident report.',
+    tags=['project', 'zeta', 'incident'],
+    content="""\
+# Project Zeta — Q3 Incident Report
+
+**Date:** September 28, 2025
+**Severity:** P1
+**Duration:** 4 hours 23 minutes
+
+## Incident Summary
+
+Project Zeta experienced a major outage on September 28, 2025 caused by a cascading
+database connection pool exhaustion. Approximately 15% of users were unable to access
+the platform for over 4 hours. The root cause was an unbounded connection pool in the
+ORM layer that failed under unexpected traffic patterns.
+
+## Impact
+
+The incident resulted in an estimated $2.3M in lost revenue and 340 customer complaints.
+The SLA breach triggered penalty clauses in 12 enterprise contracts. Recovery required
+manual intervention by the database team to restart the connection pool.
+""",
+)
+
+GROUP_OUTCOMES_MW = ScenarioGroup(
+    name='outcomes_mw',
+    description='Tests memory-worth ranking after recording outcomes.',
+    sequential_ingest=True,
+    docs=[_DOC_ZETA_ACHIEVEMENT, _DOC_ZETA_INCIDENT],
+    checks=[
+        GroundTruthCheck(
+            name='outcomes_ranking',
+            description='After outcomes, achievement units rank above incident units.',
+            query='Project Zeta',
+            check_type='ranking_after_outcomes',
+            expected=['achievement', 'incident'],
+            setup_actions=[
+                SetupAction(
+                    kind='record_outcome',
+                    search_query='Project Zeta achievement uptime success',
+                    success=True,
+                    count=3,
+                    reason='Positive outcomes for achievement facts',
+                ),
+                SetupAction(
+                    kind='record_outcome',
+                    search_query='Project Zeta incident outage failure',
+                    success=False,
+                    count=3,
+                    reason='Negative outcomes for incident facts',
+                ),
+            ],
+        ),
+    ],
+)
+
+# ---------------------------------------------------------------------------
+# Group 11: Deprioritization (F1b + F4)
+# ---------------------------------------------------------------------------
+
+_DOC_WIDGET_PRO = SyntheticDoc(
+    filename='widget-pro.md',
+    title='Widget Pro Product Overview',
+    description='Widget Pro active product documentation.',
+    tags=['product', 'widget-pro', 'active'],
+    content="""\
+# Widget Pro — Active Product
+
+**Product Line:** Widget Series
+**Status:** Active
+**Launch Date:** January 2025
+
+## Overview
+
+Widget Pro is the flagship product in the Widget Series, offering advanced data
+processing capabilities. It supports real-time analytics with sub-millisecond query
+latency and horizontal scaling to 100 nodes.
+
+## Features
+
+- Real-time analytics dashboard
+- Sub-millisecond query latency
+- Horizontal scaling to 100 nodes
+- Enterprise SSO integration
+""",
+)
+
+_DOC_WIDGET_LITE_DISCONTINUED = SyntheticDoc(
+    filename='widget-lite-discontinued.md',
+    title='Widget Lite Discontinued Product',
+    description='Widget Lite product that was discontinued.',
+    tags=['product', 'widget-lite', 'discontinued'],
+    content="""\
+# Widget Lite — Discontinued Product
+
+**Product Line:** Widget Series
+**Status:** Discontinued (EOL March 2025)
+**Original Launch:** June 2023
+
+## Overview
+
+Widget Lite was the entry-level product in the Widget Series, designed for small
+teams. It was discontinued in March 2025 due to low adoption and the decision to
+consolidate on the Widget Pro platform.
+
+## Migration Path
+
+Customers should migrate from Widget Lite to Widget Pro. The migration tool is
+available in the admin console. All Widget Lite data can be exported in CSV format.
+""",
+)
+
+GROUP_DEPRIORITIZATION = ScenarioGroup(
+    name='deprioritization',
+    description='Tests that deprioritized units are excluded by default and visible when requested.',
+    sequential_ingest=True,
+    docs=[_DOC_WIDGET_PRO, _DOC_WIDGET_LITE_DISCONTINUED],
+    checks=[
+        GroundTruthCheck(
+            name='deprioritized_excluded_by_default',
+            description='After deprioritization, discontinued product content is excluded from default search.',
+            query='Widget product',
+            check_type='excluded_by_default',
+            expected=['discontinued', 'migration', 'Widget Lite'],
+            setup_actions=[
+                SetupAction(
+                    kind='deprioritize',
+                    search_query='Widget Lite discontinued migration EOL',
+                    reason='Deprecate Widget Lite facts',
+                ),
+            ],
+        ),
+        GroundTruthCheck(
+            name='deprioritized_visible_with_flag',
+            description='Deprioritized content reappears when include_deprioritized=True.',
+            query='Widget product',
+            check_type='keyword_in_results',
+            expected=['discontinued', 'migration'],
+            include_deprioritized=True,
+        ),
+        GroundTruthCheck(
+            name='note_search_still_works',
+            description='Note search finds the Widget Lite document even after deprioritization.',
+            query='Widget Lite discontinued',
+            check_type='keyword_in_results',
+            expected=['Widget Lite'],
+            search_type='note',
+        ),
+    ],
+)
+
+# ---------------------------------------------------------------------------
+# Group 12: Intent Classification (F25)
+# ---------------------------------------------------------------------------
+
+_DOC_CORE_VALUES = SyntheticDoc(
+    filename='company-core-values.md',
+    title='Company Core Values',
+    description='Permanent company principles and values.',
+    tags=['company', 'values', 'permanent'],
+    content="""\
+# Company Core Values
+
+**Established:** Founding (2018)
+**Status:** Permanent
+
+## Principles
+
+Our company operates on three permanent principles that have remained unchanged since
+founding:
+
+1. **Customer First** — Every decision starts with customer impact
+2. **Engineering Excellence** — We invest in quality and craftsmanship
+3. **Transparent Communication** — We share context broadly and default to open
+
+These core values are the foundation of our culture and will not change. They guide
+every product decision, hiring choice, and strategic direction we make.
+""",
+)
+
+_DOC_ANNUAL_ROADMAP = SyntheticDoc(
+    filename='annual-roadmap-2025.md',
+    title='Annual Product Roadmap 2025',
+    description='Product roadmap for 2025, valid through December.',
+    tags=['roadmap', '2025', 'durable'],
+    content="""\
+# Annual Product Roadmap 2025
+
+**Period:** January — December 2025
+**Status:** Active (valid through December 2025)
+
+## Q1-Q2 Deliverables
+
+- Launch Widget Pro v2.0 with real-time analytics
+- Expand to 3 new geographic markets
+- Achieve SOC 2 Type II certification
+
+## Q3-Q4 Deliverables
+
+- Launch AI-powered recommendation engine
+- Implement usage-based pricing model
+- Reach 1,000 enterprise customers
+
+These plans are durable for the 2025 calendar year and will be revised in Q4.
+""",
+)
+
+_DOC_DAILY_STANDUP = SyntheticDoc(
+    filename='standup-jan-15.md',
+    title='Daily Standup Notes January 15',
+    description='Ephemeral daily standup notes from January 15, 2025.',
+    tags=['standup', 'jan-2025', 'ephemeral'],
+    content="""\
+# Daily Standup — January 15, 2025
+
+**Sprint:** Sprint 14
+**Date:** January 15, 2025
+
+## Updates
+
+- **Alex**: Fixed the login timeout bug, deploying to staging today
+- **Beth**: Working on the dashboard redesign, blocked on API spec
+- **Carlos**: Finished the database migration script, needs code review
+
+## Blockers
+
+- Beth needs the API spec from the backend team before proceeding
+
+## Action Items
+
+- Alex to deploy login fix by EOD
+- Carlos to request code review from senior engineer
+""",
+)
+
+GROUP_INTENT_CLASSIFICATION = ScenarioGroup(
+    name='intent_classification',
+    description='Tests that memory units carry intent classification metadata.',
+    sequential_ingest=True,
+    docs=[_DOC_CORE_VALUES, _DOC_ANNUAL_ROADMAP, _DOC_DAILY_STANDUP],
+    checks=[
+        GroundTruthCheck(
+            name='permanent_intent',
+            description='Units from permanent docs carry permanent intent class.',
+            query='company core values permanent principles',
+            check_type='unit_metadata_matches',
+            expected='permanent',
+            expected_metadata={'intent_class': 'permanent'},
+        ),
+        GroundTruthCheck(
+            name='durable_intent',
+            description='Units from durable docs carry durable intent class.',
+            query='annual product roadmap 2025 deliverables',
+            check_type='unit_metadata_matches',
+            expected='durable',
+            expected_metadata={'intent_class': 'durable'},
+        ),
+        GroundTruthCheck(
+            name='ephemeral_intent',
+            description='Units from ephemeral docs carry ephemeral intent class.',
+            query='daily standup sprint blocker action items',
+            check_type='unit_metadata_matches',
+            expected='ephemeral',
+            expected_metadata={'intent_class': 'ephemeral'},
+        ),
+    ],
+)
+
+# ---------------------------------------------------------------------------
+# Group 13: Procedural KV (F14)
+# ---------------------------------------------------------------------------
+
+GROUP_PROCEDURAL_KV = ScenarioGroup(
+    name='procedural_kv',
+    description='Tests KV store write/read roundtrip.',
+    docs=[],
+    checks=[
+        GroundTruthCheck(
+            name='kv_roundtrip_procedure',
+            description='KV write followed by read returns the same value.',
+            query='procedure:deploy:staging',
+            check_type='kv_roundtrip',
+            expected='For staging deploys, use --no-migrate flag after 6pm',
+            setup_actions=[
+                SetupAction(
+                    kind='kv_write',
+                    kv_key='procedure:deploy:staging',
+                    kv_value='For staging deploys, use --no-migrate flag after 6pm',
+                ),
+            ],
+        ),
+    ],
+)
+
+# ---------------------------------------------------------------------------
+# Group 14: Summarization (F5)
+# ---------------------------------------------------------------------------
+
+_DOC_DATA_PLATFORM_DEEP = SyntheticDoc(
+    filename='data-platform-architecture.md',
+    title='Data Platform Architecture Deep Dive',
+    description='Comprehensive architecture documentation for the DataForge platform.',
+    tags=['architecture', 'dataforge', 'deep-dive'],
+    content="""\
+# Data Platform Architecture — Deep Dive
+
+**Platform Name:** DataForge
+**Team:** Platform Engineering
+**Lead:** Jordan Park
+
+## Architecture Overview
+
+DataForge is a distributed data platform built on a microservices architecture. The
+platform ingests data through Apache Kafka, processes it with Apache Flink, and stores
+results in PostgreSQL with pgvector for AI workloads.
+
+## Ingestion Layer
+
+The ingestion layer handles 50,000 events per second through a Kafka cluster with 12
+partitions. Each event is validated, enriched with metadata, and routed to the
+appropriate processing pipeline.
+
+## Processing Layer
+
+Apache Flink processes streaming data with exactly-once semantics. The processing
+layer performs data enrichment, deduplication, and transformation before writing to
+the storage layer.
+
+## Storage Layer
+
+PostgreSQL 16 with pgvector provides both transactional and vector storage. The
+storage layer uses partitioned tables for time-series data and specialized indexes
+for vector similarity search.
+
+## Observability
+
+The platform uses OpenTelemetry for distributed tracing, Prometheus for metrics,
+and Grafana for dashboards. Jordan Park established the observability stack during
+the initial platform build.
+""",
+)
+
+GROUP_SUMMARIZATION = ScenarioGroup(
+    name='summarization',
+    description='Tests that summarize_node returns non-empty summaries.',
+    sequential_ingest=True,
+    docs=[_DOC_DATA_PLATFORM_DEEP],
+    checks=[
+        GroundTruthCheck(
+            name='summarize_dataforge_entity',
+            description='Summarize node for DataForge entity returns a non-empty summary.',
+            query='DataForge',
+            check_type='summary_nonempty',
+            expected='non-empty summary',
+        ),
+    ],
+)
+
+# ---------------------------------------------------------------------------
+# Group 15: Lint (F6 + F8 + F10)
+# ---------------------------------------------------------------------------
+
+_DOC_LINT_CONTRADICTION_A = SyntheticDoc(
+    filename='api-version-alpha.md',
+    title='API Versioning Policy (Alpha)',
+    description='Original API versioning policy with intentional contradictions.',
+    tags=['api', 'versioning', 'policy'],
+    content="""\
+# API Versioning Policy (Alpha)
+
+**Effective:** January 2025
+**Author:** Platform Team
+
+## Policy
+
+All public APIs must use URL-based versioning (e.g., /v1/resource). The current
+supported versions are v1 and v2. API version v3 is not planned. Breaking changes
+are only allowed in major versions. Minor versions must be backward compatible.
+Deprecation notices must be given 90 days in advance.
+""",
+)
+
+_DOC_LINT_CONTRADICTION_B = SyntheticDoc(
+    filename='api-version-beta.md',
+    title='API Versioning Policy (Beta)',
+    description='Updated policy that contradicts the alpha version.',
+    tags=['api', 'versioning', 'policy'],
+    content="""\
+# API Versioning Policy (Beta)
+
+**Effective:** March 2025
+**Author:** Platform Team
+
+## Policy
+
+All public APIs must use header-based versioning (Accept-Version header). API
+version v3 is now available for early adopters. Breaking changes are allowed in
+minor versions with 30-day notice. The previous URL-based versioning approach has
+been deprecated.
+""",
+)
+
+GROUP_LINT = ScenarioGroup(
+    name='lint',
+    description='Tests that the lint subsystem detects data quality issues.',
+    sequential_ingest=True,
+    docs=[_DOC_LINT_CONTRADICTION_A, _DOC_LINT_CONTRADICTION_B],
+    checks=[
+        GroundTruthCheck(
+            name='lint_findings_after_consolidation',
+            description='Consolidation tick produces lint findings.',
+            query='API versioning policy',
+            check_type='lint_finding_present',
+            expected='lint finding',
+            setup_actions=[
+                SetupAction(kind='consolidation_tick'),
+            ],
+        ),
+        GroundTruthCheck(
+            name='llm_lint_flags_contradiction',
+            description='LLM-gated lint flags the contradiction between API policies.',
+            query='API versioning contradiction',
+            check_type='llm_lint_flags_unit',
+            expected='surprise lint finding',
+            expected_metadata={'rule_name': 'surprise_gate_llm'},
+        ),
+    ],
+)
+
+# ---------------------------------------------------------------------------
 # All scenario groups
 # ---------------------------------------------------------------------------
 
@@ -1226,6 +1708,12 @@ ALL_GROUPS: list[ScenarioGroup] = [
     GROUP_ENTITY_EDGE_CASES,
     GROUP_SCALE,
     GROUP_ASSETS,
+    GROUP_OUTCOMES_MW,
+    GROUP_DEPRIORITIZATION,
+    GROUP_INTENT_CLASSIFICATION,
+    GROUP_PROCEDURAL_KV,
+    GROUP_SUMMARIZATION,
+    GROUP_LINT,
 ]
 
 

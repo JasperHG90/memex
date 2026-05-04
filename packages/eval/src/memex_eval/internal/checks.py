@@ -27,6 +27,9 @@ def run_check(
     entities: list[EntityDTO] | None = None,
     cooccurrences: list[dict] | None = None,
     mentions: list[dict] | None = None,
+    summary_result: dict | None = None,
+    kv_result: dict | None = None,
+    lint_results: dict | None = None,
 ) -> CheckResult:
     """Execute a single ground-truth check and return the result."""
     start = time.monotonic()
@@ -53,6 +56,9 @@ def run_check(
                 entities=entities,
                 cooccurrences=cooccurrences,
                 mentions=mentions,
+                summary_result=summary_result,
+                kv_result=kv_result,
+                lint_results=lint_results,
             )
     except Exception as e:
         result = CheckResult(
@@ -534,6 +540,338 @@ def _check_entity_mention(
 
 
 # ---------------------------------------------------------------------------
+# Tier-A cognitive-memory check types
+# ---------------------------------------------------------------------------
+
+
+def _check_unit_metadata_matches(
+    check: GroundTruthCheck,
+    group_name: str,
+    memory_results: list[MemoryUnitDTO] | None,
+    **_kwargs,
+) -> CheckResult:
+    """Assert returned memory units carry expected metadata fields."""
+    if not memory_results:
+        return CheckResult(
+            name=check.name,
+            group=group_name,
+            status=CheckStatus.FAIL,
+            description=check.description,
+            query=check.query,
+            expected=check.expected,
+            actual='No results returned',
+        )
+    expected_meta = check.expected_metadata or {}
+    for unit in memory_results:
+        meta = unit.metadata or {}
+        if all(meta.get(k) == v for k, v in expected_meta.items()):
+            return CheckResult(
+                name=check.name,
+                group=group_name,
+                status=CheckStatus.PASS,
+                description=check.description,
+                query=check.query,
+                expected=check.expected,
+                actual=f'Unit {unit.id} has metadata matching {expected_meta}',
+            )
+    return CheckResult(
+        name=check.name,
+        group=group_name,
+        status=CheckStatus.FAIL,
+        description=check.description,
+        query=check.query,
+        expected=check.expected,
+        actual=f'No unit with metadata {expected_meta} found in {len(memory_results)} results',
+    )
+
+
+def _check_excluded_by_default(
+    check: GroundTruthCheck,
+    group_name: str,
+    memory_results: list[MemoryUnitDTO] | None,
+    **_kwargs,
+) -> CheckResult:
+    """Assert that deprioritized content (matched by keywords) is absent from default query."""
+    combined = _results_text(memory_results, None).lower()
+    expected_list = check.expected if isinstance(check.expected, list) else [check.expected]
+    leaked = [kw for kw in expected_list if kw.lower() in combined]
+    absent = [kw for kw in expected_list if kw.lower() not in combined]
+
+    if not leaked:
+        return CheckResult(
+            name=check.name,
+            group=group_name,
+            status=CheckStatus.PASS,
+            description=check.description,
+            query=check.query,
+            expected=check.expected,
+            actual=f'Deprioritized keywords correctly absent: {", ".join(absent)}',
+        )
+    return CheckResult(
+        name=check.name,
+        group=group_name,
+        status=CheckStatus.FAIL,
+        description=check.description,
+        query=check.query,
+        expected=check.expected,
+        actual=f'Deprioritized keywords leaked into results: {", ".join(leaked)}',
+    )
+
+
+def _check_ranking_after_outcomes(
+    check: GroundTruthCheck,
+    group_name: str,
+    memory_results: list[MemoryUnitDTO] | None,
+    **_kwargs,
+) -> CheckResult:
+    """Assert that high-MW content (keyword A) ranks before low-MW content (keyword B)."""
+    if not isinstance(check.expected, list) or len(check.expected) < 2:
+        return CheckResult(
+            name=check.name,
+            group=group_name,
+            status=CheckStatus.ERROR,
+            description=check.description,
+            query=check.query,
+            expected=check.expected,
+            actual='ranking_after_outcomes requires expected=[high_kw, low_kw]',
+        )
+    if not memory_results:
+        return CheckResult(
+            name=check.name,
+            group=group_name,
+            status=CheckStatus.FAIL,
+            description=check.description,
+            query=check.query,
+            expected=check.expected,
+            actual='No results returned',
+        )
+    texts = [r.text.lower() for r in memory_results]
+    high_kw, low_kw = check.expected[0].lower(), check.expected[1].lower()
+    high_idx = next((i for i, t in enumerate(texts) if high_kw in t), None)
+    low_idx = next((i for i, t in enumerate(texts) if low_kw in t), None)
+
+    if high_idx is None:
+        return CheckResult(
+            name=check.name,
+            group=group_name,
+            status=CheckStatus.FAIL,
+            description=check.description,
+            query=check.query,
+            expected=check.expected,
+            actual=f'High-MW keyword "{check.expected[0]}" not found in results',
+        )
+    if low_idx is None:
+        return CheckResult(
+            name=check.name,
+            group=group_name,
+            status=CheckStatus.PASS,
+            description=check.description,
+            query=check.query,
+            expected=check.expected,
+            actual=f'High-MW at rank {high_idx + 1}, low-MW not found (correctly downranked)',
+        )
+    if high_idx < low_idx:
+        return CheckResult(
+            name=check.name,
+            group=group_name,
+            status=CheckStatus.PASS,
+            description=check.description,
+            query=check.query,
+            expected=check.expected,
+            actual=f'Correct ranking: "{check.expected[0]}" at {high_idx + 1} '
+            f'before "{check.expected[1]}" at {low_idx + 1}',
+        )
+    return CheckResult(
+        name=check.name,
+        group=group_name,
+        status=CheckStatus.FAIL,
+        description=check.description,
+        query=check.query,
+        expected=check.expected,
+        actual=f'Wrong ranking: "{check.expected[1]}" at {low_idx + 1} '
+        f'before "{check.expected[0]}" at {high_idx + 1}',
+    )
+
+
+def _check_summary_nonempty(
+    check: GroundTruthCheck,
+    group_name: str,
+    summary_result: dict | None = None,
+    **_kwargs,
+) -> CheckResult:
+    """Assert that summarize_node returned a non-empty summary."""
+    if not summary_result:
+        return CheckResult(
+            name=check.name,
+            group=group_name,
+            status=CheckStatus.FAIL,
+            description=check.description,
+            query=check.query,
+            expected=check.expected,
+            actual='No summary returned',
+        )
+    summary_text = summary_result.get('summary', '')
+    if summary_text and summary_text.strip():
+        return CheckResult(
+            name=check.name,
+            group=group_name,
+            status=CheckStatus.PASS,
+            description=check.description,
+            query=check.query,
+            expected=check.expected,
+            actual=f'Summary non-empty ({len(summary_text)} chars)',
+        )
+    return CheckResult(
+        name=check.name,
+        group=group_name,
+        status=CheckStatus.FAIL,
+        description=check.description,
+        query=check.query,
+        expected=check.expected,
+        actual='Summary is empty',
+    )
+
+
+def _check_kv_roundtrip(
+    check: GroundTruthCheck,
+    group_name: str,
+    kv_result: dict | None = None,
+    **_kwargs,
+) -> CheckResult:
+    """Assert that kv_get returns the expected value after kv_write."""
+    if not kv_result:
+        return CheckResult(
+            name=check.name,
+            group=group_name,
+            status=CheckStatus.FAIL,
+            description=check.description,
+            query=check.query,
+            expected=check.expected,
+            actual='KV entry not found',
+        )
+    actual_value = kv_result.get('value', '')
+    expected_value = check.expected if isinstance(check.expected, str) else str(check.expected)
+    if actual_value == expected_value:
+        return CheckResult(
+            name=check.name,
+            group=group_name,
+            status=CheckStatus.PASS,
+            description=check.description,
+            query=check.query,
+            expected=check.expected,
+            actual=f'KV roundtrip OK: value={actual_value}',
+        )
+    return CheckResult(
+        name=check.name,
+        group=group_name,
+        status=CheckStatus.FAIL,
+        description=check.description,
+        query=check.query,
+        expected=check.expected,
+        actual=f'KV mismatch: expected={expected_value}, got={actual_value}',
+    )
+
+
+def _check_lint_finding_present(
+    check: GroundTruthCheck,
+    group_name: str,
+    lint_results: dict | None = None,
+    **_kwargs,
+) -> CheckResult:
+    """Assert that lint_findings contains a finding matching expected filters."""
+    if not lint_results or not lint_results.get('findings'):
+        return CheckResult(
+            name=check.name,
+            group=group_name,
+            status=CheckStatus.FAIL,
+            description=check.description,
+            query=check.query,
+            expected=check.expected,
+            actual='No lint findings returned',
+        )
+    findings = lint_results['findings']
+    expected_meta = check.expected_metadata or {}
+    rule_name = expected_meta.get('rule_name', '')
+    severity = expected_meta.get('severity', '')
+    for f in findings:
+        f_rule = f.get('rule_name', f.get('rule', ''))
+        f_sev = f.get('severity', '')
+        if (not rule_name or f_rule == rule_name) and (not severity or f_sev == severity):
+            return CheckResult(
+                name=check.name,
+                group=group_name,
+                status=CheckStatus.PASS,
+                description=check.description,
+                query=check.query,
+                expected=check.expected,
+                actual=f'Lint finding found: rule={f_rule}, severity={f_sev}',
+            )
+    return CheckResult(
+        name=check.name,
+        group=group_name,
+        status=CheckStatus.FAIL,
+        description=check.description,
+        query=check.query,
+        expected=check.expected,
+        actual=f'No lint finding matching rule={rule_name}, severity={severity}',
+    )
+
+
+def _check_llm_lint_flags_unit(
+    check: GroundTruthCheck,
+    group_name: str,
+    lint_results: dict | None = None,
+    judge: Judge | None = None,
+    **_kwargs,
+) -> CheckResult:
+    """LLM-judged lint check: assert surprise-gated lint flags the expected unit."""
+    if judge is None:
+        return CheckResult(
+            name=check.name,
+            group=group_name,
+            status=CheckStatus.SKIP,
+            description=check.description,
+            query=check.query,
+            expected=check.expected,
+            actual='Skipped: LLM judge not available',
+        )
+    if not lint_results or not lint_results.get('findings'):
+        return CheckResult(
+            name=check.name,
+            group=group_name,
+            status=CheckStatus.FAIL,
+            description=check.description,
+            query=check.query,
+            expected=check.expected,
+            actual='No lint findings returned',
+        )
+    findings = lint_results['findings']
+    expected_meta = check.expected_metadata or {}
+    rule_name = expected_meta.get('rule_name', 'surprise_gate_llm')
+    for f in findings:
+        f_rule = f.get('rule_name', f.get('rule', ''))
+        if f_rule == rule_name:
+            return CheckResult(
+                name=check.name,
+                group=group_name,
+                status=CheckStatus.PASS,
+                description=check.description,
+                query=check.query,
+                expected=check.expected,
+                actual=f'LLM lint finding present: rule={f_rule}',
+            )
+    return CheckResult(
+        name=check.name,
+        group=group_name,
+        status=CheckStatus.FAIL,
+        description=check.description,
+        query=check.query,
+        expected=check.expected,
+        actual=f'No LLM lint finding with rule={rule_name}',
+    )
+
+
+# ---------------------------------------------------------------------------
 # Dispatch table: check_type -> handler function
 # ---------------------------------------------------------------------------
 
@@ -546,4 +884,11 @@ _CHECK_DISPATCH: dict[str, Callable[..., CheckResult]] = {
     'entity_mention_check': _check_entity_mention,
     'result_ordering': _check_result_ordering,
     'llm_judge': _check_llm_judge,
+    'unit_metadata_matches': _check_unit_metadata_matches,
+    'excluded_by_default': _check_excluded_by_default,
+    'ranking_after_outcomes': _check_ranking_after_outcomes,
+    'summary_nonempty': _check_summary_nonempty,
+    'kv_roundtrip': _check_kv_roundtrip,
+    'lint_finding_present': _check_lint_finding_present,
+    'llm_lint_flags_unit': _check_llm_lint_flags_unit,
 }

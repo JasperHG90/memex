@@ -23,6 +23,7 @@ from memex_eval.internal.scenarios import (
     ALL_GROUPS,
     GroundTruthCheck,
     ScenarioGroup,
+    SetupAction,
     get_group,
 )
 from memex_eval.judge import Judge
@@ -145,10 +146,90 @@ async def _run_group(
     # Phase 3: Run checks
     for check in group.checks:
         check_vault_id = vault_map.get(check.vault_name, vault_id)
+
+        # Run setup actions before this check
+        if check.setup_actions:
+            await _run_setup_actions(api, check_vault_id, check.setup_actions)
+
         check_result = await _execute_check(api, check_vault_id, group.name, check, judge)
         group_result.checks.append(check_result)
 
     return group_result
+
+
+async def _resolve_unit_ids(
+    api: RemoteMemexAPI,
+    vault_id: UUID,
+    action: SetupAction,
+) -> list[str]:
+    """Resolve unit IDs either from explicit list or via search discovery."""
+    if action.unit_ids:
+        return action.unit_ids
+    if action.search_query:
+        units = await api.search(
+            query=action.search_query,
+            limit=5,
+            vault_ids=[vault_id],
+        )
+        return [str(u.id) for u in units]
+    return []
+
+
+async def _run_setup_actions(
+    api: RemoteMemexAPI,
+    vault_id: UUID,
+    actions: list[SetupAction],
+) -> None:
+    """Execute setup actions before a check runs."""
+    for action in actions:
+        try:
+            if action.kind == 'record_outcome':
+                ids = await _resolve_unit_ids(api, vault_id, action)
+                if not ids:
+                    logger.warning(
+                        '  Setup: record_outcome found no units for query=%s', action.search_query
+                    )
+                    continue
+                for _ in range(action.count):
+                    await api.record_outcome(
+                        unit_ids=ids,
+                        success=action.success,
+                        vault_id=str(vault_id),
+                        reason=action.reason,
+                    )
+                logger.info(
+                    '  Setup: record_outcome(success=%s, count=%d) for %s',
+                    action.success,
+                    action.count,
+                    ids[:3],
+                )
+            elif action.kind == 'deprioritize':
+                ids = await _resolve_unit_ids(api, vault_id, action)
+                if not ids:
+                    logger.warning(
+                        '  Setup: deprioritize found no units for query=%s', action.search_query
+                    )
+                    continue
+                for uid in ids:
+                    await api.deprioritize_memory_unit(
+                        unit_id=UUID(uid),
+                        reason=action.reason or 'benchmark deprioritize',
+                        vault_id=vault_id,
+                    )
+                logger.info('  Setup: deprioritize %s', ids[:3])
+            elif action.kind == 'kv_write':
+                await api.kv_put(
+                    value=action.kv_value or '',
+                    key=action.kv_key or '',
+                )
+                logger.info('  Setup: kv_write key=%s', action.kv_key)
+            elif action.kind == 'consolidation_tick':
+                await api.consolidation_tick(vault_id=vault_id)
+                logger.info('  Setup: consolidation_tick')
+            else:
+                logger.warning('  Setup: unknown action kind "%s"', action.kind)
+        except Exception as e:
+            logger.warning('  Setup action %s failed: %s', action.kind, e)
 
 
 async def _ingest_docs(
@@ -254,6 +335,9 @@ async def _execute_check(
     entities_list = None
     cooccurrences = None
     mentions = None
+    summary_result = None
+    kv_result = None
+    lint_results = None
 
     try:
         if check.check_type == 'entity_type_check':
@@ -287,11 +371,29 @@ async def _execute_check(
                 )
             mentions = await api.get_entity_mentions(found[0].id, vault_id=vault_id)
         elif check.check_type == 'entity_exists':
-            # Search for entities by name
             entities = await api.search_entities(
                 query=check.query, limit=check.top_k, vault_id=vault_id
             )
             entity_names = [e.name for e in entities]
+        elif check.check_type == 'kv_roundtrip':
+            await api.kv_put(value=str(check.expected), key=check.query)
+            entry = await api.kv_get(key=check.query)
+            kv_result = {'value': entry.value} if entry else None
+        elif check.check_type == 'summary_nonempty':
+            found = await api.search_entities(query=check.query, limit=1, vault_id=vault_id)
+            if found:
+                try:
+                    reflection = await api.summarize_node(
+                        entity_id=found[0].id,
+                        vault_id=vault_id,
+                    )
+                    summary_result = {'summary': getattr(reflection, 'summary', '')}
+                except Exception as exc:
+                    summary_result = {'summary': '', 'error': str(exc)}
+            else:
+                summary_result = None
+        elif check.check_type in ('lint_finding_present', 'llm_lint_flags_unit'):
+            lint_results = await api.lint_findings(vault_id=str(vault_id))
         elif check.search_type == 'note':
             note_results = await api.search_notes(
                 query=check.query,
@@ -308,6 +410,8 @@ async def _execute_check(
                 kwargs['strategies'] = check.strategies
             if check.include_superseded is not None:
                 kwargs['include_superseded'] = check.include_superseded
+            if check.include_deprioritized is not None:
+                kwargs['include_deprioritized'] = check.include_deprioritized
             memory_results = await api.search(**kwargs)
     except Exception as e:
         return CheckResult(
@@ -330,6 +434,9 @@ async def _execute_check(
         entities=entities_list,
         cooccurrences=cooccurrences,
         mentions=mentions,
+        summary_result=summary_result,
+        kv_result=kv_result,
+        lint_results=lint_results,
     )
 
     # Override duration with full time (including API call)
