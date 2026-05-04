@@ -120,6 +120,29 @@ The benchmark runs in three decoupled phases, each resumable:
 - **Image-dependent questions**: Some LoCoMo questions reference images shared in conversations (book covers, photos of signs, pottery). The Memex pipeline extracts text from conversations but does not process shared images, so questions whose answers depend solely on image content cannot be answered from stored memories alone.
 - **Adversarial scoring**: Adversarial questions deliberately swap subjects (e.g., asking about Melanie's instruments when they are Caroline's). The judge must recognize that correcting the false premise is a correct response, not an error.
 
+### External benchmarks (LongMemEval)
+
+[LongMemEval](https://arxiv.org/abs/2502.19373) evaluates long-term memory across five question categories with a focus on abstention (knowing when the memory does not contain the answer). It runs as a complementary benchmark alongside LoCoMo.
+
+```bash
+# End-to-end (ingest -> answer -> judge -> report)
+memex-eval longmemeval run --dataset-path ./data/longmemeval/ --run-id baseline
+
+# Individual phases
+memex-eval longmemeval ingest --dataset-path ./data/longmemeval/ --variant s --run-id baseline
+memex-eval longmemeval answer --dataset-path ./data/longmemeval/ --variant s --run-id baseline
+memex-eval longmemeval judge --dataset-path ./data/longmemeval/ --variant s --hypotheses hypotheses.jsonl
+memex-eval longmemeval report --judgments judgments.jsonl
+
+# Compare modes (agent vs note-only vs memory-only)
+memex-eval longmemeval compare --mode-run agent:./run-agent --mode-run note-only:./run-note
+
+# Parse trace files
+memex-eval longmemeval parse-trace traces/ --dataset-path ./data/longmemeval/
+```
+
+**Dataset variants**: `s` (default, matches agentmemory baseline), `oracle`, `m`. The dataset SHA-256 is pinned; use `--allow-unpinned-checksum` to bypass during development.
+
 ## Results
 
 > Single run on LoCoMo conversation 0. Scores include manual review corrections where the automated judge was inconsistent.
@@ -163,6 +186,15 @@ memex_eval/
     locomo_judge.py       # Phase 3: grade answers + produce report
     locomo_efficiency.py  # Efficiency analysis: latency, tokens, tool usage
     locomo_report.py      # Phase 4: generate Markdown report with plots
+    longmemeval_common.py       # Shared types, dataset loaders, SHA-256 pin, abstention helpers
+    longmemeval_ingest.py       # Phase 0: ingest LongMemEval sessions
+    longmemeval_answer.py       # Phase 2: answer via Claude Code subagent (agent/note-only/memory-only modes)
+    longmemeval_answer_direct.py # Direct retrieval-only answer modes
+    longmemeval_judge.py        # Phase 3: graded correctness + abstention precision
+    longmemeval_report.py       # Phase 4: three-axis evaluation + plots
+    longmemeval_compare.py      # A/B comparison across modes
+    longmemeval_trace_parser.py # Claude Code session trace parsing
+    longmemeval_efficiency.py  # Efficiency analysis: latency, tokens, retrieval cost
 ```
 
 ## Adding scenarios (internal)
