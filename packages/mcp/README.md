@@ -61,13 +61,7 @@ A slim Docker image is available at `docker/mcp/Dockerfile` — it includes only
 
 ### Claude Code Integration
 
-Run the automated setup to configure MCP, hooks, and skills:
-
-```bash
-memex setup claude-code
-```
-
-Or configure manually in your Claude Code MCP settings:
+Install the [Memex Claude Code plugin](../../claude-code-plugin/) for automatic setup, or configure manually in your Claude Code MCP settings:
 
 ```json
 {

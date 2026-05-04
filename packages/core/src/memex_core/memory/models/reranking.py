@@ -17,8 +17,7 @@ from memex_core.memory.models.protocols import RerankerModel
 
 logger = logging.getLogger('memex.core.memory.models.reranking')
 
-# Module-level cache: avoids reloading ONNX sessions across FastAPI lifespan
-# restarts (e.g. in test suites that create a new TestClient per test).
+# Module-level cache: avoids reloading ONNX sessions across FastAPI lifespan restarts.
 _onnx_reranker_cache: 'FastReranker | None' = None
 
 
@@ -28,14 +27,8 @@ async def get_reranking_model(
 ) -> RerankerModel | None:
     """Create a reranking model from config.
 
-    Args:
-        config: Backend configuration.  ``None`` or ``OnnxBackend`` uses the
-            built-in ONNX model.  ``LitellmRerankerBackend`` delegates to
-            the litellm-backed adapter.  ``DisabledBackend`` returns ``None``.
-
-    Returns:
-        An object satisfying the ``RerankerModel`` protocol, or ``None``
-        if reranking is disabled.
+    None/OnnxBackend -> built-in ONNX. LitellmRerankerBackend -> litellm adapter.
+    DisabledBackend -> None.
     """
     global _onnx_reranker_cache
     from memex_common.config import OnnxBackend, LitellmRerankerBackend, DisabledBackend
@@ -84,11 +77,8 @@ class FastReranker(BaseOnnxModel):
         super().__init__(model_dir=model_dir, model_name=model_name)
         self.batch_size = batch_size
         if model_version == 'onnx:unknown':
-            # The default sentinel disables structural cache invalidation on
-            # model upgrades. Production callers go through
-            # ``get_reranking_model`` which always supplies a versioned
-            # identifier; the fallback is a footgun for ad-hoc instantiation
-            # in tests/benchmarks.
+            # Default sentinel disables structural cache invalidation on model
+            # upgrades. Production callers always supply a versioned identifier.
             logger.warning(
                 'FastReranker constructed with default model_version=%r — '
                 'cache will not invalidate on model upgrade until TTL '
@@ -107,16 +97,7 @@ class FastReranker(BaseOnnxModel):
         query: str,
         texts: list[str],
     ) -> np.ndarray[tuple[int], np.dtype[np.float32]]:
-        """Rerank a list of texts based on the query.
-
-        Args:
-            query (str): The search query.
-            texts (List[str]): List of document texts to score.
-
-        Returns:
-            np.ndarray: Column vector of scores corresponding to the texts.
-            texts are scored in the order provided.
-        """
+        """Score texts against query. Returns column vector of scores in input order."""
         if not texts:
             raise ValueError('Empty text list provided for reranking.')
 
@@ -150,17 +131,7 @@ class FastReranker(BaseOnnxModel):
     def rerank(
         self, query: str, texts: list[str], doc_ids: list[str]
     ) -> list[dict[str, str | float]]:
-        """
-        Sorts texts and IDs based on raw scores (descending).
-
-        Args:
-            query: The search query.
-            texts: List of document texts to score.
-            doc_ids: Optional list of identifiers. If None, 0-based indices are used.
-
-        Returns:
-            A list of dicts: [{'id': ..., 'score': ..., 'text': ...}, ...] sorted by score.
-        """
+        """Sort texts and IDs by raw scores (descending). Returns [{id, score, text}, ...]."""
         scores = self.score(query, texts)
 
         scores_list = scores.flatten().tolist()

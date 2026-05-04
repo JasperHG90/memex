@@ -1,4 +1,4 @@
-"""EMA-decayed MW score computation.
+"""EMA-decayed Memory Worth score computation.
 
 Applies exponential decay to the accumulating Bernoulli counters at read time
 so stale evidence fades toward the Beta(1,1) prior mean of 0.5.

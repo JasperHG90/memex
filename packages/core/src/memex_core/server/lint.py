@@ -134,7 +134,7 @@ async def _gate_finding_for_write(
     Looks up the finding's vault_id, then gates the auth context against it.
     Returns the resolved vault_id (or ``None`` for global findings) so the
     caller can pass it through to ``LintService.set_status`` for SQL-level
-    constraint as well (HIGH-4 sub: route + service layered checks).
+    constraint as well (cross-vault mutation rejected: route + service layered checks).
 
     Raises:
       - 404 if the finding does not exist.
@@ -156,9 +156,9 @@ async def lint_dismiss(
 ) -> dict[str, Any]:
     """Flip a pending finding to ``dismissed``. Idempotent.
 
-    Per Wave 0 multi-tenant invariant: looks up the finding's vault and
+    Per vault-scoping invariant: looks up the finding's vault and
     gates the auth context BEFORE mutating, so a vault-A scoped key with a
-    leaked vault-B finding_id cannot dismiss the vault-B row (HIGH-4 sub).
+    leaked vault-B finding_id cannot dismiss the vault-B row (cross-vault check).
     """
     finding_vault = await _gate_finding_for_write(finding_id, api, auth)
     try:
@@ -178,9 +178,9 @@ async def lint_resolve(
 ) -> dict[str, Any]:
     """Flip a pending finding to ``resolved``. Idempotent.
 
-    Per Wave 0 multi-tenant invariant: looks up the finding's vault and
+    Per vault-scoping invariant: looks up the finding's vault and
     gates the auth context BEFORE mutating, so a vault-A scoped key with a
-    leaked vault-B finding_id cannot resolve the vault-B row (HIGH-4 sub).
+    leaked vault-B finding_id cannot resolve the vault-B row (cross-vault check).
     """
     finding_vault = await _gate_finding_for_write(finding_id, api, auth)
     try:

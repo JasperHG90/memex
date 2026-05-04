@@ -274,7 +274,7 @@ _DEFAULT_POOL_MULTIPLIER = 4
 # Hard cap on the pool size so the multiplier cannot trigger unbounded scans on
 # very large memory_units tables. Even with a permissive raw_floor and a high
 # limit, we never request more than this many rows from pgvector.
-_MAX_POOL_SIZE = 1000
+_MAX_POOL_SIZE = 50
 
 
 async def find_similar_facts(

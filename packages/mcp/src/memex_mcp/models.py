@@ -355,8 +355,7 @@ class McpDeleteAssetsResult(BaseModel):
 class McpKVEntry(BaseModel):
     key: str
     # value is normally a string; for procedure: keys read with
-    # include_history=True it is a structured dict {value, version, history}
-    # per RFC-007 §114-116.
+    # include_history=True it is a structured dict {value, version, history}.
     value: str | dict[str, Any]
     scope: str
     updated_at: datetime

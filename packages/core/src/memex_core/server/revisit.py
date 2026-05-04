@@ -8,7 +8,7 @@ Routes:
 - GET  /api/v1/memory/due_for_review  — list units due for revisit in a vault
 - POST /api/v1/memory/review          — record a review outcome (FSRS-5 + audit)
 
-Vault scoping (Wave 0 invariant): both routes require ``vault_id`` and
+Vault scoping (vault-scoping invariant): both routes require ``vault_id`` and
 the service rejects cross-vault calls with PermissionError. The route
 maps PermissionError → HTTP 403 so the Hermes client can surface a
 structured tool_error to the agent.
@@ -59,7 +59,7 @@ class ReviewMemoryRequest(BaseModel):
         ...,
         description=(
             'Vault UUID or name the memory unit belongs to. REQUIRED — '
-            'the service rejects cross-vault review (Wave 0 vault-scoping invariant).'
+            'the service rejects cross-vault review (vault-scoping invariant).'
         ),
     )
 

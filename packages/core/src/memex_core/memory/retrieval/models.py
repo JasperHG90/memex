@@ -101,7 +101,7 @@ class RetrievalRequest(SQLModel):
     apply_pre_filter: bool = Field(
         default=True,
         description=(
-            'Pre-reranker MW/FSFM filter at hydration. Default ON drops obviously-failed '
+            'Pre-reranker Memory Worth/FSFM filter at hydration. Default ON drops obviously-failed '
             'or decayed candidates before the cross-encoder runs. Set False for '
             'historical / audit / lineage queries that need to see contradicted, '
             'behaviorally-failed, or decayed units — every branch is bypassed in one go.'

@@ -175,7 +175,7 @@ async def deprioritize_memory(
         typer.Option(
             '--vault',
             '-v',
-            help='Vault UUID or name the unit belongs to (REQUIRED — Wave 0 vault scoping).',
+            help='Vault UUID or name the unit belongs to (REQUIRED — vault-scoping invariant).',
         ),
     ],
     reason: Annotated[
@@ -215,7 +215,7 @@ async def restore_memory(
         typer.Option(
             '--vault',
             '-v',
-            help='Vault UUID or name the unit belongs to (REQUIRED — Wave 0 vault scoping).',
+            help='Vault UUID or name the unit belongs to (REQUIRED — vault-scoping invariant).',
         ),
     ],
 ):
@@ -277,7 +277,7 @@ async def consolidate_memory(
         typer.Option('--dry-run', help='Preview without making changes.'),
     ] = False,
 ):
-    """Vault-wide low-MW unit consolidation. Use sparingly (e.g., monthly per vault).
+    """Vault-wide low-Memory Worth unit consolidation. Use sparingly (e.g., monthly per vault).
 
     For per-entity hygiene, prefer `memex memory reconsolidate`.
     """

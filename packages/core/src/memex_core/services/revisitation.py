@@ -201,7 +201,7 @@ class RevisitationService(BaseService):
 
         Order of operations (single transaction):
           1. Load + row-lock the unit
-          2. Assert unit.vault_id matches the caller's vault — Wave 0
+          2. Assert unit.vault_id matches the caller's vault —
              vault-scoping invariant; cross-vault review is rejected.
           3. FSRS-5 schedule advance via `memory.revisit.schedule()`
           4. Persist new schedule + sticky streak + (maybe) is_deprioritized

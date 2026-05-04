@@ -1,19 +1,10 @@
-"""FSRS-5 revisitation scheduler — thin wrapper over py-fsrs 4.1.2.
+"""FSRS-5 revisitation scheduler — thin wrapper over py-fsrs.
 
-`py-fsrs==4.1.2` implements FSRS-5 (19 weights), not FSRS-4.5 — the pip
-version is unrelated to the algorithm version. py-fsrs v3.0.0 (2024-08-22)
-moved from FSRS-4.5 to FSRS-5; v2.5.1 was the last FSRS-4.5 release.
-
-This module is intentionally a thin adapter — algorithm code lives in the
-upstream `fsrs` package. We expose a stable Memex-shaped surface
-(`Quality`, `UnitState`, `schedule`) so callers in `services/revisitation.py`
-and the scheduler tick are decoupled from the upstream type names.
-
-Determinism: `Scheduler` is constructed with `enable_fuzzing=False` so the
-next-review datetime is reproducible for a given (state, quality, now).
-`learning_steps=()` and `relearning_steps=()` skip the Anki-flow
-Learning/Relearning short-circuit — Memex units transition directly to the
-Review state on first review.
+py-fsrs 4.1.2 implements FSRS-5 (19 weights), not FSRS-4.5. This module
+exposes a stable Memex surface (Quality, UnitState, schedule) decoupled
+from upstream type names. Scheduler uses enable_fuzzing=False for deterministic
+next-review datetimes. learning_steps=() and relearning_steps=() skip
+Anki-flow Learning/Relearning — units transition directly to Review.
 """
 
 from __future__ import annotations
@@ -61,17 +52,9 @@ def schedule(
 ) -> tuple[datetime, int, float, float]:
     """Compute (next_review_at, interval_days, new_stability, new_difficulty).
 
-    First review: state is None or stability is None — py-fsrs initializes a
-    fresh Card and applies the FSRS-5 init formulas.
-    Subsequent review: prior stability / difficulty / last_review are
-    reconstituted onto a Card and `review_card` advances the schedule.
-
-    Returns:
-      next_review_at — UTC datetime, integer days from `now`
-      interval_days — int, capped by py-fsrs `maximum_interval` (default 36500)
-      new_stability — float
-      new_difficulty — float (returned for caller persistence + audit; not
-        re-derived elsewhere)
+    First review: state=None/stability=None -> fresh Card with FSRS-5 init.
+    Subsequent: reconstitutes prior state onto Card and calls review_card.
+    interval_days capped by py-fsrs maximum_interval (default 36500).
     """
     if now.tzinfo is None:
         now = now.replace(tzinfo=timezone.utc)

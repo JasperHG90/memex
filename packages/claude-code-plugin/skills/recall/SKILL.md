@@ -22,4 +22,4 @@ argument-hint: "[search query]"
 
 6. **Due for review**: "what's due?" → `memex_get_due_for_review(vault_id?)`. After review, call `memex_memory_review(unit_id, quality)` with quality ∈ {again, hard, good, easy}.
 
-7. **Diagnostics**: "how is this vault doing?" → `memex_get_diagnostics_summary(vault_id=...)`.
+7. **Diagnostics**: "how is this vault doing?" → `memex_get_diagnostics_summary(vault_id=...)`. Returns unit counts, Memory Worth score, cluster count, top entities.

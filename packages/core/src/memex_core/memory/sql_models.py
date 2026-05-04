@@ -40,7 +40,7 @@ class ContentStatus(str, Enum):
 
 
 class MWMode(StrEnum):
-    """MW counter mode per vault."""
+    """Memory Worth counter mode per vault."""
 
     STATIONARY = 'stationary'
     EMA = 'ema'
@@ -166,13 +166,13 @@ class MentalModel(SQLModel, table=True):  # type: ignore
     success_co_count: int = Field(
         default=0,
         sa_column=Column(Integer, server_default='0'),
-        description='MW success co-occurrence counter (vault-scoped).',
+        description='Memory Worth success co-occurrence counter (vault-scoped).',
     )
 
     failure_co_count: int = Field(
         default=0,
         sa_column=Column(Integer, server_default='0'),
-        description='MW failure co-occurrence counter (vault-scoped).',
+        description='Memory Worth failure co-occurrence counter (vault-scoped).',
     )
 
     __table_args__ = (
@@ -1002,13 +1002,13 @@ class UnitEntity(SQLModel, table=True):  # type: ignore
     success_co_count: int = Field(
         default=0,
         sa_column=Column(Integer, server_default='0'),
-        description='MW success co-occurrence counter (vault-scoped).',
+        description='Memory Worth success co-occurrence counter (vault-scoped).',
     )
 
     failure_co_count: int = Field(
         default=0,
         sa_column=Column(Integer, server_default='0'),
-        description='MW failure co-occurrence counter (vault-scoped).',
+        description='Memory Worth failure co-occurrence counter (vault-scoped).',
     )
 
     # Relationships
@@ -1655,7 +1655,7 @@ class NoteAppend(SQLModel, table=True):  # type: ignore
 
 
 class ProcedureOutcome(SQLModel, table=True):  # type: ignore
-    """Per-(vault, procedure_kv_key) MW success/failure counter row.
+    """Per-(vault, procedure_kv_key) Memory Worth success/failure counter row.
 
     Counters increment via :class:`memex_core.services.outcome.OutcomeService`
     (target_type='kv_key'). The active value/version/history live in the
@@ -1678,7 +1678,7 @@ class ProcedureOutcome(SQLModel, table=True):  # type: ignore
             nullable=False,
             index=True,
         ),
-        description='Vault that owns this counter row (Wave 0 invariant: NOT NULL).',
+        description='Vault that owns this counter row (vault-scoping invariant: NOT NULL).',
     )
 
     kv_key: str = Field(
@@ -1878,7 +1878,7 @@ class ConsolidationTick(SQLModel, table=True):  # type: ignore
             SA_UUID(),
             nullable=False,
         ),
-        description='Vault this tick consolidated (Wave 0 invariant: NOT NULL).',
+        description='Vault this tick consolidated (vault-scoping invariant: NOT NULL).',
     )
 
     started_at: datetime = Field(

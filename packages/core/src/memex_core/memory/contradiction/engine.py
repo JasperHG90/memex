@@ -87,11 +87,9 @@ class ContradictionEngine:
             )
 
             all_links: list[MemoryLink] = []
-            # Accumulate signed alpha-step deltas per target so multiple
-            # weakens against the same unit in one batch all land, AND apply
-            # them via SQL-level arithmetic (``confidence = clamp(confidence +
-            # :delta, 0, 1)``) so concurrent batches that touch overlapping
-            # units cannot drift the column out of sync with the SQL-atomic
+            # Accumulate signed alpha-step deltas per target; apply via
+            # SQL-level ``clamp(confidence + :delta, 0, 1)`` so concurrent
+            # batches on overlapping units stay in sync with the atomic
             # ``confidence_evidence_count`` increment.
             confidence_deltas: dict[UUID, float] = {}
             evidence_bumps: dict[UUID, int] = {}
@@ -137,9 +135,8 @@ class ContradictionEngine:
                 await session.exec(upsert_stmt)  # type: ignore[arg-type]
                 all_links = list(deduped.values())
 
-            # Accumulate confidence deltas then clamp once to prevent races
-            # on overlapping units. LEAST/GREATEST mirrors the application-level
-            # max(0.0, min(1.0, ...)) clamp.
+            # Clamp per-unit deltas via SQL LEAST/GREATEST to prevent races on
+            # overlapping units (mirrors application-level max(0, min(1, ...))).
             for unit_id, delta in confidence_deltas.items():
                 values: dict[str, Any] = {
                     'confidence': sa_func.greatest(
@@ -149,9 +146,8 @@ class ContradictionEngine:
                 }
                 bump = evidence_bumps.get(unit_id, 0)
                 if bump:
-                    # GREATEST(0, ...) belt-and-suspenders mirrors confidence clamp.
-                    # Bumps are always +1 today; GREATEST is a no-op but guards
-                    # against future negative deltas.
+                    # GREATEST(0, ...) guards against future negative deltas
+                    # (always +1 today, so currently a no-op).
                     values['confidence_evidence_count'] = sa_func.greatest(
                         0,
                         MemoryUnit.confidence_evidence_count + bump,
@@ -219,22 +215,12 @@ class ContradictionEngine:
         relationships = await self._classify(unit, candidates)
 
         links: list[MemoryLink] = []
-        # Per-target confidence deltas (signed alpha steps) and evidence
-        # bumps (always +1).
-        #
-        # ``evidence_bumps[u]`` counts negative-evidence events only —
-        # one per ``weaken`` (delta = -alpha) and one per ``contradict``
-        # (delta = -2*alpha) targeting ``u``. Reinforces are intentionally
-        # excluded from the count (backfill/forward symmetry —
-        # see migration 033 backfill SQL which also filters
-        # ``link_type IN ('contradicts', 'weakens')``). Both paths
-        # count links, not events — a batch with 2 weakens on the same
-        # target produces 2 links (deduped by from/to/link_type at
-        # line 115–117) and evidence_bumps[u]=2.
-        # see BACKLOG "Future symmetric extension" bullet). So a unit
-        # receiving N weakens + M contradicts in one batch lands with
-        # ``bump = N + M`` and ``delta = -(N + 2M) * alpha`` — these
-        # magnitudes are deliberately decoupled.
+        # Per-target confidence deltas (signed alpha steps) and evidence bumps
+        # (+1 per weaken/contradict link). ``evidence_bumps`` counts only
+        # negative-evidence links (weaken = -alpha, contradict = -2*alpha);
+        # reinforces are excluded for backfill/forward symmetry. Both paths
+        # count deduped links, so N weakens + M contradicts yields
+        # ``bump = N + M`` and ``delta = -(N + 2M) * alpha``.
         confidence_deltas: dict[UUID, float] = {}
         evidence_bumps: dict[UUID, int] = {}
 
@@ -254,9 +240,8 @@ class ContradictionEngine:
             note_title = await self._get_note_title(session, authoritative.note_id)
 
             if relation == 'reinforce':
-                # Symmetric reinforce: both endpoints gain +alpha. Reinforce
-                # does NOT bump evidence_count (design — see BACKLOG
-                # known-v1-limitation: forward/backfill symmetry).
+                # Symmetric reinforce: both endpoints gain +alpha (no evidence
+                # bump — forward/backfill symmetry).
                 for u in [unit, existing_unit]:
                     confidence_deltas[u.id] = confidence_deltas.get(u.id, 0.0) + self.config.alpha
                 link_type = 'reinforces'
