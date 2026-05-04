@@ -148,7 +148,7 @@ def _build_pre_filter_clause(
     branches: list[str] = []
     binds: dict[str, float] = {}
 
-    # MW branch (always on — columns exist since the outcomes feature).
+    # Memory Worth branch (always on — columns exist since the outcomes feature).
     # Beta-Bernoulli α=β=1 closed form: mw_score = (succ + 1) / (succ + fail + 2)
     branches.append(
         '((memory_units.success_co_count + memory_units.failure_co_count) >= 5 '
@@ -187,7 +187,7 @@ def _build_pre_filter_clause(
         return None
 
     # OR'd, not AND'd — either signal is sufficient grounds to skip the
-    # cross-encoder. Cold-start safeguards (MW >= 5 outcomes, FSFM exp(elapsed))
+    # cross-encoder. Cold-start safeguards (Memory Worth >= 5 outcomes, FSFM exp(elapsed))
     # are inside the individual branches.
     pre_filter_clause = ' OR '.join(branches)
     clause = text(f'NOT ({pre_filter_clause})')
@@ -708,11 +708,11 @@ class RetrievalEngine:
                 final_results.insert(insert_at, vunit)
         t_mmr = _t() - t0
 
-        # 9b. Exploration floor: ε-greedy injection of low-MW units.
+        # 9b. Exploration floor: ε-greedy injection of low-Memory Worth units.
         #
         # Exploration must run on a separate retrieval path that bypasses
-        # the pre-filter; otherwise low-MW units (the very ones exploration
-        # is meant to re-validate) can never re-surface and MW becomes
+        # the pre-filter; otherwise low-Memory Worth units (the very ones exploration
+        # is meant to re-validate) can never re-surface and Memory Worth becomes
         # monotonic. The bypass query only fires when the ε-greedy roll
         # succeeds *and* the pre-filter is active — paying the extra
         # round-trip on every retrieve call would push the N+1 budget over
@@ -1245,7 +1245,7 @@ class RetrievalEngine:
         """Fetches actual objects from DB and converts them to MemoryUnits.
 
         When ``apply_pre_filter`` is True, the unit hydration query gains a
-        ``WHERE NOT (...)`` predicate that drops obviously-failed (low-MW)
+        ``WHERE NOT (...)`` predicate that drops obviously-failed (low-Memory Worth)
         and (when ``fsfm_branch_enabled`` is True) decayed candidates before
         they reach the cross-encoder.
 
@@ -1278,7 +1278,7 @@ class RetrievalEngine:
                 .options(selectinload(MemoryUnit.unit_entities))
             )
 
-            # Python-level conditional pre-filter. The MW branch is always
+            # Python-level conditional pre-filter. The Memory Worth branch is always
             # included; the FSFM branch is included only when the config
             # flag is True. SQL-side runtime flags would still reference
             # the missing columns at parse time. The builder owns the
@@ -1490,7 +1490,7 @@ class RetrievalEngine:
             # Normalize cross-encoder scores to [0, 1] via sigmoid
             normalized_scores = [1.0 / (1.0 + math.exp(-s)) for s in scores]
 
-            # Apply multiplicative recency, temporal proximity, MW, confidence,
+            # Apply multiplicative recency, temporal proximity, Memory Worth, confidence,
             # and decay boosts.
             from memex_core.memory.retrieval.decay import compute_decay_boost
             from memex_core.services.outcomes import compute_mw_boost

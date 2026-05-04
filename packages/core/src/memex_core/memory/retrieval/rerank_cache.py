@@ -1,30 +1,12 @@
 """In-process cross-encoder score cache with stampede protection.
 
-The cache stores raw cross-encoder logits keyed on
-``(model_version, query_hash, unit_id)``.  ``model_version`` makes invalidation
-structural: a model upgrade silently lookups under the new prefix and never
-serves stale entries from the old one.  The 24h TTL backstops other paths.
+Keys: ``(model_version, query_hash, unit_id)``. model_version makes invalidation
+structural (upgrade = new prefix, no stale hits). 24h TTL backstops other paths.
 
-Stampede protection
-~~~~~~~~~~~~~~~~~~~
-The reranker scores documents in batches.  Two concurrent retrieval calls for
-the same query+unit pair MUST NOT both invoke the cross-encoder.  Per-key
-``asyncio.Lock`` provides a check-and-fill barrier:
-
-1. First pass — split the requested keys into hits and misses against the
-   value cache, no locks involved.
-2. For each miss, acquire that key's lock and re-check the cache (another
-   coroutine may have filled it while we queued).  Truly-uncached keys fall
-   through to the batch-compute step.
-3. Run a single batched ``compute_fn`` on the still-uncached subset, fill the
-   cache, release every lock.
-
-The lock pool is a ``WeakValueDictionary`` so it does not pin locks beyond
-the lifetime of the coroutines that hold them.  Concurrent callers each
-keep a strong reference for the duration of the locked region; once they
-all release, the entry is collected.  A bounded LRU lock pool is unsafe
-here — evicting a still-held lock would hand a fresh lock to a second
-caller and break stampede protection.
+Stampede protection: per-key asyncio.Lock ensures concurrent requests for the
+same key collapse to a single cross-encoder call. Lock pool is a WeakValueDictionary
+so locks are GC'd once no coroutine holds them. A bounded LRU pool is unsafe here —
+evicting a held lock would hand a fresh lock to a second caller and break the barrier.
 """
 
 from __future__ import annotations
@@ -47,13 +29,7 @@ logger = logging.getLogger('memex.core.memory.retrieval.rerank_cache')
 
 
 def hash_query(query: str) -> str:
-    """Stable 64-bit hash of the query text — same query, same embedding, same hash.
-
-    xxh64 is used for speed (~10× faster than SHA-256 on small strings).
-    Collisions on a 1M-row working set are negligible (~6e-8) and bounded by
-    the cache TTL anyway — a collision returns a wrong score for at most one
-    cache entry, not a security concern.
-    """
+    """Stable xxh64 hash of query text. Fast (~10x SHA-256), negligible collision rate."""
     return xxhash.xxh64(query.encode('utf-8')).hexdigest()
 
 
@@ -66,14 +42,8 @@ class CrossEncoderScoreCache:
 
     def __init__(self, max_size: int = 10000, ttl_seconds: int = 86400) -> None:
         self._values: TTLCache[CacheKey, float] = TTLCache(maxsize=max_size, ttl=ttl_seconds)
-        # Lock pool uses ``WeakValueDictionary`` so a lock entry is only
-        # collected once nothing else holds it. An LRUCache here could
-        # evict a lock while a coroutine still owned it, breaking stampede
-        # protection (a fresh lock for the same key would let a second
-        # coroutine bypass the barrier and duplicate work). Callers MUST
-        # keep a strong reference for the duration of the locked region —
-        # ``get_or_compute_batch`` does this by accumulating locks into a
-        # local list before acquiring.
+        # WeakValueDictionary: locks GC'd when no coroutine holds them.
+        # LRU unsafe here — evicting a held lock breaks stampede protection.
         self._locks: weakref.WeakValueDictionary[CacheKey, asyncio.Lock] = (
             weakref.WeakValueDictionary()
         )
@@ -105,16 +75,11 @@ class CrossEncoderScoreCache:
         keys: Sequence[CacheKey],
         batch_compute_fn: BatchComputeFn,
     ) -> list[float]:
-        """Return scores in *keys* order, computing only the missing entries.
+        """Return scores in *keys* order, computing only uncached entries.
 
-        ``batch_compute_fn`` receives the indices (into *keys*) that were not
-        served from cache and must return scores in that same order.  This
-        keeps the caller in charge of the batched call signature (e.g.
-        ``reranker.score(query, [texts[i] for i in idx])``).
-
-        Each missing key's compute is barriered behind a per-key
-        ``asyncio.Lock`` so concurrent requests for the same key collapse
-        to a single cross-encoder call.
+        batch_compute_fn receives indices into *keys* for uncached entries
+        and must return scores in that order. Per-key asyncio.Lock collapses
+        concurrent requests for the same key to a single compute.
         """
         scores: list[float | None] = [None] * len(keys)
         miss_indices: list[int] = []
@@ -128,17 +93,12 @@ class CrossEncoderScoreCache:
                 miss_indices.append(i)
 
         if not miss_indices:
-            # All keys hit — every entry of *scores* is a float, never None.
-            # ``cast`` is preferable to a list comprehension + ``type: ignore``
-            # here because it expresses the intent (refine the type, do not
-            # filter values) without an O(n) re-pass.
+            # All keys hit — cast is preferable to list comprehension here
+            # (refine type, no O(n) re-pass).
             return cast(list[float], scores)
 
-        # Acquire per-key locks in a globally-consistent order to avoid
-        # deadlock when two concurrent calls request the same keys in
-        # different orders. Dedupe first — a single key may appear at
-        # multiple miss_indices (same unit referenced twice in a query)
-        # and re-acquiring its lock would deadlock the same coroutine.
+        # Acquire per-key locks in sorted order (deadlock avoidance).
+        # Dedupe: same key at multiple indices would self-deadlock.
         unique_miss_keys = sorted({keys[i] for i in miss_indices})
         locks = [await self._get_lock(k) for k in unique_miss_keys]
         for lock in locks:
@@ -154,13 +114,9 @@ class CrossEncoderScoreCache:
                     still_missing.append(i)
 
             if still_missing:
-                # Dedupe before dispatching to the cross-encoder. The same key
-                # may appear at multiple positions in *keys* (RRF dedupe runs
-                # after this layer); locks already collapse to one acquisition
-                # per unique key (above), but the compute path would still send
-                # duplicate texts to the model and pay the GPU cost N times.
-                # Pick one representative index per unique key, compute once,
-                # fan the score back to every position sharing that key.
+                # Dedupe before cross-encoder dispatch: same key at multiple
+                # positions would send duplicate texts. Pick one representative
+                # per key, compute once, fan out the score.
                 key_to_rep_index: dict[CacheKey, int] = {}
                 for i in still_missing:
                     key_to_rep_index.setdefault(keys[i], i)

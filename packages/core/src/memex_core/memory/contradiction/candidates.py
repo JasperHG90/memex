@@ -101,6 +101,8 @@ async def _get_semantic_candidates(
     # The pgvector index still bounds cost via ORDER BY + LIMIT.
     coarse_max_distance = max(0.05, 1.0 - threshold + 0.2)
 
+    # Fetch more rows than the final cap (30) so the anisotropy corrector
+    # can discriminate within a broader pool; pgvector index bounds cost.
     stmt = text("""
         SELECT id, 1 - (embedding <=> :embedding) AS sim
         FROM memory_units

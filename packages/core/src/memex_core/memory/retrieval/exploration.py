@@ -1,8 +1,7 @@
-"""MW exploration floor — ε-greedy injection of low-MW units.
+"""Memory Worth exploration floor — ε-greedy injection of low-Memory Worth units.
 
 Prevents rich-get-richer dynamics by occasionally surfacing memories that
-haven't had a chance to demonstrate value.  See Memory Worth §5.3 and
-cognitive-memory-research-report.md.
+haven't had a chance to demonstrate value.
 
 The injection happens after MMR diversity filtering but before the final
 limit is applied.  Injected units carry ``exploration: True`` in their
@@ -12,9 +11,9 @@ appropriately.
 ``edge_exploration``
 ====================
 
-The same epsilon-greedy scaffolding generalises from MW to confidence
+The same epsilon-greedy scaffolding generalises from Memory Worth to confidence
 variance: ``inject_edge_exploration`` surfaces high-variance units
-(uncertain edges) for re-validation, mirroring the low-MW path. Same
+(uncertain edges) for re-validation, mirroring the low-Memory Worth path. Same
 pattern, different signal — eligibility is variance > threshold rather
 than total outcome count < threshold.
 """
@@ -104,7 +103,7 @@ DEFAULT_EPSILON = 0.05
 # Maximum number of exploration units to inject per retrieval call.
 DEFAULT_MAX_INJECTIONS = 2
 
-# A unit is considered "low-MW" if its total outcome count is below this
+# A unit is considered "low-Memory Worth" if its total outcome count is below this
 # threshold.  Cold-start units (0/0) always qualify.
 DEFAULT_LOW_MW_THRESHOLD = 5
 
@@ -187,7 +186,7 @@ def inject_exploration_units(
         all_candidates: Full pool of hydrated candidates.
         epsilon: Exploration probability per retrieval call.
         max_injections: Maximum number of exploration units to inject.
-        low_mw_threshold: Low-MW eligibility threshold.
+        low_mw_threshold: Low-Memory Worth eligibility threshold.
 
     Returns:
         New list (always a fresh list — never the input ``results`` object)
@@ -298,10 +297,10 @@ def inject_edge_exploration(
 ) -> list[MemoryUnit]:
     """Epsilon-greedy injection of high-variance edges for re-validation.
 
-    Pairs with :func:`inject_exploration_units` (the low-MW path) — same
+    Pairs with :func:`inject_exploration_units` (the low-Memory Worth path) — same
     scaffolding, different signal. Injected units carry
     ``edge_exploration=True`` in their ``unit_metadata`` so the caller can
-    distinguish them from low-MW injections.
+    distinguish them from low-Memory Worth injections.
 
     Wiring status: this function ships inertly — defined and tested but NOT yet called from
     :mod:`memex_core.memory.retrieval.engine`. The ship-time guard
@@ -340,7 +339,7 @@ def inject_edge_exploration(
     Cross-function hazard: do NOT pipeline this
     injector and :func:`inject_exploration_units` on the same
     candidate list. Both annotate ``unit_metadata`` in place; chaining
-    them on overlapping pools could surface a unit injected by the low-MW path as a
+    them on overlapping pools could surface a unit injected by the low-Memory Worth path as a
     candidate for edge exploration. The retrieval engine calls each
     injector at most once per request, with disjoint selection pools
     (the second injector's ``all_candidates`` excludes units already in

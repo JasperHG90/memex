@@ -1,11 +1,11 @@
-"""Outcome recording service for Memory Worth (MW) counters.
+"""Outcome recording service for Memory Worth counters.
 
 Exposes `record_outcome()` for incrementing success/failure co-occurrence
 counters on MemoryUnit, UnitEntity, and MentalModel, and `compute_mw_score() /
 compute_mw_boost()` for the Beta-Bernoulli posterior mean used by the
 retrieval composition.
 
-The MW formula uses additive-marginal composition:
+The Memory Worth formula uses additive-marginal composition:
     mw_score = (success_co_count + 1) / (success_co_count + failure_co_count + 2)
     mw_boost = 1.0 + mw_alpha * (mw_score - 0.5)
 
@@ -55,7 +55,7 @@ def compute_mw_boost(
     half_life_days: float = 60.0,
     now: datetime | None = None,
 ) -> float:
-    """Additive-marginal MW boost factor for retrieval composition.
+    """Additive-marginal Memory Worth boost factor for retrieval composition.
 
     Returns 1.0 for cold-start units (neutral — no rank change).
 
@@ -115,7 +115,7 @@ class OutcomeService:
 
         Both ``unit_ids`` and ``success`` are required (no defaults) so a
         caller cannot accidentally invoke ``record_outcome(session)`` and
-        silently record a FAILURE outcome — the exact MW-signal-quality
+        silently record a FAILURE outcome — the exact Memory Worth signal-quality
         pathology the system is built to detect.
 
         .. note::
@@ -278,7 +278,7 @@ class OutcomeService:
         # invariant across MemoryUnit, UnitEntity, and MentalModel tables.
         await session.commit()
 
-        # Observe MW scores post-commit (read-only, no commit needed)
+        # Observe Memory Worth scores post-commit (read-only, no commit needed)
         refreshed = await session.exec(
             select(MU).where(MU.id.in_(parsed_ids), MU.vault_id == vault_uuid)
         )
@@ -323,7 +323,7 @@ class OutcomeService:
         vault_id: str | None,
         reason: str | None,
     ) -> dict[str, Any]:
-        """Vault-scoped MW counter increment for a procedure KV key.
+        """Vault-scoped Memory Worth counter increment for a procedure KV key.
 
         Upserts into ``procedure_outcomes`` keyed on ``(vault_id, kv_key)``,
         atomically incrementing ``success_co_count`` (success=True) or

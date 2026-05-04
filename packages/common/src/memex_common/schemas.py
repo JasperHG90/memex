@@ -105,7 +105,7 @@ VALID_RISK_CLASSES: frozenset[str] = frozenset(c.value for c in RiskClass)
 # ``packages/common/tests/test_enum_literal_parity.py``) which asserts
 # ``typing.get_args(IntentLiteral) == tuple(c.value for c in IntentClass)``.
 # This collapses three+ duplicate definitions (MCP server, DSPy classifier,
-# Hermes JSON schema) into ONE canonical definition; downstream importers
+# plugin JSON schema) into ONE canonical definition; downstream importers
 # reference these names instead of re-typing the value tuple.
 IntentLiteral = Literal['permanent', 'durable', 'ephemeral']
 RiskLiteral = Literal['none', 'sensitive', 'private', 'safety']
@@ -347,7 +347,7 @@ class RetrievalRequest(BaseModel):
     )
     apply_pre_filter: bool = Field(
         default=True,
-        description='Pre-reranker Memory Worth/FSFM filter. Default True drops low-quality candidates. Set False for audit/lineage queries.',
+        description='Pre-reranker Memory Worth/FSFM filter. Default True drops low-quality candidates. Set False for audit or lineage queries.',
     )
     debug: bool = Field(
         default=False,
@@ -691,7 +691,7 @@ class VaultDTO(BaseModel):
 
     mw_mode: str = Field(
         default='stationary',
-        description='MW mode for the vault: "stationary" or "ema".',
+        description='Memory Worth mode for the vault: "stationary" or "ema".',
     )
 
     is_active: bool = Field(
@@ -1358,7 +1358,7 @@ class ProcedureOutcomeDTO(BaseModel):
 
     Returned by ``MemexAPI.list_top_procedure_outcomes`` and the
     ``GET /api/v1/kv/procedure-observations`` endpoint. Each row exposes
-    the procedure KV key, success/failure MW counters, the
+    the procedure KV key, success/failure Memory Worth counters, the
     Beta-Bernoulli posterior-mean Memory Worth score
     (``memex_core.services.outcomes.compute_mw_score``), and the
     ``last_outcome_at`` timestamp.

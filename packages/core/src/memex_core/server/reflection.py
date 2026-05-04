@@ -40,7 +40,7 @@ class SummarizeNodeRequest(BaseModel):
         default='incremental',
         description=(
             "'incremental' (default — only new evidence) or 'full' "
-            '(re-evaluate all evidence; engine caps at MAX_FULL_SCOPE_UNITS=1000).'
+            '(re-evaluate all evidence; capped at 100 units).'
         ),
     )
     vault_id: UUID | None = Field(

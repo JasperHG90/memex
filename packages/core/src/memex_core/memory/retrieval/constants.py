@@ -1,12 +1,9 @@
-"""Constants shared between the FSFM SQL clause and the reranker decay boost.
+"""Decay-boost constants shared between the SQL FSFM clause and the reranker.
 
-Single source of truth — both code paths import from here so there's exactly
-one definition of stability semantics. Numeric values flow into SQL via
-parameter binding (asyncpg ``$N`` placeholders), never f-string interpolation.
-
-If ``stability``'s unit convention ever changes (e.g., days -> hours), the
-``STABILITY_SECONDS_PER_DAY`` divisor flips in this one place and both the
-SQL builder and the Python boost stay in lockstep automatically.
+Single source of truth for stability semantics. Numeric values flow into SQL
+via parameter binding (asyncpg ``$N``), never f-string interpolation. If the
+unit convention changes (days -> hours), ``STABILITY_SECONDS_PER_DAY`` flips
+in this one place and both paths stay in lockstep.
 """
 
 from __future__ import annotations

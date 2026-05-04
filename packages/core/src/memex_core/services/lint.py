@@ -499,8 +499,8 @@ V1_RULES: tuple[RuleSpec, ...] = (
         lint_type=LintType.QUALITY,
         target_type='memory_unit',
         suggested_action=(
-            'Unit has 5+ outcomes, low MW score, and 30+ days of inactivity. '
-            "Call memex_memory_deprioritize with reason='low MW after 5+ outcomes'."
+            'Unit has 5+ outcomes, low Memory Worth score, and 30+ days of inactivity. '
+            "Call memex_memory_deprioritize with reason='low Memory Worth after 5+ outcomes'."
         ),
         select_sql=_COLD_LOW_MW_UNIT_SQL,
     ),
@@ -699,10 +699,10 @@ class LintService(BaseService):
             rows = result.mappings().all()
             # Bulk-fetch (confidence, evidence_count) for every candidate
             # so the gate predicate runs against an in-memory map rather than
-            # firing one SELECT per row (former N+1; Hermes round-1 HIGH).
+            # firing one SELECT per row (former N+1; now bulk-loaded).
             confidence_map: dict[str, tuple[float, int]] = {}
             if gate_active and rows:
-                # Hermes round-9 HIGH: cast through ``str()`` even though
+                # Cast through ``str()`` even though
                 # every rule SQL uses ``id::text AS target_id`` — asyncpg
                 # may surface ``uuid.UUID`` objects under some text() row
                 # adapters, and ``UUID(...) not in {str: ...}`` returns
@@ -712,7 +712,7 @@ class LintService(BaseService):
                 # to str at the boundary.
                 target_ids = [str(row['target_id']) for row in rows]
                 confidence_map = await bulk_load_confidence_map(session, target_ids)
-                # Hermes round-6 MED: format-mismatch defence. The bulk map
+                # Format-mismatch defence. The bulk map
                 # keys are `id::text` from PostgreSQL (canonical lowercase,
                 # hyphenated UUID). If any rule's `select_sql` somewhere
                 # ever returned a different string form, the per-id lookup
@@ -876,7 +876,7 @@ class LintService(BaseService):
 
         When ``vault_id`` is supplied the UPDATE constrains by that vault as
         well — defense-in-depth so a route bypass cannot mutate a finding
-        owned by a different vault (HIGH-4 sub). Pass ``vault_id=None`` to
+        owned by a different vault (cross-vault check). Pass ``vault_id=None`` to
         preserve legacy in-process callers (e.g. background jobs that have
         already authenticated higher up the stack).
         """
