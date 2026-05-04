@@ -1,4 +1,4 @@
-"""F10 DSPy signatures for the surprise-gated LLM lint.
+"""DSPy signatures for the surprise-gated LLM lint.
 
 Two checks per RFC-006 §"LLM check types — DSPy signatures":
 
@@ -7,12 +7,12 @@ Two checks per RFC-006 §"LLM check types — DSPy signatures":
 - :class:`CheckSchemaDrift` — does this unit's structure (date format,
   ID style, schema) diverge from the corpus norm?
 
-Both are wrapped in F10's circuit breaker via
+Both are wrapped in the circuit breaker via
 :func:`memex_core.llm.run_dspy_operation` at the factory layer
 (``checks.make_semantic_contradiction_check`` /
 ``make_schema_drift_check``).
 
-Polarity discrimination is bridged by F10b — see
+Polarity discrimination is bridged by the NLI classifier — see
 ``memex_core.memory.lint_llm.polarity`` and the OR'd
 ``surprise.gate_passes`` composition. The NLI label is passed through
 to :class:`CheckSemanticContradiction` via ``polarity_hint`` so the LLM
@@ -51,7 +51,7 @@ class CheckSemanticContradiction(dspy.Signature):
     )
     polarity_hint: PolarityLiteral | None = dspy.InputField(
         desc=(
-            'F10b NLI classifier label (entailment / neutral / contradiction) '
+            'NLI classifier label (entailment / neutral / contradiction) '
             'when the surprise gate cleared via the polarity branch only. '
             'Use as a HINT, not a hard signal — the LLM is still the final '
             'judge. Empty / None when the cosine surprise gate alone fired.'

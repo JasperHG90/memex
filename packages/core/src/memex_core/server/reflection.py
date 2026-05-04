@@ -33,7 +33,7 @@ router = APIRouter(prefix='/api/v1')
 
 
 class SummarizeNodeRequest(BaseModel):
-    """F5: synchronous summarize-node endpoint body."""
+    """Synchronous summarize-node endpoint body."""
 
     entity_id: UUID = Field(..., description='Entity UUID to reflect on.')
     scope: Literal['incremental', 'full'] = Field(
@@ -101,7 +101,7 @@ async def summarize_node(
 ):
     """F5: synchronously consolidate memories on an entity into its mental model.
 
-    Mirrors §4 F5's synchronous contract — does NOT use BackgroundTasks. Per RFC-002,
+    Mirrors the synchronous contract — does NOT use BackgroundTasks. Per RFC-002,
     rate-limited per (entity_id, vault_id) at the service layer; the endpoint is a
     thin transport that translates ``RateLimitExceededError`` into a 429 envelope
     with a ``Retry-After`` header.

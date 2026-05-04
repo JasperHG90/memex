@@ -51,7 +51,7 @@ class DiagnosticsService(BaseService):
         )
 
     async def get_lint_dashboard(self, vault_id: UUID) -> dict[str, Any]:
-        """F26 — Pivot MaintenanceProposal rows by (lint_type, status, source) plus top-5 pending.
+        """Pivot MaintenanceProposal rows by (lint_type, status, source) plus top-5 pending.
 
         Thin wrapper over :func:`memex_core.diagnostics.lint_dashboard.aggregate_lint_findings`.
         """

@@ -2,7 +2,7 @@
 
 Exposes `record_outcome()` for incrementing success/failure co-occurrence
 counters on MemoryUnit, UnitEntity, and MentalModel, and `compute_mw_score() /
-compute_mw_boost()` for the Beta-Bernoulli posterior mean used by the F1c
+compute_mw_boost()` for the Beta-Bernoulli posterior mean used by the
 retrieval composition.
 
 The MW formula uses additive-marginal composition (v6.9, §3.4):

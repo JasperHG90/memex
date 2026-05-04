@@ -1,14 +1,14 @@
-"""F6 + F8 — Lint endpoints (maintenance ledger).
+"""Lint endpoints (maintenance ledger).
 
 Routes:
 - GET    /api/v1/lint/status                          — pending counts (global + per-vault)
 - GET    /api/v1/lint/findings                        — list findings (CLI surface, offset paged)
-- GET    /api/v1/lint/flags                           — cursor-paginated agent surface (F8)
+- GET    /api/v1/lint/flags                           — cursor-paginated agent surface
 - POST   /api/v1/lint/findings/{finding_id}/dismiss   — flip status to 'dismissed'
 - POST   /api/v1/lint/findings/{finding_id}/resolve   — flip status to 'resolved'
 
 The ``findings`` endpoint backs ``memex lint findings`` (CLI). The
-``flags`` endpoint is the F8 agent surface — shape-stable returns and
+``flags`` endpoint is the agent surface — shape-stable returns and
 opaque cursor pagination, mirrored by ``memex_get_lint_flags`` MCP.
 """
 
@@ -203,13 +203,13 @@ async def lint_flags(
     cursor: str | None = Query(None, description='Opaque cursor from a prior page.'),
     auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ) -> dict[str, Any]:
-    """F8 agent surface — shape-stable, cursor-paginated.
+    """Agent surface — shape-stable, cursor-paginated.
 
     Returns ``{findings: [...], next_cursor: str|null}``. The envelope is
     stable across empty / partial / full pages so agents never need to
     handle a missing key.
 
-    AC-F8-5 path: when the maintenance ledger is missing returns 503
+    Acceptance criteria path: when the maintenance ledger is missing returns 503
     with the documented initialization-error envelope.
     """
     if vault_id is not None:

@@ -101,7 +101,7 @@ class RetrievalRequest(SQLModel):
     apply_pre_filter: bool = Field(
         default=True,
         description=(
-            'F40: pre-reranker MW/FSFM filter at hydration. Default ON drops obviously-failed '
+            'Pre-reranker MW/FSFM filter at hydration. Default ON drops obviously-failed '
             'or decayed candidates before the cross-encoder runs. Set False for '
             'historical / audit / lineage queries that need to see contradicted, '
             'behaviorally-failed, or decayed units — every branch is bypassed in one go.'
@@ -147,7 +147,7 @@ class RetrievalRequest(SQLModel):
         ),
     )
 
-    # Intent / risk class filtering (write-time classifier; F25)
+    # Intent / risk class filtering (write-time classifier)
     intent_class: str | None = Field(
         default=None,
         description=(

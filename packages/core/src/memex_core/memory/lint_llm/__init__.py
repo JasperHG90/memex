@@ -1,11 +1,11 @@
-"""F10 — Surprise-gated LLM-assisted lint.
+"""Surprise-gated LLM-assisted lint.
 
 Submodules:
 
 - ``surprise``: anisotropy-corrected surprise score for a memory unit.
 - ``signatures``: DSPy signatures for the LLM lint checks.
 - ``checks``: factories that bind a DSPy LM to a runnable ``RunLLMCheck``.
-- ``polarity``: F10b NLI classifier wrapper + per-vault rate limiter.
+- ``polarity``: NLI classifier wrapper + per-vault rate limiter.
 - ``types``: shared dataclasses + the ``PolarityLabel`` enum.
 """
 

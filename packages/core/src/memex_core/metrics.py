@@ -124,7 +124,7 @@ NOTE_ADD_OVERLAPS_EXISTING_TOTAL = Counter(
 )
 
 # ---------------------------------------------------------------------------
-# Memory Worth (MW) outcome metrics (F1a)
+# Memory Worth (MW) outcome metrics
 # ---------------------------------------------------------------------------
 
 OUTCOME_RECORDED_TOTAL = Counter(
@@ -147,7 +147,7 @@ MW_BOOST_OBSERVED = Histogram(
 )
 
 # ---------------------------------------------------------------------------
-# F40 / F44 / F45 — pre-reranker filter observability
+# Pre-reranker filter observability
 # ---------------------------------------------------------------------------
 # CROSS_ENCODER_INPUT_COUNT_HISTOGRAM and EXPLORATION_INJECTED_TOTAL emit
 # on every retrieval call (regardless of apply_pre_filter) so observability
@@ -189,7 +189,7 @@ EXPLORATION_INJECTED_TOTAL = Counter(
 )
 
 # ---------------------------------------------------------------------------
-# F47: Contradiction-derived confidence reranker composition metrics
+# Contradiction-derived confidence reranker composition metrics
 # ---------------------------------------------------------------------------
 
 CONFIDENCE_SCORE_DISTRIBUTION = Histogram(
@@ -208,7 +208,7 @@ CONFIDENCE_BOOST_OBSERVED = Histogram(
 )
 
 # ---------------------------------------------------------------------------
-# F22: Two-Factor edge confidence — variance over (confidence, evidence_count)
+# Two-Factor edge confidence — variance over (confidence, evidence_count)
 # ---------------------------------------------------------------------------
 
 CONFIDENCE_VARIANCE_OBSERVED = Histogram(
@@ -222,20 +222,20 @@ CONFIDENCE_VARIANCE_OBSERVED = Histogram(
 )
 
 # ---------------------------------------------------------------------------
-# F11: FSFM-lite decay boost reranker composition metric
+# FSFM-lite decay boost reranker composition metric
 # ---------------------------------------------------------------------------
 
 DECAY_BOOST_OBSERVED = Histogram(
     'memex_decay_boost',
-    'F11 decay boost factors applied during reranking. Neutral is 1.0 '
+    'Decay boost factors applied during reranking. Neutral is 1.0 '
     '(NULL importance OR NULL last_outcome_at OR decay_alpha=0).',
     buckets=(0.70, 0.80, 0.85, 0.90, 0.95, 1.0, 1.05, 1.10, 1.15, 1.20, 1.30),
 )
 
 # ---------------------------------------------------------------------------
-# Write-time classifier metrics (F25 / F25b)
+# Write-time classifier metrics
 # ---------------------------------------------------------------------------
-# F25b folded the standalone classifier into the fact-extraction signature, so
+# The standalone classifier was folded into the fact-extraction signature, so
 # the per-call success/error counter (CLASSIFIER_CALLS_TOTAL) was dropped —
 # extraction errors are tracked under the extraction-engine instrumentation.
 # Distribution + blocked counters are still emitted from the engine's
@@ -261,7 +261,7 @@ CLASSIFIER_BLOCKED_TOTAL = Counter(
 )
 
 # ---------------------------------------------------------------------------
-# Diagnostics metrics (F32)
+# Diagnostics metrics
 # ---------------------------------------------------------------------------
 
 DIAGNOSTICS_MANIFOLD_COMPUTE_SECONDS = Histogram(
@@ -284,24 +284,24 @@ DIAGNOSTICS_CACHE_MISSES_TOTAL = Counter(
 )
 
 # ---------------------------------------------------------------------------
-# Lint metrics (F6)
+# Lint metrics
 # ---------------------------------------------------------------------------
 
 LINT_FINDINGS_TOTAL = Counter(
     'memex_lint_findings_total',
-    'Maintenance proposals emitted by F6 lint rules.',
+    'Maintenance proposals emitted by lint rules.',
     ['rule_name', 'lint_type', 'vault_id'],
 )
 
 LINT_RUN_DURATION_SECONDS = Histogram(
     'memex_lint_run_duration_seconds',
-    'Wall-clock duration of a single F6 lint rule execution (seconds).',
+    'Wall-clock duration of a single lint rule execution (seconds).',
     ['rule_name'],
     buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0),
 )
 
 # ---------------------------------------------------------------------------
-# F9 — Per-entity advisory lock + reconsolidate / consolidate metrics
+# Per-entity advisory lock + reconsolidate / consolidate metrics
 # ---------------------------------------------------------------------------
 
 ENTITY_LOCK_ACQUIRES_TOTAL = Counter(
@@ -325,16 +325,16 @@ CONSOLIDATE_TOTAL = Counter(
 )
 
 # ---------------------------------------------------------------------------
-# F41 — Cross-encoder score cache
+# Cross-encoder score cache
 # ---------------------------------------------------------------------------
 
 CROSS_ENCODER_CACHE_HITS_TOTAL = Counter(
     'memex_cross_encoder_cache_hits_total',
-    'Cross-encoder reranker score cache hits (F41). Hit rate = hits / (hits + misses).',
+    'Cross-encoder reranker score cache hits. Hit rate = hits / (hits + misses).',
 )
 
 CROSS_ENCODER_CACHE_MISSES_TOTAL = Counter(
     'memex_cross_encoder_cache_misses_total',
-    'Cross-encoder reranker score cache misses (F41). '
+    'Cross-encoder reranker score cache misses. '
     'A miss triggers a cross-encoder forward pass and a fill.',
 )

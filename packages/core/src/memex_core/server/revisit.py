@@ -1,6 +1,6 @@
-"""F20 — FSRS-5 revisitation HTTP endpoints.
+"""FSRS-5 revisitation HTTP endpoints.
 
-HTTP wire surface for the F20 revisit verbs so non-in-process clients
+HTTP wire surface for the revisit verbs so non-in-process clients
 (the Hermes plugin via ``RemoteMemexAPI``) can call them. The MCP tool
 calls the in-process API directly; this file gives remote callers parity.
 

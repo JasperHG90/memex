@@ -1,10 +1,10 @@
-"""F38 ConsolidationService — thin orchestrator over reflection + contradiction + prune.
+"""ConsolidationService — thin orchestrator over reflection + contradiction + prune.
 
 Per RFC-010, this is intentionally a thin module. Its **only** direct DB write
 is the ``consolidation_ticks`` summary row inserted at the end of each tick
-(AC-F38-4 module-write audit). All other writes are delegated.
+(acceptance criteria module-write audit). All other writes are delegated.
 
-Step ordering (B1 adjudication, AC-F38-1):
+Step ordering (B1 adjudication, acceptance criteria):
     1. ``select_diff_units`` — read AuditLog rows with ``action='outcome.record'``
        since the previous tick's ``completed_at``.
     2. ``ContradictionEngine.detect_contradictions`` — runs first so reflection
@@ -12,8 +12,8 @@ Step ordering (B1 adjudication, AC-F38-1):
     3. ``ReflectionService.reflect_batch`` — synthesizes mental models for the
        entities touched by the diff units.
     4. ``prune_stale_evidence`` — invoked **only** on units already at
-       ``ContentStatus.STALE``. F38 does NOT decide staleness — that lives in
-       F25 / contradiction-driven confidence drops / archive cascade.
+       ``ContentStatus.STALE``. Consolidation does NOT decide staleness — that lives in
+       the write-time classifier / contradiction-driven confidence drops / archive cascade.
     5. ``write_tick_summary`` — single ``ConsolidationTick`` row per tick.
 
 The 500-units-per-tick budget (oldest-first by ``mentioned_at`` /
@@ -159,11 +159,11 @@ class ConsolidationService:
         entities_deferred: list[UUID] = []
         error: str | None = None
 
-        # Per-entity loop under F9's per-entity advisory lock so this tick
+        # Per-entity loop under the per-entity advisory lock so this tick
         # cannot race with `memex_memory_reconsolidate` (LocksService) on the
         # same MentalModel/MemoryUnits. Contention policy: skip-and-log-deferred
         # — if another reconsolidation holds the lock, leave the entity for the
-        # next tick rather than block the whole tick. AC-F38-1 step ordering
+        # next tick rather than block the whole tick. Acceptance criteria step ordering
         # (contradiction → reflection → prune) is preserved per entity.
         for eid in entity_ids:
             entity_unit_ids = unit_ids_by_entity[eid]
@@ -404,7 +404,7 @@ class ConsolidationService:
         """Return a {entity_id: [unit_ids]} map for the diff units.
 
         Used by ``tick()`` to drive a per-entity loop under
-        ``acquire_entity_lock`` so F38 cannot race with F9's
+        ``acquire_entity_lock`` so consolidation cannot race with
         ``memex_memory_reconsolidate`` on the same MentalModel. Vault-scoped.
         """
         if not unit_ids:
@@ -432,7 +432,7 @@ class ConsolidationService:
         """Return the subset of ``unit_ids`` whose ``status == STALE``.
 
         This is the AC-F38-2 invariant: F38 invokes ``prune_stale_evidence``
-        ONLY on units already marked stale by some other service. F38 does
+        ONLY on units already marked stale by some other service. Consolidation does
         NOT mutate ``status`` from active to stale.
         """
         if not unit_ids:
@@ -446,7 +446,7 @@ class ConsolidationService:
         return [row for row in result.all() if row is not None]
 
     # ------------------------------------------------------------------
-    # Tick-summary write (the single direct write — AC-F38-4)
+    # Tick-summary write (the single direct write — acceptance criteria)
     # ------------------------------------------------------------------
 
     async def _write_tick_summary(

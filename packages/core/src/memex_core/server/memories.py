@@ -35,7 +35,7 @@ router = APIRouter(prefix='/api/v1')
 
 
 class MemoryUnitsByChunksRequest(BaseModel):
-    """F46: batch lookup of memory units by chunk_id."""
+    """Batch lookup of memory units by chunk_id."""
 
     chunk_ids: list[UUID] = Field(..., description='Chunk UUIDs to expand into memory units.')
     vault_id: UUID = Field(
@@ -57,7 +57,7 @@ async def get_memory_units_by_chunks(
     api: Annotated[MemexAPI, Depends(get_api)],
     auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ) -> list[MemoryUnitDTO]:
-    """F46: get all memory units belonging to the named chunks (vault-scoped)."""
+    """Get all memory units belonging to the named chunks (vault-scoped)."""
     await check_vault_access(auth, [request.vault_id], api, permission=Permission.READ)
     try:
         units = await api.get_memory_units_by_chunks(request.chunk_ids, request.vault_id)
@@ -175,12 +175,12 @@ async def restore_memory_unit(
 
 
 # ---------------------------------------------------------------------------
-# F9 — memex_memory_reconsolidate / memex_memory_consolidate
+# Per-entity reconsolidation / vault-wide consolidation
 # ---------------------------------------------------------------------------
 
 
 class ReconsolidateRequest(BaseModel):
-    """F9: per-entity reconsolidation under an advisory lock."""
+    """Per-entity reconsolidation under an advisory lock."""
 
     entity_id: UUID = Field(..., description='Entity UUID to reconsolidate.')
     vault_id: UUID = Field(..., description='Vault UUID — explicit per RFC-005 to scope unit_ids.')
@@ -193,7 +193,7 @@ class ReconsolidateRequest(BaseModel):
 
 
 class ConsolidateRequest(BaseModel):
-    """F9: vault-wide low-MW consolidation."""
+    """Vault-wide low-MW consolidation."""
 
     vault_id: UUID = Field(..., description='Vault UUID to consolidate.')
     dry_run: bool = Field(
@@ -203,7 +203,7 @@ class ConsolidateRequest(BaseModel):
 
 
 class ReconsolidateResponse(BaseModel):
-    """F9: typed response envelope for /memory/reconsolidate.
+    """Typed response envelope for /memory/reconsolidate.
 
     Mirrors `LocksService.reconsolidate_entity` return shape (RFC-005 / RFC-008).
     """
@@ -256,7 +256,7 @@ async def reconsolidate_entity(
     api: Annotated[MemexAPI, Depends(get_api)],
     auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ) -> ReconsolidateResponse:
-    """F9: re-evaluate memories for an entity under a per-entity advisory lock.
+    """Re-evaluate memories for an entity under a per-entity advisory lock.
 
     Acquires `acquire_entity_lock(entity_id)` for `timeout_seconds`, then runs
     `ContradictionEngine.detect_contradictions` over linked unit_ids, then
@@ -334,14 +334,14 @@ async def consolidate_vault(
     api: Annotated[MemexAPI, Depends(get_api)],
     auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ) -> Any:
-    """F9: vault-wide low-MW unit consolidation. RFC-008.
+    """Vault-wide low-MW unit consolidation. RFC-008.
 
     Predicate: mw_score<0.35 AND outcomes>=5 AND !is_deprioritized AND
     created_at<now()-30d. dry_run=true returns preview without writes.
 
     Rate-limited per vault (RFC-008 line 125; default 1 call per vault per
     hour). Translates ``RateLimitExceededError`` into a 429 envelope with a
-    ``Retry-After`` header. Mirrors the F5 summarize-node 429 contract.
+    ``Retry-After`` header. Mirrors the summarize-node 429 contract.
     """
     await check_vault_access(auth, [request.vault_id], api, permission=Permission.WRITE)
     try:
@@ -428,7 +428,7 @@ async def get_unit_history(
     ),
     auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ) -> UnitHistoryNodeDTO:
-    """F49: walk the contradiction graph backward from ``memory_id``.
+    """Walk the contradiction graph backward from ``memory_id``.
 
     Returns the supersession history (negative-evidence path: contradicts /
     weakens links) as an ordered tree rooted at the queried unit (depth=0).

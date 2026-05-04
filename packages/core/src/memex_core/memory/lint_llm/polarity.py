@@ -1,7 +1,7 @@
-"""F10b — polarity-discriminating NLI wrapper.
+"""Polarity-discriminating NLI wrapper.
 
-Augments F10's surprise gate with a three-way NLI signal so polarity-inverting
-unit/peer pairs (POC-002 result.md F3) clear the gate even when MiniLM-L12
+Augments the surprise gate with a three-way NLI signal so polarity-inverting
+unit/peer pairs (POC-002 result.md) clear the gate even when MiniLM-L12
 cosine surprise alone keeps them below the surprise threshold.
 
 The composition is OR'd: a unit/peer pair clears the gate when EITHER
@@ -52,7 +52,7 @@ class PolarityClassifyOutcome:
 class PolarityRateLimiter:
     """Per-vault hourly cap on NLI invocations.
 
-    In-memory sliding window — the F10 lint scheduler is a single-leader process
+    In-memory sliding window — the lint scheduler is a single-leader process
     (Postgres advisory lock) so a process-local counter is sufficient. The cap
     is a soft circuit-breaker; over-cap calls return ``False`` and the gate
     falls back to cosine-only behaviour for that pair.
@@ -113,7 +113,7 @@ class PolarityClassifier:
 
     Uses ``NLIClassifierModel`` for the inference call and ``PolarityRateLimiter``
     for the per-vault hourly cap (None = unlimited). The argmax label and
-    raw probabilities are returned in a :class:`PolarityResult` so the F10 LLM
+    raw probabilities are returned in a :class:`PolarityResult` so the LLM
     check can carry the label through as a hint.
     """
 
@@ -158,7 +158,7 @@ class PolarityClassifier:
         admitted = await self.rate_limiter.admit(vault_id)
         if not admitted:
             logger.warning(
-                'F10b NLI rate-limit exhausted for vault %s — falling back to cosine-only',
+                'NLI rate-limit exhausted for vault %s — falling back to cosine-only',
                 vault_id,
             )
             return PolarityClassifyOutcome(rate_limited=True)
@@ -174,7 +174,7 @@ class PolarityClassifier:
             return PolarityClassifyOutcome(result=result)
         except Exception:
             logger.exception(
-                'F10b NLI classify failed for vault %s — falling back to cosine-only',
+                'NLI classify failed for vault %s — falling back to cosine-only',
                 vault_id,
             )
             await self.rate_limiter.release(vault_id)
@@ -206,7 +206,7 @@ def gate_passes(
     surprise_threshold: float,
     polarity_threshold: float = DEFAULT_POLARITY_THRESHOLD,
 ) -> bool:
-    """OR-combine F10's cosine gate with F10b's polarity gate.
+    """OR-combine the cosine gate with the polarity gate.
 
     The contract is symmetric: the pair clears the gate when EITHER signal
     crosses its respective threshold. The caller is expected to pass

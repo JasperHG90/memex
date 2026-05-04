@@ -1,6 +1,6 @@
-"""F29 — Outcome recording endpoint.
+"""Outcome recording endpoint.
 
-HTTP wire surface for ``MemexAPI.record_outcome`` (F14 ADD-2). Required so
+HTTP wire surface for ``MemexAPI.record_outcome`` (ADD-2). Required so
 remote clients (the Hermes plugin via ``RemoteMemexAPI``) can train MW
 scoring on memory units or procedure KV keys. The MCP tool calls
 ``api.record_outcome`` in-process; this route gives non-in-process clients
@@ -64,7 +64,7 @@ class RecordOutcomeRequest(BaseModel):
         default='memory_unit',
         description=(
             "What the outcome scores. 'memory_unit' increments MW counters on "
-            "the memory units in unit_ids. 'kv_key' (F14) increments counters "
+            "the memory units in unit_ids. 'kv_key' increments counters "
             'on the procedure_outcomes row for kv_key.'
         ),
     )
@@ -85,7 +85,7 @@ async def post_record_outcome(
 ) -> dict[str, Any]:
     """Record an outcome for memory units or a procedure key.
 
-    Mirrors :meth:`MemexAPI.record_outcome`; preserves the F14 ADD-2 contract
+    Mirrors :meth:`MemexAPI.record_outcome`; preserves the ADD-2 contract
     (positional ``unit_ids``, ``success`` at the in-process call site).
     Vault is resolved server-side so callers may pass UUID or name.
 

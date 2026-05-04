@@ -1,8 +1,8 @@
-"""F10b NLI classifier factory.
+"""NLI classifier factory.
 
 Mirrors :func:`memex_core.memory.models.reranking.get_reranking_model`: a config
 dispatched factory that returns an object satisfying the
-:class:`NLIClassifierModel` protocol. ONNX-only for v1 (per F10b scope).
+:class:`NLIClassifierModel` protocol. ONNX-only for v1.
 """
 
 from __future__ import annotations
@@ -41,7 +41,7 @@ def _get_init_lock() -> asyncio.Lock:
 
 
 async def get_nli_model(config: NLIModelConfig | None = None) -> NLIClassifierModel | None:
-    """Return an NLI classifier or ``None`` when the F10b gate is disabled.
+    """Return an NLI classifier or ``None`` when the polarity gate is disabled.
 
     Reuses the same cached ONNX session across FastAPI lifespan restarts as
     the embedding/reranker models — the model is ~140 MB, single-instance.

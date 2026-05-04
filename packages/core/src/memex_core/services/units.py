@@ -1,4 +1,4 @@
-"""Memory unit curation service — non-destructive verbs (F4)."""
+"""Memory unit curation service — non-destructive verbs."""
 
 from __future__ import annotations
 
@@ -44,7 +44,7 @@ class UnitsService(BaseService):
         None, no vault check is applied (legacy CLI path).
 
         Does NOT cascade to MentalModels; does NOT call ``prune_stale_evidence``.
-        The retrieval-time filter (F1b) honours the flag — see
+        The retrieval-time filter honours the flag — see
         ``memory/retrieval/strategies.py:93-95``.
         """
         return await self._flip_deprioritized(
@@ -189,7 +189,7 @@ class UnitsService(BaseService):
         vault_id: UUID | None = None,
         link_types: tuple[str, ...] = DEFAULT_HISTORY_LINK_TYPES,
     ) -> UnitHistoryNodeDTO:
-        """F49: walk the contradiction graph backward from ``unit_id``.
+        """Walk the contradiction graph backward from ``unit_id``.
 
         Starts at ``unit_id`` (depth=0) and recursively follows outgoing
         ``contradicts`` / ``weakens`` MemoryLink rows — i.e., links where

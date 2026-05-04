@@ -7,8 +7,7 @@ leader lock at ~2^52. See RFC-005.
 Acquire/release pattern uses a dedicated short-lived asyncpg connection per
 context-manager invocation. Lock release is deterministic on context exit; if
 the connection dies mid-hold (process crash, network failure), Postgres
-auto-releases the lock when the backend terminates. Both behaviours validated
-in POC-F9 (commit bba8094, merged at 866ec74).
+auto-releases the lock when the backend terminates.
 
 LocksService orchestrates `memex_memory_reconsolidate` (entity-scoped) and
 `memex_memory_consolidate` (vault-wide). RFC-005 / RFC-008.

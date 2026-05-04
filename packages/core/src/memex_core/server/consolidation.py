@@ -1,7 +1,7 @@
-"""F38 — Consolidation orchestrator endpoints.
+"""Consolidation orchestrator endpoints.
 
-Operator-facing routes for the `memex consolidate` CLI. Per AC-F38-5 there
-is intentionally NO MCP / Hermes / Claude Code tool surface — these are
+Operator-facing routes for the `memex consolidate` CLI. Per acceptance criteria
+there is intentionally NO MCP / Hermes / Claude Code tool surface — these are
 HTTP-only and the CLI is the only first-class client.
 
 Routes:

@@ -1,4 +1,4 @@
-"""F10 surprise-gated LLM-assisted lint service.
+"""Surprise-gated LLM-assisted lint service.
 
 Implements ``LintLLMService.maybe_run`` which orchestrates:
 

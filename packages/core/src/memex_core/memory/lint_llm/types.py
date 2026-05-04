@@ -1,4 +1,4 @@
-"""F10 shared types — kept in a leaf module to avoid the circular import
+"""Shared types — kept in a leaf module to avoid the circular import
 between ``memory.lint_llm.checks`` (which produces findings) and
 ``services.lint_llm`` (which persists them).
 """
@@ -19,7 +19,7 @@ if TYPE_CHECKING:
 
 
 class PolarityLabel(str, Enum):
-    """Three-way NLI label produced by F10b's polarity classifier."""
+    """Three-way NLI label produced by the polarity classifier."""
 
     ENTAILMENT = 'entailment'
     NEUTRAL = 'neutral'
@@ -30,7 +30,7 @@ PolarityLiteral = Literal['entailment', 'neutral', 'contradiction']
 
 
 class PolarityResult(BaseModel):
-    """Argmax label + per-class probabilities from F10b's NLI classifier.
+    """Argmax label + per-class probabilities from the NLI classifier.
 
     Probabilities are stored verbatim (no rounding) so the gate can apply its
     threshold to the contradiction-probability without re-deriving it. The
@@ -68,7 +68,7 @@ class PolarityResult(BaseModel):
 
 @dataclass
 class LLMLintFinding:
-    """Output of an F10 LLM check, ready to persist as a MaintenanceProposal.
+    """Output of an LLM check, ready to persist as a MaintenanceProposal.
 
     ``rule_name`` identifies the DSPy signature that produced the finding
     (e.g. ``llm_semantic_contradiction``, ``llm_schema_drift``).
@@ -89,9 +89,9 @@ class LLMLintFinding:
 
 @dataclass
 class CheckContext:
-    """Optional context the F10 service threads into a check invocation.
+    """Optional context the service threads into a check invocation.
 
-    Currently carries the F10b polarity result computed by the orchestrator's
+    Currently carries the polarity result computed by the orchestrator's
     OR'd gate so the check does not re-invoke the NLI model. Forwards the
     argmax label to the DSPy signature as ``polarity_hint`` and the
     probabilities into the finding's ``extra_evidence`` payload.
@@ -102,7 +102,7 @@ class CheckContext:
 
 @runtime_checkable
 class LegacyRunLLMCheck(Protocol):
-    """F10's original 3-positional check signature (kept for backwards compat).
+    """Original 3-positional check signature (kept for backwards compat).
 
     The service uses ``inspect.signature`` to decide whether to call this form
     or :class:`ContextAwareRunLLMCheck`; new checks should accept ``context``.
@@ -118,7 +118,7 @@ class LegacyRunLLMCheck(Protocol):
 
 @runtime_checkable
 class ContextAwareRunLLMCheck(Protocol):
-    """F10b's context-aware check signature.
+    """Context-aware check signature.
 
     Receives a keyword-only :class:`CheckContext` so the orchestrator can plumb
     a precomputed :class:`PolarityResult` through to the DSPy signature without
@@ -135,7 +135,7 @@ class ContextAwareRunLLMCheck(Protocol):
     ) -> 'LLMLintFinding | None': ...
 
 
-# Union of the legacy 3-positional and F10b context-aware check signatures.
+# Union of the legacy 3-positional and context-aware check signatures.
 # Either form is accepted at the service boundary; ``_invoke_check`` routes via
 # ``inspect.signature`` so the right call shape is used at runtime. Using a
 # union (rather than a single Protocol that covers both) keeps positional-arg
