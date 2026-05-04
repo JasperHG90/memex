@@ -137,6 +137,13 @@ class TestAllGroups:
             'entity_mention_check',
             'result_ordering',
             'llm_judge',
+            'unit_metadata_matches',
+            'excluded_by_default',
+            'ranking_after_outcomes',
+            'summary_nonempty',
+            'kv_roundtrip',
+            'lint_finding_present',
+            'llm_lint_flags_unit',
         }
         for group in ALL_GROUPS:
             for check in group.checks:
@@ -146,8 +153,10 @@ class TestAllGroups:
                 )
 
     def test_all_checks_have_required_fields(self):
+        query_optional_types = {'lint_finding_present', 'llm_lint_flags_unit', 'kv_roundtrip'}
         for group in ALL_GROUPS:
             for check in group.checks:
                 assert check.name, f'Check in group "{group.name}" has empty name'
-                assert check.query, f'Check "{check.name}" has empty query'
+                if check.check_type not in query_optional_types:
+                    assert check.query, f'Check "{check.name}" has empty query'
                 assert check.expected is not None, f'Check "{check.name}" has None expected'
