@@ -1,7 +1,6 @@
 from typing import cast, Self, Any, AsyncGenerator, TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from memex_core.memory.sql_models import Vault as Vault
     from memex_core.services.lint_llm import LintLLMService
 import asyncio
 import hashlib
@@ -57,7 +56,7 @@ from memex_core.memory.reflect.models import (
     ReflectionResult,
 )
 from memex_core.memory.reflect.queue_service import ReflectionQueueService
-from memex_core.memory.sql_models import MemoryUnit
+from memex_core.memory.sql_models import MemoryUnit, Vault
 from memex_core.memory.models.protocols import EmbeddingsModel, RerankerModel
 from memex_core.memory.models.ner import FastNERModel
 from memex_core.memory.entity_resolver import EntityResolver
@@ -673,7 +672,6 @@ class MemexAPI:
         1. Ensure Global Vault exists.
         2. Ensure Active Vault exists.
         """
-        from memex_core.memory.sql_models import Vault
         from memex_core.config import GLOBAL_VAULT_NAME
 
         async with self.metastore.session() as session:
