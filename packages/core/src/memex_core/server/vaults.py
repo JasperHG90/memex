@@ -107,7 +107,11 @@ async def list_vaults(
             return ndjson_response(
                 [
                     VaultDTO(
-                        id=vault.id, name=vault.name, description=vault.description, access=access
+                        id=vault.id,
+                        name=vault.name,
+                        description=vault.description,
+                        mw_mode=vault.mw_mode,
+                        access=access,
                     )
                 ]
             )
@@ -123,7 +127,11 @@ async def list_vaults(
                 )
             active_access = await _vault_access(active.id, auth, api)
             active_dto = VaultDTO(
-                id=active.id, name=active.name, description=active.description, access=active_access
+                id=active.id,
+                name=active.name,
+                description=active.description,
+                mw_mode=active.mw_mode,
+                access=active_access,
             )
 
             # Resolve default reader vault (if different from active)
@@ -139,6 +147,7 @@ async def list_vaults(
                                 id=reader.id,
                                 name=reader.name,
                                 description=reader.description,
+                                mw_mode=reader.mw_mode,
                                 access=reader_access,
                             )
                         )
@@ -165,6 +174,7 @@ async def list_vaults(
                     id=v.id,
                     name=v.name,
                     description=v.description,
+                    mw_mode=v.mw_mode,
                     is_active=(v.id == active_vault_id),
                     note_count=row['note_count'],
                     last_note_added_at=row['last_note_added_at'],
@@ -183,7 +193,9 @@ async def create_vault(
     """Create a new vault."""
     try:
         vault = await api.create_vault(name=request.name, description=request.description)
-        return VaultDTO(id=vault.id, name=vault.name, description=vault.description)
+        return VaultDTO(
+            id=vault.id, name=vault.name, description=vault.description, mw_mode=vault.mw_mode
+        )
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to create vault')
 

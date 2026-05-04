@@ -1357,7 +1357,7 @@ class MemexAPI:
         instead of memory units. See
         :meth:`OutcomeService.record_outcome` for the full contract.
         """
-        half_life = self.config.memory.retrieval.mw_ema_half_life_days
+        half_life = self.config.server.memory.retrieval.mw_ema_half_life_days
         async with self.metastore.session() as session:
             return await self._outcomes.record_outcome(
                 session=session,
