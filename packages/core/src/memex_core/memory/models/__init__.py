@@ -22,6 +22,7 @@ from memex_core.memory.models.reranking import (
 from memex_core.memory.models.ner import get_ner_model, FastNERModel
 from memex_core.memory.models.nli import get_nli_model
 from memex_core.memory.models.backends.onnx_nli import OnnxNLIClassifier
+from memex_core.memory.models.backends.litellm_nli import LiteLLMNLI
 from memex_core.memory.models.anisotropy import (
     AnisotropyCorrector,
     AnisotropyCorrectorGroup,
@@ -44,6 +45,7 @@ __all__ = [
     'FastNERModel',
     'get_ner_model',
     'OnnxNLIClassifier',
+    'LiteLLMNLI',
     'get_nli_model',
     'AnisotropyCorrector',
     'AnisotropyCorrectorGroup',
