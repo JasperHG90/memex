@@ -8,9 +8,9 @@ Owns the revisit-policy domain:
 
 Algorithm: FSRS-5 via `memex_core.memory.revisit` (thin wrapper over py-fsrs).
 Counter mutation discipline: `success_co_count` / `failure_co_count` are NEVER
-written here — only `OutcomeService.record_outcome` writes those. The TC-24-15
-grep audit at `tests/integration/test_int_f20_review.py` enforces that
-discipline at the module-source level.
+written here — only `OutcomeService.record_outcome` writes those. The grep
+audit at `tests/integration/test_int_f20_review.py` enforces that discipline
+at the module-source level.
 """
 
 from __future__ import annotations
@@ -93,7 +93,7 @@ class DueUnit:
 
 
 class RevisitationService(BaseService):
-    """F20 revisit-policy verb-level service.
+    """Revisit-policy verb-level service.
 
     Inherits the standard `(metastore, filestore, config)` triple from
     `BaseService`; the audit service is wired post-construction by the
@@ -147,9 +147,9 @@ class RevisitationService(BaseService):
 
         The eligibility predicate is applied AGAIN at query time — a unit
         scheduled before becoming deprioritized (or stale, or low-confidence)
-        is filtered out at listing time per RFC-008:101 (predicate enforced
-        at both seed-time and query-time). This protects against split-brain
-        between scheduling and serving.
+        is filtered out at listing time (predicate enforced at both seed-time
+        and query-time). This protects against split-brain between scheduling
+        and serving.
         """
         cutoff = now or datetime.now(timezone.utc)
         async with self.metastore.session() as session:
@@ -186,16 +186,16 @@ class RevisitationService(BaseService):
     ) -> dict[str, Any]:
         """Advance schedule + record outcome + maintain sticky streak + audit.
 
-        Sticky semantics (RFC-014:170 + AC-F20-3):
+        Sticky semantics:
         - `revisit_review_count` tracks **consecutive** Again ratings since
           the last non-Again. Resets to 0 on any Hard/Good/Easy rating.
         - When the count reaches `STICKY_AGAIN_THRESHOLD` (5), this method
           flips `is_deprioritized=true` automatically.
         - The unset path is intentionally NOT here — once deprioritized,
           positive outcomes never auto-restore. Only `memex_memory_restore`
-          (F4) can flip `is_deprioritized` back to false.
+          can flip `is_deprioritized` back to false.
 
-        Quality mapping per AC-F20-5:
+        Quality mapping:
           quality ∈ {AGAIN, HARD}  → record_outcome(success=False)
           quality ∈ {GOOD, EASY}   → record_outcome(success=True)
 
@@ -209,12 +209,11 @@ class RevisitationService(BaseService):
           6. audit_event('memory_review', ...)
           7. Single commit
 
-        Cross-feature plumbing (F38 consolidation hook):
-        Step 5 inserts an audit row that F38's `select_diff_units`
-        observes on its next consolidation tick — so a review
-        automatically schedules the unit for downstream contradiction +
-        reflection passes without any direct service coupling. The
-        audit-log signal IS the integration seam.
+        Cross-feature plumbing (consolidation hook):
+        Step 5 inserts an audit row that `select_diff_units` observes
+        on its next consolidation tick — so a review automatically schedules
+        the unit for downstream contradiction + reflection passes without any
+        direct service coupling. The audit-log signal IS the integration seam.
         """
         review_at = now or datetime.now(timezone.utc)
         # OutcomeService is intentionally stateless: it has no metastore/filestore

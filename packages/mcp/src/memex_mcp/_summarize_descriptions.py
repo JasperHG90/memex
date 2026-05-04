@@ -1,8 +1,6 @@
 """Verbatim agent prompt text for summarize_node tool.
 
-Sourced from cognitive-memory-research-report.md §4 summarize step 6 (lines
-653-666 as of 2026-04-30 against memory_augmentation @ f79c313). When the
-spec changes, the verbatim test (TC5) fails — that is the contract.
+When the descriptions change, the verbatim test fails — that is the contract.
 """
 
 from __future__ import annotations

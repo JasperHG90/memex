@@ -132,7 +132,7 @@ async def test_resize_rejects_decompression_bomb(asset_cache, mcp_client):
 
 @pytest.mark.asyncio
 async def test_get_resources_rejects_too_many_paths(asset_cache, mcp_client):
-    """Parity with Hermes: a paths list above ``MAX_GET_RESOURCES_PATHS``
+    """Parity with hermes-plugin: a paths list above ``MAX_GET_RESOURCES_PATHS``
     is rejected up front so a misbehaving caller cannot fan out unbounded
     fetches."""
     paths = [f'images/asset-{i}.png' for i in range(MAX_GET_RESOURCES_PATHS + 1)]

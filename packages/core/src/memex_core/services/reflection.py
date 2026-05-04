@@ -150,7 +150,7 @@ class ReflectionService:
         scope: SummarizeScope = 'incremental',
         vault_id: UUID | None = None,
     ) -> ReflectionResult:
-        """F5: synchronous on-demand reflection for a single entity.
+        """Synchronous on-demand reflection for a single entity.
 
         Wraps :meth:`reflect` with a per-(entity_id, vault_id) token-bucket
         rate limit. ``scope='incremental'`` (default) honours the standard

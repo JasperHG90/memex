@@ -83,7 +83,7 @@ async def kv_get(
 ):
     """Get a key-value entry by key.
 
-    For ``procedure:`` keys (RFC-007), the default response contains only
+    For ``procedure:`` keys, the default response contains only
     the active value (back-compat — same shape as any other KV entry). Pass
     ``include_history=true`` to expose the structured envelope as
     :class:`KVProcedureEntryDTO`.
@@ -209,9 +209,9 @@ async def kv_procedure_observations(
         ),
     ] = 5,
 ):
-    """F14 — Top procedure outcomes ranked by Memory Worth (RFC-007 §155-185).
+    """Top procedure outcomes ranked by Memory Worth.
 
-    Drives the F14 procedural-observations briefing block. Rows are ordered
+    Drives the procedural-observations briefing block. Rows are ordered
     by ``mw_score = (success + 1) / (success + failure + 2)`` descending,
     tie-broken by ``last_outcome_at`` descending.
     """

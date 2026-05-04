@@ -1,7 +1,6 @@
-"""F8 — verbatim description contract (AC-F8-2).
+"""lint_flags verbatim description contract.
 
-The agent prompt is the public surface. Drift between
-``cognitive-memory-research-report.md`` §4 F8 step 6 and the registered
+Drift between the description constant and the registered
 tool description is a contract violation — this test catches a single
 character of drift.
 """
@@ -17,7 +16,7 @@ _EXPECTED = (
     'Use periodically (e.g., once per long session) or when the user asks about memory state.\n'
     '\n'
     '- vault_id (optional): scope to a single vault. Defaults to the active write vault '
-    'when omitted (Wave 0 vault-scoping invariant — never falls through to a global '
+    'when omitted (vault-scoping invariant — never falls through to a global '
     'all-vault view).\n'
     '- lint_type (optional): structural | quality | governance | schema\n'
     '- status (optional): pending | resolved | dismissed (default: pending)\n'
@@ -25,17 +24,17 @@ _EXPECTED = (
     '\n'
     'Each finding includes: target_id, lint_type, evidence (why detected), suggested_action.\n'
     'Most findings can be auto-resolved by calling the relevant tool (e.g., memory_deprioritize\n'
-    'for low-MW units). Surface high-confidence findings to the user; act autonomously on\n'
+    'for low-Memory-Worth units). Surface high-confidence findings to the user; act autonomously on\n'
     'low-risk ones (deprioritize, mark stale).'
 )
 
 
-def test_f8_description_constant_matches_section_4_verbatim() -> None:
-    """Single character of drift fails. Source: §4 F8 step 6."""
+def test_lint_flags_description_constant_matches_spec_verbatim() -> None:
+    """Single character of drift fails."""
     assert MEMEX_GET_LINT_FLAGS_DESCRIPTION == _EXPECTED
 
 
-async def test_f8_tool_uses_the_description_constant() -> None:
+async def test_lint_flags_tool_uses_the_description_constant() -> None:
     """The registered MCP tool MUST source its description from
     ``MEMEX_GET_LINT_FLAGS_DESCRIPTION`` — preventing copy-paste drift."""
     tools = await mcp._list_tools()
@@ -44,7 +43,7 @@ async def test_f8_tool_uses_the_description_constant() -> None:
     assert by_name['memex_get_lint_flags'].description == MEMEX_GET_LINT_FLAGS_DESCRIPTION
 
 
-async def test_f8_tool_is_tagged_diagnostics_and_read_only() -> None:
+async def test_lint_flags_tool_is_tagged_diagnostics_and_read_only() -> None:
     """Progressive-disclosure surface: tool appears under the 'diagnostics'
     bucket so agents discover it via memex_search(query='lint', tags=[...])."""
     tools = await mcp._list_tools()

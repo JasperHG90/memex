@@ -93,7 +93,7 @@ class TestRawFactValidators:
 
 
 class TestFilterSafetyBlocked:
-    def test_drops_safety_facts(self) -> None:
+    def test_passes_through_safety_facts(self) -> None:
         facts = [
             _make_fact(text='ok 1'),
             _make_fact(text='blocked'),
@@ -103,10 +103,11 @@ class TestFilterSafetyBlocked:
 
         kept = filter_safety_blocked(facts)
 
-        assert len(kept) == 2
-        assert all(f.risk_class != 'safety' for f in kept)
+        assert len(kept) == 3
+        assert kept[1].risk_class == 'safety'
         assert kept[0].fact_text == 'ok 1'
-        assert kept[1].fact_text == 'ok 2'
+        assert kept[1].fact_text == 'blocked'
+        assert kept[2].fact_text == 'ok 2'
 
     def test_returns_all_when_nothing_blocked(self) -> None:
         facts = [_make_fact(text=f'ok {i}') for i in range(3)]
@@ -116,8 +117,10 @@ class TestFilterSafetyBlocked:
     def test_empty_input(self) -> None:
         assert filter_safety_blocked([]) == []
 
-    def test_all_blocked(self) -> None:
+    def test_all_safety_passes_through(self) -> None:
         facts = [_make_fact(text=f'blocked {i}') for i in range(2)]
         for f in facts:
             f.risk_class = 'safety'
-        assert filter_safety_blocked(facts) == []
+        result = filter_safety_blocked(facts)
+        assert len(result) == 2
+        assert all(f.risk_class == 'safety' for f in result)

@@ -46,7 +46,9 @@ if [ -n "$_project_root" ]; then
             [ -f "$_rules_src" ] || continue
             _rules_name="$(basename "$_rules_src")"
             _rules_dst="$_rules_dst_dir/$_rules_name"
-            if [ ! -f "$_rules_dst" ] || ! diff -q "$_rules_src" "$_rules_dst" >/dev/null 2>&1; then
+            # Only install if the rule file doesn't exist yet — don't
+            # overwrite user-customized rules.
+            if [ ! -f "$_rules_dst" ]; then
                 cp "$_rules_src" "$_rules_dst" 2>/dev/null || true
             fi
         done

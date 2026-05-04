@@ -139,8 +139,8 @@ def apply_intent_risk_filter(statement: Select, **kwargs: Any) -> Select:
     the legacy client-side filter (``getattr(u, 'intent_class', 'durable') ==
     wanted`` likewise excluded ``None`` values, because the attribute exists
     on the model — ``getattr``'s default is only returned when the attribute
-    is missing entirely). In production, NULLs cannot occur: the F25
-    migration (``024_intent_risk_classifier``) adds both columns as
+    is missing entirely). In production, NULLs cannot occur: the
+    intent/risk classifier migration (``024_intent_risk_classifier``) adds both columns as
     ``NOT NULL`` with ``server_default`` (``'durable'`` / ``'none'``) and a
     CHECK constraint pinning values to the enum domain, so existing rows
     are backfilled and new rows are rejected if NULL is attempted. A persistent
@@ -260,7 +260,7 @@ from memex_core.memory.utils import get_phonetic_code
 
 
 # ---------------------------------------------------------------------------
-# Semantic seed CTE builder (T3 — semantic seeding)
+# Semantic seed CTE builder
 # ---------------------------------------------------------------------------
 
 
@@ -659,7 +659,7 @@ class MentalModelStrategy:
         #
         # NOTE: apply_context_filter / apply_intent_risk_filter are intentionally
         # NOT applied here. ``context``, ``intent_class`` and ``risk_class`` are
-        # MemoryUnit columns (set at write time per F25); MentalModel rows are
+        # MemoryUnit columns (set at write time); MentalModel rows are
         # synthesised by reflection across many memory units and don't carry
         # those facets. If a write-time risk/intent filter must constrain
         # mental-model retrieval in the future, the join would need to fan out
@@ -847,7 +847,7 @@ NoteGraphStrategy = EntityCooccurrenceNoteGraphStrategy
 
 
 # ---------------------------------------------------------------------------
-# Causal graph expansion strategies (T2)
+# Causal graph expansion strategies
 # ---------------------------------------------------------------------------
 
 CAUSAL_LINK_TYPES = ('causes', 'caused_by', 'enables', 'prevents')
@@ -1083,7 +1083,7 @@ class CausalNoteGraphStrategy:
 
 
 # ---------------------------------------------------------------------------
-# Link-expansion graph strategies (T4)
+# Link-expansion graph strategies
 # ---------------------------------------------------------------------------
 
 

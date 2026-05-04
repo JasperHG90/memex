@@ -3845,7 +3845,7 @@ async def memex_memory_deprioritize(
         Field(
             description=(
                 'Vault UUID or name the unit belongs to. Defaults to the active '
-                'write vault. Required for Wave 0 vault-scoping; cross-vault calls '
+                'write vault. Required for vault-scoping; cross-vault calls '
                 'are rejected.'
             ),
         ),
@@ -3894,7 +3894,7 @@ async def memex_memory_restore(
         Field(
             description=(
                 'Vault UUID or name the unit belongs to. Defaults to the active '
-                'write vault. Required for Wave 0 vault-scoping; cross-vault calls '
+                'write vault. Required for vault-scoping; cross-vault calls '
                 'are rejected.'
             ),
         ),
@@ -4016,7 +4016,7 @@ async def memex_get_lint_flags(
             description=(
                 'Vault UUID or name to scope the query. When omitted, falls '
                 'through to the active write vault from session config (per '
-                'Wave 0 vault-scoping invariant — never falls through to a '
+                'vault-scoping invariant — never falls through to a '
                 'global all-vault view).'
             ),
         ),
@@ -4060,7 +4060,7 @@ async def memex_get_lint_flags(
             )
         except httpx.HTTPStatusError as exc:
             if exc.response.status_code == 503:
-                # AC-F8-5 — translate the server's structured envelope.
+                # translate the server's structured envelope.
                 detail = exc.response.json().get('detail', {})
                 if (
                     isinstance(detail, dict)
@@ -4251,7 +4251,7 @@ async def memex_memory_review(
         Field(
             description=(
                 'Vault UUID or name the memory unit belongs to. REQUIRED — '
-                'the service rejects cross-vault review (Wave 0 vault-scoping invariant).'
+                'the service rejects cross-vault review (vault-scoping invariant).'
             ),
         ),
     ],

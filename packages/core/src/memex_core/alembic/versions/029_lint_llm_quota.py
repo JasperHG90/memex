@@ -1,6 +1,6 @@
-"""F10 lint_llm_quota — rolling-24h cost cap counter.
+"""lint_llm_quota — rolling-24h cost cap counter.
 
-Implements RFC-006 "Storage shape A (hour-bucket per vault)". One row per
+Implements the hour-bucket-per-vault storage shape. One row per
 (vault_id, hour_bucket); the 24h rolling window is computed by summing
 the last 24 hour-buckets via an indexed range scan.
 

@@ -20,7 +20,7 @@ Memex stores observations about how to ADAPT it to specific contexts
 (the context-tag — ``commit-style``, ``python-monorepo``).
 
 See :func:`validate_procedure_key` for the strict format check on
-procedure keys (RFC-007).
+procedure keys.
 """
 
 from __future__ import annotations
@@ -69,7 +69,7 @@ def validate_procedure_key(key: str) -> None:
     hyphens, and underscores in segments, with a leading lowercase letter
     on each of the verb and context-tag segments. Exactly two colons.
 
-    See RFC-007 §53-61 for the contract.
+    See the procedure key contract for details.
     """
     if not PROCEDURE_KEY_RE.match(key):
         raise ValueError(
@@ -124,7 +124,7 @@ class KVService(BaseService):
     ) -> Any:
         """Upsert a KV entry.
 
-        For ``procedure:`` keys (RFC-007) the write is routed through
+        For ``procedure:`` keys the write is routed through
         :meth:`_procedure_put` which wraps ``value`` in a versioned envelope
         with capped history; for all other namespaces uses the existing
         INSERT ... ON CONFLICT DO UPDATE path.
@@ -192,7 +192,7 @@ class KVService(BaseService):
         history, and caps history at :data:`PROCEDURE_HISTORY_CAP` entries
         (oldest dropped).
 
-        See RFC-007 §63-112 for the contract.
+        See the procedure write contract for details.
         """
         from sqlalchemy.dialects.postgresql import insert
 
@@ -300,8 +300,7 @@ class KVService(BaseService):
         is the unwrapped active value (back-compat — non-procedure callers
         and existing procedure-naive callers see a string, not the JSON
         envelope). With ``include_history=True``, the returned entry's
-        ``value`` is replaced with a dict ``{value, version, history}`` per
-        RFC-007 §114-116.
+        ``value`` is replaced with a dict ``{value, version, history}``.
         """
         from memex_core.memory.sql_models import KVEntry
 

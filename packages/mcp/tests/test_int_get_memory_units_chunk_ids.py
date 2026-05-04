@@ -1,4 +1,4 @@
-"""F46: ``memex_get_memory_units`` chunk_ids path + XOR validation.
+"""``memex_get_memory_units`` chunk_ids path + XOR validation.
 
 The mock-API substrate is sufficient to exercise the MCP-layer XOR guard
 and dispatch logic. End-to-end DB coverage of

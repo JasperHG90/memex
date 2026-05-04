@@ -1,7 +1,7 @@
-"""F9 maintenance_proposals resolved_by column (Wave 3 schema patch).
+"""maintenance_proposals resolved_by column.
 
 Adds a nullable ``resolved_by`` TEXT column to ``maintenance_proposals`` so
-the F9 reconsolidate / consolidate / lint resolution paths can record the
+the reconsolidate / consolidate / lint resolution paths can record the
 actor that resolved or dismissed a finding (agent name, operator id, or
 internal subsystem). Mirrors the existing ``resolved_at`` shape: nullable
 while a proposal is ``pending``, populated when status flips to

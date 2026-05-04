@@ -1,10 +1,4 @@
-"""Verbatim agent prompt text for §3.5 5-step resolution flow + §3.4.2 historical routing.
-
-Sourced from cognitive-memory-research-report.md §3.5 ("User-driven memory
-resolution: how should agents invoke deprioritize?") + §3.4.1 ("MW is the
-gradient; deprioritize is the binary") + §3.4.2 (historical-routing rule,
-added 2026-05-02). When the spec changes, the verbatim test fails — that
-is the contract.
+"""Verbatim agent prompt text for the 5-step resolution flow + historical routing.
 
 Two surfaces touched:
 - ``MEMEX_RECORD_OUTCOME_DESCRIPTION`` — the outcome verb, expanded with the
@@ -13,6 +7,7 @@ Two surfaces touched:
   with the same flow + the orthogonal-axes table.
 
 Both descriptions teach the same flow because both verbs participate in it.
+When the descriptions change, the verbatim test fails — that is the contract.
 """
 
 from __future__ import annotations
@@ -21,7 +16,7 @@ from memex_mcp._outcome_descriptions import (
     MEMEX_RECORD_OUTCOME_DESCRIPTION as _RECORD_OUTCOME_PREAMBLE,
 )
 from memex_mcp._deprioritize_descriptions import (
-    MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION as _F4_DEPRIORITIZE_DESCRIPTION,
+    MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION as _DEPRIORITIZE_PREAMBLE_SRC,
 )
 
 # ---------------------------------------------------------------------------
@@ -30,7 +25,7 @@ from memex_mcp._deprioritize_descriptions import (
 
 _FLOW_HEADER = (
     'When the user reports an issue resolved ("the X bug is fixed", "we shipped\n'
-    'Y", "issue Z is no longer relevant"), follow the §3.5 5-step flow before\n'
+    'Y", "issue Z is no longer relevant"), follow the 5-step flow before\n'
     'writing. Skipping any step (especially Step 1 disambiguation or Step 3 LLM\n'
     'judgment) leads to bulk-writing irrelevant units.\n'
 )
@@ -79,7 +74,7 @@ _FLOW_BODY = (
 )
 
 _AXES_TABLE = (
-    'Orthogonal axes (verbatim from §3.4.1 — MW is the gradient; deprioritize is\n'
+    'Orthogonal axes (Memory Worth is the gradient; deprioritize is\n'
     'the binary). The two verbs answer different questions; keep them separate:\n'
     '\n'
     '  | Tool                   | Question it answers           | Cardinality                | Reversible? |\n'
@@ -89,7 +84,7 @@ _AXES_TABLE = (
     '  | `memex_memory_         | "Should this surface by       | Binary state on the unit   | Yes         |\n'
     '  |   deprioritize`        |  default at all?"             |                            | (memory_restore) |\n'
     '\n'
-    '  - outcome=false but no deprioritize: gradient signal only — let MW\n'
+    '  - outcome=false but no deprioritize: gradient signal only — let Memory Worth\n'
     '    compound; perhaps a different query still legitimately wants this unit.\n'
     '  - deprioritize but no outcome: verdict without judging past usefulness\n'
     "    (e.g., 'correct when written but no longer relevant').\n"
@@ -102,7 +97,7 @@ _IMPERFECT_RECALL = (
     'traversal misses oblique references; chunk-scoped reads miss issues split\n'
     'across chunks. This is fine — exploration is the safety net. Any unit\n'
     'that slipped past resolution will occasionally re-surface; the user re-\n'
-    'confirms; another `record_outcome(success=false)` compounds the MW penalty.\n'
+    'confirms; another `record_outcome(success=false)` compounds the Memory Worth penalty.\n'
     'User-driven resolution is a GRADIENT across many turns, NOT a one-shot delete.\n'
 )
 
@@ -117,9 +112,9 @@ _HISTORICAL_ROUTING = (
     '      contradiction links, oldest → newest. Cleaner than ranked search.\n'
     '  - Broader audit / "show me everything including hidden stuff":\n'
     '      `memex_memory_search(query="…", apply_pre_filter=False)` — bypasses\n'
-    '      MW + FSFM + confidence pre-filters so contradicted,\n'
+    '      Memory Worth + FSFM + confidence pre-filters so contradicted,\n'
     '      behaviorally-failed, and decayed units appear. Post-reranker boosts\n'
-    '      (confidence_boost, MW) still apply, so contradicted units\n'
+    '      (confidence_boost, Memory Worth) still apply, so contradicted units\n'
     '      rank below clean ones — which is correct for audit queries.\n'
     '\n'
     'Disambiguation triggers the agent should learn (any of these → use the\n'
@@ -155,16 +150,16 @@ _DO_NOT_ADD = (
 # ---------------------------------------------------------------------------
 
 # The outcome-recording verb. The original short docstring is imported from
-# `_outcome_descriptions` (single source of truth) so MW counter discoverability
+# `_outcome_descriptions` (single source of truth) so Memory Worth counter discoverability
 # stays in sync between the standalone tool description and the augmented
 # composite. The verbatim test pins the constant against the spec; the
-# composite appends the §3.5 flow + axes table below it. The `\n\n` after the
+# composite appends the 5-step flow + axes table below it. The `\n\n` after the
 # preamble yields a blank line before the section header — visually matches
 # the deprioritize sibling description (see `_DEPRIORITIZE_PREAMBLE` below).
 MEMEX_RECORD_OUTCOME_DESCRIPTION = (
     _RECORD_OUTCOME_PREAMBLE
     + '\n\n'
-    + '## When the user reports an issue resolved (§3.5 5-step flow)\n'
+    + '## When the user reports an issue resolved (5-step flow)\n'
     + '\n'
     + _FLOW_HEADER
     + '\n'
@@ -174,7 +169,7 @@ MEMEX_RECORD_OUTCOME_DESCRIPTION = (
     + '\n'
     + _IMPERFECT_RECALL
     + '\n'
-    + '## Historical-routing rule (§3.4.2)\n'
+    + '## Historical-routing rule\n'
     + '\n'
     + _HISTORICAL_ROUTING
     + '\n'
@@ -184,17 +179,17 @@ MEMEX_RECORD_OUTCOME_DESCRIPTION = (
 
 # The deprioritize verb. The original short description (kept as the preamble
 # so deprioritize discoverability for misleading/outdated/noise units is
-# unchanged) is followed by the same §3.5 flow + axes + history.
+# unchanged) is followed by the same 5-step flow + axes + history.
 # Imported from `_deprioritize_descriptions` so there is a single source of truth; the
-# verbatim test (test_f4_tool_descriptions.py) pins the constant against the
+# verbatim test (test_deprioritize_tool_descriptions.py) pins the constant against the
 # spec, and the composite just appends a trailing newline for clean section
 # separation.
-_DEPRIORITIZE_PREAMBLE = _F4_DEPRIORITIZE_DESCRIPTION + '\n'
+_DEPRIORITIZE_PREAMBLE = _DEPRIORITIZE_PREAMBLE_SRC + '\n'
 
 MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION = (
     _DEPRIORITIZE_PREAMBLE
     + '\n'
-    + '## When the user reports an issue resolved (§3.5 5-step flow)\n'
+    + '## When the user reports an issue resolved (5-step flow)\n'
     + '\n'
     + _FLOW_HEADER
     + '\n'
@@ -204,7 +199,7 @@ MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION = (
     + '\n'
     + _IMPERFECT_RECALL
     + '\n'
-    + '## Historical-routing rule (§3.4.2)\n'
+    + '## Historical-routing rule\n'
     + '\n'
     + _HISTORICAL_ROUTING
     + '\n'

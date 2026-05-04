@@ -5,7 +5,7 @@ counters on MemoryUnit, UnitEntity, and MentalModel, and `compute_mw_score() /
 compute_mw_boost()` for the Beta-Bernoulli posterior mean used by the
 retrieval composition.
 
-The MW formula uses additive-marginal composition (v6.9, §3.4):
+The MW formula uses additive-marginal composition:
     mw_score = (success_co_count + 1) / (success_co_count + failure_co_count + 2)
     mw_boost = 1.0 + mw_alpha * (mw_score - 0.5)
 
@@ -104,26 +104,26 @@ class OutcomeService:
           increments success/failure co-counters on each MemoryUnit and
           propagates to linked UnitEntity + MentalModel rows. Requires
           positional ``unit_ids``.
-        * ``target_type='kv_key'`` (F14 — added 2026-04-30): increments
+        * ``target_type='kv_key'`` (procedure outcomes): increments
           success/failure co-counters on the vault-scoped
           ``procedure_outcomes`` row matching ``(vault_id, kv_key)``. Row
           is upserted; ``last_outcome_at`` is set to ``now()``. Requires
           keyword-only ``kv_key`` (must be a ``procedure:<verb>:<tag>``
-          key per RFC-007 §53-61) plus ``success`` and ``vault_id``.
+          key per the procedure key contract) plus ``success`` and ``vault_id``.
           ``unit_ids`` MUST be ``None`` or empty for kv_key mode —
           mixing modes is an error (silent counter divergence otherwise).
 
         Both ``unit_ids`` and ``success`` are required (no defaults) so a
         caller cannot accidentally invoke ``record_outcome(session)`` and
         silently record a FAILURE outcome — the exact MW-signal-quality
-        pathology F1 is built to detect.
+        pathology the system is built to detect.
 
         .. note::
 
             ``outcome_confidence`` is **currently ignored** in counter
             arithmetic — v1 uses integer increments only. Fractional
-            weighting is tracked under F36. Until F36 ships, callers
-            passing values other than ``1.0`` will receive a
+            weighting is tracked as a future enhancement. Until it ships,
+            callers passing values other than ``1.0`` will receive a
             ``FutureWarning`` so the silent loss of signal is visible.
 
         Args:
@@ -134,10 +134,11 @@ class OutcomeService:
             vault_id: Vault scope for the outcome.
             outcome_confidence: Weight for this outcome signal (0.0–1.0).
                 Currently recorded but not used in counter arithmetic (v1
-                uses integer increments; fractional weighting is F36).
-                # TODO(F36): fractional counter weighting
+                uses integer increments; fractional weighting is a future
+                enhancement).
+                # TODO: fractional counter weighting
             reason: Optional free-text reason (logged, not stored on units).
-            target_type: 'memory_unit' (default) or 'kv_key' (F14 procedure
+            target_type: 'memory_unit' (default) or 'kv_key' (procedure
                 outcomes).
             kv_key: Procedure KV key (kv_key mode only).
 
@@ -151,7 +152,7 @@ class OutcomeService:
             warnings.warn(
                 'outcome_confidence is currently ignored in counter arithmetic '
                 '(v1 uses integer increments). Fractional weighting is tracked '
-                'under F36. The supplied value '
+                'as a future enhancement. The supplied value '
                 f'(outcome_confidence={outcome_confidence!r}) will be logged '
                 'but not affect counters.',
                 FutureWarning,
@@ -205,13 +206,13 @@ class OutcomeService:
             log.warning('outcome.no_valid_ids')
             return {'units_updated': 0, 'entities_updated': 0, 'models_updated': 0}
 
-        # F11 — single ``now`` snapshot per record_outcome call so every
+        # Single ``now`` snapshot per record_outcome call so every
         # decay-clock bump shares one reference time with the audit log
         # event. Same convention as the reranker's per-query snapshot.
         now = datetime.now(timezone.utc)
 
         # Atomic increment on MemoryUnit rows (SQL-level, no race condition).
-        # F11: bump last_outcome_at on every counter update — recent
+        # Bump last_outcome_at on every counter update — recent
         # behavioural signal resets the decay clock.
         stmt = (
             update(MU)
@@ -258,8 +259,8 @@ class OutcomeService:
         model_result = await session.exec(model_stmt)
         model_count = model_result.rowcount  # type: ignore[union-attr]
 
-        # F38 diff hook: emit one audit row per unit so consolidation_tick can
-        # find units with new outcome signal via AuditLog.action='outcome.record'.
+        # Diff hook: emit one audit row per unit so consolidation_tick can find
+        # units with new outcome signal via AuditLog.action='outcome.record'.
         from memex_core.memory.sql_models import AuditLog
 
         outcome_label = 'success' if success else 'failure'
@@ -322,7 +323,7 @@ class OutcomeService:
         vault_id: str | None,
         reason: str | None,
     ) -> dict[str, Any]:
-        """F14: vault-scoped MW counter increment for a procedure KV key.
+        """Vault-scoped MW counter increment for a procedure KV key.
 
         Upserts into ``procedure_outcomes`` keyed on ``(vault_id, kv_key)``,
         atomically incrementing ``success_co_count`` (success=True) or
@@ -330,8 +331,7 @@ class OutcomeService:
         ``last_outcome_at = now()``.
 
         Validates that ``kv_key`` matches the
-        ``procedure:<verb>:<context-tag>`` shape (RFC-007 §53-61) before
-        touching the DB.
+        ``procedure:<verb>:<context-tag>`` shape before touching the DB.
         """
         from memex_core.services.kv import validate_procedure_key
 

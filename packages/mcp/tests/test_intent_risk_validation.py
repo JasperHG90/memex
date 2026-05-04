@@ -1,4 +1,4 @@
-"""Local validation of intent_class / risk_class on memex_memory_search (issue #92).
+"""Local validation of intent_class / risk_class on memex_memory_search.
 
 The CLI and Hermes plugin validate against ``VALID_INTENT_CLASSES`` /
 ``VALID_RISK_CLASSES`` before the API call. The MCP server does the same so

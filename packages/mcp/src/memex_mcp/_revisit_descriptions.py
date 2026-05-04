@@ -11,13 +11,10 @@ intent unambiguously:
 
 The disambiguation matters because both verbs share the word "review":
 the agent must call get_due_for_review when listing and memory_review when
-recording. The verbatim phrasings here include the trigger phrasings the
-real-LLM-turn test exercises (TC-24-12).
+recording.
 
-Algorithm note: scheduling is FSRS-5 via py-fsrs 4.1.2 — the current
-production-grade open-source spaced-repetition algorithm (Anki, RemNote,
-ts-fsrs all ship FSRS-5 in 2025). Verified at .dev-team-artifacts/
-dev-tier-a-cognitive-memory/pocs/003-f20-fsrs-parity/paper-cross-check.md.
+Scheduling is FSRS-5 via py-fsrs — the current production-grade
+open-source spaced-repetition algorithm.
 """
 
 from __future__ import annotations
@@ -31,7 +28,7 @@ MEMEX_GET_DUE_FOR_REVIEW_DESCRIPTION = (
     'predicate (intent_class IN (permanent, durable), status=active, not\n'
     'deprioritized, confidence >= 0.5, mw_score >= 0.4).\n'
     '\n'
-    '- vault_id: vault UUID or name (defaults to active vault if omitted)\n'
+    '- vault_id: vault UUID or name (defaults to active write vault if omitted)\n'
     '- limit: maximum number of due units to return (default 20)\n'
     '\n'
     'Returns a list of {unit_id, text_preview, revisit_due_at, intent_class}.\n'
@@ -52,7 +49,7 @@ MEMEX_MEMORY_REVIEW_DESCRIPTION = (
     '- quality: one of "again" (forgotten), "hard", "good", or "easy"\n'
     '         (or the FSRS-5 IntEnum value 1/2/3/4)\n'
     '- vault_id: REQUIRED — the vault the memory unit belongs to.\n'
-    '         Cross-vault review is rejected (Wave 0 vault-scoping invariant).\n'
+    '         Cross-vault review is rejected (vault-scoping invariant).\n'
     '\n'
     'Quality mapping for outcome counters:\n'
     '  "again" / "hard" → recorded as a failure outcome\n'

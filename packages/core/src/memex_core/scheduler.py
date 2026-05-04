@@ -202,9 +202,9 @@ async def periodic_revisit_task(api: 'MemexAPI'):
 async def periodic_lint_llm_task(api: 'MemexAPI'):
     """Per-vault surprise-gated LLM lint under MEMEX_LEADER_LOCK_ID.
 
-    Runs the enabled DSPy lint signatures per RFC-006 Option (A): semantic
-    contradiction + schema drift. Both share the same 24h cost cap, so the
-    second pass eats from whatever the first one left.
+    Runs the enabled DSPy lint signatures (semantic contradiction + schema
+    drift). Both share the same 24h cost cap, so the second pass eats from
+    whatever the first one left.
     """
     from memex_core.memory.lint_llm.checks import (
         make_schema_drift_check,
@@ -335,13 +335,9 @@ async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI
 
     # ============================================================
     # Tier A — Scheduler tasks (under MEMEX_LEADER_LOCK_ID)
-    # Lint task:                WS-linter
-    # Revisit seed task:       WS-revisit
-    # Diagnostics refresh:     WS-diagnostics
-    # Consolidation tick:      WS-quick-wins
     # ============================================================
 
-    # --- Lint ---       (filled by WS-linter)
+    # --- Lint ---
     if config.server.memory.lint.enabled:
         lint_interval = config.server.memory.lint.interval_seconds
 
@@ -349,7 +345,7 @@ async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI
         async def run_lint_job():
             await periodic_lint_task(api)
 
-    # --- Lint_llm ---  (filled by WS-linter)
+    # --- Lint_llm ---
     lint_llm_cfg = config.server.memory.lint_llm
     if lint_llm_cfg.enabled and lint_llm_cfg.cost_cap_per_24h > 0:
         logger.info(
@@ -365,7 +361,7 @@ async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI
     else:
         logger.info('Scheduler: Lint_llm DISABLED (enabled=False or cost_cap_per_24h=0).')
 
-    # --- Revisit ---   (filled by WS-revisit)
+    # --- Revisit ---
     if config.server.memory.revisit.enabled:
         revisit_interval = config.server.memory.revisit.interval_seconds
 
@@ -373,12 +369,12 @@ async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI
         async def run_revisit_job():
             await periodic_revisit_task(api)
 
-    # --- Diagnostics --- (filled by WS-diagnostics)
+    # --- Diagnostics ---
     @clock.task(trigger=Every(seconds=7 * 86400))
     async def run_diagnostics_refresh():
         await periodic_diagnostics_refresh_task(api)
 
-    # --- Consolidation --- (filled by WS-quick-wins)
+    # --- Consolidation ---
     consolidation_cfg = config.server.memory.consolidation
     if consolidation_cfg.enabled:
         logger.info(

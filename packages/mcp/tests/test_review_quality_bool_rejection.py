@@ -1,4 +1,4 @@
-"""F20 MCP regression: ``quality`` must reject Python bools.
+"""review quality bool rejection: ``quality`` must reject Python bools.
 
 Pydantic's ``int | str`` Union does NOT reject bool — it silently coerces
 ``True`` → ``1`` and ``False`` → ``0`` (because ``bool ⊂ int``). Without

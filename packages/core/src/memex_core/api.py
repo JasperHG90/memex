@@ -642,7 +642,7 @@ class MemexAPI:
         dry_run: bool = False,
         actor: str | None = None,
     ) -> dict[str, Any]:
-        """Vault-wide low-MW unit consolidation (RFC-008).
+        """Vault-wide low-MW unit consolidation.
 
         Facade for `LocksService.consolidate_vault`.
         """
@@ -756,7 +756,7 @@ class MemexAPI:
         times. Currently closes:
 
           * ``LocksService._pool`` — shared asyncpg pool used by entity
-            locks (CRIT-1 fix).
+            locks.
         """
         try:
             await self._locks.close()
@@ -1677,7 +1677,7 @@ class MemexAPI:
     async def kv_get(self, key: str, *, include_history: bool = False) -> Any | None:
         """Get a KV entry by key. Delegates to KVService.
 
-        For ``procedure:`` keys (RFC-007), ``include_history=True`` swaps the
+        For ``procedure:`` keys, ``include_history=True`` swaps the
         returned entry's ``value`` field from the unwrapped active string to
         a dict ``{value, version, history}``. Default behavior is unchanged.
         """

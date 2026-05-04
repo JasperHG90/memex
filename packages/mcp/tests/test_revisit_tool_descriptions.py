@@ -1,7 +1,7 @@
-"""F20 — MCP tool description verbatim drift guard.
+"""revisit tool description verbatim drift guard.
 
-Mirrors the F4/F5 pattern (test_f4_tool_descriptions.py,
-test_f5_tool_description.py): assert each F20 description constant in
+Mirrors the deprioritize/summarize pattern (test_deprioritize_tool_descriptions.py,
+test_summarize_node_description.py): assert each revisit description constant in
 ``_revisit_descriptions.py`` matches a hardcoded verbatim block here. When
 either side changes, the test fails — that's the contract.
 
@@ -12,7 +12,7 @@ side too. Two independent copies pin the wording.
 
 The descriptions are agent-facing prompt text — drift here changes how
 the LLM picks which verb to call and what the user-visible behaviour
-becomes. AC-X-10 boot canary catches registration regressions; this
+becomes. Boot canary catches registration regressions; this
 test catches *content* regressions.
 """
 
@@ -26,7 +26,7 @@ from memex_mcp._revisit_descriptions import (
 )
 
 
-F20_GET_DUE_VERBATIM = (
+GET_DUE_VERBATIM = (
     'memex_get_due_for_review — List memories that are due for revisit in a vault.\n'
     '\n'
     'Use when the user asks something like "what memories are due for review?",\n'
@@ -35,7 +35,7 @@ F20_GET_DUE_VERBATIM = (
     'predicate (intent_class IN (permanent, durable), status=active, not\n'
     'deprioritized, confidence >= 0.5, mw_score >= 0.4).\n'
     '\n'
-    '- vault_id: vault UUID or name (defaults to active vault if omitted)\n'
+    '- vault_id: vault UUID or name (defaults to active write vault if omitted)\n'
     '- limit: maximum number of due units to return (default 20)\n'
     '\n'
     'Returns a list of {unit_id, text_preview, revisit_due_at, intent_class}.\n'
@@ -44,7 +44,7 @@ F20_GET_DUE_VERBATIM = (
 )
 
 
-F20_REVIEW_VERBATIM = (
+REVIEW_VERBATIM = (
     'memex_memory_review — Record a review outcome on a memory unit.\n'
     '\n'
     'Use when the user says something like "I just reviewed memory X, it was\n'
@@ -57,7 +57,7 @@ F20_REVIEW_VERBATIM = (
     '- quality: one of "again" (forgotten), "hard", "good", or "easy"\n'
     '         (or the FSRS-5 IntEnum value 1/2/3/4)\n'
     '- vault_id: REQUIRED — the vault the memory unit belongs to.\n'
-    '         Cross-vault review is rejected (Wave 0 vault-scoping invariant).\n'
+    '         Cross-vault review is rejected (vault-scoping invariant).\n'
     '\n'
     'Quality mapping for outcome counters:\n'
     '  "again" / "hard" → recorded as a failure outcome\n'
@@ -76,12 +76,12 @@ F20_REVIEW_VERBATIM = (
 
 def test_get_due_for_review_description_constant_matches_spec_verbatim():
     """MEMEX_GET_DUE_FOR_REVIEW_DESCRIPTION matches the verbatim spec block."""
-    assert MEMEX_GET_DUE_FOR_REVIEW_DESCRIPTION == F20_GET_DUE_VERBATIM
+    assert MEMEX_GET_DUE_FOR_REVIEW_DESCRIPTION == GET_DUE_VERBATIM
 
 
 def test_memory_review_description_constant_matches_spec_verbatim():
     """MEMEX_MEMORY_REVIEW_DESCRIPTION matches the verbatim spec block."""
-    assert MEMEX_MEMORY_REVIEW_DESCRIPTION == F20_REVIEW_VERBATIM
+    assert MEMEX_MEMORY_REVIEW_DESCRIPTION == REVIEW_VERBATIM
 
 
 @pytest.mark.asyncio
@@ -91,7 +91,7 @@ async def test_get_due_for_review_tool_registered_with_verbatim_description():
 
     tool = await mcp.get_tool('memex_get_due_for_review')
     assert tool is not None, 'memex_get_due_for_review tool not registered'
-    assert tool.description == F20_GET_DUE_VERBATIM
+    assert tool.description == GET_DUE_VERBATIM
 
 
 @pytest.mark.asyncio
@@ -101,11 +101,11 @@ async def test_memory_review_tool_registered_with_verbatim_description():
 
     tool = await mcp.get_tool('memex_memory_review')
     assert tool is not None, 'memex_memory_review tool not registered'
-    assert tool.description == F20_REVIEW_VERBATIM
+    assert tool.description == REVIEW_VERBATIM
 
 
 @pytest.mark.asyncio
-async def test_f20_tools_tagged_correctly():
+async def test_revisit_tools_tagged_correctly():
     """Tags are part of the wire contract: read tools advertise readOnlyHint=True
     so consumers can plan parallel dispatch; write tools advertise
     readOnlyHint=False + idempotentHint=False (review IS a state mutation).

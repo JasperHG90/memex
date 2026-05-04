@@ -1,12 +1,12 @@
-"""F6 maintenance_proposals — finding ledger for the rule-based linter.
+"""maintenance_proposals — finding ledger for the rule-based linter.
 
 Creates the `maintenance_proposals` table that stores findings emitted by the
-F6 LintService. Schema follows RFC-003 §"`MaintenanceProposal` schema":
+LintService. Schema follows the MaintenanceProposal schema:
 
 - `vault_id` is nullable (NULL = global findings; reserved for Tier B; v1
-  emits no global findings — see RFC-003 §"Cross-vault scope").
+  emits no global findings — see cross-vault scope design).
 - The 4 enum-style columns (`lint_type`, `target_type`, `status`, `source`)
-  are TEXT with CHECK constraints; matches the F25 (024) precedent.
+  are TEXT with CHECK constraints; matches the intent_risk_classifier (024) precedent.
 - A partial unique index on `(rule_name, target_type, target_id, vault_id)
   WHERE status = 'pending'` enforces idempotent re-runs (the rule engine
   uses `INSERT ... ON CONFLICT DO NOTHING`).

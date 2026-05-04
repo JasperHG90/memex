@@ -4,7 +4,7 @@ Per-key token bucket with monotonic-clock refill. Designed for advisory
 limits, not security gates: multi-worker leakage is accepted in v1
 (distributed locking introduces per-entity locks; consolidation will reuse this primitive).
 
-Reusable across surfaces per RFC-002.
+Reusable across surfaces.
 """
 
 from __future__ import annotations
@@ -45,8 +45,8 @@ class TokenBucketRateLimiter:
     one token or raises ``RateLimitExceededError``.
 
     Mutual exclusion uses ``asyncio.Lock`` to honour the project-wide
-    asyncio convention (multi-worker leakage is documented in RFC-002 and
-    acknowledged in the PR body per acceptance criteria). Hold time is microseconds —
+    asyncio convention (multi-worker leakage is documented and acknowledged).
+    Hold time is microseconds —
     dict lookup plus arithmetic — so contention is negligible.
     """
 

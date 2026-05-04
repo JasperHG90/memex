@@ -356,9 +356,9 @@ class DisabledBackend(BaseModel):
 class LitellmNLIBackend(BaseModel):
     """Use a litellm-supported chat completion provider for NLI classification.
 
-    NLI is performed via a structured chat completion prompt that asks the model
-    to classify a (premise, hypothesis) pair as entailment, neutral, or
-    contradiction and return JSON probabilities.
+    NLI (Natural Language Inference) classifies a (premise, hypothesis) pair as
+    entailment, neutral, or contradiction. Used by the surprise gate's polarity
+    branch to detect contradictions that cosine similarity alone would miss.
 
     Examples: ``openai/gpt-4o-mini``, ``gemini/gemini-2.0-flash``,
     ``ollama/llama3``.
@@ -401,10 +401,11 @@ NLIBackend: TypeAlias = Annotated[
 
 
 class NLIPolarityConfig(BaseModel):
-    """NLI polarity-discrimination gate settings.
+    """NLI (Natural Language Inference) polarity gate for contradiction detection.
 
     Controls whether NLI is enabled and the thresholds for the polarity
-    branch of the surprise gate. The model backend (ONNX, litellm, or
+    branch of the surprise gate. NLI detects contradictions that cosine
+    similarity alone would miss. The model backend (ONNX, litellm, or
     disabled) is configured separately via ``NLIBackend``.
     """
 

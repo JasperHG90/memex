@@ -1,9 +1,6 @@
 """Verbatim agent prompt text for lint flags tool.
 
-Sourced from cognitive-memory-research-report.md §4 lint-flags step 6 (lines
-716-730 as of 2026-05-01 against memory_augmentation @ 77b15da). When
-the spec changes, the verbatim test (TC-21-5) fails — that is the
-contract.
+When the spec changes, the verbatim test fails — that is the contract.
 """
 
 from __future__ import annotations
@@ -13,7 +10,7 @@ MEMEX_GET_LINT_FLAGS_DESCRIPTION = (
     'Use periodically (e.g., once per long session) or when the user asks about memory state.\n'
     '\n'
     '- vault_id (optional): scope to a single vault. Defaults to the active write vault '
-    'when omitted (Wave 0 vault-scoping invariant — never falls through to a global '
+    'when omitted (vault-scoping invariant — never falls through to a global '
     'all-vault view).\n'
     '- lint_type (optional): structural | quality | governance | schema\n'
     '- status (optional): pending | resolved | dismissed (default: pending)\n'
@@ -21,6 +18,6 @@ MEMEX_GET_LINT_FLAGS_DESCRIPTION = (
     '\n'
     'Each finding includes: target_id, lint_type, evidence (why detected), suggested_action.\n'
     'Most findings can be auto-resolved by calling the relevant tool (e.g., memory_deprioritize\n'
-    'for low-MW units). Surface high-confidence findings to the user; act autonomously on\n'
+    'for low-Memory-Worth units). Surface high-confidence findings to the user; act autonomously on\n'
     'low-risk ones (deprioritize, mark stale).'
 )

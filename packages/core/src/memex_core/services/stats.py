@@ -96,8 +96,8 @@ class StatsService(BaseService):
     ) -> list[Any]:
         """Return all memory units whose ``chunk_id`` is in ``chunk_ids``, scoped to ``vault_id``.
 
-        Vault-scoping is mandatory — F46 chunk-traversal must not leak units
-        from sibling vaults that happen to reference the same chunk UUID.
+        Vault-scoping is mandatory — chunk-traversal must not leak units from
+        sibling vaults that happen to reference the same chunk UUID.
         """
         from sqlmodel import select
 

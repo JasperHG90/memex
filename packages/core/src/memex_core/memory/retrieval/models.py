@@ -13,7 +13,7 @@ __all__ = [
 # ``VALID_INTENT_CLASSES`` / ``VALID_RISK_CLASSES`` are imported above for use
 # in the ``model_validator`` below but deliberately NOT re-exported. The
 # canonical home is ``memex_common.schemas`` — re-exporting here would create
-# a second public import path and risk future drift (round-7 review).
+# a second public import path and risk future drift.
 
 VALID_STRATEGIES = frozenset({'semantic', 'keyword', 'graph', 'temporal', 'mental_model'})
 
@@ -173,7 +173,7 @@ class RetrievalRequest(SQLModel):
         """Cross-field validator: strategies, intent_class, risk_class.
 
         Originally named ``validate_strategies`` when only ``strategies`` was
-        validated; renamed in round-5 review to reflect that it now also
+        validated; renamed to reflect that it now also
         validates intent/risk class membership against the canonical enum sets.
         """
         if self.strategies is not None:

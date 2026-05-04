@@ -1,8 +1,6 @@
 """Verbatim agent prompt text for reconsolidate/consolidate tools.
 
-Sourced from cognitive-memory-research-report.md §4 reconsolidate step 6 (lines
-758-775 as of 2026-05-01 against memory_augmentation @ 1c0a464). When the
-spec changes, the verbatim test (TC9) fails — that is the contract.
+When the descriptions change, the verbatim test fails — that is the contract.
 """
 
 from __future__ import annotations
@@ -20,7 +18,7 @@ MEMEX_MEMORY_RECONSOLIDATE_DESCRIPTION = (
 )
 
 MEMEX_MEMORY_CONSOLIDATE_DESCRIPTION = (
-    'memory_consolidate — Vault-wide batch curation. Identifies low-MW + stale units\n'
+    'memory_consolidate — Vault-wide batch curation. Identifies low-Memory-Worth + stale units\n'
     'and deprioritizes them. Writes findings to the maintenance ledger.\n'
     '\n'
     '- vault_id: target vault\n'

@@ -1,9 +1,8 @@
-"""F5 — MCP tool description verbatim test (TC5).
+"""summarize_node tool description verbatim test.
 
-The expected text is hardcoded here, NOT loaded from the spec markdown
-(non-circular: when the spec changes, this test fails — that is the
-contract). Sourced from cognitive-memory-research-report.md §4 F5 step 6
-(lines 653-666 as of 2026-04-30 against memory_augmentation @ f79c313).
+The expected text is hardcoded here, NOT loaded from the source
+(non-circular: when the source changes, this test fails — that is the
+contract).
 """
 
 from __future__ import annotations
@@ -13,7 +12,7 @@ import pytest
 from memex_mcp._summarize_descriptions import MEMEX_MEMORY_SUMMARIZE_NODE_DESCRIPTION
 
 
-F5_DESCRIPTION_VERBATIM = (
+SUMMARIZE_NODE_DESCRIPTION_VERBATIM = (
     'memory_summarize_node — Trigger reflection synchronously on a specific entity or\n'
     'note set. Use when you notice mid-conversation that retrieved facts about a topic\n'
     'are conflicting, incomplete, or scattered, and you want Memex to consolidate them\n'
@@ -30,8 +29,8 @@ F5_DESCRIPTION_VERBATIM = (
 
 
 def test_summarize_node_description_constant_matches_spec_verbatim():
-    """TC5: MEMEX_MEMORY_SUMMARIZE_NODE_DESCRIPTION matches §4 F5 step 6 char-for-char."""
-    assert MEMEX_MEMORY_SUMMARIZE_NODE_DESCRIPTION == F5_DESCRIPTION_VERBATIM
+    """MEMEX_MEMORY_SUMMARIZE_NODE_DESCRIPTION matches the verbatim constant."""
+    assert MEMEX_MEMORY_SUMMARIZE_NODE_DESCRIPTION == SUMMARIZE_NODE_DESCRIPTION_VERBATIM
 
 
 @pytest.mark.asyncio
@@ -41,12 +40,12 @@ async def test_summarize_node_tool_registered_with_verbatim_description():
 
     tool = await mcp.get_tool('memex_memory_summarize_node')
     assert tool is not None, 'memex_memory_summarize_node tool not registered'
-    assert tool.description == F5_DESCRIPTION_VERBATIM
+    assert tool.description == SUMMARIZE_NODE_DESCRIPTION_VERBATIM
 
 
 @pytest.mark.asyncio
 async def test_summarize_node_tool_tagged_write_storage():
-    """Tool registered with the standard write/storage tags (per F4 taxonomy)."""
+    """Tool registered with the standard write/storage tags."""
     from memex_mcp.server import mcp
 
     tool = await mcp.get_tool('memex_memory_summarize_node')

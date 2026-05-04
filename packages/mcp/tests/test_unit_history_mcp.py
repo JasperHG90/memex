@@ -1,4 +1,4 @@
-"""F49 — memex_get_unit_history MCP-level dispatch + serialization tests.
+"""memex_get_unit_history MCP-level dispatch + serialization tests.
 
 Verifies:
 - Tool is registered with the expected description, tags, and signature.
@@ -52,7 +52,7 @@ def _build_history(*, root_id: UUID, pred_id: UUID, vault_label: str = 'A') -> U
 
 @pytest.mark.asyncio
 async def test_tool_is_registered_with_expected_metadata():
-    """The MCP tool registry surfaces F49 with the right tag + description."""
+    """The MCP tool registry surfaces memex_get_unit_history with the right tag + description."""
     tool = await mcp.get_tool('memex_get_unit_history')
     assert tool is not None, 'memex_get_unit_history must be registered'
     assert 'storage' in (tool.tags or set())

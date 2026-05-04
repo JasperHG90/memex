@@ -138,7 +138,7 @@ async def get_lint_dashboard(
     Returns the (lint_type, status, source) pivot, the pending_by_type
     slice, and the top-5 most-recent pending findings. Distinct from the
     /lint/status (single count) and /lint/findings (paginated row listing) —
-    this is the operator/observability dashboard view per RFC-009 §72.
+    this is the operator/observability dashboard view.
     """
     await check_vault_access(auth, [vault_id], api)
     try:

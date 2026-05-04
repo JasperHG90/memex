@@ -63,7 +63,7 @@ def _hermes_tools_with_routing() -> list[dict[str, Any]]:
         # Tools sourced from real schemas (RECORD_OUTCOME_SCHEMA etc.) use
         # `parameters` directly and bypass this helper. For tools defined here,
         # pass `required=` explicitly when the canonical required list is known
-        # (mirrors the MCP-side pattern in test_int_f43_resolution_flow_llm.py).
+        # (mirrors the MCP-side pattern in test_int_resolution_flow_llm.py).
         return {
             'type': 'function',
             'function': {

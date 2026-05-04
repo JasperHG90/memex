@@ -48,7 +48,7 @@ def _surfaces() -> dict[str, str]:
     some concepts naturally appear on only one of the two verbs in some
     phrasings — the parity contract is "present somewhere in the verb pair",
     not "present in each verb individually" (the per-verb parity is enforced
-    by test_f43_descriptions.py).
+    by test_resolution_flow_descriptions.py).
     """
     return {
         'mcp': MEMEX_RECORD_OUTCOME_DESCRIPTION + '\n' + MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION,

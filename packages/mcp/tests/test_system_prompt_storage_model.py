@@ -1,6 +1,6 @@
 """Regression fences for the MCP server's system-prompt storage-model primer.
 
-These tests guard against the OrangeHermes-class bug from regressing in MCP
+These tests guard against the bug from regressing in MCP
 prose: agents conflated KV writes with memory-unit updates because the prose
 overloaded the word ``fact`` across both layers and never taught the
 append-only / supersession invariant.
@@ -64,7 +64,7 @@ def test_storage_model_states_append_only_invariant():
     # The verbs must appear inside an explicit prohibition. A revert that
     # turns the bullet permissive (e.g. "you can edit, replace, or delete...")
     # would still satisfy a bare "verb in section" check yet leak the
-    # OrangeHermes regression — so require a negation phrase too.
+    # regression — so require a negation phrase too.
     negation_phrases = (
         'Do NOT try to edit, replace, or delete',
         "Don't try to edit, replace, or delete",
@@ -90,7 +90,7 @@ def test_storage_model_describes_reflection_as_read_only():
 def test_kv_routing_no_longer_calls_kv_a_fact_store():
     """The IF/THEN routing block must not advertise KV as a fact store.
 
-    Regression fence for the OrangeHermes muddle: agents wrote system-status
+    Regression fence for the regression: agents wrote system-status
     flags into KV to mark stale memory units 'resolved' because the prompt
     said 'storing/retrieving structured facts ... → KV STORE'.
     """

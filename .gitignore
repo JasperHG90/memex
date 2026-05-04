@@ -118,7 +118,6 @@ celerybeat.pid
 .env
 .venv
 .venv-*
-.ws-env
 env/
 venv/
 ENV/

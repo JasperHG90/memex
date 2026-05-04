@@ -1,10 +1,7 @@
-"""F4 — MCP tool description verbatim test.
+"""deprioritize tool description verbatim test.
 
-T4: tool description == cognitive-memory-research-report.md §4 F4 step 6
-verbatim (lines 615-628 as of 2026-04-30).
-
-The expected text is hardcoded here, NOT loaded from the spec markdown
-(non-circular: when the spec changes, this test fails — that is the
+The expected text is hardcoded here, NOT loaded from the source
+(non-circular: when the source changes, this test fails — that is the
 contract).
 """
 
@@ -18,10 +15,9 @@ from memex_mcp._deprioritize_descriptions import (
 )
 
 
-# Source: cognitive-memory-research-report.md §4 F4 step 6 (lines 615-628 as
-# of 2026-04-30 against memory_augmentation @ 1c0a464). When the spec changes,
-# this constant must be re-synced and this test is the failing contract.
-F4_DESCRIPTION_VERBATIM = (
+# When the source description changes, this constant must be re-synced
+# and this test is the failing contract.
+DEPRIORITIZE_DESCRIPTION_VERBATIM = (
     "memory_deprioritize — Lower a memory unit's retrieval rank without deleting it.\n"
     'Use when a memory is misleading, outdated, or noise that contaminates retrieval.\n'
     '\n'
@@ -39,28 +35,28 @@ F4_DESCRIPTION_VERBATIM = (
 
 
 def test_deprioritize_description_constant_matches_spec_verbatim():
-    """T4: MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION matches §4 F4 step 6 char-for-char."""
-    assert MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION == F4_DESCRIPTION_VERBATIM
+    """MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION matches the verbatim constant."""
+    assert MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION == DEPRIORITIZE_DESCRIPTION_VERBATIM
 
 
 @pytest.mark.asyncio
 async def test_mcp_tool_registered_with_verbatim_description_preamble():
-    """The MCP tool description starts with the F4 verbatim preamble.
+    """The MCP tool description starts with the deprioritize verbatim preamble.
 
-    F43 (cognitive-memory-research-report.md §3.5 + §3.4.2) extends the
-    deprioritize description with the 5-step user-confirmed-fix flow + the
-    historical-routing rule. The original F4 verbatim description is kept as
-    the preamble so the curate-memory-after-the-fact discoverability is
-    unchanged. The full description is asserted by F43's verbatim test
-    (test_f43_descriptions.py).
+    The resolution-flow description extends the deprioritize description with the
+    5-step user-confirmed-fix flow + the historical-routing rule. The original
+    deprioritize verbatim description is kept as the preamble so the
+    curate-memory-after-the-fact discoverability is unchanged. The full
+    description is asserted by the resolution-flow verbatim test
+    (test_resolution_flow_descriptions.py).
     """
     from memex_mcp.server import mcp
 
     tool = await mcp.get_tool('memex_memory_deprioritize')
     assert tool is not None, 'memex_memory_deprioritize tool not registered'
-    assert tool.description.startswith(F4_DESCRIPTION_VERBATIM), (
-        'Registered description must start with the F4 verbatim preamble '
-        '(§4 F4 step 6); F43 may append additional sections after it.'
+    assert tool.description.startswith(DEPRIORITIZE_DESCRIPTION_VERBATIM), (
+        'Registered description must start with the deprioritize verbatim preamble; '
+        'the resolution-flow description may append additional sections after it.'
     )
 
 

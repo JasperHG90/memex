@@ -1,13 +1,11 @@
 """MCP tool description content pinning.
 
-Asserts that the §3.5 5-step flow + §3.4.1 axes table + §3.4.2 historical
-routing rule are present verbatim in the registered descriptions of
-``memex_record_outcome`` and ``memex_memory_deprioritize``. Per CLAUDE.md
-rule 24 (agent-surface parity), the MCP layer is the primary surface.
+Asserts that the 5-step flow + axes table + historical routing rule are
+present verbatim in the registered descriptions of
+``memex_record_outcome`` and ``memex_memory_deprioritize``.
+The MCP layer is the primary surface.
 
-When the spec changes, these assertions fail — that is the contract.
-Source: cognitive-memory-research-report.md §3.5 + §3.4.1 + §3.4.2 (added
-2026-05-02).
+When the descriptions change, these assertions fail — that is the contract.
 """
 
 from __future__ import annotations
@@ -21,10 +19,10 @@ from memex_mcp._resolution_flow_descriptions import (
 
 
 # ---------------------------------------------------------------------------
-# Required content checkpoints — sourced from spec §3.5 worked example.
+# Required content checkpoints.
 # ---------------------------------------------------------------------------
 
-# Step 1 disambiguation (§3.5 Step 1).
+# Step 1 disambiguation.
 _S1_KEYWORDS = ('Disambiguate', 'ASK before writing')
 
 # Step 2 routing — must teach Options A/B/C and the top_k>=30 rule.
@@ -58,16 +56,16 @@ _IMPERFECT_KEYWORDS = (
     'GRADIENT',
 )
 
-# Orthogonal-axes table from §3.4.1.
+# Orthogonal-axes table.
 _AXES_KEYWORDS = (
     'orthogonal axes',
-    'MW is the gradient',
+    'Memory Worth is the gradient',
     'binary',
     'Append-only counter',
     'memory_restore',
 )
 
-# Historical / audit-query routing rule (§3.4.2).
+# Historical / audit-query routing rule.
 _HISTORICAL_KEYWORDS = (
     'memex_get_unit_history',
     'apply_pre_filter=False',
@@ -90,10 +88,7 @@ _DO_NOT_ADD_KEYWORDS = (
 
 def _assert_all_present(text: str, keywords: tuple[str, ...], section: str) -> None:
     missing = [kw for kw in keywords if kw not in text]
-    assert not missing, (
-        f'Description is missing {section} keywords: {missing!r}.\n'
-        'See cognitive-memory-research-report.md §3.5 + §3.4.1 + §3.4.2.'
-    )
+    assert not missing, f'Description is missing {section} keywords: {missing!r}.'
 
 
 @pytest.mark.parametrize(
@@ -145,7 +140,7 @@ def test_description_codifies_do_not_add_list(description: str) -> None:
 
 
 @pytest.mark.asyncio
-async def test_record_outcome_tool_registered_with_f43_description() -> None:
+async def test_record_outcome_tool_registered_with_resolution_flow_description() -> None:
     """The MCP server registers memex_record_outcome with the composite description."""
     from memex_mcp.server import mcp
 
@@ -158,7 +153,7 @@ async def test_record_outcome_tool_registered_with_f43_description() -> None:
 
 
 @pytest.mark.asyncio
-async def test_deprioritize_tool_registered_with_f43_description() -> None:
+async def test_deprioritize_tool_registered_with_resolution_flow_description() -> None:
     """The MCP server registers memex_memory_deprioritize with the composite description."""
     from memex_mcp.server import mcp
 

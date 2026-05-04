@@ -1,9 +1,9 @@
-"""F11 — FSFM-lite decay scoring columns on memory_units.
+"""FSFM-lite decay scoring columns on memory_units.
 
-Adds three nullable columns supporting the F11 decay-boost composition and
-F40's FSFM pre-filter clause:
+Adds three nullable columns supporting the decay-boost composition and
+FSFM pre-filter clause:
 
-- ``importance: float`` — derived from F25's ``intent_class``
+- ``importance: float`` — derived from ``intent_class``
   (permanent=1.0, durable=0.7, ephemeral=0.3); rows where ``intent_class``
   is somehow NULL stay ``importance = NULL`` (genuine missing
   classification, no synthetic default).
@@ -11,13 +11,13 @@ F40's FSFM pre-filter clause:
   infinity, durable=180, ephemeral=14).
 - ``last_outcome_at: timestamptz`` — when the unit last had
   ``record_outcome`` called against it; explicitly left NULL on every
-  pre-existing row so the F11 NULL-handling guard treats them as
+  pre-existing row so the NULL-handling guard treats them as
   "no temporal anchor -> neutral boost" rather than synthesising a
   decay-clock start point at backfill time.
 
 The intent->importance and intent->stability values mirror the constants
-in ``memex_core.memory.retrieval.constants`` so F40's SQL clause and F11's
-Python boost share one source of truth (the migration's CASE expressions
+in ``memex_core.memory.retrieval.constants`` so the SQL clause and Python
+boost share one source of truth (the migration's CASE expressions
 must stay in lockstep with that module).
 
 Revision ID: 032_fsfm_decay_columns

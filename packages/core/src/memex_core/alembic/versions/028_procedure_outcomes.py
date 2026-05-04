@@ -1,12 +1,11 @@
-"""F14 procedure_outcomes — vault-scoped MW counters for procedural KV keys.
+"""procedure_outcomes — vault-scoped MW counters for procedural KV keys.
 
 Scoped to counters ONLY — active value/version/history live in KVEntry.value
 JSON envelope (no schema change to kv_entries). One row per (vault_id, kv_key);
 counters increment via OutcomeService.record_outcome(target_type='kv_key', ...).
 
 FK to kv_entries.key ON DELETE CASCADE — deleting a procedure key cleans up its
-counter rows. UniqueConstraint(vault_id, kv_key) enforces vault-scoped isolation
-(Wave 0 invariant).
+counter rows. UniqueConstraint(vault_id, kv_key) enforces vault-scoped isolation.
 
 Revision ID: 028_procedure_outcomes
 Revises: 027_consolidation_ticks

@@ -1,10 +1,10 @@
 """ConsolidationService — thin orchestrator over reflection + contradiction + prune.
 
-Per RFC-010, this is intentionally a thin module. Its **only** direct DB write
+This is intentionally a thin module. Its **only** direct DB write
 is the ``consolidation_ticks`` summary row inserted at the end of each tick
 (acceptance criteria module-write audit). All other writes are delegated.
 
-Step ordering (B1 adjudication, acceptance criteria):
+Step ordering:
     1. ``select_diff_units`` — read AuditLog rows with ``action='outcome.record'``
        since the previous tick's ``completed_at``.
     2. ``ContradictionEngine.detect_contradictions`` — runs first so reflection
@@ -431,9 +431,9 @@ class ConsolidationService:
     ) -> list[UUID]:
         """Return the subset of ``unit_ids`` whose ``status == STALE``.
 
-        This is the AC-F38-2 invariant: F38 invokes ``prune_stale_evidence``
-        ONLY on units already marked stale by some other service. Consolidation does
-        NOT mutate ``status`` from active to stale.
+        Invariant: ``prune_stale_evidence`` is invoked ONLY on units already
+        marked stale by some other service. Consolidation does NOT mutate
+        ``status`` from active to stale.
         """
         if not unit_ids:
             return []

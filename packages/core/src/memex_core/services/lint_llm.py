@@ -18,7 +18,7 @@ The deferred queue is itself capped at ``deferred_queue_cap`` rows per
 vault; oldest rows beyond the cap are evicted (``status='dismissed'``,
 ``resolved_at=now()``) with a warning span.
 
-References: RFC-006 §"Cost-cap implementation", §"Trigger surface".
+References: cost-cap implementation, trigger surface.
 """
 
 from __future__ import annotations
@@ -103,7 +103,7 @@ class MaybeRunOutcome:
 
 @dataclass
 class LintLLMTickSummary:
-    """Per-vault summary of an F10 scheduler tick."""
+    """Per-vault summary of a scheduler tick."""
 
     vault_id: UUID
     candidates_evaluated: int = 0
@@ -342,11 +342,11 @@ async def _invoke_check(
 ) -> LLMLintFinding | None:
     """Invoke ``run_llm_check`` with backward-compatible context plumbing.
 
-    F10's original check signature was ``(unit_id, vault_id, session)``; F10b
-    adds an optional ``context`` kwarg so the cosine-OR-polarity gate can pass
-    the precomputed :class:`PolarityResult` through to the DSPy signature
-    without re-invoking the NLI model. Existing 3-arg checks (and existing
-    tests that mock 3-arg lambdas) continue to work unchanged.
+    The original check signature was ``(unit_id, vault_id, session)``; an
+    optional ``context`` kwarg was added so the cosine-OR-polarity gate can
+    pass the precomputed :class:`PolarityResult` through to the DSPy
+    signature without re-invoking the NLI model. Existing 3-arg checks (and
+    existing tests that mock 3-arg lambdas) continue to work unchanged.
 
     Dispatch is decided up front by ``inspect.signature`` (cached per-callable)
     rather than by catching ``TypeError`` from the call site, so genuine
@@ -358,7 +358,7 @@ async def _invoke_check(
 
 
 class LintLLMService(BaseService):
-    """Surprise-gated LLM lint service for F10.
+    """Surprise-gated LLM lint service.
 
     Dependency-injects ``run_llm_check`` so DSPy signatures (commits 4-5) can
     plug in without touching this module. Every public coroutine is
@@ -403,7 +403,7 @@ class LintLLMService(BaseService):
         ``uq_lint_llm_quota_vault_hour`` and the UPDATE branch's WHERE
         predicate re-checks the (now post-increment) total against the cap.
         Eliminates the read-then-write TOCTOU window present in the prior
-        implementation (PR #101 c4 HIGH-1).
+        implementation.
         """
         cap = self._settings.cost_cap_per_24h
         if cap <= 0:
@@ -455,7 +455,7 @@ class LintLLMService(BaseService):
             },
         )
         logger.warning(
-            'F10 deferred queue evicted %d oldest entries for vault %s (cap=%d, was=%d)',
+            'deferred queue evicted %d oldest entries for vault %s (cap=%d, was=%d)',
             excess,
             vault_id,
             cap,
@@ -487,9 +487,7 @@ class LintLLMService(BaseService):
                 'target_id': str(unit_id),
                 'rule_name': _RULE_LLM_DEFERRED,
                 'evidence': json.dumps(evidence),
-                'suggested_action': (
-                    'Re-run F10 LLM lint on next tick when 24h quota has capacity.'
-                ),
+                'suggested_action': ('Re-run LLM lint on next tick when 24h quota has capacity.'),
             },
         )
         await self._evict_excess_deferred(vault_id, session=session)
@@ -581,19 +579,19 @@ class LintLLMService(BaseService):
     ) -> MaybeRunOutcome:
         """Surprise-gate → quota → LLM check → write finding (or defer).
 
-        Single-unit orchestration. Caller (the F10 scheduler tick) commits the
+        Single-unit orchestration. Caller (the scheduler tick) commits the
         session after each unit so quota increments are durable even if a
         later unit fails.
 
-        F10b: when ``polarity_classifier`` is supplied AND cosine surprise is
+        When ``polarity_classifier`` is supplied AND cosine surprise is
         below the threshold, the service runs an NLI invocation against the
         unit's top-1 nearest peer. If the contradiction-probability crosses
         ``polarity_classifier.polarity_threshold`` the OR'd gate clears and
         the LLM check fires. The NLI invocation is skipped when cosine
         surprise is already at/above the threshold (cheap pre-filter).
 
-        ``confidence_map`` (Hermes round-5 MED): when supplied, the F22
-        confidence/variance gate runs against this prefetched
+        ``confidence_map``: when supplied, the confidence/variance gate runs
+        against this prefetched
         ``{unit_id_str: (confidence, evidence_count)}`` map instead of
         firing one SELECT per unit. ``tick()`` builds the map once for all
         candidates so the gate scales O(1) extra queries instead of O(N).
@@ -696,7 +694,7 @@ class LintLLMService(BaseService):
         dismissed (non-destructive); over-cap rows from a prior tick stay
         deferred until the quota has capacity.
 
-        F10b note: deferred rows are invoked with an empty ``CheckContext``
+        Note: deferred rows are invoked with an empty ``CheckContext``
         (no ``polarity_hint``, no ``polarity_*_prob`` in ``extra_evidence``).
         The polarity result that originally cleared the gate is not persisted
         on the deferred ``MaintenanceProposal``, and re-running NLI on every
@@ -704,7 +702,7 @@ class LintLLMService(BaseService):
         already accounted for the original call). Callers comparing immediate
         vs deferred findings should expect this evidence asymmetry; surfacing
         polarity to deferred findings requires persisting the result on the
-        proposal row, which is out of F10b's scope.
+        proposal row, which is out of scope.
         """
         settings = self._settings
         if not settings.enabled or settings.cost_cap_per_24h <= 0:
@@ -719,7 +717,7 @@ class LintLLMService(BaseService):
         processed = 0
         for proposal_id, unit_id, _evidence in rows:
             # Per-row try/except so a single LLM/storage failure does not
-            # poison the rest of the queue (PR #101 c4 HIGH-2). Use a
+            # poison the rest of the queue. Use a
             # SAVEPOINT so an exception leaves the outer transaction usable
             # for subsequent rows; otherwise the failed statement would
             # abort the surrounding tx and every later iteration would no-op.
@@ -736,7 +734,7 @@ class LintLLMService(BaseService):
                     await self.dismiss_deferred(proposal_id, session=session)
             except Exception:
                 logger.exception(
-                    'F10 process_deferred: LLM check failed for deferred unit %s '
+                    'process_deferred: LLM check failed for deferred unit %s '
                     '(proposal %s) — skipping and continuing',
                     unit_id,
                     proposal_id,
@@ -775,9 +773,9 @@ class LintLLMService(BaseService):
         run_llm_check: RunLLMCheck,
         polarity_classifier: PolarityClassifier | None = None,
     ) -> LintLLMTickSummary:
-        """Single F10 scheduler-tick for ``vault_id``.
+        """Single scheduler-tick for ``vault_id``.
 
-        Order of operations matches RFC-006 §"Cost-cap implementation":
+        Order of operations (cost-cap implementation):
 
         1. Process the deferred queue first (so over-cap units from a prior
            tick get budget priority once it's free).
@@ -803,7 +801,7 @@ class LintLLMService(BaseService):
                 await session.commit()
             except Exception:
                 await session.rollback()
-                logger.exception('F10 tick: process_deferred failed for vault %s', vault_id)
+                logger.exception('tick: process_deferred failed for vault %s', vault_id)
 
         # 2. Fresh candidates.
         async with self.metastore.session() as session:
@@ -811,8 +809,8 @@ class LintLLMService(BaseService):
                 vault_id, limit=settings.units_per_tick, session=session
             )
 
-        # F22 confidence-gate bulk pre-fetch (Hermes round-5 MED): when the
-        # gate is active, hydrate ``(confidence, confidence_evidence_count)``
+        # Confidence-gate bulk pre-fetch: when the gate is active, hydrate
+        # ``(confidence, confidence_evidence_count)``
         # for every candidate up front so per-unit ``maybe_run`` does NOT
         # fire one SELECT per unit. Skipped entirely when the gate is off
         # (the ship default), so the extra query is paid only when the
@@ -841,7 +839,7 @@ class LintLLMService(BaseService):
                 except Exception:
                     await session.rollback()
                     logger.exception(
-                        'F10 tick: maybe_run failed for unit %s in vault %s',
+                        'tick: maybe_run failed for unit %s in vault %s',
                         unit_id,
                         vault_id,
                     )

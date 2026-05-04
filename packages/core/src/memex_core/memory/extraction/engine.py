@@ -225,7 +225,7 @@ class ExtractionEngine:
         intent_override: str | None = None,
         risk_override: str | None = None,
     ) -> list[ProcessedFact]:
-        """F25b — apply overrides, emit distribution metrics, drop safety facts.
+        """Apply overrides, emit distribution metrics, drop safety facts.
 
         Intent + risk are produced by the extraction LLM (folded into
         ``ExtractSemanticFacts``) and arrive on each fact already. This method
@@ -235,12 +235,12 @@ class ExtractionEngine:
           are applied independently. A caller passing only ``intent_override``
           replaces the intent on every fact while leaving the LLM-produced
           ``risk_class`` intact, and vice versa. This is a deliberate post-fold
-          contract change from the F25 v1 behavior, where setting *either*
+          contract change from the earlier behavior, where setting *either*
           override skipped the entire (separate) classifier call and the
           non-overridden dimension fell back to schema defaults. After the
           fold there is no separate classifier to skip — intent + risk arrive
           together with extraction — so per-dimension overrides are the only
-          coherent semantics. See cognitive-memory-research-report.md §F25b
+          coherent semantics. See cognitive-memory-research-report.md
           (Surface impact) for the full rationale.
         * Facts with ``risk_class='safety'`` are dropped before persistence
           via :func:`filter_safety_blocked`. This honors both LLM-classified

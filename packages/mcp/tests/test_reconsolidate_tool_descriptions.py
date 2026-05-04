@@ -1,10 +1,7 @@
-"""F9 — MCP tool description verbatim test.
+"""reconsolidate/consolidate tool description verbatim test.
 
-TC9: tool description == cognitive-memory-research-report.md §4 F9 step 6
-verbatim (lines 758-775 as of 2026-05-01).
-
-The expected text is hardcoded here, NOT loaded from the spec markdown
-(non-circular: when the spec changes, this test fails — that is the
+The expected text is hardcoded here, NOT loaded from the source
+(non-circular: when the source changes, this test fails — that is the
 contract).
 """
 
@@ -18,10 +15,9 @@ from memex_mcp._reconsolidate_descriptions import (
 )
 
 
-# Source: cognitive-memory-research-report.md §4 F9 step 6 (lines 758-775 as
-# of 2026-05-01 against memory_augmentation @ 1c0a464). When the spec changes,
-# this constant must be re-synced and this test is the failing contract.
-F9_RECONSOLIDATE_VERBATIM = (
+# When the source description changes, this constant must be re-synced
+# and this test is the failing contract.
+RECONSOLIDATE_VERBATIM = (
     'memory_reconsolidate — Re-evaluate memories for a specific entity, detecting\n'
     'contradictions and updating mental models. Use when you notice retrieved facts\n'
     'about an entity disagree.\n'
@@ -33,8 +29,8 @@ F9_RECONSOLIDATE_VERBATIM = (
     'is concrete evidence of conflicting information.'
 )
 
-F9_CONSOLIDATE_VERBATIM = (
-    'memory_consolidate — Vault-wide batch curation. Identifies low-MW + stale units\n'
+CONSOLIDATE_VERBATIM = (
+    'memory_consolidate — Vault-wide batch curation. Identifies low-Memory-Worth + stale units\n'
     'and deprioritizes them. Writes findings to the maintenance ledger.\n'
     '\n'
     '- vault_id: target vault\n'
@@ -46,13 +42,13 @@ F9_CONSOLIDATE_VERBATIM = (
 
 
 def test_reconsolidate_description_constant_matches_spec_verbatim():
-    """TC9: MEMEX_MEMORY_RECONSOLIDATE_DESCRIPTION matches §4 F9 step 6 char-for-char."""
-    assert MEMEX_MEMORY_RECONSOLIDATE_DESCRIPTION == F9_RECONSOLIDATE_VERBATIM
+    """MEMEX_MEMORY_RECONSOLIDATE_DESCRIPTION matches spec char-for-char."""
+    assert MEMEX_MEMORY_RECONSOLIDATE_DESCRIPTION == RECONSOLIDATE_VERBATIM
 
 
 def test_consolidate_description_constant_matches_spec_verbatim():
-    """TC9: MEMEX_MEMORY_CONSOLIDATE_DESCRIPTION matches §4 F9 step 6 char-for-char."""
-    assert MEMEX_MEMORY_CONSOLIDATE_DESCRIPTION == F9_CONSOLIDATE_VERBATIM
+    """MEMEX_MEMORY_CONSOLIDATE_DESCRIPTION matches spec char-for-char."""
+    assert MEMEX_MEMORY_CONSOLIDATE_DESCRIPTION == CONSOLIDATE_VERBATIM
 
 
 @pytest.mark.asyncio
@@ -62,7 +58,7 @@ async def test_reconsolidate_tool_registered_with_verbatim_description():
 
     tool = await mcp.get_tool('memex_memory_reconsolidate')
     assert tool is not None, 'memex_memory_reconsolidate tool not registered'
-    assert tool.description == F9_RECONSOLIDATE_VERBATIM
+    assert tool.description == RECONSOLIDATE_VERBATIM
 
 
 @pytest.mark.asyncio
@@ -72,4 +68,4 @@ async def test_consolidate_tool_registered_with_verbatim_description():
 
     tool = await mcp.get_tool('memex_memory_consolidate')
     assert tool is not None, 'memex_memory_consolidate tool not registered'
-    assert tool.description == F9_CONSOLIDATE_VERBATIM
+    assert tool.description == CONSOLIDATE_VERBATIM

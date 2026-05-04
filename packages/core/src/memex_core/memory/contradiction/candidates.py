@@ -97,7 +97,7 @@ async def _get_semantic_candidates(
 
     from memex_core.memory.models.anisotropy import get_shared_corrector
 
-    # Loosen the SQL pre-filter so the corrector has room to discriminate.
+    # Loosen the SQL pre-filter to give the corrector room to discriminate.
     # The pgvector index still bounds cost via ORDER BY + LIMIT.
     coarse_max_distance = max(0.05, 1.0 - threshold + 0.2)
 

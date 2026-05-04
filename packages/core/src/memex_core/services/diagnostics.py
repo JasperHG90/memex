@@ -93,7 +93,7 @@ class DiagnosticsService(BaseService):
             # Default-argument capture is intentional: binds _service and _key at
             # definition time (early binding). A bare closure would late-bind, which
             # is fragile if a future refactor mutates self/key between callback
-            # creation and firing. See round-7/round-12 review notes.
+            # creation and firing.
             # The default-arg pattern means the callback is callable as
             # Callable[[Task], None] at runtime, but strict type checkers see the
             # 3-param signature; the cast at add_done_callback below pins the

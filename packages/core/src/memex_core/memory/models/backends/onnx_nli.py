@@ -1,4 +1,4 @@
-"""ONNX-backed NLI classifier.
+"""ONNX-backed NLI (Natural Language Inference) classifier.
 
 Wraps a cross-encoder NLI model (default ``cross-encoder/nli-deberta-v3-xsmall``)
 with the same ``BaseOnnxModel`` substrate that ``FastReranker`` / ``FastEmbedder``
@@ -6,6 +6,11 @@ use, so the model lifecycle (download, ONNX session, tokenizer) is shared.
 
 The model emits three logits per ``(premise, hypothesis)`` pair which we softmax
 into ``{entailment, neutral, contradiction}`` probabilities.
+
+This is NOT the ContradictionEngine. The NLI classifier is a fast 3-way gate
+used in the surprise pipeline's polarity branch — it detects contradiction
+probability as a cheap pre-filter before the full ContradictionEngine (which
+uses DSPy signatures for structured contradiction analysis) runs.
 """
 
 from __future__ import annotations

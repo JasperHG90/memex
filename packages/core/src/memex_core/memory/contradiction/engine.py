@@ -137,15 +137,9 @@ class ContradictionEngine:
                 await session.exec(upsert_stmt)  # type: ignore[arg-type]
                 all_links = list(deduped.values())
 
-            # Accumulate confidence deltas then clamp once, so concurrent
-            # _detect calls on overlapping units cannot race. LEAST/GREATEST
-            # mirrors the application-level max(0.0, min(1.0, ...)) clamp.
-            #
-            # Reinforce path: the old last-writer-wins dict silently dropped
-            # duplicate reinforces in one batch. The new accumulation correctly
-            # sums them (intentional — the prior behaviour was an event-loss bug).
-            # Reinforce-heavy batches now move confidence strictly higher than
-            # before; LEAST(1.0, ...) caps the column at 1.0.
+            # Accumulate confidence deltas then clamp once to prevent races
+            # on overlapping units. LEAST/GREATEST mirrors the application-level
+            # max(0.0, min(1.0, ...)) clamp.
             for unit_id, delta in confidence_deltas.items():
                 values: dict[str, Any] = {
                     'confidence': sa_func.greatest(
@@ -155,12 +149,9 @@ class ContradictionEngine:
                 }
                 bump = evidence_bumps.get(unit_id, 0)
                 if bump:
-                    # GREATEST(0, ...) belt-and-suspenders parallels the
-                    # confidence column's clamp.
-                    # Bumps are always +1 today, so the GREATEST is a no-op
-                    # — but a future code change that produces negative
-                    # deltas would clamp gracefully here instead of
-                    # tripping the DB CHECK constraint.
+                    # GREATEST(0, ...) belt-and-suspenders mirrors confidence clamp.
+                    # Bumps are always +1 today; GREATEST is a no-op but guards
+                    # against future negative deltas.
                     values['confidence_evidence_count'] = sa_func.greatest(
                         0,
                         MemoryUnit.confidence_evidence_count + bump,
@@ -206,21 +197,8 @@ class ContradictionEngine:
     ) -> tuple[list[MemoryLink], dict[UUID, float], dict[UUID, int]]:
         """Process a single flagged unit: get candidates, classify, adjust.
 
-        Returns ``(links, confidence_deltas, evidence_bumps)``:
-
-          - ``links``: link rows to upsert (deduped by the caller).
-          - ``confidence_deltas``: signed alpha-step deltas keyed by unit_id.
-            ``+alpha`` for reinforce, ``-alpha`` for weaken, ``-2*alpha`` for
-            contradict. The caller sums deltas per-unit (previously this
-            dict was ``confidence_updates`` carrying the
-            absolute new value, so concurrent batches that touched the same
-            target would overwrite each other and drift the confidence column
-            out of sync with ``confidence_evidence_count``).
-          - ``evidence_bumps``: per-unit increments for
-            ``confidence_evidence_count`` — summed by the caller.
-
-        Both delta maps stay symmetric in the caller's accumulation step so
-        ``confidence`` and ``confidence_evidence_count`` advance in lockstep.
+        Returns (links, confidence_deltas, evidence_bumps). Deltas are signed
+        alpha-steps so the caller can sum per-unit without overwrite races.
         """
         candidates = await get_candidates(
             session,

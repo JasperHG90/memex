@@ -1,8 +1,8 @@
-"""F43 — Real-LLM golden tests against the MCP tool descriptions.
+"""Real-LLM golden tests against the MCP tool descriptions.
 
 Drives a real LLM agent turn ("Telegram notifications are now resolved") with
-the F43 ``memex_record_outcome`` and ``memex_memory_deprioritize`` descriptions
-in scope and asserts the canonical §3.5 5-step flow expectations:
+the ``memex_record_outcome`` and ``memex_memory_deprioritize`` descriptions
+in scope and asserts the canonical 5-step flow expectations:
 
   (a) Agent disambiguates first when scope is ambiguous.
   (b) Agent calls ``memex_find_note`` (or ``memex_memory_search``) BEFORE any
@@ -53,7 +53,7 @@ _SKIP_LLM_TESTS = bool(os.environ.get('SKIP_LLM_TESTS'))
 
 
 def _f43_tool_set() -> list[dict[str, Any]]:
-    """Bundle the tools the F43 flow can pick from.
+    """Bundle the tools the resolution flow can pick from.
 
     Includes the pair under test (record_outcome + deprioritize) plus the
     routing tools (find_note, memory_search, list_entities,
@@ -182,7 +182,7 @@ def test_ambiguous_resolution_prompts_clarification_before_write() -> None:
                         '- "Daily reflection 2026-04-29" mentions Telegram cron output\n'
                         '- "Daily reflection 2026-04-30" mentions Telegram briefing alerts\n'
                         '- "Debugging session 2026-04-30" mentions a Telegram media bug\n'
-                        'Pick a tool to call. If the scope is ambiguous, the §3.5 flow '
+                        'Pick a tool to call. If the scope is ambiguous, the 5-step flow '
                         'requires you to ASK the user FIRST rather than write. Only call '
                         'memex_record_outcome / memex_memory_deprioritize after you know '
                         'exactly which units the user means.'
@@ -213,7 +213,7 @@ def test_ambiguous_resolution_prompts_clarification_before_write() -> None:
     ]
     assert not write_calls, (
         f'Agent issued a write call ({[tc.function.name for tc in write_calls]}) '
-        'against an ambiguous scope without disambiguating first. §3.5 Step 1 '
+        'against an ambiguous scope without disambiguating first. Step 1 '
         'breach.'
     )
 
@@ -277,14 +277,14 @@ def test_resolution_calls_search_before_write_when_no_unit_ids_known() -> None:
         'memex_memory_search',
         'memex_list_entities',
     ), (
-        f'agent first-called {first!r}; §3.5 Step 2 requires a routing/search call '
+        f'agent first-called {first!r}; Step 2 requires a routing/search call '
         'before any write when unit_ids are unknown.'
     )
     # Negative assertion: no write call leads.
     assert first not in (
         'memex_record_outcome',
         'memex_memory_deprioritize',
-    ), 'agent wrote before searching — §3.5 Step 2 breach.'
+    ), 'agent wrote before searching — Step 2 breach.'
 
 
 # ---------------------------------------------------------------------------
@@ -310,7 +310,7 @@ def test_cross_note_search_uses_top_k_at_least_30() -> None:
                     'content': (
                         'You are an agent integrated with Memex. Use Option B '
                         '(cross-note memex_memory_search) to gather candidates for the '
-                        '§3.5 resolution flow. The §3.5 spec says top_k MUST be >= 30; '
+                        '5-step resolution flow. The §3.5 spec says top_k MUST be >= 30; '
                         'the default 5 is too narrow.'
                     ),
                 },
@@ -343,10 +343,10 @@ def test_cross_note_search_uses_top_k_at_least_30() -> None:
     args = json.loads(search_calls[0].function.arguments)
     top_k = args.get('top_k')
     assert isinstance(top_k, int), (
-        f'agent did not set top_k (got {top_k!r}); §3.5 Option B requires top_k>=30.'
+        f'agent did not set top_k (got {top_k!r}); Option B requires top_k>=30.'
     )
     assert top_k >= 30, (
-        f'agent set top_k={top_k}; §3.5 Option B requires top_k>=30 for cross-note '
+        f'agent set top_k={top_k}; Option B requires top_k>=30 for cross-note '
         'recall. Default 5 misses paraphrased mentions.'
     )
 
@@ -374,7 +374,7 @@ def test_resolution_issues_paired_writes_against_subset() -> None:
                 {
                     'role': 'system',
                     'content': (
-                        'You are an agent integrated with Memex executing §3.5 Steps '
+                        'You are an agent integrated with Memex executing Steps '
                         '4+5. The user has confirmed a bug fix; you have already done '
                         'Steps 1-3 and judged exactly ONE unit relevant. Issue PAIRED '
                         'writes (memex_record_outcome with success=false AND '
@@ -411,10 +411,10 @@ def test_resolution_issues_paired_writes_against_subset() -> None:
     names = [tc.function.name for tc in tool_calls]
 
     assert 'memex_record_outcome' in names, (
-        f'agent did not call record_outcome; §3.5 Step 4 breach. Calls: {names!r}'
+        f'agent did not call record_outcome; Step 4 breach. Calls: {names!r}'
     )
     assert 'memex_memory_deprioritize' in names, (
-        f'agent did not call memex_memory_deprioritize; §3.5 Step 5 breach. Calls: {names!r}'
+        f'agent did not call memex_memory_deprioritize; Step 5 breach. Calls: {names!r}'
     )
 
     # All write-call args must reference the relevant unit and never the irrelevant.
@@ -423,7 +423,7 @@ def test_resolution_issues_paired_writes_against_subset() -> None:
             continue
         args_str = tc.function.arguments
         assert irrelevant_id not in args_str, (
-            f'agent wrote against the irrelevant (episodic) unit; §3.5 Step 3 breach. '
+            f'agent wrote against the irrelevant (episodic) unit; Step 3 breach. '
             f'Tool: {tc.function.name}, args: {args_str!r}'
         )
         assert relevant_id in args_str, (

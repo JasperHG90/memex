@@ -1,9 +1,7 @@
-"""HIGH-006 — F8 ``memex_get_lint_flags`` MCP surface vault scoping.
+"""``memex_get_lint_flags`` MCP surface vault scoping.
 
-The MCP tool previously accepted ``vault_id=None`` and fell through to a
-global all-vault view, leaking findings across tenants. After the fix it
-falls through to the session active write vault when no ``vault_id`` is
-supplied — never to a global view.
+The MCP tool defaults to the session active write vault when no
+``vault_id`` is supplied — never falls through to a global view.
 """
 
 from __future__ import annotations
@@ -17,7 +15,7 @@ from helpers import parse_tool_result, TEST_VAULT_UUID
 async def test_lint_flags_defaults_to_active_write_vault_when_omitted(
     mock_api, mcp_client, mock_config
 ):
-    """HIGH-006: omitting vault_id MUST scope the call to the session
+    """Omitting vault_id MUST scope the call to the session
     active write vault, NOT trigger a global all-vault query.
 
     The conftest mock_config fixture sets ``write_vault='my-project'``,

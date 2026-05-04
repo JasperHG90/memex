@@ -1,4 +1,4 @@
-"""Add intent_class + risk_class to memory_units (F25 — write-time classifier).
+"""Add intent_class + risk_class to memory_units (write-time classifier).
 
 - Add intent_class TEXT column (permanent | durable | ephemeral), default 'durable'
 - Add risk_class TEXT column (none | sensitive | private | safety), default 'none'

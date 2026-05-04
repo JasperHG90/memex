@@ -408,13 +408,12 @@ class TestClassifyAndFilterMetricsGating:
         assert after_intent - before_intent == 1
         assert after_risk - before_risk == 1
 
-    def test_safety_class_facts_do_not_inflate_distribution(
+    def test_safety_class_facts_are_passed_through_and_counted(
         self, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
     ) -> None:
-        """Hermes round-4 MED: ``CLASSIFIER_RISK_DISTRIBUTION`` must increment
-        only for facts that survive ``filter_safety_blocked``. Otherwise a
-        ``risk='safety'`` fact gets counted both as a ``safety`` distribution
-        tick *and* as a ``CLASSIFIER_BLOCKED_TOTAL`` tick — double-counting.
+        """Safety-class facts are recorded but passed through (not dropped).
+        ``CLASSIFIER_RISK_DISTRIBUTION`` increments for all facts including safety,
+        and ``CLASSIFIER_BLOCKED_TOTAL`` also increments for safety facts.
         """
         from memex_core.metrics import (
             CLASSIFIER_INTENT_DISTRIBUTION,
@@ -432,8 +431,8 @@ class TestClassifyAndFilterMetricsGating:
         )._value.get()
 
         facts = [
-            self._processed('durable', 'safety'),  # gets dropped
-            self._processed('durable', 'none'),  # gets persisted
+            self._processed('durable', 'safety'),  # passed through, not dropped
+            self._processed('durable', 'none'),  # normal
         ]
         out = engine._classify_and_filter(facts)
 
@@ -442,15 +441,11 @@ class TestClassifyAndFilterMetricsGating:
             intent_class='durable'
         )._value.get()
 
-        assert len(out) == 1
-        # Safety-class fact does NOT show up on the distribution.
-        assert after_safety == before_safety, (
-            'CLASSIFIER_RISK_DISTRIBUTION must not increment for facts dropped '
-            'by filter_safety_blocked — they are tracked separately by '
-            'CLASSIFIER_BLOCKED_TOTAL.'
-        )
-        # The kept (non-safety) fact's intent does land on the distribution.
-        assert after_intent_durable - before_intent_durable == 1
+        assert len(out) == 2
+        # Safety-class fact DOES appear on the risk distribution.
+        assert after_safety - before_safety == 1
+        # Both facts' intent classes land on the distribution.
+        assert after_intent_durable - before_intent_durable == 2
 
 
 class TestPartialOverrideSemantics:

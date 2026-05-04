@@ -1,4 +1,4 @@
-"""F20 revisit_last_reviewed_at — record last-review timestamp for FSRS-5.
+"""revisit_last_reviewed_at — record last-review timestamp for FSRS-5.
 
 Adds one column to ``memory_units``:
 - ``revisit_last_reviewed_at`` (TIMESTAMPTZ, NULL): wall-clock timestamp of the

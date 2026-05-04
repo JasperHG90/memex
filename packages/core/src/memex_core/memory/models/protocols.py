@@ -28,16 +28,16 @@ class RerankerModel(Protocol):
 
     ``model_version`` is a stable string identifier (provider:model:revision
     style) that distinguishes one cross-encoder weight set from another.
-    The retrieval-side score cache (F41) keys on this so a model upgrade
+    The retrieval-side score cache keys on this so a model upgrade
     invalidates entries structurally rather than waiting for the TTL.
 
     Implementations SHOULD return a stable identifier that changes when the
     underlying model is upgraded — e.g. ``'onnx:<repo_id>:<revision>'`` or
-    ``'litellm:<model_id>'`` — so the F41 score cache can invalidate entries
+    ``'litellm:<model_id>'`` — so the score cache can invalidate entries
     structurally on a swap rather than waiting on the TTL.
 
-    **Backwards compatibility note (F41).** ``Protocol`` is structural, so the
-    body of ``model_version`` below is *not* what makes pre-F41 backends
+    **Backwards compatibility note.** ``Protocol`` is structural, so the
+    body of ``model_version`` below is *not* what makes backends
     satisfy this contract — Python never calls it. The actual runtime
     backwards-compat mechanism is the ``getattr(reranker, 'model_version',
     'unknown')`` guard on the cache call site (``retrieval/engine.py`` —
@@ -59,8 +59,8 @@ class RerankerModel(Protocol):
 class NLIClassifierModel(Protocol):
     """Three-way NLI classifier: returns probabilities for entailment / neutral / contradiction.
 
-    F10b uses this to disambiguate "topically related" peers from "polarity-inverting"
-    peers when the cosine surprise gate alone cannot lift them above threshold (POC-002).
+    Uses this to disambiguate "topically related" peers from "polarity-inverting"
+    peers when the cosine surprise gate alone cannot lift them above threshold.
 
     ``classify`` accepts a ``(premise, hypothesis)`` pair and returns a dict whose
     values sum to ~1.0::

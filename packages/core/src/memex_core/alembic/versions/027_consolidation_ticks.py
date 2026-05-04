@@ -1,10 +1,10 @@
-"""F38 consolidation_ticks — vault-scoped tick-summary rows for consolidation orchestrator.
+"""consolidation_ticks — vault-scoped tick-summary rows for consolidation orchestrator.
 
-One row per `consolidation_tick(vault_id)` invocation. F38's `services/consolidation.py`
+One row per `consolidation_tick(vault_id)` invocation. `services/consolidation.py`
 is a thin orchestrator over reflection + contradiction + prune-stale-only; its sole
-DB write is the row inserted into this table at the end of each tick (AC-F38-4).
+DB write is the row inserted into this table at the end of each tick.
 
-Schema per RFC-010 §"Tick-summary row schema":
+Schema per the tick-summary row schema:
 - started_at + completed_at (NOT just last_tick_at — the gap captures wall-clock duration
   + signals "in progress" via NULL completed_at)
 - units_processed: count of units returned by select_diff_units (capped at 500)
@@ -14,7 +14,7 @@ Schema per RFC-010 §"Tick-summary row schema":
 Two indexes:
 - (vault_id, started_at) for ad-hoc per-vault history queries
 - (vault_id, completed_at DESC NULLS LAST) covers `get_last_tick_timestamp` lookups
-  via MAX(completed_at) — peer-review tweak from staff-eng-2.
+  via MAX(completed_at).
 
 Revision ID: 027_consolidation_ticks
 Revises: 026_revisit_columns

@@ -2,7 +2,7 @@
 
 Single-int advisory locks keyed off entity UUID. The high bit (1 << 62) places
 all entity lock ids in [2^62, 2^63-1] — disjoint by construction from the
-leader lock at ~2^52. See RFC-005.
+leader lock at ~2^52.
 
 Acquire/release pattern uses a dedicated short-lived asyncpg connection per
 context-manager invocation. Lock release is deterministic on context exit; if
@@ -10,7 +10,7 @@ the connection dies mid-hold (process crash, network failure), Postgres
 auto-releases the lock when the backend terminates.
 
 LocksService orchestrates `memex_memory_reconsolidate` (entity-scoped) and
-`memex_memory_consolidate` (vault-wide). RFC-005 / RFC-008.
+`memex_memory_consolidate` (vault-wide).
 """
 
 from __future__ import annotations
@@ -51,8 +51,7 @@ class EntityLockTimeoutError(MemexError):
     user as 'another reconsolidation is in progress; retry in a moment'.
 
     Carries the configured ``timeout_seconds`` so HTTP handlers can derive a
-    sensible ``Retry-After`` value dynamically instead of hard-coding one
-    (Hermes round-4 MED).
+    sensible ``Retry-After`` value dynamically instead of hard-coding one.
     """
 
     def __init__(self, message: str, *, timeout_seconds: float | None = None) -> None:
@@ -110,8 +109,7 @@ async def acquire_entity_lock(
     context.
 
     Uses a dedicated asyncpg connection so the lock survives the SQLAlchemy
-    session lifecycle of any work performed inside the body (validated in
-    POC-F9 / RFC-005). Spins on `pg_try_advisory_lock` with a bounded wait —
+    session lifecycle of any work performed inside the body. Spins on `pg_try_advisory_lock` with a bounded wait —
     blocking `pg_advisory_lock` would hang an MCP request indefinitely if the
     lock is contended.
 
@@ -126,7 +124,7 @@ async def acquire_entity_lock(
     Raises EntityLockTimeoutError when timeout_seconds elapses without
     acquiring. On context exit (success OR exception), the lock is released
     and the connection released/closed; if the process crashes before exit,
-    Postgres auto-releases on backend termination (POC TC-12-5).
+    Postgres auto-releases on backend termination.
     """
     from memex_core.metrics import ENTITY_LOCK_ACQUIRES_TOTAL
 
@@ -183,9 +181,8 @@ class LocksService:
 
     Holds references to the metastore + contradiction engine + reflection
     service + units service. Computes the asyncpg DSN once at init from
-    `config`. `consolidate_vault` does NOT acquire an advisory lock (per
-    RFC-008 §`memex_memory_consolidate` — per-row F4 deprioritize is
-    idempotent, so no batch lock is needed).
+    `config`. `consolidate_vault` does NOT acquire an advisory lock (per-row
+    deprioritize is idempotent, so no batch lock is needed).
     """
 
     def __init__(
@@ -204,19 +201,19 @@ class LocksService:
         self.contradiction = contradiction
         self.units = units
         self._dsn = dsn if dsn is not None else dsn_from_config(config)
-        # CRIT-1: shared asyncpg pool for all entity-lock connections opened
-        # by this service. Lazily created on first use so it binds to the
+        # Shared asyncpg pool for all entity-lock connections opened by this
+        # service. Lazily created on first use so it binds to the
         # running event loop; ``max_size=10`` matches the SQLAlchemy default
         # pool size (metastore.py) so the two pools cannot together exhaust
         # Postgres ``max_connections`` even at saturation.
         self._pool: asyncpg.Pool | None = None
-        # MED: cached at first use so we don't re-introspect on every
+        # Cached at first use so we don't re-introspect on every
         # consolidate_vault call. The schema cannot change at runtime within a
         # single process, so caching is safe; tests that monkey-patch the
         # attribute can override it directly.
         self._has_maintenance_proposals_table_cache: bool | None = None
-        # F9 / RFC-008 line 125: per-vault rate limit on memex_memory_consolidate.
-        # Reuses F5's TokenBucketRateLimiter primitive. Default 1 call per vault
+        # Per-vault rate limit on memex_memory_consolidate.
+        # Reuses the TokenBucketRateLimiter primitive. Default 1 call per vault
         # per hour (LLM-intensive + mass-mutation guard).
         consolidate_cfg = config.server.memory.consolidate_rate_limit
         self._consolidate_limiter = TokenBucketRateLimiter(
@@ -286,7 +283,7 @@ class LocksService:
     ) -> dict[str, Any]:
         """Re-evaluate memories linked to an entity under a per-entity lock.
 
-        Steps (RFC-005 / RFC-008):
+        Steps:
             1. Acquire `acquire_entity_lock(entity_id)` for `timeout_seconds`.
             2. Resolve `entity_id → unit_ids` via UnitEntity, scoped to vault.
             3. ContradictionEngine.detect_contradictions on those unit_ids.
@@ -375,14 +372,14 @@ class LocksService:
     async def _select_consolidate_candidates(self, vault_id: UUID) -> list[UUID]:
         """Identify low-MW + 5+-outcomes + non-deprioritized + 30-days-old units.
 
-        Predicate (RFC-008 §`memex_memory_consolidate`):
+        Predicate (vault-wide consolidate):
             ``mw_score < 0.35
               AND (success_co_count + failure_co_count) >= 5
               AND is_deprioritized = false
               AND created_at < now() - INTERVAL '30 days'``
 
-        Threshold 0.35 is intentionally broader than F6 `cold_low_mw_unit`
-        (0.3) — that rule proposes; this verb proposes-and-acts.
+        Threshold 0.35 is intentionally broader than the `cold_low_mw_unit`
+        lint rule (0.3) — that rule proposes; this verb proposes-and-acts.
         """
         from datetime import datetime, timedelta, timezone
 
@@ -420,31 +417,31 @@ class LocksService:
         dry_run: bool = False,
         actor: str | None = None,
     ) -> dict[str, Any]:
-        """Vault-wide low-MW unit consolidation (RFC-008).
+        """Vault-wide low-MW unit consolidation.
 
         Steps:
-            1. Acquire a per-vault rate-limit token (RFC-008 line 125;
-               default 1 call per vault per hour). Skipped on `dry_run`
-               so agents can preview cheaply without burning the bucket.
+            1. Acquire a per-vault rate-limit token (default 1 call per vault
+               per hour). Skipped on `dry_run` so agents can preview cheaply
+               without burning the bucket.
             2. Identify candidates by predicate (see `_select_consolidate_candidates`).
             3. If `dry_run`: return preview, no writes.
-            4. Otherwise: for each candidate, call F4
+            4. Otherwise: for each candidate, call
                `UnitsService.set_unit_deprioritized` and write a
                `MaintenanceProposal` row with `status='resolved'`,
                `rule_name='consolidate_vault_low_mw'`, evidence carrying
                actor + reason for traceability.
 
-        Does NOT acquire an advisory lock — per-row F4 deprioritize is
+        Does NOT acquire an advisory lock — per-row deprioritize is
         idempotent (column flip).
 
         Branch B fallback: if `maintenance_proposals` table is missing
-        (F6 not deployed), returns the preview shape without proposal
-        writes. Branch A is live in this codebase since F6 merged.
+        (lint subsystem not deployed), returns the preview shape without
+        proposal writes. Branch A is live in this codebase.
 
         Raises ``RateLimitExceededError`` (with ``retry_after_seconds``)
         when the per-vault bucket is empty and ``dry_run=False``. The
         exception is a service-layer signal — surface translation to
-        MCP/HTTP belongs to the calling layer (mirrors F5 summarize_node).
+        MCP/HTTP belongs to the calling layer.
         """
         from memex_core.metrics import CONSOLIDATE_TOTAL
 
@@ -484,8 +481,8 @@ class LocksService:
                 )
 
             # Single batched UPDATE per vault rather than one transaction per
-            # unit (HIGH-6). Audit-log emission stays per-unit so cascade
-            # semantics match the single-row path.
+            # unit. Audit-log emission stays per-unit so cascade semantics
+            # match the single-row path.
             updated_ids = await self.units.batch_set_unit_deprioritized(
                 candidates, reason, actor=actor
             )

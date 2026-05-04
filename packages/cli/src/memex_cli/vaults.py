@@ -247,7 +247,7 @@ async def set_mw_mode(
     identifier: Annotated[str, typer.Argument(help='Name or UUID of the vault.')],
     mode: Annotated[str, typer.Argument(help='Memory Worth mode: stationary or ema.')],
 ):
-    """Set the MW counter mode for a vault."""
+    """Set the Memory Worth counter mode for a vault (stationary or ema)."""
     if mode not in ('stationary', 'ema'):
         console.print(f'[red]Invalid mode: {mode!r}. Must be "stationary" or "ema".[/red]')
         raise typer.Exit(code=1)
@@ -276,7 +276,7 @@ async def show_vault(
     ctx: typer.Context,
     identifier: Annotated[str, typer.Argument(help='Name or UUID of the vault.')],
 ):
-    """Show vault details including MW mode."""
+    """Show vault details including Memory Worth mode."""
     config: MemexConfig = ctx.obj
 
     async with get_api_context(config) as api:

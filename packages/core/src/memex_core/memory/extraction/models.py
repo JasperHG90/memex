@@ -445,39 +445,26 @@ class RawFact(BaseFact):
     )
     intent_class: IntentLiteral = Field(
         default='durable',
-        description='Lifecycle class — how durable the fact is, NOT how important it feels. '
-        "'permanent' = identity/preferences/key facts that should never decay (e.g. 'user has a "
-        "peanut allergy', 'user prefers ruff over black'). 'durable' = project decisions, "
-        'relationship state, multi-week relevance — DEFAULT for unclear cases. '
-        "'ephemeral' = task context, session details, days-to-weeks relevance only (e.g. "
-        "'tomorrow's standup is at 10am', 'Bob is on vacation this week'). Set based on the "
-        "fact's actual durability, not perceived importance: a specific date for next week is "
-        "ephemeral even if the event is important; the user's home address is permanent even "
-        'though it is not exciting.',
+        description='Lifecycle durability (NOT importance). '
+        "'permanent' = never-decay (identity, preferences). "
+        "'durable' = multi-week relevance (DEFAULT). "
+        "'ephemeral' = days-to-weeks only (task context).",
     )
     risk_class: RiskLiteral = Field(
         default='none',
-        description='Sensitivity class. '
-        "'none' = default, public-safe content. "
-        "'sensitive' = flagged for linter review; still retrievable in default scope. "
-        "'private' = excluded from default retrieval; surfaced only on explicit query "
-        '(passwords, financial details, medical specifics). '
-        "'safety' = blocked entirely (Memex refuses to ingest). Use ONLY for content that "
-        'would cause real-world harm if surfaced (e.g. self-harm planning, instructions for '
-        "violence). Be conservative — when in doubt, prefer 'sensitive' or 'private' over "
-        "'safety'.",
+        description='Sensitivity. '
+        "'none' = public-safe (default). "
+        "'sensitive' = flagged for review. "
+        "'private' = excluded from default retrieval (PII, medical). "
+        "'safety' = recorded but passed through (deferred blocking).",
     )
     occurred_start: str | None = Field(
         default=None,
-        description='Exact date in ISO 8601 format (YYYY-MM-DD, or -YYYY-MM-DD for BCE dates). ONLY use if a specific date is present. Otherwise None. '
-        "WHEN the event happened (ISO timestamp). Only for fact_kind='dated'. Leave null for conversations. If a `date "
-        "is mentioned in 'when', you **MUST** convert it here.",
+        description='ISO 8601 date (YYYY-MM-DD). Only for fact_kind="dated". Leave null for conversations.',
     )
     occurred_end: str | None = Field(
         default=None,
-        description='Exact date in ISO 8601 format (YYYY-MM-DD, or -YYYY-MM-DD for BCE dates). ONLY use if a specific date is present. Otherwise None. '
-        'WHEN the event ended (ISO timestamp). Only for dated events with duration. Leave null for conversations. '
-        "If an **end date** is mentioned in 'when', you **MUST** convert it here.",
+        description='ISO 8601 end date. Only for dated events with duration. Leave null otherwise.',
     )
 
     @field_serializer('fact_kind')
@@ -607,12 +594,8 @@ class ExtractedFact(BaseFact):
         '(none | sensitive | private | safety). Coerced to default on invalid input.',
     )
 
-    # ExtractedFact previously had no validators on intent_class / risk_class.
-    # Mirror RawFact's default-on-fail behavior so direct construction with an
-    # invalid string degrades gracefully instead of raising ValueError. Types
-    # tightened to IntentLiteral / RiskLiteral so mypy flags bad assignments at
-    # construction sites; validator names mirror RawFact's public
-    # ``coerce_intent_class`` / ``coerce_risk_class`` for grep consistency.
+    # Mirror RawFact's default-on-fail coercion so direct construction with
+    # an invalid string degrades gracefully.
 
     @field_validator('intent_class', mode='before')
     @classmethod

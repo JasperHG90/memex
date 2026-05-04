@@ -9,7 +9,7 @@ Step 1 (MANDATORY): `qmd search --line-numbers -n 10 "<exact_term>" --collection
 Step 2 (MANDATORY if Step 1 fails): `qmd vsearch --line-numbers -n 10 "<concept>" --collection <COLLECTION>`
 Step 3 (ONLY if Steps 1+2 fail): `qmd query --line-numbers -n 10 "<question>" --collection <COLLECTION>`
 
-PROHIBITED: Skipping to `query`. Skipping Step 2. Using `read_file`, `glob`, `grep`, `ripgrep`, `find`, `search_file_content`, or any shell-based search for discovery before completing Steps 1-3.
+PROHIBITED: Skipping to `query`. Skipping Step 2. Using `read_file`, `glob`, `grep`, `ripgrep`, `find`, or `search_file_content`, or any shell-based search for discovery before completing Steps 1-3.
 OVERRIDE: Use `run_shell_command` with `qmd search` for all code discovery.
 </constraint>
 
@@ -60,7 +60,7 @@ Python monorepo managed by `uv` with 8 packages.
 | `packages/eval` | `memex_eval` | Evaluation: internal synthetic benchmarks + external LoCoMo benchmark with LLM-as-judge |
 | `packages/firefox-extension` | — | TypeScript/WebExtension for saving pages to Memex |
 | `packages/claude-code-plugin` | — | Claude Code plugin: `/remember` and `/recall` skills, session hooks, MCP server config |
-| `packages/hermes-plugin` | `memex_hermes_plugin` | Hermes Agent memory provider plugin — primary tools (memory_search, note_search, survey, add_note, append_note, list_entities, get_entity_mentions, get_entity_cooccurrences) plus note lifecycle, templates, assets, and KV surfaces (~36 schemas total). Tool names mirror the MCP server. Session briefings include a storage-model primer (notes / memory units / KV) and per-project vault binding |
+| `packages/hermes-plugin` | `memex_hermes_plugin` | Hermes Agent memory provider plugin |
 
 ### Dependency graph
 
@@ -82,63 +82,36 @@ memex-eval → memex-common
 
 ```
 memex_core/
-├── server/          # FastAPI route handlers (ingestion, retrieval, notes, entities, etc.)
-├── services/        # Domain logic layer (ingestion, search, notes, reflection, lineage, etc.)
+├── server/          # FastAPI route handlers
+├── services/        # Domain logic layer
 ├── memory/
 │   ├── extraction/  # LLM fact extraction pipeline (DSPy signatures, chunking, dedup)
 │   ├── retrieval/   # TEMPR: 5 strategies + RRF + MMR diversity
 │   ├── reflect/     # Hindsight reflection loop (Phases 0-6)
 │   ├── contradiction/ # Contradiction detection between facts
 │   ├── models/      # Embedding, reranking, NER model backends
-│   └── sql_models.py # Full DB schema (Entity, MemoryUnit, MentalModel, Note, Chunk, etc.)
+│   └── sql_models.py # Full DB schema
 ├── storage/         # MetaStore (Postgres+pgvector), FileStore (local/S3/GCS)
 ├── processing/      # Content processing (batch jobs, dates, files, web scraping, titles)
 ├── api.py           # MemexAPI — main facade class
 ├── llm.py           # DSPy/LiteLLM executor with circuit breaker
-├── circuit_breaker.py # LLM call resilience (CLOSED→OPEN→HALF_OPEN)
+├── circuit_breaker.py # LLM call resilience
 ├── scheduler.py     # Background reflection with Postgres advisory lock leader election
 ├── metrics.py       # Prometheus metrics
 ├── tracing.py       # OpenTelemetry instrumentation
 └── alembic/         # Database migrations
 ```
 
-### Memory model (Hindsight Framework)
-
-1. **Extraction** (`memex_core.memory.extraction`) — Multi-phase pipeline: chunk text → extract facts/observations/events via DSPy → entity resolution → deduplication → embedding generation → persistence
-2. **Retrieval** (`memex_core.memory.retrieval`) — TEMPR: 5 strategies (Temporal, Entity/Graph, Mental Model, Keyword/BM25, Semantic/vector) fused with Reciprocal Rank Fusion + MMR diversity filtering. Supports query expansion via LLM.
-3. **Reflection** (`memex_core.memory.reflect`) — 7-phase Hindsight loop: liveness → validation → comparison → validation → update → finalization → enrichment. Synthesizes observations into mental models with trend tracking (new/stable/strengthening/weakening/stale).
-4. **Contradiction** (`memex_core.memory.contradiction`) — Detects conflicting facts, classifies relationships, adjusts confidence.
-
-### Entry points
-
-- `memex_core.api.MemexAPI` — main API facade (ingest, recall, reflect, entity/note CRUD)
-- `memex_core.server` — FastAPI REST server (NDJSON streaming, rate limiting, auth, webhooks)
-- `memex_core.memory.engine.MemoryEngine` — memory engine factory and orchestration
-- `memex_core.services.*` — domain service layer (ingestion, search, notes, reflection, lineage, entities, vaults, kv, stats, audit)
-- `memex_cli.__init__.app` — Typer CLI app
-- `memex_mcp.server.mcp` — MCP server (35 tools, progressive disclosure via `DiscoveryMode` transform)
-
-### Inference model backends
-
-Embedding and reranking models are configurable via `server.embedding_model` and `server.memory.retrieval.reranker`. Both default to built-in ONNX models; set `type: litellm` to use any litellm-supported provider (OpenAI, Gemini, Cohere, Ollama, etc.).
-
-- Protocols: `EmbeddingsModel`, `RerankerModel` in `memex_core.memory.models.protocols`
-- ONNX backends: `FastEmbedder`, `FastReranker` in `memex_core.memory.models`
-- LiteLLM backends: `memex_core.memory.models.backends.litellm_embedder`, `litellm_reranker`
-- Factory functions: `get_embedding_model(config)`, `get_reranking_model(config)` dispatch on config type
-- Reranker logit transform: litellm providers return [0,1] scores; the adapter applies inverse sigmoid so the retrieval engine's sigmoid normalisation (`retrieval/engine.py:987`) recovers the original scores
-
 ### Key architectural patterns
 
 - **Distributed reflection queue**: PostgreSQL `SELECT ... FOR UPDATE SKIP LOCKED` for atomic task claiming
-- **Note identity is stable; content is mutable in place**. Each note has a stable `note_id` (derived deterministically from `note_key + vault_id`). Two ways to update an existing note's body, both keeping the same `note_id`: (a) **append** — `memex_append_note(note_key=...)` adds a delta to the end (issue #56); (b) **overwrite** — `memex_add_note(note_key=...)` re-ingests the full body. Both run incremental block-diff extraction (only changed chunks invoke the LLM). Lifecycle states (`active` / `superseded` / `archived`) gate operations: appends/overwrites are rejected on non-`active` parents; status transitions are non-destructive. The audit log (`note_appends`, `audit_events`) is genuinely append-only — every mutation leaves a row.
+- **Note identity is stable; content is mutable in place**. `note_key` upsert creates new versions; append extends in place. Lifecycle states gate operations.
 - **fsspec abstraction**: storage is backend-agnostic (local, S3, GCS)
 - **Circuit breaker**: LLM call resilience with Prometheus metrics
 - **Leader election**: Postgres advisory locks for background reflection scheduling
 - **Multi-tenancy**: vault-scoped data isolation with global vault fallback
-- **Lineage tracking**: upstream/downstream provenance chains (Document ↔ Memory Unit ↔ Mental Model)
-- **Entity graph**: cooccurrence tracking + hybrid ranking (mention count + retrieval frequency + centrality)
-- **Stable chunking**: sentence/code block/list-aware text splitting
+- **Lineage tracking**: upstream/downstream provenance chains
+- **Entity graph**: cooccurrence tracking + hybrid ranking
 
 ## Git workflow
 
@@ -158,9 +131,7 @@ Embedding and reranking models are configurable via `server.embedding_model` and
 
 ## Testing
 
-### Structure
-
-- Root tests (`/tests/`) — E2E tests against real Postgres via testcontainers (`pgvector/pgvector:pg18-trixie`)
+- Root tests (`/tests/`) — E2E tests against real Postgres via testcontainers
 - Unit tests (`packages/core/tests/unit/`) — mocked dependencies, no database
 - Integration tests (`packages/core/tests/integration/`) — real Postgres, no mocks
 - Package tests (`packages/{cli,mcp,eval}/tests/`) — package-specific tests
@@ -172,38 +143,8 @@ Embedding and reranking models are configurable via `server.embedding_model` and
 - `@pytest.mark.llm_mock` — uses `MockDspyLM` with deterministic golden responses
 - `@pytest.mark.benchmark` — performance benchmarks
 
-### Key fixtures
-
-- `postgres_container` (session) — testcontainers Postgres lifecycle
-- `client` / `async_client` (function) — FastAPI TestClient with real DB
-- `tmp_env` (function, autouse) — isolated config/data/logs dirs per test
-- `_truncate_db` (function) — clean tables + re-seed global vault between tests
-- `mock_dspy_lm` — deterministic LLM mock with response queue (unit tests)
-
-Async mode: `asyncio_mode = "auto"` — all async tests run automatically.
-
 <constraint name="test-practices">
 - Use `uuid4()` in content to prevent `idempotency_check` failures.
 - Use `patch.dict(os.environ, ...)` for config tests.
 - Ensure `ensure_db_env_vars` fixture is active for E2E tests.
 </constraint>
-
-## Memory layers and tool routing
-
-| Layer | What it stores | Retrieve with | Tiny example |
-|---|---|---|---|
-| **Episodic** ("what happened, when") | Timestamped, source-attributed Notes — sessions, reflections, decisions | `memex_note_search` / `memex_recent_notes` / `memex_find_note` | "Find yesterday's reflection about the deploy regression" |
-| **Semantic** ("decontextualised facts") | MemoryUnits — short fact/observation/event statements extracted from notes | `memex_memory_search` / `memex_get_memory_units` / `memex_get_entity_mentions` | "What does v2 use for auth?" |
-| **Conceptual** ("synthesised mental models") | MentalModels — reflection output bundling per-entity observations with trend tracking (new/strengthening/stable/weakening/stale) | `memex_survey` / `memex_get_entities` (with `mental_models=True`) | "What do you know about Project X overall?" |
-| **Procedural-observations** ("adaptations to context") | KV entries under `procedure:<verb>:<context-tag>` — observations about how to adapt your existing skills to a context, NOT the procedures themselves | `memex_kv_search` / `memex_kv_get` with `prefix='procedure:'` | "For this user, `deploy` means staging — never prod after 6pm" |
-
-Default to `memex_memory_search` for content-shaped questions, `memex_note_search` for source-shaped questions. The agent owns the verb; Memex owns the adverb. Canonical source: `packages/common/src/memex_common/agent_surface.py`; parity enforced by `test_f3_layer_primer_parity.py`.
-
-## When the user reports an issue resolved (5-step flow)
-
-1. **Disambiguate** — if scope ambiguous, ASK before writing.
-2. **Route** — title → `memex_find_note`; content → `memex_memory_search`. Pick a coverage path: (A) entity-anchored, (B) cross-note semantic with `top_k>=30`, or (C) single-note PageIndex.
-3. **LLM-judge** — read candidate unit bodies, pick fix-relevant subset. Never bulk-write.
-4. **+5. Paired writes** against judged subset: `memex_record_outcome(success=false)` AND `memex_memory_deprioritize`. Two orthogonal axes: MW gradient vs binary surface state.
-
-Historical/audit queries ("how has my view on X evolved") → `memex_get_unit_history` or `memex_memory_search(apply_pre_filter=False)`.

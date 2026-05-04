@@ -57,22 +57,11 @@ logger = logging.getLogger('memex.core.memory.extraction.core')
 
 class ExtractSemanticFacts(dspy.Signature):
     """
-    Extract semantic facts from text chunks.
-    LANGUAGE RULE: Output extracted facts in ENGLISH. Translate if necessary.
-    TEMPORAL HANDLING: Use 'event_date_ref' as the anchor for relative dates.
-
-    Each fact MUST carry intent_class and risk_class:
-
-    intent_class (durability, NOT importance):
-      - permanent: identity, preferences, never-decaying facts.
-      - durable: project decisions, multi-week relevance. DEFAULT.
-      - ephemeral: task context, days-to-weeks relevance only.
-
-    risk_class (sensitivity):
-      - none: public-safe. DEFAULT.
-      - sensitive: flagged for review; still in default retrieval.
-      - private: excluded from default retrieval (passwords, medical).
-      - safety: BLOCKED at ingestion. Only for real-world harm content.
+    Extract semantic facts from text chunks. Output in ENGLISH.
+    Use 'event_date_ref' for relative dates. Each fact needs intent_class
+    and risk_class:
+    intent_class: permanent (never-decay), durable (default), ephemeral (short-lived).
+    risk_class: none (default), sensitive (flagged), private (excluded from retrieval), safety (blocked).
     """
 
     chunk_text: str = dspy.InputField(

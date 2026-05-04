@@ -99,10 +99,10 @@ async def summarize_node(
     request: Annotated[SummarizeNodeRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
 ):
-    """F5: synchronously consolidate memories on an entity into its mental model.
+    """Synchronously consolidate memories on an entity into its mental model.
 
-    Mirrors the synchronous contract — does NOT use BackgroundTasks. Per RFC-002,
-    rate-limited per (entity_id, vault_id) at the service layer; the endpoint is a
+    Mirrors the synchronous contract — does NOT use BackgroundTasks.
+    Rate-limited per (entity_id, vault_id) at the service layer; the endpoint is a
     thin transport that translates ``RateLimitExceededError`` into a 429 envelope
     with a ``Retry-After`` header.
     """

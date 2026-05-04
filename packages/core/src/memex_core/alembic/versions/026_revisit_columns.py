@@ -1,4 +1,4 @@
-"""F20 revisit columns + partial index — adds FSRS-5 schedule state to memory_units.
+"""revisit columns + partial index — adds FSRS-5 schedule state to memory_units.
 
 Adds four columns to `memory_units`:
 - revisit_due_at (TIMESTAMPTZ, NULL): when the unit is next due for review
@@ -21,7 +21,8 @@ always defined — every unit starts at zero consecutive Again ratings, regardle
 whether it has been scheduled.
 
 FSRS-5 algorithm note: py-fsrs 4.1.2 implements FSRS-5 (19 weights), not FSRS-4.5 —
-verified at .dev-team-artifacts/dev-tier-a-cognitive-memory/pocs/003-f20-fsrs-parity/
+verified at
+.dev-team-artifacts/dev-tier-a-cognitive-memory/pocs/003-fsrs-parity/
 paper-cross-check.md. The schema is algorithm-version-agnostic; only column SEMANTICS
 (stability + difficulty + due_at + streak count) are load-bearing.
 
