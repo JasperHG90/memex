@@ -44,7 +44,7 @@ MODEL_REGISTRY: dict[str, ModelSpec] = {
         revision='main',
     ),
     'nli': ModelSpec(
-        repo_id='cross-encoder/nli-deberta-v3-small',
+        repo_id='cross-encoder/nli-deberta-v3-xsmall',
         revision='main',
     ),
 }

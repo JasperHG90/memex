@@ -10,9 +10,6 @@ Each factory binds a DSPy ``LM`` and signature into a coroutine matching
    pre-flight + Prometheus metrics + OTel span).
 3. Returns an :class:`memex_core.services.lint_llm.LLMLintFinding` if the
    signature flags an issue, else ``None``.
-
-References: RFC-006 §"LLM check types — DSPy signatures",
-§"Output shape on MaintenanceProposal.evidence".
 """
 
 from __future__ import annotations

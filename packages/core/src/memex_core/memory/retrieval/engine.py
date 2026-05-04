@@ -83,21 +83,21 @@ def _get_confidence(unit: HasConfidence) -> float:
 
     Thin wrapper over the shared
     :func:`memex_core.memory.confidence.extract_confidence_and_count` so the
-    falsy-zero handling and ``None`` fallback stay in one place
-    (Hermes round-4 MED). Schema is NOT NULL DEFAULT 1.0; this guard
-    handles stripped/stale model objects (no attribute) and rows
-    materialised with confidence=None before the column default takes
-    effect. ``0.0`` is a legitimate value (unit contradicted to zero) and
-    is preserved verbatim — never coerced via ``or 1.0``.
+    falsy-zero handling and ``None`` fallback stay in one place. Schema is
+    NOT NULL DEFAULT 1.0; this guard handles stripped/stale model objects
+    (no attribute) and rows materialised with confidence=None before the
+    column default takes effect. ``0.0`` is a legitimate value (unit
+    contradicted to zero) and is preserved verbatim — never coerced via
+    ``or 1.0``.
     """
     confidence, _ = extract_confidence_and_count(unit)
     return confidence
 
 
-# F40 — pre-reranker filter at hydration.
+# Pre-reranker filter at hydration.
 # STABILITY_SECONDS_PER_DAY is re-exported from
-# memex_core.memory.retrieval.constants so F40's SQL builder and F11's
-# Python boost share one source of truth. Numeric values flow into SQL via
+# memex_core.memory.retrieval.constants so the SQL builder and the Python
+# boost share one source of truth. Numeric values flow into SQL via
 # parameter binding (asyncpg ``$N`` placeholder), never f-string
 # interpolation — see _build_pre_filter_clause's SECURITY INVARIANT.
 from memex_core.memory.retrieval.constants import (  # noqa: E402
@@ -111,7 +111,7 @@ def _build_pre_filter_clause(
     apply_pre_filter: bool,
     fsfm_branch_enabled: bool,
 ) -> TextClause | None:
-    """Build the F40 pre-reranker predicate as a SQLAlchemy ``TextClause``.
+    """Build the pre-reranker predicate as a SQLAlchemy ``TextClause``.
 
     Returns a ``TextClause`` already wrapped as ``NOT (...)`` so the caller
     can pass it straight to ``stmt.where(...)``, or ``None`` when the
@@ -130,11 +130,11 @@ def _build_pre_filter_clause(
     surface where the wrong code path can leak. Pinning test asserts the
     rendered SQL string is independent of the constants' values.
 
-    Implementation pitfall (round-3 review): the FSFM branch is included
-    via a **Python-level conditional**, NOT a SQL-side runtime flag like
-    ``(NOT :fsfm_enabled OR ...)``. SQL-side guards still reference the
-    missing column names at parse time and would crash on
-    ``column "importance" does not exist`` until F11's migration runs.
+    Implementation pitfall: the FSFM branch is included via a **Python-level
+    conditional**, NOT a SQL-side runtime flag like ``(NOT :fsfm_enabled OR
+    ...)``. SQL-side guards still reference the missing column names at parse
+    time and would crash on ``column "importance" does not exist`` until the
+    FSFM migration runs.
 
     The pinning test in
     ``tests/unit/retrieval/test_f40_sql_builder.py`` enforces this by
@@ -148,7 +148,7 @@ def _build_pre_filter_clause(
     branches: list[str] = []
     binds: dict[str, float] = {}
 
-    # MW branch (always on — columns exist since F1a).
+    # MW branch (always on — columns exist since the outcomes feature).
     # Beta-Bernoulli α=β=1 closed form: mw_score = (succ + 1) / (succ + fail + 2)
     branches.append(
         '((memory_units.success_co_count + memory_units.failure_co_count) >= 5 '
@@ -156,7 +156,7 @@ def _build_pre_filter_clause(
         '(memory_units.success_co_count + memory_units.failure_co_count + 2.0) < 0.15)'
     )
 
-    # FSFM branch (gated by config flag — columns ship with F11).
+    # FSFM branch (gated by config flag — columns ship with the FSFM migration).
     # COALESCE(..., FALSE) wraps the *branch result*, not individual columns,
     # so SQL three-valued logic ``FALSE OR NULL OR FALSE -> NULL`` doesn't
     # poison the surrounding ``NOT`` and exclude cold-start rows. NULLIF on
@@ -175,7 +175,7 @@ def _build_pre_filter_clause(
         binds['stability_seconds_per_day'] = STABILITY_SECONDS_PER_DAY
         binds['stability_threshold'] = STABILITY_THRESHOLD
 
-    # F48 — confidence branch (always on; column is NOT NULL DEFAULT 1.0,
+    # Confidence branch (always on; column is NOT NULL DEFAULT 1.0,
     # so cold-start units never match). Strict ``<`` keeps the 0.2 boundary
     # safe. No COALESCE wrap needed: unlike FSFM, ``confidence`` cannot be
     # NULL by schema, so SQL three-valued logic does not arise. The
@@ -303,7 +303,7 @@ class RetrievalEngine:
         self.ner_model = ner_model
         self.retrieval_config = retrieval_config or RetrievalConfig()
         self.lm = lm
-        # Per-engine RNG for the F33 ε-greedy roll. ``random.random()``
+        # Per-engine RNG for the ε-greedy roll. ``random.random()``
         # would dispatch to CPython's module-global Mersenne Twister,
         # which is guarded by a lock — under high concurrency that lock
         # is contended. A per-instance ``random.Random()`` is unshared
@@ -343,7 +343,7 @@ class RetrievalEngine:
         self._embedding_cache: TTLCache[str, np.ndarray] = TTLCache(maxsize=256, ttl=300)
         self._embedding_cache_lock = asyncio.Lock()
 
-        # F41 — cross-encoder score cache (default-on; bypassed when flag is False)
+        # Cross-encoder score cache (default-on; bypassed when flag is False)
         self._rerank_cache: CrossEncoderScoreCache | None = (
             CrossEncoderScoreCache(
                 max_size=self.retrieval_config.cross_encoder_cache_size,
@@ -514,7 +514,7 @@ class RetrievalEngine:
         if request.source_context:
             filters['source_context'] = request.source_context
 
-        # Thread intent_class / risk_class filters (write-time classifier; F25)
+        # Thread intent_class / risk_class filters (write-time classifier)
         if request.intent_class is not None:
             filters['intent_class'] = request.intent_class
         if request.risk_class is not None:
@@ -630,7 +630,7 @@ class RetrievalEngine:
         if not fused_items:
             return ([], None)
 
-        # 6. Hydrate Objects (F40 pre-filter applies here when enabled).
+        # 6. Hydrate Objects (pre-filter applies here when enabled).
         t0 = _t()
         final_results = await self._hydrate_results(
             session, fused_items, apply_pre_filter=request.apply_pre_filter
@@ -645,7 +645,7 @@ class RetrievalEngine:
             ]
 
         # Snapshot AFTER superseded filter so exploration injection cannot
-        # surface superseded-but-ACTIVE units (PR #91 cycle3 MED-1).
+        # surface superseded-but-ACTIVE units.
         hydrated_candidates = list(final_results)
 
         # 7. Rerank (cap input to avoid O(n) cross-encoder blowup)
@@ -708,16 +708,16 @@ class RetrievalEngine:
                 final_results.insert(insert_at, vunit)
         t_mmr = _t() - t0
 
-        # 9b. Exploration floor: ε-greedy injection of low-MW units (F33).
+        # 9b. Exploration floor: ε-greedy injection of low-MW units.
         #
-        # F44 — F33 exploration must run on a separate retrieval path that
-        # bypasses F40's pre-filter; otherwise low-MW units (the very ones
-        # exploration is meant to re-validate) can never re-surface and MW
-        # becomes monotonic. The bypass query only fires when the
-        # ε-greedy roll succeeds *and* the pre-filter is active — paying
-        # the extra round-trip on every retrieve call would push the N+1
-        # budget over its threshold for the ~95% of calls (with default
-        # ε=0.05) that don't end up injecting.
+        # Exploration must run on a separate retrieval path that bypasses
+        # the pre-filter; otherwise low-MW units (the very ones exploration
+        # is meant to re-validate) can never re-surface and MW becomes
+        # monotonic. The bypass query only fires when the ε-greedy roll
+        # succeeds *and* the pre-filter is active — paying the extra
+        # round-trip on every retrieve call would push the N+1 budget over
+        # its threshold for the ~95% of calls (with default ε=0.05) that
+        # don't end up injecting.
         if final_results and self.retrieval_config.exploration_epsilon > 0:
             from memex_core.memory.retrieval.exploration import inject_exploration_units
             from memex_core.metrics import EXPLORATION_INJECTED_TOTAL
@@ -727,16 +727,16 @@ class RetrievalEngine:
             if should_inject:
                 exploration_pool = hydrated_candidates
                 if request.apply_pre_filter:
-                    # Re-hydrate ALL fused items without the F40 predicate
-                    # so exploration sees units the main path filtered out.
+                    # Re-hydrate ALL fused items without the pre-filter
+                    # predicate so exploration sees units the main path filtered out.
                     bypass_pool = await self._hydrate_results(
                         session, fused_items, apply_pre_filter=False
                     )
                     if not request.include_superseded:
                         threshold = self.retrieval_config.superseded_threshold
-                        # Hermes round-19 LOW: use the SSOT helper for the
-                        # confidence read so the falsy-zero handling and
-                        # ``None`` fallback are consistent with the rest of
+                        # Use the SSOT helper for the confidence read so the
+                        # falsy-zero handling and ``None`` fallback are
+                        # consistent with the rest of
                         # the rerank path (engine.py:1507) and lint
                         # (services/lint_confidence.py).
                         bypass_pool = [
@@ -1244,12 +1244,12 @@ class RetrievalEngine:
     ) -> list[MemoryUnit]:
         """Fetches actual objects from DB and converts them to MemoryUnits.
 
-        F40 — when ``apply_pre_filter`` is True, the unit hydration query
-        gains a ``WHERE NOT (...)`` predicate that drops obviously-failed
-        (low-MW) and (when ``fsfm_branch_enabled`` is True) decayed
-        candidates before they reach the cross-encoder.
+        When ``apply_pre_filter`` is True, the unit hydration query gains a
+        ``WHERE NOT (...)`` predicate that drops obviously-failed (low-MW)
+        and (when ``fsfm_branch_enabled`` is True) decayed candidates before
+        they reach the cross-encoder.
 
-        F45 — emits ``HYDRATION_QUERY_DURATION_SECONDS`` and
+        Emits ``HYDRATION_QUERY_DURATION_SECONDS`` and
         ``PRE_FILTER_CANDIDATES_PRUNED``. Metrics emit when ``unit_ids`` is
         non-empty. Empty-input retrievals (model-only results) skip the
         hydration query entirely and so don't emit pre-filter metrics.
@@ -1278,13 +1278,12 @@ class RetrievalEngine:
                 .options(selectinload(MemoryUnit.unit_entities))
             )
 
-            # F40 — Python-level conditional pre-filter. The MW branch is
-            # always included; the FSFM branch is included only when the
-            # config flag is True. SQL-side runtime flags would still
-            # reference the missing columns at parse time. The builder
-            # owns the single ``text(...)`` boundary — see its docstring
-            # for the SECURITY INVARIANT pinning constants-only
-            # interpolation.
+            # Python-level conditional pre-filter. The MW branch is always
+            # included; the FSFM branch is included only when the config
+            # flag is True. SQL-side runtime flags would still reference
+            # the missing columns at parse time. The builder owns the
+            # single ``text(...)`` boundary — see its docstring for the
+            # SECURITY INVARIANT pinning constants-only interpolation.
             pre_filter_clause = _build_pre_filter_clause(
                 apply_pre_filter=apply_pre_filter,
                 fsfm_branch_enabled=self.retrieval_config.fsfm_branch_enabled,
@@ -1298,12 +1297,12 @@ class RetrievalEngine:
 
             fetched_units = {u.id: u for u in units}
 
-            # F45 — pruned-candidates histogram (always emits, even when
-            # the predicate is inactive — value is 0 in that case).
+            # Pruned-candidates histogram (always emits, even when the
+            # predicate is inactive — value is 0 in that case).
             pruned = max(0, len(unit_ids) - len(fetched_units))
             PRE_FILTER_CANDIDATES_PRUNED.observe(pruned)
 
-            # F47 calibration signal: emit raw confidence values regardless of
+            # Calibration signal: emit raw confidence values regardless of
             # confidence_alpha so the pre-flip distribution accumulates.
             for u in units:
                 CONFIDENCE_SCORE_DISTRIBUTION.observe(_get_confidence(u))
@@ -1408,7 +1407,7 @@ class RetrievalEngine:
         results: list[MemoryUnit],
         formatted_texts: list[str],
     ) -> list[float]:
-        """Score *results* against *query*, serving cache hits where possible (F41).
+        """Score *results* against *query*, serving cache hits where possible.
 
         When the cache is disabled the call falls through to the cross-encoder
         directly. Cache key triple is ``(model_version, query_hash, unit_id)``;
@@ -1418,9 +1417,9 @@ class RetrievalEngine:
         if self._rerank_cache is None or self.reranker is None:
             return await self._reranker_score_uncached(query, formatted_texts)
 
-        # Defensive fallback for out-of-tree rerankers that pre-date F41 and
-        # don't define ``model_version`` (the protocol now ships a default
-        # but duck-typed implementations may not subclass it). With a constant
+        # Defensive fallback for out-of-tree rerankers that don't define
+        # ``model_version`` (the protocol now ships a default but duck-typed
+        # implementations may not subclass it). With a constant
         # version the cache still works; model upgrades will be invalidated
         # by the TTL backstop rather than structurally.
         model_version = getattr(self.reranker, 'model_version', 'unknown')
@@ -1452,7 +1451,7 @@ class RetrievalEngine:
         * **Memory Worth boost** -- scaled by
           ``RetrievalConfig.reranking_mw_alpha`` (Beta-Bernoulli posterior mean;
           cold-start mw_boost = 1.0, neutral)
-        * **F47 contradiction-derived confidence boost** -- scaled by
+        * **Contradiction-derived confidence boost** -- scaled by
           ``RetrievalConfig.confidence_alpha`` (uses ``unit.confidence``;
           cold-start confidence = 1.0 → boost > 1.0 when alpha > 0; default
           alpha = 0.0 ships boost = 1.0 for every unit)
@@ -1460,7 +1459,7 @@ class RetrievalEngine:
         Set any alpha to 0 to disable that boost (backward compatible).
         """
         if not self.reranker or not results:
-            # F45 — emit zero-input observation so the histogram is always
+            # Emit zero-input observation so the histogram is always
             # populated for the no-rerank case (observability comparisons
             # need the denominator).
             CROSS_ENCODER_INPUT_COUNT_HISTOGRAM.observe(0)
@@ -1479,11 +1478,11 @@ class RetrievalEngine:
                     )
                 )
 
-            # F45 — cross-encoder input count post-filter. Validates that
-            # the pre-filter shrinks the reranker working set.
+            # Cross-encoder input count post-filter. Validates that the
+            # pre-filter shrinks the reranker working set.
             CROSS_ENCODER_INPUT_COUNT_HISTOGRAM.observe(len(formatted_texts))
 
-            # F41 — score via cache wrapper. Cache misses fall through to
+            # Score via cache wrapper. Cache misses fall through to
             # _reranker_score_uncached, which holds the shared reranker
             # semaphore and timeout.
             scores = await self._reranker_score(query, results, formatted_texts)
@@ -1491,8 +1490,8 @@ class RetrievalEngine:
             # Normalize cross-encoder scores to [0, 1] via sigmoid
             normalized_scores = [1.0 / (1.0 + math.exp(-s)) for s in scores]
 
-            # Apply multiplicative recency, temporal proximity, MW, F47 confidence,
-            # and F11 decay boosts.
+            # Apply multiplicative recency, temporal proximity, MW, confidence,
+            # and decay boosts.
             from memex_core.memory.retrieval.decay import compute_decay_boost
             from memex_core.services.outcomes import compute_mw_boost
 
@@ -1532,29 +1531,28 @@ class RetrievalEngine:
                 )
                 MW_BOOST_OBSERVED.observe(mw_boost)
 
-                # F47: contradiction-derived confidence boost.
+                # Contradiction-derived confidence boost.
                 # confidence_alpha defaults to 0.0 → boost = 1.0 (no behavior change).
-                # F22: when certainty_modulation_enabled is True, the boost is
+                # When certainty_modulation_enabled is True, the boost is
                 # additionally multiplied by certainty = 1 - variance/MAX_VARIANCE
                 # (closed-form Beta(1, 1) posterior). Cold-start (count=0) →
-                # certainty = 0 → boost collapses to neutral (preserves F47 cold-start
+                # certainty = 0 → boost collapses to neutral (preserves cold-start
                 # safety even with the multiplier active).
                 # Single extraction so confidence and evidence_count come
-                # from the same clamped read (Hermes round-10 MED).
+                # from the same clamped read.
                 confidence, evidence_count = extract_confidence_and_count(unit)
-                # Hermes round-8 MED: emit the calibration histogram on
-                # every rerank pass — including when ``certainty_modulation``
-                # is OFF (the ship default). Operators need the variance
-                # distribution BEFORE flipping the flag to make an informed
-                # decision; gating the metric on the flag would leave them
-                # blind. The single mean_and_variance call serves both the
-                # metric and the (conditional) certainty multiplier.
+                # Emit the calibration histogram on every rerank pass —
+                # including when ``certainty_modulation`` is OFF (the ship
+                # default). Operators need the variance distribution BEFORE
+                # flipping the flag to make an informed decision; gating the
+                # metric on the flag would leave them blind. The single
+                # mean_and_variance call serves both the metric and the
+                # (conditional) certainty multiplier.
                 _, variance = mean_and_variance(confidence, evidence_count)
                 CONFIDENCE_VARIANCE_OBSERVED.observe(variance)
-                # Boost-factor range (Hermes round-17 LOW): with
-                # ``confidence_alpha`` capped at 2.0 by the
-                # ``RetrievalConfig.confidence_alpha`` ``le=2.0`` field
-                # constraint and ``confidence ∈ [0, 1]`` enforced by
+                # Boost-factor range: with ``confidence_alpha`` capped at
+                # 2.0 by the ``RetrievalConfig.confidence_alpha`` ``le=2.0``
+                # field constraint and ``confidence ∈ [0, 1]`` enforced by
                 # ``extract_confidence_and_count``, ``confidence_boost``
                 # lies in ``[0.0, 2.0]`` (further compressed toward 1.0
                 # when ``certainty < 1`` under modulation, and pinned at
@@ -1568,8 +1566,7 @@ class RetrievalEngine:
                     # of round-tripping ``certainty(confidence, count)``
                     # (which would re-evaluate ``mean_and_variance``).
                     # The closed form lives in ``certainty_from_variance``
-                    # so both call sites share one source of truth (Hermes
-                    # round-4 MED + round-12 LOW).
+                    # so both call sites share one source of truth.
                     certainty_factor = certainty_from_variance(variance)
                     confidence_boost = max(
                         1.0 + confidence_alpha * (confidence - 0.5) * certainty_factor, 0.0
@@ -1603,10 +1600,10 @@ class RetrievalEngine:
             return [item[0] for item in scored_results]
         except (ValueError, RuntimeError, OSError) as e:
             logger.error(f'Reranking failed: {e}. Falling back to RRF order.')
-            # F45 — close the observability gap: the early-return path
-            # observes 0, so the exception/fallback path must too. Without
-            # this, a reranker exception silently skips the histogram and
-            # the metric over-represents successful rerank counts.
+            # Close the observability gap: the early-return path observes 0,
+            # so the exception/fallback path must too. Without this, a
+            # reranker exception silently skips the histogram and the metric
+            # over-represents successful rerank counts.
             CROSS_ENCODER_INPUT_COUNT_HISTOGRAM.observe(0)
             return results
 

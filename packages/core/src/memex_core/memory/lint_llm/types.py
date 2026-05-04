@@ -72,7 +72,7 @@ class LLMLintFinding:
 
     ``rule_name`` identifies the DSPy signature that produced the finding
     (e.g. ``llm_semantic_contradiction``, ``llm_schema_drift``).
-    ``check_type`` is the corresponding evidence-payload tag per RFC-006.
+    ``check_type`` is the corresponding evidence-payload tag.
     """
 
     rule_name: str

@@ -1,6 +1,6 @@
 """DSPy signatures for the surprise-gated LLM lint.
 
-Two checks per RFC-006 §"LLM check types — DSPy signatures":
+Two checks:
 
 - :class:`CheckSemanticContradiction` — does this unit contradict any of
   its top-k peers?

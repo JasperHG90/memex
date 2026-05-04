@@ -1,4 +1,4 @@
-"""F41 — In-process cross-encoder score cache with stampede protection.
+"""In-process cross-encoder score cache with stampede protection.
 
 The cache stores raw cross-encoder logits keyed on
 ``(model_version, query_hash, unit_id)``.  ``model_version`` makes invalidation
@@ -66,14 +66,14 @@ class CrossEncoderScoreCache:
 
     def __init__(self, max_size: int = 10000, ttl_seconds: int = 86400) -> None:
         self._values: TTLCache[CacheKey, float] = TTLCache(maxsize=max_size, ttl=ttl_seconds)
-        # Hermes round-1 MED — lock pool uses ``WeakValueDictionary`` so a
-        # lock entry is only collected once nothing else holds it. An
-        # LRUCache here could evict a lock while a coroutine still owned
-        # it, breaking stampede protection (a fresh lock for the same key
-        # would let a second coroutine bypass the barrier and duplicate
-        # work). Callers MUST keep a strong reference for the duration of
-        # the locked region — ``get_or_compute_batch`` does this by
-        # accumulating locks into a local list before acquiring.
+        # Lock pool uses ``WeakValueDictionary`` so a lock entry is only
+        # collected once nothing else holds it. An LRUCache here could
+        # evict a lock while a coroutine still owned it, breaking stampede
+        # protection (a fresh lock for the same key would let a second
+        # coroutine bypass the barrier and duplicate work). Callers MUST
+        # keep a strong reference for the duration of the locked region —
+        # ``get_or_compute_batch`` does this by accumulating locks into a
+        # local list before acquiring.
         self._locks: weakref.WeakValueDictionary[CacheKey, asyncio.Lock] = (
             weakref.WeakValueDictionary()
         )
@@ -154,14 +154,13 @@ class CrossEncoderScoreCache:
                     still_missing.append(i)
 
             if still_missing:
-                # Hermes round-2 MED — dedupe before dispatching to the
-                # cross-encoder. The same key may appear at multiple positions
-                # in *keys* (RRF dedupe runs after this layer); locks already
-                # collapse to one acquisition per unique key (above), but the
-                # compute path would still send duplicate texts to the model
-                # and pay the GPU cost N times. Pick one representative index
-                # per unique key, compute once, fan the score back to every
-                # position sharing that key.
+                # Dedupe before dispatching to the cross-encoder. The same key
+                # may appear at multiple positions in *keys* (RRF dedupe runs
+                # after this layer); locks already collapse to one acquisition
+                # per unique key (above), but the compute path would still send
+                # duplicate texts to the model and pay the GPU cost N times.
+                # Pick one representative index per unique key, compute once,
+                # fan the score back to every position sharing that key.
                 key_to_rep_index: dict[CacheKey, int] = {}
                 for i in still_missing:
                     key_to_rep_index.setdefault(keys[i], i)

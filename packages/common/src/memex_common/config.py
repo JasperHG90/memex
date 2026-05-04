@@ -353,6 +353,37 @@ class DisabledBackend(BaseModel):
     type: Literal['disabled'] = 'disabled'
 
 
+class LitellmNLIBackend(BaseModel):
+    """Use a litellm-supported chat completion provider for NLI classification.
+
+    NLI is performed via a structured chat completion prompt that asks the model
+    to classify a (premise, hypothesis) pair as entailment, neutral, or
+    contradiction and return JSON probabilities.
+
+    Examples: ``openai/gpt-4o-mini``, ``gemini/gemini-2.0-flash``,
+    ``ollama/llama3``.
+    """
+
+    type: Literal['litellm'] = 'litellm'
+    model: str = Field(
+        ...,
+        description=(
+            'LiteLLM model string for NLI classification via chat completion, '
+            "e.g. 'openai/gpt-4o-mini', 'gemini/gemini-2.0-flash', 'ollama/llama3'."
+        ),
+    )
+    api_base: HttpUrl | None = Field(
+        default=None,
+        description='API base URL. Required for self-hosted providers (Ollama, vLLM). '
+        'Omit for cloud providers that use standard endpoints.',
+    )
+    api_key: SecretStr | None = Field(
+        default=None,
+        description='API key. Can also be set via provider env vars '
+        '(OPENAI_API_KEY, GEMINI_API_KEY, etc.).',
+    )
+
+
 EmbeddingBackend: TypeAlias = Annotated[
     Union[OnnxBackend, LitellmEmbeddingBackend],
     Field(discriminator='type'),
@@ -363,23 +394,29 @@ RerankerBackend: TypeAlias = Annotated[
     Field(discriminator='type'),
 ]
 
+NLIBackend: TypeAlias = Annotated[
+    Union[OnnxBackend, LitellmNLIBackend, DisabledBackend],
+    Field(discriminator='type'),
+]
 
-class NLIModelConfig(BaseModel):
-    """Natural Language Inference (NLI) classifier for polarity discrimination.
 
-    Augments the surprise gate so contradicting pairs (e.g. "prefers staging"
-    vs "prefers production") clear the gate when cosine similarity alone
-    cannot. Uses an ONNX cross-encoder to classify peer pairs as
-    entailing / contradicting / neutral.
+class NLIPolarityConfig(BaseModel):
+    """NLI polarity-discrimination gate settings.
+
+    Controls whether NLI is enabled and the thresholds for the polarity
+    branch of the surprise gate. The model backend (ONNX, litellm, or
+    disabled) is configured separately via ``NLIBackend``.
     """
 
-    type: Literal['onnx'] = Field(
-        default='onnx',
-        description='Backend type.',
-    )
     enabled: bool = Field(
         default=True,
         description='Kill-switch. When False, falls back to cosine-only.',
+    )
+    backend: NLIBackend = Field(
+        default_factory=OnnxBackend,
+        description='NLI model backend. Default: built-in ONNX cross-encoder. '
+        'Set type=litellm to use any litellm-supported chat completion provider. '
+        'Set type=disabled to skip model loading entirely.',
     )
     polarity_threshold: float = Field(
         default=0.6,
@@ -392,6 +429,18 @@ class NLIModelConfig(BaseModel):
         ge=1,
         description='Per-vault hourly cap. None = unlimited.',
     )
+
+    @model_validator(mode='before')
+    @classmethod
+    def _migrate_flat_config(cls, data: Any) -> Any:
+        """Accept old flat NLIModelConfig format with 'type' at top level."""
+        if isinstance(data, dict) and 'type' in data and 'backend' not in data:
+            backend_type = data.pop('type')
+            data['backend'] = {'type': backend_type}
+        return data
+
+
+NLIModelConfig = NLIPolarityConfig
 
 
 class SearchStrategiesConfig(BaseModel):
@@ -1443,8 +1492,8 @@ class LintLLMConfig(BaseModel):
         'the LLM check runs. Skips cold-start (variance = MAX_VARIANCE) and '
         'low-confidence units when the gate is configured.',
     )
-    polarity: NLIModelConfig = Field(
-        default_factory=NLIModelConfig,
+    polarity: NLIPolarityConfig = Field(
+        default_factory=NLIPolarityConfig,
         description='NLI polarity classifier configuration (entailment / neutral / '
         'contradiction). The NLI branch only fires when cosine surprise is below '
         'surprise_threshold, so this is a fallback signal — never a primary gate.',

@@ -22,8 +22,9 @@ import asyncio
 import logging
 import time
 from collections import defaultdict
-from dataclasses import dataclass
 from uuid import UUID
+
+from pydantic import BaseModel, Field
 
 from memex_core.memory.lint_llm.types import PolarityLabel, PolarityResult
 from memex_core.memory.models.protocols import NLIClassifierModel
@@ -33,20 +34,19 @@ logger = logging.getLogger('memex.core.memory.lint_llm.polarity')
 DEFAULT_POLARITY_THRESHOLD: float = 0.6
 
 
-@dataclass
-class PolarityClassifyOutcome:
+class PolarityClassifyOutcome(BaseModel):
     """Discriminated outcome of a single ``PolarityClassifier.classify_pair`` call.
 
     The orchestrator inspects this to distinguish the three terminal states a
     classify call can land in: a real NLI result, a soft rate-limit fallback,
     or a model-side failure that was suppressed (logged + degraded). Splitting
     the latter two lets observability tell "the limiter said no" from "the
-    model crashed and we silently degraded" — a Hermes round-7 finding.
+    model crashed and we silently degraded".
     """
 
-    result: PolarityResult | None = None
-    rate_limited: bool = False
-    model_failed: bool = False
+    result: PolarityResult | None = Field(default=None)
+    rate_limited: bool = Field(default=False)
+    model_failed: bool = Field(default=False)
 
 
 class PolarityRateLimiter:
@@ -60,8 +60,8 @@ class PolarityRateLimiter:
     ``admit`` reserves a slot under the lock so concurrent classify calls cannot
     over-commit the cap; ``release`` removes the most recently reserved slot,
     used to refund the reservation when the downstream model invocation fails
-    (Hermes round-7 MED 2 — burning a slot on a model crash silently degrades
-    the per-vault reliability budget).
+    (burning a slot on a model crash silently degrades the per-vault
+    reliability budget).
     """
 
     def __init__(self, max_per_vault_per_hour: int | None) -> None:
@@ -149,11 +149,10 @@ class PolarityClassifier:
         * ``model_failed=True`` — the model raised, returned malformed
           output, or otherwise crashed mid-call. The reserved slot is
           refunded so a hot-failing model cannot silently exhaust the
-          per-vault reliability budget (Hermes round-7 MED 2). Failures are
-          logged so they are distinguishable from "model said neutral" in
-          scheduler logs, rather than propagating up through ``maybe_run``
-          → ``tick``'s generic exception handler with a non-specific
-          traceback.
+          per-vault reliability budget. Failures are logged so they are
+          distinguishable from "model said neutral" in scheduler logs,
+          rather than propagating up through ``maybe_run`` → ``tick``'s
+          generic exception handler with a non-specific traceback.
         """
         admitted = await self.rate_limiter.admit(vault_id)
         if not admitted:

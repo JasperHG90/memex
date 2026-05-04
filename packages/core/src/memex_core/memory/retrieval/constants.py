@@ -1,12 +1,12 @@
-"""Constants shared between F40's FSFM SQL clause and F11's reranker boost.
+"""Constants shared between the FSFM SQL clause and the reranker decay boost.
 
 Single source of truth — both code paths import from here so there's exactly
 one definition of stability semantics. Numeric values flow into SQL via
 parameter binding (asyncpg ``$N`` placeholders), never f-string interpolation.
 
 If ``stability``'s unit convention ever changes (e.g., days -> hours), the
-``STABILITY_SECONDS_PER_DAY`` divisor flips in this one place and both
-F40's SQL builder and F11's Python boost stay in lockstep automatically.
+``STABILITY_SECONDS_PER_DAY`` divisor flips in this one place and both the
+SQL builder and the Python boost stay in lockstep automatically.
 """
 
 from __future__ import annotations

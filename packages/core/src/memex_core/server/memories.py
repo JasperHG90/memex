@@ -63,11 +63,11 @@ async def get_memory_units_by_chunks(
         units = await api.get_memory_units_by_chunks(request.chunk_ids, request.vault_id)
         return [build_memory_unit_dto(u) for u in units]
     except (MemexError, ValueError) as e:
-        # Hermes round-1 MED: narrowed from (KeyError, RuntimeError, OSError)
-        # which can mask genuine bugs (bad DTO dict access, filesystem errors)
-        # rather than client-visible errors. Service-layer raises MemexError
-        # subclasses for known failure modes; ValueError covers UUID/typing
-        # validation. Anything else propagates as a 500 with a logged stack.
+        # Narrowed from (KeyError, RuntimeError, OSError) which can mask
+        # genuine bugs (bad DTO dict access, filesystem errors) rather than
+        # client-visible errors. Service-layer raises MemexError subclasses
+        # for known failure modes; ValueError covers UUID/typing validation.
+        # Anything else propagates as a 500 with a logged stack.
         raise _handle_error(e, 'Failed to get memory units by chunks')
 
 
@@ -183,7 +183,7 @@ class ReconsolidateRequest(BaseModel):
     """Per-entity reconsolidation under an advisory lock."""
 
     entity_id: UUID = Field(..., description='Entity UUID to reconsolidate.')
-    vault_id: UUID = Field(..., description='Vault UUID — explicit per RFC-005 to scope unit_ids.')
+    vault_id: UUID = Field(..., description='Vault UUID — explicit scoping for unit_ids.')
     timeout_seconds: float = Field(
         default=30.0,
         ge=0.1,
@@ -205,7 +205,7 @@ class ConsolidateRequest(BaseModel):
 class ReconsolidateResponse(BaseModel):
     """Typed response envelope for /memory/reconsolidate.
 
-    Mirrors `LocksService.reconsolidate_entity` return shape (RFC-005 / RFC-008).
+    Mirrors `LocksService.reconsolidate_entity` return shape.
     """
 
     entity_id: UUID = Field(..., description='Entity UUID that was reconsolidated.')
@@ -227,12 +227,12 @@ class ReconsolidateResponse(BaseModel):
         default=None,
         description=(
             'Optional error string for non-fatal partial outcomes. Reserved for '
-            'future partial-outcome reporting from the service layer (RFC-008 '
-            'v6.9 plan): when a reconsolidation completes with degraded results '
-            '(e.g., reflection succeeded but contradiction detection skipped a '
-            'subset of units), the service may surface a non-fatal explanation '
-            'here without raising. Currently always ``None`` — populated when '
-            'partial-outcome reporting lands.'
+            'future partial-outcome reporting from the service layer: when a '
+            'reconsolidation completes with degraded results (e.g., reflection '
+            'succeeded but contradiction detection skipped a subset of units), '
+            'the service may surface a non-fatal explanation here without raising. '
+            'Currently always ``None`` — populated when partial-outcome reporting '
+            'lands.'
         ),
     )
 
@@ -260,7 +260,7 @@ async def reconsolidate_entity(
 
     Acquires `acquire_entity_lock(entity_id)` for `timeout_seconds`, then runs
     `ContradictionEngine.detect_contradictions` over linked unit_ids, then
-    `ReflectionService.reflect_batch` for the entity. RFC-005 / RFC-008.
+    `ReflectionService.reflect_batch` for the entity.
 
     Translates ``EntityLockTimeoutError`` into a 503 with a ``Retry-After``
     header derived from ``request.timeout_seconds`` (parity with
@@ -282,9 +282,9 @@ async def reconsolidate_entity(
             exc,
             exc_info=True,
         )
-        # Hermes round-4 MED: derive Retry-After from the request's configured
-        # timeout (the canonical value the caller asked us to wait). Falls
-        # back to '5' only if the request somehow lacks a positive timeout.
+        # Derive Retry-After from the request's configured timeout (the
+        # canonical value the caller asked us to wait). Falls back to '5'
+        # only if the request somehow lacks a positive timeout.
         retry_after = max(1, int(request.timeout_seconds)) if request.timeout_seconds else 5
         raise HTTPException(
             status_code=503,
@@ -334,14 +334,14 @@ async def consolidate_vault(
     api: Annotated[MemexAPI, Depends(get_api)],
     auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ) -> Any:
-    """Vault-wide low-MW unit consolidation. RFC-008.
+    """Vault-wide low-MW unit consolidation.
 
     Predicate: mw_score<0.35 AND outcomes>=5 AND !is_deprioritized AND
     created_at<now()-30d. dry_run=true returns preview without writes.
 
-    Rate-limited per vault (RFC-008 line 125; default 1 call per vault per
-    hour). Translates ``RateLimitExceededError`` into a 429 envelope with a
-    ``Retry-After`` header. Mirrors the summarize-node 429 contract.
+    Rate-limited per vault (default 1 call per vault per hour). Translates
+    ``RateLimitExceededError`` into a 429 envelope with a ``Retry-After``
+    header. Mirrors the summarize-node 429 contract.
     """
     await check_vault_access(auth, [request.vault_id], api, permission=Permission.WRITE)
     try:
@@ -353,12 +353,11 @@ async def consolidate_vault(
             exc,
             exc_info=True,
         )
-        # Hermes round-4 MED: derive Retry-After from the exception's
-        # carried timeout (set by acquire_entity_lock). ConsolidateRequest
-        # has no client-supplied timeout field — RFC-008 says consolidate
-        # does NOT acquire a per-entity lock — so the only timeout context
-        # available is whatever the underlying lock context used. Falls
-        # back to '5' if absent.
+        # Derive Retry-After from the exception's carried timeout (set by
+        # acquire_entity_lock). ConsolidateRequest has no client-supplied
+        # timeout field — consolidate does NOT acquire a per-entity lock —
+        # so the only timeout context available is whatever the underlying
+        # lock context used. Falls back to '5' if absent.
         retry_after = (
             max(1, int(exc.timeout_seconds))
             if exc.timeout_seconds is not None and exc.timeout_seconds > 0

@@ -1,6 +1,6 @@
 """ONNX-backed NLI classifier.
 
-Wraps a cross-encoder NLI model (default ``cross-encoder/nli-deberta-v3-small``)
+Wraps a cross-encoder NLI model (default ``cross-encoder/nli-deberta-v3-xsmall``)
 with the same ``BaseOnnxModel`` substrate that ``FastReranker`` / ``FastEmbedder``
 use, so the model lifecycle (download, ONNX session, tokenizer) is shared.
 

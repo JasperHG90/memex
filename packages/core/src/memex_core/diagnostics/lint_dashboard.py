@@ -42,7 +42,7 @@ async def aggregate_lint_findings(
     Two SQL round-trips: one ``GROUP BY`` for the pivot, one ordered LIMIT for
     the top-5. Both filter by ``vault_id`` (NOT NULL semantics — global findings
     with vault_id IS NULL are not surfaced through this per-vault view; that
-    matches F32's per-vault diagnostics summary contract).
+    matches the per-vault diagnostics summary contract).
     """
     # Use explicit `.label()` on each column so rows are accessed by name via
     # SQLAlchemy's Row attribute API, rather than positional unpacking. Keeps

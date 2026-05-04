@@ -273,9 +273,7 @@ _DEFAULT_POOL_MULTIPLIER = 4
 
 # Hard cap on the pool size so the multiplier cannot trigger unbounded scans on
 # very large memory_units tables. Even with a permissive raw_floor and a high
-# limit, we never request more than this many rows from pgvector. Tuned to be
-# generous (well above realistic ``limit`` values) while preventing pathological
-# scans flagged by Hermes review on PR #91 (MED-3).
+# limit, we never request more than this many rows from pgvector.
 _MAX_POOL_SIZE = 1000
 
 
@@ -294,7 +292,7 @@ async def find_similar_facts(
     Find semantically similar facts using vector cosine distance.
 
     Similarity scores are routed through the shared anisotropy corrector
-    (F2) so the threshold filters on a discriminative, normalized scale
+    so the threshold filters on a discriminative, normalized scale
     rather than raw cosine values that cluster in [0.7, 0.95].
 
     Args:
@@ -331,7 +329,7 @@ async def find_similar_facts(
     # filter has room to work. The anisotropy corrector compresses scores
     # toward (0, 1); a raw cutoff of 0.5 is a generous coarse pre-filter.
     # The pool size is hard-capped via ``max_pool_size`` so that very large
-    # ``limit`` values cannot trigger pathological scans (PR #91 MED-3).
+    # ``limit`` values cannot trigger pathological scans.
     raw_floor = min(threshold, 0.5)
     pool_size = min(limit * pool_multiplier, max_pool_size)
     statement = (
@@ -438,7 +436,7 @@ async def check_duplicates_in_window(
 
         from memex_core.memory.models.anisotropy import get_shared_corrector
 
-        # Loosened raw pre-filter so anisotropy normalization (F2) has room
+        # Loosened raw pre-filter so anisotropy normalization has room
         # to discriminate. We still pass the threshold semantic to callers,
         # but the comparison is now against the normalized score.
         coarse_distance_floor = max(0.0, 1.0 - similarity_threshold + 0.2)

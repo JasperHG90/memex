@@ -1,6 +1,6 @@
-"""F11 — FSFM-lite decay boost composed at the reranker.
+"""FSFM-lite decay boost composed at the reranker.
 
-Closed form (mirrors F1c's compute_mw_boost in services/outcomes.py):
+Closed form (mirrors compute_mw_boost in services/outcomes.py):
 
     boost = 1.0 + decay_alpha * (importance * exp(-elapsed_days / stability) - 0.5)
 
@@ -51,7 +51,7 @@ class DecayInputs(Protocol):
 
 
 def compute_decay_boost(unit: DecayInputs, decay_alpha: float, now: datetime) -> float:
-    """Compute the F11 decay boost for a single memory unit.
+    """Compute the decay boost for a single memory unit.
 
     Returns 1.0 (neutral) when ``importance`` or ``last_outcome_at`` is None.
     When ``stability`` is None the decay term collapses to 1.0 (permanent

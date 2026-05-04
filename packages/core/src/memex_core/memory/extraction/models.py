@@ -495,9 +495,8 @@ class RawFact(BaseFact):
     @field_validator('intent_class', mode='before')
     @classmethod
     def coerce_intent_class(cls, v: object) -> str:
-        # F25b default-on-fail — delegated to the shared utility in
-        # ``memex_common.schemas`` (Hermes round-6 MED: single source of
-        # truth for the coercion across RawFact + ExtractedFact).
+        # Delegated to the shared utility in ``memex_common.schemas`` —
+        # single source of truth for the coercion across RawFact + ExtractedFact.
         return _shared_coerce_intent_class(v)
 
     @field_validator('risk_class', mode='before')
@@ -608,17 +607,12 @@ class ExtractedFact(BaseFact):
         '(none | sensitive | private | safety). Coerced to default on invalid input.',
     )
 
-    # Hermes round-2 MED: ExtractedFact previously had no validators on
-    # intent_class / risk_class even though ProcessedFact.from_extracted_fact
-    # eagerly calls IntentClass(...) / RiskClass(...) on them. The "extraction
-    # must never be blocked by a classification mishap" invariant relied on
-    # every construction site coming from a validated RawFact. Mirror RawFact's
-    # default-on-fail behavior so a future direct ``ExtractedFact(...)`` with
-    # an invalid string degrades gracefully instead of raising ValueError.
-    # (Hermes round-3 MED: types tightened to IntentLiteral / RiskLiteral so
-    # mypy can flag bad assignments at construction sites; validator names
-    # mirror RawFact's public ``coerce_intent_class`` / ``coerce_risk_class``
-    # for grep consistency within this module.)
+    # ExtractedFact previously had no validators on intent_class / risk_class.
+    # Mirror RawFact's default-on-fail behavior so direct construction with an
+    # invalid string degrades gracefully instead of raising ValueError. Types
+    # tightened to IntentLiteral / RiskLiteral so mypy flags bad assignments at
+    # construction sites; validator names mirror RawFact's public
+    # ``coerce_intent_class`` / ``coerce_risk_class`` for grep consistency.
 
     @field_validator('intent_class', mode='before')
     @classmethod

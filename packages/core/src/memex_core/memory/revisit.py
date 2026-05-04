@@ -1,10 +1,8 @@
-"""F20 revisitation scheduler — FSRS-5 thin wrapper over py-fsrs 4.1.2.
+"""FSRS-5 revisitation scheduler — thin wrapper over py-fsrs 4.1.2.
 
 `py-fsrs==4.1.2` implements FSRS-5 (19 weights), not FSRS-4.5 — the pip
 version is unrelated to the algorithm version. py-fsrs v3.0.0 (2024-08-22)
 moved from FSRS-4.5 to FSRS-5; v2.5.1 was the last FSRS-4.5 release.
-Verified at `.dev-team-artifacts/dev-tier-a-cognitive-memory/pocs/
-003-f20-fsrs-parity/paper-cross-check.md`.
 
 This module is intentionally a thin adapter — algorithm code lives in the
 upstream `fsrs` package. We expose a stable Memex-shaped surface
@@ -15,7 +13,7 @@ Determinism: `Scheduler` is constructed with `enable_fuzzing=False` so the
 next-review datetime is reproducible for a given (state, quality, now).
 `learning_steps=()` and `relearning_steps=()` skip the Anki-flow
 Learning/Relearning short-circuit — Memex units transition directly to the
-Review state on first review (consistent with the F20 spec, RFC-014:170).
+Review state on first review.
 """
 
 from __future__ import annotations

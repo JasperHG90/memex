@@ -1,8 +1,8 @@
 """NLI classifier factory.
 
-Mirrors :func:`memex_core.memory.models.reranking.get_reranking_model`: a config
+Mirrors :func:`memex_core.memory.models.reranking.get_reranking_model`: a config-
 dispatched factory that returns an object satisfying the
-:class:`NLIClassifierModel` protocol. ONNX-only for v1.
+:class:`NLIClassifierModel` protocol. Supports ONNX and litellm backends.
 """
 
 from __future__ import annotations
@@ -44,11 +44,11 @@ async def get_nli_model(config: NLIModelConfig | None = None) -> NLIClassifierMo
     """Return an NLI classifier or ``None`` when the polarity gate is disabled.
 
     Reuses the same cached ONNX session across FastAPI lifespan restarts as
-    the embedding/reranker models — the model is ~140 MB, single-instance.
+    the embedding/reranker models — the model is ~60 MB, single-instance.
     A module-level ``asyncio.Lock`` serialises the check-and-set so two
     concurrent callers cannot both observe ``None``, both download, and
-    race on the assignment (model is large; double-init wastes ~140 MB
-    of disk + RAM and emits two HuggingFace fetches).
+    race on the assignment (double-init wastes disk + RAM and emits
+    duplicate HuggingFace fetches).
     """
     global _onnx_nli_cache
 

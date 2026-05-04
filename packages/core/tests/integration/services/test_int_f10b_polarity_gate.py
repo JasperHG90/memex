@@ -1,7 +1,7 @@
 """F10b — polarity-discriminating NLI gate integration tests.
 
 Drives ``LintLLMService.maybe_run`` end-to-end against real Postgres + the
-real ONNX NLI classifier (``cross-encoder/nli-deberta-v3-small``). Asserts:
+real ONNX NLI classifier (``cross-encoder/nli-deberta-v3-xsmall``). Asserts:
 
 * polarity-inversion fixture (POC-002 fixture: "FastAPI is a Python web framework"
   vs "FastAPI is not a Python web framework") clears the gate via the polarity

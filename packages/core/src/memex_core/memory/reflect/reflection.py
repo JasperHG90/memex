@@ -53,31 +53,29 @@ logger = logging.getLogger('memex.core.memory.reflect.reflection')
 
 
 def _variance_key(unit: MemoryUnit) -> float:
-    """F22 reflection prioritisation key: closed-form Beta(1, 1) variance.
+    """Closed-form Beta(1, 1) variance for reflection prioritisation.
 
-    Hoisted to module scope (Hermes round-17 LOW) so the closure isn't
-    re-defined on every call to ``_batch_fetch_recent_memories``. Pure
-    function — no captured state.
+    Hoisted to module scope so the closure isn't re-defined on every call
+    to ``_batch_fetch_recent_memories``. Pure function — no captured state.
 
-    Hermes round-22 MED: this helper is INERT until the operator-flip
-    ``ReflectionConfig.variance_prioritisation_enabled`` toggles to
-    True. The single call site is the ``if
+    This helper is INERT until the operator-flip
+    ``ReflectionConfig.variance_prioritisation_enabled`` toggles to True.
+    The single call site is the ``if
     self.config.server.memory.reflection.variance_prioritisation_enabled:``
-    branch in ``_batch_fetch_recent_memories`` (see this module's
-    ``reflect`` block). Defining this function does not affect
-    reflection behaviour; only the gated sort does.
+    branch in ``_batch_fetch_recent_memories``. Defining this function
+    does not affect reflection behaviour; only the gated sort does.
     """
     confidence, count = extract_confidence_and_count(unit)
     _, variance = mean_and_variance(confidence, count)
     return variance
 
 
-# F5: hard ceiling on per-entity recent-memory fetch when ReflectionRequest
+# Hard ceiling on per-entity recent-memory fetch when ReflectionRequest
 # carries limit_recent_memories=None (scope='full'). Caps per-call LLM cost
 # so a busy entity with thousands of units cannot saturate the prompt budget
 # on a single agent-triggered reflection. The rate limit guards call
-# *frequency*; this constant guards per-call *size*.
-MAX_FULL_SCOPE_UNITS = 1000
+# frequency; this constant guards per-call size.
+MAX_FULL_SCOPE_UNITS = 100
 
 
 def get_reflection_engine(
@@ -172,7 +170,7 @@ class ReflectionEngine:
             # 1.1 Batch Load Data for this Vault (Serial DB Access)
             models_map = await self._batch_get_or_create_models(entity_ids, vault_id=vault_id)
             entities_map = await self._batch_get_entities(entity_ids)
-            # F5 mixed-limit batch semantics: a single SQL fetch sized to the
+            # Mixed-limit batch semantics: a single SQL fetch sized to the
             # most-permissive limit in the batch (or unbounded → MAX_FULL_SCOPE_UNITS
             # ceiling) so per-request slicing in _process_entity_reflection yields
             # correct semantics without multiple roundtrips.
@@ -232,7 +230,7 @@ class ReflectionEngine:
         async with sem:
             try:
                 entity = entities_map.get(eid)
-                # F5 per-request slice: memories_map carries the batch's
+                # Per-request slice: memories_map carries the batch's
                 # most-permissive fetch; honour each request's own limit here.
                 # None means unbounded (already capped at MAX_FULL_SCOPE_UNITS by SQL).
                 fetched = memories_map.get(eid, [])
@@ -551,7 +549,7 @@ class ReflectionEngine:
         Fetch recent memories for multiple entities in one go using Window Function.
         Vault scoping follows "Fall-through" logic: (vault_id == active OR vault_id == Global).
 
-        ``limit_per_entity=None`` requests an unbounded fetch ('full' scope from F5);
+        ``limit_per_entity=None`` requests an unbounded fetch ('full' scope);
         the engine still applies ``MAX_FULL_SCOPE_UNITS`` as a hard ceiling so per-call
         LLM cost stays bounded.
         """
@@ -595,19 +593,19 @@ class ReflectionEngine:
         for unit, eid in results:
             memories_map[eid].append(unit)
 
-        # F22: prioritise high-variance edges within each entity bucket so the
+        # Prioritise high-variance edges within each entity bucket so the
         # per-tick LLM budget concentrates on uncertain units (highest
         # information yield). Stable sort preserves the existing
         # event_date DESC tiebreak from the SQL window function.
         #
-        # Hermes round-10 HIGH: gated on
-        # ``ReflectionConfig.variance_prioritisation_enabled`` (default
-        # False) so the F22 migration ships INERTLY — reflection ordering
-        # does not change on deploy. Operators flip the flag after the
-        # ``CONFIDENCE_VARIANCE_OBSERVED`` histogram (calibration metric
-        # in retrieval/engine.py) populates as expected. This pairs with
-        # ``RetrievalConfig.certainty_modulation_enabled`` for the F47
-        # boost gating.
+        # Gated on ``ReflectionConfig.variance_prioritisation_enabled``
+        # (default False) so variance-based ordering ships inertly —
+        # reflection ordering does not change on deploy. Operators flip
+        # the flag after the ``CONFIDENCE_VARIANCE_OBSERVED`` histogram
+        # (calibration metric in retrieval/engine.py) populates as
+        # expected. This pairs with
+        # ``RetrievalConfig.certainty_modulation_enabled`` for the
+        # certainty boost gating.
         if self.config.server.memory.reflection.variance_prioritisation_enabled:
             for eid, units in memories_map.items():
                 units.sort(key=_variance_key, reverse=True)

@@ -15,7 +15,7 @@ class ReflectionRequest(BaseModel):
         default=20,
         description=(
             'Number of recent memories to consider. None means no per-request cap '
-            "(F5 'full' scope); the engine still enforces MAX_FULL_SCOPE_UNITS=1000 "
+            "('full' scope); the engine still enforces MAX_FULL_SCOPE_UNITS "
             'as a hard ceiling on the SQL fetch.'
         ),
     )
