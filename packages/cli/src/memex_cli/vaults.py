@@ -49,13 +49,13 @@ async def list_vaults(
             has_access = any(row['vault'].access is not None for row in rows)
             if has_access:
                 lines = [
-                    '| Name | Notes | Last Modified | Active | Access | Description |',
-                    '|------|-------|---------------|--------|--------|-------------|',
+                    '| Name | Notes | Last Modified | Active | MW Mode | Access | Description |',
+                    '|------|-------|---------------|--------|---------|--------|-------------|',
                 ]
             else:
                 lines = [
-                    '| Name | Notes | Last Modified | Active | Description |',
-                    '|------|-------|---------------|--------|-------------|',
+                    '| Name | Notes | Last Modified | Active | MW Mode | Description |',
+                    '|------|-------|---------------|--------|---------|-------------|',
                 ]
             for row in rows:
                 v = row['vault']
@@ -63,14 +63,17 @@ async def list_vaults(
                 last_mod_dt = row.get('last_note_added_at')
                 last_mod = last_mod_dt.strftime('%Y-%m-%d') if last_mod_dt else '\u2014'
                 active = 'yes' if v.is_active else ''
+                mw_mode = v.mw_mode
                 desc = v.description or ''
                 if has_access:
                     access = ', '.join(v.access) if v.access else '\u2014'
                     lines.append(
-                        f'| {v.name} | {count} | {last_mod} | {active} | {access} | {desc} |'
+                        f'| {v.name} | {count} | {last_mod} | {active} | {mw_mode} | {access} | {desc} |'
                     )
                 else:
-                    lines.append(f'| {v.name} | {count} | {last_mod} | {active} | {desc} |')
+                    lines.append(
+                        f'| {v.name} | {count} | {last_mod} | {active} | {mw_mode} | {desc} |'
+                    )
             print('\n'.join(lines))
             return
 
@@ -93,6 +96,7 @@ async def list_vaults(
     table = Table(title='Available Vaults')
     table.add_column('ID', style='dim')
     table.add_column('Name', style='cyan')
+    table.add_column('MW Mode', style='yellow')
     table.add_column('Description', style='white')
     if has_access:
         table.add_column('Access', style='green')
@@ -101,7 +105,7 @@ async def list_vaults(
         console.print('[yellow]No vaults found.[/yellow]')
     else:
         for v in vaults:
-            row = [str(v.id), v.name, v.description or '']
+            row = [str(v.id), v.name, v.mw_mode, v.description or '']
             if has_access:
                 row.append(', '.join(v.access) if v.access else '\u2014')
             table.add_row(*row)
@@ -234,6 +238,66 @@ async def delete_vault(
         console.print(f'[green]Vault "{identifier}" deleted successfully.[/green]')
     else:
         console.print(f'[red]Vault "{identifier}" not found.[/red]')
+
+
+@app.command('set-mw-mode')
+@async_command
+async def set_mw_mode(
+    ctx: typer.Context,
+    identifier: Annotated[str, typer.Argument(help='Name or UUID of the vault.')],
+    mode: Annotated[str, typer.Argument(help='MW mode: stationary or ema.')],
+):
+    """Set the MW counter mode for a vault."""
+    if mode not in ('stationary', 'ema'):
+        console.print(f'[red]Invalid mode: {mode!r}. Must be "stationary" or "ema".[/red]')
+        raise typer.Exit(code=1)
+
+    config: MemexConfig = ctx.obj
+
+    async with get_api_context(config) as api:
+        try:
+            vault_uuid = await api.resolve_vault_identifier(identifier)
+        except Exception as e:
+            handle_api_error(e)
+
+        try:
+            await api.set_mw_mode(vault_uuid, mode)
+        except Exception as e:
+            handle_api_error(e)
+
+    console.print(f'[green]Vault[/green] {identifier} [green]MW mode set to[/green] {mode}')
+
+
+@app.command('show')
+@async_command
+async def show_vault(
+    ctx: typer.Context,
+    identifier: Annotated[str, typer.Argument(help='Name or UUID of the vault.')],
+):
+    """Show vault details including MW mode."""
+    config: MemexConfig = ctx.obj
+
+    async with get_api_context(config) as api:
+        try:
+            vault_uuid = await api.resolve_vault_identifier(identifier)
+        except Exception as e:
+            handle_api_error(e)
+
+        vault = await api.get_vault(vault_uuid)
+
+    if vault is None:
+        console.print(f'[red]Vault {identifier} not found.[/red]')
+        raise typer.Exit(code=1)
+
+    table = Table(title=f'Vault: {vault.name}', show_header=False, box=None, padding=(0, 2))
+    table.add_column(style='dim')
+    table.add_column(style='bold')
+    table.add_row('ID', str(vault.id))
+    table.add_row('Name', vault.name)
+    table.add_row('Description', vault.description or '—')
+    table.add_row('MW Mode', vault.mw_mode)
+    table.add_row('Created', str(vault.created_at))
+    console.print(table)
 
 
 @app.command('summary')

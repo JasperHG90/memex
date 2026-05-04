@@ -56,7 +56,7 @@ from memex_core.memory.reflect.models import (
     ReflectionResult,
 )
 from memex_core.memory.reflect.queue_service import ReflectionQueueService
-from memex_core.memory.sql_models import MemoryUnit
+from memex_core.memory.sql_models import MemoryUnit, Vault
 from memex_core.memory.models.protocols import EmbeddingsModel, RerankerModel
 from memex_core.memory.models.ner import FastNERModel
 from memex_core.memory.entity_resolver import EntityResolver
@@ -672,7 +672,6 @@ class MemexAPI:
         1. Ensure Global Vault exists.
         2. Ensure Active Vault exists.
         """
-        from memex_core.memory.sql_models import Vault
         from memex_core.config import GLOBAL_VAULT_NAME
 
         async with self.metastore.session() as session:
@@ -1358,6 +1357,7 @@ class MemexAPI:
         instead of memory units. See
         :meth:`OutcomeService.record_outcome` for the full contract.
         """
+        half_life = self.config.server.memory.retrieval.mw_ema_half_life_days
         async with self.metastore.session() as session:
             return await self._outcomes.record_outcome(
                 session=session,
@@ -1368,6 +1368,7 @@ class MemexAPI:
                 reason=reason,
                 target_type=target_type,
                 kv_key=kv_key,
+                mw_ema_half_life_days=half_life,
             )
 
     async def create_vault(self, name: str, description: str | None = None) -> Any:
@@ -1381,6 +1382,10 @@ class MemexAPI:
     async def truncate_vault(self, vault_id: UUID) -> dict[str, int]:
         """Remove all content from a vault. Delegates to VaultService."""
         return await self._vaults.truncate_vault(vault_id)
+
+    async def set_mw_mode(self, vault_id: UUID, mw_mode: str) -> Vault:
+        """Set the MW mode for a vault. Delegates to VaultService."""
+        return await self._vaults.set_mw_mode(vault_id, mw_mode)
 
     async def add_note_assets(self, note_id: UUID, files: dict[str, bytes]) -> dict[str, Any]:
         """Add assets to an existing note. Delegates to NoteService."""
@@ -1539,6 +1544,10 @@ class MemexAPI:
     async def get_vault_by_name(self, name: str) -> Any | None:
         """Get a vault by name. Delegates to VaultService."""
         return await self._vaults.get_vault_by_name(name)
+
+    async def get_vault(self, vault_id: UUID) -> Any | None:
+        """Get a vault by UUID. Delegates to VaultService."""
+        return await self._vaults.get_vault(vault_id)
 
     async def get_reflection_queue_batch(
         self,

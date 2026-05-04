@@ -56,15 +56,12 @@ def test_seed_chain_is_linear_and_correct() -> None:
     sd = ScriptDirectory.from_config(cfg)
 
     heads = sd.get_heads()
-    # Head moves forward with each Wave-N schema patch.
-    # F11 added 032 (FSFM decay columns); F22 adds 033 (confidence evidence count).
-    assert heads == ['033_confidence_evidence_count'], (
-        f'Expected single head 033_confidence_evidence_count, got {heads}'
-    )
+    assert heads == ['034_add_mw_mode'], f'Expected single head 034_add_mw_mode, got {heads}'
 
     walk = list(sd.walk_revisions())
     top9 = [(r.revision, r.down_revision) for r in walk[:9]]
     expected_top9 = [
+        ('034_add_mw_mode', '033_confidence_evidence_count'),
         ('033_confidence_evidence_count', '032_fsfm_decay_columns'),
         ('032_fsfm_decay_columns', '031_proposal_resolved_by'),
         ('031_proposal_resolved_by', '030_revisit_last_reviewed_at'),
@@ -73,7 +70,6 @@ def test_seed_chain_is_linear_and_correct() -> None:
         ('028_procedure_outcomes', '027_consolidation_ticks'),
         ('027_consolidation_ticks', '026_revisit_columns'),
         ('026_revisit_columns', '025_maintenance_proposals'),
-        ('025_maintenance_proposals', '024_intent_risk_classifier'),
     ]
     assert top9 == expected_top9, f'Tier A chain mismatch: got {top9}'
 

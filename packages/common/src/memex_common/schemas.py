@@ -828,6 +828,11 @@ class VaultDTO(BaseModel):
         examples=['My personal memories and notes.'],
     )
 
+    mw_mode: str = Field(
+        default='stationary',
+        description='MW mode for the vault: "stationary" or "ema".',
+    )
+
     is_active: bool = Field(
         default=False,
         description='Whether this vault is the currently active (writer) vault.',

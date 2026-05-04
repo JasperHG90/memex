@@ -4,6 +4,9 @@ Pure-function tests for compute_mw_score and compute_mw_boost.
 Integration tests for record_outcome live in tests/integration/.
 """
 
+from datetime import datetime, timezone, timedelta
+
+from memex_core.memory.sql_models import MWMode
 from memex_core.services.outcomes import (
     compute_mw_boost,
     compute_mw_score,
@@ -29,7 +32,6 @@ class TestMwScoreComputation:
         assert 0.5 < score < 1.0
 
     def test_symmetry(self):
-        # (3+1)/(3+7+2) vs (7+1)/(7+3+2)
         low = compute_mw_score(3, 7)
         high = compute_mw_score(7, 3)
         assert low < 0.5 < high
@@ -59,18 +61,59 @@ class TestMwBoostComputation:
         assert boost_high > boost_default
 
     def test_boost_never_zeros(self):
-        # Even 0 successes and 100 failures, boost is still positive
         boost = compute_mw_boost(0, 100)
-        assert boost > 0.0  # additive-marginal guarantees > 0
+        assert boost > 0.0
 
     def test_equal_success_failure_gives_neutral(self):
-        # With large equal counts, score converges to 0.5, boost to 1.0
         boost = compute_mw_boost(50, 50)
         assert abs(boost - 1.0) < 0.01
 
     def test_boost_formula_additive_marginal(self):
-        # Verify: mw_boost = 1.0 + alpha * (score - 0.5)
         success, failure = 8, 2
         score = compute_mw_score(success, failure)
         boost = compute_mw_boost(success, failure)
         assert abs(boost - (1.0 + MW_ALPHA_DEFAULT * (score - 0.5))) < 1e-10
+
+
+class TestMwBoostEmaMode:
+    """compute_mw_boost branches on vault mw_mode."""
+
+    def test_ema_cold_start_boost_is_neutral(self):
+        now = datetime.now(timezone.utc)
+        boost = compute_mw_boost(
+            0, 0, mw_mode=MWMode.EMA, last_outcome_at=None, half_life_days=60, now=now
+        )
+        assert boost == 1.0
+
+    def test_stationary_default_matches_existing(self):
+        boost_default = compute_mw_boost(9, 1)
+        boost_explicit = compute_mw_boost(9, 1, mw_mode=MWMode.STATIONARY)
+        assert boost_default == boost_explicit
+
+    def test_ema_fresh_outcome_approximates_stationary(self):
+        now = datetime.now(timezone.utc)
+        recent = now - timedelta(hours=1)
+        boost_ema = compute_mw_boost(
+            9, 1, mw_mode=MWMode.EMA, last_outcome_at=recent, half_life_days=60, now=now
+        )
+        boost_stationary = compute_mw_boost(9, 1, mw_mode=MWMode.STATIONARY)
+        assert abs(boost_ema - boost_stationary) < 0.001
+
+    def test_ema_old_outcome_decays_toward_neutral(self):
+        now = datetime.now(timezone.utc)
+        old = now - timedelta(days=90)
+        boost = compute_mw_boost(
+            9, 1, mw_mode=MWMode.EMA, last_outcome_at=old, half_life_days=60, now=now
+        )
+        assert 1.0 < boost < compute_mw_boost(9, 1, mw_mode=MWMode.STATIONARY)
+
+    def test_ema_branches_on_enum_not_string(self):
+        now = datetime.now(timezone.utc)
+        old = now - timedelta(days=90)
+        boost_enum = compute_mw_boost(
+            9, 1, mw_mode=MWMode.EMA, last_outcome_at=old, half_life_days=60, now=now
+        )
+        boost_coerced = compute_mw_boost(
+            9, 1, mw_mode=MWMode('ema'), last_outcome_at=old, half_life_days=60, now=now
+        )
+        assert boost_enum == boost_coerced

@@ -48,7 +48,14 @@ from memex_core.memory.retrieval.temporal_concretizer import (
     TemporalConcretizer,
     has_ambiguous_temporal_expression,
 )
-from memex_core.memory.sql_models import MemoryUnit, MentalModel, UnitEntity, ContentStatus
+from memex_core.memory.sql_models import (
+    MemoryUnit,
+    MentalModel,
+    UnitEntity,
+    ContentStatus,
+    Vault,
+    MWMode,
+)
 from memex_core.memory.retrieval.models import RetrievalRequest
 from memex_common.types import FactTypes
 from memex_core.config import GLOBAL_VAULT_ID
@@ -644,8 +651,16 @@ class RetrievalEngine:
         # 7. Rerank (cap input to avoid O(n) cross-encoder blowup)
         t0 = _t()
         if use_reranker:
+            resolved_mw_mode = MWMode.STATIONARY
+            if session is not None and primary_vault_id is not None:
+                vault_row = await session.get(Vault, primary_vault_id)
+                if vault_row is not None:
+                    resolved_mw_mode = vault_row.mw_mode
             final_results = await self._rerank_results(
-                request.query, final_results[:rerank_cap], min_score=request.min_score
+                request.query,
+                final_results[:rerank_cap],
+                min_score=request.min_score,
+                mw_mode=resolved_mw_mode,
             )
         t_rerank = _t() - t0
 
@@ -1419,7 +1434,12 @@ class RetrievalEngine:
         return await self._rerank_cache.get_or_compute_batch(keys, _compute)
 
     async def _rerank_results(
-        self, query: str, results: list[MemoryUnit], min_score: float | None = None
+        self,
+        query: str,
+        results: list[MemoryUnit],
+        min_score: float | None = None,
+        *,
+        mw_mode: MWMode = MWMode.STATIONARY,
     ) -> list[MemoryUnit]:
         """Re-rank results using a cross-encoder with multiplicative boosts.
 
@@ -1505,6 +1525,10 @@ class RetrievalEngine:
                     success_co_count=unit.success_co_count,
                     failure_co_count=unit.failure_co_count,
                     mw_alpha=mw_alpha,
+                    mw_mode=mw_mode,
+                    last_outcome_at=unit.last_outcome_at,
+                    half_life_days=self.retrieval_config.mw_ema_half_life_days,
+                    now=now,
                 )
                 MW_BOOST_OBSERVED.observe(mw_boost)
 
