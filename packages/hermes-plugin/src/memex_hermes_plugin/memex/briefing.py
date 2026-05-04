@@ -452,7 +452,7 @@ def _render_diagnostics_block(summary: dict[str, Any]) -> str:
     """Render the diagnostics summary as a compact markdown block.
 
     Includes manifold_status, unit_counts, avg_mw_score, and top entity names —
-    at least three documented fields.
+    at least three documented fields (per acceptance criteria).
     """
     counts = summary.get('unit_counts') or {}
     active = counts.get('active', 0)

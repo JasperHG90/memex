@@ -1,6 +1,6 @@
 """Verbatim agent prompt text for reconsolidate/consolidate tools.
 
-Sourced from cognitive-memory-research-report.md §4 step 6 (lines
+Sourced from cognitive-memory-research-report.md §4 reconsolidate step 6 (lines
 758-775 as of 2026-05-01 against memory_augmentation @ 1c0a464). When the
 spec changes, the verbatim test (TC9) fails — that is the contract.
 """

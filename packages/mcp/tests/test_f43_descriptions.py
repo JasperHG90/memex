@@ -54,7 +54,7 @@ _S45_KEYWORDS = (
 # Imperfect-recall framing + safety net.
 _IMPERFECT_KEYWORDS = (
     'Imperfect recall',
-    'safety net',
+    'exploration is the safety net',
     'GRADIENT',
 )
 
