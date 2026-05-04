@@ -39,8 +39,7 @@ def _read(path: Path) -> str:
         'Mandatory LLM judgment',
         'memex_record_outcome',
         'memex_memory_deprioritize',
-        'F33 exploration',
-        'safety net',
+        'exploration is the safety net',
         'Imperfect recall',
         'memex_get_unit_history',
         'apply_pre_filter=False',
@@ -74,7 +73,7 @@ def test_remember_skill_references_resolution_flow() -> None:
     assert 'Option B' in text or '(B)' in text
     assert 'Option C' in text or '(C)' in text
     assert 'top_k' in text
-    assert 'F33' in text
+    assert 'exploration is the safety net' in text
     assert 'memex_get_unit_history' in text
     assert 'apply_pre_filter=False' in text
 
