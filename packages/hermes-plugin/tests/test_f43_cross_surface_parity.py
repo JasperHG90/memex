@@ -3,7 +3,7 @@
 Asserts that the canonical §3.5 / §3.4.2 concepts appear in ALL FOUR agent
 surfaces:
 
-  1. MCP tool descriptions (``memex_mcp._f43_descriptions``)
+  1. MCP tool descriptions (``memex_mcp._resolution_flow_descriptions``)
   2. Hermes session-briefing primer (``memex_hermes_plugin.memex.briefing``)
   3. Claude Code plugin rule (``packages/claude-code-plugin/rules/memory-resolution-flow.md``)
   4. Hermes tool-schema descriptions (``memex_hermes_plugin.memex.tools``) —
@@ -31,7 +31,7 @@ from memex_hermes_plugin.memex.tools import (  # noqa: E402
     MEMORY_DEPRIORITIZE_SCHEMA,
     RECORD_OUTCOME_SCHEMA,
 )
-from memex_mcp._f43_descriptions import (  # noqa: E402
+from memex_mcp._resolution_flow_descriptions import (  # noqa: E402
     MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION,
     MEMEX_RECORD_OUTCOME_DESCRIPTION,
 )

@@ -17,7 +17,7 @@ import os
 
 import pytest
 
-from memex_mcp._f4_descriptions import MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION
+from memex_mcp._deprioritize_descriptions import MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION
 
 
 @pytest.mark.integration

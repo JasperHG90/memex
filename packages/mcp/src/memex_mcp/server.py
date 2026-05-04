@@ -27,7 +27,7 @@ import json
 from pydantic import BeforeValidator, Field
 
 from memex_mcp.lifespan import lifespan, get_api, get_asset_cache, get_config
-from memex_mcp._f3_descriptions import (
+from memex_mcp._layer_primer_descriptions import (
     LAYER_ROUTING_PRIMER_PROSE as _F3_LAYER_ROUTING_PRIMER_PROSE,
 )
 from memex_mcp.models import (
@@ -3687,7 +3687,7 @@ async def memex_get_vault_summary(
         raise ToolError(f'Get vault summary failed: {e}')
 
 
-from memex_mcp._f43_descriptions import (
+from memex_mcp._resolution_flow_descriptions import (
     MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION as _F43_MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION,
     MEMEX_RECORD_OUTCOME_DESCRIPTION as _F43_MEMEX_RECORD_OUTCOME_DESCRIPTION,
 )
@@ -3821,7 +3821,7 @@ if __name__ == '__main__':
 
 # --- F4 ---  (filled by WS-quick-wins)
 
-from memex_mcp._f4_descriptions import (
+from memex_mcp._deprioritize_descriptions import (
     MEMEX_MEMORY_RESTORE_DESCRIPTION,
 )
 
@@ -3928,7 +3928,7 @@ async def memex_memory_restore(
 
 # --- F5 ---  (filled by WS-quick-wins)
 
-from memex_mcp._f5_descriptions import MEMEX_MEMORY_SUMMARIZE_NODE_DESCRIPTION
+from memex_mcp._summarize_descriptions import MEMEX_MEMORY_SUMMARIZE_NODE_DESCRIPTION
 
 
 @mcp.tool(
@@ -3998,7 +3998,7 @@ async def memex_memory_summarize_node(
 
 # --- F8 ---  (filled by WS-linter)
 
-from memex_mcp._f8_descriptions import MEMEX_GET_LINT_FLAGS_DESCRIPTION
+from memex_mcp._lint_flags_descriptions import MEMEX_GET_LINT_FLAGS_DESCRIPTION
 
 
 @mcp.tool(
@@ -4077,7 +4077,7 @@ async def memex_get_lint_flags(
 
 # --- F9 ---  (filled by WS-locks)
 
-from memex_mcp._f9_descriptions import (
+from memex_mcp._reconsolidate_descriptions import (
     MEMEX_MEMORY_CONSOLIDATE_DESCRIPTION,
     MEMEX_MEMORY_RECONSOLIDATE_DESCRIPTION,
 )
@@ -4173,7 +4173,7 @@ async def memex_memory_consolidate(
 
 # --- F20 --- (filled by WS-revisit)
 
-from memex_mcp._f20_descriptions import (
+from memex_mcp._revisit_descriptions import (
     MEMEX_GET_DUE_FOR_REVIEW_DESCRIPTION,
     MEMEX_MEMORY_REVIEW_DESCRIPTION,
 )

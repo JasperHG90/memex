@@ -17,7 +17,7 @@ _F5_SOURCE_FILES: tuple[Path, ...] = tuple(
         'packages/core/src/memex_core/services/reflection.py',
         'packages/core/src/memex_core/server/reflection.py',
         'packages/core/src/memex_core/services/rate_limit.py',
-        'packages/mcp/src/memex_mcp/_f5_descriptions.py',
+        'packages/mcp/src/memex_mcp/_summarize_descriptions.py',
     )
 )
 

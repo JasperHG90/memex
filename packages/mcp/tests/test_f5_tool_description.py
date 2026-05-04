@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from memex_mcp._f5_descriptions import MEMEX_MEMORY_SUMMARIZE_NODE_DESCRIPTION
+from memex_mcp._summarize_descriptions import MEMEX_MEMORY_SUMMARIZE_NODE_DESCRIPTION
 
 
 F5_DESCRIPTION_VERBATIM = (

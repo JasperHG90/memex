@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from memex_mcp._f9_descriptions import (
+from memex_mcp._reconsolidate_descriptions import (
     MEMEX_MEMORY_CONSOLIDATE_DESCRIPTION,
     MEMEX_MEMORY_RECONSOLIDATE_DESCRIPTION,
 )

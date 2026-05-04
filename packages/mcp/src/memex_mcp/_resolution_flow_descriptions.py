@@ -17,10 +17,10 @@ Both descriptions teach the same flow because both verbs participate in it.
 
 from __future__ import annotations
 
-from memex_mcp._f1a_descriptions import (
+from memex_mcp._outcome_descriptions import (
     MEMEX_RECORD_OUTCOME_DESCRIPTION as _RECORD_OUTCOME_PREAMBLE,
 )
-from memex_mcp._f4_descriptions import (
+from memex_mcp._deprioritize_descriptions import (
     MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION as _F4_DEPRIORITIZE_DESCRIPTION,
 )
 
@@ -155,7 +155,7 @@ _DO_NOT_ADD = (
 # ---------------------------------------------------------------------------
 
 # The outcome-recording verb. The original short docstring is imported from
-# `_f1a_descriptions` (single source of truth) so MW counter discoverability
+# `_outcome_descriptions` (single source of truth) so MW counter discoverability
 # stays in sync between the standalone tool description and the augmented
 # composite. The verbatim test pins the constant against the spec; the
 # composite appends the §3.5 flow + axes table below it. The `\n\n` after the
@@ -185,7 +185,7 @@ MEMEX_RECORD_OUTCOME_DESCRIPTION = (
 # The deprioritize verb. The original short description (kept as the preamble
 # so deprioritize discoverability for misleading/outdated/noise units is
 # unchanged) is followed by the same §3.5 flow + axes + history.
-# Imported from `_f4_descriptions` so there is a single source of truth; the
+# Imported from `_deprioritize_descriptions` so there is a single source of truth; the
 # verbatim test (test_f4_tool_descriptions.py) pins the constant against the
 # spec, and the composite just appends a trailing newline for clean section
 # separation.

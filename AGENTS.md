@@ -208,7 +208,7 @@ Default to `memex_memory_search` for content-shaped questions and
 `memex_note_search` for source-shaped questions. The agent owns the verb;
 Memex owns the adverb. The single source of truth for the primer strings
 lives in `packages/common/src/memex_common/agent_surface.py`; consumers
-(`packages/mcp/.../server.py` via the `_f3_descriptions.py` shim,
+(`packages/mcp/.../server.py` via the `_layer_primer_descriptions.py` shim,
 `packages/hermes-plugin/.../briefing.py` and `.../templates.py`,
 `packages/claude-code-plugin/rules/memory-layers.md`, and this section)
 all import or mirror that one module — never re-declare the text.
@@ -228,7 +228,7 @@ The two verbs are orthogonal axes (MW gradient vs binary surface state).
 
 Authoritative agent guidance lives in three places (parity required per
 the agent-surface rule): the MCP tool descriptions
-(`packages/mcp/src/memex_mcp/_f43_descriptions.py`), the Hermes session
+(`packages/mcp/src/memex_mcp/_resolution_flow_descriptions.py`), the Hermes session
 briefing (`packages/hermes-plugin/.../briefing.py`
 `_RESOLUTION_FLOW_PRIMER`), and the Claude Code plugin rule
 (`packages/claude-code-plugin/rules/memory-resolution-flow.md`). For
