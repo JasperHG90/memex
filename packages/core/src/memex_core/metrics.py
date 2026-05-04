@@ -149,7 +149,7 @@ MW_BOOST_OBSERVED = Histogram(
 # ---------------------------------------------------------------------------
 # F40 / F44 / F45 — pre-reranker filter observability
 # ---------------------------------------------------------------------------
-# CROSS_ENCODER_INPUT_COUNT_HISTOGRAM and F33_EXPLORATION_INJECTED_TOTAL emit
+# CROSS_ENCODER_INPUT_COUNT_HISTOGRAM and EXPLORATION_INJECTED_TOTAL emit
 # on every retrieval call (regardless of apply_pre_filter) so observability
 # comparisons (with/without filter) are always possible.
 # HYDRATION_QUERY_DURATION_SECONDS and PRE_FILTER_CANDIDATES_PRUNED skip
@@ -180,8 +180,8 @@ CROSS_ENCODER_INPUT_COUNT_HISTOGRAM = Histogram(
     buckets=(0, 5, 10, 20, 30, 40, 50, 60, 70, 75),
 )
 
-F33_EXPLORATION_INJECTED_TOTAL = Counter(
-    'memex_f33_exploration_injected_total',
+EXPLORATION_INJECTED_TOTAL = Counter(
+    'memex_exploration_injected_total',
     'Count of low-MW candidates that the separate exploration hydration query '
     'surfaced for exploration injection (i.e., units the pre-filter would '
     'have removed but the exploration path bypasses). Validates that the '
