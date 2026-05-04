@@ -1,4 +1,4 @@
-"""F6 maintenance ledger / linter CLI.
+"""Maintenance ledger / linter CLI.
 
 Subcommands:
 
@@ -7,10 +7,10 @@ Subcommands:
 * ``memex lint dismiss <finding_id>`` — flip to dismissed.
 * ``memex lint resolve <finding_id>`` — flip to resolved.
 * ``memex lint review [--vault X | --global | --all] [--apply]`` —
-  interactive triage (F7).
+  interactive triage.
 
-The maintenance ledger is read-only from the agent surface (F8 ships the
-MCP tool); this CLI is for human inspection and reconciliation.
+The maintenance ledger is read-only from the agent surface; this CLI is
+for human inspection and reconciliation.
 """
 
 from __future__ import annotations
@@ -30,7 +30,7 @@ console = Console()
 app = typer.Typer(
     name='lint',
     help=(
-        'F6 maintenance ledger: rule-based finding scan over the vault. '
+        'Maintenance ledger: rule-based finding scan over the vault. '
         'Findings are advisory; nothing is auto-applied.'
     ),
     no_args_is_help=True,

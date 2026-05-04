@@ -20,7 +20,7 @@ You have been invoked via the `/recall` slash command.
    c. If still no results, call `memex_list_entities` to browse the knowledge graph.
    d. If nothing is found after all three strategies, say so — do not guess.
 
-   **Memory layers (§2.3 / F3)** — route by query type using the four-layer
+   **Memory layers (§2.3)** — route by query type using the four-layer
    primer in `.claude/rules/memory-layers.md`: Episodic (`memex_note_search`
    / `memex_recent_notes` / `memex_find_note`) for "what happened, when";
    Semantic (`memex_memory_search` / `memex_get_memory_units` /
@@ -36,12 +36,12 @@ You have been invoked via the `/recall` slash command.
    Triggers: "evolved", "used to", "history of", "what changed", "what did I
    think before", "audit", "show me everything", "show me the hidden ones".
    - **Ordered-chain timeline on a specific unit**: call
-     `memex_get_unit_history(unit_id)` (F49) — graph walk through
+     `memex_get_unit_history(unit_id)` — graph walk through
      contradiction links, oldest → newest. Cleaner than ranked search.
    - **Broader audit / "show me everything including hidden stuff"**: call
      `memex_memory_search(query="...", apply_pre_filter=False)` — bypasses
      MW + FSFM + confidence pre-filters so contradicted, behaviorally-
-     failed, and decayed units appear. Post-reranker boosts (F47, F1c)
+     failed, and decayed units appear. Post-reranker boosts
      still apply, so contradicted units rank below clean ones — correct
      for audit queries.
 
@@ -54,7 +54,7 @@ You have been invoked via the `/recall` slash command.
    - Include source Note IDs so the user can drill deeper with `memex_read_note`.
    - If no results are found, tell the user and suggest alternative queries.
 
-4. **Recall a learned procedure** (F14) — when the user asks "how do I
+4. **Recall a learned procedure** — when the user asks "how do I
    X?", "what's our procedure for Y?", or you are about to perform a
    recurring task (writing a PR, running the test matrix), check the
    `procedure:` KV namespace BEFORE other surfaces:
@@ -73,7 +73,7 @@ You have been invoked via the `/recall` slash command.
    the user query is "how-to" rather than "what".
 
 <!-- # --- F8 --- (filled by WS-linter) -->
-5. **Memory hygiene** (F8) — when the user asks about memory state,
+5. **Memory hygiene** — when the user asks about memory state,
    stale facts, or how the vault is doing, call
    `memex_get_lint_flags(vault_id=...)` to surface the linter's pending
    findings (orphan mental models, low-MW units, sensitive unreviewed

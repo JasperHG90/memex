@@ -1,6 +1,6 @@
-"""Verbatim agent prompt text for F20 tools.
+"""Verbatim agent prompt text for revisit/review tools.
 
-The two F20 verbs are deliberately distinct so the agent can disambiguate
+The two verbs are deliberately distinct so the agent can disambiguate
 intent unambiguously:
 
 - memex_get_due_for_review — READ verb. "What memories are due for review?"

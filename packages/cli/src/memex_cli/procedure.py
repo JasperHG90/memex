@@ -1,4 +1,4 @@
-"""Procedure KV namespace commands (F14).
+"""Procedure KV namespace commands.
 
 Thin CLI wrapper over the procedure-key surface:
 
@@ -30,7 +30,7 @@ console = Console()
 app = typer.Typer(
     name='procedure',
     help=(
-        'Procedure KV namespace (F14): compact, learned how-tos owned by '
+        'Procedure KV namespace: compact, learned how-tos owned by '
         'the agent. Each key is procedure:<verb>:<context-tag> with a '
         'versioned envelope and capped history (5 prior versions). '
         'Per-(vault, key) Memory Worth counters track success/failure.'

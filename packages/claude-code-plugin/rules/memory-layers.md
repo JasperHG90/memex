@@ -30,7 +30,7 @@ and global Entities cover them implicitly; do not request new schema or
 new tools for these layers.
 
 Canonical sources: `cognitive-memory-research-report.md` §2.3 (memory-types
-mapping), §2.4 (current-services reality table), §4 F3 (this rule's spec).
+mapping), §2.4 (current-services reality table), §4 (this rule's spec).
 The code-level single source of truth for the primer strings lives in
 `packages/common/src/memex_common/agent_surface.py`; this rule file
 mirrors the four canonical layer rows from that module's

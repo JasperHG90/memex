@@ -2,11 +2,11 @@
 
 Mirrors the F4/F5 pattern (test_f4_tool_descriptions.py,
 test_f5_tool_description.py): assert each F20 description constant in
-``_f20_descriptions.py`` matches a hardcoded verbatim block here. When
+``_revisit_descriptions.py`` matches a hardcoded verbatim block here. When
 either side changes, the test fails — that's the contract.
 
 Why hardcode the expected text in the test rather than load from
-``_f20_descriptions.py``? Because the test would then be circular: any
+``_revisit_descriptions.py``? Because the test would then be circular: any
 edit to the source description would silently update the "expected"
 side too. Two independent copies pin the wording.
 
@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import pytest
 
-from memex_mcp._f20_descriptions import (
+from memex_mcp._revisit_descriptions import (
     MEMEX_GET_DUE_FOR_REVIEW_DESCRIPTION,
     MEMEX_MEMORY_REVIEW_DESCRIPTION,
 )

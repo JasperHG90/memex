@@ -8,7 +8,7 @@ character of drift.
 
 from __future__ import annotations
 
-from memex_mcp._f8_descriptions import MEMEX_GET_LINT_FLAGS_DESCRIPTION
+from memex_mcp._lint_flags_descriptions import MEMEX_GET_LINT_FLAGS_DESCRIPTION
 from memex_mcp.server import mcp
 
 

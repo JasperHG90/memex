@@ -16,7 +16,7 @@ _F4_SOURCE_FILES: tuple[Path, ...] = tuple(
     for p in (
         'packages/core/src/memex_core/services/units.py',
         'packages/core/src/memex_core/server/memories.py',
-        'packages/mcp/src/memex_mcp/_f4_descriptions.py',
+        'packages/mcp/src/memex_mcp/_deprioritize_descriptions.py',
     )
 )
 

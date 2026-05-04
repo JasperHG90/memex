@@ -1,8 +1,8 @@
-"""F38 — `memex consolidate` CLI subgroup.
+"""`memex consolidate` CLI subgroup.
 
-Operator-facing surface for the consolidation orchestrator. Per AC-F38-5
-there is intentionally NO MCP / Hermes / Claude Code tool — this CLI is the
-only first-class human surface.
+Operator-facing surface for the consolidation orchestrator. There is
+intentionally no MCP / Hermes / Claude Code tool — this CLI is the only
+first-class human surface.
 
 Subcommands:
 - ``memex consolidate tick [--vault X] [--dry-run] [--budget N]``
@@ -25,7 +25,7 @@ console = Console()
 
 app = typer.Typer(
     name='consolidate',
-    help='F38 — Per-vault consolidation tick (contradiction → reflection → prune-stale-only).',
+    help='Per-vault consolidation tick (contradiction → reflection → prune-stale-only).',
     no_args_is_help=True,
 )
 

@@ -13,7 +13,7 @@ F45_METRIC_NAMES = {
     'memex_hydration_query_duration_seconds',
     'memex_pre_filter_candidates_pruned',
     'memex_cross_encoder_input_count',
-    'memex_f33_exploration_injected_total',
+    'memex_exploration_injected_total',
 }
 
 
@@ -24,7 +24,7 @@ def test_f45_histograms_importable() -> None:
     assert hasattr(metrics, 'HYDRATION_QUERY_DURATION_SECONDS')
     assert hasattr(metrics, 'PRE_FILTER_CANDIDATES_PRUNED')
     assert hasattr(metrics, 'CROSS_ENCODER_INPUT_COUNT_HISTOGRAM')
-    assert hasattr(metrics, 'F33_EXPLORATION_INJECTED_TOTAL')
+    assert hasattr(metrics, 'EXPLORATION_INJECTED_TOTAL')
 
 
 def test_f45_metrics_registered_to_default_registry() -> None:
