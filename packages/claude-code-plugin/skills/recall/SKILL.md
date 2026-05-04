@@ -6,117 +6,26 @@ argument-hint: "[search query]"
 
 # /recall — Search Memex Long-Term Memory
 
-You have been invoked via the `/recall` slash command.
-
-## Instructions
-
-1. **Determine the search query.**
-   - Use `$ARGUMENTS` as the search query.
-   - If `$ARGUMENTS` is empty, ask the user what they would like to recall.
+1. **Query**: use `$ARGUMENTS` as the search query. If empty, ask the user.
 
 2. **Search strategy** (two-stage with expansion fallback):
-   a. **First pass**: call `memex_memory_search` AND `memex_note_search` in parallel (no expansion).
-   b. **If insufficient**: retry both with `expand_query=true` for broader recall via LLM query expansion.
-   c. If still no results, call `memex_list_entities` to browse the knowledge graph.
-   d. If nothing is found after all three strategies, say so — do not guess.
+   a. `memex_memory_search` AND `memex_note_search` in parallel (no expansion).
+   b. If insufficient, retry both with `expand_query=true`.
+   c. If still nothing, try `memex_list_entities`. If all fail, say so — do not guess.
 
-   **Memory layers (§2.3)** — route by query type using the four-layer
-   primer in `.claude/rules/memory-layers.md`: Episodic (`memex_note_search`
-   / `memex_recent_notes` / `memex_find_note`) for "what happened, when";
-   Semantic (`memex_memory_search` / `memex_get_memory_units` /
-   `memex_get_entity_mentions`) for decontextualised facts; Conceptual
-   (`memex_survey` / `memex_get_entities` with `mental_models=True`) for
-   synthesised mental models; Procedural-observations
-   (`memex_kv_search` / `memex_kv_get` with `prefix='procedure:'`) for
-   "how do I adapt my skill to this context". The agent owns the verb;
-   Memex owns the adverb.
+   **Layer routing** (see `.claude/rules/memory-layers.md`): Episodic → `memex_note_search` / `memex_find_note`; Semantic → `memex_memory_search`; Conceptual → `memex_survey`; Procedural → `memex_kv_search` / `memex_kv_get(prefix='procedure:')`.
 
-   **Historical / audit-query routing rule (§3.4.2)** — when the user asks
-   HOW THINGS CHANGED rather than "what is true *now*", route differently.
-   Triggers: "evolved", "used to", "history of", "what changed", "what did I
-   think before", "audit", "show me everything", "show me the hidden ones".
-   - **Ordered-chain timeline on a specific unit**: call
-     `memex_get_unit_history(unit_id)` — graph walk through
-     contradiction links, oldest → newest. Cleaner than ranked search.
-   - **Broader audit / "show me everything including hidden stuff"**: call
-     `memex_memory_search(query="...", apply_pre_filter=False)` — bypasses
-     MW + FSFM + confidence pre-filters so contradicted, behaviorally-
-     failed, and decayed units appear. Post-reranker boosts
-     still apply, so contradicted units rank below clean ones — correct
-     for audit queries.
+   **Historical queries** ("how has X evolved?", "show me everything including hidden"): do NOT use resolution flow. Use `memex_get_unit_history(unit_id)` for ordered chains, or `memex_memory_search(apply_pre_filter=False)` for broad audit. Triggers: "evolved", "used to", "history of", "audit", "show me everything/hidden".
 
-   When the user says "the X issue is resolved", do NOT use this rule —
-   that's the resolution flow (see `/remember` skill +
-   `.claude/rules/memory-resolution-flow.md`).
+3. **Present results**: summarize clearly, include source Note IDs for drill-down.
 
-3. **Present results.**
-   - Summarize the findings in a clear, readable format.
-   - Include source Note IDs so the user can drill deeper with `memex_read_note`.
-   - If no results are found, tell the user and suggest alternative queries.
+4. **Procedure recall**: for "how do I X?" queries, check `procedure:` KV namespace first:
+   - `memex_kv_list(namespaces=["procedure"])` for matching keys
+   - `memex_kv_get(key)` for active value; `memex_kv_get(key, include_history=true)` for version history
+   - After using a procedure, close the loop: `memex_record_outcome(target_type="kv_key", kv_key=..., success=...)`
 
-4. **Recall a learned procedure** — when the user asks "how do I
-   X?", "what's our procedure for Y?", or you are about to perform a
-   recurring task (writing a PR, running the test matrix), check the
-   `procedure:` KV namespace BEFORE other surfaces:
-   - First scan `memex_kv_list(namespaces=["procedure"])` for matching
-     `procedure:<verb>:<context-tag>` keys.
-   - Read with `memex_kv_get(key)` for the active value, or
-     `memex_kv_get(key, include_history=true)` to also see the capped
-     5-version history (useful when the active value looks stale).
-   - After ACTUALLY using a procedure to perform the action, close the
-     loop with
-     `memex_record_outcome(target_type="kv_key", kv_key=..., success=...)`
-     so the procedure's Memory Worth counters stay calibrated.
+5. **Memory hygiene**: when asked about memory state or stale facts, call `memex_get_lint_flags(vault_id=...)`. Surface high-confidence findings; act autonomously on low-risk ones (e.g. `memex_memory_deprioritize` for low-MW units).
 
-   Procedure recall is shape-different from note recall: it returns an
-   instruction to execute, not a fact to remember. Reach for it whenever
-   the user query is "how-to" rather than "what".
+6. **Memories due for review**: when asked "what's due?" or "what should I revisit?", call `memex_get_due_for_review(vault_id?)`. After review, call `memex_memory_review(unit_id, quality)` with quality ∈ {again, hard, good, easy}. Five consecutive 'again' ratings auto-deprioritize.
 
-<!-- # --- F8 --- (filled by WS-linter) -->
-5. **Memory hygiene** — when the user asks about memory state,
-   stale facts, or how the vault is doing, call
-   `memex_get_lint_flags(vault_id=...)` to surface the linter's pending
-   findings (orphan mental models, low-MW units, sensitive unreviewed
-   entries, dangling refs). Each finding includes `target_id`,
-   `lint_type`, `evidence`, and `suggested_action`; most can be
-   auto-resolved by calling the relevant tool (e.g. `memex_memory_deprioritize`
-   for low-MW units, or `memex_memory_consolidate(vault_id, dry_run=true)`
-   for a vault-wide preview before applying). Surface high-confidence
-   findings to the user; act autonomously on low-risk ones.
-
-<!--
-Tier A — /recall verb extensions
-F20: WS-revisit     (get_due_for_review surfacing)
-F32: WS-diagnostics (get_diagnostics_summary surfacing)
-
-# --- F20 --- (filled by WS-revisit)
-4. **Memories due for review** (when the user asks "what's due?", "what
-   should I revisit?", "show my review queue", etc.): call
-   `memex_get_due_for_review(vault_id?)` to list units whose
-   `revisit_due_at <= now()` AND that pass the 5-gate eligibility
-   predicate. The list returns `{unit_id, text_preview, revisit_due_at,
-   intent_class}`. After the user reviews each one, call
-   `memex_memory_review(unit_id, quality)` with `quality` ∈ {`'again'`,
-   `'hard'`, `'good'`, `'easy'`} to advance the FSRS-5 schedule and
-   record the outcome.
-
-   Sticky-deprioritize: 5 consecutive `'again'` ratings auto-flips a
-   unit to `is_deprioritized=true`. The `auto_deprioritized` field on
-   the response signals when the gate just triggered — surface that to
-   the user. Only `memex memory restore <id>` (CLI) flips the gate
-   back; positive ratings do NOT auto-restore.
-
-# --- F32 --- (filled by WS-diagnostics)
-5. **Vault diagnostics** (when the user asks "how is this vault doing?",
-   "what's in vault X?", "check vault health", or wants visualisation):
-   call `memex_get_diagnostics_summary(vault_id=...)` to surface unit
-   counts by status (active / stale / deprioritized), pending lint counts
-   by type, cluster_count (null when the UMAP manifold cache is cold),
-   avg MW score, and top retrieved entities. For full JSON or visual
-   plots, point the user to the CLI: `memex diagnostics manifold |
-   retrieval | summary --vault X`.
--->
-
-<!--
-F14: WS-quick-wins  (procedure: KV recall — see step 4 above)
--->
+7. **Vault diagnostics**: "how is this vault doing?" → `memex_get_diagnostics_summary(vault_id=...)`. For full output, point to `memex diagnostics manifold|retrieval|summary --vault X`.

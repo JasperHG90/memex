@@ -49,12 +49,12 @@ async def list_vaults(
             has_access = any(row['vault'].access is not None for row in rows)
             if has_access:
                 lines = [
-                    '| Name | Notes | Last Modified | Active | MW Mode | Access | Description |',
+                    '| Name | Notes | Last Modified | Active | Memory Worth | Access | Description |',
                     '|------|-------|---------------|--------|---------|--------|-------------|',
                 ]
             else:
                 lines = [
-                    '| Name | Notes | Last Modified | Active | MW Mode | Description |',
+                    '| Name | Notes | Last Modified | Active | Memory Worth | Description |',
                     '|------|-------|---------------|--------|---------|-------------|',
                 ]
             for row in rows:
@@ -63,7 +63,7 @@ async def list_vaults(
                 last_mod_dt = row.get('last_note_added_at')
                 last_mod = last_mod_dt.strftime('%Y-%m-%d') if last_mod_dt else '\u2014'
                 active = 'yes' if v.is_active else ''
-                mw_mode = v.mw_mode
+                mw_mode = v.mw_mode.replace('_', ' ') if v.mw_mode else '—'
                 desc = v.description or ''
                 if has_access:
                     access = ', '.join(v.access) if v.access else '\u2014'
@@ -96,7 +96,7 @@ async def list_vaults(
     table = Table(title='Available Vaults')
     table.add_column('ID', style='dim')
     table.add_column('Name', style='cyan')
-    table.add_column('MW Mode', style='yellow')
+    table.add_column('Memory Worth', style='yellow')
     table.add_column('Description', style='white')
     if has_access:
         table.add_column('Access', style='green')
@@ -245,7 +245,7 @@ async def delete_vault(
 async def set_mw_mode(
     ctx: typer.Context,
     identifier: Annotated[str, typer.Argument(help='Name or UUID of the vault.')],
-    mode: Annotated[str, typer.Argument(help='MW mode: stationary or ema.')],
+    mode: Annotated[str, typer.Argument(help='Memory Worth mode: stationary or ema.')],
 ):
     """Set the MW counter mode for a vault."""
     if mode not in ('stationary', 'ema'):
@@ -265,7 +265,9 @@ async def set_mw_mode(
         except Exception as e:
             handle_api_error(e)
 
-    console.print(f'[green]Vault[/green] {identifier} [green]MW mode set to[/green] {mode}')
+    console.print(
+        f'[green]Vault[/green] {identifier} [green]Memory Worth mode set to[/green] {mode}'
+    )
 
 
 @app.command('show')
@@ -295,7 +297,7 @@ async def show_vault(
     table.add_row('ID', str(vault.id))
     table.add_row('Name', vault.name)
     table.add_row('Description', vault.description or '—')
-    table.add_row('MW Mode', vault.mw_mode)
+    table.add_row('Memory Worth', vault.mw_mode)
     table.add_row('Created', str(vault.created_at))
     console.print(table)
 

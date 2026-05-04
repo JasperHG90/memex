@@ -190,13 +190,6 @@ Async mode: `asyncio_mode = "auto"` — all async tests run automatically.
 
 ## Memory layers and tool routing
 
-Memex stores four memory layers; pick the right tool for the layer you
-need (canonical spec: research report §2.3 + §4 F3). The mapping is the
-same across all five agent surfaces — MCP tool descriptions, the Hermes
-session briefing, the Hermes templates fragment, the Claude Code rule
-file, and this section — enforced by `test_f3_layer_primer_parity.py`
-(parity required per the agent-surface rule).
-
 | Layer | What it stores | Retrieve with | Tiny example |
 |---|---|---|---|
 | **Episodic** ("what happened, when") | Timestamped, source-attributed Notes — sessions, reflections, decisions | `memex_note_search` / `memex_recent_notes` / `memex_find_note` | "Find yesterday's reflection about the deploy regression" |
@@ -204,34 +197,13 @@ file, and this section — enforced by `test_f3_layer_primer_parity.py`
 | **Conceptual** ("synthesised mental models") | MentalModels — reflection output bundling per-entity observations with trend tracking (new/strengthening/stable/weakening/stale) | `memex_survey` / `memex_get_entities` (with `mental_models=True`) | "What do you know about Project X overall?" |
 | **Procedural-observations** ("adaptations to context") | KV entries under `procedure:<verb>:<context-tag>` — observations about how to adapt your existing skills to a context, NOT the procedures themselves | `memex_kv_search` / `memex_kv_get` with `prefix='procedure:'` | "For this user, `deploy` means staging — never prod after 6pm" |
 
-Default to `memex_memory_search` for content-shaped questions and
-`memex_note_search` for source-shaped questions. The agent owns the verb;
-Memex owns the adverb. The single source of truth for the primer strings
-lives in `packages/common/src/memex_common/agent_surface.py`; consumers
-(`packages/mcp/.../server.py` via the `_layer_primer_descriptions.py` shim,
-`packages/hermes-plugin/.../briefing.py` and `.../templates.py`,
-`packages/claude-code-plugin/rules/memory-layers.md`, and this section)
-all import or mirror that one module — never re-declare the text.
+Default to `memex_memory_search` for content-shaped questions, `memex_note_search` for source-shaped questions. The agent owns the verb; Memex owns the adverb. Canonical source: `packages/common/src/memex_common/agent_surface.py`; parity enforced by `test_f3_layer_primer_parity.py`.
 
-## When the user reports an issue resolved (§3.5 5-step flow)
+## When the user reports an issue resolved (5-step flow)
 
-When the user says "the X bug is fixed" / "we shipped Y" / "issue Z is no
-longer relevant", apply the **5-step resolution flow**: (1) disambiguate
-first if scope is ambiguous; (2) route by info quality (`memex_find_note`
-for title fragment, `memex_memory_search` only when title is unknown) AND
-pick a coverage path — Option A entity-anchored, Option B cross-note
-semantic with `top_k>=30`, or Option C single-note PageIndex traversal;
-(3) mandatory LLM judgment over candidates — never bulk-write; (4+5) paired
-writes (`memex_record_outcome(success=false)` AND
-`memex_memory_deprioritize`) against the LLM-judged-relevant subset only.
-The two verbs are orthogonal axes (MW gradient vs binary surface state).
+1. **Disambiguate** — if scope ambiguous, ASK before writing.
+2. **Route** — title → `memex_find_note`; content → `memex_memory_search`. Pick a coverage path: (A) entity-anchored, (B) cross-note semantic with `top_k>=30`, or (C) single-note PageIndex.
+3. **LLM-judge** — read candidate unit bodies, pick fix-relevant subset. Never bulk-write.
+4. **+5. Paired writes** against judged subset: `memex_record_outcome(success=false)` AND `memex_memory_deprioritize`. Two orthogonal axes: MW gradient vs binary surface state.
 
-Authoritative agent guidance lives in three places (parity required per
-the agent-surface rule): the MCP tool descriptions
-(`packages/mcp/src/memex_mcp/_resolution_flow_descriptions.py`), the Hermes session
-briefing (`packages/hermes-plugin/.../briefing.py`
-`_RESOLUTION_FLOW_PRIMER`), and the Claude Code plugin rule
-(`packages/claude-code-plugin/rules/memory-resolution-flow.md`). For
-"how has my view on X evolved" / audit queries, use
-`memex_get_unit_history` or `memex_memory_search(apply_pre_filter=False)`
-— see the historical-routing rule in any of the three sources.
+Historical/audit queries ("how has my view on X evolved") → `memex_get_unit_history` or `memex_memory_search(apply_pre_filter=False)`.

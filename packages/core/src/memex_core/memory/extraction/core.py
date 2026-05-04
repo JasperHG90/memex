@@ -61,31 +61,18 @@ class ExtractSemanticFacts(dspy.Signature):
     LANGUAGE RULE: Output extracted facts in ENGLISH. Translate if necessary.
     TEMPORAL HANDLING: Use 'event_date_ref' as the anchor for relative dates.
 
-    PER-FACT CLASSIFICATION (F25b — folded into the same call as extraction):
+    Each fact MUST carry intent_class and risk_class:
 
-    Each extracted fact MUST carry an ``intent_class`` and a ``risk_class``.
+    intent_class (durability, NOT importance):
+      - permanent: identity, preferences, never-decaying facts.
+      - durable: project decisions, multi-week relevance. DEFAULT.
+      - ephemeral: task context, days-to-weeks relevance only.
 
-    Intent describes how durable the fact is, NOT how important it feels:
-      - permanent: identity, preferences, key facts that should never decay
-        (e.g. "user has a peanut allergy", "user prefers ruff over black").
-      - durable: project decisions, relationship state, multi-week relevance.
-        DEFAULT for unclear cases.
-      - ephemeral: task context, session details, days-to-weeks relevance only
-        (e.g. "tomorrow's standup is at 10am", "Bob is on vacation this week").
-
-    Set intent based on the content's actual durability, not perceived importance.
-    A specific date for next week is "ephemeral" even if the event is important.
-    The user's home address is "permanent" even though it's not exciting.
-
-    Risk classifies sensitivity:
-      - none: default, public-safe content.
-      - sensitive: flagged for linter review; still retrievable in default scope.
-      - private: excluded from default retrieval; surfaced only on explicit query
-        (passwords, financial details, medical specifics).
-      - safety: blocked entirely (Memex refuses to ingest). Use ONLY for content
-        that would cause real-world harm if surfaced (e.g. self-harm planning,
-        instructions for violence). Be conservative — when in doubt, prefer
-        'sensitive' or 'private' over 'safety'.
+    risk_class (sensitivity):
+      - none: public-safe. DEFAULT.
+      - sensitive: flagged for review; still in default retrieval.
+      - private: excluded from default retrieval (passwords, medical).
+      - safety: BLOCKED at ingestion. Only for real-world harm content.
     """
 
     chunk_text: str = dspy.InputField(

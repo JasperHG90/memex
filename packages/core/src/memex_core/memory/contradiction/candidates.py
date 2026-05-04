@@ -87,10 +87,10 @@ async def _get_semantic_candidates(
 ) -> list[MemoryUnit]:
     """Find semantically similar units via pgvector cosine distance.
 
-    Raw pgvector similarities are routed through the shared anisotropy
-    corrector (F2) before the threshold is applied, so contradiction
-    candidate selection works on a discriminative scale rather than the
-    compressed [0.7, 0.95] band typical of high-dimensional embeddings.
+    Similarities are corrected through the shared anisotropy corrector
+    before thresholding, so candidates are scored on a discriminative scale
+    rather than the compressed [0.7, 0.95] band typical of high-dimensional
+    embeddings.
     """
     if unit.embedding is None or len(unit.embedding) == 0:
         return []

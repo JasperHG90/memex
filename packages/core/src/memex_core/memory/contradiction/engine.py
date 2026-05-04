@@ -137,42 +137,15 @@ class ContradictionEngine:
                 await session.exec(upsert_stmt)  # type: ignore[arg-type]
                 all_links = list(deduped.values())
 
-            # Apply confidence deltas via SQL-level arithmetic so concurrent
-            # _detect calls on overlapping units cannot drift confidence
-            # against the atomic confidence_evidence_count increment.
-            # ``LEAST/GREATEST`` clamp matches the prior application-level
-            # ``max(0.0, min(1.0, ...))``.
+            # Accumulate confidence deltas then clamp once, so concurrent
+            # _detect calls on overlapping units cannot race. LEAST/GREATEST
+            # mirrors the application-level max(0.0, min(1.0, ...)) clamp.
             #
-            # Semantic note: the deltas-and-
-            # clamp form trades per-step clamping (old: confidence=0.15
-            # weakened twice → 0.05, 0.0 with two zero-pinned steps) for
-            # accumulated-then-clamped (new: total delta -0.2 → 0.15-0.2
-            # clamped to 0.0 once). The endpoint value is identical for
-            # any monotonic-decreasing sequence on a unit; only the
-            # *number* of intermediate clamps changes — which is unobserved
-            # because nothing reads the mid-batch state. The accumulation
-            # is what makes the concurrency fix correct: per-step
-            # absolute writes raced; per-step deltas don't.
-            #
-            # Reinforce semantic-change note: for
-            # the *reinforce* (monotonic-increasing) path the endpoint
-            # value is NOT identical to pre-fix behaviour. The old
-            # ``confidence_updates`` dict's last-writer-wins absolute
-            # write silently dropped duplicate same-target reinforces in
-            # one batch, so two reinforces on unit ``A`` landed at
-            # ``confidence + alpha`` (one event surviving). The new
-            # accumulation correctly sums them to ``confidence + 2*alpha``.
-            # This is intentional — the prior behaviour was an event-
-            # loss bug — but it is a behavioural change and reinforce-
-            # heavy batches will now move ``confidence`` strictly higher
-            # than they did before. Paired with the LEAST(1.0, ...) clamp
-            # so the column still cannot exceed 1.0.
-            #
-            # TODO(perf, post-v1): one UPDATE per distinct unit_id is fine
-            # for typical contradiction-batch sizes (≤ a few units), but a
-            # single bulk ``UPDATE … FROM (VALUES …)`` or ``executemany``
-            # would collapse this to one round-trip if/when batch fan-out
-            # grows (non-blocking).
+            # Reinforce path: the old last-writer-wins dict silently dropped
+            # duplicate reinforces in one batch. The new accumulation correctly
+            # sums them (intentional — the prior behaviour was an event-loss bug).
+            # Reinforce-heavy batches now move confidence strictly higher than
+            # before; LEAST(1.0, ...) caps the column at 1.0.
             for unit_id, delta in confidence_deltas.items():
                 values: dict[str, Any] = {
                     'confidence': sa_func.greatest(

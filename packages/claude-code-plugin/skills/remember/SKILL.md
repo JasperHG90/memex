@@ -6,181 +6,50 @@ argument-hint: "[what to remember]"
 
 # /remember — Save to Memex Long-Term Memory
 
-You have been invoked via the `/remember` slash command.
+1. **Determine content**: use `$ARGUMENTS` if provided; otherwise infer the most important persistable context from the conversation.
 
-## Instructions
-
-1. **Determine what to remember.**
-   - If `$ARGUMENTS` is provided and non-empty, use that text as the memory content.
-   - If `$ARGUMENTS` is empty, review the recent conversation and identify the single
-     most important piece of information worth persisting (e.g. a decision, a discovery,
-     a user preference).
-
-2. **Format the memory.**
-   - **title**: A concise, descriptive title (≤10 words).
-   - **markdown_content**: The memory body in Markdown. Be specific and include enough
-     context so the memory is useful in a future session without the original conversation.
-   - **description**: A one-sentence summary (≤250 words).
+2. **Format**:
+   - **title**: concise, ≤10 words
+   - **markdown_content**: specific enough to be useful without the original conversation
+   - **description**: one-sentence summary, ≤250 words
    - **author**: `"claude-code"`
-   - **tags**: Always include `"claude-code"` and `"manual-capture"`. Add 1-3 additional
-     topic tags derived from the content.
+   - **tags**: always include `"claude-code"` + `"manual-capture"` + 1-3 topic tags
 
-   **Pick the right memory layer (§2.3)** before saving — see
-   `.claude/rules/memory-layers.md` for the 4-layer table. A note
-   (`memex_add_note` / `memex_append_note`) is the right surface for
-   Episodic / Semantic / Conceptual content (events, facts, decisions,
-   reflections). For Procedural-observations ("for this user, X means Y")
-   write to the `procedure:` KV namespace instead — see "Capturing a
-   learned procedure" below. Episodic and Semantic flow into MemoryUnits
-   automatically at ingestion; Conceptual MentalModels are synthesised by
-   background reflection.
+3. **Pick the right surface** (see `.claude/rules/memory-layers.md`):
+   - Note (`memex_add_note` / `memex_append_note`) for Episodic/Semantic/Conceptual content
+   - `procedure:` KV namespace for Procedural-observations (learned how-tos) — see step 5
 
-3. **Consider a template (for structured content).**
-   If the memory is an architectural decision, technical brief, retro, or RFC,
-   call `memex_list_templates` then `memex_get_template(slug)`, follow the
-   structure when writing `markdown_content`, and pass `template: "<slug>"` to
-   `memex_add_note`. Skip for short, unstructured captures.
+4. **Template for structured content**: `memex_list_templates` → `memex_get_template(slug)` → `memex_add_note(..., template=slug)`. Skip for short unstructured captures.
 
-4. **Save the memory.**
-   Call the `memex_add_note` MCP tool with the values above and set `background: true`
-   so ingestion does not block the conversation.
+5. **Save**: call `memex_add_note` with `background: true`. Confirm to the user.
 
-5. **Confirm to the user.**
-   After calling the tool, briefly confirm what was saved and mention the title.
+## Deprioritize vs archive
 
-## Curating memory after the fact (deprioritize vs archive)
+- `memex_memory_deprioritize(unit_id, reason)` — NON-DESTRUCTIVE. Lowers retrieval rank; unit stays accessible via `include_deprioritized=true`. Reversible via `memex_memory_restore`.
+- Archive (`memex memory delete`, CLI-only) — DESTRUCTIVE, removes from entity graph. Prefer deprioritize unless PII removal is required.
 
-When a previously-saved memory turns out to be misleading, outdated, or noise
-that contaminates retrieval, prefer the **NON-DESTRUCTIVE** verb:
+## 5-step resolution flow (user reports issue fixed)
 
-- `memex_memory_deprioritize(unit_id, reason)` lowers the unit's retrieval
-  rank without removing it from the entity graph. The unit remains accessible
-  via `include_deprioritized=true` retrieval. Use the `reason` field liberally
-  ("user confirmed issue fixed", "superseded by v2.3 release") — it is logged
-  to `audit_logs` as the audit trail. Reversible via `memex_memory_restore`.
-- Archive (CLI-only, `memex memory delete`) is the **DESTRUCTIVE** counterpart:
-  it removes the unit from the entity graph and is irreversible. Prefer
-  deprioritize unless the unit MUST leave the graph entirely.
+See `.claude/rules/memory-resolution-flow.md` for the canonical text. Short version:
 
-## When the user reports an issue resolved (§3.5 5-step flow)
+1. **Disambiguate** — if scope ambiguous, ASK.
+2. **Route** — title → `memex_find_note`; content → `memex_memory_search`. Then pick: (A) entity-anchored, (B) cross-note semantic (top_k≥30), or (C) single-note PageIndex.
+3. **LLM-judge** — read candidate unit bodies, pick fix-relevant subset. Never bulk-write.
+4. **+5. Paired writes** against judged subset: `memex_record_outcome(success=false)` AND `memex_memory_deprioritize(reason=...)`.
 
-When the user says "the X bug is fixed", "we shipped Y", "issue Z is no longer
-relevant", apply the **5-step resolution flow** — see
-`.claude/rules/memory-resolution-flow.md` for the canonical text. The
-short version:
-
-1. **Disambiguate first** — if scope is ambiguous, ASK before writing.
-2. **Route by info quality + pick a coverage path**:
-   - Title fragment → `memex_find_note`; content only → `memex_memory_search`
-   - **(A) entity-anchored**: `memex_list_entities` → `memex_get_entity_mentions`
-   - **(B) cross-note semantic**: `memex_memory_search(top_k>=30, after=...)`
-     — `top_k` MUST be ≥30, default 5 misses cross-note matches
-   - **(C) single-note PageIndex**: `memex_get_page_indices` →
-     `memex_get_memory_units(chunk_ids=[...])`
-3. **Mandatory LLM judgment** — read candidate unit bodies, pick the
-   fix-relevant subset. Never bulk-write the raw candidate set.
-4. **+5. Paired writes against the LLM-judged-relevant subset only**:
-   `memex_record_outcome(unit_ids=[...], success=false, reason="...")` AND
-   `memex_memory_deprioritize(unit_id=..., reason="...")` against the
-   SAME subset.
-
-The two verbs are orthogonal axes (MW gradient vs binary surface state);
-user-confirmed-fix is BOTH signals at once. Imperfect cross-note recall is by
-design — exploration is the safety net.
-
-For "how has my view on X evolved" / "what did I used to think about Y" /
-audit queries, do NOT use the resolution flow — use
-`memex_get_unit_history(unit_id)` for ordered chains, or
-`memex_memory_search(apply_pre_filter=False)` for broader audit. See
-`.claude/rules/memory-resolution-flow.md` for the full historical-routing rule.
+Historical/audit queries ("how has my view on X evolved") → `memex_get_unit_history` or `memex_memory_search(apply_pre_filter=False)`.
 
 ## Capturing a learned procedure (procedure: KV namespace)
 
-Some kinds of "remembering" are NOT a note — they are a compact, learned
-how-to: "how I write commit messages for this project", "how I run the
-test matrix on this monorepo". For those, write to the `procedure:` KV
-namespace instead of `memex_add_note`. Each procedure key is
+For how-tos ("how I write PRs for this project"), write to `procedure:<verb>:<context-tag>`:
+- Save: `memex_kv_write(value=..., key="procedure:<verb>:<context-tag>")`
+- Read active value: `memex_kv_get(key)`; history: `memex_kv_get(key, include_history=true)`
+- After USE, close the loop: `memex_record_outcome(target_type="kv_key", kv_key=..., success=...)`
 
-```
-procedure:<verb>:<context-tag>
-```
+Use procedure: keys for executable how-tos; use `memex_add_note` for facts/decisions/context.
 
-— for example `procedure:write_pr:commit-style` or
-`procedure:run_tests:python-monorepo`. The agent owns the verb (the
-action you are taking); Memex stores observations about how to ADAPT the
-verb to a specific context (the context-tag).
+## Consolidation verbs
 
-Use `memex_kv_write(value=..., key="procedure:<verb>:<context-tag>")` to
-save. The server keeps the active value plus a capped 5-version history,
-so an updated procedure overwrites the active value but does not lose
-prior versions — read them with
-`memex_kv_get(key, include_history=true)`.
-
-After actually USING a procedure key in a turn (you read it via
-`memex_kv_get` and then performed the action), close the loop with
-`memex_record_outcome(target_type="kv_key", kv_key=..., success=...)` so
-Memex's per-(vault, key) Memory Worth counters reflect what worked. The
-counters drive the briefing surface — silence provides no learning
-signal.
-
-Use a procedure: key when the content is a how-to that you (or a future
-agent) will ACTUALLY EXECUTE; use `memex_add_note` when the content is a
-fact, decision, or piece of context to recall.
-
-## Synchronously consolidating mid-conversation (summarize_node vs reflect)
-
-When you notice mid-conversation that retrieved facts about a topic are
-conflicting, incomplete, or scattered, you can ask Memex to consolidate them
-into a coherent mental model **before continuing**:
-
-- `memex_memory_summarize_node(entity_id, scope)` triggers reflection
-  **synchronously**. `scope='incremental'` (default) consolidates only new
-  evidence; `scope='full'` re-evaluates all evidence on the entity (capped
-  at the most-recent 1000 units). The tool returns the updated mental model
-  in the same turn, so you can act on it immediately.
-- Background `reflect` (the existing scheduler-driven path) is the **default**:
-  it runs asynchronously when leader-elected and is the cheaper option.
-
-`summarize_node` is rate-limited to **1 call per (entity, vault) per 60
-seconds**. If you hit the limit, the response includes `retry_after_seconds`;
-do not retry-loop. Reach for `summarize_node` only when an in-session reason
-exists (a contradiction signal, a user-driven question that depends on the
-consolidated view); otherwise let background reflection do its work.
-
-## Reconsolidating versus consolidating
-
-Two related but **distinct** curation verbs:
-
-- `memex_memory_reconsolidate(entity_id, vault_id)` is **ENTITY-SCOPED**.
-  Use when retrieved facts about a specific entity disagree. Runs
-  contradiction detection across that entity's linked units, then reflection.
-  Acquires a per-entity Postgres advisory lock — concurrent calls on the
-  same entity serialise (the second observes a `lock_contention` envelope).
-- `memex_memory_consolidate(vault_id, dry_run)` is **VAULT-SCOPED**.
-  Identifies low-MW + stale units across the entire vault and deprioritizes
-  them; writes findings to the maintenance ledger. Use sparingly (e.g.,
-  monthly per vault). `dry_run=true` returns the candidate list as a preview
-  without writes.
-
-Reach for `reconsolidate` on concrete contradiction signals; `consolidate`
-is the periodic batch. Both are LLM-intensive and write-side — prefer
-`memex_memory_deprioritize` for individual high-confidence noise units.
-
-<!--
-Tier A — /remember verb extensions
-F4:  WS-quick-wins  (memory_deprioritize/restore disclosure)
-F5:  WS-quick-wins  (memory_summarize_node disclosure)
-F9:  WS-locks       (memory_reconsolidate, memory_consolidate disclosure)
-F14: WS-quick-wins  (procedural KV capture surfacing)
-F20: WS-revisit     (memory_review disclosure)
-
-# --- F4 ---  (filled by WS-quick-wins — see "Curating memory after the fact" section above)
-
-# --- F5 ---  (filled by WS-quick-wins)
-
-# --- F9 ---  (filled by WS-locks)
-
-# --- F14 --- (filled by WS-quick-wins — see "Capturing a learned procedure" section above)
-
-# --- F20 --- (filled by WS-revisit)
--->
+- `memex_memory_summarize_node(entity_id, scope)` — synchronous reflection. `'incremental'` (default) for new evidence only; `'full'` to re-evaluate all (capped 1000 units). Rate-limited: 1 call per (entity, vault) per 60s.
+- `memex_memory_reconsolidate(entity_id, vault_id)` — entity-scoped contradiction detection + reflection. Per-entity advisory lock.
+- `memex_memory_consolidate(vault_id, dry_run)` — vault-scoped batch deprioritization of low-MW + stale units. Use sparingly (monthly).

@@ -25,23 +25,10 @@ _logger = logging.getLogger('memex.common.schemas')
 from memex_common.mixins import VaultMixin
 
 
-# Variance of Uniform(0, 1) = Beta(1, 1), the cold-start posterior
-# variance ceiling. Mirrors ``memex_core.memory.confidence.MAX_VARIANCE``;
-# duplicated here because ``memex_common`` MUST NOT depend on
-# ``memex_core`` (the dependency direction is core → common). The
-# cross-reference unit test in
-# ``packages/core/tests/unit/memory/test_confidence.py`` (see
-# ``TestDtoFormulaConsistency``) pins equivalence between this constant
-# and the formula in ``memex_core.memory.confidence.mean_and_variance``.
-# Extracted from inline ``1.0 / 12.0`` literals so
-# the Field constraint and the validator formula reference a single
-# source of truth.
-# Also defined in
-# ``memex_core.memory.confidence.MAX_VARIANCE`` and
-# ``memex_common.config._MAX_VARIANCE``. Any edit here MUST be mirrored
-# in both of those locations. Future: a ``memex_common.constants``
-# module would reduce duplication from 3 to 2 (core can't import
-# common for the reverse direction), halving the drift surface.
+# Cold-start posterior variance ceiling. Duplicated from
+# ``memex_core.memory.confidence.MAX_VARIANCE`` because common must not
+# import core. Test parity:
+# ``packages/core/tests/unit/memory/test_confidence.py::TestDtoFormulaConsistency``.
 _MAX_VARIANCE: float = 1.0 / 12.0
 
 
@@ -370,41 +357,31 @@ class RetrievalRequest(BaseModel):
     )
     strategies: list[str] | None = Field(
         default=None,
-        description=(
-            'Inclusion list of strategies to run. '
-            'Valid values: semantic, keyword, graph, temporal, mental_model. '
-            'If None, all strategies are used.'
-        ),
+        description='Strategies to run. None = all.',
+        examples=[['semantic', 'keyword', 'graph', 'temporal', 'mental_model']],
     )
     include_vectors: bool = Field(
-        default=False, description='Whether to include embeddings in the result (slower).'
+        default=False, description='Include embeddings in results (slower).'
     )
-    include_stale: bool = Field(
-        default=False, description='Whether to include stale memory units in results.'
-    )
+    include_stale: bool = Field(default=False, description='Include stale memory units.')
     include_superseded: bool = Field(
         default=False,
-        description='Whether to include superseded (low-confidence) memory units in results.',
+        description='Include superseded (low-confidence) memory units.',
     )
     include_deprioritized: bool = Field(
         default=False,
-        description='Whether to include deprioritized memory units in results.',
+        description='Include deprioritized memory units.',
     )
     apply_pre_filter: bool = Field(
         default=True,
         description=(
-            'pre-reranker MW/FSFM filter at hydration. Default ON drops obviously-failed '
-            'or decayed candidates before the cross-encoder runs (~30% reranker latency '
-            'reduction with cold-start safeguards intact). Set False for historical / audit / '
-            'lineage queries that need to see contradicted, behaviorally-failed, or decayed '
-            'units — every branch (MW + FSFM + future confidence) is bypassed in one go.'
+            'Pre-reranker MW/FSFM filter. Default ON drops failed/decayed candidates '
+            'before cross-encoder. Set False for audit/lineage queries.'
         ),
     )
     debug: bool = Field(
         default=False,
-        description=(
-            'When True, include per-result strategy attribution (name, rank, RRF score, timing).'
-        ),
+        description='Include per-result strategy attribution (name, rank, RRF score, timing).',
     )
 
 
@@ -430,10 +407,9 @@ class ReflectionRequest(VaultMixin):
     entity_id: UUID = Field(description='The UUID of the entity to reflect upon.')
     limit_recent_memories: int | None = Field(
         default=20,
-        description=(
-            'Number of recent memories to consider. None means no per-request cap '
-            "('full' scope); the engine still enforces MAX_FULL_SCOPE_UNITS=1000."
-        ),
+        ge=1,
+        le=50,
+        description='Recent memories to consider. None = no cap.',
     )
 
 

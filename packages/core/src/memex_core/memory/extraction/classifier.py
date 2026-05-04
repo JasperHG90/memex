@@ -1,36 +1,17 @@
-"""Write-time intent + risk safety filter (F25b).
+"""Write-time intent + risk safety filter.
 
-F25 originally introduced a *separate* DSPy classifier (``ClassifyMemoryUnit``)
-that ran one LLM call per extracted fact. F25b folded those output fields into
-the fact-extraction signature itself (see ``ExtractSemanticFacts`` in
-``extraction/core.py``), so intent + risk now arrive **with** each fact in the
-single extraction call. This module is what's left after the fold:
+Post-extraction filter that drops facts flagged as ``risk_class='safety'``
+before persistence. Tracks the drop rate per vault for dashboards.
 
-* ``filter_safety_blocked`` — post-extraction filter that drops facts the
-  LLM flagged as ``risk_class='safety'`` *before* persistence. Counter-side
-  effect tracks the drop rate per vault for dashboards.
+Intent/risk coercion lives on ``RawFact`` pydantic validators in
+``extraction/models.py`` — this module does not coerce.
 
-Default-on-fail coercion of the LLM-produced ``intent_class`` / ``risk_class``
-strings happens at parse time on ``RawFact`` itself (pydantic
-``@field_validator``s in ``extraction/models.py``). The previous module-level
-``_coerce_intent`` / ``_coerce_risk`` helpers were retired in the F25b
-follow-up — they had become dead production code that duplicated the
-validators, with the only consumers being their own unit tests. Single
-source of truth for the coercion lives on ``RawFact`` (and, post-Hermes
-round-2 MED, on ``ExtractedFact`` too).
+Pipeline: extract_facts → dedup → embedding → filter_safety_blocked → persist.
 
-Pipeline placement (post-F25b):
-    extract_facts (LLM emits intent/risk; RawFact validators coerce on the
-    way in) → dedup → embedding → filter_safety_blocked → persist.
+Risk classes: none (default), sensitive (flagged for linter), private (excluded
+from default retrieval), safety (blocked at ingestion).
 
-The two-verb risk policy (unchanged from F25):
-    none      — public-safe content (default).
-    sensitive — flagged for linter; still retrievable in default scope.
-    private   — excluded from default retrieval (see strategies.apply_generic_filters).
-    safety    — refused at ingestion; ``filter_safety_blocked`` drops these facts.
-
-Permanent / Durable / Ephemeral mirror KinthAI's three-way split (intent class
-captures lifecycle, separate from risk).
+Intent classes: permanent, durable, ephemeral (mirrors lifecycle split).
 """
 
 from __future__ import annotations
@@ -42,14 +23,9 @@ from memex_core.metrics import CLASSIFIER_BLOCKED_TOTAL
 
 logger = logging.getLogger('memex.core.memory.extraction.classifier')
 
-# Hermes round-5 MED: ``INTENT_VALUES`` / ``RISK_VALUES`` / ``DEFAULT_INTENT``
-# / ``DEFAULT_RISK`` were retired from this module. The canonical valid
-# values live on the ``IntentClass`` / ``RiskClass`` enums in
-# ``memex_common.schemas``; the canonical defaults are
-# ``IntentClass.DURABLE.value`` / ``RiskClass.NONE.value`` (and are enforced
-# by the pydantic validators on ``RawFact`` / ``ExtractedFact``). Tests that
-# previously imported the constants from here should derive them directly
-# from the enums.
+# Intent/risk enum values and defaults moved to ``memex_common.schemas``
+# (IntentClass, RiskClass). Pydantic validators on RawFact/ExtractedFact
+# enforce them at parse time.
 
 
 def filter_safety_blocked(facts: list[ProcessedFact]) -> list[ProcessedFact]:

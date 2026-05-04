@@ -1,14 +1,8 @@
-"""F26 — Lint dashboard aggregator (RFC-009 §72).
+"""Lint dashboard aggregator.
 
-Reads ``maintenance_proposals`` (F6) and pivots by ``(lint_type, status, source)``
-plus surfaces the top-5 most-recent pending findings. Used by:
-- ``GET /api/v1/diagnostics/lint/{vault_id}`` (full dashboard)
-- ``compute_diagnostics_summary`` (just the ``pending_by_type`` slice; replaces
-  the F32-core placeholder ``lint_pending_by_type: {}``)
-
-This is intentionally a thin aggregator — F6 owns the rule engine and the
-``/lint/findings`` row-listing surface; F8 owns the agent-paginated ``/lint/flags``
-surface; F26 only adds the operator/observability *pivot* view.
+Pivots ``maintenance_proposals`` by ``(lint_type, status, source)`` and surfaces
+the top-5 most-recent pending findings. Used by the diagnostics endpoint and
+the session briefing.
 """
 
 from __future__ import annotations

@@ -365,34 +365,32 @@ RerankerBackend: TypeAlias = Annotated[
 
 
 class NLIModelConfig(BaseModel):
-    """Configuration for the polarity-discriminating NLI classifier.
+    """Natural Language Inference (NLI) classifier for polarity discrimination.
 
-    The NLI signal augments the surprise gate so polarity-inverting unit/peer
-    pairs (e.g. "User prefers staging" vs "User prefers production") clear the
-    gate even when MiniLM-L12 cosine surprise alone cannot lift them above the
-    surprise threshold (POC-002).
+    Augments the surprise gate so contradicting pairs (e.g. "prefers staging"
+    vs "prefers production") clear the gate when cosine similarity alone
+    cannot. Uses an ONNX cross-encoder to classify peer pairs as
+    entailing / contradicting / neutral.
     """
 
     type: Literal['onnx'] = Field(
         default='onnx',
-        description='Backend type. Currently only the ONNX backend is supported.',
+        description='Backend type.',
     )
     enabled: bool = Field(
         default=True,
-        description='Master kill-switch for the NLI gate. If False the gate '
-        'collapses to cosine-only behaviour.',
+        description='Kill-switch. When False, falls back to cosine-only.',
     )
     polarity_threshold: float = Field(
         default=0.6,
         ge=0.0,
         le=1.0,
-        description='Minimum NLI contradiction-probability for a peer pair to clear the '
-        'surprise gate via the polarity branch.',
+        description='Min contradiction probability to clear the surprise gate.',
     )
     rate_limit_per_vault_per_hour: int | None = Field(
         default=None,
         ge=1,
-        description='Optional per-vault hourly cap on NLI invocations. None = unlimited.',
+        description='Per-vault hourly cap. None = unlimited.',
     )
 
 

@@ -16,7 +16,7 @@ import asyncio
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
-import structlog
+import logging
 import typer
 from rich.console import Console
 from rich.panel import Panel
@@ -26,7 +26,7 @@ from rich.table import Table
 _VALID_KEYS = {'a', 'd', 's', 'q'}
 _DEFAULT_KEY = 's'
 
-_logger = structlog.get_logger(__name__)
+_logger = logging.getLogger(__name__)
 
 
 class LintApplyProto(Protocol):
@@ -160,9 +160,8 @@ async def run_review_loop(
                     console.print(f'[green]resolved:[/green] {finding_id}')
                 except Exception as e:
                     _logger.exception(
-                        'lint_review.apply_failed',
-                        finding_id=finding_id,
-                        verdict='accept',
+                        'lint_review.apply_failed: finding_id=%s verdict=accept',
+                        finding_id,
                     )
                     summary.apply_errors.append((finding_id, str(e)))
                     console.print(f'[red]apply failed for {finding_id}:[/red] {e}')
@@ -176,9 +175,8 @@ async def run_review_loop(
                     console.print(f'[yellow]dismissed:[/yellow] {finding_id}')
                 except Exception as e:
                     _logger.exception(
-                        'lint_review.apply_failed',
-                        finding_id=finding_id,
-                        verdict='dismiss',
+                        'lint_review.apply_failed: finding_id=%s verdict=dismiss',
+                        finding_id,
                     )
                     summary.apply_errors.append((finding_id, str(e)))
                     console.print(f'[red]apply failed for {finding_id}:[/red] {e}')
