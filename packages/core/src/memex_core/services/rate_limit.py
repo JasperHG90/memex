@@ -1,10 +1,10 @@
-"""In-process token-bucket rate limiter (F5).
+"""In-process token-bucket rate limiter.
 
 Per-key token bucket with monotonic-clock refill. Designed for advisory
 limits, not security gates: multi-worker leakage is accepted in v1
-(F9 introduces distributed locking; F38 will reuse this primitive).
+(distributed locking introduces per-entity locks; consolidation will reuse this primitive).
 
-Reusable across F5, F9, F10, F20 per RFC-002.
+Reusable across surfaces per RFC-002.
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ class TokenBucketRateLimiter:
 
     Mutual exclusion uses ``asyncio.Lock`` to honour the project-wide
     asyncio convention (multi-worker leakage is documented in RFC-002 and
-    acknowledged in the PR body per AC-F5-4). Hold time is microseconds —
+    acknowledged in the PR body per acceptance criteria). Hold time is microseconds —
     dict lookup plus arithmetic — so contention is negligible.
     """
 

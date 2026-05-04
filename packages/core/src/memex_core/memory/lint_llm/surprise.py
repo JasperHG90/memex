@@ -1,11 +1,11 @@
-"""F10 surprise score — anisotropy-corrected per-unit surprise.
+"""Surprise score — anisotropy-corrected per-unit surprise.
 
 Mirrors production semantics from ``memory/contradiction/candidates.py`` and
 ``memory/retrieval/engine.py`` (``_compute_pairwise_cosine``)::
 
   surprise(unit, vault) = 1 - mean( normalize( top_k_cosine_sim(unit, vault) ) )
 
-where ``normalize`` is F2's shared :class:`AnisotropyCorrector` (Z-score →
+where ``normalize`` is the shared :class:`AnisotropyCorrector` (Z-score →
 sigmoid) and ``top_k_cosine_sim`` is computed in pgvector with
 ``1 - (a.embedding <=> b.embedding)``.
 
@@ -14,9 +14,9 @@ A unit that is anomalous (figure-skating in a Python-frameworks vault, or a
 contradiction to the corpus consensus) returns low corrected similarities →
 high surprise.
 
-Validated by POC-F10 (`pocs/002-f10-surprise-threshold/result.md`):
+Validated by POC (`pocs/002-f10-surprise-threshold/result.md`):
 - PASS topical-anomaly recall @ 0.7 threshold.
-- Polarity-inversion recall is bridged by F10b: see ``polarity.py`` and
+- Polarity-inversion recall is bridged by the NLI classifier: see ``polarity.py`` and
   :func:`gate_passes` — cosine surprise OR'd with NLI contradiction-probability.
 """
 
@@ -47,7 +47,7 @@ def gate_passes(
     surprise_threshold: float,
     polarity_threshold: float = DEFAULT_POLARITY_THRESHOLD,
 ) -> bool:
-    """F10 + F10b composed gate.
+    """Composed cosine + NLI gate.
 
     Returns ``True`` when the cosine surprise alone clears ``surprise_threshold``
     OR (when cosine is below threshold) the supplied NLI contradiction-probability
@@ -77,7 +77,7 @@ async def compute_unit_surprise(
 
     Returns a value in [0, 1] where 1.0 is maximally surprising. Computes
     top-k cosine similarities to other ACTIVE units in the same vault via
-    pgvector, routes them through F2's anisotropy corrector, then returns
+    pgvector, routes them through the anisotropy corrector, then returns
     ``1 - mean(corrected)``.
 
     A vault with fewer than ``k`` peer units returns 1.0 (no neighborhood to
@@ -125,7 +125,7 @@ async def warm_corrector(
 ) -> int:
     """Warm the shared corrector with random pairwise similarities from a vault.
 
-    F2's corrector is cold-start passthrough until it has ``min_samples``
+    The corrector is cold-start passthrough until it has ``min_samples``
     (default 32) observations in its window; the corrected output only
     diverges from the raw similarity once the window is populated. To make
     the surprise score meaningful on the first call, pre-feed at least

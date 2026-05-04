@@ -1,4 +1,4 @@
-"""F20 revisitation service — eligibility, scheduling, listing, review.
+"""Revisitation service — eligibility, scheduling, listing, review.
 
 Owns the revisit-policy domain:
 - 5-gate eligibility predicate (Python + SQL forms — single source of truth)

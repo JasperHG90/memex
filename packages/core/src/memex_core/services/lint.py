@@ -1,4 +1,4 @@
-"""F6 maintenance ledger — rule-based linter.
+"""Maintenance ledger — rule-based linter.
 
 Implements ``LintService.run_rules(vault_id?)`` which iterates the v1 rule
 registry and emits ``MaintenanceProposal`` rows. Rules are read-only against
@@ -6,11 +6,11 @@ the resources they inspect; the only writes ``run_rules`` performs are
 ``INSERT INTO maintenance_proposals`` (with ``ON CONFLICT DO NOTHING`` against
 the partial unique index ``uq_maintenance_proposals_pending``).
 
-v1 rule set (one per ``LintType`` enum value, per AC-F6-6):
+v1 rule set (one per ``LintType`` enum value):
 
   - ``orphan_mental_model``         (structural)
   - ``cold_low_mw_unit``            (quality)
-  - ``sensitive_unreviewed_unit``   (governance, AC-F6-G1)
+  - ``sensitive_unreviewed_unit``   (governance, governance acceptance criteria)
   - ``dangling_entity_ref_in_unit`` (schema)
 
 The mw_score expression is the inline form of
@@ -54,7 +54,7 @@ logger = logging.getLogger('memex.core.services.lint')
 
 
 # ---------------------------------------------------------------------------
-# F8 — Read-side DTOs, cursor codec, and table-not-found signal
+# Read-side DTOs, cursor codec, and table-not-found signal
 # ---------------------------------------------------------------------------
 
 
@@ -62,7 +62,7 @@ _MAX_LIMIT = 200
 
 
 class LintSubsystemNotInitializedError(RuntimeError):
-    """Signals AC-F8-5: ``maintenance_proposals`` table is missing.
+    """Signals acceptance criteria: ``maintenance_proposals`` table is missing.
 
     The MCP/HTTP layer translates this into the documented error envelope
     so the agent gets a clear, actionable message ("run alembic upgrade").
@@ -70,7 +70,7 @@ class LintSubsystemNotInitializedError(RuntimeError):
 
     def __init__(self) -> None:
         super().__init__(
-            'F6 maintenance_proposals table is missing. '
+            'Maintenance proposals table is missing. '
             'Run `alembic upgrade head` to initialize the lint ledger.'
         )
 
@@ -115,7 +115,7 @@ class LintFindingsPage(BaseModel):
     """Shape-stable page envelope returned by :meth:`LintService.get_findings`.
 
     ``findings`` is always present (possibly empty); ``next_cursor`` is
-    always present (string or None). The agent surface (F8) MUST round-trip
+    always present (string or None). The agent surface MUST round-trip
     these fields verbatim — never collapse to a bare list or null.
     """
 
@@ -134,7 +134,7 @@ def _decode_cursor(cursor: str) -> tuple[datetime, UUID] | None:
 
     Returning None lets ``get_findings`` treat junk cursors as "page 1"
     rather than 500-ing — the cursor is opaque so agents can't reason
-    about its shape, and a stale cursor (e.g. across F8 redeploys)
+    about its shape, and a stale cursor (e.g. across redeploys)
     should degrade gracefully.
     """
     try:
@@ -448,7 +448,7 @@ class LintService(BaseService):
                 ctx.__enter__()
             result = await session.execute(text(spec.select_sql), {'vault_id': str(vault_id)})
             rows = result.mappings().all()
-            # F22 — bulk-fetch (confidence, evidence_count) for every candidate
+            # Bulk-fetch (confidence, evidence_count) for every candidate
             # so the gate predicate runs against an in-memory map rather than
             # firing one SELECT per row (former N+1; Hermes round-1 HIGH).
             confidence_map: dict[str, tuple[float, int]] = {}
@@ -653,8 +653,8 @@ class LintService(BaseService):
         by ``(created_at DESC, id DESC)`` so the cursor is total-order under
         concurrent inserts.
 
-        AC-F8-5 path — when the ``maintenance_proposals`` table is missing
-        (e.g. F8 ran before F6's migration applied) raises
+        Acceptance criteria path — when the ``maintenance_proposals`` table is missing
+        (e.g. the endpoint ran before the migration applied) raises
         :class:`LintSubsystemNotInitializedError`; the MCP/HTTP layer maps
         that to the documented error envelope.
         """

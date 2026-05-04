@@ -9,7 +9,7 @@ Keys must start with one of the valid namespace prefixes:
 - ``user:`` — per-user preferences
 - ``project:`` — per-project bindings
 - ``app:`` — per-application configuration
-- ``procedure:`` — procedural observations (F14)
+- ``procedure:`` — procedural observations
 
 The ``procedure:<verb>:<context-tag>`` namespace is special: writes use
 last-writer-wins on the active value with a ``version`` increment, and
@@ -344,7 +344,7 @@ class KVService(BaseService):
         context: str | None = None,
         limit: int = 5,
     ) -> list[dict[str, Any]]:
-        """F14 — Top procedure outcomes for a vault, ranked by Memory Worth.
+        """Top procedure outcomes for a vault, ranked by Memory Worth.
 
         Returns up to ``limit`` rows from ``procedure_outcomes`` joined to
         ``kv_entries`` for the given ``vault_id``, ordered by

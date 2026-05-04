@@ -603,7 +603,7 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
         default=0,
         sa_column=Column(Integer, nullable=False, server_default='0'),
         description=(
-            'F22: negative-evidence event count — how many times the contradiction '
+            'Negative-evidence event count — how many times the contradiction '
             'engine has weakened or contradicted this unit. Pairs with the closed-form '
             'Beta(1, 1) posterior at memex_core.memory.confidence.mean_and_variance to '
             'derive variance without storing it. Cold-start (count=0) → variance = 1/12.'
@@ -632,7 +632,7 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
         default=0,
         sa_column=Column(Integer, nullable=False, server_default='0'),
         description=(
-            'F20: consecutive Again-rating count for the sticky auto-deprioritize gate. '
+            'Consecutive Again-rating count for the sticky auto-deprioritize gate. '
             'Resets to 0 on Hard/Good/Easy.'
         ),
     )
@@ -641,7 +641,7 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
         default=None,
         sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
         description=(
-            'F20: wall-clock timestamp of the most recent review. Distinct from '
+            'Wall-clock timestamp of the most recent review. Distinct from '
             'revisit_due_at (next-due); FSRS-5 elapsed-days uses this column.'
         ),
     )
@@ -650,9 +650,9 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
         default=None,
         sa_column=Column(Float, nullable=True),
         description=(
-            'F11: importance signal derived from F25 intent_class at write time '
-            '(permanent=1.0, durable=0.7, ephemeral=0.3). NULL for pre-F25 '
-            'unclassified units; the F11 decay boost treats NULL as no signal '
+            'Importance signal derived from intent_class at write time '
+            '(permanent=1.0, durable=0.7, ephemeral=0.3). NULL for '
+            'unclassified units; the decay boost treats NULL as no signal '
             '-> neutral 1.0.'
         ),
     )
@@ -661,8 +661,8 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
         default=None,
         sa_column=Column(Float, nullable=True),
         description=(
-            'F11: per-intent-class stability in days (durable=180, ephemeral=14, '
-            'permanent=NULL meaning infinity). The F11 decay boost treats '
+            'Per-intent-class stability in days (durable=180, ephemeral=14, '
+            'permanent=NULL meaning infinity). The decay boost treats '
             'NULL as the stability -> infinity limit (decay term = 1.0).'
         ),
     )
@@ -671,8 +671,8 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
         default=None,
         sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
         description=(
-            'F11: wall-clock timestamp of the most recent record_outcome call. '
-            'NULL on units that have never had an outcome recorded; the F11 '
+            'Wall-clock timestamp of the most recent record_outcome call. '
+            'NULL on units that have never had an outcome recorded; the '
             'decay boost treats NULL as no temporal anchor -> neutral 1.0. '
             'Distinct from procedure_outcomes.last_outcome_at (separate table).'
         ),
@@ -1714,7 +1714,7 @@ class ProcedureOutcome(SQLModel, table=True):  # type: ignore
 
 
 # ---------------------------------------------------------------------------
-# F6 — Maintenance ledger (rule-based linter)
+# Maintenance ledger (rule-based linter)
 # ---------------------------------------------------------------------------
 
 
@@ -1737,12 +1737,12 @@ class LintSource(str, Enum):
 
 
 class MaintenanceProposal(SQLModel, table=True):  # type: ignore
-    """Finding ledger row emitted by the F6 LintService.
+    """Finding ledger row emitted by the LintService.
 
-    Read-only from the agent surface (F8). The unique partial index on
+    Read-only from the agent surface. The unique partial index on
     ``(rule_name, target_type, target_id, vault_id) WHERE status = 'pending'``
     makes ``LintService.run_rules`` idempotent on reruns. ``vault_id`` is
-    nullable per AC-F6-1 (NULL = global findings; reserved for Tier B).
+    nullable per acceptance criteria (NULL = global findings; reserved for Tier B).
     """
 
     __tablename__ = 'maintenance_proposals'
@@ -1839,11 +1839,11 @@ class MaintenanceProposal(SQLModel, table=True):  # type: ignore
 
 
 class ConsolidationTick(SQLModel, table=True):  # type: ignore
-    """One row per F38 ``consolidation_tick(vault_id)`` invocation.
+    """One row per ``consolidation_tick(vault_id)`` invocation.
 
-    F38's ``services/consolidation.py`` is a thin orchestrator over
+    ``services/consolidation.py`` is a thin orchestrator over
     reflection + contradiction + prune-stale-only; this row is its sole
-    DB write at the end of each tick (AC-F38-4). ``completed_at IS NULL``
+    DB write at the end of each tick (acceptance criteria). ``completed_at IS NULL``
     signals an in-progress tick; the gap between ``started_at`` and
     ``completed_at`` is wall-clock duration.
     """
@@ -1926,12 +1926,12 @@ class ConsolidationTick(SQLModel, table=True):  # type: ignore
 
 
 # ---------------------------------------------------------------------------
-# F10 — LLM lint quota (rolling-24h cost cap)
+# LLM lint quota (rolling-24h cost cap)
 # ---------------------------------------------------------------------------
 
 
 class LintLLMQuota(SQLModel, table=True):  # type: ignore
-    """Hour-bucket counter for the F10 24h-rolling cost cap.
+    """Hour-bucket counter for the 24h-rolling cost cap.
 
     One row per (vault_id, hour_bucket). The 24h rolling window is computed by
     summing the last 24 hour-buckets via the indexed range scan

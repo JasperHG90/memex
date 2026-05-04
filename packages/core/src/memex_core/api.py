@@ -613,7 +613,7 @@ class MemexAPI:
 
     @property
     def lint_llm(self) -> 'LintLLMService':
-        """F10 surprise-gated LLM lint service."""
+        """Surprise-gated LLM lint service."""
         return self._lint_llm
 
     @property
@@ -629,7 +629,7 @@ class MemexAPI:
     ) -> dict[str, Any]:
         """Re-evaluate memories for an entity under a per-entity advisory lock.
 
-        Facade for `LocksService.reconsolidate_entity` (F9).
+        Facade for `LocksService.reconsolidate_entity`.
         """
         return await self._locks.reconsolidate_entity(
             entity_id, vault_id, timeout_seconds=timeout_seconds
@@ -642,7 +642,7 @@ class MemexAPI:
         dry_run: bool = False,
         actor: str | None = None,
     ) -> dict[str, Any]:
-        """Vault-wide low-MW unit consolidation (F9 / RFC-008).
+        """Vault-wide low-MW unit consolidation (RFC-008).
 
         Facade for `LocksService.consolidate_vault`.
         """
@@ -756,7 +756,7 @@ class MemexAPI:
         cleanly on graceful server stop. Idempotent — safe to call multiple
         times. Currently closes:
 
-          * ``LocksService._pool`` — shared asyncpg pool used by F9 entity
+          * ``LocksService._pool`` — shared asyncpg pool used by entity
             locks (CRIT-1 fix).
         """
         try:
@@ -1088,7 +1088,7 @@ class MemexAPI:
         chunk_ids: list[UUID],
         vault_id: UUID,
     ) -> list[Any]:
-        """F46: get memory units belonging to the named chunks (vault-scoped)."""
+        """Get memory units belonging to the named chunks (vault-scoped)."""
         return await self._stats.get_memory_units_by_chunks(chunk_ids, vault_id)
 
     async def delete_memory_unit(self, unit_id: UUID) -> bool:
@@ -1146,7 +1146,7 @@ class MemexAPI:
         max_depth: int = 10,
         vault_id: UUID | None = None,
     ) -> UnitHistoryNodeDTO:
-        """F49: walk the contradiction graph backward from ``unit_id``.
+        """Walk the contradiction graph backward from ``unit_id``.
 
         Returns a ``UnitHistoryNodeDTO`` tree rooted at the queried unit
         (depth=0). v1 walks ``contradicts`` and ``weakens`` links only —
@@ -1165,7 +1165,7 @@ class MemexAPI:
         *,
         limit: int = 20,
     ) -> list[Any]:
-        """F20: list memory units due for revisit in `vault_id`. Delegates to RevisitationService."""
+        """List memory units due for revisit in `vault_id`. Delegates to RevisitationService."""
         return await self._revisit.list_due(vault_id, limit=limit)
 
     async def review_memory_unit(
@@ -1176,7 +1176,7 @@ class MemexAPI:
         vault_id: UUID,
         actor: UUID | None = None,
     ) -> dict[str, Any]:
-        """F20: record a review outcome on a memory unit. Delegates to RevisitationService."""
+        """Record a review outcome on a memory unit. Delegates to RevisitationService."""
         return await self._revisit.review(unit_id, quality, vault_id=vault_id, actor=actor)
 
     async def retrieve(self, request: RetrievalRequest) -> tuple[list[MemoryUnit], Any]:
@@ -1326,7 +1326,7 @@ class MemexAPI:
         scope: str = 'incremental',
         vault_id: UUID | None = None,
     ) -> ReflectionResult:
-        """F5: synchronous on-demand reflection (rate-limited per entity, vault).
+        """Synchronous on-demand reflection (rate-limited per entity, vault).
 
         Delegates to :meth:`ReflectionService.summarize_node`. Surfaces a
         ``RateLimitExceededError`` upward; surface adapters (MCP/Hermes/HTTP)
@@ -1353,7 +1353,7 @@ class MemexAPI:
     ) -> dict[str, Any]:
         """Record an outcome. Delegates to OutcomeService.
 
-        For ``target_type='kv_key'`` (F14), increments the vault-scoped
+        For ``target_type='kv_key'``, increments the vault-scoped
         success/failure counters on ``procedure_outcomes`` for ``kv_key``
         instead of memory units. See
         :meth:`OutcomeService.record_outcome` for the full contract.
@@ -1692,7 +1692,7 @@ class MemexAPI:
         context: str | None = None,
         limit: int = 5,
     ) -> list[dict[str, Any]]:
-        """F14 — Top procedure outcomes for a vault, ranked by MW score."""
+        """Top procedure outcomes for a vault, ranked by MW score."""
         return await self._kv.list_top_procedure_outcomes(
             vault_id=vault_id, context=context, limit=limit
         )

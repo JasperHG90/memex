@@ -1,4 +1,4 @@
-"""F10 LLM check factories — build runnable RunLLMCheck callables.
+"""LLM check factories — build runnable RunLLMCheck callables.
 
 Each factory binds a DSPy ``LM`` and signature into a coroutine matching
 :class:`memex_core.services.lint_llm.RunLLMCheck`. The coroutine:
@@ -134,12 +134,12 @@ def make_semantic_contradiction_check(
     unit. Surprise is recomputed inside the check so the evidence payload
     can carry it for downstream filtering / diagnostics.
 
-    F10b: when the orchestrator (:meth:`LintLLMService.maybe_run`) attaches a
+    When the orchestrator (:meth:`LintLLMService.maybe_run`) attaches a
     :class:`CheckContext` carrying a ``PolarityResult`` (because the
     cosine-OR-polarity gate cleared via the polarity branch), the check
     forwards the argmax label to the DSPy signature as ``polarity_hint``
     and adds the probabilities to ``extra_evidence``. With no context, the
-    check is byte-identical to its F10 behaviour.
+    check is byte-identical to its original behaviour.
     """
     predictor = dspy.Predict(CheckSemanticContradiction)
     sk = surprise_k if surprise_k is not None else k
@@ -152,7 +152,7 @@ def make_semantic_contradiction_check(
     ) -> LLMLintFinding | None:
         unit_text = await _load_unit_text(session, unit_id)
         if unit_text is None:
-            logger.warning('F10 semantic-contradiction: unit %s missing — skipping', unit_id)
+            logger.warning('Semantic-contradiction: unit %s missing — skipping', unit_id)
             return None
 
         related = await _load_top_k_related(session, unit_id, vault_id, k=k)
@@ -236,7 +236,7 @@ def make_schema_drift_check(
     ) -> LLMLintFinding | None:
         unit_text = await _load_unit_text(session, unit_id)
         if unit_text is None:
-            logger.warning('F10 schema-drift: unit %s missing — skipping', unit_id)
+            logger.warning('Schema-drift: unit %s missing — skipping', unit_id)
             return None
 
         sample = await _load_random_sample(session, unit_id, vault_id, k=k)

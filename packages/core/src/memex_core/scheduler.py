@@ -92,7 +92,7 @@ async def periodic_kv_ttl_cleanup_task(api: 'MemexAPI'):
 
 
 async def periodic_diagnostics_refresh_task(api: 'MemexAPI'):
-    """F32: weekly UMAP manifold refresh per vault under leader lock."""
+    """Weekly UMAP manifold refresh per vault under leader lock."""
     async with background_session('bg-sched-diagnostics-refresh'):
         try:
             vaults = await api.list_vaults()
@@ -127,7 +127,7 @@ async def periodic_diagnostics_refresh_task(api: 'MemexAPI'):
 
 
 async def periodic_lint_task(api: 'MemexAPI'):
-    """F6: per-vault lint run under existing MEMEX_LEADER_LOCK_ID."""
+    """Per-vault lint run under existing MEMEX_LEADER_LOCK_ID."""
     async with background_session('bg-sched-lint'):
         try:
             vaults = await api.list_vaults()
@@ -136,21 +136,21 @@ async def periodic_lint_task(api: 'MemexAPI'):
                     summary = await api.lint.run_rules(vault.id)
                     if summary.total_findings:
                         logger.info(
-                            'Scheduler: F6 lint emitted %d findings in vault %s',
+                            'Scheduler: Lint emitted %d findings in vault %s',
                             summary.total_findings,
                             vault.name,
                         )
                 except Exception as e:
                     logger.warning(f'Scheduler: Lint run failed for vault {vault.name}: {e}')
         except (OSError, RuntimeError, ValueError) as e:
-            logger.error(f'Scheduler: F6 lint task failed: {e}', exc_info=True)
+            logger.error(f'Scheduler: Lint task failed: {e}', exc_info=True)
 
 
 async def periodic_consolidation_task(api: 'MemexAPI', units_per_tick: int):
-    """F38: per-vault consolidation tick under the single leader lock.
+    """Per-vault consolidation tick under the single leader lock.
 
     Sequential per-vault iteration — per-vault parallelism is intentionally
-    out of scope (Wave 0: only F9 introduces additional advisory locks).
+    out of scope.
     Per-vault failures are warning-logged and never raise — one bad vault
     must not stop other vaults from being consolidated this tick.
     """
@@ -169,7 +169,7 @@ async def periodic_consolidation_task(api: 'MemexAPI', units_per_tick: int):
 
 
 async def periodic_revisit_task(api: 'MemexAPI'):
-    """F20: per-vault revisit-schedule populator under existing MEMEX_LEADER_LOCK_ID.
+    """Per-vault revisit-schedule populator under existing MEMEX_LEADER_LOCK_ID.
 
     Walks every vault and seeds `revisit_due_at` for never-evaluated eligible
     units. Idempotent — already-scheduled units and previously-evaluated-and-
@@ -187,20 +187,20 @@ async def periodic_revisit_task(api: 'MemexAPI'):
                     scheduled = await api.revisit.populate_initial_schedules(vault.id)
                     if scheduled:
                         logger.info(
-                            'Scheduler: F20 revisit scheduled %d unit(s) in vault %s',
+                            'Scheduler: Revisit scheduled %d unit(s) in vault %s',
                             scheduled,
                             vault.name,
                         )
                 except Exception as e:
                     logger.warning(
-                        f'Scheduler: F20 revisit populator failed for vault {vault.name}: {e}'
+                        f'Scheduler: Revisit populator failed for vault {vault.name}: {e}'
                     )
         except (OSError, RuntimeError, ValueError) as e:
-            logger.error(f'Scheduler: F20 revisit task failed: {e}', exc_info=True)
+            logger.error(f'Scheduler: Revisit task failed: {e}', exc_info=True)
 
 
 async def periodic_lint_llm_task(api: 'MemexAPI'):
-    """F10: per-vault surprise-gated LLM lint under MEMEX_LEADER_LOCK_ID.
+    """Per-vault surprise-gated LLM lint under MEMEX_LEADER_LOCK_ID.
 
     Runs the enabled DSPy lint signatures per RFC-006 Option (A): semantic
     contradiction + schema drift. Both share the same 24h cost cap, so the
@@ -234,8 +234,7 @@ async def periodic_lint_llm_task(api: 'MemexAPI'):
                 )
         except Exception as e:
             logger.warning(
-                'Scheduler: F10b NLI classifier load failed (%s); '
-                'falling back to F10 cosine-only gate',
+                'Scheduler: NLI classifier load failed (%s); falling back to cosine-only gate',
                 e,
             )
 
@@ -251,7 +250,7 @@ async def periodic_lint_llm_task(api: 'MemexAPI'):
         checks.append(('schema_drift', make_schema_drift_check(api.lm, k=settings.surprise_k)))
 
     if not checks:
-        logger.info('Scheduler: F10 lint_llm — no checks enabled, skipping tick')
+        logger.info('Scheduler: Lint_llm — no checks enabled, skipping tick')
         return
 
     async with background_session('bg-sched-lint-llm'):
@@ -275,7 +274,7 @@ async def periodic_lint_llm_task(api: 'MemexAPI'):
                             or summary.deferred_processed
                         ):
                             logger.info(
-                                'Scheduler: F10 lint_llm[%s] vault=%s: '
+                                'Scheduler: Lint_llm[%s] vault=%s: '
                                 'evaluated=%d emitted=%d deferred=%d processed_deferred=%d',
                                 check_name,
                                 vault.name,
@@ -286,13 +285,13 @@ async def periodic_lint_llm_task(api: 'MemexAPI'):
                             )
                     except Exception as e:
                         logger.warning(
-                            'Scheduler: F10 lint_llm[%s] failed for vault %s: %s',
+                            'Scheduler: Lint_llm[%s] failed for vault %s: %s',
                             check_name,
                             vault.name,
                             e,
                         )
         except (OSError, RuntimeError, ValueError) as e:
-            logger.error(f'Scheduler: F10 lint_llm task failed: {e}', exc_info=True)
+            logger.error(f'Scheduler: Lint_llm task failed: {e}', exc_info=True)
 
 
 async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI'):
@@ -336,13 +335,13 @@ async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI
 
     # ============================================================
     # Tier A — Scheduler tasks (under MEMEX_LEADER_LOCK_ID)
-    # F6 lint task:                WS-linter
-    # F20 revisit seed task:       WS-revisit
-    # F32 diagnostics refresh:     WS-diagnostics
-    # F38 consolidation tick:      WS-quick-wins
+    # Lint task:                WS-linter
+    # Revisit seed task:       WS-revisit
+    # Diagnostics refresh:     WS-diagnostics
+    # Consolidation tick:      WS-quick-wins
     # ============================================================
 
-    # --- F6 lint ---       (filled by WS-linter)
+    # --- Lint ---       (filled by WS-linter)
     if config.server.memory.lint.enabled:
         lint_interval = config.server.memory.lint.interval_seconds
 
@@ -350,11 +349,11 @@ async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI
         async def run_lint_job():
             await periodic_lint_task(api)
 
-    # --- F10 lint_llm ---  (filled by WS-linter)
+    # --- Lint_llm ---  (filled by WS-linter)
     lint_llm_cfg = config.server.memory.lint_llm
     if lint_llm_cfg.enabled and lint_llm_cfg.cost_cap_per_24h > 0:
         logger.info(
-            f'Scheduler: F10 lint_llm enabled. '
+            f'Scheduler: Lint_llm enabled. '
             f'Interval: {lint_llm_cfg.interval_seconds}s. '
             f'Cap: {lint_llm_cfg.cost_cap_per_24h}/24h/vault. '
             f'Threshold: {lint_llm_cfg.surprise_threshold}.'
@@ -364,9 +363,9 @@ async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI
         async def run_lint_llm_job():
             await periodic_lint_llm_task(api)
     else:
-        logger.info('Scheduler: F10 lint_llm DISABLED (enabled=False or cost_cap_per_24h=0).')
+        logger.info('Scheduler: Lint_llm DISABLED (enabled=False or cost_cap_per_24h=0).')
 
-    # --- F20 revisit ---   (filled by WS-revisit)
+    # --- Revisit ---   (filled by WS-revisit)
     if config.server.memory.revisit.enabled:
         revisit_interval = config.server.memory.revisit.interval_seconds
 
@@ -374,16 +373,16 @@ async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI
         async def run_revisit_job():
             await periodic_revisit_task(api)
 
-    # --- F32 diagnostics --- (filled by WS-diagnostics)
+    # --- Diagnostics --- (filled by WS-diagnostics)
     @clock.task(trigger=Every(seconds=7 * 86400))
     async def run_diagnostics_refresh():
         await periodic_diagnostics_refresh_task(api)
 
-    # --- F38 consolidation --- (filled by WS-quick-wins)
+    # --- Consolidation --- (filled by WS-quick-wins)
     consolidation_cfg = config.server.memory.consolidation
     if consolidation_cfg.enabled:
         logger.info(
-            f'Scheduler: F38 consolidation enabled. '
+            f'Scheduler: Consolidation enabled. '
             f'Cadence: {consolidation_cfg.cadence_seconds}s. '
             f'Budget: {consolidation_cfg.units_per_tick} units/tick.'
         )
@@ -392,7 +391,7 @@ async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI
         async def run_consolidation_job():
             await periodic_consolidation_task(api, consolidation_cfg.units_per_tick)
     else:
-        logger.info('Scheduler: F38 consolidation DISABLED via config.')
+        logger.info('Scheduler: Consolidation DISABLED via config.')
 
     # asyncpg requires a plain postgresql:// DSN (no +asyncpg driver suffix)
     sa_url = make_url(config.server.meta_store.instance.connection_string)

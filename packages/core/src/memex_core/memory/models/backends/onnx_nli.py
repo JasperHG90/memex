@@ -1,4 +1,4 @@
-"""ONNX-backed NLI classifier (F10b).
+"""ONNX-backed NLI classifier.
 
 Wraps a cross-encoder NLI model (default ``cross-encoder/nli-deberta-v3-small``)
 with the same ``BaseOnnxModel`` substrate that ``FastReranker`` / ``FastEmbedder``
@@ -99,12 +99,12 @@ class OnnxNLIClassifier(BaseOnnxModel):
         ):
             raise ValueError(
                 f'NLI model config.json declares id2label={config_label_order} '
-                f'but the F10b default expects {_LABEL_ORDER}. Pass an explicit '
+                f'but the default expects {_LABEL_ORDER}. Pass an explicit '
                 "label_order=... to opt in to the model's ordering."
             )
         self._label_order = effective
         # ONNX Runtime documents `Run()` as thread-safe on a shared session,
-        # but `_score_pair` is invoked via `asyncio.to_thread` and the F10
+        # but `_score_pair` is invoked via `asyncio.to_thread` and the
         # scheduler can drive multiple vault ticks; serialise inference with
         # a `threading.Lock` so the path is safe under any provider/runtime
         # where that guarantee weakens (e.g. some EP combinations).
