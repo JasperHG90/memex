@@ -631,19 +631,19 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
     revisit_due_at: datetime | None = Field(
         default=None,
         sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
-        description='F20: when this unit is next due for FSRS-5 review (NULL if not scheduled).',
+        description='When this unit is next due for FSRS-5 review (NULL if not scheduled).',
     )
 
     revisit_stability: float | None = Field(
         default=None,
         sa_column=Column(Float, nullable=True),
-        description='F20: FSRS-5 stability state (NULL until first review).',
+        description='FSRS-5 stability state (NULL until first review).',
     )
 
     revisit_difficulty: float | None = Field(
         default=None,
         sa_column=Column(Float, nullable=True),
-        description='F20: FSRS-5 difficulty state (NULL until first review).',
+        description='FSRS-5 difficulty state (NULL until first review).',
     )
 
     revisit_review_count: int = Field(
@@ -1811,7 +1811,7 @@ class MaintenanceProposal(SQLModel, table=True):  # type: ignore
     source: LintSource = Field(
         default=LintSource.RULE,
         sa_column=Column(Text, nullable=False, server_default=sql_text("'rule'")),
-        description='Whether the finding came from a SQL rule or an LLM check (F10).',
+        description='Whether the finding came from a SQL rule or an LLM check.',
     )
     created_at: datetime = created_at_field()
     resolved_at: datetime | None = Field(

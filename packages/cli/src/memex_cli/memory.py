@@ -244,7 +244,7 @@ async def reconsolidate_memory(
         typer.Option('--vault', '-v', help='Vault UUID (required for vault-scoped resolution).'),
     ],
 ):
-    """F9: re-evaluate memories for an entity under a per-entity advisory lock.
+    """Re-evaluate memories for an entity under a per-entity advisory lock.
 
     Runs contradiction detection across all units linked to the entity, then
     triggers reflection. LLM-intensive — use only when there is concrete
@@ -277,7 +277,7 @@ async def consolidate_memory(
         typer.Option('--dry-run', help='Preview without making changes.'),
     ] = False,
 ):
-    """F9: vault-wide low-MW unit consolidation. Use sparingly (e.g., monthly per vault).
+    """Vault-wide low-MW unit consolidation. Use sparingly (e.g., monthly per vault).
 
     For per-entity hygiene, prefer `memex memory reconsolidate`.
     """

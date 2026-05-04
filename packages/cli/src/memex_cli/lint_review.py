@@ -1,4 +1,4 @@
-"""F7 — interactive prompt loop for ``memex lint review``.
+"""Interactive prompt loop for ``memex lint review``.
 
 Pure UX layer. Reads pending findings via the same client method as
 ``memex lint findings``; for each one, renders a per-finding card and

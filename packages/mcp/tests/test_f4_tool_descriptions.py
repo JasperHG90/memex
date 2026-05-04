@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import pytest
 
-from memex_mcp._f4_descriptions import (
+from memex_mcp._deprioritize_descriptions import (
     MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION,
     MEMEX_MEMORY_RESTORE_DESCRIPTION,
 )

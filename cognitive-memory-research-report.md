@@ -1016,7 +1016,7 @@ record success=false. This is how Memex avoids rich-get-richer dynamics.
 
 > **Status:** Implemented (2026-05-03, branch `wave-14/F3-layer-formalization`).
 > Canonical primer constants live in
-> `packages/mcp/src/memex_mcp/_f3_descriptions.py`
+> `packages/mcp/src/memex_mcp/_layer_primer_descriptions.py`
 > (`LAYER_ROUTING_PRIMER_PROSE` / `LAYER_ROUTING_PRIMER_TABLE` /
 > `LAYER_ROUTING_PRIMER_FRAGMENT`); the 4 agent surfaces (MCP server, Hermes
 > briefing + templates, Claude Code rule, root `CLAUDE.md`) are pinned by

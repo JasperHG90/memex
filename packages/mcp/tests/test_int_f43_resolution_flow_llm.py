@@ -37,7 +37,7 @@ from typing import Any
 
 import pytest
 
-from memex_mcp._f43_descriptions import (
+from memex_mcp._resolution_flow_descriptions import (
     MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION,
     MEMEX_RECORD_OUTCOME_DESCRIPTION,
 )

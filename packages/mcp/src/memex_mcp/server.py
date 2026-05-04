@@ -27,7 +27,7 @@ import json
 from pydantic import BeforeValidator, Field
 
 from memex_mcp.lifespan import lifespan, get_api, get_asset_cache, get_config
-from memex_mcp._f3_descriptions import (
+from memex_mcp._layer_primer_descriptions import (
     LAYER_ROUTING_PRIMER_PROSE as _F3_LAYER_ROUTING_PRIMER_PROSE,
 )
 from memex_mcp.models import (
@@ -1669,7 +1669,7 @@ async def memex_memory_search(
         Field(
             default=True,
             description=(
-                'F40 pre-reranker MW/FSFM filter at hydration. Default True drops '
+                'Pre-reranker MW/FSFM filter at hydration. Default True drops '
                 'obviously-failed (low Memory Worth) or decayed candidates before the '
                 'cross-encoder runs. Set False for HISTORICAL / AUDIT / LINEAGE queries '
                 '("how has my view on X evolved", "show me everything I used to think '
@@ -3687,7 +3687,7 @@ async def memex_get_vault_summary(
         raise ToolError(f'Get vault summary failed: {e}')
 
 
-from memex_mcp._f43_descriptions import (
+from memex_mcp._resolution_flow_descriptions import (
     MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION as _F43_MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION,
     MEMEX_RECORD_OUTCOME_DESCRIPTION as _F43_MEMEX_RECORD_OUTCOME_DESCRIPTION,
 )
@@ -3747,7 +3747,7 @@ async def memex_record_outcome(
             default='memory_unit',
             description=(
                 'What the outcome scores. "memory_unit" (default) increments '
-                'MW counters on memory units in unit_ids. "kv_key" (F14) '
+                'MW counters on memory units in unit_ids. "kv_key" '
                 'increments vault-scoped counters on the procedure_outcomes '
                 'row for kv_key.'
             ),
@@ -3821,7 +3821,7 @@ if __name__ == '__main__':
 
 # --- F4 ---  (filled by WS-quick-wins)
 
-from memex_mcp._f4_descriptions import (
+from memex_mcp._deprioritize_descriptions import (
     MEMEX_MEMORY_RESTORE_DESCRIPTION,
 )
 
@@ -3928,7 +3928,7 @@ async def memex_memory_restore(
 
 # --- F5 ---  (filled by WS-quick-wins)
 
-from memex_mcp._f5_descriptions import MEMEX_MEMORY_SUMMARIZE_NODE_DESCRIPTION
+from memex_mcp._summarize_descriptions import MEMEX_MEMORY_SUMMARIZE_NODE_DESCRIPTION
 
 
 @mcp.tool(
@@ -3998,7 +3998,7 @@ async def memex_memory_summarize_node(
 
 # --- F8 ---  (filled by WS-linter)
 
-from memex_mcp._f8_descriptions import MEMEX_GET_LINT_FLAGS_DESCRIPTION
+from memex_mcp._lint_flags_descriptions import MEMEX_GET_LINT_FLAGS_DESCRIPTION
 
 
 @mcp.tool(
@@ -4035,7 +4035,7 @@ async def memex_get_lint_flags(
         Field(description='Opaque cursor from a prior page; omit on first call.'),
     ] = None,
 ) -> dict[str, Any]:
-    """F8 read-only surface: list pending memory-hygiene findings.
+    """Read-only surface: list pending memory-hygiene findings.
 
     HIGH-006: previously a missing ``vault_id`` would fall through to a
     global all-vault view, leaking findings across tenants. The tool now
@@ -4077,7 +4077,7 @@ async def memex_get_lint_flags(
 
 # --- F9 ---  (filled by WS-locks)
 
-from memex_mcp._f9_descriptions import (
+from memex_mcp._reconsolidate_descriptions import (
     MEMEX_MEMORY_CONSOLIDATE_DESCRIPTION,
     MEMEX_MEMORY_RECONSOLIDATE_DESCRIPTION,
 )
@@ -4097,7 +4097,7 @@ async def memex_memory_reconsolidate(
         str, Field(description='Vault UUID — required for vault-scoped resolution.')
     ],
 ) -> dict[str, Any]:
-    """F9: re-evaluate memories on an entity under a per-entity advisory lock."""
+    """Re-evaluate memories on an entity under a per-entity advisory lock."""
     try:
         api = get_api(ctx)
         try:
@@ -4140,11 +4140,11 @@ async def memex_memory_consolidate(
         Field(description='If true, return preview without making changes.'),
     ] = False,
 ) -> dict[str, Any]:
-    """F9: vault-wide low-MW unit consolidation.
+    """Vault-wide low-MW unit consolidation.
 
     Rate-limited per vault (RFC-008 line 125; default 1 call per vault per
     hour). On 429 the tool returns a structured envelope with
-    ``retry_after_seconds`` rather than raising — mirrors the F5
+    ``retry_after_seconds`` rather than raising — mirrors the
     summarize-node contract so agents can back off without retry loops.
     """
     from memex_common.client import RateLimitExceeded
@@ -4173,7 +4173,7 @@ async def memex_memory_consolidate(
 
 # --- F20 --- (filled by WS-revisit)
 
-from memex_mcp._f20_descriptions import (
+from memex_mcp._revisit_descriptions import (
     MEMEX_GET_DUE_FOR_REVIEW_DESCRIPTION,
     MEMEX_MEMORY_REVIEW_DESCRIPTION,
 )
@@ -4300,8 +4300,8 @@ async def memex_memory_review(
     description=(
         'Vault diagnostics summary: unit counts by status (active/stale/deprioritized), '
         'lint pending counts by type, cluster_count (null on cold cache), avg MW score, '
-        'and top-5 retrieved entities. Synchronous (no UMAP block) — surfaces F32 manifold '
-        'status without waiting on compute.'
+        'and top-5 retrieved entities. Synchronous (no UMAP block) — surfaces '
+        'manifold status without waiting on compute.'
     ),
     tags={'diagnostics'},
     annotations={'readOnlyHint': True},
@@ -4314,7 +4314,7 @@ async def memex_get_diagnostics_summary(
         Field(description='Vault UUID or name.'),
     ],
 ) -> dict[str, Any]:
-    """Return the F32 diagnostics summary for a vault."""
+    """Return the diagnostics summary for a vault."""
     try:
         api = get_api(ctx)
         resolved_vault_id = await _resolve_vault_id(api, vault_id)

@@ -1,10 +1,10 @@
-"""F32 — `memex diagnostics` CLI subgroup.
+"""`memex diagnostics` CLI subgroup.
 
 Subcommands:
 - manifold   — emit UMAP projection JSON (or 202 task info)
 - retrieval  — emit top-N entities heatmap JSON
 - summary    — emit full diagnostics summary JSON
-- lint       — emit lint-finding pivot JSON (F26)
+- lint       — emit lint-finding pivot JSON
 """
 
 from __future__ import annotations
@@ -22,7 +22,7 @@ console = Console()
 
 app = typer.Typer(
     name='diagnostics',
-    help='F32 — Diagnostics (UMAP manifold, retrieval heatmap, vault summary).',
+    help='Diagnostics (UMAP manifold, retrieval heatmap, vault summary).',
     no_args_is_help=True,
 )
 
@@ -94,7 +94,7 @@ async def lint_cmd(
     ctx: typer.Context,
     vault: Annotated[str, typer.Option('--vault', help='Vault name or ID.')],
 ):
-    """Print the lint-finding pivot JSON (F26).
+    """Print the lint-finding pivot JSON.
 
     Surfaces the (lint_type, status, source) pivot, the pending-by-type slice,
     and the top-5 most-recent pending findings for the vault. Distinct from

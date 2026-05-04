@@ -720,7 +720,7 @@ class RetrievalEngine:
         # ε=0.05) that don't end up injecting.
         if final_results and self.retrieval_config.exploration_epsilon > 0:
             from memex_core.memory.retrieval.exploration import inject_exploration_units
-            from memex_core.metrics import F33_EXPLORATION_INJECTED_TOTAL
+            from memex_core.metrics import EXPLORATION_INJECTED_TOTAL
 
             should_inject = self._rng.random() < self.retrieval_config.exploration_epsilon
 
@@ -759,7 +759,7 @@ class RetrievalEngine:
                     )
                     injected = len(final_results) - pre_inject_count
                     if injected > 0:
-                        F33_EXPLORATION_INJECTED_TOTAL.inc(injected)
+                        EXPLORATION_INJECTED_TOTAL.inc(injected)
 
         # 10. Collect resonance update info (deferred to background)
         t0 = _t()

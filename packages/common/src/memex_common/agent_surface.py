@@ -5,7 +5,7 @@ strings that must stay byte-identical across more than one agent surface
 (per the agent-surface parity rule in CLAUDE.md). Surfaces import from
 here; they do NOT redeclare the same text locally.
 
-Currently exports (F3 — 4-layer memory-routing primer):
+Currently exports (4-layer memory-routing primer):
 - ``LAYER_ROUTING_PRIMER_PROSE`` — compact prose for MCP tool descriptions
 - ``LAYER_ROUTING_PRIMER_TABLE`` — markdown table for Hermes briefing /
   Claude Code rule / CLAUDE.md

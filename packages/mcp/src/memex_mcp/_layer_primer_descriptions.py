@@ -1,4 +1,4 @@
-"""Verbatim agent prompt text for F3 — 4-layer memory-routing primer.
+"""Verbatim agent prompt text for 4-layer memory-routing primer.
 
 The canonical strings live in ``memex_common.agent_surface`` so all four
 agent surfaces (MCP, Hermes briefing, Hermes templates, Claude Code rule)
@@ -11,7 +11,7 @@ bare ``from memex_common.agent_surface import ...`` line scattered through
 shim and import directly from ``memex_common.agent_surface``.
 
 Sourced from cognitive-memory-research-report.md §2.3 (Memory types and
-how Memex covers them) + §4 F3 ("Agent prompt text"). When the spec
+how Memex covers them) + §4 ("Agent prompt text"). When the spec
 changes, edit ``memex_common/agent_surface.py``; the parity test in
 ``packages/hermes-plugin/tests/test_f3_layer_primer_parity.py`` will fail
 until every surface is updated.
