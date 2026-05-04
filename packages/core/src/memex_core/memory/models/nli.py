@@ -66,6 +66,11 @@ async def get_nli_model(config: NLIPolarityConfig | None = None) -> NLIClassifie
         return None
 
     if isinstance(backend, OnnxBackend) or backend is None:
+        if backend is None:
+            logger.warning(
+                'NLI backend is None — defaulting to ONNX. '
+                'Set backend.type explicitly to avoid this warning.'
+            )
         if _onnx_nli_cache is not None:
             return _onnx_nli_cache
 
@@ -94,6 +99,9 @@ async def get_nli_model(config: NLIPolarityConfig | None = None) -> NLIClassifie
     if isinstance(backend, LitellmNLIBackend):
         from memex_core.memory.models.backends.litellm_nli import LiteLLMNLI
 
+        # Intentionally not cached: LiteLLMNLI is stateless (no ONNX session),
+        # cheap to construct, and callers already rate-limit NLI invocations
+        # via PolarityRateLimiter.
         return LiteLLMNLI(backend)
 
     raise ValueError(f'Unknown NLI backend: {type(backend)}')
