@@ -19,6 +19,21 @@ console = Console()
 DEFAULT_SERVER = 'http://localhost:8001/api/v1/'
 
 
+def _make_recorder(
+    mlflow_uri: str | None,
+    mlflow_experiment: str,
+    mlflow_run_name: str | None,
+):
+    """Build a recorder from CLI options, returning NullRecorder if disabled."""
+    from memex_eval.recorders import get_recorder
+
+    return get_recorder(
+        mlflow_uri=mlflow_uri,
+        mlflow_experiment=mlflow_experiment,
+        mlflow_run_name=mlflow_run_name,
+    )
+
+
 @app.command()
 def run(
     server: str = typer.Option(DEFAULT_SERVER, '--server', '-s', help='Memex API server URL.'),
@@ -32,6 +47,23 @@ def run(
         None, '--judge-model', help='Override the LLM judge model.'
     ),
     output: str | None = typer.Option(None, '--output', '-o', help='Export results to JSON file.'),
+    mlflow_uri: str | None = typer.Option(
+        None,
+        '--mlflow-uri',
+        envvar='MLFLOW_TRACKING_URI',
+        help='Optional MLflow tracking URI.',
+    ),
+    mlflow_experiment: str = typer.Option(
+        'memex-eval',
+        '--mlflow-experiment',
+        envvar='MEMEX_EVAL_MLFLOW_EXPERIMENT',
+        help='MLflow experiment name.',
+    ),
+    mlflow_run_name: str | None = typer.Option(
+        None,
+        '--mlflow-run-name',
+        help='Override default MLflow run name.',
+    ),
     verbose: bool = typer.Option(False, '--verbose', '-v', help='Enable verbose logging.'),
 ) -> None:
     """Run the internal quality benchmark against a Memex server."""
@@ -40,21 +72,55 @@ def run(
     from memex_eval.internal.runner import run_benchmark
     from memex_eval.report import print_report, export_json
 
-    result = asyncio.run(
-        run_benchmark(
-            server_url=server,
-            group_filter=group,
-            use_llm_judge=not no_llm_judge,
-            judge_model=judge_model,
+    recorder = _make_recorder(mlflow_uri, mlflow_experiment, mlflow_run_name)
+
+    with recorder:
+        recorder.start_run()
+        recorder.log_params(
+            {
+                'benchmark': 'internal',
+                'server_url': server,
+                'group_filter': group or 'all',
+                'use_llm_judge': str(not no_llm_judge),
+                'judge_model': judge_model or 'default',
+            }
         )
-    )
 
-    print_report(result)
+        result = asyncio.run(
+            run_benchmark(
+                server_url=server,
+                group_filter=group,
+                use_llm_judge=not no_llm_judge,
+                judge_model=judge_model,
+            )
+        )
 
-    if output:
-        export_json(result, output)
+        print_report(result)
 
-    # Exit with non-zero if any checks failed
+        if output:
+            export_json(result, output)
+            recorder.log_artifact(output)
+
+        # Log metrics from BenchmarkResult.to_dict()
+        summary = result.to_dict()['summary']
+        recorder.log_metrics(
+            {
+                'summary.pass_rate': summary['pass_rate'],
+                'summary.duration_ms': summary.get('duration_ms', 0),
+            }
+        )
+        for group_data in result.to_dict()['groups']:
+            prefix = f'groups.{group_data["name"]}'
+            recorder.log_metrics(
+                {
+                    f'{prefix}.pass_rate': group_data['pass_rate'],
+                    f'{prefix}.passed': group_data['passed'],
+                    f'{prefix}.failed': group_data['failed'],
+                    f'{prefix}.ingest_duration_ms': group_data.get('ingest_duration_ms', 0),
+                    f'{prefix}.reflection_duration_ms': group_data.get('reflection_duration_ms', 0),
+                }
+            )
+
     if result.total_failed > 0 or result.total_errored > 0:
         raise typer.Exit(code=1)
 
@@ -67,6 +133,18 @@ def locomo_ingest_cmd(
     server: str = typer.Option(DEFAULT_SERVER, '--server', '-s', help='Memex API server URL.'),
     conversation: int = typer.Option(0, '--conversation', '-c', help='Conversation index (0-9).'),
     clean: bool = typer.Option(False, '--clean', help='Delete existing notes and re-ingest.'),
+    mlflow_uri: str | None = typer.Option(
+        None,
+        '--mlflow-uri',
+        envvar='MLFLOW_TRACKING_URI',
+        help='Optional MLflow tracking URI.',
+    ),
+    mlflow_experiment: str = typer.Option(
+        'memex-eval',
+        '--mlflow-experiment',
+        envvar='MEMEX_EVAL_MLFLOW_EXPERIMENT',
+    ),
+    mlflow_run_name: str | None = typer.Option(None, '--mlflow-run-name'),
     verbose: bool = typer.Option(False, '--verbose', '-v', help='Enable verbose logging.'),
 ) -> None:
     """Phase 0: Ingest LoCoMo conversation sessions into Memex."""
@@ -74,14 +152,25 @@ def locomo_ingest_cmd(
 
     from memex_eval.external.locomo_ingest import ingest_locomo
 
-    asyncio.run(
-        ingest_locomo(
-            server_url=server,
-            dataset_path=dataset_path,
-            conversation_index=conversation,
-            clean=clean,
+    recorder = _make_recorder(mlflow_uri, mlflow_experiment, mlflow_run_name)
+
+    with recorder:
+        recorder.start_run()
+        recorder.log_params(
+            {
+                'benchmark': 'locomo',
+                'phase': 'ingest',
+                'conversation_index': conversation,
+            }
         )
-    )
+        asyncio.run(
+            ingest_locomo(
+                server_url=server,
+                dataset_path=dataset_path,
+                conversation_index=conversation,
+                clean=clean,
+            )
+        )
 
 
 @app.command('locomo-export')
@@ -95,6 +184,18 @@ def locomo_export_cmd(
     ),
     seed: int = typer.Option(42, '--seed', help='Random seed for sampling.'),
     conversation: int = typer.Option(0, '--conversation', '-c', help='Conversation index (0-9).'),
+    mlflow_uri: str | None = typer.Option(
+        None,
+        '--mlflow-uri',
+        envvar='MLFLOW_TRACKING_URI',
+        help='Optional MLflow tracking URI.',
+    ),
+    mlflow_experiment: str = typer.Option(
+        'memex-eval',
+        '--mlflow-experiment',
+        envvar='MEMEX_EVAL_MLFLOW_EXPERIMENT',
+    ),
+    mlflow_run_name: str | None = typer.Option(None, '--mlflow-run-name'),
     verbose: bool = typer.Option(False, '--verbose', '-v', help='Enable verbose logging.'),
 ) -> None:
     """Phase 1: Export LoCoMo questions to JSONL."""
@@ -102,13 +203,25 @@ def locomo_export_cmd(
 
     from memex_eval.external.locomo_export import export_questions
 
-    export_questions(
-        dataset_path=dataset_path,
-        output=output,
-        limit=limit,
-        seed=seed,
-        conversation_index=conversation,
-    )
+    recorder = _make_recorder(mlflow_uri, mlflow_experiment, mlflow_run_name)
+
+    with recorder:
+        recorder.start_run()
+        recorder.log_params(
+            {
+                'benchmark': 'locomo',
+                'phase': 'export',
+                'conversation_index': conversation,
+            }
+        )
+        export_questions(
+            dataset_path=dataset_path,
+            output=output,
+            limit=limit,
+            seed=seed,
+            conversation_index=conversation,
+        )
+        recorder.log_artifact(output)
 
 
 @app.command('locomo-answer')
@@ -124,6 +237,18 @@ def locomo_answer_cmd(
     ),
     output: str = typer.Option('answers.jsonl', '--output', '-o', help='Output answers JSONL.'),
     server: str = typer.Option(DEFAULT_SERVER, '--server', '-s', help='Memex API server URL.'),
+    mlflow_uri: str | None = typer.Option(
+        None,
+        '--mlflow-uri',
+        envvar='MLFLOW_TRACKING_URI',
+        help='Optional MLflow tracking URI.',
+    ),
+    mlflow_experiment: str = typer.Option(
+        'memex-eval',
+        '--mlflow-experiment',
+        envvar='MEMEX_EVAL_MLFLOW_EXPERIMENT',
+    ),
+    mlflow_run_name: str | None = typer.Option(None, '--mlflow-run-name'),
     verbose: bool = typer.Option(False, '--verbose', '-v', help='Enable verbose logging.'),
 ) -> None:
     """Phase 2: Answer LoCoMo questions using a curated CLI agent."""
@@ -131,12 +256,24 @@ def locomo_answer_cmd(
 
     from memex_eval.external.locomo_answer import AnswerMethod, answer_questions
 
-    answer_questions(
-        method=AnswerMethod(method),
-        questions_path=questions,
-        output_path=output,
-        server_url=server,
-    )
+    recorder = _make_recorder(mlflow_uri, mlflow_experiment, mlflow_run_name)
+
+    with recorder:
+        recorder.start_run()
+        recorder.log_params(
+            {
+                'benchmark': 'locomo',
+                'phase': 'answer',
+                'method': method,
+            }
+        )
+        answer_questions(
+            method=AnswerMethod(method),
+            questions_path=questions,
+            output_path=output,
+            server_url=server,
+        )
+        recorder.log_artifact(output)
 
 
 @app.command('locomo-judge')
@@ -149,6 +286,18 @@ def locomo_judge_cmd(
     judge_model: str | None = typer.Option(
         None, '--judge-model', help='Override the LLM judge model.'
     ),
+    mlflow_uri: str | None = typer.Option(
+        None,
+        '--mlflow-uri',
+        envvar='MLFLOW_TRACKING_URI',
+        help='Optional MLflow tracking URI.',
+    ),
+    mlflow_experiment: str = typer.Option(
+        'memex-eval',
+        '--mlflow-experiment',
+        envvar='MEMEX_EVAL_MLFLOW_EXPERIMENT',
+    ),
+    mlflow_run_name: str | None = typer.Option(None, '--mlflow-run-name'),
     verbose: bool = typer.Option(False, '--verbose', '-v', help='Enable verbose logging.'),
 ) -> None:
     """Phase 3: Judge LoCoMo answers and produce a graded report."""
@@ -156,14 +305,26 @@ def locomo_judge_cmd(
 
     from memex_eval.external.locomo_judge import judge_answers
 
-    asyncio.run(
-        judge_answers(
-            questions_path=questions,
-            answers_path=answers,
-            output_path=output,
-            judge_model=judge_model,
+    recorder = _make_recorder(mlflow_uri, mlflow_experiment, mlflow_run_name)
+
+    with recorder:
+        recorder.start_run()
+        recorder.log_params(
+            {
+                'benchmark': 'locomo',
+                'phase': 'judge',
+                'judge_model': judge_model or 'default',
+            }
         )
-    )
+        asyncio.run(
+            judge_answers(
+                questions_path=questions,
+                answers_path=answers,
+                output_path=output,
+                judge_model=judge_model,
+            )
+        )
+        recorder.log_artifact(output)
 
 
 @app.command('locomo-report')
@@ -178,6 +339,18 @@ def locomo_report_cmd(
     output_dir: str = typer.Option(
         'report', '--output-dir', '-o', help='Output directory for report and plots.'
     ),
+    mlflow_uri: str | None = typer.Option(
+        None,
+        '--mlflow-uri',
+        envvar='MLFLOW_TRACKING_URI',
+        help='Optional MLflow tracking URI.',
+    ),
+    mlflow_experiment: str = typer.Option(
+        'memex-eval',
+        '--mlflow-experiment',
+        envvar='MEMEX_EVAL_MLFLOW_EXPERIMENT',
+    ),
+    mlflow_run_name: str | None = typer.Option(None, '--mlflow-run-name'),
     verbose: bool = typer.Option(False, '--verbose', '-v', help='Enable verbose logging.'),
 ) -> None:
     """Phase 4: Generate evaluation report with plots from judge results and traces."""
@@ -185,12 +358,22 @@ def locomo_report_cmd(
 
     from memex_eval.external.locomo_report import generate_report
 
-    generate_report(
-        results_path=results,
-        answers_path=answers,
-        traces_dir=traces_dir,
-        output_dir=output_dir,
-    )
+    recorder = _make_recorder(mlflow_uri, mlflow_experiment, mlflow_run_name)
+
+    with recorder:
+        recorder.start_run()
+        recorder.log_params(
+            {
+                'benchmark': 'locomo',
+                'phase': 'report',
+            }
+        )
+        generate_report(
+            results_path=results,
+            answers_path=answers,
+            traces_dir=traces_dir,
+            output_dir=output_dir,
+        )
 
 
 @app.command('locomo-efficiency')
@@ -200,6 +383,18 @@ def locomo_efficiency_cmd(
         ..., '--traces-dir', '-t', help='Directory with trace JSONL files.'
     ),
     output: str = typer.Option('efficiency.json', '--output', '-o', help='Output efficiency JSON.'),
+    mlflow_uri: str | None = typer.Option(
+        None,
+        '--mlflow-uri',
+        envvar='MLFLOW_TRACKING_URI',
+        help='Optional MLflow tracking URI.',
+    ),
+    mlflow_experiment: str = typer.Option(
+        'memex-eval',
+        '--mlflow-experiment',
+        envvar='MEMEX_EVAL_MLFLOW_EXPERIMENT',
+    ),
+    mlflow_run_name: str | None = typer.Option(None, '--mlflow-run-name'),
     verbose: bool = typer.Option(False, '--verbose', '-v', help='Enable verbose logging.'),
 ) -> None:
     """Analyze LoCoMo answer efficiency: latency, tokens, tool usage, retrieval cost."""
@@ -207,11 +402,22 @@ def locomo_efficiency_cmd(
 
     from memex_eval.external.locomo_efficiency import analyze_efficiency
 
-    analyze_efficiency(
-        answers_path=answers,
-        output_path=output,
-        traces_dir=traces_dir,
-    )
+    recorder = _make_recorder(mlflow_uri, mlflow_experiment, mlflow_run_name)
+
+    with recorder:
+        recorder.start_run()
+        recorder.log_params(
+            {
+                'benchmark': 'locomo',
+                'phase': 'efficiency',
+            }
+        )
+        analyze_efficiency(
+            answers_path=answers,
+            output_path=output,
+            traces_dir=traces_dir,
+        )
+        recorder.log_artifact(output)
 
 
 # ---------------------------------------------------------------------------
