@@ -1,6 +1,7 @@
 from typing import cast, Self, Any, AsyncGenerator, TYPE_CHECKING
 
 if TYPE_CHECKING:
+    from memex_core.memory.sql_models import Vault as Vault
     from memex_core.services.lint_llm import LintLLMService
 import asyncio
 import hashlib
@@ -1382,7 +1383,7 @@ class MemexAPI:
         """Remove all content from a vault. Delegates to VaultService."""
         return await self._vaults.truncate_vault(vault_id)
 
-    async def set_mw_mode(self, vault_id: UUID, mw_mode: str) -> Any:
+    async def set_mw_mode(self, vault_id: UUID, mw_mode: str) -> Vault:
         """Set the MW mode for a vault. Delegates to VaultService."""
         return await self._vaults.set_mw_mode(vault_id, mw_mode)
 
@@ -1543,6 +1544,10 @@ class MemexAPI:
     async def get_vault_by_name(self, name: str) -> Any | None:
         """Get a vault by name. Delegates to VaultService."""
         return await self._vaults.get_vault_by_name(name)
+
+    async def get_vault(self, vault_id: UUID) -> Any | None:
+        """Get a vault by UUID. Delegates to VaultService."""
+        return await self._vaults.get_vault(vault_id)
 
     async def get_reflection_queue_batch(
         self,

@@ -12,6 +12,8 @@ from sqlmodel import col
 
 from memex_common.exceptions import VaultNotFoundError, AmbiguousResourceError
 
+from memex_core.memory.sql_models import Vault
+
 from memex_core.services.audit import audit_event
 from memex_core.services.base import BaseService
 
@@ -238,7 +240,13 @@ class VaultService(BaseService):
             stmt = select(Vault).where(Vault.name == name)
             return (await session.exec(stmt)).first()
 
-    async def set_mw_mode(self, vault_id: UUID, mw_mode: str) -> Any:
+    async def get_vault(self, vault_id: UUID) -> Vault | None:
+        """Get a single vault by UUID."""
+
+        async with self.metastore.session() as session:
+            return await session.get(Vault, vault_id)
+
+    async def set_mw_mode(self, vault_id: UUID, mw_mode: str) -> Vault:
         """Set the MW mode for a vault."""
         from memex_core.memory.sql_models import Vault, MWMode
 

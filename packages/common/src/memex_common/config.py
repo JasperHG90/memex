@@ -827,9 +827,9 @@ class RetrievalConfig(BaseModel):
         '1.0 + α × (confidence − 0.5) form is retained. Flip to True after observing the '
         'CONFIDENCE_VARIANCE_OBSERVED histogram populates as expected.',
     )
-    mw_ema_half_life_days: int = Field(
-        default=60,
-        ge=1,
+    mw_ema_half_life_days: float = Field(
+        default=60.0,
+        gt=0,
         description='Half-life in days for EMA decay of MW counters. '
         'Only applies when the vault mw_mode is set to ema. '
         'Default 60 means outcomes older than 60 days contribute half their weight.',

@@ -24,6 +24,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import select, update
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from memex_core.memory.retrieval.mw_ema import compute_mw_ema_score
 from memex_core.memory.sql_models import MWMode
 from memex_core.metrics import OUTCOME_RECORDED_TOTAL, MW_SCORE_DISTRIBUTION
 
@@ -51,7 +52,7 @@ def compute_mw_boost(
     *,
     mw_mode: MWMode | str = MWMode.STATIONARY,
     last_outcome_at: datetime | None = None,
-    half_life_days: int = 60,
+    half_life_days: float = 60.0,
     now: datetime | None = None,
 ) -> float:
     """Additive-marginal MW boost factor for retrieval composition.
@@ -286,7 +287,15 @@ class OutcomeService:
         vault_row = await session.get(Vault, vault_uuid)
         mw_mode_val = vault_row.mw_mode if vault_row else MWMode.STATIONARY
         for unit in refreshed.all():
-            mw_score = compute_mw_score(unit.success_co_count, unit.failure_co_count)
+            if mw_mode_val == MWMode.EMA:
+                mw_score = compute_mw_ema_score(
+                    unit.success_co_count,
+                    unit.failure_co_count,
+                    unit.last_outcome_at,
+                    half_life_days=60.0,
+                )
+            else:
+                mw_score = compute_mw_score(unit.success_co_count, unit.failure_co_count)
             MW_SCORE_DISTRIBUTION.labels(vault_id=str(vault_id), mode=mw_mode_val).observe(mw_score)
 
         OUTCOME_RECORDED_TOTAL.labels(

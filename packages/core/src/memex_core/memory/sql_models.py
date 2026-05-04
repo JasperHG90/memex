@@ -61,7 +61,7 @@ class Vault(SQLModel, table=True):  # type: ignore
     )
     name: str = Field(index=True, unique=True, description='The name of the vault.')
     description: str | None = Field(default=None, description='Optional description of the vault.')
-    mw_mode: str = Field(
+    mw_mode: MWMode = Field(
         default=MWMode.STATIONARY,
         sa_column=Column(Text, nullable=False, server_default='stationary'),
     )

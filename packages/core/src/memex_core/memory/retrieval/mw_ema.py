@@ -25,9 +25,11 @@ def compute_mw_ema_score(
     success: int,
     failure: int,
     last_outcome_at: datetime | None,
-    half_life_days: int,
+    half_life_days: float,
     now: datetime,
 ) -> float:
+    if half_life_days <= 0:
+        raise ValueError(f'half_life_days must be positive, got {half_life_days}')
     if last_outcome_at is None:
         return 0.5
 

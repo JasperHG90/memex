@@ -63,7 +63,7 @@ async def list_vaults(
                 last_mod_dt = row.get('last_note_added_at')
                 last_mod = last_mod_dt.strftime('%Y-%m-%d') if last_mod_dt else '\u2014'
                 active = 'yes' if v.is_active else ''
-                mw_mode = getattr(v, 'mw_mode', 'stationary')
+                mw_mode = v.mw_mode
                 desc = v.description or ''
                 if has_access:
                     access = ', '.join(v.access) if v.access else '\u2014'
@@ -105,7 +105,7 @@ async def list_vaults(
         console.print('[yellow]No vaults found.[/yellow]')
     else:
         for v in vaults:
-            row = [str(v.id), v.name, getattr(v, 'mw_mode', 'stationary'), v.description or '']
+            row = [str(v.id), v.name, v.mw_mode, v.description or '']
             if has_access:
                 row.append(', '.join(v.access) if v.access else '\u2014')
             table.add_row(*row)
@@ -283,9 +283,8 @@ async def show_vault(
         except Exception as e:
             handle_api_error(e)
 
-        vaults = await api.list_vaults()
+        vault = await api.get_vault(vault_uuid)
 
-    vault = next((v for v in vaults if str(v.id) == str(vault_uuid)), None)
     if vault is None:
         console.print(f'[red]Vault {identifier} not found.[/red]')
         raise typer.Exit(code=1)

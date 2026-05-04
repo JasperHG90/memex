@@ -48,7 +48,14 @@ from memex_core.memory.retrieval.temporal_concretizer import (
     TemporalConcretizer,
     has_ambiguous_temporal_expression,
 )
-from memex_core.memory.sql_models import MemoryUnit, MentalModel, UnitEntity, ContentStatus
+from memex_core.memory.sql_models import (
+    MemoryUnit,
+    MentalModel,
+    UnitEntity,
+    ContentStatus,
+    Vault,
+    MWMode,
+)
 from memex_core.memory.retrieval.models import RetrievalRequest
 from memex_common.types import FactTypes
 from memex_core.config import GLOBAL_VAULT_ID
@@ -644,10 +651,8 @@ class RetrievalEngine:
         # 7. Rerank (cap input to avoid O(n) cross-encoder blowup)
         t0 = _t()
         if use_reranker:
-            resolved_mw_mode = 'stationary'
+            resolved_mw_mode = MWMode.STATIONARY
             if session is not None and primary_vault_id is not None:
-                from memex_core.memory.sql_models import Vault
-
                 vault_row = await session.get(Vault, primary_vault_id)
                 if vault_row is not None:
                     resolved_mw_mode = vault_row.mw_mode
