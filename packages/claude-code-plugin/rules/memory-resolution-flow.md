@@ -74,8 +74,7 @@ You can want one without the other:
 
 None of Options A/B/C give *provable* 100% recall on cross-note resolution.
 Semantic search misses paraphrases; entity traversal misses oblique references;
-chunk-scoped reads miss issues split across chunks. **exploration is the
-safety net** — any unit that slipped past resolution will occasionally
+chunk-scoped reads miss issues split across chunks. **exploration is the safety net** — any unit that slipped past resolution will occasionally
 re-surface, the user re-confirms, and another `record_outcome(success=false)`
 compounds the MW penalty. User-driven resolution is a GRADIENT across many
 turns, not a one-shot delete.
