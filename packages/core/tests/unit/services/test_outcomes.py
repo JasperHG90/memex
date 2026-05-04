@@ -113,7 +113,7 @@ class TestMwBoostEmaMode:
         boost_enum = compute_mw_boost(
             9, 1, mw_mode=MWMode.EMA, last_outcome_at=old, half_life_days=60, now=now
         )
-        boost_str = compute_mw_boost(
-            9, 1, mw_mode='ema', last_outcome_at=old, half_life_days=60, now=now
+        boost_coerced = compute_mw_boost(
+            9, 1, mw_mode=MWMode('ema'), last_outcome_at=old, half_life_days=60, now=now
         )
-        assert boost_enum == boost_str
+        assert boost_enum == boost_coerced

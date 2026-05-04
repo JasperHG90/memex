@@ -50,7 +50,7 @@ def compute_mw_boost(
     failure_co_count: int,
     mw_alpha: float = MW_ALPHA_DEFAULT,
     *,
-    mw_mode: MWMode | str = MWMode.STATIONARY,
+    mw_mode: MWMode = MWMode.STATIONARY,
     last_outcome_at: datetime | None = None,
     half_life_days: float = 60.0,
     now: datetime | None = None,
