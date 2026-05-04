@@ -13,7 +13,7 @@ real ONNX NLI classifier (``cross-encoder/nli-deberta-v3-xsmall``). Asserts:
 * both-branches case (cosine surprise >= threshold) skips the NLI invocation
   entirely (the F10b cosine pre-filter).
 
-The NLI model is session-scoped because it is ~140 MB.
+The NLI model is session-scoped because it is ~60 MB.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ import pytest_asyncio
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from memex_common.config import MemexConfig, NLIModelConfig
+from memex_common.config import MemexConfig, NLIPolarityConfig
 from memex_core.memory.lint_llm.checks import make_semantic_contradiction_check
 from memex_core.memory.lint_llm.polarity import (
     PolarityClassifier,
@@ -50,7 +50,7 @@ async def real_embedding_model():
 
 @pytest_asyncio.fixture(scope='session')
 async def real_nli_model():
-    return await get_nli_model(NLIModelConfig())
+    return await get_nli_model(NLIPolarityConfig())
 
 
 @pytest.fixture

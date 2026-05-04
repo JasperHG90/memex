@@ -67,8 +67,8 @@ def test_remember_does_not_advertise_kv_get_include_history():
 
 def test_recall_documents_procedure_namespace_and_kv_get_include_history():
     text = _read('recall')
-    # Procedure key shape MUST be named.
-    assert 'procedure:<verb>:<context-tag>' in text
+    # Procedure namespace MUST be referenced (full template lives in /remember).
+    assert 'procedure:' in text
     # Read side: kv_get with include_history=true is the recall flag.
     assert 'include_history=true' in text
     assert 'memex_kv_list(namespaces=["procedure"])' in text

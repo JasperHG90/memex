@@ -51,7 +51,7 @@ class LiteLLMNLI:
     def __init__(self, config: LitellmNLIBackend) -> None:
         self._model = config.model
         self._api_base = str(config.api_base) if config.api_base else None
-        self._api_key = config.api_key.get_secret_value() if config.api_key else None
+        self._api_key = config.api_key  # keep SecretStr; extract at call time
         logger.info(
             'LiteLLM NLI classifier initialised: model=%s api_base=%s',
             self._model,
@@ -67,7 +67,7 @@ class LiteLLMNLI:
         if self._api_base:
             kwargs['api_base'] = self._api_base
         if self._api_key:
-            kwargs['api_key'] = self._api_key
+            kwargs['api_key'] = self._api_key.get_secret_value()
 
         user_message = _USER_TEMPLATE.format(premise=premise, hypothesis=hypothesis)
 
@@ -92,7 +92,8 @@ def _parse_nli_response(content: str) -> dict[str, float]:
     code fences, and missing keys. Raises ``ValueError`` on unparseable
     output so the caller (PolarityClassifier) can fall back gracefully.
     """
-    text = content.strip()
+    raw = content.strip()
+    text = raw
     if text.startswith('```'):
         first_newline = text.index('\n') if '\n' in text else len(text)
         text = text[first_newline + 1 :] if first_newline < len(text) else ''
@@ -102,11 +103,12 @@ def _parse_nli_response(content: str) -> dict[str, float]:
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError:
-        start = text.find('{')
-        end = text.rfind('}')
+        # Fallback: search for JSON object in the original (pre-fence-stripping) content
+        start = raw.find('{')
+        end = raw.rfind('}')
         if start != -1 and end != -1 and start < end:
             try:
-                parsed = json.loads(text[start : end + 1])
+                parsed = json.loads(raw[start : end + 1])
             except json.JSONDecodeError:
                 raise ValueError(f'NLI classifier returned unparseable response: {content!r}')
         else:

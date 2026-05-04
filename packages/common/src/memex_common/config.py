@@ -435,6 +435,7 @@ class NLIPolarityConfig(BaseModel):
     def _migrate_flat_config(cls, data: Any) -> Any:
         """Accept old flat NLIModelConfig format with 'type' at top level."""
         if isinstance(data, dict) and 'type' in data and 'backend' not in data:
+            data = {**data}
             backend_type = data.pop('type')
             data['backend'] = {'type': backend_type}
         return data
