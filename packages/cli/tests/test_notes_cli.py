@@ -604,12 +604,15 @@ def test_note_append_requires_some_identifier(runner, mock_api, mock_config, mon
     mock_api.append_to_note.assert_not_called()
 
 
-def test_note_append_key_without_vault_errors(runner, mock_api, mock_config, monkeypatch):
-    """`--key` requires `--vault`."""
+def test_note_append_key_without_vault_uses_default(runner, mock_api, mock_config, monkeypatch):
+    """`--key` without `--vault` uses the default write vault."""
+    mock_api.append_to_note.return_value = _append_response(uuid4(), uuid4())
     monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
     result = runner.invoke(note_app, ['append', '--key', 'k', '--delta', 'x'], obj=mock_config)
-    assert result.exit_code != 0
-    mock_api.append_to_note.assert_not_called()
+    assert result.exit_code == 0, result.stdout
+    request = mock_api.append_to_note.call_args.args[0]
+    assert request.note_key == 'k'
+    assert request.vault_id == mock_config.write_vault
 
 
 def test_note_append_rejects_both_delta_and_file(

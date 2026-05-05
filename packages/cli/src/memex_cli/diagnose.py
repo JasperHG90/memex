@@ -31,16 +31,20 @@ app = typer.Typer(
 @async_command
 async def manifold_cmd(
     ctx: typer.Context,
-    vault: Annotated[str, typer.Option('--vault', help='Vault name or ID.')],
+    vault: Annotated[
+        str | None,
+        typer.Option('--vault', '-v', help='Vault name or UUID. Defaults to the active vault.'),
+    ] = None,
     force_refresh: Annotated[
         bool, typer.Option('--force-refresh', help='Force recompute, ignore cache.')
     ] = False,
 ):
     """Print the UMAP manifold JSON. 202 task info if cache is cold."""
     config: MemexConfig = ctx.obj
+    effective_vault = vault if vault is not None else config.vault.active
     async with get_api_context(config) as api:
         try:
-            vault_id = await api.resolve_vault_identifier(vault)
+            vault_id = await api.resolve_vault_identifier(effective_vault)
             status_code, payload = await api.get_diagnostics_manifold(
                 vault_id, force_refresh=force_refresh
             )
@@ -55,14 +59,18 @@ async def manifold_cmd(
 @async_command
 async def retrieval_cmd(
     ctx: typer.Context,
-    vault: Annotated[str, typer.Option('--vault', help='Vault name or ID.')],
+    vault: Annotated[
+        str | None,
+        typer.Option('--vault', '-v', help='Vault name or UUID. Defaults to the active vault.'),
+    ] = None,
     top_n: Annotated[int, typer.Option('--top-n', help='Number of entities to return.')] = 50,
 ):
     """Print the top-N entity outcome heatmap JSON."""
     config: MemexConfig = ctx.obj
+    effective_vault = vault if vault is not None else config.vault.active
     async with get_api_context(config) as api:
         try:
-            vault_id = await api.resolve_vault_identifier(vault)
+            vault_id = await api.resolve_vault_identifier(effective_vault)
             payload = await api.get_diagnostics_retrieval(vault_id, top_n=top_n)
         except Exception as e:
             handle_api_error(e)
@@ -74,13 +82,17 @@ async def retrieval_cmd(
 @async_command
 async def summary_cmd(
     ctx: typer.Context,
-    vault: Annotated[str, typer.Option('--vault', help='Vault name or ID.')],
+    vault: Annotated[
+        str | None,
+        typer.Option('--vault', '-v', help='Vault name or UUID. Defaults to the active vault.'),
+    ] = None,
 ):
     """Print the full diagnostics summary JSON (synchronous, no UMAP block)."""
     config: MemexConfig = ctx.obj
+    effective_vault = vault if vault is not None else config.vault.active
     async with get_api_context(config) as api:
         try:
-            vault_id = await api.resolve_vault_identifier(vault)
+            vault_id = await api.resolve_vault_identifier(effective_vault)
             payload = await api.get_diagnostics_summary(vault_id)
         except Exception as e:
             handle_api_error(e)
@@ -92,7 +104,10 @@ async def summary_cmd(
 @async_command
 async def lint_cmd(
     ctx: typer.Context,
-    vault: Annotated[str, typer.Option('--vault', help='Vault name or ID.')],
+    vault: Annotated[
+        str | None,
+        typer.Option('--vault', '-v', help='Vault name or UUID. Defaults to the active vault.'),
+    ] = None,
 ):
     """Print the lint-finding pivot JSON.
 
@@ -102,9 +117,10 @@ async def lint_cmd(
     rows) — this is the operator/observability dashboard view.
     """
     config: MemexConfig = ctx.obj
+    effective_vault = vault if vault is not None else config.vault.active
     async with get_api_context(config) as api:
         try:
-            vault_id = await api.resolve_vault_identifier(vault)
+            vault_id = await api.resolve_vault_identifier(effective_vault)
             payload = await api.get_diagnostics_lint(vault_id)
         except Exception as e:
             handle_api_error(e)

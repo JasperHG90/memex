@@ -171,13 +171,13 @@ async def deprioritize_memory(
     ctx: typer.Context,
     unit_id: Annotated[str, typer.Argument(help='UUID of the memory unit to deprioritize.')],
     vault: Annotated[
-        str,
+        str | None,
         typer.Option(
             '--vault',
             '-v',
-            help='Vault UUID or name the unit belongs to (REQUIRED — Wave 0 vault scoping).',
+            help='Vault name or UUID. Defaults to the active vault.',
         ),
-    ],
+    ] = None,
     reason: Annotated[
         str,
         typer.Option('--reason', '-r', help='Why this unit is being deprioritized.'),
@@ -189,10 +189,11 @@ async def deprioritize_memory(
     """
     config: MemexConfig = ctx.obj
     uuid_obj = parse_uuid(unit_id, 'memory unit')
+    effective_vault = vault if vault is not None else config.vault.active
 
     async with get_api_context(config) as api:
         try:
-            resolved_vault = await api.resolve_vault_identifier(vault)
+            resolved_vault = await api.resolve_vault_identifier(effective_vault)
             unit = await api.deprioritize_memory_unit(
                 uuid_obj, reason=reason, vault_id=resolved_vault
             )
@@ -211,21 +212,22 @@ async def restore_memory(
     ctx: typer.Context,
     unit_id: Annotated[str, typer.Argument(help='UUID of the memory unit to restore.')],
     vault: Annotated[
-        str,
+        str | None,
         typer.Option(
             '--vault',
             '-v',
-            help='Vault UUID or name the unit belongs to (REQUIRED — Wave 0 vault scoping).',
+            help='Vault name or UUID. Defaults to the active vault.',
         ),
-    ],
+    ] = None,
 ):
     """Restore a deprioritized memory unit (flips ``is_deprioritized`` back to false)."""
     config: MemexConfig = ctx.obj
     uuid_obj = parse_uuid(unit_id, 'memory unit')
+    effective_vault = vault if vault is not None else config.vault.active
 
     async with get_api_context(config) as api:
         try:
-            resolved_vault = await api.resolve_vault_identifier(vault)
+            resolved_vault = await api.resolve_vault_identifier(effective_vault)
             unit = await api.restore_memory_unit(uuid_obj, vault_id=resolved_vault)
         except Exception as e:
             handle_api_error(e)
@@ -240,9 +242,9 @@ async def reconsolidate_memory(
     ctx: typer.Context,
     entity_id: Annotated[str, typer.Argument(help='UUID of the entity to reconsolidate.')],
     vault: Annotated[
-        str,
-        typer.Option('--vault', '-v', help='Vault UUID (required for vault-scoped resolution).'),
-    ],
+        str | None,
+        typer.Option('--vault', '-v', help='Vault name or UUID. Defaults to the active vault.'),
+    ] = None,
 ):
     """Re-evaluate memories for an entity under a per-entity advisory lock.
 
@@ -252,10 +254,11 @@ async def reconsolidate_memory(
     """
     config: MemexConfig = ctx.obj
     entity_uuid = parse_uuid(entity_id, 'entity')
-    vault_uuid = parse_uuid(vault, 'vault')
+    effective_vault = vault if vault is not None else config.vault.active
 
     async with get_api_context(config) as api:
         try:
+            vault_uuid = await api.resolve_vault_identifier(effective_vault)
             result = await api.reconsolidate_entity(entity_uuid, vault_uuid)
         except Exception as e:
             handle_api_error(e)
@@ -269,23 +272,24 @@ async def reconsolidate_memory(
 async def consolidate_memory(
     ctx: typer.Context,
     vault: Annotated[
-        str,
-        typer.Option('--vault', '-v', help='Vault UUID to consolidate.'),
-    ],
+        str | None,
+        typer.Option('--vault', '-v', help='Vault name or UUID. Defaults to the active vault.'),
+    ] = None,
     dry_run: Annotated[
         bool,
         typer.Option('--dry-run', help='Preview without making changes.'),
     ] = False,
 ):
-    """Vault-wide low-MW unit consolidation. Use sparingly (e.g., monthly per vault).
+    """Vault-wide low-Memory-Worth unit consolidation. Use sparingly.
 
     For per-entity hygiene, prefer `memex memory reconsolidate`.
     """
     config: MemexConfig = ctx.obj
-    vault_uuid = parse_uuid(vault, 'vault')
+    effective_vault = vault if vault is not None else config.vault.active
 
     async with get_api_context(config) as api:
         try:
+            vault_uuid = await api.resolve_vault_identifier(effective_vault)
             result = await api.consolidate_vault(vault_uuid, dry_run=dry_run)
         except Exception as e:
             handle_api_error(e)
@@ -345,7 +349,8 @@ async def add_memory(
         typer.Option('--asset', '-a', help='Path to an asset file to attach to the note.'),
     ] = None,
     vault: Annotated[
-        str | None, typer.Option('--vault', '-v', help='Target vault (write).')
+        str | None,
+        typer.Option('--vault', '-v', help='Vault name or UUID. Defaults to the active vault.'),
     ] = None,
     key: Annotated[
         str | None, typer.Option('--key', '-k', help='Unique stable key for the note.')
@@ -528,7 +533,9 @@ async def search_memory(
     query: Annotated[str, typer.Argument(help='Search query.')],
     vault: Annotated[
         list[str] | None,
-        typer.Option('--vault', '-v', help='Filter by vault(s). Use "*" for all vaults.'),
+        typer.Option(
+            '--vault', '-v', help='Vault(s) to search. Accepts names or UUIDs. Use "*" for all.'
+        ),
     ] = None,
     limit: int = 5,
     token_budget: Annotated[

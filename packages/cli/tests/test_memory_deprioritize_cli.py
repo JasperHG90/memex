@@ -71,13 +71,17 @@ def test_deprioritize_default_reason_is_manual(runner, mock_api, mock_config, mo
     assert mock_api.deprioritize_memory_unit.call_args.kwargs.get('reason') == 'manual'
 
 
-def test_deprioritize_requires_vault_flag(runner, mock_api, mock_config, monkeypatch):
-    """Wave 0 vault scoping: omitting --vault must abort the command."""
+def test_deprioritize_default_vault(runner, mock_api, mock_config, monkeypatch):
+    """Omitting --vault falls back to config.vault.active."""
     unit_id = str(uuid4())
+    vault_id = str(uuid4())
+    mock_api.deprioritize_memory_unit.return_value = _fake_unit(unit_id)
+    mock_api.resolve_vault_identifier.return_value = vault_id
     monkeypatch.setattr('memex_cli.memory.get_api_context', lambda config: mock_api)
+
     result = runner.invoke(app, ['deprioritize', unit_id], obj=mock_config)
-    assert result.exit_code != 0
-    mock_api.deprioritize_memory_unit.assert_not_called()
+    assert result.exit_code == 0, result.stdout
+    mock_api.resolve_vault_identifier.assert_called_once_with(mock_config.vault.active)
 
 
 def test_deprioritize_help_lists_command():

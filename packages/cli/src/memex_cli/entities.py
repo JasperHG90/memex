@@ -109,8 +109,9 @@ async def delete_entity(
 async def delete_mental_model(
     ctx: typer.Context,
     identifier: Annotated[str, typer.Argument(help='Name or UUID of the entity.')],
-    vault_id: Annotated[
-        str | None, typer.Option('--vault', '-v', help='Vault UUID. Defaults to active vault.')
+    vault: Annotated[
+        str | None,
+        typer.Option('--vault', '-v', help='Vault name or UUID. Defaults to the active vault.'),
     ] = None,
     force: Annotated[bool, typer.Option('--force', '-f', help='Skip confirmation.')] = False,
 ):
@@ -128,8 +129,8 @@ async def delete_mental_model(
             handle_api_error(e)
             return
 
-        parsed_vault_id = parse_uuid(vault_id, 'vault') if vault_id else None
-        vault_label = vault_id or 'active vault'
+        parsed_vault_id = parse_uuid(vault, 'vault') if vault else None
+        vault_label = vault or 'active vault'
         if not force:
             if not typer.confirm(f'Delete mental model for "{entity.name}" in {vault_label}?'):
                 console.print('[yellow]Aborted.[/yellow]')
