@@ -739,7 +739,7 @@ async def find_note(
             date = str(date)[:10] if date else ''
         table.add_row(
             r.title or 'Untitled',
-            f'{r.score:.2f}',
+            f'{r.score:.3f}',
             date,
             r.status or '',
             str(r.note_id),
@@ -1303,7 +1303,7 @@ async def search_notes(
         if len(preview) > 300:
             preview = preview[:297] + '...'
 
-        score_str = f'{doc.score:.2f}' if doc.score > 0 else '-'
+        score_str = f'{doc.score:.3f}' if doc.score > 0 else '-'
 
         table.add_row(score_str, title, preview, str(doc.note_id))
 
