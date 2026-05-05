@@ -192,6 +192,10 @@ class NoteSearchEngine:
         # Cross-encoder reranking
         if request.rerank and self.reranker and results:
             results = await self._rerank_results(request.query, results, best_chunk_text_by_note)
+        else:
+            # When reranking is disabled, raw_score is the same as score (RRF only).
+            for r in results:
+                r.raw_score = None
 
         # Skeleton-tree reasoning refinement
         if (request.reason or request.summarize) and self.lm:
@@ -709,7 +713,11 @@ class NoteSearchEngine:
 
             final_results.append(
                 NoteSearchResult(
-                    note_id=doc.id, metadata=metadata, summaries=summaries, score=best_score
+                    note_id=doc.id,
+                    metadata=metadata,
+                    summaries=summaries,
+                    score=best_score,
+                    raw_score=best_score,
                 )
             )
 

@@ -894,6 +894,10 @@ class NoteSearchResult(BaseModel):
     metadata: dict[str, Any]
     summaries: list[BlockSummaryDTO] = Field(default_factory=list)
     score: float = 0.0
+    raw_score: float | None = Field(
+        default=None,
+        description='Pre-reranker RRF fusion score. Null when reranking is disabled.',
+    )
     vault_id: UUID | None = None
     vault_name: str | None = None
     reasoning: list[dict[str, Any]] | None = Field(
