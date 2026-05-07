@@ -42,20 +42,35 @@ router = APIRouter(prefix='/api/v1/lint')
 async def lint_status(
     api: Annotated[MemexAPI, Depends(get_api)],
     vault_id: UUID | None = Query(None, description='Scope to one vault.'),
-    scope: str = Query('all', pattern='^(vault|global|all)$'),
+    scope: str | None = Query(
+        None,
+        pattern='^(vault|global|all)$',
+        description=(
+            'Scope of the count. Defaults to "vault" when ``vault_id`` is supplied '
+            'and "all" otherwise. Pass an explicit value to disambiguate.'
+        ),
+    ),
     auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ) -> dict[str, Any]:
     """Pending finding counts.
 
-    - ``scope=all`` (default): total across every vault and global.
-    - ``scope=vault``: count for ``vault_id``; required when scope=vault.
-    - ``scope=global``: count for findings with vault_id NULL.
+    - ``scope=all`` (default when no ``vault_id``): total across every vault.
+    - ``scope=vault`` (default when ``vault_id`` is set): count for that vault.
+    - ``scope=global``: count for findings with ``vault_id`` NULL.
     """
     try:
-        if vault_id is not None:
-            await check_vault_access(auth, [vault_id], api, permission=Permission.READ)
-            count = await api.lint.count_pending(vault_id)
-            return {'scope': 'vault', 'vault_id': str(vault_id), 'pending': count}
+        if scope is None:
+            scope = 'vault' if vault_id is not None else 'all'
+        if scope == 'vault' and vault_id is None:
+            raise HTTPException(
+                status_code=400,
+                detail='vault_id is required when scope=vault',
+            )
+        if scope in ('global', 'all') and vault_id is not None:
+            raise HTTPException(
+                status_code=400,
+                detail=f'vault_id is not allowed with scope={scope}',
+            )
         if scope == 'global':
             count = await api.lint.count_pending(None)
             return {'scope': 'global', 'pending': count}
@@ -65,10 +80,11 @@ async def lint_status(
                     text("SELECT count(*) FROM maintenance_proposals WHERE status = 'pending'")
                 )
                 return {'scope': 'all', 'pending': int(row.scalar() or 0)}
-        raise HTTPException(
-            status_code=400,
-            detail='vault_id is required when scope=vault',
-        )
+        # scope == 'vault'
+        assert vault_id is not None  # narrowed by the guard above
+        await check_vault_access(auth, [vault_id], api, permission=Permission.READ)
+        count = await api.lint.count_pending(vault_id)
+        return {'scope': 'vault', 'vault_id': str(vault_id), 'pending': count}
     except HTTPException:
         raise
     except Exception as e:

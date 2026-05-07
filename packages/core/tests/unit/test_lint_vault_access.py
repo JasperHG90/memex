@@ -144,6 +144,51 @@ class TestLintNoAuth:
 
 
 # ---------------------------------------------------------------------------
+# /lint/status scope contract: scope=global must NOT count per-vault, and
+# explicit scope+vault_id combinations must be rejected with 400.
+# ---------------------------------------------------------------------------
+
+
+class TestLintStatusScopeContract:
+    def test_scope_global_returns_global_count(self, mock_api):
+        # count_pending(None) returns the global count.
+        mock_api.lint.count_pending = AsyncMock(return_value=7)
+        client = _make_client(mock_api, _unrestricted_reader())
+        resp = client.get('/api/v1/lint/status?scope=global')
+        assert resp.status_code == 200, resp.text
+        assert resp.json() == {'scope': 'global', 'pending': 7}
+        mock_api.lint.count_pending.assert_awaited_once_with(None)
+
+    def test_scope_global_rejects_vault_id(self, mock_api):
+        client = _make_client(mock_api, _unrestricted_reader())
+        resp = client.get(f'/api/v1/lint/status?scope=global&vault_id={ALLOWED_VAULT}')
+        assert resp.status_code == 400, resp.text
+        mock_api.lint.count_pending.assert_not_called()
+
+    def test_scope_all_rejects_vault_id(self, mock_api):
+        client = _make_client(mock_api, _unrestricted_reader())
+        resp = client.get(f'/api/v1/lint/status?scope=all&vault_id={ALLOWED_VAULT}')
+        assert resp.status_code == 400, resp.text
+
+    def test_scope_vault_without_vault_id_returns_400(self, mock_api):
+        client = _make_client(mock_api, _unrestricted_reader())
+        resp = client.get('/api/v1/lint/status?scope=vault')
+        assert resp.status_code == 400, resp.text
+
+    def test_implicit_scope_vault_when_only_vault_id_supplied(self, mock_api):
+        # No scope param → infer scope=vault from vault_id, run auth check,
+        # call count_pending(vault_id), and return per-vault payload.
+        mock_api.lint.count_pending = AsyncMock(return_value=3)
+        client = _make_client(mock_api, _unrestricted_reader())
+        resp = client.get(f'/api/v1/lint/status?vault_id={ALLOWED_VAULT}')
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body['scope'] == 'vault'
+        assert body['vault_id'] == str(ALLOWED_VAULT)
+        assert body['pending'] == 3
+
+
+# ---------------------------------------------------------------------------
 # Read-extra: a read_vault_ids entry must also unlock the lint flag reads.
 # ---------------------------------------------------------------------------
 
