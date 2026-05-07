@@ -104,17 +104,23 @@ _BACKFILL_SQL = sa.text(f"""
             ml.from_unit_id::text AS from_unit_id,
             ml.link_metadata ->> 'authoritative_unit_id' AS authoritative_unit_id,
             NULLIF(
-                trim(regexp_replace(
-                    COALESCE(ml.link_metadata ->> 'reasoning', ''),
-                    '{_CONTROL_CHAR_REGEX}', '', 'g'
-                )),
+                regexp_replace(
+                    regexp_replace(
+                        COALESCE(ml.link_metadata ->> 'reasoning', ''),
+                        '{_CONTROL_CHAR_REGEX}', '', 'g'
+                    ),
+                    '^\\s+|\\s+$', '', 'g'
+                ),
                 ''
             ) AS reasoning,
             NULLIF(
-                trim(regexp_replace(
-                    COALESCE(ml.link_metadata ->> 'superseding_note_title', ''),
-                    '{_CONTROL_CHAR_REGEX}', '', 'g'
-                )),
+                regexp_replace(
+                    regexp_replace(
+                        COALESCE(ml.link_metadata ->> 'superseding_note_title', ''),
+                        '{_CONTROL_CHAR_REGEX}', '', 'g'
+                    ),
+                    '^\\s+|\\s+$', '', 'g'
+                ),
                 ''
             ) AS title
         FROM memory_links ml
