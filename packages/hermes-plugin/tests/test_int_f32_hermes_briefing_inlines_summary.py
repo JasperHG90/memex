@@ -37,8 +37,11 @@ def test_diagnostic_summary_in_briefing_block():
     assert '### Memex diagnostics' in block
 
     # Field 1: manifold status (pending in this fixture; cluster_count null).
+    # The compressed renderer surfaces clusters under the label `clusters:`
+    # rather than the dict-style `cluster_count`; accept either so the test
+    # stays green if a future revision restores the longer label.
     assert 'pending' in block
-    assert 'cluster_count' in block
+    assert 'cluster_count' in block or 'clusters:' in block
 
     # Field 2: unit counts (active / stale / deprioritized).
     assert '12' in block and '3' in block and '1' in block

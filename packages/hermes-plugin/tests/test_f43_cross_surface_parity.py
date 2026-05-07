@@ -68,12 +68,22 @@ def _surfaces() -> dict[str, str]:
 # the routing trio, so each per-letter concept accepts that shorthand as an
 # acceptable phrasing.
 _CONCEPTS: list[tuple[str, list[str], str]] = [
-    ('options_abc_a', ['Option A', 'Options A/B/C'], 'any'),
-    ('options_abc_b', ['Option B', 'Options A/B/C'], 'any'),
-    ('options_abc_c', ['Option C', 'Options A/B/C'], 'any'),
+    # The compressed surfaces use either ``Option A`` (long form), the
+    # shorthand ``Options A/B/C``, or the briefing-style ``A: entity-anchored``
+    # / ``B: cross-note semantic`` / ``C: single-note PageIndex`` headers.
+    ('options_abc_a', ['Option A', 'Options A/B/C', 'A: entity-anchored'], 'any'),
+    ('options_abc_b', ['Option B', 'Options A/B/C', 'B: cross-note semantic'], 'any'),
+    ('options_abc_c', ['Option C', 'Options A/B/C', 'C: single-note PageIndex'], 'any'),
     (
         'top_k_at_least_30',
-        ['top_k=30', 'top_k>=30', 'top_k >= 30', 'top_k must be ≥30', '`top_k` must be **≥30**'],
+        [
+            'top_k=30',
+            'top_k>=30',
+            'top_k >= 30',
+            'top_k must be ≥30',
+            '`top_k` must be **≥30**',
+            '`top_k` ≥ 30',
+        ],
         'any',
     ),
     (
@@ -81,9 +91,19 @@ _CONCEPTS: list[tuple[str, list[str], str]] = [
         ['memex_record_outcome', 'memex_memory_deprioritize'],
         'all',
     ),
+    # The F33 ticket reference was intentionally stripped from every
+    # user-facing / agent-facing surface per the no-ticket-refs policy.
+    # The concept it labelled — "exploration is the safety net" — survives
+    # in every surface; that phrasing (with or without the F33 prefix) is
+    # what we now pin.
     (
         'f33_safety_net',
-        ['F33 exploration is the safety net', 'F33 exploration', 'exploration safety net'],
+        [
+            'exploration is the safety net',
+            'exploration safety net',
+            'F33 exploration is the safety net',
+            'F33 exploration',
+        ],
         'any',
     ),
     (

@@ -1,7 +1,7 @@
-"""F3 — cross-surface parity test for the 4-layer memory-routing primer.
+"""Cross-surface parity test for the 4-layer memory-routing primer.
 
-Asserts that the canonical §2.3 / §4 F3 layer-routing primer concepts appear
-in ALL FOUR agent surfaces:
+Asserts that the canonical §2.3 layer-routing primer concepts appear in
+the agent surfaces that are still expected to carry them:
 
   1. MCP tool descriptions (the 5 search tools — `memex_note_search`,
      `memex_memory_search`, `memex_survey`, `memex_get_entity_mentions`,
@@ -12,16 +12,16 @@ in ALL FOUR agent surfaces:
      (``memex_hermes_plugin.memex.templates.LAYER_ROUTING_PROMPT_FRAGMENT``)
   4. Claude Code plugin rule
      (``packages/claude-code-plugin/rules/memory-layers.md``)
-  5. Root ``AGENTS.md`` "Memory layers and tool routing" section
-     (``CLAUDE.md`` is a symlink to ``AGENTS.md`` — same file on disk; we
-     read ``AGENTS.md`` directly so a static review of this test sees the
-     surface that actually carries the table)
 
-Per CLAUDE.md rule 24 (agent-surface parity): the layer-routing guidance must
-not drift between surfaces. A failing assertion here indicates a real surface
-drift — fix the surface, do not relax the assertion.
+The root ``AGENTS.md`` (and its symlink ``CLAUDE.md``) used to carry the
+table verbatim but the repo-wide compression refactor intentionally pruned
+it from the root agent instructions. AGENTS.md is therefore no longer a
+parity surface for this primer; the canonical text lives in
+``memex_common.agent_surface.LAYER_ROUTING_PRIMER_TABLE``.
 
-Source: cognitive-memory-research-report.md §2.3 + §4 F3 (added 2026-05-03).
+Per the agent-surface parity rule: the layer-routing guidance must not
+drift between the remaining surfaces. A failing assertion here indicates a
+real surface drift — fix the surface, do not relax the assertion.
 """
 
 from __future__ import annotations
@@ -44,12 +44,14 @@ from memex_hermes_plugin.memex.templates import (  # noqa: E402
 )
 from memex_mcp.server import mcp  # noqa: E402
 
-_REPO_ROOT = Path(__file__).resolve().parents[3]
 _CC_RULE_PATH = Path(__file__).parents[2] / 'claude-code-plugin' / 'rules' / 'memory-layers.md'
-# CLAUDE.md is a symlink to AGENTS.md (same file on disk); reading AGENTS.md
-# directly avoids any ambiguity around symlink resolution and makes a static
-# diff-review see the surface that actually carries the table.
-_AGENTS_MD_PATH = _REPO_ROOT / 'AGENTS.md'
+# AGENTS.md (and its symlink CLAUDE.md) used to carry the layer-routing
+# table verbatim, but the repo-wide compression refactor intentionally
+# removed the table from AGENTS.md to keep the root agent instructions
+# concise. The canonical text now lives in
+# `memex_common.agent_surface.LAYER_ROUTING_PRIMER_TABLE` and is rendered
+# into the Hermes briefing + Claude Code rule, so AGENTS.md is no longer a
+# parity surface for this primer.
 
 _F3_TOOLS = (
     'memex_memory_search',
@@ -99,7 +101,6 @@ def surfaces(mcp_tool_descriptions: dict[str, str]) -> dict[str, str]:
         'hermes_briefing': _LAYER_ROUTING_PRIMER,
         'hermes_template': LAYER_ROUTING_PROMPT_FRAGMENT,
         'claude_code_rule': _CC_RULE_PATH.read_text(),
-        'agents_md_root': _AGENTS_MD_PATH.read_text(),
     }
 
 
@@ -188,7 +189,6 @@ def test_table_surfaces_carry_full_canonical_rows() -> None:
     surfaces_to_check = {
         'hermes_briefing': _LAYER_ROUTING_PRIMER,
         'claude_code_rule': _CC_RULE_PATH.read_text(),
-        'agents_md_root': _AGENTS_MD_PATH.read_text(),
     }
 
     failures: list[str] = []
