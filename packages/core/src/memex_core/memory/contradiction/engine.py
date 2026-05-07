@@ -36,22 +36,38 @@ from memex_core.memory.sql_models import (
 logger = logging.getLogger('memex.core.memory.contradiction')
 
 
-_CONTROL_CHAR_RE = re.compile(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]')
+# Strips ASCII C0 (0x00-0x1F) except tab (0x09) and newline (0x0A);
+# DEL (0x7F); C1 (0x80-0x9F). CR (0x0D) IS stripped — it's terminal-
+# hostile (line-overwrite). Migration 035 mirrors this exact pattern;
+# keep the two in sync.
+_CONTROL_CHAR_RE = re.compile(r'[\x00-\x08\x0B-\x1F\x7F-\x9F]')
+
+# ASCII whitespace set — matches Postgres POSIX ``\s`` and the migration's
+# ``regexp_replace('^\s+|\s+$', '', 'g')`` so runtime and backfill agree
+# on edge-trim semantics. Python's bare ``str.strip()`` would strip a
+# wider Unicode-whitespace class (NBSP, ideographic space, etc.); we
+# deliberately restrict to ASCII to keep the two byte-identical.
+_ASCII_WHITESPACE = ' \t\n\r\f\v'
 
 
 def _sanitise_evidence_text(value: Any, *, max_len: int) -> str | None:
     """Defensive sanitisation for free-text payloads stored in lint
     ``evidence`` JSONB. Strips ASCII C0 controls (``0x00–0x1F`` except
-    ``\\n``/``\\t``), DEL (``0x7F``) and the C1 control range
-    (``0x80–0x9F``); truncates to ``max_len`` characters; returns None
-    for empty/None input.
+    tab/newline — CR IS stripped), DEL (``0x7F``) and the C1 control
+    range (``0x80–0x9F``); trims ASCII edge whitespace; truncates to
+    ``max_len`` characters with a trailing ``…``; returns ``None`` for
+    empty/None input.
 
-    Pre-truncates the input to ``max_len * 4`` chars before the regex pass
-    so megabyte-scale pathological payloads (e.g., a runaway LLM that
-    emits 1 MB of NULs) cannot turn this defensive helper into an O(N)
-    bottleneck on the contradiction emit path. ``max_len * 4`` leaves
-    enough headroom for inputs that are 75 % control chars and still
-    yield ``max_len`` survivors after stripping.
+    Migration 035 mirrors this contract in SQL so backfilled rows are
+    byte-identical to runtime emissions for any input whose edges use
+    ASCII whitespace only.
+
+    No pre-truncation guard: the compiled regex runs the per-char work
+    in C, processes a 10 MB pathological NUL payload in well under a
+    second, and is on an async background path where that latency is
+    invisible. A pre-truncate-then-clean strategy would silently drop
+    real content past the cut for any input that mixes real text with
+    a long stretch of control chars.
 
     Downstream renderers must still escape per their target format
     (HTML, Markdown, terminal); this only protects the storage layer
@@ -61,9 +77,7 @@ def _sanitise_evidence_text(value: Any, *, max_len: int) -> str | None:
         return None
     if not isinstance(value, str):
         value = str(value)
-    if len(value) > max_len * 4:
-        value = value[: max_len * 4]
-    cleaned = _CONTROL_CHAR_RE.sub('', value).strip()
+    cleaned = _CONTROL_CHAR_RE.sub('', value).strip(_ASCII_WHITESPACE)
     if not cleaned:
         return None
     if len(cleaned) > max_len:

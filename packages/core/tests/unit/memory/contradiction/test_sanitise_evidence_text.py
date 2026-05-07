@@ -1,9 +1,11 @@
 """Unit coverage for ``_sanitise_evidence_text`` in the contradiction engine.
 
 Pins the runtime sanitisation contract that migration 035's SQL backfill
-mirrors: control-char stripping, edge whitespace trim, ellipsis truncation
-at the cap, ``None`` on empty/None input, and the pre-truncation guard
-that bounds work for pathological multi-MB payloads.
+mirrors: control-char stripping (incl. CR, DEL, C1), ASCII edge-whitespace
+trim (deliberately narrow so Postgres ``\\s`` and Python parity hold),
+ellipsis truncation at the cap, ``None`` on empty/None input, and a
+pathological-input perf check (no pre-truncate guard — that was removed
+because it dropped real content past the cut).
 """
 
 from __future__ import annotations
@@ -65,30 +67,55 @@ def test_no_ellipsis_when_exactly_at_cap() -> None:
     assert out == 'A' * 1000  # equality, not '>', so no ellipsis
 
 
-def test_pre_truncation_bounds_work_for_huge_input() -> None:
-    """A 10 MB payload of NULs must not iterate the full length.
-
-    Pre-fix the sanitiser scanned every char in Python before stripping;
-    post-fix the helper truncates to ``max_len * 4`` upfront and lets the
-    compiled regex do the per-char work in C. The functional assertion
-    here is that the call returns ``None`` (everything was a stripped
-    control) without timing out.
+def test_strips_carriage_return() -> None:
+    """CR is stripped — it is terminal-hostile (line-overwrite). The
+    earlier per-char loop stripped it; the regex refactor must too.
     """
+    assert _sanitise_evidence_text('a\rb\r\nc', max_len=100) == 'a' + 'b\nc'
+
+
+def test_strips_form_feed_and_vertical_tab() -> None:
+    """``\\f`` (0x0C) and ``\\v`` (0x0B) are C0 controls — stripped."""
+    assert _sanitise_evidence_text('a\x0bb\x0cc', max_len=100) == 'abc'
+
+
+def test_does_not_strip_nbsp_or_other_unicode_whitespace_at_edges() -> None:
+    """Edge trim is ASCII-only — matches Postgres POSIX ``\\s`` and the
+    migration's regex. NBSP (``U+00A0``) and ideographic space
+    (``U+3000``) at edges must survive so runtime and backfill agree.
+    """
+    out = _sanitise_evidence_text(' foo　', max_len=100)
+    assert out == ' foo　'
+
+
+def test_huge_pathological_nul_input_completes_quickly() -> None:
+    """10 MB of NULs must process in under a second via the compiled
+    regex without iterating Python per-char. There is no pre-truncation
+    guard — the regex runs the per-char work in C.
+    """
+    import time
+
     huge = '\x00' * (10 * 1024 * 1024)
+    start = time.monotonic()
     assert _sanitise_evidence_text(huge, max_len=1000) is None
+    assert time.monotonic() - start < 1.0, 'sanitiser too slow on pathological input'
 
 
-def test_pre_truncation_preserves_first_max_len_4_chars_of_real_content() -> None:
-    """The pre-truncation cap must be wide enough that real content within
-    the first ``max_len`` chars survives, even when the input is huge.
+def test_real_content_after_a_long_run_of_controls_survives() -> None:
+    """A small real prefix + 1 MB of NULs + a real suffix must still
+    yield the suffix in the output (capped by ``max_len`` truncation
+    rules, not by an arbitrary pre-truncate). This pins behaviour
+    against any future re-introduction of the ``max_len * 4`` guard
+    that drops trailing real content.
     """
-    prefix = 'The first 50 chars of real content. ' + ('A' * 14)  # 50 chars
-    huge = prefix + ('B' * (10 * 1024 * 1024))
-    out = _sanitise_evidence_text(huge, max_len=100)
+    prefix = 'A' * 30  # short real prefix
+    middle = '\x00' * (1024 * 1024)  # 1 MB of NULs
+    suffix = 'B' * 30  # short real suffix
+    out = _sanitise_evidence_text(prefix + middle + suffix, max_len=200)
     assert out is not None
-    assert out.startswith('The first 50 chars of real content.')
-    assert len(out) == 100
-    assert out.endswith('…')
+    assert out.startswith('A' * 30)
+    assert out.endswith('B' * 30)
+    assert len(out) == 60
 
 
 def test_non_string_input_is_coerced() -> None:

@@ -145,9 +145,17 @@ async def test_contradict_bumps_evidence_count_and_decreases_confidence(
     refreshed = (await session.exec(select(MemoryUnit).where(MemoryUnit.id == old_unit.id))).first()
     assert refreshed is not None
     assert refreshed.confidence_evidence_count == 1
+    # Pinned concrete value catches a regression in the engine formula
+    # itself (e.g., someone changes ``- penalty`` to ``- 2*penalty``);
+    # the formula-driven value catches a config tuning (e.g., someone
+    # changes ``alpha`` and forgets the test). Both required.
+    assert math.isclose(refreshed.confidence, 0.2, rel_tol=1e-6), (
+        f'expected confidence 0.2 (config: alpha=0.1, superseded_threshold=0.3), '
+        f'got {refreshed.confidence}'
+    )
     expected = 1.0 - (1.0 - contradiction_config.superseded_threshold + contradiction_config.alpha)
     assert math.isclose(refreshed.confidence, expected, rel_tol=1e-6), (
-        f'expected confidence {expected}, got {refreshed.confidence}'
+        f'formula expectation {expected}, got {refreshed.confidence}'
     )
     assert refreshed.confidence < contradiction_config.superseded_threshold, (
         'one-shot contradict must land strictly below superseded_threshold'

@@ -60,8 +60,10 @@ depends_on: str | Sequence[str] | None = None
 # regexp_replace strips ASCII C0 controls (0x00-0x1F except \n, \t),
 # DEL (0x7F), and the C1 control range (0x80-0x9F) so the backfilled
 # evidence matches the runtime sanitisation contract enforced by
-# _sanitise_evidence_text() in the contradiction engine.
-_CONTROL_CHAR_REGEX = r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]'
+# _sanitise_evidence_text() in the contradiction engine. CR (0x0D)
+# is stripped — terminal-hostile (line-overwrite); both runtime and
+# this migration agree.
+_CONTROL_CHAR_REGEX = r'[\x00-\x08\x0B-\x1F\x7F-\x9F]'
 
 _BACKFILL_SQL = sa.text(f"""
     INSERT INTO maintenance_proposals (

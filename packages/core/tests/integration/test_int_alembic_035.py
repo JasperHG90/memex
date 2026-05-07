@@ -211,22 +211,16 @@ async def test_035_backfill_truncates_with_ellipsis_and_strips_controls(
             # Authoritative defaults to from_unit_id when unset.
             assert ev_u4['authoritative_unit_id'] == seed['u3']
 
-            # Control chars stripped, tab + newline preserved, edge whitespace trimmed.
+            # Control chars stripped (C0 except tab/newline, DEL, C1), tab +
+            # newline preserved inside the body, edge whitespace trimmed.
+            # Seed reasoning: '   \tkeep tab\nkeep newline\x01drop\x7Fdrop\x9Fdrop  '
+            # — leading '   \t' trimmed; '\x01' / '\x7F' / '\x9F' stripped;
+            # trailing '  ' trimmed; embedded '\n' survives.
             ev_u6 = by_target[seed['u6']]
-            assert ev_u6['reasoning'] == 'keep tab\nkeep newline\x01drop\x7fdropdrop'.replace(
-                '\x01', ''
-            ).replace('\x7f', '').replace('', '')
-            assert ev_u6['reasoning'].startswith('\tkeep tab') or ev_u6['reasoning'].startswith(
-                'keep tab'
+            assert ev_u6['reasoning'] == 'keep tab\nkeep newlinedropdropdrop', (
+                f'unexpected sanitised reasoning: {ev_u6["reasoning"]!r}'
             )
-            assert '\n' in ev_u6['reasoning']
-            # No surviving controls / DEL / C1.
-            assert all(
-                ord(ch) >= 0x20 and ord(ch) != 0x7F and not (0x80 <= ord(ch) <= 0x9F)
-                for ch in ev_u6['reasoning']
-                if ch not in ('\n', '\t')
-            )
-            # Title stripped of controls + edge whitespace, no trailing spaces.
+            # Title stripped of '\x01' / '\x9F' + edge whitespace.
             assert ev_u6['superseding_note_title'] == 'Real title'
 
             # Empty / whitespace-only reasoning → JSONB null (not '').
