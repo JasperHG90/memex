@@ -150,4 +150,7 @@ class OnnxNLIClassifier(BaseOnnxModel):
         return {label: float(probs[i]) for i, label in enumerate(self._label_order)}
 
     async def classify(self, premise: str, hypothesis: str) -> dict[str, float]:
+        # exempt: NLI inference is serialised by self._inference_lock at the
+        # model level (one in-flight call), so a shared async semaphore would
+        # be redundant.
         return await asyncio.to_thread(self._score_pair, premise, hypothesis)
