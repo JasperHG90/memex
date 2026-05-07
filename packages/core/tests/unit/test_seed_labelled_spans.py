@@ -28,12 +28,27 @@ _FILE_MARKERS: dict[str, list[str]] = {
     ],
     'packages/hermes-plugin/src/memex_hermes_plugin/memex/tools.py': [
         'Tier A — Hermes sync wrappers',
+        # WS slot anchors (Hermes scaffolding writes generated code into
+        # these blocks). If any disappear, the WS pipeline silently
+        # produces no-op stubs.
+        '# --- F4 ---',
+        '# --- F5 ---',
+        '# --- F8 ---',
+        '# --- F9 ---',
+        '# --- F20 ---',
+        '# --- F32',
     ],
     'packages/hermes-plugin/src/memex_hermes_plugin/memex/briefing.py': [
         'Tier A — Briefing blocks',
     ],
     'packages/hermes-plugin/src/memex_hermes_plugin/memex/templates.py': [
         'Tier A — Prompt-fragment templates',
+        '# --- F4 ---',
+        '# --- F5 ---',
+        '# --- F8 ---',
+        '# --- F9 ---',
+        '# --- F20 ---',
+        '# --- F32',
     ],
 }
 
