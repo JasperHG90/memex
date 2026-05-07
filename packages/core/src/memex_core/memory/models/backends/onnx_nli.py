@@ -152,20 +152,27 @@ class OnnxNLIClassifier(BaseOnnxModel):
     async def classify(self, premise: str, hypothesis: str) -> dict[str, float]:
         """Classify a single (premise, hypothesis) pair.
 
-        Concurrency notes for the to_thread audit:
+        Concurrency notes for the to_thread audit (see ``__init__`` for
+        the lock framing — both comments describe the SAME lock as
+        defense-in-depth around an ONNX session that the runtime
+        documents as thread-safe):
+
           - Single call site: ``LintLLMService.maybe_run`` (services/lint_llm.py).
             Within one tick, units are processed serially.
-          - The scheduler iterates vaults serially within a tick (see
-            ``scheduler.py:periodic_lint_llm_task``), so concurrent NLI
-            calls only arise across overlapping ticks (e.g. process restart
-            or test fixtures).
-          - At the model level, ``self._inference_lock`` serialises ONNX
-            ``session.run`` so concurrent calls cannot corrupt the runtime;
-            tokenisation and softmax run outside the lock and may interleave.
-          - The classifier handles a single pair per call; throughput
-            ceiling is the inference time, not parallelism. A shared async
-            semaphore would force a queue with no throughput benefit.
+          - The scheduler iterates vaults serially in a tick (see
+            ``scheduler.py:periodic_lint_llm_task``); concurrent NLI calls
+            only arise across overlapping ticks (e.g. process restart).
+          - ``self._inference_lock`` serialises ``session.run`` as
+            defense-in-depth even though ONNX Runtime documents the call
+            as thread-safe. Tokenisation and softmax interleave; the
+            HuggingFace ``tokenizers.Tokenizer.encode`` used here is
+            documented as thread-safe for stateless reads (we never
+            mutate the tokenizer post-init).
+          - Throughput ceiling is inference time (~10-30 ms per pair on
+            CPU); a shared async semaphore would force a queue with no
+            measurable benefit.
         """
-        # exempt: per-pair model with caller-cadence-bounded call rate
-        # and ONNX-level inference lock for runtime safety. See classify().
+        # exempt: per-pair model with caller-cadence-bounded call rate.
+        # Concurrency safety: read-only tokenizer, defense-in-depth ONNX
+        # inference lock; see classify() docstring.
         return await asyncio.to_thread(self._score_pair, premise, hypothesis)
