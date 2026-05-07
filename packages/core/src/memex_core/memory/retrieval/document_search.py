@@ -299,6 +299,15 @@ class NoteSearchEngine:
             for r in results:
                 r.raw_score = None
             return results
+        except BaseException:
+            # CancelledError, KeyboardInterrupt, SystemExit, and unexpected
+            # subclasses of Exception not in the recoverable tuple: still
+            # propagate, but null raw_score on the way out so any caller
+            # that observes the (mutated) results list cannot mistake them
+            # for a successful rerank pass.
+            for r in results:
+                r.raw_score = None
+            raise
 
     async def _identify_relevant_sections(
         self,
