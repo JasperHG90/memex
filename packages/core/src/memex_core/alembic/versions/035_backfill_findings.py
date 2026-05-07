@@ -18,8 +18,12 @@ Postgres would otherwise reject the second duplicate row inside a single
 INSERT with ``cardinality_violation``.
 
 Sanitisation: the ``reasoning`` and ``superseding_note_title`` text fields
-are stripped of ASCII C0/C1 control chars (other than ``\\n`` / ``\\t``)
-and capped to the same 1000 / 200 char limits the runtime engine enforces.
+are stripped of ASCII C0/C1 control chars (other than ``\\n`` / ``\\t``),
+trimmed of leading/trailing whitespace, capped to the same 1000 / 200
+char limits the runtime engine enforces, and — when the cap is hit —
+get the same trailing ``…`` ellipsis the runtime sanitiser appends.
+Empty / whitespace-only inputs become JSONB ``null`` rather than ``""``,
+matching ``_sanitise_evidence_text`` returning ``None``.
 
 The ``backfilled: true`` flag in the resulting evidence JSONB lets
 operators distinguish migration-emitted rows from runtime-emitted rows
@@ -75,13 +79,19 @@ _BACKFILL_SQL = sa.text(f"""
                 COALESCE(deduped.authoritative_unit_id, deduped.from_unit_id),
             'superseded_unit_id', deduped.target_id,
             'reasoning',
-                LEFT(regexp_replace(COALESCE(deduped.reasoning, ''),
-                                    '{_CONTROL_CHAR_REGEX}', '', 'g'),
-                     1000),
+                CASE
+                    WHEN deduped.reasoning IS NULL THEN NULL
+                    WHEN char_length(deduped.reasoning) > 1000
+                        THEN LEFT(deduped.reasoning, 999) || U&'\\2026'
+                    ELSE deduped.reasoning
+                END,
             'superseding_note_title',
-                LEFT(regexp_replace(COALESCE(deduped.title, ''),
-                                    '{_CONTROL_CHAR_REGEX}', '', 'g'),
-                     200),
+                CASE
+                    WHEN deduped.title IS NULL THEN NULL
+                    WHEN char_length(deduped.title) > 200
+                        THEN LEFT(deduped.title, 199) || U&'\\2026'
+                    ELSE deduped.title
+                END,
             'backfilled', true
         ),
         'Review the contradiction and decide whether the superseded unit should be revised or removed.',
@@ -93,8 +103,20 @@ _BACKFILL_SQL = sa.text(f"""
             ml.to_unit_id::text AS target_id,
             ml.from_unit_id::text AS from_unit_id,
             ml.link_metadata ->> 'authoritative_unit_id' AS authoritative_unit_id,
-            ml.link_metadata ->> 'reasoning' AS reasoning,
-            ml.link_metadata ->> 'superseding_note_title' AS title
+            NULLIF(
+                trim(regexp_replace(
+                    COALESCE(ml.link_metadata ->> 'reasoning', ''),
+                    '{_CONTROL_CHAR_REGEX}', '', 'g'
+                )),
+                ''
+            ) AS reasoning,
+            NULLIF(
+                trim(regexp_replace(
+                    COALESCE(ml.link_metadata ->> 'superseding_note_title', ''),
+                    '{_CONTROL_CHAR_REGEX}', '', 'g'
+                )),
+                ''
+            ) AS title
         FROM memory_links ml
         WHERE ml.link_type = 'contradicts'
         ORDER BY ml.vault_id, ml.to_unit_id, ml.from_unit_id
