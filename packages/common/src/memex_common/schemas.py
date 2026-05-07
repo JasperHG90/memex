@@ -82,7 +82,7 @@ class RiskClass(str, Enum):
     none      — public-safe content (default).
     sensitive — flagged for linter review; still retrievable in default scope.
     private   — excluded from default retrieval; surfaced only on explicit query.
-    safety    — recorded but passed through (blocking deferred to pre-flight assessment).
+    safety    — blocked at ingestion (filter_safety_blocked drops the fact pre-persistence).
     """
 
     NONE = 'none'

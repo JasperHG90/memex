@@ -23,7 +23,7 @@
   <img src="https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square" alt="Apache 2.0" />
   <img src="https://img.shields.io/badge/version-v0.1.6a-green?style=flat-square" alt="v0.1.6a" />
 <<<<<<< HEAD
-  <img src="https://img.shields.io/badge/tests-5,509%20passing-brightgreen?style=flat-square" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-5,084%20passing-brightgreen?style=flat-square" alt="Tests" />
 </p>
 
 > [!IMPORTANT]
