@@ -56,11 +56,13 @@ def test_seed_chain_is_linear_and_correct() -> None:
     sd = ScriptDirectory.from_config(cfg)
 
     heads = sd.get_heads()
-    assert heads == ['034_add_mw_mode'], f'Expected single head 034_add_mw_mode, got {heads}'
+    expected_head = '035_backfill_findings'
+    assert heads == [expected_head], f'Expected single head {expected_head}, got {heads}'
 
     walk = list(sd.walk_revisions())
-    top9 = [(r.revision, r.down_revision) for r in walk[:9]]
-    expected_top9 = [
+    top10 = [(r.revision, r.down_revision) for r in walk[:10]]
+    expected_top10 = [
+        ('035_backfill_findings', '034_add_mw_mode'),
         ('034_add_mw_mode', '033_confidence_evidence_count'),
         ('033_confidence_evidence_count', '032_fsfm_decay_columns'),
         ('032_fsfm_decay_columns', '031_proposal_resolved_by'),
@@ -71,7 +73,7 @@ def test_seed_chain_is_linear_and_correct() -> None:
         ('027_consolidation_ticks', '026_revisit_columns'),
         ('026_revisit_columns', '025_maintenance_proposals'),
     ]
-    assert top9 == expected_top9, f'Tier A chain mismatch: got {top9}'
+    assert top10 == expected_top10, f'Tier A chain mismatch: got {top10}'
 
 
 @pytest.mark.parametrize('rev,down,fid', _TIER_A_STUBS)
