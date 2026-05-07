@@ -52,6 +52,10 @@ async def lint_status(
     - ``scope=global``: count for findings with vault_id NULL.
     """
     try:
+        if vault_id is not None:
+            await check_vault_access(auth, [vault_id], api, permission=Permission.READ)
+            count = await api.lint.count_pending(vault_id)
+            return {'scope': 'vault', 'vault_id': str(vault_id), 'pending': count}
         if scope == 'global':
             count = await api.lint.count_pending(None)
             return {'scope': 'global', 'pending': count}
@@ -61,14 +65,10 @@ async def lint_status(
                     text("SELECT count(*) FROM maintenance_proposals WHERE status = 'pending'")
                 )
                 return {'scope': 'all', 'pending': int(row.scalar() or 0)}
-        if vault_id is None:
-            raise HTTPException(
-                status_code=400,
-                detail='vault_id is required when scope=vault',
-            )
-        await check_vault_access(auth, [vault_id], api, permission=Permission.READ)
-        count = await api.lint.count_pending(vault_id)
-        return {'scope': 'vault', 'vault_id': str(vault_id), 'pending': count}
+        raise HTTPException(
+            status_code=400,
+            detail='vault_id is required when scope=vault',
+        )
     except HTTPException:
         raise
     except Exception as e:

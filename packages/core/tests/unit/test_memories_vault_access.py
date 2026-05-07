@@ -14,6 +14,8 @@ sentinel).
 
 from __future__ import annotations
 
+import logging
+from contextlib import contextmanager
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
@@ -26,6 +28,33 @@ from memex_core.server import app
 from memex_core.server.auth import AuthContext, get_auth_context
 from memex_core.server.common import get_api
 from memex_core.services.locks import EntityLockTimeoutError
+
+
+@contextmanager
+def _capture_server_logs(level: int):
+    """Capture records on the ``memex.core.server`` logger directly.
+
+    ``configure_logging`` (called by some sibling tests) sets
+    ``propagate=False`` on the ``memex`` parent logger, which severs the
+    path that pytest's ``caplog`` listens on. Attaching a dedicated handler
+    sidesteps that and works regardless of test order.
+    """
+    server_logger = logging.getLogger('memex.core.server')
+    captured: list[logging.LogRecord] = []
+
+    class _Capture(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            captured.append(record)
+
+    handler = _Capture(level=level)
+    prior_level = server_logger.level
+    server_logger.addHandler(handler)
+    server_logger.setLevel(level)
+    try:
+        yield captured
+    finally:
+        server_logger.removeHandler(handler)
+        server_logger.setLevel(prior_level)
 
 
 ALLOWED_VAULT = uuid4()
@@ -398,7 +427,7 @@ class TestReconsolidateLockTimeoutEnvelope:
         assert resp.status_code == 503, resp.text
         assert resp.headers.get('retry-after') == '30'
 
-    def test_reconsolidate_lock_timeout_logs_full_exception(self, mock_api, caplog):
+    def test_reconsolidate_lock_timeout_logs_full_exception(self, mock_api):
         """Server-side log MUST include the full exception so on-call can
         diagnose lock contention even though the HTTP detail is generic.
         """
@@ -406,7 +435,7 @@ class TestReconsolidateLockTimeoutEnvelope:
             side_effect=EntityLockTimeoutError(f'could not acquire {self._INTERNAL_LEAK_NEEDLE}')
         )
         client = _make_client(mock_api, _unrestricted_writer())
-        with caplog.at_level('WARNING', logger='memex.core.server'):
+        with _capture_server_logs(logging.WARNING) as records:
             resp = client.post(
                 '/api/v1/memory/reconsolidate',
                 json={
@@ -416,7 +445,7 @@ class TestReconsolidateLockTimeoutEnvelope:
                 },
             )
         assert resp.status_code == 503, resp.text
-        warning_records = [r for r in caplog.records if r.levelname == 'WARNING']
+        warning_records = [r for r in records if r.levelno == logging.WARNING]
         assert warning_records, 'Expected a WARNING log for entity lock timeout'
         assert any(self._INTERNAL_LEAK_NEEDLE in r.getMessage() for r in warning_records), (
             f'Expected internal lock-timeout detail in WARNING logs; got: '
@@ -492,7 +521,7 @@ class TestReconsolidateResponseSchemaDrift:
     with detail ``'Internal response schema mismatch'``.
     """
 
-    def test_missing_required_key_logs_schema_drift_and_500(self, mock_api, caplog):
+    def test_missing_required_key_logs_schema_drift_and_500(self, mock_api):
         # Service returns a dict missing required ``units_examined`` and
         # ``contradictions_run`` -- pure schema drift, not a business error.
         mock_api.reconsolidate_entity = AsyncMock(
@@ -506,7 +535,7 @@ class TestReconsolidateResponseSchemaDrift:
             }
         )
         client = _make_client(mock_api, _unrestricted_writer())
-        with caplog.at_level('CRITICAL', logger='memex.core.server'):
+        with _capture_server_logs(logging.CRITICAL) as records:
             resp = client.post(
                 '/api/v1/memory/reconsolidate',
                 json={
@@ -523,7 +552,7 @@ class TestReconsolidateResponseSchemaDrift:
         # The "schema drift" marker MUST appear in the logs at CRITICAL --
         # this is the on-call signal that distinguishes a code bug from a
         # client-visible business error.
-        critical_records = [r for r in caplog.records if r.levelname == 'CRITICAL']
+        critical_records = [r for r in records if r.levelno == logging.CRITICAL]
         assert critical_records, 'Expected a CRITICAL log for schema drift'
         assert any('schema drift' in r.getMessage().lower() for r in critical_records), (
             f'Expected "schema drift" in CRITICAL logs; got: '

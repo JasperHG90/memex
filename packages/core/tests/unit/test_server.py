@@ -31,7 +31,7 @@ def mock_api():
 
     # Use SimpleNamespace to simulate an object with attributes that Pydantic can read
     mock_api.create_vault.return_value = SimpleNamespace(
-        id=MOCK_VAULT_ID, name='Test Vault', description='A test vault'
+        id=MOCK_VAULT_ID, name='Test Vault', description='A test vault', mw_mode='stationary'
     )
 
     mock_api.search.return_value = (
