@@ -119,6 +119,7 @@ async def delete_mental_model(
     Delete the mental model for an entity in a specific vault. Does NOT delete the entity itself.
     """
     config: MemexConfig = ctx.obj
+    effective_vault = vault if vault is not None else config.vault.active
 
     async with get_api_context(config) as api:
         try:
@@ -129,14 +130,21 @@ async def delete_mental_model(
             handle_api_error(e)
             return
 
-        vault_label = vault or 'active vault'
+        try:
+            resolved_vault_id = (
+                await api.resolve_vault_identifier(effective_vault) if effective_vault else None
+            )
+        except Exception as e:
+            handle_api_error(e)
+            return
+
+        vault_label = effective_vault or 'active vault'
         if not force:
             if not typer.confirm(f'Delete mental model for "{entity.name}" in {vault_label}?'):
                 console.print('[yellow]Aborted.[/yellow]')
                 return
 
         try:
-            resolved_vault_id = await api.resolve_vault_identifier(vault) if vault else None
             success = await api.delete_mental_model(entity.id, vault_id=resolved_vault_id)
         except Exception as e:
             handle_api_error(e)

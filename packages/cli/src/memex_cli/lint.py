@@ -67,7 +67,7 @@ async def lint_status(
     ctx: typer.Context,
     vault: Annotated[
         str | None,
-        typer.Option('--vault', '-v', help='Vault name or UUID. Defaults to the active vault.'),
+        typer.Option('--vault', '-v', help='Filter to one vault by name or UUID.'),
     ] = None,
     is_global: Annotated[
         bool,
@@ -109,7 +109,7 @@ async def lint_findings(
     ctx: typer.Context,
     vault: Annotated[
         str | None,
-        typer.Option('--vault', '-v', help='Vault name or UUID. Defaults to the active vault.'),
+        typer.Option('--vault', '-v', help='Filter to one vault by name or UUID.'),
     ] = None,
     lint_type: Annotated[
         str | None,
@@ -212,7 +212,7 @@ async def lint_review_cmd(
     ctx: typer.Context,
     vault: Annotated[
         str | None,
-        typer.Option('--vault', '-v', help='Vault name or UUID. Defaults to the active vault.'),
+        typer.Option('--vault', '-v', help='Filter to one vault by name or UUID.'),
     ] = None,
     is_global: Annotated[
         bool,

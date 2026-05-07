@@ -127,9 +127,6 @@ async def add_note(
     Use --asset to attach auxiliary files (images, PDFs) to a note.
     """
     config: MemexConfig = ctx.obj
-    # Override active vault if specified
-    if vault:
-        config.vault.active = vault
 
     # Determine input source
     if file:
@@ -144,6 +141,8 @@ async def add_note(
     else:
         console.print('[red]Error: Must provide content, --file, or --url.[/red]')
         raise typer.Exit(1)
+
+    effective_vault = vault if vault is not None else config.write_vault
 
     console.print('[bold green]Adding Note[/bold green]')
 
@@ -169,7 +168,7 @@ async def add_note(
                 req = IngestURLRequest(
                     url=url,
                     assets=assets_dict,
-                    vault_id=config.write_vault,
+                    vault_id=effective_vault,
                     user_notes=user_notes,
                 )
                 result = await api.ingest_url(req, background=background)
@@ -208,8 +207,8 @@ async def add_note(
                     f'[cyan]Uploading and summarizing {len(files_to_upload)} file(s)...[/cyan]'
                 )
                 metadata = {}
-                if config.write_vault:
-                    metadata['vault_id'] = str(config.write_vault)
+                if effective_vault:
+                    metadata['vault_id'] = str(effective_vault)
                 if user_notes:
                     metadata['user_notes'] = user_notes
 
@@ -283,7 +282,7 @@ async def add_note(
                     files=assets_dict,
                     tags=effective_tags,
                     note_key=key,
-                    vault_id=config.write_vault,
+                    vault_id=effective_vault,
                     user_notes=user_notes,
                     author=author,
                     template=template,

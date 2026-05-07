@@ -75,13 +75,34 @@ def test_deprioritize_default_vault(runner, mock_api, mock_config, monkeypatch):
     """Omitting --vault falls back to config.vault.active."""
     unit_id = str(uuid4())
     vault_id = str(uuid4())
+    mock_config.vault.active = 'my-active-vault'
     mock_api.deprioritize_memory_unit.return_value = _fake_unit(unit_id)
     mock_api.resolve_vault_identifier.return_value = vault_id
     monkeypatch.setattr('memex_cli.memory.get_api_context', lambda config: mock_api)
 
     result = runner.invoke(app, ['deprioritize', unit_id], obj=mock_config)
     assert result.exit_code == 0, result.stdout
-    mock_api.resolve_vault_identifier.assert_called_once_with(mock_config.vault.active)
+    mock_api.resolve_vault_identifier.assert_called_once_with('my-active-vault')
+
+
+def test_deprioritize_no_vault_configured_surfaces_error(
+    runner, mock_api, mock_config, monkeypatch
+):
+    """No --vault and no active vault → resolve raises → CLI exits non-zero."""
+    import httpx
+
+    unit_id = str(uuid4())
+    request = httpx.Request('GET', 'http://example/api/v1/vaults')
+    response = httpx.Response(404, request=request, json={'detail': "Vault 'None' not found."})
+    mock_api.resolve_vault_identifier.side_effect = httpx.HTTPStatusError(
+        'not found', request=request, response=response
+    )
+    monkeypatch.setattr('memex_cli.memory.get_api_context', lambda config: mock_api)
+
+    assert mock_config.vault.active is None
+    result = runner.invoke(app, ['deprioritize', unit_id], obj=mock_config)
+    assert result.exit_code != 0
+    mock_api.deprioritize_memory_unit.assert_not_called()
 
 
 def test_deprioritize_help_lists_command():

@@ -204,22 +204,19 @@ def test_add_note_file_not_exists(runner):
 
 
 def test_add_note_with_vault(runner, mock_api, mock_config, monkeypatch):
-    captured_config = None
-
-    def mock_get_api_context(config):
-        nonlocal captured_config
-        captured_config = config
-        return mock_api
-
     mock_api.ingest.return_value = IngestResponse(
         status='success', note_id='test-uuid', unit_ids=[uuid4()]
     )
-    monkeypatch.setattr('memex_cli.notes.get_api_context', mock_get_api_context)
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
 
     result = runner.invoke(note_app, ['add', 'test', '--vault', 'MyVault'], obj=mock_config)
     assert result.exit_code == 0
-    assert captured_config is not None
-    assert captured_config.vault.active == 'MyVault'
+    mock_api.ingest.assert_called_once()
+    note = mock_api.ingest.call_args[0][0]
+    assert isinstance(note, NoteCreateDTO)
+    assert note.vault_id == 'MyVault'
+    # The shared config object is NOT mutated as a side-effect.
+    assert mock_config.vault.active is None
 
 
 def test_add_note_with_key(runner, mock_api, mock_config, monkeypatch):
