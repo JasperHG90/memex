@@ -35,6 +35,27 @@ from memex_core.memory.sql_models import (
 logger = logging.getLogger('memex.core.memory.contradiction')
 
 
+def _sanitise_evidence_text(value: Any, *, max_len: int) -> str | None:
+    """Defensive sanitisation for free-text payloads stored in lint
+    ``evidence`` JSONB. Strips control characters except ``\n``/``\t``,
+    truncates to ``max_len`` characters, returns None for empty/None input.
+
+    Downstream renderers must still escape per their target format
+    (HTML, Markdown, terminal); this only protects the storage layer.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        value = str(value)
+    cleaned = ''.join(ch for ch in value if ch in ('\n', '\t') or ord(ch) >= 32)
+    cleaned = cleaned.strip()
+    if not cleaned:
+        return None
+    if len(cleaned) > max_len:
+        cleaned = cleaned[: max_len - 1] + '…'
+    return cleaned
+
+
 class ContradictionEngine:
     """Detects and records contradictions between memory units."""
 
@@ -192,22 +213,32 @@ class ContradictionEngine:
         unit that gets contradicted again after triage deserves a new alert.
 
         ``evidence`` carries free-text ``reasoning`` and ``superseding_note_title``
-        sourced from upstream (LLM output and note titles). Downstream renderers
-        MUST escape these values; do not assume they are safe HTML / Markdown.
+        sourced from upstream (LLM output and note titles). The values are
+        sanitised at write time (control-chars stripped, length-capped) so
+        the JSONB column cannot store arbitrarily large or terminal-hostile
+        payloads. Downstream renderers MUST still escape per their target
+        format (HTML, Markdown, etc.); do not assume the values are safe
+        for direct rendering.
 
         Within a single call, multiple contradicts links may share the same
         superseded ``target_id`` (e.g. two new units contradicting the same
         old fact in one ingestion batch). Postgres rejects duplicate target
         rows in a single ``ON CONFLICT DO NOTHING`` statement with a
         ``cardinality_violation`` because the index arbiter cannot resolve
-        them in one pass. We dedupe by ``target_id`` first and keep the
-        first link's evidence for that row.
+        them in one pass. We dedupe by ``target_id`` first; ``links`` is
+        sorted by ``(target_id, from_unit_id)`` so the kept finding is
+        deterministic across retries even when upstream LLM ordering shifts.
         """
+        # Stable sort so the kept link per target is deterministic across
+        # retries — without this, the LLM's flagged_ids ordering decides
+        # which authoritative_unit_id ends up in evidence.
+        sorted_links = sorted(
+            (lk for lk in links if lk.link_type == 'contradicts'),
+            key=lambda lk: (str(lk.to_unit_id), str(lk.from_unit_id)),
+        )
         seen_targets: set[str] = set()
         rows: list[dict[str, Any]] = []
-        for link in links:
-            if link.link_type != 'contradicts':
-                continue
+        for link in sorted_links:
             target_id = str(link.to_unit_id)
             if target_id in seen_targets:
                 continue
@@ -216,8 +247,10 @@ class ContradictionEngine:
             evidence = {
                 'authoritative_unit_id': metadata.get('authoritative_unit_id'),
                 'superseded_unit_id': target_id,
-                'reasoning': metadata.get('reasoning'),
-                'superseding_note_title': metadata.get('superseding_note_title'),
+                'reasoning': _sanitise_evidence_text(metadata.get('reasoning'), max_len=1000),
+                'superseding_note_title': _sanitise_evidence_text(
+                    metadata.get('superseding_note_title'), max_len=200
+                ),
             }
             rows.append(
                 {

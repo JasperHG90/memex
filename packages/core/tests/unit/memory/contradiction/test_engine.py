@@ -3,7 +3,7 @@
 import pytest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from memex_common.config import ContradictionConfig
 from memex_core.memory.contradiction.engine import ContradictionEngine
@@ -645,6 +645,98 @@ class TestEmitContradictionFindings:
         assert len(target_id_keys) == 1, (
             f'expected 1 target_id parameter (deduped), got {target_id_keys}'
         )
+
+    @pytest.mark.asyncio
+    async def test_dedup_pick_is_deterministic_under_input_reorder(self, engine):
+        """Dedup orders links by (target_id, from_unit_id) before keeping the
+        first per target. This makes the kept finding deterministic across
+        retries even when upstream LLM ordering shifts.
+        """
+        vault_id = uuid4()
+        sup_id = uuid4()
+        # Build IDs with a known string ordering so we can predict the pick.
+        auth_lo = UUID('00000000-0000-0000-0000-000000000001')
+        auth_hi = UUID('ffffffff-ffff-ffff-ffff-ffffffffffff')
+        link_lo = MemoryLink(
+            from_unit_id=auth_lo,
+            to_unit_id=sup_id,
+            link_type='contradicts',
+            vault_id=vault_id,
+            weight=1.0,
+            link_metadata={
+                'authoritative_unit_id': str(auth_lo),
+                'reasoning': 'lo wins by sort order',
+            },
+        )
+        link_hi = MemoryLink(
+            from_unit_id=auth_hi,
+            to_unit_id=sup_id,
+            link_type='contradicts',
+            vault_id=vault_id,
+            weight=1.0,
+            link_metadata={
+                'authoritative_unit_id': str(auth_hi),
+                'reasoning': 'hi loses',
+            },
+        )
+
+        async def _capture_exec(stmt):
+            captured.append(stmt)
+            return MagicMock()
+
+        for ordering in ([link_lo, link_hi], [link_hi, link_lo]):
+            captured: list = []
+            session = AsyncMock()
+            session.exec = AsyncMock(side_effect=_capture_exec)
+            await engine._emit_contradiction_findings(session, ordering, vault_id)
+            params = captured[0].compile().params
+            evidence_values = [v for k, v in params.items() if 'evidence' in k]
+            assert len(evidence_values) == 1
+            kept = evidence_values[0]
+            assert kept['authoritative_unit_id'] == str(auth_lo), (
+                f'expected the lo authoritative_unit_id (sort-stable pick) regardless of '
+                f'input order, got {kept}'
+            )
+
+    @pytest.mark.asyncio
+    async def test_evidence_text_is_sanitised(self, engine):
+        """``reasoning`` and ``superseding_note_title`` come from upstream
+        free text; the engine strips control characters and caps length so
+        the JSONB column cannot store payload bombs.
+        """
+        vault_id = uuid4()
+        sup_id = uuid4()
+        long_text = 'A' * 5000  # exceeds reasoning cap (1000)
+        bad_chars = 'a\x00b\x07c'  # NUL + bell
+        link = MemoryLink(
+            from_unit_id=uuid4(),
+            to_unit_id=sup_id,
+            link_type='contradicts',
+            vault_id=vault_id,
+            weight=1.0,
+            link_metadata={
+                'authoritative_unit_id': str(uuid4()),
+                'reasoning': long_text + bad_chars,
+                'superseding_note_title': 'T' * 500 + bad_chars,
+            },
+        )
+        captured: list = []
+
+        async def _capture_exec(stmt):
+            captured.append(stmt)
+            return MagicMock()
+
+        session = AsyncMock()
+        session.exec = AsyncMock(side_effect=_capture_exec)
+        await engine._emit_contradiction_findings(session, [link], vault_id)
+        params = captured[0].compile().params
+        evidence = next(v for k, v in params.items() if 'evidence' in k)
+        assert len(evidence['reasoning']) <= 1000
+        assert len(evidence['superseding_note_title']) <= 200
+        assert '\x00' not in evidence['reasoning']
+        assert '\x07' not in evidence['reasoning']
+        assert '\x00' not in evidence['superseding_note_title']
+        assert '\x07' not in evidence['superseding_note_title']
 
 
 class TestProcessFlaggedUnitContradict:
