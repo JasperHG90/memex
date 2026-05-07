@@ -1,4 +1,4 @@
-"""Unit tests for migration 030_proposal_resolved_by (issue #34).
+"""Unit tests for migration 031_proposal_resolved_by.
 
 Static checks that don't need a database. The behavioural round-trip
 assertion (column appears on upgrade, disappears on downgrade) lives in the

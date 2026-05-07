@@ -49,7 +49,9 @@ class TestContradictionConfigBounds:
 class TestPenaltyMathInvariant:
     """For every accepted (alpha, superseded_threshold) combo, the contradict
     penalty must drop a fresh unit (confidence=1.0) strictly below the
-    threshold AND the resulting confidence must clamp into [0, 1].
+    threshold AND the resulting confidence must clamp into [0, 1]. Some
+    extreme combos (large alpha, small threshold) trivially clamp the unit
+    to 0.0 — that's still strictly < threshold > 0, so the invariant holds.
     """
 
     @pytest.mark.parametrize(
@@ -58,14 +60,38 @@ class TestPenaltyMathInvariant:
             (0.1, 0.3),  # defaults
             (0.05, 0.1),
             (0.5, 0.99),
-            (1.0, 0.01),
+            (1.0, 0.01),  # trivial-clamp regime: final=0, still < 0.01
             (0.01, 0.5),
+            (0.001, 0.99),  # near-boundary: final=0.989 < 0.99 by 0.001
         ],
     )
     def test_penalty_drops_below_threshold(self, alpha: float, threshold: float) -> None:
         cfg = ContradictionConfig(alpha=alpha, superseded_threshold=threshold)
         penalty = 1.0 - cfg.superseded_threshold + cfg.alpha
         final = max(0.0, min(1.0, 1.0 - penalty))
-        assert final < cfg.superseded_threshold, (
+        # Float-tolerant strict less-than: at least one ULP below threshold.
+        assert final < cfg.superseded_threshold - 1e-12, (
             f'penalty={penalty} leaves final={final}, threshold={threshold}'
+        )
+
+    @pytest.mark.parametrize(
+        'alpha,threshold',
+        [
+            (0.1, 0.3),  # defaults
+            (0.05, 0.5),
+            (0.01, 0.5),
+        ],
+    )
+    def test_normal_regime_does_not_trivially_clamp(self, alpha: float, threshold: float) -> None:
+        """In the documented sane range (small-to-moderate alpha + interior
+        threshold), the penalty leaves final > 0 — the unit is superseded
+        but not zeroed out, preserving signal for tooling that distinguishes
+        'mildly superseded' from 'fully discarded'.
+        """
+        cfg = ContradictionConfig(alpha=alpha, superseded_threshold=threshold)
+        penalty = 1.0 - cfg.superseded_threshold + cfg.alpha
+        final = max(0.0, min(1.0, 1.0 - penalty))
+        assert final > 0.0, (
+            f'(alpha={alpha}, threshold={threshold}) trivially clamps to 0; '
+            'expected interior result for the sane regime'
         )
