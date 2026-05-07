@@ -124,12 +124,22 @@ class TestTriage:
 class TestConfidenceAdjustment:
     """Test confidence adjustment logic (Hindsight Eq. 26)."""
 
-    def test_contradict_decreases_by_2alpha(self, config):
-        """Contradict should decrease confidence by 2*alpha."""
+    def test_contradict_drops_below_superseded_threshold(self, config):
+        """A single contradict must push confidence strictly below superseded_threshold.
+
+        The retrieval engine treats units with ``confidence < superseded_threshold``
+        as superseded. A weaker penalty (e.g. ``2*alpha``) leaves the unit at 0.8
+        with the default ``superseded_threshold=0.3``, so contradictions never
+        surface as supersession in retrieval. The engine therefore picks the
+        penalty so that ``1.0 - penalty < superseded_threshold``.
+        """
         alpha = config.alpha
+        threshold = config.superseded_threshold
+        penalty = 1.0 - threshold + alpha
         initial = 1.0
-        expected = max(initial - 2 * alpha, 0.0)
-        assert expected == pytest.approx(0.8)
+        final = max(initial - penalty, 0.0)
+        assert final < threshold
+        assert final == pytest.approx(0.2)
 
     def test_weaken_decreases_by_alpha(self, config):
         """Weaken should decrease confidence by alpha."""
@@ -521,6 +531,119 @@ class TestConfidenceDeltaAccumulation:
         assert any(v == pytest.approx(-0.2, abs=1e-9) for v in delta_params), (
             f'expected -0.2 accumulated delta, got float params: {delta_params}'
         )
+
+
+class TestEmitContradictionFindings:
+    """``_emit_contradiction_findings`` writes a maintenance_proposals row for
+    every ``contradicts`` link so ``memex lint findings`` surfaces them.
+    """
+
+    @pytest.mark.asyncio
+    async def test_contradicts_link_emits_one_finding(self, engine):
+        vault_id = uuid4()
+        auth_id, sup_id = uuid4(), uuid4()
+        link = MemoryLink(
+            from_unit_id=auth_id,
+            to_unit_id=sup_id,
+            link_type='contradicts',
+            vault_id=vault_id,
+            weight=1.0,
+            link_metadata={
+                'authoritative_unit_id': str(auth_id),
+                'superseded_unit_id': str(sup_id),
+                'reasoning': 'supersedes prior policy',
+                'superseding_note_title': 'Quick Note',
+            },
+        )
+
+        session = AsyncMock()
+        captured: list = []
+
+        async def _capture_exec(stmt):
+            captured.append(stmt)
+            return MagicMock()
+
+        session.exec = AsyncMock(side_effect=_capture_exec)
+
+        await engine._emit_contradiction_findings(session, [link], vault_id)
+
+        assert len(captured) == 1
+        compiled = str(captured[0])
+        assert 'maintenance_proposals' in compiled.lower()
+        assert 'on conflict' in compiled.lower()
+
+    @pytest.mark.asyncio
+    async def test_non_contradict_links_skipped(self, engine):
+        vault_id = uuid4()
+        link = MemoryLink(
+            from_unit_id=uuid4(),
+            to_unit_id=uuid4(),
+            link_type='reinforces',
+            vault_id=vault_id,
+            weight=1.0,
+            link_metadata={},
+        )
+
+        session = AsyncMock()
+        session.exec = AsyncMock()
+
+        await engine._emit_contradiction_findings(session, [link], vault_id)
+
+        session.exec.assert_not_called()
+
+
+class TestProcessFlaggedUnitContradict:
+    """Path-level test: a single contradict relation must emit a delta that
+    drops confidence strictly below ``superseded_threshold`` so retrieval
+    treats the unit as superseded immediately (no need for repeated hits).
+    """
+
+    @pytest.mark.asyncio
+    async def test_single_contradict_emits_supersession_delta(self, engine):
+        vault_id = uuid4()
+        new_unit = _make_unit(
+            text='Key rotation has been discontinued',
+            event_date=datetime(2026, 5, 5, tzinfo=timezone.utc),
+        )
+        existing_unit = _make_unit(
+            text='Keys are rotated every 90 days',
+            event_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+
+        rel = ContradictionRelationship(
+            existing_id=str(existing_unit.id),
+            relation='contradict',
+            authoritative='new',
+            reasoning='supersedes prior policy',
+        )
+
+        session = AsyncMock()
+
+        with (
+            patch(
+                'memex_core.memory.contradiction.engine.get_candidates',
+                AsyncMock(return_value=[existing_unit]),
+            ),
+            patch.object(engine, '_classify', AsyncMock(return_value=[rel])),
+            patch.object(engine, '_get_note_title', AsyncMock(return_value='Quick Note')),
+        ):
+            links, deltas, bumps = await engine._process_flagged_unit(session, new_unit, vault_id)
+
+        assert len(links) == 1
+        assert links[0].link_type == 'contradicts'
+
+        delta = deltas[existing_unit.id]
+        # 1.0 - threshold + alpha = 1.0 - 0.3 + 0.1 = 0.8
+        threshold = engine.config.superseded_threshold
+        alpha = engine.config.alpha
+        assert delta == pytest.approx(-(1.0 - threshold + alpha))
+
+        final_confidence = max(0.0, 1.0 + delta)
+        assert final_confidence < threshold, (
+            f'expected confidence below {threshold}, got {final_confidence}'
+        )
+
+        assert bumps[existing_unit.id] == 1
 
 
 class TestTemporalDefault:

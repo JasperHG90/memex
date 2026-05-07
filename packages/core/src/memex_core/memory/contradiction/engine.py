@@ -6,7 +6,7 @@ from typing import Any
 from uuid import UUID
 
 import dspy
-from sqlalchemy import func as sa_func, update
+from sqlalchemy import func as sa_func, text as sa_text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import select, col
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -22,7 +22,15 @@ from memex_core.memory.contradiction.signatures import (
     TriageNewUnits,
     TriageUnit,
 )
-from memex_core.memory.sql_models import MemoryLink, MemoryUnit, Note
+from memex_core.memory.sql_models import (
+    LintSource,
+    LintStatus,
+    LintType,
+    MaintenanceProposal,
+    MemoryLink,
+    MemoryUnit,
+    Note,
+)
 
 logger = logging.getLogger('memex.core.memory.contradiction')
 
@@ -135,6 +143,8 @@ class ContradictionEngine:
                 await session.exec(upsert_stmt)  # type: ignore[arg-type]
                 all_links = list(deduped.values())
 
+                await self._emit_contradiction_findings(session, all_links, vault_id)
+
             # Clamp per-unit deltas via SQL LEAST/GREATEST to prevent races on
             # overlapping units (mirrors application-level max(0, min(1, ...))).
             for unit_id, delta in confidence_deltas.items():
@@ -162,6 +172,56 @@ class ContradictionEngine:
                 len(confidence_deltas),
                 sum(evidence_bumps.values()),
             )
+
+    async def _emit_contradiction_findings(
+        self,
+        session: AsyncSession,
+        links: list[MemoryLink],
+        vault_id: UUID,
+    ) -> None:
+        """Surface ``contradicts`` links as ``maintenance_proposals`` rows so
+        ``memex lint findings`` shows them immediately, without waiting on the
+        periodic LLM-lint tick.
+
+        One finding per superseded unit. The partial unique index on
+        ``(rule_name, target_type, target_id, vault_id) WHERE status='pending'``
+        deduplicates re-emissions for the same unit.
+        """
+        rows: list[dict[str, Any]] = []
+        for link in links:
+            if link.link_type != 'contradicts':
+                continue
+            metadata = link.link_metadata or {}
+            evidence = {
+                'authoritative_unit_id': metadata.get('authoritative_unit_id'),
+                'superseded_unit_id': str(link.to_unit_id),
+                'reasoning': metadata.get('reasoning'),
+                'superseding_note_title': metadata.get('superseding_note_title'),
+            }
+            rows.append(
+                {
+                    'vault_id': vault_id,
+                    'lint_type': LintType.QUALITY.value,
+                    'target_type': 'memory_unit',
+                    'target_id': str(link.to_unit_id),
+                    'rule_name': 'semantic_contradiction',
+                    'evidence': evidence,
+                    'suggested_action': (
+                        'Review the contradiction and decide whether the '
+                        'superseded unit should be revised or removed.'
+                    ),
+                    'status': LintStatus.PENDING.value,
+                    'source': LintSource.LLM.value,
+                }
+            )
+        if not rows:
+            return
+        insert_stmt = pg_insert(MaintenanceProposal).values(rows)
+        insert_stmt = insert_stmt.on_conflict_do_nothing(
+            index_elements=['rule_name', 'target_type', 'target_id', 'vault_id'],
+            index_where=sa_text("status = 'pending'"),
+        )
+        await session.exec(insert_stmt)  # type: ignore[arg-type]
 
     async def _load_units(self, session: AsyncSession, unit_ids: list[UUID]) -> list[MemoryUnit]:
         """Load memory units by IDs."""
@@ -252,8 +312,11 @@ class ContradictionEngine:
                 evidence_bumps[superseded.id] = evidence_bumps.get(superseded.id, 0) + 1
                 link_type = 'weakens'
             elif relation == 'contradict':
+                # Push confidence below superseded_threshold so contradicted
+                # units are immediately recognized as superseded by retrieval.
+                penalty = 1.0 - self.config.superseded_threshold + self.config.alpha
                 confidence_deltas[superseded.id] = (
-                    confidence_deltas.get(superseded.id, 0.0) - 2 * self.config.alpha
+                    confidence_deltas.get(superseded.id, 0.0) - penalty
                 )
                 evidence_bumps[superseded.id] = evidence_bumps.get(superseded.id, 0) + 1
                 link_type = 'contradicts'
