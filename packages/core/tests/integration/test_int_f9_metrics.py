@@ -76,6 +76,10 @@ def metrics_locks_service(metastore, memex_config, asyncpg_dsn) -> LocksService:
     svc.contradiction = contradiction
     svc.units = None  # consolidate dry_run does not need units
     svc._dsn = asyncpg_dsn
+    # ``__new__`` bypasses ``__init__``, so the lazy-init attributes that
+    # ``_get_pool`` and ``consolidate_vault`` read must be set explicitly.
+    svc._pool = None
+    svc._has_maintenance_proposals_table_cache = None
     return svc
 
 

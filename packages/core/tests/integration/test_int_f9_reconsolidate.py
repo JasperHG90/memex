@@ -80,7 +80,12 @@ def mocked_locks_service(metastore, memex_config, asyncpg_dsn) -> LocksService:
     svc.config = memex_config
     svc.reflection = reflection
     svc.contradiction = contradiction
+    svc.units = None
     svc._dsn = asyncpg_dsn
+    # ``__new__`` bypasses ``__init__``, so the lazy-init attributes that
+    # ``_get_pool`` reads must be set explicitly.
+    svc._pool = None
+    svc._has_maintenance_proposals_table_cache = None
     return svc
 
 
