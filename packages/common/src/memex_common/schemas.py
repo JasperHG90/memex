@@ -421,6 +421,17 @@ class CreateVaultRequest(BaseModel):
     description: str | None = Field(default=None, description='Optional description.')
 
 
+class SetMwModeRequest(BaseModel):
+    """Request body for ``POST /vaults/{id}/mw-mode``."""
+
+    mode: str = Field(
+        ...,
+        description='Memory Worth counter mode for the vault.',
+        examples=['stationary', 'ema'],
+        pattern='^(stationary|ema)$',
+    )
+
+
 class MemoryUnitBase(VaultMixin):
     """Base schema for Memory Unit shared between DTOs and SQLModels."""
 

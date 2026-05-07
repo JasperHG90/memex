@@ -11,12 +11,13 @@ from memex_common.config import Permission
 from memex_common.exceptions import MemexError
 from memex_core.server.auth import (
     AuthContext,
+    check_vault_access,
     get_auth_context,
     require_delete,
     require_read,
     require_write,
 )
-from memex_common.schemas import CreateVaultRequest, VaultDTO
+from memex_common.schemas import CreateVaultRequest, SetMwModeRequest, VaultDTO
 
 from memex_core.api import MemexAPI
 from memex_core.server.common import (
@@ -248,23 +249,20 @@ async def delete_vault(vault_id: UUID, api: Annotated[MemexAPI, Depends(get_api)
 )
 async def set_vault_mw_mode(
     vault_id: UUID,
+    request: Annotated[SetMwModeRequest, Body(...)],
     api: Annotated[MemexAPI, Depends(get_api)],
-    body: Annotated[dict[str, str], Body(...)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
     """Set the Memory Worth counter mode for a vault (stationary or ema)."""
-    mode = body.get('mode')
-    if mode not in ('stationary', 'ema'):
-        raise HTTPException(status_code=400, detail="mode must be 'stationary' or 'ema'")
+    await check_vault_access(auth, [vault_id], api, permission=Permission.WRITE)
     try:
-        vault = await api.set_mw_mode(vault_id, mode)
+        vault = await api.set_mw_mode(vault_id, request.mode)
         return VaultDTO(
             id=vault.id,
             name=vault.name,
             description=vault.description,
             mw_mode=vault.mw_mode,
         )
-    except HTTPException:
-        raise
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to set mw_mode')
 

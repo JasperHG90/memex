@@ -359,8 +359,63 @@ def test_set_mw_mode_route_validates_and_calls_api():
             assert body['mw_mode'] == 'ema'
             api.set_mw_mode.assert_awaited_once_with(vault_id, 'ema')
 
+            # Invalid mode caught by Pydantic body validation → 422.
             resp = client.post(f'/api/v1/vaults/{vault_id}/mw-mode', json={'mode': 'banana'})
-            assert resp.status_code == 400, resp.text
+            assert resp.status_code == 422, resp.text
+    finally:
+        app.dependency_overrides.pop(get_api, None)
+        app.dependency_overrides.pop(get_auth_context, None)
+
+
+@pytest.mark.integration
+def test_set_mw_mode_route_blocks_forbidden_vault():
+    """A scoped writer keyed to vault-A must NOT be able to flip mw_mode on
+    vault-B. Regression test for the prior auth gap on
+    POST /vaults/{id}/mw-mode (the previous version used Depends(require_write)
+    only, no per-vault gate).
+    """
+    from types import SimpleNamespace
+    from uuid import UUID
+
+    from memex_common.config import POLICY_PERMISSIONS, Policy
+    from memex_core.server import app
+    from memex_core.server.auth import AuthContext, get_auth_context
+    from memex_core.server.common import get_api
+
+    allowed_vault = uuid4()
+    forbidden_vault = uuid4()
+
+    api = AsyncMock()
+    api.set_mw_mode.return_value = SimpleNamespace(
+        id=forbidden_vault, name='x', description=None, mw_mode='ema'
+    )
+
+    async def _resolve(identifier):
+        if isinstance(identifier, UUID):
+            return identifier
+        return UUID(str(identifier))
+
+    api.resolve_vault_identifier = AsyncMock(side_effect=_resolve)
+
+    scoped_writer = AuthContext(
+        key_prefix='test1234',
+        key_name='scoped-writer',
+        policy=Policy.WRITER,
+        permissions=POLICY_PERMISSIONS[Policy.WRITER],
+        vault_ids=[str(allowed_vault)],
+        read_vault_ids=None,
+    )
+
+    app.dependency_overrides[get_api] = lambda: api
+    app.dependency_overrides[get_auth_context] = lambda: scoped_writer
+    try:
+        with TestClient(app) as client:
+            resp = client.post(f'/api/v1/vaults/{forbidden_vault}/mw-mode', json={'mode': 'ema'})
+            assert resp.status_code == 403, resp.text
+            api.set_mw_mode.assert_not_called()
+
+            resp = client.post(f'/api/v1/vaults/{allowed_vault}/mw-mode', json={'mode': 'ema'})
+            assert resp.status_code == 200, resp.text
     finally:
         app.dependency_overrides.pop(get_api, None)
         app.dependency_overrides.pop(get_auth_context, None)
@@ -373,37 +428,68 @@ def test_set_mw_mode_route_validates_and_calls_api():
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_note_search_raw_score_present_when_reranked():
-    """``DocumentSearchEngine`` populates ``raw_score`` with the pre-rerank
-    RRF score when reranking runs, and clears it to ``None`` when reranking
-    is disabled. This is a no-DB unit-style check on the rerank helper to
-    keep CI fast; a full retrieval round-trip is covered by other tests.
+async def test_rerank_success_preserves_rrf_in_raw_score():
+    """When ``_rerank_results`` succeeds, ``score`` gets the sigmoid-normalised
+    reranker output and ``raw_score`` keeps the pre-rerank RRF score. Drives
+    the real method against a stub reranker — not the field-rebinding pattern
+    the prior version used.
     """
     from memex_common.schemas import NoteSearchResult
+    from memex_core.memory.retrieval.document_search import NoteSearchEngine
 
+    engine = NoteSearchEngine.__new__(NoteSearchEngine)
+
+    class _StubReranker:
+        def score(self, query, texts):
+            return [10.0 for _ in texts]
+
+    engine.reranker = _StubReranker()  # type: ignore[attr-defined]
+
+    note_a, note_b = uuid4(), uuid4()
     results = [
-        NoteSearchResult(note_id=uuid4(), metadata={}, score=0.8, raw_score=0.8),
-        NoteSearchResult(note_id=uuid4(), metadata={}, score=0.6, raw_score=0.6),
+        NoteSearchResult(note_id=note_a, metadata={}, score=0.8, raw_score=0.8),
+        NoteSearchResult(note_id=note_b, metadata={}, score=0.6, raw_score=0.6),
     ]
+    chunk_text = {note_a: 'a text', note_b: 'b text'}
 
-    # When rerank is disabled, the engine path sets raw_score to None.
-    for r in results:
-        r.raw_score = None
-    assert all(r.raw_score is None for r in results)
+    out = await engine._rerank_results('q', results, chunk_text)
 
-    # When rerank runs, raw_score keeps the original RRF score and ``score``
-    # gets overwritten with the sigmoid-normalised reranker output. Simulate
-    # that overwrite to confirm raw_score preserves the pre-rerank value.
-    r0, r1 = (
-        NoteSearchResult(note_id=uuid4(), metadata={}, score=0.8, raw_score=0.8),
-        NoteSearchResult(note_id=uuid4(), metadata={}, score=0.6, raw_score=0.6),
+    # raw_score preserved as the pre-rerank RRF score for every item.
+    assert {r.note_id: r.raw_score for r in out} == {note_a: 0.8, note_b: 0.6}
+    # score overwritten by the sigmoid output (≈ 1.0 for logit 10).
+    for r in out:
+        assert r.score > 0.99
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_rerank_failure_falls_back_and_nulls_raw_score():
+    """When the reranker raises, ``_rerank_results`` returns the original
+    RRF order AND wipes ``raw_score`` to ``None`` so callers can detect
+    that rerank did not actually run.
+    """
+    from memex_common.schemas import NoteSearchResult
+    from memex_core.memory.retrieval.document_search import NoteSearchEngine
+
+    engine = NoteSearchEngine.__new__(NoteSearchEngine)
+
+    class _BrokenReranker:
+        def score(self, query, texts):
+            raise RuntimeError('rerank model OOM')
+
+    engine.reranker = _BrokenReranker()  # type: ignore[attr-defined]
+
+    note_a = uuid4()
+    results = [NoteSearchResult(note_id=note_a, metadata={}, score=0.7, raw_score=0.7)]
+    chunk_text = {note_a: 'a'}
+
+    out = await engine._rerank_results('q', results, chunk_text)
+
+    assert len(out) == 1
+    assert out[0].score == pytest.approx(0.7)  # unchanged: still RRF
+    assert out[0].raw_score is None, (
+        'rerank failure must null raw_score so callers can detect the fallback'
     )
-    r0.score = 0.99  # reranker overwrite
-    r1.score = 0.50  # reranker overwrite
-    assert r0.raw_score == pytest.approx(0.8)
-    assert r1.raw_score == pytest.approx(0.6)
-    assert r0.score == pytest.approx(0.99)
-    assert r1.score == pytest.approx(0.50)
 
 
 # --------------------------------------------------------------------------- #
