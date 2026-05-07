@@ -2,6 +2,7 @@
 
 import asyncio
 import logging
+import re
 from typing import Any
 from uuid import UUID
 
@@ -35,12 +36,22 @@ from memex_core.memory.sql_models import (
 logger = logging.getLogger('memex.core.memory.contradiction')
 
 
+_CONTROL_CHAR_RE = re.compile(r'[\x00-\x08\x0B\x0C\x0E-\x1F\x7F-\x9F]')
+
+
 def _sanitise_evidence_text(value: Any, *, max_len: int) -> str | None:
     """Defensive sanitisation for free-text payloads stored in lint
     ``evidence`` JSONB. Strips ASCII C0 controls (``0x00–0x1F`` except
     ``\\n``/``\\t``), DEL (``0x7F``) and the C1 control range
     (``0x80–0x9F``); truncates to ``max_len`` characters; returns None
     for empty/None input.
+
+    Pre-truncates the input to ``max_len * 4`` chars before the regex pass
+    so megabyte-scale pathological payloads (e.g., a runaway LLM that
+    emits 1 MB of NULs) cannot turn this defensive helper into an O(N)
+    bottleneck on the contradiction emit path. ``max_len * 4`` leaves
+    enough headroom for inputs that are 75 % control chars and still
+    yield ``max_len`` survivors after stripping.
 
     Downstream renderers must still escape per their target format
     (HTML, Markdown, terminal); this only protects the storage layer
@@ -50,16 +61,9 @@ def _sanitise_evidence_text(value: Any, *, max_len: int) -> str | None:
         return None
     if not isinstance(value, str):
         value = str(value)
-    cleaned_chars: list[str] = []
-    for ch in value:
-        if ch in ('\n', '\t'):
-            cleaned_chars.append(ch)
-            continue
-        code = ord(ch)
-        if code < 0x20 or code == 0x7F or 0x80 <= code <= 0x9F:
-            continue
-        cleaned_chars.append(ch)
-    cleaned = ''.join(cleaned_chars).strip()
+    if len(value) > max_len * 4:
+        value = value[: max_len * 4]
+    cleaned = _CONTROL_CHAR_RE.sub('', value).strip()
     if not cleaned:
         return None
     if len(cleaned) > max_len:
