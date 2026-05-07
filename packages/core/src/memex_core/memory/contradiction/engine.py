@@ -183,18 +183,39 @@ class ContradictionEngine:
         ``memex lint findings`` shows them immediately, without waiting on the
         periodic LLM-lint tick.
 
-        One finding per superseded unit. The partial unique index on
+        Idempotency: the partial unique index on
         ``(rule_name, target_type, target_id, vault_id) WHERE status='pending'``
-        deduplicates re-emissions for the same unit.
+        prevents a second pending row for the same superseded unit while a
+        prior finding is still pending. Once that finding is resolved or
+        dismissed it leaves the index, so a subsequent contradiction against
+        the same unit will create a new pending row — by design: a flagged
+        unit that gets contradicted again after triage deserves a new alert.
+
+        ``evidence`` carries free-text ``reasoning`` and ``superseding_note_title``
+        sourced from upstream (LLM output and note titles). Downstream renderers
+        MUST escape these values; do not assume they are safe HTML / Markdown.
+
+        Within a single call, multiple contradicts links may share the same
+        superseded ``target_id`` (e.g. two new units contradicting the same
+        old fact in one ingestion batch). Postgres rejects duplicate target
+        rows in a single ``ON CONFLICT DO NOTHING`` statement with a
+        ``cardinality_violation`` because the index arbiter cannot resolve
+        them in one pass. We dedupe by ``target_id`` first and keep the
+        first link's evidence for that row.
         """
+        seen_targets: set[str] = set()
         rows: list[dict[str, Any]] = []
         for link in links:
             if link.link_type != 'contradicts':
                 continue
+            target_id = str(link.to_unit_id)
+            if target_id in seen_targets:
+                continue
+            seen_targets.add(target_id)
             metadata = link.link_metadata or {}
             evidence = {
                 'authoritative_unit_id': metadata.get('authoritative_unit_id'),
-                'superseded_unit_id': str(link.to_unit_id),
+                'superseded_unit_id': target_id,
                 'reasoning': metadata.get('reasoning'),
                 'superseding_note_title': metadata.get('superseding_note_title'),
             }
@@ -203,7 +224,7 @@ class ContradictionEngine:
                     'vault_id': vault_id,
                     'lint_type': LintType.QUALITY.value,
                     'target_type': 'memory_unit',
-                    'target_id': str(link.to_unit_id),
+                    'target_id': target_id,
                     'rule_name': 'semantic_contradiction',
                     'evidence': evidence,
                     'suggested_action': (
@@ -275,12 +296,14 @@ class ContradictionEngine:
         relationships = await self._classify(unit, candidates)
 
         links: list[MemoryLink] = []
-        # Per-target confidence deltas (signed alpha steps) and evidence bumps
-        # (+1 per weaken/contradict link). ``evidence_bumps`` counts only
-        # negative-evidence links (weaken = -alpha, contradict = -2*alpha);
-        # reinforces are excluded for backfill/forward symmetry. Both paths
-        # count deduped links, so N weakens + M contradicts yields
-        # ``bump = N + M`` and ``delta = -(N + 2M) * alpha``.
+        # Per-target confidence deltas and evidence bumps (+1 per
+        # weaken/contradict link). ``evidence_bumps`` counts only
+        # negative-evidence links; reinforces are excluded for
+        # backfill/forward symmetry. Weaken applies a -alpha step;
+        # contradict applies a one-shot supersession penalty
+        # (1 - superseded_threshold + alpha) so the unit lands strictly
+        # below the retrieval-side superseded threshold without
+        # depending on repeated hits.
         confidence_deltas: dict[UUID, float] = {}
         evidence_bumps: dict[UUID, int] = {}
 

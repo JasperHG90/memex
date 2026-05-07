@@ -591,6 +591,61 @@ class TestEmitContradictionFindings:
 
         session.exec.assert_not_called()
 
+    @pytest.mark.asyncio
+    async def test_dupe_targets_in_one_batch_collapsed_to_one_row(self, engine):
+        """Two contradicts links targeting the same superseded unit must
+        produce ONE row in the INSERT statement. Without dedup Postgres
+        rejects the second row with cardinality_violation since the partial
+        unique index arbiter cannot resolve duplicates within a single
+        statement.
+        """
+        vault_id = uuid4()
+        sup_id = uuid4()
+        auth_a, auth_b = uuid4(), uuid4()
+        links = [
+            MemoryLink(
+                from_unit_id=auth_a,
+                to_unit_id=sup_id,
+                link_type='contradicts',
+                vault_id=vault_id,
+                weight=1.0,
+                link_metadata={
+                    'authoritative_unit_id': str(auth_a),
+                    'reasoning': 'first',
+                },
+            ),
+            MemoryLink(
+                from_unit_id=auth_b,
+                to_unit_id=sup_id,
+                link_type='contradicts',
+                vault_id=vault_id,
+                weight=1.0,
+                link_metadata={
+                    'authoritative_unit_id': str(auth_b),
+                    'reasoning': 'second',
+                },
+            ),
+        ]
+
+        captured: list = []
+
+        async def _capture_exec(stmt):
+            captured.append(stmt)
+            return MagicMock()
+
+        session = AsyncMock()
+        session.exec = AsyncMock(side_effect=_capture_exec)
+
+        await engine._emit_contradiction_findings(session, links, vault_id)
+
+        assert len(captured) == 1
+        # Compiled SQL parameters reflect ONE row, not two.
+        params = captured[0].compile().params
+        target_id_keys = [k for k in params if 'target_id' in k]
+        assert len(target_id_keys) == 1, (
+            f'expected 1 target_id parameter (deduped), got {target_id_keys}'
+        )
+
 
 class TestProcessFlaggedUnitContradict:
     """Path-level test: a single contradict relation must emit a delta that
