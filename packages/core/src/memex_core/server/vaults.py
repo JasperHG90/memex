@@ -241,6 +241,34 @@ async def delete_vault(vault_id: UUID, api: Annotated[MemexAPI, Depends(get_api)
         raise _handle_error(e, 'Vault deletion failed')
 
 
+@router.post(
+    '/vaults/{vault_id}/mw-mode',
+    response_model=VaultDTO,
+    dependencies=[Depends(require_write)],
+)
+async def set_vault_mw_mode(
+    vault_id: UUID,
+    api: Annotated[MemexAPI, Depends(get_api)],
+    body: Annotated[dict[str, str], Body(...)],
+):
+    """Set the Memory Worth counter mode for a vault (stationary or ema)."""
+    mode = body.get('mode')
+    if mode not in ('stationary', 'ema'):
+        raise HTTPException(status_code=400, detail="mode must be 'stationary' or 'ema'")
+    try:
+        vault = await api.set_mw_mode(vault_id, mode)
+        return VaultDTO(
+            id=vault.id,
+            name=vault.name,
+            description=vault.description,
+            mw_mode=vault.mw_mode,
+        )
+    except HTTPException:
+        raise
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Failed to set mw_mode')
+
+
 @router.post('/vaults/{vault_id}/truncate', dependencies=[Depends(require_delete)])
 async def truncate_vault(vault_id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
     """Remove all content from a vault without deleting the vault itself."""

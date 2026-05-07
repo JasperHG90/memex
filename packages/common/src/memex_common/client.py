@@ -183,6 +183,11 @@ class RemoteMemexAPI:
         result = await self._post(f'vaults/{vault_id}/truncate', data={})
         return result.get('deleted', {})
 
+    async def set_mw_mode(self, vault_id: UUID, mw_mode: str) -> VaultDTO:
+        """Set the Memory Worth counter mode for a vault (stationary or ema)."""
+        result = await self._post(f'vaults/{vault_id}/mw-mode', data={'mode': mw_mode})
+        return VaultDTO(**result)
+
     async def set_writer_vault(self, identifier: str) -> dict[str, Any]:
         """Set the active (writer) vault for the current server session."""
         response = await self.client.post(f'vaults/{identifier}/set-writer')
