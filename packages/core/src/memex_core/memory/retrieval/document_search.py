@@ -285,6 +285,12 @@ class NoteSearchEngine:
             return [r for r, _ in scored] + overflow
         except (ValueError, RuntimeError, OSError) as e:
             logger.error(f'Note search reranking failed: {e}. Falling back to RRF order.')
+            # Rerank did not run: ``score`` is still the RRF score and we
+            # owe callers a `None` raw_score so they can detect the
+            # fallback (``raw_score == score`` would lie about rerank
+            # having succeeded).
+            for r in results:
+                r.raw_score = None
             return results
 
     async def _identify_relevant_sections(
