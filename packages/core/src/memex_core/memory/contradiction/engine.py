@@ -37,18 +37,29 @@ logger = logging.getLogger('memex.core.memory.contradiction')
 
 def _sanitise_evidence_text(value: Any, *, max_len: int) -> str | None:
     """Defensive sanitisation for free-text payloads stored in lint
-    ``evidence`` JSONB. Strips control characters except ``\n``/``\t``,
-    truncates to ``max_len`` characters, returns None for empty/None input.
+    ``evidence`` JSONB. Strips ASCII C0 controls (``0x00–0x1F`` except
+    ``\\n``/``\\t``), DEL (``0x7F``) and the C1 control range
+    (``0x80–0x9F``); truncates to ``max_len`` characters; returns None
+    for empty/None input.
 
     Downstream renderers must still escape per their target format
-    (HTML, Markdown, terminal); this only protects the storage layer.
+    (HTML, Markdown, terminal); this only protects the storage layer
+    from payload bombs and terminal-hostile content.
     """
     if value is None:
         return None
     if not isinstance(value, str):
         value = str(value)
-    cleaned = ''.join(ch for ch in value if ch in ('\n', '\t') or ord(ch) >= 32)
-    cleaned = cleaned.strip()
+    cleaned_chars: list[str] = []
+    for ch in value:
+        if ch in ('\n', '\t'):
+            cleaned_chars.append(ch)
+            continue
+        code = ord(ch)
+        if code < 0x20 or code == 0x7F or 0x80 <= code <= 0x9F:
+            continue
+        cleaned_chars.append(ch)
+    cleaned = ''.join(cleaned_chars).strip()
     if not cleaned:
         return None
     if len(cleaned) > max_len:
