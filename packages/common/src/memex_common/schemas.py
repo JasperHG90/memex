@@ -423,9 +423,9 @@ class CreateVaultRequest(BaseModel):
 
 # Mirrors ``memex_core.memory.sql_models.MWMode``. ``memex_common`` cannot
 # import core, so the values are duplicated here as a Literal. Adding a new
-# mode requires updating BOTH definitions; the parity is checked by
-# ``packages/core/tests/unit/test_int_alembic_034.py`` (model-side) and the
-# vault-DTO round-trip tests.
+# mode requires updating BOTH definitions; the parity is enforced by
+# ``packages/core/tests/unit/test_mw_mode_literal_parity.py`` which imports
+# both symbols and asserts equality.
 MwModeLiteral = Literal['stationary', 'ema']
 
 
