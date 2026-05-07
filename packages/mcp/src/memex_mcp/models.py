@@ -212,6 +212,7 @@ class McpNoteSearchResult(BaseModel):
     note_id: UUID
     title: str
     score: float
+    raw_score: float | None = None
     vault_name: str | None = None
     status: str | None = None
     description: str | None = None

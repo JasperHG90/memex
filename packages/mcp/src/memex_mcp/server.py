@@ -2036,6 +2036,7 @@ async def memex_note_search(
                         note_id=doc.note_id,
                         title=title,
                         score=doc.score,
+                        raw_score=doc.raw_score,
                         vault_name=doc.vault_name,
                         status=getattr(doc, 'note_status', None),
                         description=description,
