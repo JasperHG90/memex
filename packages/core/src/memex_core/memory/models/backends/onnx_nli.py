@@ -154,14 +154,18 @@ class OnnxNLIClassifier(BaseOnnxModel):
 
         Concurrency notes for the to_thread audit:
           - Single call site: ``LintLLMService.maybe_run`` (services/lint_llm.py).
-          - That call site is already throttled twice over:
-            (a) per-vault scheduler tick processes ``units_per_tick`` serially;
-            (b) the surprise-gated polarity branch only fires when cosine
-            surprise < ``surprise_threshold``.
-          - The ``threading.Lock`` in ``_score_pair`` is for ONNX-runtime
-            safety on ``session.run``; tokenisation and softmax run free.
-            It does NOT cap concurrency end-to-end.
+            Within one tick, units are processed serially.
+          - The scheduler iterates vaults serially within a tick (see
+            ``scheduler.py:periodic_lint_llm_task``), so concurrent NLI
+            calls only arise across overlapping ticks (e.g. process restart
+            or test fixtures).
+          - At the model level, ``self._inference_lock`` serialises ONNX
+            ``session.run`` so concurrent calls cannot corrupt the runtime;
+            tokenisation and softmax run outside the lock and may interleave.
+          - The classifier handles a single pair per call; throughput
+            ceiling is the inference time, not parallelism. A shared async
+            semaphore would force a queue with no throughput benefit.
         """
-        # exempt: caller-side throttled (LintLLMService.maybe_run); a shared
-        # async semaphore here would be redundant. See classify() docstring.
+        # exempt: per-pair model with caller-cadence-bounded call rate
+        # and ONNX-level inference lock for runtime safety. See classify().
         return await asyncio.to_thread(self._score_pair, premise, hypothesis)
