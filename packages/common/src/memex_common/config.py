@@ -989,19 +989,31 @@ class ContradictionConfig(BaseModel):
     )
     alpha: float = Field(
         default=0.1,
+        gt=0.0,
+        le=1.0,
         description='Hindsight step size for confidence adjustment.',
     )
     similarity_threshold: float = Field(
         default=0.5,
+        ge=0.0,
+        le=1.0,
         description='Min cosine similarity for candidate retrieval.',
     )
     max_candidates_per_unit: int = Field(
         default=15,
+        ge=1,
         description='Max candidates per flagged unit.',
     )
     superseded_threshold: float = Field(
         default=0.3,
-        description='Confidence below this = superseded.',
+        gt=0.0,
+        lt=1.0,
+        description=(
+            'Confidence below this = superseded. Bounded strictly inside (0, 1) so '
+            'the contradict penalty (1 - threshold + alpha) can both subtract a '
+            'meaningful amount and leave room for it to drop strictly below the '
+            'threshold without trivially clamping to 0.'
+        ),
     )
     model: ModelConfig | None = Field(
         default=None,
