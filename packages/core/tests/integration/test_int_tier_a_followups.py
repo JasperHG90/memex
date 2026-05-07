@@ -434,8 +434,17 @@ def test_set_mw_mode_route_blocks_forbidden_vault(_skip_schema_check):
 
 @pytest.mark.integration
 def test_set_mw_mode_route_read_extras_do_not_grant_write(_skip_schema_check):
-    """A writer with vault_ids=[A] AND read_vault_ids=[B] must STILL be denied
-    write to vault B. read_vault_ids only widens reads.
+    """A writer with ``vault_ids=[A]`` AND ``read_vault_ids=[B]`` must:
+       1. be allowed to READ vault B (a baseline check that read_extras
+          actually widens read access — proves the test fixture is set
+          up correctly);
+       2. STILL be denied WRITE to vault B (the regression we care about).
+
+    Without (1), the test would assert the same thing as
+    ``test_set_mw_mode_route_blocks_forbidden_vault`` (vault_ids alone
+    rejects), giving false-positive coverage. With (1) we prove the
+    caller's read_extras DO grant something, which makes the WRITE 403 a
+    meaningful test of the WRITE-path narrowness.
     """
     from types import SimpleNamespace
     from uuid import UUID
@@ -452,6 +461,8 @@ def test_set_mw_mode_route_read_extras_do_not_grant_write(_skip_schema_check):
     api.set_mw_mode.return_value = SimpleNamespace(
         id=read_only_vault, name='x', description=None, mw_mode='ema'
     )
+    api.lint = AsyncMock()
+    api.lint.count_pending = AsyncMock(return_value=0)
 
     async def _resolve(identifier):
         if isinstance(identifier, UUID):
@@ -473,10 +484,18 @@ def test_set_mw_mode_route_read_extras_do_not_grant_write(_skip_schema_check):
     app.dependency_overrides[get_auth_context] = lambda: auth
     try:
         with TestClient(app) as client:
+            # (1) read_extras grants READ access to read_only_vault.
+            resp = client.get(f'/api/v1/lint/status?vault_id={read_only_vault}')
+            assert resp.status_code == 200, (
+                f'read_vault_ids should grant READ to {read_only_vault}; got {resp.text}'
+            )
+
+            # (2) read_extras must NOT grant WRITE to read_only_vault.
             resp = client.post(f'/api/v1/vaults/{read_only_vault}/mw-mode', json={'mode': 'ema'})
             assert resp.status_code == 403, resp.text
             api.set_mw_mode.assert_not_called()
 
+            # The caller's own write_vault still works for WRITE.
             resp = client.post(f'/api/v1/vaults/{write_vault}/mw-mode', json={'mode': 'ema'})
             assert resp.status_code == 200, resp.text
     finally:
