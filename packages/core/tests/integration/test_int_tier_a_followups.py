@@ -21,6 +21,7 @@ under ``@pytest.mark.llm``.
 
 from __future__ import annotations
 
+import os
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
@@ -412,21 +413,18 @@ async def test_note_search_raw_score_present_when_reranked():
 
 @pytest.mark.integration
 @pytest.mark.llm
+@pytest.mark.skipif(
+    not os.environ.get('GOOGLE_API_KEY'),
+    reason='GOOGLE_API_KEY not set; @pytest.mark.llm requires real API access',
+)
 @pytest.mark.asyncio
 async def test_short_declarative_input_yields_at_least_one_fact():
     """The short-input directive in ``ExtractSemanticFacts`` must make the
     LLM produce at least one fact for a single declarative sentence.
     Reproduces the ``Key rotation has been discontinued entirely`` regression
     where the model was returning ``[]`` for short inputs.
-
-    Skipped without ``GOOGLE_API_KEY``; runs the real model when present.
     """
-    import os
-
     import dspy
-
-    if not os.environ.get('GOOGLE_API_KEY'):
-        pytest.skip('GOOGLE_API_KEY not set')
 
     from memex_core.memory.extraction.core import (
         ExtractSemanticFacts,
