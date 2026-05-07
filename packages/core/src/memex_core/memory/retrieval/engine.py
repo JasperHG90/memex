@@ -718,6 +718,12 @@ class RetrievalEngine:
         # round-trip on every retrieve call would push the N+1 budget over
         # its threshold for the ~95% of calls (with default ε=0.05) that
         # don't end up injecting.
+        # Track exploration injections so the final ``[: request.limit]``
+        # slice in token-budget=None mode can be widened to keep them in
+        # the response. Without this counter, MMR fills the limit with
+        # main-path winners and the exploration units get truncated off
+        # the tail despite being explicitly appended.
+        exploration_injected = 0
         if final_results and self.retrieval_config.exploration_epsilon > 0:
             from memex_core.memory.retrieval.exploration import inject_exploration_units
             from memex_core.metrics import EXPLORATION_INJECTED_TOTAL
@@ -757,9 +763,9 @@ class RetrievalEngine:
                         max_injections=self.retrieval_config.exploration_max_injections,
                         low_mw_threshold=self.retrieval_config.exploration_low_mw_threshold,
                     )
-                    injected = len(final_results) - pre_inject_count
-                    if injected > 0:
-                        EXPLORATION_INJECTED_TOTAL.inc(injected)
+                    exploration_injected = len(final_results) - pre_inject_count
+                    if exploration_injected > 0:
+                        EXPLORATION_INJECTED_TOTAL.inc(exploration_injected)
 
         # 10. Collect resonance update info (deferred to background)
         t0 = _t()
@@ -824,7 +830,11 @@ class RetrievalEngine:
         if token_budget is not None:
             return (final_results, resonance_context)
 
-        return (final_results[: request.limit], resonance_context)
+        # Widen the slice by ``exploration_injected`` so the appended
+        # exploration units survive the final cap. They sit at the tail
+        # (after MMR-ordered main results), and the slice would otherwise
+        # cut exactly at ``request.limit``, leaving them on the floor.
+        return (final_results[: request.limit + exploration_injected], resonance_context)
 
     def _fuse_multi_query_results(
         self, ranked_batches: list[tuple[Sequence[Any], float]], limit: int
