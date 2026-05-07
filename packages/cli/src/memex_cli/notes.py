@@ -390,11 +390,7 @@ async def append_note(
         raise typer.Exit(1)
 
     config: MemexConfig = ctx.obj
-    # Override active vault if specified, then use write_vault (which falls back
-    # to server.default_active_vault when vault.active is None).
-    if vault:
-        config.vault.active = vault
-    effective_vault = config.write_vault
+    effective_vault = vault if vault is not None else config.write_vault
 
     try:
         resolved_append_id = UUID(append_id) if append_id else uuid4()

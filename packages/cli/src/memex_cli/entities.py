@@ -16,7 +16,7 @@ from rich.table import Table
 
 from memex_common.config import MemexConfig
 from memex_common.schemas import EntityDTO
-from memex_cli.utils import get_api_context, async_command, handle_api_error, parse_uuid
+from memex_cli.utils import get_api_context, async_command, handle_api_error
 
 console = Console()
 
@@ -129,7 +129,6 @@ async def delete_mental_model(
             handle_api_error(e)
             return
 
-        parsed_vault_id = parse_uuid(vault, 'vault') if vault else None
         vault_label = vault or 'active vault'
         if not force:
             if not typer.confirm(f'Delete mental model for "{entity.name}" in {vault_label}?'):
@@ -137,7 +136,8 @@ async def delete_mental_model(
                 return
 
         try:
-            success = await api.delete_mental_model(entity.id, vault_id=parsed_vault_id)
+            resolved_vault_id = await api.resolve_vault_identifier(vault) if vault else None
+            success = await api.delete_mental_model(entity.id, vault_id=resolved_vault_id)
         except Exception as e:
             handle_api_error(e)
             return
