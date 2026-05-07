@@ -63,12 +63,10 @@ class ExtractSemanticFacts(dspy.Signature):
     intent_class: permanent (never-decay), durable (default), ephemeral (short-lived).
     risk_class: none (default), sensitive (flagged), private (excluded from retrieval), safety (blocked).
 
-    SHORT INPUT RULE: A single declarative sentence is still a fact. If the
-    chunk contains any clear assertion (e.g. "Key rotation has been
-    discontinued entirely."), extract at least one fact. Do NOT return an
-    empty list just because the chunk is short — only return empty when the
-    text is meta-commentary, navigation, formatting noise, or otherwise
-    contains no factual claim.
+    A single declarative sentence asserting a clear claim is a fact. Return
+    an empty list ONLY when the chunk has no factual content (greetings,
+    metadata-only, navigation, formatting noise, partial sentence fragments
+    with no resolvable assertion).
     """
 
     chunk_text: str = dspy.InputField(
@@ -178,10 +176,7 @@ async def _extract_facts_from_chunk(
         '6. CAUSAL RELATIONS: Check for causal links between facts.\n'
         "   - If Fact B happens BECAUSE OF Fact A, add a 'causal_relation' to Fact B.\n"
         "   - 'target_index' must point to a PREVIOUS fact (target_index < current_index).\n"
-        "   - Types: 'caused_by', 'enabled_by', 'prevented_by'.\n"
-        '7. SHORT INPUT: Even a single declarative sentence must produce a fact '
-        'when it asserts a clear claim. Only return [] when the chunk has no '
-        'factual content (greetings, metadata-only, navigation, formatting noise).'
+        "   - Types: 'caused_by', 'enabled_by', 'prevented_by'."
     )
 
     try:

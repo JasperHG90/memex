@@ -150,7 +150,18 @@ class OnnxNLIClassifier(BaseOnnxModel):
         return {label: float(probs[i]) for i, label in enumerate(self._label_order)}
 
     async def classify(self, premise: str, hypothesis: str) -> dict[str, float]:
-        # exempt: NLI inference is serialised by self._inference_lock at the
-        # model level (one in-flight call), so a shared async semaphore would
-        # be redundant.
+        """Classify a single (premise, hypothesis) pair.
+
+        Concurrency notes for the to_thread audit:
+          - Single call site: ``LintLLMService.maybe_run`` (services/lint_llm.py).
+          - That call site is already throttled twice over:
+            (a) per-vault scheduler tick processes ``units_per_tick`` serially;
+            (b) the surprise-gated polarity branch only fires when cosine
+            surprise < ``surprise_threshold``.
+          - The ``threading.Lock`` in ``_score_pair`` is for ONNX-runtime
+            safety on ``session.run``; tokenisation and softmax run free.
+            It does NOT cap concurrency end-to-end.
+        """
+        # exempt: caller-side throttled (LintLLMService.maybe_run); a shared
+        # async semaphore here would be redundant. See classify() docstring.
         return await asyncio.to_thread(self._score_pair, premise, hypothesis)

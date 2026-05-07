@@ -39,7 +39,7 @@ def _migration_031_source() -> str:
     return migration_path.read_text(encoding='utf-8')
 
 
-class TestMigration030Metadata:
+class TestMigration031Metadata:
     def test_revision_id_fits_in_alembic_version_column(self):
         m = _load_migration_031()
         # alembic_version.version_num is varchar(32) by default — keep ids short.
@@ -53,7 +53,7 @@ class TestMigration030Metadata:
         assert m.down_revision == '030_revisit_last_reviewed_at'
 
 
-class TestMigration030AddsNullableColumn:
+class TestMigration031AddsNullableColumn:
     """The schema patch is purely additive: nullable resolved_by TEXT column."""
 
     def test_upgrade_adds_resolved_by_column(self):
