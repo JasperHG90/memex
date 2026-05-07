@@ -330,8 +330,19 @@ async def test_vault_service_set_mw_mode_persists_in_postgres(
     assert row is not None and row.mw_mode == 'ema'
 
 
+@pytest.fixture
+def _skip_schema_check(monkeypatch):
+    """Skip the metastore schema-version check inside TestClient(app)
+    lifespans. The lifespan-spawned metastore connects to whatever the
+    parsed config points at (a local Postgres in CI), not the testcontainer
+    DB the integration suite stamps. We don't need a working DB for these
+    route-level tests because ``api`` is overridden via dependency_overrides.
+    """
+    monkeypatch.setenv('MEMEX_SKIP_SCHEMA_CHECK', 'true')
+
+
 @pytest.mark.integration
-def test_set_mw_mode_route_validates_and_calls_api():
+def test_set_mw_mode_route_validates_and_calls_api(_skip_schema_check):
     """The REST route accepts ``mode`` in the body, validates it, calls
     ``api.set_mw_mode`` for valid input, and returns 400 for invalid input.
     Uses a minimal AsyncMock api so the test focuses on the route — the
@@ -368,7 +379,7 @@ def test_set_mw_mode_route_validates_and_calls_api():
 
 
 @pytest.mark.integration
-def test_set_mw_mode_route_blocks_forbidden_vault():
+def test_set_mw_mode_route_blocks_forbidden_vault(_skip_schema_check):
     """A scoped writer keyed to vault-A must NOT be able to flip mw_mode on
     vault-B. Regression test for the prior auth gap on
     POST /vaults/{id}/mw-mode (the previous version used Depends(require_write)
@@ -415,6 +426,58 @@ def test_set_mw_mode_route_blocks_forbidden_vault():
             api.set_mw_mode.assert_not_called()
 
             resp = client.post(f'/api/v1/vaults/{allowed_vault}/mw-mode', json={'mode': 'ema'})
+            assert resp.status_code == 200, resp.text
+    finally:
+        app.dependency_overrides.pop(get_api, None)
+        app.dependency_overrides.pop(get_auth_context, None)
+
+
+@pytest.mark.integration
+def test_set_mw_mode_route_read_extras_do_not_grant_write(_skip_schema_check):
+    """A writer with vault_ids=[A] AND read_vault_ids=[B] must STILL be denied
+    write to vault B. read_vault_ids only widens reads.
+    """
+    from types import SimpleNamespace
+    from uuid import UUID
+
+    from memex_common.config import POLICY_PERMISSIONS, Policy
+    from memex_core.server import app
+    from memex_core.server.auth import AuthContext, get_auth_context
+    from memex_core.server.common import get_api
+
+    write_vault = uuid4()
+    read_only_vault = uuid4()
+
+    api = AsyncMock()
+    api.set_mw_mode.return_value = SimpleNamespace(
+        id=read_only_vault, name='x', description=None, mw_mode='ema'
+    )
+
+    async def _resolve(identifier):
+        if isinstance(identifier, UUID):
+            return identifier
+        return UUID(str(identifier))
+
+    api.resolve_vault_identifier = AsyncMock(side_effect=_resolve)
+
+    auth = AuthContext(
+        key_prefix='test1234',
+        key_name='writer-with-read-extras',
+        policy=Policy.WRITER,
+        permissions=POLICY_PERMISSIONS[Policy.WRITER],
+        vault_ids=[str(write_vault)],
+        read_vault_ids=[str(read_only_vault)],
+    )
+
+    app.dependency_overrides[get_api] = lambda: api
+    app.dependency_overrides[get_auth_context] = lambda: auth
+    try:
+        with TestClient(app) as client:
+            resp = client.post(f'/api/v1/vaults/{read_only_vault}/mw-mode', json={'mode': 'ema'})
+            assert resp.status_code == 403, resp.text
+            api.set_mw_mode.assert_not_called()
+
+            resp = client.post(f'/api/v1/vaults/{write_vault}/mw-mode', json={'mode': 'ema'})
             assert resp.status_code == 200, resp.text
     finally:
         app.dependency_overrides.pop(get_api, None)

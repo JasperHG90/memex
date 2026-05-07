@@ -421,14 +421,21 @@ class CreateVaultRequest(BaseModel):
     description: str | None = Field(default=None, description='Optional description.')
 
 
+# Mirrors ``memex_core.memory.sql_models.MWMode``. ``memex_common`` cannot
+# import core, so the values are duplicated here as a Literal. Adding a new
+# mode requires updating BOTH definitions; the parity is checked by
+# ``packages/core/tests/unit/test_int_alembic_034.py`` (model-side) and the
+# vault-DTO round-trip tests.
+MwModeLiteral = Literal['stationary', 'ema']
+
+
 class SetMwModeRequest(BaseModel):
     """Request body for ``POST /vaults/{id}/mw-mode``."""
 
-    mode: str = Field(
+    mode: MwModeLiteral = Field(
         ...,
         description='Memory Worth counter mode for the vault.',
         examples=['stationary', 'ema'],
-        pattern='^(stationary|ema)$',
     )
 
 
