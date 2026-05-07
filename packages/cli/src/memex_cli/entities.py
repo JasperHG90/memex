@@ -16,7 +16,7 @@ from rich.table import Table
 
 from memex_common.config import MemexConfig
 from memex_common.schemas import EntityDTO
-from memex_cli.utils import get_api_context, async_command, handle_api_error, parse_uuid
+from memex_cli.utils import get_api_context, async_command, handle_api_error
 
 console = Console()
 
@@ -109,8 +109,9 @@ async def delete_entity(
 async def delete_mental_model(
     ctx: typer.Context,
     identifier: Annotated[str, typer.Argument(help='Name or UUID of the entity.')],
-    vault_id: Annotated[
-        str | None, typer.Option('--vault', '-v', help='Vault UUID. Defaults to active vault.')
+    vault: Annotated[
+        str | None,
+        typer.Option('--vault', '-v', help='Vault name or UUID. Defaults to the active vault.'),
     ] = None,
     force: Annotated[bool, typer.Option('--force', '-f', help='Skip confirmation.')] = False,
 ):
@@ -118,6 +119,7 @@ async def delete_mental_model(
     Delete the mental model for an entity in a specific vault. Does NOT delete the entity itself.
     """
     config: MemexConfig = ctx.obj
+    effective_vault = vault if vault is not None else config.vault.active
 
     async with get_api_context(config) as api:
         try:
@@ -128,15 +130,22 @@ async def delete_mental_model(
             handle_api_error(e)
             return
 
-        parsed_vault_id = parse_uuid(vault_id, 'vault') if vault_id else None
-        vault_label = vault_id or 'active vault'
+        try:
+            resolved_vault_id = (
+                await api.resolve_vault_identifier(effective_vault) if effective_vault else None
+            )
+        except Exception as e:
+            handle_api_error(e)
+            return
+
+        vault_label = effective_vault or 'active vault'
         if not force:
             if not typer.confirm(f'Delete mental model for "{entity.name}" in {vault_label}?'):
                 console.print('[yellow]Aborted.[/yellow]')
                 return
 
         try:
-            success = await api.delete_mental_model(entity.id, vault_id=parsed_vault_id)
+            success = await api.delete_mental_model(entity.id, vault_id=resolved_vault_id)
         except Exception as e:
             handle_api_error(e)
             return

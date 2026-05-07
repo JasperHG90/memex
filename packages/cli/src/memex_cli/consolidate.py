@@ -36,7 +36,7 @@ async def tick_cmd(
     ctx: typer.Context,
     vault: Annotated[
         str | None,
-        typer.Option('--vault', help='Vault name or ID. Omit to tick every vault.'),
+        typer.Option('--vault', '-v', help='Vault name or UUID. Omit to tick every vault.'),
     ] = None,
     dry_run: Annotated[
         bool,
@@ -102,7 +102,7 @@ async def status_cmd(
     ctx: typer.Context,
     vault: Annotated[
         str | None,
-        typer.Option('--vault', help='Vault name or ID. Omit to list every vault.'),
+        typer.Option('--vault', '-v', help='Vault name or UUID. Omit to list every vault.'),
     ] = None,
     json_output: Annotated[
         bool, typer.Option('--json', help='Emit JSON instead of a table.')

@@ -131,7 +131,7 @@ class TestRecorderWithBenchmarkResult:
         runner = CliRunner()
         # Just verify the --mlflow-uri flag is accepted without error
         # (the actual benchmark won't run without a server)
-        result = runner.invoke(app, ['run', '--help'])
+        result = runner.invoke(app, ['internal', 'run', '--help'])
         assert result.exit_code == 0
         assert '--mlflow-uri' in result.output
         assert '--mlflow-experiment' in result.output
@@ -143,7 +143,7 @@ class TestRecorderWithBenchmarkResult:
         from memex_eval.cli import app
 
         runner = CliRunner()
-        for cmd in ['locomo-ingest', 'locomo-export', 'locomo-answer', 'locomo-judge']:
-            result = runner.invoke(app, [cmd, '--help'])
+        for sub in ['ingest', 'export', 'answer', 'judge']:
+            result = runner.invoke(app, ['locomo', sub, '--help'])
             assert result.exit_code == 0
             assert '--mlflow-uri' in result.output
