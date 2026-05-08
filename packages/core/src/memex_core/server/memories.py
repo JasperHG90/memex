@@ -84,6 +84,35 @@ async def get_memory_unit(id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
         raise _handle_error(e, f'Failed to get memory unit {id}')
 
 
+@router.get(
+    '/notes/{note_id}/memory_units',
+    response_model=list[MemoryUnitDTO],
+    dependencies=[Depends(require_read)],
+)
+async def list_memory_units_by_note(
+    note_id: UUID,
+    vault_id: Annotated[
+        UUID,
+        Query(description='Vault UUID — required for vault-scoping; cross-vault is rejected.'),
+    ],
+    api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+) -> list[MemoryUnitDTO]:
+    """List memory units belonging to a note (vault-scoped).
+
+    Used by the eval suite to resolve note_keys to unit IDs after
+    ingestion. Vault-scoping is mandatory and enforced via
+    ``check_vault_access`` so a mismatched ``vault_id`` returns 403.
+    Backed by ``idx_memory_units_note_id``.
+    """
+    await check_vault_access(auth, [vault_id], api, permission=Permission.READ)
+    try:
+        units = await api.list_memory_units_by_note(note_id, vault_id)
+        return [build_memory_unit_dto(u) for u in units]
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, f'Failed to list memory units for note {note_id}')
+
+
 @router.delete('/memories/{id}', dependencies=[Depends(require_delete)])
 async def delete_memory_unit(id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
     """Delete a memory unit and all associated data (entity links, memory links, evidence)."""

@@ -810,6 +810,32 @@ class RemoteMemexAPI:
         result = await self._post('memories/by-chunks', body)
         return [MemoryUnitDTO(**r) for r in result]
 
+    async def list_memory_units_by_note(
+        self,
+        note_id: UUID | str,
+        vault_id: UUID | str,
+    ) -> list[MemoryUnitDTO]:
+        """Fetch memory units belonging to a note (vault-scoped).
+
+        Used by the eval suite to resolve note_keys to unit IDs after
+        ingestion. The server enforces vault-scoping; passing a vault_id
+        the caller's API key is not authorized for returns 403.
+        """
+        result = await self._get(
+            f'notes/{note_id}/memory_units', params={'vault_id': str(vault_id)}
+        )
+        return [MemoryUnitDTO(**r) for r in result]
+
+    async def get_system_config(self) -> dict[str, Any]:
+        """Fetch the resolved server config with secrets redacted.
+
+        Admin-only — the server requires an admin API key. The returned
+        shape mirrors ``MemexConfig.model_dump(mode='json')`` with secret
+        leaves replaced by ``'<redacted>'`` and sibling ``<key>_set``
+        booleans added.
+        """
+        return await self._get('system/config')
+
     async def delete_memory_unit(self, unit_id: UUID) -> bool:
         """Delete a memory unit and all associated data."""
         try:

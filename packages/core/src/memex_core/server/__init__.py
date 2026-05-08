@@ -45,6 +45,7 @@ from memex_core.server.stats import router as stats_router
 from memex_core.server.health import router as health_router
 from memex_core.server.summary import router as summary_router
 from memex_core.server.survey import router as survey_router
+from memex_core.server.system_routes import router as system_router
 from memex_core.server.session_briefing import router as session_briefing_router
 from memex_core.server.vault_summary import router as vault_summary_router
 from memex_core.server.vaults import router as vaults_router
@@ -350,3 +351,4 @@ app.include_router(session_briefing_router)
 app.include_router(diagnostics_router)
 app.include_router(lint_router)
 app.include_router(consolidation_router)
+app.include_router(system_router)
