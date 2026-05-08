@@ -153,6 +153,12 @@ class RuleSpec:
     with the columns ``target_id`` (text) and ``evidence`` (jsonb). Rules MUST
     include ``vault_id = :vault_id`` in their WHERE clause when their target
     is vault-scoped — guarded by ``test_lint_rule_sql_audits.py``.
+
+    ``param_keys`` declares the named bind parameters the rule's SQL needs
+    beyond ``vault_id``. ``LintService._run_one`` resolves them by reading
+    ``self.config.server.memory.deprioritize_score`` and similar config
+    blocks and passes the resulting values as a single mapping. Names must
+    match the ``:placeholder`` form in ``select_sql``.
     """
 
     name: str
@@ -160,6 +166,7 @@ class RuleSpec:
     target_type: str
     suggested_action: str
     select_sql: str
+    param_keys: tuple[str, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -231,7 +238,7 @@ _SENSITIVE_UNREVIEWED_UNIT_SQL = """
         jsonb_build_object(
             'risk_class', mu.risk_class,
             'created_at', mu.created_at,
-            'last_review_at', NULL
+            'last_governance_action_at', NULL
         ) AS evidence
     FROM memory_units mu
     WHERE mu.vault_id = :vault_id
@@ -241,7 +248,7 @@ _SENSITIVE_UNREVIEWED_UNIT_SQL = """
       AND NOT EXISTS (
           SELECT 1
           FROM audit_logs al
-          WHERE al.action = 'memory_review'
+          WHERE al.action IN ('memory_deprioritize', 'memory_restore', 'lint_finding_resolved')
             AND al.resource_type = 'memory_unit'
             AND al.resource_id = mu.id::text
             AND al.timestamp > (now() - interval '30 days')
@@ -260,6 +267,220 @@ _DANGLING_ENTITY_REF_IN_UNIT_SQL = """
     WHERE ue.vault_id = :vault_id
       AND e.id IS NULL
 """
+
+
+# ---------------------------------------------------------------------------
+# FSFM-inspired graph-aware deprioritization scoring rules.
+#
+# All four rules share one SQL CTE pipeline (``unit_signals`` →
+# ``unit_components`` → ``unit_scores``) that mirrors the canonical Python
+# implementation in ``services/deprioritize_score.py``.  The constants
+# embedded in the SQL match the Pydantic defaults in
+# ``DeprioritizeScoreConfig`` (weights, lambda_link=0.01, mu_entity=0.005,
+# propose threshold 0.30).  Drift between SQL and Python is guarded by
+# ``test_fsfm_sql_python_parity.py``; if the user overrides the config
+# weights at runtime, the lint rules continue to use the defaults — this
+# is intentional (predictable behaviour for the maintenance ledger).
+# ---------------------------------------------------------------------------
+
+# Safety: vault_id is parameter-bound; every numeric knob is bound via
+# named placeholder (``:weight_graph`` etc.) so the SQL text contains no
+# user-controlled string interpolation. See the S608 invariant comment
+# block above ``_COLD_LOW_MW_UNIT_SQL``.
+_FSFM_COMPOSITE_DEPRIORITIZE_SQL = """
+    WITH unit_signals AS (
+        SELECT
+            mu.id AS unit_id,
+            mu.vault_id AS vault_id,
+            mu.success_co_count AS success_co_count,
+            mu.failure_co_count AS failure_co_count,
+            mu.last_outcome_at AS last_outcome_at,
+            mu.stability AS stability,
+            mu.importance AS importance,
+            mu.intent_class AS intent_class,
+            mu.risk_class AS risk_class,
+            mu.confidence AS confidence,
+            ((mu.success_co_count + 1.0) / (mu.success_co_count + mu.failure_co_count + 2)) AS mw_score,
+            (
+                SELECT SUM(
+                    CASE ml.link_type
+                        WHEN 'contradicts' THEN 1.0
+                        WHEN 'weakens' THEN 0.5
+                        WHEN 'reinforces' THEN -1.0
+                        WHEN 'causes' THEN -0.1
+                        WHEN 'caused_by' THEN -0.1
+                        WHEN 'enables' THEN -0.1
+                        WHEN 'prevents' THEN -0.1
+                        ELSE 0.0
+                    END
+                    * ml.weight
+                    * src.confidence
+                    * ((src.success_co_count + 1.0) / (src.success_co_count + src.failure_co_count + 2))
+                    * exp(-CAST(:lambda_link AS double precision) * GREATEST(0.0, EXTRACT(EPOCH FROM (now() - ml.created_at)) / 86400.0))
+                )
+                FROM memory_links ml
+                JOIN memory_units src ON src.id = ml.from_unit_id
+                WHERE ml.to_unit_id = mu.id
+                  AND ml.vault_id = mu.vault_id
+                  AND src.vault_id = mu.vault_id
+                  AND ml.link_type IN (
+                    'contradicts', 'weakens', 'reinforces',
+                    'causes', 'caused_by', 'enables', 'prevents'
+                  )
+            ) AS graph_pressure_raw,
+            (
+                SELECT COUNT(*)
+                FROM memory_links ml
+                JOIN memory_units src ON src.id = ml.from_unit_id
+                WHERE ml.to_unit_id = mu.id
+                  AND ml.link_type = 'contradicts'
+                  AND ml.vault_id = mu.vault_id
+                  AND src.vault_id = mu.vault_id
+            ) AS contradicts_count,
+            (
+                SELECT COALESCE(SUM(
+                    src.confidence * ((src.success_co_count + 1.0) /
+                                      (src.success_co_count + src.failure_co_count + 2))
+                ), 0.0)
+                FROM memory_links ml
+                JOIN memory_units src ON src.id = ml.from_unit_id
+                WHERE ml.to_unit_id = mu.id
+                  AND ml.link_type = 'contradicts'
+                  AND ml.vault_id = mu.vault_id
+                  AND src.vault_id = mu.vault_id
+            ) AS contradicts_credibility_sum,
+            (
+                SELECT MAX(e.last_seen)
+                FROM unit_entities ue
+                JOIN entities e ON e.id = ue.entity_id
+                WHERE ue.unit_id = mu.id AND ue.vault_id = mu.vault_id
+            ) AS freshest_entity_last_seen
+        FROM memory_units mu
+        WHERE mu.vault_id = :vault_id
+          AND mu.status = 'active'
+          AND mu.is_deprioritized = false
+          AND COALESCE(mu.intent_class, '') != 'permanent'
+          AND COALESCE(mu.risk_class, 'none') NOT IN ('sensitive', 'private', 'safety')
+    ),
+    unit_components AS (
+        SELECT
+            s.*,
+            CASE
+                WHEN s.graph_pressure_raw IS NULL THEN 0.5
+                ELSE 1.0 / (1.0 + exp(-s.graph_pressure_raw))
+            END AS graph_pressure,
+            (1.0 - s.mw_score) AS mw_complement,
+            CASE
+                WHEN s.last_outcome_at IS NULL OR s.stability IS NULL OR s.stability <= 0
+                    THEN 0.0
+                ELSE 1.0 - exp(
+                    -GREATEST(0.0, EXTRACT(EPOCH FROM (now() - s.last_outcome_at)) / 86400.0)
+                    / s.stability
+                )
+            END AS temporal_staleness,
+            CASE
+                WHEN s.freshest_entity_last_seen IS NULL THEN 0.0
+                ELSE 1.0 - exp(
+                    -CAST(:mu_entity AS double precision) * GREATEST(0.0,
+                        EXTRACT(EPOCH FROM (now() - s.freshest_entity_last_seen)) / 86400.0
+                    )
+                )
+            END AS entity_dormancy
+        FROM unit_signals s
+    ),
+    unit_scores AS (
+        SELECT
+            c.*,
+            (
+                CAST(:weight_graph AS double precision) * c.graph_pressure
+              + CAST(:weight_mw AS double precision) * c.mw_complement
+              + CAST(:weight_temporal AS double precision) * c.temporal_staleness
+              + CAST(:weight_entity AS double precision) * c.entity_dormancy
+            ) * (1.0 - COALESCE(c.importance, 0.5)) AS composite_score,
+            -- component_range is a cheap proxy for "components disagree":
+            -- a high range means signals point in different directions.
+            (
+                GREATEST(
+                    CASE WHEN c.graph_pressure_raw IS NULL THEN 0.5
+                         ELSE 1.0 / (1.0 + exp(-c.graph_pressure_raw)) END,
+                    1.0 - c.mw_score,
+                    CASE WHEN c.last_outcome_at IS NULL OR c.stability IS NULL OR c.stability <= 0
+                         THEN 0.0
+                         ELSE 1.0 - exp(
+                             -GREATEST(0.0, EXTRACT(EPOCH FROM (now() - c.last_outcome_at)) / 86400.0)
+                             / c.stability
+                         ) END,
+                    CASE WHEN c.freshest_entity_last_seen IS NULL THEN 0.0
+                         ELSE 1.0 - exp(
+                             -CAST(:mu_entity AS double precision) * GREATEST(0.0,
+                                 EXTRACT(EPOCH FROM (now() - c.freshest_entity_last_seen)) / 86400.0
+                             )
+                         ) END
+                )
+              - LEAST(
+                    CASE WHEN c.graph_pressure_raw IS NULL THEN 0.5
+                         ELSE 1.0 / (1.0 + exp(-c.graph_pressure_raw)) END,
+                    1.0 - c.mw_score,
+                    CASE WHEN c.last_outcome_at IS NULL OR c.stability IS NULL OR c.stability <= 0
+                         THEN 0.0
+                         ELSE 1.0 - exp(
+                             -GREATEST(0.0, EXTRACT(EPOCH FROM (now() - c.last_outcome_at)) / 86400.0)
+                             / c.stability
+                         ) END,
+                    CASE WHEN c.freshest_entity_last_seen IS NULL THEN 0.0
+                         ELSE 1.0 - exp(
+                             -CAST(:mu_entity AS double precision) * GREATEST(0.0,
+                                 EXTRACT(EPOCH FROM (now() - c.freshest_entity_last_seen)) / 86400.0
+                             )
+                         ) END
+                )
+            ) AS component_range
+        FROM unit_components c
+    )
+    -- One row per qualifying unit. ``flag_reason`` distinguishes the
+    -- escalation patterns from the vanilla ``composite`` reason that the
+    -- auto-band consumes. Order of precedence (most-specific first):
+    --   1. low_credibility_contradiction_only
+    --   2. components_disagree (only when all four components have data)
+    --   3. high_mw_with_nonmw_pressure
+    --   4. composite                          ← auto-band eligible
+    SELECT
+        s.unit_id::text AS target_id,
+        jsonb_build_object(
+            'composite_score', s.composite_score,
+            'components', jsonb_build_object(
+                'graph_pressure', s.graph_pressure,
+                'mw_complement', s.mw_complement,
+                'temporal_staleness', s.temporal_staleness,
+                'entity_dormancy', s.entity_dormancy
+            ),
+            'component_range', s.component_range,
+            'mw_score', s.mw_score,
+            'importance', s.importance,
+            'intent_class', s.intent_class,
+            'success_co_count', s.success_co_count,
+            'failure_co_count', s.failure_co_count,
+            'contradicts_count', s.contradicts_count,
+            'contradicts_credibility_sum', s.contradicts_credibility_sum,
+            'flag_reason',
+            CASE
+                WHEN s.contradicts_count > 0
+                     AND s.contradicts_credibility_sum < CAST(:contradicted_low_credibility_max AS double precision)
+                    THEN 'low_credibility_contradiction_only'
+                WHEN s.last_outcome_at IS NOT NULL
+                     AND s.stability IS NOT NULL AND s.stability > 0
+                     AND s.freshest_entity_last_seen IS NOT NULL
+                     AND s.component_range > CAST(:disagreement_range AS double precision)
+                    THEN 'components_disagree'
+                WHEN s.mw_score > CAST(:high_mw_threshold AS double precision)
+                     AND (s.success_co_count + s.failure_co_count) >= CAST(:high_mw_min_outcomes AS integer)
+                    THEN 'high_mw_with_nonmw_pressure'
+                ELSE 'composite'
+            END
+        ) AS evidence
+    FROM unit_scores s
+    WHERE s.composite_score > CAST(:propose_threshold AS double precision)
+"""  # noqa: S608 — every interpolation is a named bind parameter
 
 
 V1_RULES: tuple[RuleSpec, ...] = (
@@ -302,6 +523,31 @@ V1_RULES: tuple[RuleSpec, ...] = (
             '(data integrity issue). Remove the dangling reference.'
         ),
         select_sql=_DANGLING_ENTITY_REF_IN_UNIT_SQL,
+    ),
+    RuleSpec(
+        name='composite_deprioritize_candidate',
+        lint_type=LintType.QUALITY,
+        target_type='memory_unit',
+        suggested_action=(
+            'FSFM composite score above the propose threshold. Inspect evidence '
+            "(see ``flag_reason``) and call memex_memory_deprioritize with reason='fsfm composite'. "
+            'Findings with ``flag_reason`` ∈ {high_mw_with_nonmw_pressure, components_disagree, '
+            'low_credibility_contradiction_only} are escalation-only — auto-band skips them.'
+        ),
+        select_sql=_FSFM_COMPOSITE_DEPRIORITIZE_SQL,
+        param_keys=(
+            'lambda_link',
+            'mu_entity',
+            'weight_graph',
+            'weight_mw',
+            'weight_temporal',
+            'weight_entity',
+            'propose_threshold',
+            'high_mw_threshold',
+            'high_mw_min_outcomes',
+            'disagreement_range',
+            'contradicted_low_credibility_max',
+        ),
     ),
 )
 
@@ -446,7 +692,10 @@ class LintService(BaseService):
         try:
             if ctx is not None:
                 ctx.__enter__()
-            result = await session.execute(text(spec.select_sql), {'vault_id': str(vault_id)})
+            params: dict[str, Any] = {'vault_id': str(vault_id)}
+            if spec.param_keys:
+                params.update(self._resolve_rule_params(spec.param_keys))
+            result = await session.execute(text(spec.select_sql), params)
             rows = result.mappings().all()
             # Bulk-fetch (confidence, evidence_count) for every candidate
             # so the gate predicate runs against an in-memory map rather than
@@ -532,6 +781,38 @@ class LintService(BaseService):
             findings_emitted=emitted,
             duration_seconds=duration,
         )
+
+    def _resolve_rule_params(self, keys: tuple[str, ...]) -> dict[str, Any]:
+        """Resolve a rule's named bind parameters from the live config.
+
+        Centralises the mapping from ``RuleSpec.param_keys`` to live config
+        values so the rule SQL stays declarative. Adding a new rule knob
+        requires (1) adding the field to the relevant pydantic config
+        block and (2) extending the ``known`` dict below — drift between
+        the declared key and the config field will fail loudly via
+        :class:`KeyError` instead of silently falling back.
+        """
+        cfg = self.config.server.memory.deprioritize_score
+        known: dict[str, Any] = {
+            'lambda_link': cfg.lambda_link,
+            'mu_entity': cfg.mu_entity,
+            'weight_graph': cfg.weights.graph,
+            'weight_mw': cfg.weights.mw,
+            'weight_temporal': cfg.weights.temporal,
+            'weight_entity': cfg.weights.entity,
+            'propose_threshold': cfg.thresholds.propose,
+            'high_mw_threshold': cfg.thresholds.high_mw_threshold,
+            'high_mw_min_outcomes': cfg.thresholds.high_mw_min_outcomes,
+            'disagreement_range': cfg.thresholds.disagreement_range,
+            'contradicted_low_credibility_max': cfg.thresholds.contradicted_low_credibility_max,
+        }
+        try:
+            return {k: known[k] for k in keys}
+        except KeyError as exc:
+            raise KeyError(
+                f'Unknown lint-rule param {exc.args[0]!r}; extend '
+                f'LintService._resolve_rule_params (known keys: {sorted(known)}).'
+            ) from None
 
     async def count_pending(self, vault_id: UUID | None = None) -> int:
         """Count pending findings.

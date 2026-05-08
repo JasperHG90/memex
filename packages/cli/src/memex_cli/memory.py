@@ -236,6 +236,75 @@ async def restore_memory(
     console.print(f'[green]Memory unit {unit.id} restored.[/green]')
 
 
+@app.command('score')
+@async_command
+async def score_memory(
+    ctx: typer.Context,
+    unit_id: Annotated[str, typer.Argument(help='UUID of the memory unit to score.')],
+    vault: Annotated[
+        str | None,
+        typer.Option(
+            '--vault',
+            '-v',
+            help='Vault name or UUID. Defaults to the active vault.',
+        ),
+    ] = None,
+    json_output: Annotated[
+        bool,
+        typer.Option(
+            '--json',
+            help='Print the breakdown as raw JSON (for piping into jq / scripts).',
+        ),
+    ] = False,
+):
+    """Compute and print the FSFM composite deprioritization score for a unit.
+
+    The breakdown shows each component (graph_pressure, mw_complement,
+    temporal_staleness, entity_dormancy), the importance baseline, and the
+    final score in ``[0, 1]``. Use this when tuning the configured weights or
+    investigating why a unit was (or wasn't) flagged by the linter.
+    """
+    config: MemexConfig = ctx.obj
+    uuid_obj = parse_uuid(unit_id, 'memory unit')
+    effective_vault = vault if vault is not None else config.vault.active
+
+    async with get_api_context(config) as api:
+        try:
+            resolved_vault = await api.resolve_vault_identifier(effective_vault)
+            breakdown = await api.score_memory_unit(uuid_obj, vault_id=resolved_vault)
+        except Exception as e:
+            handle_api_error(e)
+            return
+
+    if breakdown is None:
+        console.print(f'[red]Memory unit {unit_id} not found in vault.[/red]')
+        raise typer.Exit(code=1)
+
+    if json_output:
+        console.print(breakdown.model_dump_json(indent=2))
+        return
+
+    panel_lines = [
+        f'[bold]Composite score:[/bold] {breakdown.score:.4f}',
+        f'[bold]Importance baseline:[/bold] {breakdown.importance:.3f}'
+        if breakdown.importance is not None
+        else '[bold]Importance baseline:[/bold] (NULL)',
+    ]
+    if breakdown.is_protected:
+        panel_lines.append(
+            f'[yellow]Protected:[/yellow] {breakdown.protected_reason} (score short-circuited to 0)'
+        )
+    console.print(Panel('\n'.join(panel_lines), title=f'Score for {breakdown.unit_id}'))
+
+    if breakdown.components:
+        comp = Table(title='Components', show_header=True)
+        comp.add_column('Component')
+        comp.add_column('Value', justify='right')
+        for k, v in breakdown.components.items():
+            comp.add_row(k, f'{v:.4f}')
+        console.print(comp)
+
+
 @app.command('reconsolidate')
 @async_command
 async def reconsolidate_memory(

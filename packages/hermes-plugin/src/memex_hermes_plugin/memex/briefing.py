@@ -153,7 +153,6 @@ def format_briefing_block(
     diagnostics_summary: dict[str, Any] | None = None,
     procedural_observations: list[dict[str, Any]] | None = None,
     lint_pending_count: int | None = None,
-    revisit_due_count: int | None = None,
 ) -> str:
     """Compose the Memex system-prompt block."""
     lines = ['## Memex Memory']
@@ -187,9 +186,6 @@ def format_briefing_block(
     if lint_pending_count is not None and lint_pending_count > 0:
         lines.append('\n' + _render_lint_block(lint_pending_count))
 
-    if revisit_due_count is not None and revisit_due_count > 0:
-        lines.append('\n' + _render_revisit_block(revisit_due_count))
-
     if diagnostics_summary:
         lines.append('\n' + _render_diagnostics_block(diagnostics_summary))
 
@@ -205,10 +201,6 @@ __all__ = ['BriefingCache', 'format_briefing_block']
 
 # ============================================================
 # Tier A — Briefing blocks
-# F6:  pending lint count                 (WS-linter)
-# F14: procedural observations            (WS-quick-wins)
-# F20: N memories due for review         (WS-revisit)
-# F32: diagnostic summary                (WS-diagnostics)
 # ============================================================
 
 
@@ -242,20 +234,6 @@ def _render_procedural_block(observations: list[dict[str, Any]]) -> str:
         'Inspect envelope with `memex_kv_get(key, include_history=true)`.'
     )
     return '\n'.join(lines)
-
-
-def _render_revisit_block(due_count: int) -> str:
-    if due_count <= 0:
-        return (
-            '### Memories due for review\n'
-            '- No memories due for review. The FSFS-5 scheduler will surface units as due dates pass.'
-        )
-    return (
-        f'### Memories due for review\n'
-        f'- {due_count} memories due. Use `memex_get_due_for_review()` to list, then '
-        f'`memex_memory_review(unit_id, quality)` for each (quality: again/hard/good/easy). '
-        f"Five consecutive 'again' ratings auto-deprioritize; `memex memory restore` is the only way back."
-    )
 
 
 def _render_diagnostics_block(summary: dict[str, Any]) -> str:

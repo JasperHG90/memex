@@ -1660,17 +1660,3 @@ class NoteAppendResponse(BaseModel):
         default_factory=list,
         description='Memory units newly extracted from the delta.',
     )
-
-
-class DueUnitDTO(BaseModel):
-    """Due-for-review wire DTO.
-
-    Mirrors the in-process ``memex_core.services.revisitation.DueUnit``
-    dataclass. Lives in ``memex_common`` so the remote ``MemexClient`` can
-    return the same shape without depending on ``memex_core``.
-    """
-
-    unit_id: UUID
-    text_preview: str
-    revisit_due_at: dt.datetime
-    intent_class: str

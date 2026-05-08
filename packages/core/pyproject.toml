@@ -59,13 +59,6 @@ dependencies = [
     # TimeoutError subclass (true on 1.80.x). Bumping needs that re-checked.
     "litellm>=1.80.16,<1.81.0",
     "stamina>=25.2.0",
-    # F20: FSRS-5 spaced-repetition scheduler. py-fsrs 4.1.2 implements FSRS-5
-    # (19 weights), not FSRS-4.5 — pip version != algorithm version. Verified
-    # at .dev-team-artifacts/dev-tier-a-cognitive-memory/pocs/003-f20-fsrs-parity/
-    # paper-cross-check.md. Pinning to the v4.x line until py-fsrs 5.x ReviewLog
-    # changes are validated; py-fsrs 6.x switches to FSRS-6 (deliberate algo
-    # upgrade — that's a future ticket, not a drop-in).
-    "fsrs>=4.0.0,<5.0.0",
     "xxhash>=3.0",
 ]
 

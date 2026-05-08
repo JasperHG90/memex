@@ -208,25 +208,46 @@ async def _seed_all_rules_fire(session: AsyncSession) -> tuple[UUID, dict[str, s
 
 @pytest.mark.asyncio
 async def test_run_rules_emits_findings_and_summary(session: AsyncSession, api) -> None:
-    """All 4 v1 rules each emit exactly one finding; summary totals match."""
+    """All 4 original v1 rules each emit exactly one finding on the seed
+    fixture; the FSFM rules registered alongside them must NOT fire on
+    these synthetic units (they're calibrated for different signal mixes)."""
     vault_id, expected_targets = await _seed_all_rules_fire(session)
 
     summary = await api.lint.run_rules(vault_id)
 
     assert summary.vault_id == vault_id
-    assert summary.total_findings == 4
 
     by_rule = {r.rule_name: r for r in summary.rules}
-    assert set(by_rule.keys()) == {
+    # The registry now also includes the FSFM rules — those run but should
+    # emit zero findings on this fixture (whose units don't carry the
+    # graph / temporal / entity-dormancy signals the FSFM composite needs).
+    assert {
         'orphan_mental_model',
         'cold_low_mw_unit',
         'sensitive_unreviewed_unit',
         'dangling_entity_ref_in_unit',
-    }
+    } <= set(by_rule.keys()), f'missing v1 rule(s): {set(by_rule.keys())}'
+
+    # Each original v1 rule fires exactly once on its crafted target.
     for rule_name, expected_target in expected_targets.items():
         assert by_rule[rule_name].findings_emitted == 1, f'rule {rule_name} did not emit'
 
-    # Verify ledger contents.
+    # The consolidated FSFM rule fires on this fixture only if the
+    # fixture's signals (now-time updated_at, NULL last_outcome_at, no
+    # inbound links, no entities) actually push composite > 0.30.
+    # Confirm zero so the ``total_findings == 4`` invariant we want to
+    # keep is preserved. A regression that lets FSFM fire on neutral
+    # units would surface here.
+    assert 'composite_deprioritize_candidate' in by_rule, (
+        'FSFM consolidated rule must be registered in V1_RULES'
+    )
+    assert by_rule['composite_deprioritize_candidate'].findings_emitted == 0, (
+        'FSFM composite_deprioritize_candidate unexpectedly fired on the v1-fixture units'
+    )
+
+    assert summary.total_findings == 4
+
+    # Verify ledger contents — exactly 4 rows, one per v1 rule.
     rows = await session.execute(
         text(
             'SELECT rule_name, target_id, status, source, lint_type '

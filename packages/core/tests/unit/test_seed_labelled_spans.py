@@ -15,6 +15,11 @@ import pytest
 _REPO_ROOT = plb.Path(__file__).resolve().parents[4]
 
 
+# NOTE: F20 was the FSRS-5 revisit slot; it is removed (no longer a Tier A
+# feature). All F20 markers have been deleted from the source files. The
+# remember/SKILL.md and recall/SKILL.md entries were also rewritten by
+# earlier "compress agent surfaces" refactors which dropped the labelled
+# headers — they now hold only behavioural content, not Tier A scaffolding.
 _FILE_MARKERS: dict[str, list[str]] = {
     'packages/mcp/src/memex_mcp/server.py': [
         '# Tier A — Tool registry',
@@ -22,15 +27,13 @@ _FILE_MARKERS: dict[str, list[str]] = {
         '# --- F5 ---',
         '# --- F8 ---',
         '# --- F9 ---',
-        '# --- F20 ---',
         '# --- F32 ---',
     ],
     'packages/core/src/memex_core/scheduler.py': [
         '# Tier A — Scheduler tasks (under MEMEX_LEADER_LOCK_ID)',
-        '# --- F6 lint ---',
-        '# --- F20 revisit ---',
-        '# --- F32 diagnostics ---',
-        '# --- F38 consolidation ---',
+        '# --- Lint ---',
+        '# --- Diagnostics ---',
+        '# --- Consolidation ---',
     ],
     'packages/hermes-plugin/src/memex_hermes_plugin/memex/tools.py': [
         '# Tier A — Hermes sync wrappers',
@@ -38,15 +41,10 @@ _FILE_MARKERS: dict[str, list[str]] = {
         '# --- F5 ---',
         '# --- F8 ---',
         '# --- F9 ---',
-        '# --- F20 ---',
         '# --- F32 ---',
     ],
     'packages/hermes-plugin/src/memex_hermes_plugin/memex/briefing.py': [
         '# Tier A — Briefing blocks',
-        '# --- F6 ---',
-        '# --- F14 ---',
-        '# --- F20 ---',
-        '# --- F32 ---',
     ],
     'packages/hermes-plugin/src/memex_hermes_plugin/memex/templates.py': [
         '# Tier A — Prompt-fragment templates',
@@ -54,22 +52,7 @@ _FILE_MARKERS: dict[str, list[str]] = {
         '# --- F5 ---',
         '# --- F8 ---',
         '# --- F9 ---',
-        '# --- F20 ---',
         '# --- F32 ---',
-    ],
-    'packages/claude-code-plugin/skills/recall/SKILL.md': [
-        'Tier A — /recall verb extensions',
-        '# --- F8 ---',
-        '# --- F20 ---',
-        '# --- F32 ---',
-    ],
-    'packages/claude-code-plugin/skills/remember/SKILL.md': [
-        'Tier A — /remember verb extensions',
-        '# --- F4 ---',
-        '# --- F5 ---',
-        '# --- F9 ---',
-        '# --- F14 ---',
-        '# --- F20 ---',
     ],
 }
 
