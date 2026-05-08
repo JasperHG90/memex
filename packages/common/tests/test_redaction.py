@@ -1,11 +1,14 @@
 """Tests for memex_common.redaction.redact — secret deny-list walker.
 
 Covers:
-- Substring-pattern matching on every secret-bearing leaf name
-  (password, api_key, secret_access_key, session_token, webhook_secret,
-  dsn, database_url).
+- Exact-name matching on every secret-bearing leaf name (password,
+  api_key, access_key_id, secret_access_key, session_token, token,
+  webhook_secret, dsn, database_url).
+- Suffix matching for future predictable names (``*_password``,
+  ``*_api_key``, ``*_token``, ``*_secret``); the leading underscore
+  excludes plural ``*_tokens`` count fields.
 - Shape-based rule for ``ApiKeyConfig``-shaped dicts (key + policy
-  siblings) where ``key`` would be too generic to substring-match.
+  siblings) where bare ``key`` would be too generic for name matching.
 - Sibling ``<key>_set`` boolean indicating whether the original was
   configured (non-empty) without leaking the value.
 - Recursion through nested dicts and lists.
@@ -98,6 +101,47 @@ def test_redacts_dsn_and_database_url() -> None:
 def test_does_not_redact_non_secret_field() -> None:
     out = redact({'note_key': 'project-alpha-kickoff', 'vault_name': 'work'})
     assert out == {'note_key': 'project-alpha-kickoff', 'vault_name': 'work'}
+
+
+def test_does_not_redact_token_count_tunables() -> None:
+    """`token`-substring fields like `max_tokens`, `chunk_size_tokens`,
+    `tokenizer` are non-secret integer/string knobs and MUST pass through
+    unredacted — the eval-suite reproducibility contract requires them."""
+    payload = {
+        'max_tokens': 4096,
+        'chunk_size_tokens': 512,
+        'chunk_overlap_tokens': 64,
+        'scan_chunk_size_tokens': 256,
+        'block_token_target': 1024,
+        'short_doc_threshold_tokens': 200,
+        'max_node_length_tokens': 1500,
+        'min_node_tokens': 32,
+        'gap_rescan_threshold_tokens': 100,
+        'token_budget': 8000,
+        'max_batch_tokens': 2048,
+        'max_narrative_tokens': 600,
+        'tokenizer': 'cl100k_base',
+        'tokens_per_minute': 30000,
+    }
+    out = redact(payload)
+    assert out == payload
+
+
+def test_redacts_suffix_token_field() -> None:
+    """`*_token` suffix (with underscore) catches future SecretStr fields
+    like `oauth_token`, `bearer_token`, etc., without false-matching
+    plural `*_tokens` count fields."""
+    out = redact({'oauth_token': 'tok-abc', 'oauth_tokens': 5})
+    assert out['oauth_token'] == REDACTED
+    assert out['oauth_token_set'] is True
+    assert out['oauth_tokens'] == 5  # plural — not a secret
+
+
+def test_redacts_suffix_secret_field() -> None:
+    """`*_secret` suffix catches future fields like `signing_secret`."""
+    out = redact({'signing_secret': 'shhh', 'public_key': 'okay'})
+    assert out['signing_secret'] == REDACTED
+    assert out['public_key'] == 'okay'
 
 
 def test_apikeyconfig_shape_redacts_plain_key_field() -> None:

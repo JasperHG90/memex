@@ -109,7 +109,13 @@ async def list_memory_units_by_note(
     try:
         units = await api.list_memory_units_by_note(note_id, vault_id)
         return [build_memory_unit_dto(u) for u in units]
-    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+    except (MemexError, ValueError) as e:
+        # Narrow catch matches the sibling get_memory_units_by_chunks above
+        # (lines 65-71 explain the reasoning): KeyError / RuntimeError /
+        # OSError mask genuine bugs rather than client-visible failures.
+        # Service-layer raises MemexError subclasses for known failure modes;
+        # ValueError covers UUID/typing validation. Anything else propagates
+        # as a 500 with a logged stack.
         raise _handle_error(e, f'Failed to list memory units for note {note_id}')
 
 

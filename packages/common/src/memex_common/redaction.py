@@ -15,18 +15,34 @@ from typing import Any
 
 REDACTED = '<redacted>'
 
-# Case-insensitive substring patterns. A leaf key matching any pattern is
-# redacted regardless of value type (str, SecretStr's `'**********'`,
-# bytes, anything truthy/falsy).
-_SECRET_PATTERNS: tuple[str, ...] = (
-    'password',
-    'api_key',
-    'access_key_id',
-    'secret_access_key',
-    'token',
-    'webhook_secret',
-    'dsn',
-    'database_url',
+# Two-tier rule set: exact leaf names + safe suffix patterns. Substring
+# matching was rejected because it produced false positives on tunable
+# integer knobs (e.g. ``max_tokens``, ``chunk_size_tokens``,
+# ``tokenizer``) that share substrings with secret-bearing fields. The
+# exact set covers known SecretStr fields in MemexConfig plus
+# ``GCSFileStoreConfig.token`` (a plain ``str`` field). The suffix set
+# is a safety net for future SecretStr fields with predictable names
+# (``*_password``, ``*_api_key``, ``*_token``, ``*_secret``); the leading
+# underscore is what makes ``_token`` exclude plural ``_tokens``.
+_SECRET_NAMES_EXACT: frozenset[str] = frozenset(
+    {
+        'password',
+        'api_key',
+        'access_key_id',
+        'secret_access_key',
+        'session_token',
+        'token',
+        'webhook_secret',
+        'dsn',
+        'database_url',
+    }
+)
+
+_SECRET_NAME_SUFFIXES: tuple[str, ...] = (
+    '_password',
+    '_api_key',
+    '_token',
+    '_secret',
 )
 
 # Patterns that are too generic for substring matching but appear as
@@ -41,9 +57,17 @@ _SHAPE_REDACTIONS: tuple[tuple[frozenset[str], str], ...] = (
 
 
 def _is_secret_key(name: str) -> bool:
-    """Return True if a leaf key name matches a substring pattern."""
+    """Return True if a leaf key is exactly a known secret name OR ends with
+    a known secret suffix.
+
+    Substring matching is intentionally NOT used: ``'token'`` substring would
+    match ``max_tokens`` and other non-secret integer knobs, breaking the
+    reproducibility contract on ``GET /api/v1/system/config``.
+    """
     lowered = name.lower()
-    return any(p in lowered for p in _SECRET_PATTERNS)
+    if lowered in _SECRET_NAMES_EXACT:
+        return True
+    return any(lowered.endswith(suffix) for suffix in _SECRET_NAME_SUFFIXES)
 
 
 def _shape_secret_keys(d: dict[str, Any]) -> set[str]:
