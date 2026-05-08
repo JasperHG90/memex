@@ -170,6 +170,7 @@ memex-eval suite run [<name>|--all]
   [--replicates N]
   [--seed INT]
   [--output PATH]
+  [--notes TEXT | --notes-file PATH]
   [--no-llm-judge]
   [--judge-model MODEL]
   [--verbose]
@@ -186,6 +187,8 @@ memex-eval suite run [<name>|--all]
 | `--replicates` | `1` | Run each scenario N times; surfaces `metric.<key>.std`. `>1` is recommended for LLMJudge-bearing suites |
 | `--seed` | run-id-derived | Seeds Python `random` + `numpy.random` (NOT the LLM judge — see §3.6) |
 | `--output` | none | Also dump full `RunResult` JSON to a path |
+| `--notes` | none | Free-form description of what changed in the code; uploaded as `run_notes.md` artifact + truncated `notes` MLflow tag for UI filtering |
+| `--notes-file` | none | Read `--notes` body from a file (mutually exclusive with `--notes`) |
 | `--no-llm-judge` | off | Skip LLMJudge / UsefulAtK scenarios; deterministic-only run (faster, free) |
 | `--judge-model` | `gemini/gemini-3-flash-preview` (or `EVAL_JUDGE_MODEL` env) | Override LLM judge model (litellm format) |
 | `--verbose` / `-v` | off | DEBUG-level logging |
@@ -204,6 +207,7 @@ memex-eval suite sweep <name>
   [--server URL]               (must be localhost; non-local is rejected)
   [--server-startup-timeout SEC]
   [--graceful-shutdown-seconds SEC]
+  [--notes TEXT | --notes-file PATH]
   [other run flags]
 ```
 
@@ -213,6 +217,8 @@ memex-eval suite sweep <name>
 | `--server` | `http://localhost:<random-free-port>/api/v1/` | Must be localhost; non-local URLs hard-fail with `SweepNotSupportedRemote` |
 | `--server-startup-timeout` | `60` (seconds) | Per-point timeout for `/health` to return 200 after subprocess spawn |
 | `--graceful-shutdown-seconds` | `30` | SIGTERM grace window before SIGKILL on each point's server |
+| `--notes` | none | Free-form change description; logged as `run_notes.md` artifact + `notes` tag on every child run AND the parent (see §4.6) |
+| `--notes-file` | none | Read `--notes` body from a file (mutually exclusive with `--notes`) |
 
 The first sweep run takes longer (~60s server-startup) than the second; subsequent points reuse cached imports where possible. Per-point cost: server cold-start + ingest + extraction + scenario loop. Budget ~3-5 minutes per point for a typical 5-scenario suite with 5 source notes.
 
@@ -736,6 +742,7 @@ Three sub-budgets (cap: ≤80 total params):
 - `suite.name=<name>`, `schema_version=<v>` — for filtering in MLflow UI
 - `suite.tags=<comma-joined>` — values, not boolean presence (e.g. `extraction,retrieval`)
 - `components=<comma-joined>` — `components_under_test` joined
+- `notes=<first-line preview>` — present only when `--notes` was passed; truncated to 240 chars with a `… (see run_notes.md artifact)` suffix when content was lost
 - For sweep child runs: `sweep.id`, `sweep.point_index`, `mlflow.parentRunId` (auto-set by `start_run(nested=True)`)
 
 #### Artifacts (queryable but not directly diff-able in UI)
@@ -744,6 +751,7 @@ Three sub-budgets (cap: ≤80 total params):
 - `README.md` — frozen suite description at run time
 - `sources/` — frozen copy of every source note + asset (so a 6-month-old run is reproducible from artifacts alone)
 - `config_snapshot.json` — full `MemexConfig` dump from `GET /api/v1/system/config` with secrets redacted (see §3.7)
+- `run_notes.md` — present only when `--notes` was passed; full body of the user-supplied change description (see §4.6)
 
 ### 3.4 Sweeps
 
@@ -888,31 +896,223 @@ When the framework's `schema_version` bumps (rare — happens when a metric is r
 
 Bumping `suite_version` (frequent — happens any time you change scenarios or sources) keeps everything in the same experiment. Comparable across the bump as long as the metric set stays stable.
 
-### 3.12 Adding a new `ExpectedOutcome` type (advanced)
+## 4. Extending the framework
 
-If none of the built-in outcomes fit, subclass `_ExpectedOutcomeBase` in your suite's `__init__.py` (local) or contribute to `memex_eval.suite.base` (framework-level):
+Everything in the framework that's a "closed set" of types — outcomes, setup actions, answer backends, suites — is registry-driven. Custom code registers itself once at import time; the core never has to learn about it. Three registries, one entry-point group.
+
+### 4.1 Registering a custom outcome
+
+Use `@register_outcome('<type-name>')` on a subclass of `ExpectedOutcomeBase`. The class must declare `type: Literal['<type-name>']` to match the discriminator. `score()` consumes a uniform `AgentAnswer` (whatever the active backend produced) and returns a `dict[str, float]`.
+
+The example below asserts that a unit's `confidence` (a real field on `MemoryUnitDTO`) went up by at least `min_delta` after a setup action snapshotted the baseline. The same pattern applies to any per-unit numeric you can pull off `MemoryUnitDTO`.
 
 ```python
-from memex_eval.suite import _ExpectedOutcomeBase, ActualMemorySearch
 from typing import Literal
+from memex_eval.suite import ExpectedOutcomeBase, register_outcome
 
-class MyCustomOutcome(_ExpectedOutcomeBase):
-    type: Literal['my_custom_outcome']
-    expected_thing: str
+@register_outcome('confidence_delta')
+class ConfidenceDelta(ExpectedOutcomeBase):
+    """Assert that a unit's confidence went up by ≥ min_delta after setup."""
 
-    async def fetch(self, api, vault_id, scenario):
-        units = await api.search(query=scenario.query, vault_ids=[vault_id], limit=scenario.top_k)
-        return ActualMemorySearch(units=units)
+    type: Literal['confidence_delta']
+    target_keywords: list[str]
+    min_delta: float
 
-    def score(self, actual: ActualMemorySearch) -> dict[str, float]:
-        # Return a dict of metric keys, e.g.:
-        return {'my_custom_metric': 1.0 if any(self.expected_thing in u.text for u in actual.units) else 0.0}
+    def score(self, answer, scenario, *, context=None, **_kw):
+        ctx = context or {}
+        # The runner auto-prefixes setup-action context keys with the
+        # action's registered name. ``snapshot_confidence`` publishes
+        # ``baseline``, which becomes ``snapshot_confidence.baseline``.
+        before = float(ctx.get('snapshot_confidence.baseline', 0.0))
+        target = next(
+            (u for u in answer.units
+             if all(kw.lower() in (u.text or '').lower() for kw in self.target_keywords)),
+            None,
+        )
+        if target is None:
+            return {'confidence_delta': 0.0, 'pass': 0.0}
+        after = float(getattr(target, 'confidence', 0.0) or 0.0)
+        delta = after - before
+        return {
+            'confidence_delta': delta,
+            'pass': 1.0 if delta >= self.min_delta else 0.0,
+        }
 
-    def metric_keys(self) -> list[str]:
-        return ['my_custom_metric']
+    def metric_keys(self, top_k=None):
+        return ['confidence_delta', 'pass']
 ```
 
-Register it in the `ExpectedOutcomeUnion` discriminated union if framework-level; otherwise just use it directly in your suite. Each `ExpectedOutcome` subclass owns **both** the runtime fetch shape (what to ask Memex for) AND the scoring (what to do with the result) — the runner only orchestrates.
+Use it in any suite — by direct instance or by JSON dict (the validator coerces dicts via the registry):
+
+```python
+Scenario(
+    id='positive_outcome_lifts_confidence',
+    description='Recording a successful outcome should lift confidence on the matched unit.',
+    query='Project Alpha lead',
+    setup_actions=[
+        SetupAction(kind='snapshot_confidence', search_query='Project Alpha lead'),
+        SetupAction(kind='record_outcome', search_query='Project Alpha lead', success=True),
+    ],
+    expected=ConfidenceDelta(
+        type='confidence_delta',
+        target_keywords=['Sarah Chen'],
+        min_delta=0.05,
+    ),
+)
+```
+
+`register_outcome` is strict: it raises if `<type-name>` is already registered, so plugins can't silently shadow built-ins. Use `replace_outcome('<type-name>')` for intentional overrides and `unregister_outcome('<type-name>')` to remove an entry (mainly for tests). Outcome names match `^[a-z][a-z0-9_]*$`. Register custom outcomes in any module that runs before `load_suite()` — typically the top of your suite's `__init__.py`.
+
+### 4.2 Registering a custom setup action
+
+Setup actions are registered side-effects that run before each scenario's query. Each action may publish a context dict that the outcome reads back via `score(context=...)` — this is the substrate for delta-style assertions.
+
+```python
+import abc
+from memex_eval.suite import SetupActionHandler, register_setup_action
+
+@register_setup_action('snapshot_confidence')
+class SnapshotConfidence(SetupActionHandler):
+    """Capture the confidence of units matching search_query before any
+    other setup runs, so a downstream outcome can score the delta.
+
+    Set ``required = True`` to abort the scenario with status='error' if
+    the snapshot fails — protects delta outcomes from scoring against a
+    phantom-zero baseline.
+    """
+
+    required = True
+
+    async def run(self, api, vault_id, params):
+        query = params.get('search_query')
+        if not query:
+            return None
+        units = await api.search(query=query, limit=5, vault_ids=[vault_id])
+        if not units:
+            return None
+        # Bare keys here — the runner auto-prefixes them with the handler
+        # name, so the outcome reads ``snapshot_confidence.baseline`` and
+        # ``snapshot_confidence.unit_id``. No collision risk between
+        # handlers in the same scenario.
+        return {
+            'baseline': float(getattr(units[0], 'confidence', 0.0) or 0.0),
+            'unit_id': str(units[0].id),
+        }
+```
+
+`SetupAction` allows arbitrary extra fields (`extra='allow'` on the model), so custom actions can carry whatever params they need:
+
+```python
+SetupAction.model_validate({
+    'kind': 'snapshot_confidence',
+    'search_query': 'Project Alpha lead',
+    'window_s': 30,            # custom param — passed through to params dict
+})
+```
+
+If the action doesn't need to publish anything, return `None`. If it raises, the runner catches the exception, records `{'kind': ..., 'error': ...}` in `context['_setup_failures']`, and continues — *unless* the handler sets `required = True`, in which case the scenario short-circuits to `status='error'` and **no further actions in the same scenario are executed** (so a failed snapshot can't be followed by a record-outcome that contaminates the vault). Delta-style outcomes should mark their snapshot handlers as `required` to refuse scoring against a missing baseline.
+
+Like outcomes, `register_setup_action` is strict on collisions; use `replace_setup_action('<name>')` for explicit overrides and `unregister_setup_action('<name>')` to remove an entry (mainly for tests). Names match `^[a-z][a-z0-9_]*$`.
+
+### 4.3 Registering a custom answer backend
+
+`@register_backend('<name>')` on a subclass of `AnswerBackend`. Backends produce a uniform `AgentAnswer` so outcomes don't care whether the answer came from the API, Claude Code, Hermes, or some other agent runtime.
+
+```python
+from memex_eval.suite import AgentAnswer, AnswerBackend, register_backend
+
+@register_backend('my-agent')
+class MyAgentBackend(AnswerBackend):
+    async def answer(self, scenario, *, api, vault_id, server_url, judge=None):
+        # Drive your agent however you want, then map its output:
+        text, tool_calls, retrieved_unit_ids = await my_agent_runtime(scenario.query)
+        return AgentAnswer(
+            answer_text=text,
+            tool_calls=tool_calls,
+            retrieved_unit_ids=retrieved_unit_ids,
+            backend_name=self.name,
+        )
+```
+
+Pick the backend per-suite via `SuiteMetadata.default_answer_mode='my-agent'`, or per-scenario via `Scenario.answer_mode='my-agent'`.
+
+`register_backend` is strict on collisions; use `replace_backend('<name>')` for explicit overrides and `unregister_backend('<name>')` for tests. Backend names match `^[a-z][a-z0-9_-]*$` (the hyphen variant exists so `claude-code` keeps validating).
+
+### 4.4 Shipping suites as a separate pip package (entry-point plugin)
+
+Suites can live outside this repo. Drop `SUITE: Suite` in any module of your package and declare it as an entry point:
+
+```toml
+# pyproject.toml of your suite package (e.g. memex-eval-suites-acme)
+[project.entry-points."memex_eval.suites"]
+acme_retrieval = "acme_eval_suites.acme_retrieval"
+acme_compliance = "acme_eval_suites.acme_compliance"
+```
+
+After `pip install memex-eval-suites-acme`:
+
+```bash
+memex-eval suite list                  # acme_retrieval and acme_compliance show up
+memex-eval suite run acme_retrieval    # runs your plugin suite
+memex-eval suite history acme_retrieval --metric metric.recall_at_10.mean
+```
+
+Resolution order is: built-in subpackage → entry-point plugin → filesystem path. Built-in names take priority (a plugin can't shadow `basic_extraction`). Plugins should also register any custom outcomes / setup actions / backends in the imported module's top-level body, so a single import wires everything up.
+
+### 4.5 Ad-hoc filesystem suites (no install required)
+
+For one-off experiments, point the CLI at any directory exporting `SUITE: Suite`:
+
+```bash
+memex-eval suite run /home/jasper/experiments/my_one_off_suite
+memex-eval suite validate ./local_suite
+```
+
+The loader switches on the argument shape: contains `/` or starts with `.` → filesystem load; bare name → built-in lookup → entry-point plugin lookup.
+
+### 4.6 Recording change context — `--notes`
+
+A run's results are only interpretable in context: which version of memex, which knobs, what changed in the code since the last comparable run. The framework auto-captures the easy half (`git.sha`, `memex.version`, `suite.sources_hash`, full config snapshot, etc.) but the human "what did I just change and why" is on you.
+
+Pass `--notes "<text>"` (or `--notes-file <path>` for longer write-ups) on `suite run` and `suite sweep`:
+
+```bash
+memex-eval suite run basic_extraction \
+  --notes "Bumped reranking_mw_alpha 0.0→0.3 to test FSFM weight sensitivity. PR #143."
+```
+
+What gets logged:
+
+- `RunResult.notes` — the full text on the run-result object (and the `run_result.json` artifact).
+- MLflow artifact `run_notes.md` — the full text as a separate file, viewable in the MLflow UI without diving into JSON.
+- MLflow tag `notes` — the first line, truncated to 240 chars, with a `… (see run_notes.md artifact)` suffix when content was lost. Use this for filtering in the MLflow UI. A search like `tags.notes LIKE "%mw_alpha%"` finds every run that touched that knob — note that `LIKE` only works with the SQL tracking backend (Postgres/MySQL/SQLite); the file-store backend supports only exact `=` / `!=` matches on tags, so put the most-searchable keyword on the first line.
+
+For sweeps, the notes apply to both the parent and every child run (same change, multiple knob points). Comparing two runs months apart, the notes are usually how you remember what each one was actually testing.
+
+Convention: lead with what changed, then *why*, then a PR or issue link. The first line is the searchable tag; everything after it is for the future-you who's trying to understand why a metric moved.
+
+### 4.7 Isolating registry mutation in tests — `isolated_registries()`
+
+Outcome / setup-action / backend registries are process-globals. Tests that register custom entries (or plugin packages that swap in alternative built-ins) should run inside `isolated_registries()` so they don't leak across runs:
+
+```python
+from typing import Literal
+from memex_eval.suite import isolated_registries, register_outcome, ExpectedOutcomeBase
+
+def test_my_outcome():
+    with isolated_registries():
+        @register_outcome('my_test_outcome')
+        class MyTest(ExpectedOutcomeBase):
+            type: Literal['my_test_outcome']
+            def score(self, answer, scenario, **_kw):
+                return {'pass': 1.0}
+            def metric_keys(self, top_k=None):
+                return ['pass']
+        # ...test body...
+    # registry restored on exit
+```
+
+The framework's own test suite uses an autouse pytest fixture that does the same; reach for `isolated_registries()` in any external test file or notebook that registers framework extensions.
 
 ---
 

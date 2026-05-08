@@ -54,6 +54,7 @@ def sweep_suite(
     answer_mode: str | None = None,
     startup_timeout_s: float = 60.0,
     graceful_shutdown_s: float = 30.0,
+    notes: str | None = None,
 ) -> dict[str, Any]:
     """Run a knob sweep over ``params`` (cartesian product if multiple).
 
@@ -101,6 +102,22 @@ def sweep_suite(
                     'sweep.points_total': str(len(points)),
                 }
             )
+            from memex_eval.suite.runner import _build_notes_tag
+
+            tag_value = _build_notes_tag(notes)
+            if tag_value and hasattr(parent_recorder, 'set_tag'):
+                parent_recorder.set_tag('notes', tag_value)
+            # Log the full body as an artifact on the parent run too — keeps
+            # the sweep self-contained without diving into a child run.
+            if notes and notes.strip():
+                import tempfile
+                from pathlib import Path
+
+                with tempfile.TemporaryDirectory() as _tmp:
+                    nd = Path(_tmp) / 'run_notes.md'
+                    nd.write_text(notes)
+                    with contextlib.suppress(Exception):
+                        parent_recorder.log_artifact(nd)
             parent_run_id = getattr(parent_recorder, 'run_id', None)
         except Exception as e:  # noqa: BLE001
             logger.warning('Could not open MLflow parent run: %s', e)
@@ -145,6 +162,7 @@ def sweep_suite(
                             recorder=child_recorder,
                             extra_params=child_extra_params,
                             extra_tags={'sweep.id': sweep_id},
+                            notes=notes,
                         )
                     )
                 shutdown_method = srv.stop() if False else 'graceful'  # already done by ctx

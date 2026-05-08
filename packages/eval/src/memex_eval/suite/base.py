@@ -5,20 +5,34 @@ Every ``ExpectedOutcome`` subclass scores against a uniform
 default; see ``memex_eval.suite.agents``). This decouples scoring from
 how the answer was generated, enabling pluggable backends:
 direct-API, Claude-Code-as-subagent, Hermes-via-plugin, or custom.
+
+Outcomes are registered via ``@register_outcome('<type-name>')`` so
+external packages can ship custom outcomes — e.g. delta-style
+assertions like ``memory_worth_delta`` — without editing this file.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import logging
 import re
 from pathlib import Path
-from typing import Annotated, Any, Literal, Union
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import (
+    BaseModel,
+    BeforeValidator,
+    ConfigDict,
+    Field,
+    SerializeAsAny,
+    model_validator,
+)
 
 from memex_eval.suite.agents import AgentAnswer
 from memex_eval.suite.metrics import mrr, ndcg_at_k, recall_at_k
 from memex_eval.suite.sources import SourceNote, SuiteSources
+
+logger = logging.getLogger('memex_eval.suite.base')
 
 
 # ---------------------------------------------------------------------------
@@ -29,11 +43,19 @@ from memex_eval.suite.sources import SourceNote, SuiteSources
 class SetupAction(BaseModel):
     """Pre-query side effect for a scenario.
 
-    Runner-interpreted: not pure data. ``search_query`` resolves
-    ``unit_ids`` at runtime via ``api.search``.
+    ``kind`` matches a registered ``SetupActionHandler`` (see
+    ``memex_eval.suite.setup_actions.register_setup_action``). The
+    runner dispatches by name and passes ``model_dump()`` to the
+    handler — extra fields beyond the documented set are fine, so
+    custom actions can carry arbitrary parameters.
+
+    The legacy fields below stay for ergonomic IDE support; new actions
+    are free to ignore them and add their own.
     """
 
-    kind: Literal['record_outcome', 'deprioritize', 'kv_write', 'consolidation_tick']
+    model_config = ConfigDict(extra='allow')
+
+    kind: str
     search_query: str | None = None
     unit_ids: list[str] | None = None
     success: bool = True
@@ -44,16 +66,22 @@ class SetupAction(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Expected outcomes (discriminated union)
+# Expected outcomes — registry-driven; external outcomes plug in via
+# ``@register_outcome('<type-name>')`` without editing this file.
 # ---------------------------------------------------------------------------
 
 
-class _ExpectedOutcomeBase(BaseModel):
-    """Base for the discriminated union.
+class ExpectedOutcomeBase(BaseModel):
+    """Base for every registered ExpectedOutcome.
 
-    Subclasses MUST implement ``score`` and ``metric_keys``. Outcomes
-    are agnostic to which backend produced the ``AgentAnswer`` — they
-    consume whichever fields are populated.
+    Subclasses MUST set ``type: Literal['<name>']`` (the registry key) and
+    implement ``score()``; ``metric_keys()`` and ``referenced_note_keys()``
+    are optional. Outcomes are backend-agnostic — they consume whichever
+    ``AgentAnswer`` fields the active backend populated.
+
+    Register external outcomes via ``@register_outcome('<name>')``; the
+    framework dispatches by the ``type`` field at validation time, so
+    nothing in core has to change to add a new outcome.
     """
 
     type: str
@@ -66,6 +94,7 @@ class _ExpectedOutcomeBase(BaseModel):
         *,
         note_key_to_unit_ids: dict[str, list[str]] | None = None,
         judge: Any | None = None,
+        context: dict[str, Any] | None = None,
     ) -> dict[str, float]:
         raise NotImplementedError
 
@@ -74,6 +103,123 @@ class _ExpectedOutcomeBase(BaseModel):
 
     def referenced_note_keys(self) -> set[str]:
         return set()
+
+
+# ---------------------------------------------------------------------------
+# Outcome registry — open-ended set, lookup by ``type`` discriminator.
+# ---------------------------------------------------------------------------
+
+
+# Registry-name validator. Stricter than ``_SCENARIO_ID_RE`` (defined further
+# down) because it requires a leading letter — scenario_id allows a leading
+# digit, registry names do not.
+_REGISTRY_NAME_RE = re.compile(r'^[a-z][a-z0-9_]*$')
+
+
+_OUTCOME_REGISTRY: dict[str, type[ExpectedOutcomeBase]] = {}
+
+
+def register_outcome(type_name: str):
+    """Register an ``ExpectedOutcomeBase`` subclass under its discriminator.
+
+    The subclass MUST declare ``type: Literal['<type_name>']`` so the
+    Pydantic validator can re-construct it from a JSON dict. Custom
+    outcomes ship in any importable module — load them once before
+    invoking ``load_suite`` (e.g. via your suite package's ``__init__``).
+
+    Example::
+
+        @register_outcome('memory_worth_delta')
+        class MemoryWorthDelta(ExpectedOutcomeBase):
+            type: Literal['memory_worth_delta']
+            target_keywords: list[str]
+            min_delta: float
+            def score(self, answer, scenario, *, context=None, **_kw):
+                ...
+    """
+
+    if not _REGISTRY_NAME_RE.match(type_name):
+        raise ValueError(f'Outcome type {type_name!r} must match {_REGISTRY_NAME_RE.pattern!r}')
+
+    def deco(cls: type[ExpectedOutcomeBase]) -> type[ExpectedOutcomeBase]:
+        existing = _OUTCOME_REGISTRY.get(type_name)
+        if existing is not None and existing is not cls:
+            raise ValueError(
+                f'Outcome type {type_name!r} already registered to '
+                f'{existing.__qualname__}. Use replace_outcome() to override.'
+            )
+        _OUTCOME_REGISTRY[type_name] = cls
+        return cls
+
+    return deco
+
+
+def replace_outcome(type_name: str):
+    """Like ``register_outcome`` but allows overriding an existing registration.
+
+    Reserved for tests and intentional overrides; production code should use
+    ``register_outcome``, which fails fast on collision.
+    """
+
+    if not _REGISTRY_NAME_RE.match(type_name):
+        raise ValueError(f'Outcome type {type_name!r} must match {_REGISTRY_NAME_RE.pattern!r}')
+
+    def deco(cls: type[ExpectedOutcomeBase]) -> type[ExpectedOutcomeBase]:
+        if type_name in _OUTCOME_REGISTRY:
+            logger.warning(
+                'Replacing outcome %r (was %s, now %s)',
+                type_name,
+                _OUTCOME_REGISTRY[type_name].__qualname__,
+                cls.__qualname__,
+            )
+        _OUTCOME_REGISTRY[type_name] = cls
+        return cls
+
+    return deco
+
+
+def unregister_outcome(type_name: str) -> None:
+    """Remove a registered outcome. Idempotent."""
+    _OUTCOME_REGISTRY.pop(type_name, None)
+
+
+def get_outcome_class(type_name: str) -> type[ExpectedOutcomeBase]:
+    if type_name not in _OUTCOME_REGISTRY:
+        raise KeyError(
+            f'Unknown outcome type {type_name!r}. Registered: {sorted(_OUTCOME_REGISTRY)}'
+        )
+    return _OUTCOME_REGISTRY[type_name]
+
+
+def list_outcomes() -> list[str]:
+    return sorted(_OUTCOME_REGISTRY)
+
+
+def _coerce_outcome(v: Any) -> ExpectedOutcomeBase:
+    """BeforeValidator: turn dicts into the right registered subclass."""
+    if isinstance(v, ExpectedOutcomeBase):
+        return v
+    if isinstance(v, dict):
+        type_name = v.get('type')
+        if not type_name:
+            raise ValueError("ExpectedOutcome dict requires a 'type' discriminator")
+        cls = _OUTCOME_REGISTRY.get(type_name)
+        if cls is None:
+            raise ValueError(
+                f'Unknown outcome type {type_name!r}; registered: {sorted(_OUTCOME_REGISTRY)}'
+            )
+        return cls.model_validate(v)
+    raise TypeError(f'Expected dict or ExpectedOutcomeBase, got {type(v).__name__}')
+
+
+# SerializeAsAny is required: without it, Pydantic dumps only the base class's
+# fields (just `type: str`) and silently drops every subclass-specific field
+# (e.g. ``keywords``, ``note_keys``, ``rubric``). With SerializeAsAny, the
+# concrete subclass's serializer is honored. Round-trip integrity is asserted
+# in tests/suite/test_extensibility.py::TestOutcomeRegistry::test_round_trip.
+ExpectedOutcomeUnion = SerializeAsAny[
+    Annotated[ExpectedOutcomeBase, BeforeValidator(_coerce_outcome)]
+]
 
 
 def _aggregate_text(answer: AgentAnswer) -> str:
@@ -99,7 +245,8 @@ def _aggregate_unit_ids(answer: AgentAnswer) -> list[str]:
     return [str(getattr(u, 'id', '')) for u in answer.units if getattr(u, 'id', None)]
 
 
-class KeywordsPresent(_ExpectedOutcomeBase):
+@register_outcome('keywords_present')
+class KeywordsPresent(ExpectedOutcomeBase):
     type: Literal['keywords_present']
     keywords: list[str]
 
@@ -112,7 +259,8 @@ class KeywordsPresent(_ExpectedOutcomeBase):
         return ['pass']
 
 
-class KeywordsAbsent(_ExpectedOutcomeBase):
+@register_outcome('keywords_absent')
+class KeywordsAbsent(ExpectedOutcomeBase):
     type: Literal['keywords_absent']
     keywords: list[str]
 
@@ -125,7 +273,8 @@ class KeywordsAbsent(_ExpectedOutcomeBase):
         return ['pass']
 
 
-class EntityResolves(_ExpectedOutcomeBase):
+@register_outcome('entity_resolves')
+class EntityResolves(ExpectedOutcomeBase):
     type: Literal['entity_resolves']
     expected_names: list[str]
     expected_type: str | None = None
@@ -145,7 +294,8 @@ class EntityResolves(_ExpectedOutcomeBase):
         return ['pass']
 
 
-class EntityCooccurs(_ExpectedOutcomeBase):
+@register_outcome('entity_cooccurs')
+class EntityCooccurs(ExpectedOutcomeBase):
     type: Literal['entity_cooccurs']
     expected_neighbors: list[str]
 
@@ -160,7 +310,8 @@ class EntityCooccurs(_ExpectedOutcomeBase):
         return ['pass']
 
 
-class GoldUnitIds(_ExpectedOutcomeBase):
+@register_outcome('gold_unit_ids')
+class GoldUnitIds(ExpectedOutcomeBase):
     type: Literal['gold_unit_ids']
     note_keys: list[str]
     metrics_to_compute: list[Literal['recall_at_k', 'mrr', 'ndcg_at_k']] = Field(
@@ -207,7 +358,8 @@ class GoldUnitIds(_ExpectedOutcomeBase):
         return set(self.note_keys)
 
 
-class RankingOrder(_ExpectedOutcomeBase):
+@register_outcome('ranking_order')
+class RankingOrder(ExpectedOutcomeBase):
     type: Literal['ranking_order']
     expected_keyword_order: list[str]
 
@@ -235,7 +387,8 @@ class RankingOrder(_ExpectedOutcomeBase):
         return ['pass']
 
 
-class ExcludedByDefault(_ExpectedOutcomeBase):
+@register_outcome('excluded_by_default')
+class ExcludedByDefault(ExpectedOutcomeBase):
     type: Literal['excluded_by_default']
     forbidden_keywords: list[str]
 
@@ -248,7 +401,8 @@ class ExcludedByDefault(_ExpectedOutcomeBase):
         return ['pass']
 
 
-class LLMJudge(_ExpectedOutcomeBase):
+@register_outcome('llm_judge')
+class LLMJudge(ExpectedOutcomeBase):
     """Graded-correctness judge.
 
     ``rubric`` is passed to the judge as the *expected answer description*
@@ -290,7 +444,8 @@ class LLMJudge(_ExpectedOutcomeBase):
         return ['graded_score', 'pass']
 
 
-class UsefulAtK(_ExpectedOutcomeBase):
+@register_outcome('useful_at_k')
+class UsefulAtK(ExpectedOutcomeBase):
     type: Literal['useful_at_k']
     rubric: str
     k: int = 5
@@ -331,7 +486,8 @@ class UsefulAtK(_ExpectedOutcomeBase):
         return [f'useful_at_{self.k}', 'pass']
 
 
-class LintFindingPresent(_ExpectedOutcomeBase):
+@register_outcome('lint_finding_present')
+class LintFindingPresent(ExpectedOutcomeBase):
     type: Literal['lint_finding_present']
     expected_rule_name: str
 
@@ -345,7 +501,8 @@ class LintFindingPresent(_ExpectedOutcomeBase):
         return ['pass']
 
 
-class LLMLintFlagsUnit(_ExpectedOutcomeBase):
+@register_outcome('llm_lint_flags_unit')
+class LLMLintFlagsUnit(ExpectedOutcomeBase):
     type: Literal['llm_lint_flags_unit']
     target_keywords: list[str]
 
@@ -360,7 +517,8 @@ class LLMLintFlagsUnit(_ExpectedOutcomeBase):
         return ['pass']
 
 
-class ToolCallContains(_ExpectedOutcomeBase):
+@register_outcome('tool_call_contains')
+class ToolCallContains(ExpectedOutcomeBase):
     """Agent-mode outcome: assert the agent called specific MCP tool(s).
 
     Useful for verifying integration patterns — e.g. "the agent must
@@ -383,7 +541,8 @@ class ToolCallContains(_ExpectedOutcomeBase):
         return ['pass']
 
 
-class CompositeOutcome(_ExpectedOutcomeBase):
+@register_outcome('composite')
+class CompositeOutcome(ExpectedOutcomeBase):
     """Bundle multiple child outcomes; metric keys are prefixed by index."""
 
     type: Literal['composite']
@@ -391,14 +550,24 @@ class CompositeOutcome(_ExpectedOutcomeBase):
 
     def score(self, answer: AgentAnswer, scenario, **kw) -> dict[str, float]:
         out: dict[str, float] = {}
+        all_pass = True
+        # Single pass — calling each child's score() twice would double-bill any
+        # LLM judges and risk inconsistent pass/fail across the two calls.
         for i, child in enumerate(self.children):
             child_metrics = child.score(answer, scenario, **kw)
             for k, v in child_metrics.items():
                 out[f'child{i}.{k}'] = v
-        # Composite passes iff every child passes (or has no `pass` key)
-        all_pass = all(
-            (child.score(answer, scenario, **kw).get('pass', 1.0) >= 1.0) for child in self.children
-        )
+            # Mirror _execute_scenario's pass/fail derivation: explicit
+            # ``pass`` key wins; otherwise ``any(v > 0)``. Without this, a
+            # child that emits ``{'recall_at_5': 0.0}`` (no ``pass`` key)
+            # silently passes inside a composite even though it would fail
+            # standalone.
+            if 'pass' in child_metrics:
+                child_passed = child_metrics['pass'] >= 1.0
+            else:
+                child_passed = any(v > 0 for v in child_metrics.values())
+            if not child_passed:
+                all_pass = False
         out['pass'] = 1.0 if all_pass else 0.0
         return out
 
@@ -415,25 +584,6 @@ class CompositeOutcome(_ExpectedOutcomeBase):
             out.update(child.referenced_note_keys())
         return out
 
-
-ExpectedOutcomeUnion = Annotated[
-    Union[
-        KeywordsPresent,
-        KeywordsAbsent,
-        EntityResolves,
-        EntityCooccurs,
-        GoldUnitIds,
-        RankingOrder,
-        ExcludedByDefault,
-        LLMJudge,
-        UsefulAtK,
-        LintFindingPresent,
-        LLMLintFlagsUnit,
-        ToolCallContains,
-        CompositeOutcome,
-    ],
-    Field(discriminator='type'),
-]
 
 CompositeOutcome.model_rebuild()
 
@@ -610,6 +760,7 @@ class RunResult(BaseModel):
     vault_name: str = ''
     answer_modes: list[str] = Field(default_factory=list)
     replicates: int = 1
+    notes: str | None = None  # Free-form change notes (uploaded as MLflow artifact)
     scenario_outcomes: list[ScenarioOutcome] = Field(default_factory=list)
     suite_metrics: dict[str, float] = Field(default_factory=dict)
     note_key_to_unit_ids: dict[str, list[str]] = Field(default_factory=dict)
@@ -639,6 +790,12 @@ class RunResult(BaseModel):
 __all__ = [
     'AgentAnswer',
     'SetupAction',
+    'ExpectedOutcomeBase',
+    'register_outcome',
+    'replace_outcome',
+    'unregister_outcome',
+    'get_outcome_class',
+    'list_outcomes',
     'KeywordsPresent',
     'KeywordsAbsent',
     'EntityResolves',

@@ -32,6 +32,7 @@ from memex_eval.suite.base import (
     UsefulAtK,
 )
 from memex_eval.suite.metrics import aggregate_metric_keys, percentile
+from memex_eval.suite.setup_actions import get_setup_action
 
 if TYPE_CHECKING:
     from memex_eval.recorders.mlflow_recorder import MLflowRecorder, NullRecorder
@@ -61,6 +62,36 @@ def _memex_version() -> str:
         return ''
 
 
+_NOTES_TAG_MAX = 240
+_NOTES_OVERFLOW_SUFFIX = '… (see run_notes.md artifact)'
+
+# Param keys consumed by the runner — stripped before the SetupAction's params
+# dict is handed to the registered handler so handlers can use those names
+# freely in their own ``extra='allow'`` fields. If you add another runner-
+# interpreted reserved field on ``SetupAction``, add it here too.
+_RUNNER_RESERVED_PARAM_KEYS: frozenset[str] = frozenset({'kind', 'required'})
+
+
+def _build_notes_tag(notes: str | None) -> str:
+    """Build the MLflow ``notes`` tag value from a free-form notes body.
+
+    Returns an empty string when ``notes`` is None or whitespace-only —
+    callers should treat that as "skip the tag entirely". Appends the
+    overflow suffix only when the tag actually loses content (multi-line
+    body OR first line longer than the cap), so trailing whitespace alone
+    does not falsely advertise a longer artifact.
+    """
+    if not notes:
+        return ''
+    stripped = notes.strip()
+    if not stripped:
+        return ''
+    first_line = stripped.splitlines()[0]
+    truncated = first_line[:_NOTES_TAG_MAX]
+    content_lost = len(stripped.splitlines()) > 1 or len(first_line) > _NOTES_TAG_MAX
+    return truncated + (_NOTES_OVERFLOW_SUFFIX if content_lost else '')
+
+
 def _extract_judge_revision(lm: Any) -> str | None:
     try:
         entry = lm.history[-1]
@@ -81,51 +112,60 @@ async def _setup_vault(api: RemoteMemexAPI, name: str, description: str) -> UUID
     return vault.id
 
 
-async def _resolve_unit_ids(api: RemoteMemexAPI, vault_id: UUID, action: SetupAction) -> list[str]:
-    if action.unit_ids:
-        return action.unit_ids
-    if action.search_query:
-        units = await api.search(query=action.search_query, limit=5, vault_ids=[vault_id])
-        return [str(u.id) for u in units]
-    return []
-
-
 async def _run_setup_actions(
     api: RemoteMemexAPI, vault_id: UUID, actions: list[SetupAction]
-) -> None:
+) -> dict[str, Any]:
+    """Dispatch each action through the setup-action registry.
+
+    Each handler's optional dict return is auto-prefixed with the handler
+    name (e.g. ``snapshot.baseline``) and merged into the per-scenario
+    context. The context dict carries:
+
+    - ``<action_name>.<key>`` entries from each handler's return.
+    - ``_setup_failures`` — list of ``{kind, error}`` for any action that
+      raised. Outcomes that depend on baseline data should check this.
+    - ``_required_setup_failed`` — True if any handler with
+      ``required=True`` raised; the runner short-circuits the scenario to
+      status='error' in this case.
+    """
+    context: dict[str, Any] = {'_setup_failures': []}
     for action in actions:
         try:
-            if action.kind == 'record_outcome':
-                ids = await _resolve_unit_ids(api, vault_id, action)
-                if not ids:
-                    logger.warning('  Setup: record_outcome found no units')
-                    continue
-                for _ in range(action.count):
-                    await api.record_outcome(
-                        unit_ids=ids,
-                        success=action.success,
-                        vault_id=str(vault_id),
-                        reason=action.reason,
-                    )
-            elif action.kind == 'deprioritize':
-                ids = await _resolve_unit_ids(api, vault_id, action)
-                if not ids:
-                    logger.warning('  Setup: deprioritize found no units')
-                    continue
-                for uid in ids:
-                    await api.deprioritize_memory_unit(
-                        unit_id=UUID(uid),
-                        reason=action.reason or 'eval-suite deprioritize',
-                        vault_id=vault_id,
-                    )
-            elif action.kind == 'kv_write':
-                await api.kv_put(value=action.kv_value or '', key=action.kv_key or '')
-            elif action.kind == 'consolidation_tick':
-                await api.consolidation_tick(vault_id=vault_id)
-            else:
-                logger.warning('  Setup: unknown action kind %r', action.kind)
+            handler = get_setup_action(action.kind)
+        except KeyError as e:
+            context['_setup_failures'].append({'kind': action.kind, 'error': str(e)})
+            logger.warning('  Setup: %s', e)
+            # If the missing handler was declared required at the action
+            # level, treat as a required-failure so the scenario short-circuits.
+            if getattr(action, 'required', False):
+                context['_required_setup_failed'] = True
+                break
+            continue
+        try:
+            params = {
+                k: v for k, v in action.model_dump().items() if k not in _RUNNER_RESERVED_PARAM_KEYS
+            }
+            result = await handler.run(api, vault_id, params)
+            if isinstance(result, dict):
+                # Look up the registered name from the registry so we never
+                # depend on cls.name (which can be mutated by replace_*).
+                prefix = action.kind + '.'
+                for k, v in result.items():
+                    key = k if k.startswith(prefix) else f'{prefix}{k}'
+                    context[key] = v
         except Exception as e:
+            context['_setup_failures'].append({'kind': action.kind, 'error': str(e)})
+            if getattr(handler, 'required', False) or getattr(action, 'required', False):
+                context['_required_setup_failed'] = True
+                # Stop running further actions so we don't mutate vault state
+                # after a required snapshot/precondition has failed.
+                logger.warning(
+                    '  Required setup %s failed; aborting remaining setup actions.',
+                    action.kind,
+                )
+                break
             logger.warning('  Setup action %s failed: %s', action.kind, e)
+    return context
 
 
 async def _ingest_sources(
@@ -249,8 +289,20 @@ async def _execute_scenario(
         )
 
     try:
+        scenario_context: dict[str, Any] = {}
         if scenario.setup_actions:
-            await _run_setup_actions(api, vault_id, scenario.setup_actions)
+            scenario_context = await _run_setup_actions(api, vault_id, scenario.setup_actions)
+            if scenario_context.get('_required_setup_failed'):
+                return ScenarioOutcome(
+                    scenario_id=scenario.id,
+                    status='error',
+                    metrics={},
+                    actual_summary={'setup_failures': scenario_context.get('_setup_failures', [])},
+                    duration_ms=(time.monotonic() - started) * 1000,
+                    error='A required setup_action failed; refusing to score',
+                    replicate_index=replicate_index,
+                    answer_mode=answer_mode,
+                )
 
         # Backend produces an AgentAnswer; outcomes score against it uniformly.
         answer: AgentAnswer = await backend.answer(
@@ -270,7 +322,11 @@ async def _execute_scenario(
                 answer_mode=answer_mode,
             )
         metrics = scenario.expected.score(
-            answer, scenario, note_key_to_unit_ids=note_key_to_unit_ids, judge=judge
+            answer,
+            scenario,
+            note_key_to_unit_ids=note_key_to_unit_ids,
+            judge=judge,
+            context=scenario_context,
         )
         duration_ms = (time.monotonic() - started) * 1000
 
@@ -376,8 +432,15 @@ async def run_suite(
     recorder: 'MLflowRecorder | NullRecorder | None' = None,
     extra_tags: dict[str, str] | None = None,
     extra_params: dict[str, str] | None = None,
+    notes: str | None = None,
 ) -> RunResult:
     """Run one suite end-to-end.
+
+    Args:
+        notes: Free-form description of the change being evaluated. Persisted
+            on ``RunResult.notes`` and uploaded to MLflow as the
+            ``run_notes.md`` artifact + a truncated ``notes`` tag for
+            UI-side filtering. The full text lives in the artifact.
 
     Logs to ``recorder`` if provided. Returns the full ``RunResult``.
     """
@@ -472,16 +535,19 @@ async def run_suite(
                 # Ingest source notes
                 note_id_by_key = await _ingest_sources(api, default_vault_id, vault_map, suite)
 
-                # Wait for extraction (vault-wide stable signal first)
-                with contextlib.suppress(Exception):
-                    await wait_for_extraction(
-                        api,
-                        default_vault_id,
-                        poll_interval=2.0,
-                        poll_timeout=120.0,
-                        stable_ticks_required=2,
-                        max_consecutive_errors=5,
-                    )
+                # Wait for extraction (vault-wide stable signal first). Skip
+                # entirely when no notes were ingested — otherwise we burn the
+                # full retry budget on a vault that has nothing to extract.
+                if note_id_by_key:
+                    with contextlib.suppress(Exception):
+                        await wait_for_extraction(
+                            api,
+                            default_vault_id,
+                            poll_interval=2.0,
+                            poll_timeout=120.0,
+                            stable_ticks_required=2,
+                            max_consecutive_errors=5,
+                        )
 
                 # Per-note unit-id resolution (also serves as per-note extraction wait)
                 note_key_to_unit_ids = await _wait_extraction_per_note(
@@ -558,6 +624,7 @@ async def run_suite(
         vault_name=vault_name,
         answer_modes=answer_modes_used,
         replicates=replicates,
+        notes=notes,
         scenario_outcomes=outcomes,
         suite_metrics=suite_metrics,
         note_key_to_unit_ids=note_key_to_unit_ids,
@@ -625,6 +692,13 @@ def _log_to_recorder(
         **extra_tags,
     }
 
+    # User-supplied change-description notes — short summary as a tag (for
+    # UI filtering), full body uploaded as an artifact below. MLflow tag
+    # values cap at 5000 chars; we keep it well under for readability.
+    notes_tag = _build_notes_tag(result.notes)
+    if notes_tag:
+        tags['notes'] = notes_tag
+
     # mlflow.parentRunId belongs in tags, not params — extract from extra_params
     # so the MLflow UI properly nests this run under its sweep parent.
     parent_run_id = extra_params.pop('mlflow.parentRunId', None)
@@ -652,7 +726,9 @@ def _log_to_recorder(
         with tempfile.TemporaryDirectory() as tmp:
             tmpdir = Path(tmp)
             run_result_path = tmpdir / 'run_result.json'
-            run_result_path.write_text(result.model_dump_json(indent=2, default=str))
+            # Pydantic's mode='json' handles UUID/datetime/Path automatically;
+            # ``default=`` is a json.dumps kwarg, not model_dump_json's.
+            run_result_path.write_text(result.model_dump_json(indent=2))
             recorder.log_artifact(run_result_path)
 
             # Defense-in-depth: re-redact even though the server already did.
@@ -666,6 +742,12 @@ def _log_to_recorder(
             if suite.readme_path and suite.readme_path.is_file():
                 with contextlib.suppress(Exception):
                     recorder.log_artifact(suite.readme_path)
+
+            # User-supplied change notes — full text as its own artifact.
+            if result.notes and result.notes.strip():
+                notes_path = tmpdir / 'run_notes.md'
+                notes_path.write_text(result.notes)
+                recorder.log_artifact(notes_path)
 
             # Snapshot the source notes (and any binary assets) so a 6-month-old
             # run is reproducible from the artifact alone — plan §6.

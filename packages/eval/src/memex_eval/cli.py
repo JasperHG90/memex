@@ -457,6 +457,24 @@ suite_app = typer.Typer(
 app.add_typer(suite_app, name='suite')
 
 
+def _read_notes_file(path: str) -> str:
+    """Read --notes-file with helpful errors instead of raw stack traces."""
+    from pathlib import Path as _NP
+
+    p = _NP(path)
+    if not p.is_file():
+        console.print(f'[red]--notes-file not found: {path}[/red]')
+        raise typer.Exit(code=2)
+    try:
+        return p.read_text(encoding='utf-8')
+    except UnicodeDecodeError as e:
+        console.print(f'[red]--notes-file {path!r} is not valid UTF-8: {e}[/red]')
+        raise typer.Exit(code=2) from None
+    except OSError as e:
+        console.print(f'[red]Could not read --notes-file {path!r}: {e}[/red]')
+        raise typer.Exit(code=2) from None
+
+
 def _resolve_overrides_to_env(
     overrides: list[str],
 ) -> tuple[dict[str, str], dict[str, str]]:
@@ -632,6 +650,20 @@ def suite_run(
     no_llm_judge: bool = typer.Option(False, '--no-llm-judge'),
     judge_model: str | None = typer.Option(None, '--judge-model', envvar='EVAL_JUDGE_MODEL'),
     output: str | None = typer.Option(None, '--output', '-o'),
+    notes: str | None = typer.Option(
+        None,
+        '--notes',
+        help=(
+            'Free-form description of the change being evaluated. Uploaded to MLflow as '
+            'the run_notes.md artifact + a truncated `notes` tag for filtering. Use this '
+            'to record what changed in the code so a 6-month-old run is interpretable.'
+        ),
+    ),
+    notes_file: str | None = typer.Option(
+        None,
+        '--notes-file',
+        help='Read the notes body from a file (mutually exclusive with --notes).',
+    ),
     verbose: bool = typer.Option(False, '--verbose', '-v'),
 ) -> None:
     """Run a suite (or all) once."""
@@ -647,6 +679,12 @@ def suite_run(
     else:
         console.print('[red]Provide a suite name or pass --all.[/red]')
         raise typer.Exit(code=1)
+
+    if notes and notes_file:
+        console.print('[red]Pass either --notes or --notes-file, not both.[/red]')
+        raise typer.Exit(code=2)
+    if notes_file:
+        notes = _read_notes_file(notes_file)
 
     cfg_overrides, _env = _resolve_overrides_to_env(overrides)
     if cfg_overrides:
@@ -688,6 +726,7 @@ def suite_run(
                     replicates=replicates,
                     seed=seed,
                     recorder=recorder,
+                    notes=notes,
                 )
             )
         except KeyboardInterrupt:
@@ -706,7 +745,7 @@ def suite_run(
         if output:
             from pathlib import Path as _P
 
-            _P(output).write_text(result.model_dump_json(indent=2, default=str))
+            _P(output).write_text(result.model_dump_json(indent=2))
 
         if failed > 0 or errored > 0:
             any_failure = True
@@ -744,11 +783,23 @@ def suite_sweep(
     seed: int | None = typer.Option(None, '--seed'),
     server_startup_timeout: float = typer.Option(60.0, '--server-startup-timeout'),
     graceful_shutdown_seconds: float = typer.Option(30.0, '--graceful-shutdown-seconds'),
+    notes: str | None = typer.Option(
+        None,
+        '--notes',
+        help='Free-form change description; logged on every child run + the parent.',
+    ),
+    notes_file: str | None = typer.Option(None, '--notes-file', help='Read notes from a file.'),
     verbose: bool = typer.Option(False, '--verbose', '-v'),
 ) -> None:
     """Sweep a suite across knob values; spawns a fresh server per point."""
     _setup_logging(verbose)
     from memex_eval.suite.sweep import sweep_suite, SweepNotSupportedRemote
+
+    if notes and notes_file:
+        console.print('[red]Pass either --notes or --notes-file, not both.[/red]')
+        raise typer.Exit(code=2)
+    if notes_file:
+        notes = _read_notes_file(notes_file)
 
     try:
         summary = sweep_suite(
@@ -764,6 +815,7 @@ def suite_sweep(
             answer_mode=answer_mode,
             startup_timeout_s=server_startup_timeout,
             graceful_shutdown_s=graceful_shutdown_seconds,
+            notes=notes,
         )
     except SweepNotSupportedRemote as e:
         console.print(f'[red]{e}[/red]')

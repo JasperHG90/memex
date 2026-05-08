@@ -23,6 +23,7 @@ import abc
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -127,9 +128,16 @@ class _DictAttrShim:
 
 _BACKEND_REGISTRY: dict[str, type[AnswerBackend]] = {}
 
+# Backends use a slightly looser pattern than outcomes/setup-actions so the
+# existing built-in name 'claude-code' (with a hyphen) keeps validating.
+_BACKEND_NAME_RE = re.compile(r'^[a-z][a-z0-9_-]*$')
+
 
 def register_backend(name: str):
     """Decorator: register a backend class under ``name``.
+
+    Refuses to overwrite an existing registration. Use ``replace_backend``
+    for explicit overrides (mainly tests).
 
     ::
 
@@ -139,14 +147,48 @@ def register_backend(name: str):
                 ...
     """
 
+    if not _BACKEND_NAME_RE.match(name):
+        raise ValueError(f'Backend name {name!r} must match {_BACKEND_NAME_RE.pattern!r}')
+
     def deco(cls: type[AnswerBackend]) -> type[AnswerBackend]:
-        if name in _BACKEND_REGISTRY:
-            logger.warning('Overriding existing backend registration: %r', name)
-        cls.name = name
+        existing = _BACKEND_REGISTRY.get(name)
+        if existing is not None and existing is not cls:
+            raise ValueError(
+                f'Backend {name!r} already registered to {existing.__qualname__}. '
+                f'Use replace_backend() to override.'
+            )
+        if not getattr(cls, 'name', ''):
+            cls.name = name
         _BACKEND_REGISTRY[name] = cls
         return cls
 
     return deco
+
+
+def replace_backend(name: str):
+    """Like ``register_backend`` but allows overriding an existing entry."""
+
+    if not _BACKEND_NAME_RE.match(name):
+        raise ValueError(f'Backend name {name!r} must match {_BACKEND_NAME_RE.pattern!r}')
+
+    def deco(cls: type[AnswerBackend]) -> type[AnswerBackend]:
+        if name in _BACKEND_REGISTRY:
+            logger.warning(
+                'Replacing backend %r (was %s, now %s)',
+                name,
+                _BACKEND_REGISTRY[name].__qualname__,
+                cls.__qualname__,
+            )
+        if not getattr(cls, 'name', ''):
+            cls.name = name
+        _BACKEND_REGISTRY[name] = cls
+        return cls
+
+    return deco
+
+
+def unregister_backend(name: str) -> None:
+    _BACKEND_REGISTRY.pop(name, None)
 
 
 def get_backend(name: str) -> AnswerBackend:
@@ -443,8 +485,6 @@ def _extract_unit_ids_from_tool_result(block: dict[str, Any], out: AgentAnswer) 
             elif isinstance(part, str):
                 text_blob += part + '\n'
     # Memex MCP results carry unit IDs as UUIDs in JSON; pull them via simple regex.
-    import re
-
     uuid_pattern = re.compile(
         r'\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b',
         re.IGNORECASE,
@@ -560,6 +600,8 @@ __all__ = [
     'AgentAnswer',
     'AnswerBackend',
     'register_backend',
+    'replace_backend',
+    'unregister_backend',
     'get_backend',
     'list_backends',
     'DirectApiBackend',
