@@ -1,11 +1,15 @@
-"""Integration coverage for ``035_backfill_findings``.
+"""Integration coverage for ``037_backfill_findings``.
 
-Migration 035 backfills ``maintenance_proposals`` rows from pre-existing
+Migration 037 backfills ``maintenance_proposals`` rows from pre-existing
 ``contradicts`` ``memory_links``. The runtime contradiction engine emits
 the same shape via ``_sanitise_evidence_text`` in ``contradiction/engine.py``;
 this test seeds varied pre-existing reasoning payloads (long, controls,
 whitespace, duplicates) before running the migration and asserts the
 resulting JSONB matches the runtime sanitisation contract end-to-end.
+
+(File kept named ``test_int_alembic_035.py`` for git history continuity;
+the migration was renumbered to 037 when the upstream FSRS-5 ripout took
+the 035 + 036 slots — see merge commit b19dccdb.)
 """
 
 from __future__ import annotations
@@ -27,8 +31,8 @@ from _alembic_test_helpers import (  # noqa: F401
 pytestmark = [pytest.mark.integration]
 
 
-_TARGET = '035_backfill_findings'
-_PRE = '034_add_mw_mode'
+_TARGET = '037_backfill_findings'
+_PRE = '036_fsfm_cooldown_index'
 
 
 @pytest_asyncio.fixture
@@ -257,7 +261,7 @@ async def test_035_backfill_is_idempotent(fresh_db_url: str) -> None:
         plb.Path(memex_core.__file__).resolve().parent
         / 'alembic'
         / 'versions'
-        / '035_backfill_findings.py'
+        / '037_backfill_findings.py'
     )
     spec = importlib.util.spec_from_file_location('mig035', migration_path)
     assert spec is not None and spec.loader is not None
