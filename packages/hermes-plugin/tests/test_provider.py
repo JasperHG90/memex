@@ -596,7 +596,8 @@ def test_create_failure_does_not_flip_initialized(provider_with_append_api):
 
 def test_pending_queue_capped_to_protect_memory(provider_with_append_api):
     """If Memex is unreachable for a long session, the queue must not grow
-    without bound. Past the cap, the OLDEST entry is dropped."""
+    without bound. Backpressure refuses NEW chunks at the cap so older
+    content (more valuable for downstream reflection) is preserved."""
     provider, api, _ = provider_with_append_api
     api.ingest = AsyncMock(side_effect=RuntimeError('down'))
     api.append_to_note = AsyncMock(side_effect=RuntimeError('down'))
@@ -610,10 +611,21 @@ def test_pending_queue_capped_to_protect_memory(provider_with_append_api):
         provider.on_pre_compress([])
 
     assert len(provider._pending) == _PENDING_MAX
-    # Critical: the head 'create' must be preserved across drops, otherwise
-    # all queued appends would orphan onto a non-existent note when Memex
-    # comes back.
+    # The head must be the 'create' — appends would orphan onto a
+    # non-existent note when Memex comes back.
     assert provider._pending[0]['kind'] == 'create'
+    # Tail must be appends, in the order they were captured.
+    assert all(p['kind'] == 'append' for p in provider._pending[1:])
+    # First append is from turn 1; the last surviving append is from turn
+    # (_PENDING_MAX - 1). Anything past that was refused at the boundary.
+    assert 'q1' in provider._pending[1]['content']
+    assert f'q{_PENDING_MAX - 1}' in provider._pending[-1]['content']
+    # Verify the refused chunks were dropped, not silently inserted.
+    for refused_idx in (_PENDING_MAX, _PENDING_MAX + 4):
+        for entry in provider._pending:
+            assert f'q{refused_idx}' not in entry.get('content', ''), (
+                f'turn {refused_idx} should have been refused but is in queue'
+            )
 
 
 def test_recovery_after_outage_drains_queue(provider_with_append_api):
@@ -659,6 +671,172 @@ def test_recovery_after_outage_drains_queue(provider_with_append_api):
     api.ingest.assert_awaited_once()
     assert api.append_to_note.await_count == 3
     assert provider._pending == []
+
+
+def test_non_transient_4xx_drops_failing_entry(provider_with_append_api):
+    """A 409 / 422 / 400 / 404 cannot succeed on retry; drop the entry so
+    the queue can keep draining. Otherwise one bad chunk poisons the rest.
+    """
+    import httpx
+
+    provider, api, _ = provider_with_append_api
+
+    # First flush succeeds (create).
+    provider.sync_turn('q1', 'a1')
+    provider.on_pre_compress([])
+    api.ingest.assert_awaited_once()
+
+    # Next append: server returns 422 (delta validation failure).
+    fake_response = httpx.Response(status_code=422, text='delta empty')
+    fake_response._request = httpx.Request('POST', 'http://test/notes/append')
+    bad_error = httpx.HTTPStatusError('422', request=fake_response._request, response=fake_response)
+    api.append_to_note = AsyncMock(side_effect=bad_error)
+    provider._api.append_to_note = api.append_to_note
+
+    provider.sync_turn('q2', 'a2')
+    provider.on_pre_compress([])
+
+    # Bad entry is dropped; queue is empty.
+    assert provider._pending == []
+
+    # Subsequent appends still work (queue is unblocked).
+    api.append_to_note = AsyncMock(
+        return_value=SimpleNamespace(
+            status='success',
+            note_id=uuid4(),
+            append_id=uuid4(),
+            content_hash='x',
+            delta_bytes=1,
+            new_unit_ids=[],
+        )
+    )
+    provider._api.append_to_note = api.append_to_note
+    provider.sync_turn('q3', 'a3')
+    provider.on_pre_compress([])
+    api.append_to_note.assert_awaited_once()
+    assert provider._pending == []
+
+
+def test_transient_5xx_keeps_entry_for_retry(provider_with_append_api):
+    """5xx and network errors are treated as transient; the entry stays
+    queued for the next flush to retry with the same append_id.
+    """
+    import httpx
+
+    provider, api, _ = provider_with_append_api
+
+    provider.sync_turn('q1', 'a1')
+    provider.on_pre_compress([])
+
+    fake_response = httpx.Response(status_code=503, text='busy')
+    fake_response._request = httpx.Request('POST', 'http://test/notes/append')
+    transient = httpx.HTTPStatusError('503', request=fake_response._request, response=fake_response)
+    api.append_to_note = AsyncMock(side_effect=transient)
+    provider._api.append_to_note = api.append_to_note
+
+    provider.sync_turn('q2', 'a2')
+    provider.on_pre_compress([])
+
+    # 503 is transient — entry stays at head.
+    assert len(provider._pending) == 1
+    assert provider._pending[0]['kind'] == 'append'
+
+
+def test_vault_rebind_after_note_initialized_is_ignored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """Once we've created the session note in vault A, rebinding to vault B
+    mid-session must NOT redirect subsequent appends — that would 404
+    against vault B (note_key is vault-scoped) and silently split the
+    transcript across two notes.
+    """
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    monkeypatch.setenv('MEMEX_SERVER_URL', 'http://test:8000')
+    monkeypatch.setenv('MEMEX_VAULT', 'vault-A')
+
+    import json
+
+    cfg_dir = tmp_path / 'memex'
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    (cfg_dir / 'config.json').write_text(json.dumps({'briefing_refresh_cadence': 1}))
+
+    fake_api = Mock()
+    vault_a = uuid4()
+    vault_b = uuid4()
+    note_uuid = uuid4()
+    fake_api.kv_get = AsyncMock(return_value=None)
+    fake_api.resolve_vault_identifier = AsyncMock(side_effect=[vault_a, vault_b])
+    fake_api.get_session_briefing = AsyncMock(return_value='')
+    fake_api.ingest = AsyncMock(return_value=SimpleNamespace(status='ok', note_id=str(note_uuid)))
+    fake_api.get_note = AsyncMock(return_value=SimpleNamespace(id=note_uuid))
+
+    with patch('memex_common.client.RemoteMemexAPI', return_value=fake_api):
+        with patch(
+            'memex_hermes_plugin.memex.provider.resolve_vault',
+            side_effect=['vault-A', 'vault-B'],
+        ):
+            provider = MemexMemoryProvider()
+            provider.initialize('s', hermes_home=str(tmp_path), platform='cli')
+            try:
+                # Land the create in vault A.
+                provider.sync_turn('q', 'a')
+                provider.on_session_end([])
+                assert provider._note_initialized is True
+                assert provider._vault_id == vault_a
+
+                # Trigger the rebind cadence; must be ignored since note is created.
+                provider.on_turn_start(1, 'msg')
+                assert provider._vault_id == vault_a
+                assert provider._vault_name == 'vault-A'
+            finally:
+                provider.shutdown()
+
+
+def test_shutdown_is_idempotent_under_concurrent_calls(provider_with_append_api):
+    """Concurrent shutdown calls (Hermes' explicit shutdown + atexit
+    fallback) must tear down exactly once. No double-close, no double-flush."""
+    import threading
+
+    provider, api, _ = provider_with_append_api
+    provider.sync_turn('q', 'a')
+
+    barrier = threading.Barrier(2)
+
+    def call_shutdown():
+        barrier.wait()
+        provider.shutdown()
+
+    t1 = threading.Thread(target=call_shutdown)
+    t2 = threading.Thread(target=call_shutdown)
+    t1.start()
+    t2.start()
+    t1.join(timeout=10)
+    t2.join(timeout=10)
+
+    assert not t1.is_alive() and not t2.is_alive()
+    # ingest fired exactly once even under racing shutdowns.
+    assert api.ingest.await_count == 1
+
+
+def test_pending_survives_session_end_buffer_clear(provider_with_append_api):
+    """on_session_end clears the buffer + watermark, but pending entries
+    must survive — the queue is the durable client-side record once the
+    chunk has been captured (not the buffer)."""
+    provider, api, _ = provider_with_append_api
+
+    # Make ingest fail so the entry stays queued.
+    api.ingest = AsyncMock(side_effect=RuntimeError('down'))
+    provider._api.ingest = api.ingest
+
+    provider.sync_turn('q', 'a')
+    provider.on_session_end([])
+
+    # Buffer cleared, but pending entry preserved.
+    assert provider._turn_buffer == []
+    assert provider._flushed_index == 0
+    assert len(provider._pending) == 1
+    assert provider._pending[0]['kind'] == 'create'
+    assert 'q' in provider._pending[0]['content']
 
 
 def test_vault_rebind_reresolves_on_cadence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):

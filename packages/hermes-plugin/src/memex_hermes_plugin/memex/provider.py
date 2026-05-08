@@ -17,18 +17,15 @@ import base64
 import logging
 import os
 import threading
+import time
 from pathlib import Path
 from typing import Any
 from uuid import UUID, uuid4
 
-# Hard cap on the in-memory retry queue. If Memex is unreachable for the
-# entire session the queue would otherwise grow with every flush; this bounds
-# the worst case. Beyond the cap, the OLDEST entry is dropped with a warning.
-_PENDING_MAX = 256
-
 import httpx
 from agent.memory_provider import MemoryProvider  # type: ignore[import-not-found]
 from memex_common.asset_cache import SessionAssetCache
+from memex_core.services.notes import derive_note_uuid_from_key
 
 from .async_bridge import run_sync, shutdown_loop
 from .briefing import BriefingCache, format_briefing_block
@@ -40,6 +37,15 @@ from .templates import HERMES_SESSION_TEMPLATE
 from .tools import ALL_SCHEMAS, TOOLS_MODE_SCHEMAS, dispatch
 
 logger = logging.getLogger(__name__)
+
+# Hard cap on the in-memory retry queue: bounds memory if Memex is
+# unreachable for an entire session.
+_PENDING_MAX = 256
+
+# Non-transient HTTP statuses. The append/create will never succeed if
+# resent verbatim, so we drop the failing entry and continue draining the
+# rest of the queue. 5xx, 408, 429, and network errors are transient.
+_NON_TRANSIENT_HTTP_STATUSES: frozenset[int] = frozenset({400, 404, 409, 410, 422})
 
 
 def _resolve_hermes_home(kwargs: dict[str, Any]) -> Path:
@@ -70,24 +76,22 @@ class MemexMemoryProvider(MemoryProvider):
         self._asset_cache: SessionAssetCache | None = None
         self._turn_buffer: list[dict[str, str]] = []
         self._turn_count = 0
-        # Watermark into _turn_buffer: turns at index < _flushed_index have
-        # been captured into the pending queue. Pre-compress and session-end
-        # flush only the slice past the watermark to avoid double-writes.
+        # Watermark: turns at index < _flushed_index were already captured
+        # into _pending. Avoids double-writes across flush boundaries.
         self._flushed_index = 0
-        # First write of the session is an ``ingest`` (creates the note);
-        # subsequent writes are ``append_to_note`` (extend the note body).
-        # Flipped to True under ``_state_lock`` after a successful create.
         self._note_initialized = False
-        # FIFO queue of pending writes. Each entry is a dict:
-        #   {'kind': 'create', 'content': str, 'title': str}
-        #   {'kind': 'append', 'content': str, 'append_id': UUID}
-        # A failed flush leaves its entry at the head; the next flush retries.
-        # Capped at ``_PENDING_MAX`` to bound memory if Memex is unreachable
-        # for the entire session.
+        # FIFO queue of pending writes (create or append). Each entry
+        # snapshots the vault_id at enqueue time so a mid-session vault
+        # rebind doesn't redirect in-flight chunks.
         self._pending: list[dict[str, Any]] = []
         self._shutdown_registered = False
+        self._shutdown_started = False
         self._state_lock = threading.Lock()
         self._atexit_lock = threading.Lock()
+        # Serializes _drain_pending so concurrent flush callers don't
+        # race on the head item. _state_lock alone isn't enough: the
+        # network call happens with _state_lock released.
+        self._drain_lock = threading.Lock()
 
     @property
     def asset_cache(self) -> SessionAssetCache | None:
@@ -379,14 +383,15 @@ class MemexMemoryProvider(MemoryProvider):
     def _refresh_vault_binding(self) -> None:
         """Best-effort re-resolve the active vault.
 
-        Honors mid-session vault rebinds (e.g., the agent calls
-        ``memex_kv_write('project:<id>:vault', ...)`` and the user expects
-        subsequent transcript writes to land in the new vault). Failures are
-        logged at DEBUG and leave the existing vault binding in place — we
-        never fall back to a vault-less write that could land in the wrong
-        place.
+        Once the session note has been created in a vault we hold the
+        binding constant for the rest of the session: appending to the
+        existing note from a different vault would 404 (note_key is
+        vault-scoped) and split the transcript across two notes. Rebinds
+        only take effect for sessions that haven't yet created a note.
         """
         if self._api is None or self._config is None:
+            return
+        if self._note_initialized:
             return
         try:
             new_vault_name = resolve_vault(
@@ -469,7 +474,17 @@ class MemexMemoryProvider(MemoryProvider):
     # -- Shutdown ------------------------------------------------------------
 
     def shutdown(self) -> None:  # type: ignore[override]
-        """Flush pending buffers and close the client."""
+        """Flush pending buffers and close the client.
+
+        Idempotent: the second call observes ``_shutdown_started`` and
+        returns. Concurrent calls (Hermes' shutdown + atexit fallback) are
+        gated by ``_atexit_lock`` so the teardown happens exactly once.
+        """
+        with self._atexit_lock:
+            if self._shutdown_started:
+                return
+            self._shutdown_started = True
+
         if self._api is not None:
             chunk = self._capture_unflushed_buffer_slice()
             if chunk:
@@ -477,8 +492,6 @@ class MemexMemoryProvider(MemoryProvider):
                     self._enqueue_chunk(chunk, title=self._format_session_title())
                 except Exception as e:
                     logger.debug('Shutdown enqueue failed: %s', e)
-            # One last attempt to drain anything queued (including from the
-            # enqueue above) before we close the HTTP client.
             try:
                 self._drain_pending()
             except Exception as e:
@@ -568,96 +581,125 @@ class MemexMemoryProvider(MemoryProvider):
         no other create is pending) is enqueued as a ``create``; everything
         else is an ``append`` with a freshly-minted ``append_id`` for
         idempotent retry semantics.
+
+        Backpressure: at cap we drop the NEW chunk rather than evicting
+        an older one. Older transcript content is more valuable for
+        downstream reflection (it is the part the model has already
+        forgotten), and evicting it silently would re-introduce the
+        original missing-chunks bug under sustained outage.
         """
         if not content.strip():
             return
         with self._state_lock:
+            if len(self._pending) >= _PENDING_MAX:
+                logger.error(
+                    'Pending session-note write queue at cap (%d); dropping new chunk '
+                    '(%d bytes). Investigate: Memex unreachable for the full session?',
+                    _PENDING_MAX,
+                    len(content),
+                )
+                return
             has_pending_create = any(p['kind'] == 'create' for p in self._pending)
+            vault_id = str(self._vault_id) if self._vault_id else None
             if not self._note_initialized and not has_pending_create:
                 entry: dict[str, Any] = {
                     'kind': 'create',
                     'content': content,
                     'title': title,
+                    'vault_id': vault_id,
                 }
             else:
                 entry = {
                     'kind': 'append',
                     'content': content,
                     'append_id': uuid4(),
+                    'vault_id': vault_id,
                 }
             self._pending.append(entry)
-            if len(self._pending) > _PENDING_MAX:
-                # Never drop a pending create — dropping it would orphan
-                # every queued append (the note wouldn't exist server-side
-                # to append onto). Drop the oldest *append* instead.
-                drop_index = 0
-                for i, e in enumerate(self._pending):
-                    if e['kind'] != 'create':
-                        drop_index = i
-                        break
-                dropped = self._pending.pop(drop_index)
-                logger.warning(
-                    'Pending session-note write queue full (%d); dropped %s entry at index %d.',
-                    _PENDING_MAX,
-                    dropped['kind'],
-                    drop_index,
-                )
         self._drain_pending()
 
     def _drain_pending(self) -> None:
-        """Process the pending queue FIFO. Stops at the first failure.
+        """Process the pending queue FIFO.
 
-        Successful items are popped; the failed item stays at head so the
-        next flush retries with the same idempotency token (for appends).
+        Serialized via ``_drain_lock`` so concurrent callers (hooks,
+        atexit, shutdown) take turns instead of racing on the head item.
+        Successful items are popped; transient failures keep the head in
+        place for retry; non-transient failures (4xx HTTP statuses)
+        drop the failing entry so a poisoned item can't block the rest of
+        the queue.
         """
         if self._api is None or self._config is None:
             return
-        while True:
-            with self._state_lock:
-                if not self._pending:
-                    return
-                head = self._pending[0]
-            try:
-                if head['kind'] == 'create':
-                    self._do_create(head['content'], title=head['title'])
-                    # Background ingest queued the row; wait for it to be
-                    # visible before issuing appends, otherwise the next
-                    # append would 404. If the row never appears we leave
-                    # the create queued so the next flush retries.
-                    if not self._wait_for_note_row():
-                        logger.warning(
-                            'Session note row did not appear after ingest; '
-                            'will retry on next flush.',
-                        )
+        if not self._drain_lock.acquire(blocking=False):
+            return  # Another caller is already draining; let them.
+        try:
+            while True:
+                with self._state_lock:
+                    if not self._pending:
                         return
-                    with self._state_lock:
-                        self._note_initialized = True
-                        if self._pending and self._pending[0] is head:
-                            self._pending.pop(0)
-                else:
-                    self._do_append(head['content'], append_id=head['append_id'])
-                    with self._state_lock:
-                        if self._pending and self._pending[0] is head:
-                            self._pending.pop(0)
-            except Exception as e:
-                logger.warning(
-                    'Session note %s failed; will retry on next flush: %s',
-                    head['kind'],
-                    e,
-                )
-                return
+                    head = self._pending[0]
+                try:
+                    if head['kind'] == 'create':
+                        self._do_create(
+                            head['content'],
+                            title=head['title'],
+                            vault_id=head.get('vault_id'),
+                        )
+                        if not self._wait_for_note_row():
+                            logger.warning(
+                                'Session note row did not appear after ingest; '
+                                'will retry on next flush.',
+                            )
+                            return
+                        with self._state_lock:
+                            self._note_initialized = True
+                            if self._pending and self._pending[0] is head:
+                                self._pending.pop(0)
+                    else:
+                        self._do_append(
+                            head['content'],
+                            append_id=head['append_id'],
+                            vault_id=head.get('vault_id'),
+                        )
+                        with self._state_lock:
+                            if self._pending and self._pending[0] is head:
+                                self._pending.pop(0)
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code in _NON_TRANSIENT_HTTP_STATUSES:
+                        logger.error(
+                            'Session note %s rejected (HTTP %d); dropping entry: %s',
+                            head['kind'],
+                            e.response.status_code,
+                            e,
+                        )
+                        with self._state_lock:
+                            if self._pending and self._pending[0] is head:
+                                self._pending.pop(0)
+                        continue
+                    logger.warning(
+                        'Session note %s transient error (HTTP %d); will retry: %s',
+                        head['kind'],
+                        e.response.status_code,
+                        e,
+                    )
+                    return
+                except Exception as e:
+                    logger.warning(
+                        'Session note %s failed; will retry on next flush: %s',
+                        head['kind'],
+                        e,
+                    )
+                    return
+        finally:
+            self._drain_lock.release()
 
-    def _do_create(self, content: str, *, title: str) -> None:
+    def _do_create(self, content: str, *, title: str, vault_id: str | None) -> None:
         """Create the session note via ``api.ingest``. May raise.
 
-        Uses ``background=True`` so the LLM-bound extraction phase runs
-        asynchronously server-side and the call returns quickly. The note
-        row itself is inserted as part of the same transaction that the
-        background job opens, so by the time we issue the next
-        ``append_to_note`` (which takes a row lock by ``note_key``), the
-        row exists. ``_drain_pending`` calls ``_wait_for_note_row`` after
-        a successful create to confirm the row is visible before we fire
-        any appends — without that gate the next append could 404.
+        Uses ``background=True`` so the LLM extraction phase runs
+        asynchronously server-side. ``_drain_pending`` calls
+        ``_wait_for_note_row`` afterwards to confirm the row is visible
+        before issuing appends.
         """
         assert self._api is not None and self._config is not None
         from memex_common.schemas import NoteCreateDTO
@@ -667,7 +709,7 @@ class MemexMemoryProvider(MemoryProvider):
             description=f'Hermes session transcript ({self._session_id})',
             content=base64.b64encode(content.encode('utf-8')),
             note_key=self._session_note_key,
-            vault_id=str(self._vault_id) if self._vault_id else None,
+            vault_id=vault_id,
             tags=['hermes', self._agent_identity] if self._agent_identity else ['hermes'],
             author='hermes',
             template=self._config.retain.session_template or HERMES_SESSION_TEMPLATE,
@@ -677,39 +719,40 @@ class MemexMemoryProvider(MemoryProvider):
     def _wait_for_note_row(self, *, timeout: float = 10.0) -> bool:
         """Poll for the session note row to appear server-side.
 
-        Returns True if the row is visible, False on timeout. Called after
-        a successful background ingest to gate subsequent appends. The
-        ``derive_note_uuid_from_key`` is deterministic, so we know the id
-        before the row exists.
+        Returns True if the row is visible, False on timeout. The id is
+        deterministic from ``note_key`` so we can poll before the server
+        finishes the background insert. 404 means "not yet"; any other
+        exception is also treated as "not yet" — the caller will leave
+        the create queued for the next flush to retry.
         """
         if self._api is None:
             return False
-        from memex_core.services.notes import derive_note_uuid_from_key
-
         note_id = derive_note_uuid_from_key(self._session_note_key)
-        import time
-
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             try:
-                run_sync(self._api.get_note(note_id), timeout=2.0)
+                run_sync(self._api.get_note(note_id), timeout=1.0)
                 return True
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code != 404:
+                    return False  # unexpected — let the caller surface
+                time.sleep(0.1)
             except Exception:
                 time.sleep(0.1)
         return False
 
-    def _do_append(self, content: str, *, append_id: UUID) -> None:
+    def _do_append(self, content: str, *, append_id: UUID, vault_id: str | None) -> None:
         """Append a delta to the existing session note. May raise.
 
-        Idempotent on ``append_id``: the server replays a cached outcome if
-        the same id was previously processed, so retries are safe.
+        Idempotent on ``append_id``: the server replays a cached outcome
+        if the same id was previously processed, so retries are safe.
         """
         assert self._api is not None
         from memex_common.schemas import NoteAppendRequest
 
         request = NoteAppendRequest(
             note_key=self._session_note_key,
-            vault_id=str(self._vault_id) if self._vault_id else None,
+            vault_id=vault_id,
             delta=content,
             append_id=append_id,
             joiner='paragraph',
