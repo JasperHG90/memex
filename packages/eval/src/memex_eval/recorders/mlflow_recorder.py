@@ -60,7 +60,7 @@ class NullRecorder:
 class MLflowRecorder:
     """Records benchmark results to an MLflow tracking server.
 
-    Requires ``mlflow>=2.18,<3`` (install via ``memex-eval[mlflow]``).
+    Requires ``mlflow>=3.1`` (install via ``memex-eval[mlflow]``).
     """
 
     def __init__(

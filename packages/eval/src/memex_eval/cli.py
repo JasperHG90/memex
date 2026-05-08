@@ -451,7 +451,7 @@ def locomo_efficiency_cmd(
 
 suite_app = typer.Typer(
     name='suite',
-    help='Run, list, and sweep evaluation suites with MLflow tracking.',
+    help='Run, list, validate, and track evaluation suites (optional MLflow).',
     no_args_is_help=True,
 )
 app.add_typer(suite_app, name='suite')
@@ -482,7 +482,8 @@ def _resolve_overrides_to_env(
 
     Returns ``(override_dict, env_dict)`` where ``override_dict`` is the
     raw user input (logged as MLflow params) and ``env_dict`` is the env
-    overlay used by ``sweep`` to spawn server subprocesses.
+    overlay shape — kept for callers that want to spawn a server with the
+    override applied.
     """
     out_overrides: dict[str, str] = {}
     out_env: dict[str, str] = {}
@@ -690,8 +691,8 @@ def suite_run(
     if cfg_overrides:
         console.print(
             '[yellow]warning:[/yellow] --override on `suite run` is logged to MLflow '
-            'only — the running server is NOT restarted with these values. To '
-            'actually exercise different config, use `memex-eval suite sweep`.'
+            'only — the running server is NOT restarted with these values. Restart '
+            'your server with the desired knob set in env or YAML, then re-run.'
         )
 
     any_failure = False
@@ -763,80 +764,6 @@ def suite_backends() -> None:
         console.print(f'  • {n}')
 
 
-@suite_app.command('sweep')
-def suite_sweep(
-    name: str = typer.Argument(..., help='Suite name.'),
-    params: list[str] = typer.Option(
-        ...,
-        '--param',
-        help='Repeatable. KEY=v1,v2,v3 — sweep cartesian product across all --param flags.',
-    ),
-    server: str = typer.Option(
-        DEFAULT_SERVER, '--server', '-s', envvar='MEMEX_EVAL_DEFAULT_SERVER'
-    ),
-    mlflow_uri: str | None = typer.Option(None, '--mlflow-uri', envvar='MLFLOW_TRACKING_URI'),
-    mlflow_experiment: str | None = typer.Option(None, '--mlflow-experiment'),
-    answer_mode: str | None = typer.Option(None, '--answer-mode'),
-    no_llm_judge: bool = typer.Option(False, '--no-llm-judge'),
-    judge_model: str | None = typer.Option(None, '--judge-model'),
-    replicates: int = typer.Option(1, '--replicates', min=1, max=20),
-    seed: int | None = typer.Option(None, '--seed'),
-    server_startup_timeout: float = typer.Option(60.0, '--server-startup-timeout'),
-    graceful_shutdown_seconds: float = typer.Option(30.0, '--graceful-shutdown-seconds'),
-    notes: str | None = typer.Option(
-        None,
-        '--notes',
-        help='Free-form change description; logged on every child run + the parent.',
-    ),
-    notes_file: str | None = typer.Option(None, '--notes-file', help='Read notes from a file.'),
-    verbose: bool = typer.Option(False, '--verbose', '-v'),
-) -> None:
-    """Sweep a suite across knob values; spawns a fresh server per point."""
-    _setup_logging(verbose)
-    from memex_eval.suite.sweep import sweep_suite, SweepNotSupportedRemote
-
-    if notes and notes_file:
-        console.print('[red]Pass either --notes or --notes-file, not both.[/red]')
-        raise typer.Exit(code=2)
-    if notes_file:
-        notes = _read_notes_file(notes_file)
-
-    try:
-        summary = sweep_suite(
-            suite_name=name,
-            params=params,
-            server=server,
-            mlflow_uri=mlflow_uri,
-            mlflow_experiment=mlflow_experiment,
-            use_llm_judge=not no_llm_judge,
-            judge_model=judge_model,
-            replicates=replicates,
-            seed=seed,
-            answer_mode=answer_mode,
-            startup_timeout_s=server_startup_timeout,
-            graceful_shutdown_s=graceful_shutdown_seconds,
-            notes=notes,
-        )
-    except SweepNotSupportedRemote as e:
-        console.print(f'[red]{e}[/red]')
-        raise typer.Exit(code=1) from None
-
-    console.rule(f'sweep {summary["sweep.id"]}')
-    for child in summary['children']:
-        if 'error' in child:
-            console.print(
-                f'  [red]point {child["point_index"]}[/red] {child["overrides"]} '
-                f'→ {child["error"][:80]}'
-            )
-        else:
-            console.print(
-                f'  [green]point {child["point_index"]}[/green] '
-                f'{child["overrides"]} → pass_rate={child["pass_rate"]:.3f}'
-            )
-    if summary['children_failed']:
-        raise typer.Exit(code=1)
-
-
 @suite_app.command('history')
 def suite_history(
     name: str = typer.Argument(..., help='Suite name.'),
@@ -872,7 +799,10 @@ def suite_history(
     try:
         import mlflow
     except ImportError:
-        console.print('[red]mlflow not installed[/red]')
+        console.print(
+            '[red]suite history requires mlflow.[/red] '
+            'Install with: [yellow]uv add memex-eval[mlflow][/yellow]'
+        )
         raise typer.Exit(code=1) from None
 
     if mlflow_uri:

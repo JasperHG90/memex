@@ -10,6 +10,7 @@ Public surface for suite authors:
         SourceNote,
         Scenario,
         SetupAction,
+        InlineNote,
         # Built-in outcomes
         KeywordsPresent,
         KeywordsAbsent,
@@ -62,6 +63,7 @@ from memex_eval.suite.base import (
     ExpectedOutcomeBase,
     ExpectedOutcomeUnion,
     GoldUnitIds,
+    InlineNote,
     KeywordsAbsent,
     KeywordsPresent,
     LintFindingPresent,
@@ -141,6 +143,7 @@ __all__ = [
     'SourceNote',
     'Scenario',
     'SetupAction',
+    'InlineNote',
     'KeywordsPresent',
     'KeywordsAbsent',
     'EntityResolves',

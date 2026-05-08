@@ -30,14 +30,67 @@ from pydantic import (
 
 from memex_eval.suite.agents import AgentAnswer
 from memex_eval.suite.metrics import mrr, ndcg_at_k, recall_at_k
-from memex_eval.suite.sources import SourceNote, SuiteSources
+from memex_eval.suite.sources import NOTE_KEY_RE, SourceNote, SuiteSources
 
 logger = logging.getLogger('memex_eval.suite.base')
+
+
+# Registry-name validator (outcomes / setup-actions). Stricter than the
+# scenario-id and note-key conventions: must start with a letter, no hyphens.
+_REGISTRY_NAME_RE = re.compile(r'^[a-z][a-z0-9_]*$')
+
+# Note-key validator (re-exported from sources for the InlineNote model).
+# Single source of truth — see sources.NOTE_KEY_RE.
+_NOTE_KEY_RE = NOTE_KEY_RE
 
 
 # ---------------------------------------------------------------------------
 # Setup actions (runner-interpreted DSL)
 # ---------------------------------------------------------------------------
+
+
+class InlineNote(BaseModel):
+    """A note ingested as part of one specific scenario.
+
+    Use this when a scenario needs source content that should NOT be in
+    the suite's shared sources — e.g. a contradiction-detection scenario
+    that ingests note A as a shared source, then declares an inline note
+    that contradicts a claim in A and asserts the contradiction surfaces.
+
+    The runner ingests inline notes after the suite-level sources are
+    loaded but before the scenario's setup_actions and query run. The
+    note is materialized in the same vault under the prefixed key
+    ``inline-<scenario_id>-<note_key>``; ``GoldUnitIds`` may reference
+    either the short ``note_key`` (resolved within the scenario) or the
+    fully-prefixed form.
+
+    Inline notes persist in the suite's vault for the rest of the run
+    (vault-level cleanup happens at the end of run_suite). The prefixed
+    note_key prevents collisions across scenarios.
+
+    Limitations:
+    - **No binary assets.** ``InlineNote`` carries only markdown text. If
+      you need an image or other asset, define the note as a regular
+      ``SourceNote`` under ``sources/`` with a per-note ``assets/`` subdir.
+    - **Replicates >1**: the note is ingested once and cached; replicate 2
+      sees the post-setup-action state, not a fresh baseline. See the
+      how-to guide §1.3 for the contract.
+    """
+
+    note_key: str
+    content: str
+    title: str | None = None
+    description: str | None = None
+    tags: list[str] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _validate_note_key(self) -> InlineNote:
+        if not _NOTE_KEY_RE.match(self.note_key):
+            raise ValueError(
+                f'InlineNote.note_key {self.note_key!r} must match {_NOTE_KEY_RE.pattern!r} '
+                f'(same convention as SourceNote filename stems)'
+            )
+        return self
 
 
 class SetupAction(BaseModel):
@@ -108,12 +161,6 @@ class ExpectedOutcomeBase(BaseModel):
 # ---------------------------------------------------------------------------
 # Outcome registry — open-ended set, lookup by ``type`` discriminator.
 # ---------------------------------------------------------------------------
-
-
-# Registry-name validator. Stricter than ``_SCENARIO_ID_RE`` (defined further
-# down) because it requires a leading letter — scenario_id allows a leading
-# digit, registry names do not.
-_REGISTRY_NAME_RE = re.compile(r'^[a-z][a-z0-9_]*$')
 
 
 _OUTCOME_REGISTRY: dict[str, type[ExpectedOutcomeBase]] = {}
@@ -610,6 +657,7 @@ class Scenario(BaseModel):
     include_superseded: bool | None = None
     include_deprioritized: bool | None = None
     setup_actions: list[SetupAction] = Field(default_factory=list)
+    inline_notes: list[InlineNote] = Field(default_factory=list)
     vault_name: str | None = None
     max_duration_ms: float | None = None
     search_type: Literal['memory', 'note'] = 'memory'
@@ -700,11 +748,17 @@ class Suite(BaseModel):
                 raise ValueError(f'Duplicate scenario_id {sc.id!r} in suite {self.metadata.name}')
             scenario_ids.add(sc.id)
             referenced = sc.expected.referenced_note_keys()
-            missing = referenced - source_keys
+            # An outcome may reference either a suite-level source note_key or
+            # one of THIS scenario's inline_notes (by short or prefixed key).
+            inline_short = {n.note_key for n in sc.inline_notes}
+            inline_prefixed = {f'inline-{sc.id}-{k}' for k in inline_short}
+            available = source_keys | inline_short | inline_prefixed
+            missing = referenced - available
             if missing:
                 raise ValueError(
                     f'Scenario {sc.id!r} references note_keys {sorted(missing)} '
-                    f'not present in suite {self.metadata.name!r} sources.'
+                    f'not present in suite {self.metadata.name!r} sources or its '
+                    f'own inline_notes.'
                 )
             _walk(sc.expected)
         return self
@@ -790,6 +844,7 @@ class RunResult(BaseModel):
 __all__ = [
     'AgentAnswer',
     'SetupAction',
+    'InlineNote',
     'ExpectedOutcomeBase',
     'register_outcome',
     'replace_outcome',

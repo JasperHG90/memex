@@ -245,6 +245,115 @@ async def _wait_extraction_per_note(
     return out
 
 
+async def _ingest_inline_notes(
+    api: RemoteMemexAPI,
+    vault_id: UUID,
+    suite: Suite,
+    scenario: Scenario,
+    note_key_to_unit_ids: dict[str, list[str]],
+) -> None:
+    """Ingest a scenario's inline notes into the suite vault and resolve
+    their note_key → unit_ids in-place on ``note_key_to_unit_ids``.
+
+    Each inline note's wire-level note_key is prefixed with
+    ``inline-<scenario_id>-`` to avoid collisions with sibling scenarios.
+    The map is populated under both the prefixed AND short keys so
+    GoldUnitIds outcomes can reference either form.
+
+    No-op if the scenario has no inline notes OR if all inline notes have
+    already been resolved (e.g. on a 2nd replicate of the same scenario).
+    """
+    import base64
+
+    if not scenario.inline_notes:
+        return
+    # Idempotence guard for replicates 2..N: gate on the per-scenario prefixed
+    # key, never the short form. Two scenarios may legitimately declare inline
+    # notes under the same short note_key; the prefixed form is the unique id.
+    prefixed_keys = {f'inline-{scenario.id}-{n.note_key}' for n in scenario.inline_notes}
+    if all(k in note_key_to_unit_ids for k in prefixed_keys):
+        # Re-publish the short forms in case another scenario shadowed them.
+        for n in scenario.inline_notes:
+            note_key_to_unit_ids[n.note_key] = note_key_to_unit_ids[
+                f'inline-{scenario.id}-{n.note_key}'
+            ]
+        return
+
+    inline_id_by_key: dict[str, str] = {}
+    for inline in scenario.inline_notes:
+        prefixed = f'inline-{scenario.id}-{inline.note_key}'
+        wire_note_key = f'eval-{suite.name}-{prefixed}'
+        lookup_name = inline.title or inline.note_key
+        dto = NoteCreateDTO(
+            name=lookup_name,
+            description=inline.description or f'Eval suite inline note: {inline.note_key}',
+            content=base64.b64encode(inline.content.encode('utf-8')),
+            tags=inline.tags,
+            vault_id=str(vault_id),
+            note_key=wire_note_key,
+        )
+        # Per-note try/except: if one inline note fails to ingest, keep going
+        # so the rest of the scenario's inline notes (and the scenario itself)
+        # can still produce a meaningful error breadcrumb.
+        try:
+            resp = await api.ingest(dto)
+        except Exception as e:
+            logger.warning('Inline-note ingest failed for %r: %s', inline.note_key, e)
+            continue
+        if hasattr(resp, 'note_id') and resp.note_id:
+            inline_id_by_key[inline.note_key] = str(resp.note_id)
+        elif hasattr(resp, 'status') and resp.status == 'skipped':
+            # Idempotency-skip: same wire note_key already in this vault. The
+            # only path that hits this is intra-scenario retry (because each
+            # scenario's wire note_key is uniquely prefixed with the
+            # scenario_id). Look up by title within THIS vault; if zero or
+            # multiple matches, log loudly so the eval status='error' has
+            # a breadcrumb the user can act on.
+            try:
+                existing = await api.find_notes_by_title(lookup_name, vault_ids=[vault_id])
+                matches = [n for n in existing if getattr(n, 'name', None) == lookup_name]
+                if len(matches) == 1:
+                    inline_id_by_key[inline.note_key] = str(matches[0].id)
+                elif not matches:
+                    logger.warning(
+                        'Inline-note idempotent-skip: no existing note with '
+                        'name=%r found in vault for note_key=%r; downstream '
+                        'GoldUnitIds will status=error',
+                        lookup_name,
+                        inline.note_key,
+                    )
+                else:
+                    logger.warning(
+                        'Inline-note idempotent-skip: %d notes share name=%r '
+                        'in this vault; refusing to guess which one belongs '
+                        'to inline note_key=%r',
+                        len(matches),
+                        lookup_name,
+                        inline.note_key,
+                    )
+            except Exception as e:
+                logger.warning(
+                    'Inline-note idempotent-skip lookup failed for %r: %s',
+                    inline.note_key,
+                    e,
+                )
+        else:
+            logger.warning(
+                'Inline-note ingest returned no note_id for %r (resp=%r); '
+                'GoldUnitIds referencing this key will status=error',
+                inline.note_key,
+                resp,
+            )
+
+    if not inline_id_by_key:
+        return
+    resolved = await _wait_extraction_per_note(api, inline_id_by_key, vault_id)
+    for inline_key, unit_ids in resolved.items():
+        note_key_to_unit_ids[inline_key] = unit_ids
+        prefixed = f'inline-{scenario.id}-{inline_key}'
+        note_key_to_unit_ids[prefixed] = unit_ids
+
+
 async def _execute_scenario(
     api: RemoteMemexAPI,
     server_url: str,
@@ -257,6 +366,23 @@ async def _execute_scenario(
 ) -> ScenarioOutcome:
     started = time.monotonic()
     answer_mode = suite.answer_mode_for(scenario)
+
+    # Inline notes — ingest into the suite vault before validating gold
+    # note_keys, so the validation can see the inline-note unit IDs.
+    if scenario.inline_notes:
+        try:
+            await _ingest_inline_notes(api, vault_id, suite, scenario, note_key_to_unit_ids)
+        except Exception as e:
+            return ScenarioOutcome(
+                scenario_id=scenario.id,
+                status='error',
+                metrics={},
+                actual_summary={'inline_note_ingest_error': str(e)},
+                duration_ms=(time.monotonic() - started) * 1000,
+                error=f'Failed to ingest inline notes: {e}',
+                replicate_index=replicate_index,
+                answer_mode=answer_mode,
+            )
 
     # Validate gold note_keys resolved before running.
     referenced = scenario.expected.referenced_note_keys()
@@ -554,7 +680,12 @@ async def run_suite(
                     api, note_id_by_key, default_vault_id
                 )
 
-                # Run scenarios
+                # Run scenarios in DEFINITION ORDER. The runner is contractually
+                # required to iterate suite.scenarios in the same order they
+                # appear in SCENARIOS = [...]; downstream scenarios may rely on
+                # state mutations from earlier scenarios (recorded outcomes,
+                # deprioritization, KV writes, inline-note contradictions).
+                # Guarded by tests/suite/test_extensibility.py.
                 for scenario in suite.scenarios:
                     sc_vault_id = vault_map.get(scenario.vault_name, default_vault_id)
                     for replicate in range(replicates):
@@ -699,8 +830,10 @@ def _log_to_recorder(
     if notes_tag:
         tags['notes'] = notes_tag
 
-    # mlflow.parentRunId belongs in tags, not params — extract from extra_params
-    # so the MLflow UI properly nests this run under its sweep parent.
+    # mlflow.parentRunId belongs in tags, not params — when a caller passes
+    # extra_params={'mlflow.parentRunId': <id>} (e.g. for grouping multiple
+    # related runs in the MLflow UI), route it to tags so the SQL backend
+    # registers the parent/child relationship correctly.
     parent_run_id = extra_params.pop('mlflow.parentRunId', None)
     is_nested = bool(parent_run_id)
     if parent_run_id:

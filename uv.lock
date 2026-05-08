@@ -3401,7 +3401,6 @@ dependencies = [
     { name = "matplotlib" },
     { name = "memex-common" },
     { name = "memex-core" },
-    { name = "mlflow" },
     { name = "python-frontmatter" },
     { name = "pyyaml" },
     { name = "rich" },
@@ -3411,6 +3410,11 @@ dependencies = [
     { name = "typer" },
 ]
 
+[package.optional-dependencies]
+mlflow = [
+    { name = "mlflow" },
+]
+
 [package.metadata]
 requires-dist = [
     { name = "dspy", specifier = ">=3.1.0" },
@@ -3418,7 +3422,7 @@ requires-dist = [
     { name = "matplotlib", specifier = ">=3.10.8" },
     { name = "memex-common", editable = "packages/common" },
     { name = "memex-core", editable = "packages/core" },
-    { name = "mlflow", specifier = ">=3.1" },
+    { name = "mlflow", marker = "extra == 'mlflow'", specifier = ">=3.1" },
     { name = "python-frontmatter", specifier = ">=1.1" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "rich", specifier = ">=13" },
@@ -3427,6 +3431,7 @@ requires-dist = [
     { name = "tiktoken", specifier = ">=0.12.0" },
     { name = "typer", specifier = ">=0.12" },
 ]
+provides-extras = ["mlflow"]
 
 [[package]]
 name = "memex-hermes-plugin"

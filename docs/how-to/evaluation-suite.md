@@ -1,6 +1,6 @@
 # Evaluation Suite Guide
 
-How to author, run, sweep, and track Memex evaluation suites with full MLflow reproducibility.
+How to author, run, and track Memex evaluation suites with optional MLflow integration for longitudinal comparison.
 
 > **Scope.** This guide covers the **internal** evaluation framework (`memex-eval suite …`). The external benchmarks (LoCoMo, LongMemEval) keep their existing CLIs and are not covered here.
 
@@ -10,19 +10,17 @@ A **Suite** is the unit of evaluation. It bundles:
 
 | Component | What it is | Lives in |
 |---|---|---|
-| **Sources** | Markdown notes (+ optional binary assets) ingested into a temporary vault | `sources/*.md` and `sources/assets/` |
-| **Scenarios** | Typed Python objects describing one verifiable assertion each | `__init__.py` (the `SCENARIOS` list) |
+| **Sources** | Markdown notes (+ optional binary assets) ingested into a temporary vault | `sources/*.md` and `sources/assets/<note-key>/` |
+| **Scenarios** | Typed Python objects describing one verifiable assertion each, **executed in list order** | `__init__.py` (the `SCENARIOS` list) |
+| **Inline notes** | Per-scenario markdown notes ingested only when that scenario runs (e.g. contradiction follow-ups) | `Scenario.inline_notes=[InlineNote(...)]` |
 | **Metadata** | Suite name/version/tags/primary_metrics/components/knobs | `__init__.py` (the `METADATA` literal) |
 | **README** | Scientific description (what + why + what's tested) | `README.md` (plain markdown) |
 
-Every suite run produces:
+> **Scenario execution order.** The runner iterates `SCENARIOS` in definition order. Later scenarios may depend on side effects of earlier ones (recorded outcomes, deprioritization, KV writes, inline-note contradictions); this is intentional and contractually pinned by tests.
 
-- One **MLflow run** under experiment `memex-suite-<name>-v<schema_version>`
-- Stable params (suite version, git SHA, knob values, sources hash)
-- Stable metrics (`metric.<key>.{mean,std,min,max}`, `latency_ms.{p50,p95}`, `pass_rate`)
-- Artifacts (`run_result.json`, frozen `README.md` + `sources/` snapshot, `config_snapshot.json`)
+Every suite run produces a `RunResult` (full per-scenario detail) and, when MLflow is installed and a tracking URI is configured, an MLflow run under experiment `memex-suite-<name>-v<schema_version>` with stable params (suite version, git SHA, knob values, sources hash), stable metrics (`metric.<key>.{mean,std,min,max}`, `latency_ms.{p50,p95}`, `pass_rate`), and artifacts (`run_result.json`, frozen `README.md` + `sources/` snapshot, `config_snapshot.json`, optional `run_notes.md`).
 
-A **sweep** is N runs of the same suite at different knob values, all under one MLflow experiment with a parent/child structure.
+> **MLflow is optional.** Install via `uv add memex-eval[mlflow]` for the MLflow integration; otherwise `--output PATH` writes the full `RunResult` JSON. Without MLflow, longitudinal comparison happens at whatever level your team's run-tracking is — diff two `RunResult` JSON dumps, plot from the file, etc.
 
 ---
 
@@ -32,7 +30,7 @@ A **sweep** is N runs of the same suite at different knob values, all under one 
 
 - Memex server running locally (default `http://localhost:8000/api/v1/`)
 - `GOOGLE_API_KEY` in your env if any suite uses LLM-judge outcomes
-- Postgres reachable (testcontainer or docker-compose) if you'll be sweeping
+- For MLflow tracking: `uv add memex-eval[mlflow]` + `MLFLOW_TRACKING_URI` env (or pass `--mlflow-uri`)
 
 ### One-line run
 
@@ -75,18 +73,7 @@ memex-eval suite run basic_extraction \
   --override server.memory.retrieval.reranking_mw_alpha=0.5
 ```
 
-For automatic server lifecycle (spawn-with-overrides-then-clean-up), use `sweep` instead.
-
-### Sweep a knob across N values
-
-```bash
-memex-eval suite sweep basic_extraction \
-  --param server.memory.retrieval.reranking_mw_alpha=0.0,0.1,0.3,0.5,0.7
-```
-
-The harness spawns one server subprocess per sweep point (with the override env var set), runs the suite against it, gracefully shuts it down, and proceeds to the next point. All N runs land as MLflow nested children under one parent run for trivial side-by-side comparison.
-
-> **Sweep is local-only.** `--server <remote-url>` for sweep is rejected because env-var overrides only take effect at process startup, not on a long-running server.
+> **Knob sweeps are out-of-scope.** If you want to test multiple knob values, run the suite N times with different server configs (CI matrix, shell loop, etc.) and tag each run via `--notes` + `--mlflow-run-name`.
 
 ### Open MLflow to inspect
 
@@ -104,8 +91,6 @@ The project ships justfile recipes for the most common cases:
 ```bash
 just suite-list                              # alias for `memex-eval suite list`
 just suite-run basic_extraction              # alias for `memex-eval suite run basic_extraction`
-just suite-sweep basic_extraction \
-  server.memory.retrieval.reranking_mw_alpha=0.0,0.3,0.5
 ```
 
 ---
@@ -195,33 +180,6 @@ memex-eval suite run [<name>|--all]
 
 Exit code is non-zero if any scenario fails or errors.
 
-### `memex-eval suite sweep <name>`
-
-Run a suite N times across knob values, with full server-lifecycle management. Logs all N runs as MLflow nested children of one parent run.
-
-```
-memex-eval suite sweep <name>
-  --param KEY=v1,v2,v3,...   (repeatable; values comma-separated)
-  [--mlflow-uri URL]
-  [--mlflow-experiment NAME]
-  [--server URL]               (must be localhost; non-local is rejected)
-  [--server-startup-timeout SEC]
-  [--graceful-shutdown-seconds SEC]
-  [--notes TEXT | --notes-file PATH]
-  [other run flags]
-```
-
-| Flag | Default | Description |
-|---|---|---|
-| `--param` | required | Repeatable. Format: `<dotted.config.path>=<v1>,<v2>,...`. Each value spawns a sweep point. Multiple `--param` flags produce a Cartesian product (cap: ≤20 total points). Validated against `MemexConfig`; SecretStr fields rejected |
-| `--server` | `http://localhost:<random-free-port>/api/v1/` | Must be localhost; non-local URLs hard-fail with `SweepNotSupportedRemote` |
-| `--server-startup-timeout` | `60` (seconds) | Per-point timeout for `/health` to return 200 after subprocess spawn |
-| `--graceful-shutdown-seconds` | `30` | SIGTERM grace window before SIGKILL on each point's server |
-| `--notes` | none | Free-form change description; logged as `run_notes.md` artifact + `notes` tag on every child run AND the parent (see §4.6) |
-| `--notes-file` | none | Read `--notes` body from a file (mutually exclusive with `--notes`) |
-
-The first sweep run takes longer (~60s server-startup) than the second; subsequent points reuse cached imports where possible. Per-point cost: server cold-start + ingest + extraction + scenario loop. Budget ~3-5 minutes per point for a typical 5-scenario suite with 5 source notes.
-
 ### `memex-eval suite history <name>`
 
 Tabulate a metric across MLflow runs filtered by git commit range. The "follow it over time" view.
@@ -310,6 +268,7 @@ You'll see something like:
 ```python
 from memex_eval.suite import (
     Suite, SuiteMetadata, SuiteSources, Scenario,
+    InlineNote,    # only needed if any scenario uses inline_notes
     KeywordsPresent, GoldUnitIds, LLMJudge,
 )
 from pathlib import Path
@@ -400,6 +359,38 @@ Scenario(
 
 The runner resolves `note_keys` to actual unit IDs after ingestion via `GET /api/v1/notes/{note_id}/memory_units`. **If a referenced note produces zero memory units after extraction, the scenario reports `status='error'` (not `'fail'`)** so a silent recall=0 cannot poison your numbers.
 
+**Inline notes** — per-scenario notes that aren't part of the shared sources. Use this when one scenario needs ingested content that other scenarios shouldn't see (canonical case: ingest a contradiction-followup that targets a claim in a shared source note).
+
+```python
+Scenario(
+    id='alpha_lead_contradiction_detected',
+    description='Inline note contradicting Sarah-Chen-as-lead surfaces the contradiction.',
+    query='Who leads Project Alpha?',
+    top_k=5,
+    inline_notes=[
+        InlineNote(
+            note_key='alpha_lead_succession',
+            title='Project Alpha lead change',
+            content=(
+                'Sarah Chen has stepped down as Project Alpha lead. '
+                'Marcus Rivera is the new lead effective 2026-05-01.'
+            ),
+            tags=['acme-corp', 'project-alpha', 'leadership'],
+        ),
+    ],
+    expected=KeywordsPresent(
+        type='keywords_present',
+        keywords=['Marcus Rivera', 'Sarah Chen'],
+    ),
+),
+```
+
+The runner ingests inline notes into the suite vault under the prefixed `note_key` `inline-<scenario_id>-<inline_key>` (so they don't collide across sibling scenarios) and waits for extraction before running the query. Outcomes can reference the inline note via either the short key (`alpha_lead_succession`) or the prefixed form (`inline-<scenario_id>-alpha_lead_succession`); both are wired into `note_key_to_unit_ids`. Validation accepts either.
+
+> **State leak across scenarios.** Inline notes persist in the suite vault for the rest of the run (cleanup happens at suite-end). The prefixed `note_key` prevents identity collisions, but extracted units AND any contradictions/supersessions they trigger are visible to later scenarios. Scenarios that follow a contradiction-bearing inline note should either (a) be the contradiction-checking scenario itself, (b) run earlier in the list, or (c) live in a separate suite.
+
+> **Replicates + inline notes.** With `--replicates >1`, inline notes are ingested once on the first replicate and cached for replicates 2..N. If your scenario's `setup_actions` mutate those units (deprioritize / record_outcome), the second replicate sees the post-mutation state, not a fresh baseline. Use `--replicates=1` for inline-note scenarios where per-replicate isolation matters, or design the scenario so the mutation is the thing being measured.
+
 #### 1.4 If your scenario needs new source content, drop a markdown file under `sources/`
 
 ```bash
@@ -419,7 +410,7 @@ EOF
 
 The frontmatter block (between `---`) is parsed into `SourceNote` metadata; everything below is the markdown body. The filename stem (`project-alpha-budget`) becomes the `note_key`. Do **not** create duplicate stems within one suite — the loader will reject it.
 
-For binary assets (e.g. a PNG referenced in the note), drop them into `sources/assets/` and reference them in `SourceNote.assets` if needed (advanced — see §3).
+For binary assets (e.g. a PNG referenced in the note), drop them into `sources/assets/<note-key>/` — they'll auto-attach to that note only. Bare files at `sources/assets/*` (no per-note subdir) are NOT auto-attached; the loader will emit a warning. For explicit per-asset filenames in `NoteCreateDTO.files`, set `assets:` in the note's YAML frontmatter.
 
 #### 1.5 Bump `suite_version`
 
@@ -479,15 +470,20 @@ You're testing a part of the system not covered by any existing suite. Examples:
 
 ```
 packages/eval/src/memex_eval/suites/fsfm_weights/
-├── __init__.py                 # exports SUITE: Suite (the canonical definition)
-├── README.md                   # plain markdown — scientific description
+├── __init__.py                       # exports SUITE: Suite (the canonical definition)
+├── README.md                         # plain markdown — scientific description
 └── sources/
-    ├── _shared.md              # source notes; filename stem = note_key
-    ├── high-graph-pressure.md
+    ├── high-graph-pressure.md        # filename stem = note_key (lowercase, hyphens/underscores ok)
     ├── low-mw-score.md
-    └── assets/                 # optional, only if you need binary attachments
-        └── pressure-diagram.png
+    ├── 2023-historical-baseline.md   # digit-leading stems are fine
+    └── assets/                       # optional binary attachments
+        └── high-graph-pressure/      # subdir name MUST equal the note_key it binds to
+            └── pressure-diagram.png  # auto-attached to high-graph-pressure.md only
 ```
+
+> **Per-note asset binding.** Files under `sources/assets/<note-key>/*` auto-attach to that note only. Files placed directly under `sources/assets/*` (no per-note subdir) are NOT auto-attached and the loader emits a warning naming the unattached files. To bind one asset to one note via frontmatter instead, set `assets:` in the note's YAML frontmatter — explicit binding always wins.
+
+> **Filename rules.** Source note stems must match `^[a-z0-9][a-z0-9_-]*$` (lowercase, digits ok, hyphens/underscores ok). Files starting with `_` are intentionally skipped (use this for shared partials / fixtures). Files that don't match the regex (e.g. `README.md`, `Notes.md`) are skipped with a loader warning so a stray README doesn't take down the whole suite.
 
 ### Step-by-step
 
@@ -512,7 +508,7 @@ Targeted regression set for the four FSFM composite weights
 `server.memory.retrieval.deprioritize.weights.*`. Source notes are
 designed so that each weight's contribution is isolable: scenarios pin
 the expected ranking under default weights and surface measurable
-deltas under sweeps.
+deltas across runs configured with different weight values.
 
 ## Why
 
@@ -534,10 +530,10 @@ precedent; this suite gives empirical signal as we tune them.
 
 ## How to interpret
 
-A drop in `metric.recall_at_10.mean` under a sweep point means the new
-weight set is over-deprioritizing. A drop in `pass_rate` means a
-deterministic ranking expectation broke. Use the parent-vs-children
-view in MLflow to compare across sweep points.
+A drop in `metric.recall_at_10.mean` between two runs configured with
+different weights means the new weight set is over-deprioritizing. A
+drop in `pass_rate` means a deterministic ranking expectation broke.
+Compare runs side-by-side in the MLflow UI.
 ```
 
 #### 2.3 Write source notes
@@ -571,8 +567,8 @@ Filename stem = `note_key`. Stems must be unique within a suite. Frontmatter key
 ```python
 """FSFM weights regression suite.
 
-Targeted scenarios that surface measurable deltas under the four
-FSFM weight knobs. Designed to be sweep-friendly.
+Targeted scenarios that surface measurable deltas across runs at
+different FSFM weight settings.
 """
 from pathlib import Path
 
@@ -581,6 +577,7 @@ from memex_eval.suite import (
     SuiteMetadata,
     SuiteSources,
     Scenario,
+    InlineNote,    # only needed if any scenario uses inline_notes
     GoldUnitIds,
     KeywordsPresent,
     RankingOrder,
@@ -662,21 +659,14 @@ The validator checks:
 
 If validation passes, the suite is auto-discovered by `memex-eval suite list`.
 
-#### 2.6 Smoke run + sweep
+#### 2.6 Smoke run
 
 ```bash
-# One-shot run
 memex-eval suite run fsfm_weights \
   --mlflow-uri file://./mlruns
-
-# Sweep one weight
-memex-eval suite sweep fsfm_weights \
-  --param server.memory.retrieval.deprioritize.weights.graph=0.3,0.4,0.5,0.6 \
-  --mlflow-uri file://./mlruns \
-  --mlflow-experiment memex-sweep-fsfm-graph-202605
 ```
 
-Sweep output: 1 parent run + N child runs in MLflow, each child carries `sweep.point_index` + `override.<knob>` params for trivial side-by-side comparison.
+For comparing knob values, restart the server with each setting and re-run the suite — distinguish the runs via `--notes` and `--mlflow-run-name`.
 
 #### 2.7 Tests
 
@@ -686,23 +676,17 @@ The framework's e2e test (`test_runner_e2e.py`) auto-discovers your suite. Add s
 
 ## 3. Nuts and bolts
 
-> For complete CLI flags and per-command options see **CLI reference — every command and flag** above. This section covers the deeper mechanics (MLflow schema, sweep contract, redaction, reproducibility).
+> For complete CLI flags and per-command options see **CLI reference — every command and flag** above. This section covers the deeper mechanics (MLflow schema, redaction, reproducibility).
 
 ### 3.2 Knob overrides — `--override`
 
-`--override <dotted.path>=<value>` translates to a `MEMEX_*` environment variable using the project's nested-delimiter convention (`__`):
+`--override <dotted.path>=<value>` is logged to MLflow as an `override.*` param **only**. The CLI does not restart the server with the new value — start the server with the desired knob set in env or YAML config, then run the suite. The override flag exists so the value lands in the run's params for diff-against-other-runs.
 
 ```bash
-# CLI form
---override server.memory.retrieval.reranking_mw_alpha=0.5
-
-# Translates to
-MEMEX_SERVER__MEMORY__RETRIEVAL__RERANKING_MW_ALPHA=0.5
+# Server already running with MEMEX_SERVER__MEMORY__RETRIEVAL__RERANKING_MW_ALPHA=0.5 in env
+memex-eval suite run basic_extraction \
+  --override server.memory.retrieval.reranking_mw_alpha=0.5
 ```
-
-Both single-shot `run` and `sweep` use this. **Override paths are validated against the live `MemexConfig` schema at parse time** — typos fail before any server is spawned. Paths that resolve to `SecretStr` fields are **rejected** (you cannot sweep a secret).
-
-For a single-shot run, the user is expected to have already configured the running server with the desired knob value. For sweeps, the harness manages server lifecycle (see §3.4).
 
 ### 3.3 MLflow conventions
 
@@ -711,7 +695,6 @@ For a single-shot run, the user is expected to have already configured the runni
 | Use case | Experiment name |
 |---|---|
 | Default longitudinal tracking of a suite | `memex-suite-<name>-v<schema_version>` |
-| One-off sweep | `memex-sweep-<name>-<knob>-<YYYYMM>` |
 | Custom | whatever you pass to `--mlflow-experiment` |
 
 #### Params (logged immutably at run start)
@@ -743,7 +726,6 @@ Three sub-budgets (cap: ≤80 total params):
 - `suite.tags=<comma-joined>` — values, not boolean presence (e.g. `extraction,retrieval`)
 - `components=<comma-joined>` — `components_under_test` joined
 - `notes=<first-line preview>` — present only when `--notes` was passed; truncated to 240 chars with a `… (see run_notes.md artifact)` suffix when content was lost
-- For sweep child runs: `sweep.id`, `sweep.point_index`, `mlflow.parentRunId` (auto-set by `start_run(nested=True)`)
 
 #### Artifacts (queryable but not directly diff-able in UI)
 
@@ -752,31 +734,6 @@ Three sub-budgets (cap: ≤80 total params):
 - `sources/` — frozen copy of every source note + asset (so a 6-month-old run is reproducible from artifacts alone)
 - `config_snapshot.json` — full `MemexConfig` dump from `GET /api/v1/system/config` with secrets redacted (see §3.7)
 - `run_notes.md` — present only when `--notes` was passed; full body of the user-supplied change description (see §4.6)
-
-### 3.4 Sweeps
-
-```bash
-memex-eval suite sweep basic_extraction \
-  --param server.memory.retrieval.reranking_mw_alpha=0.0,0.1,0.3,0.5,0.7 \
-  --mlflow-experiment memex-sweep-basic_extraction-mw_alpha-202605
-```
-
-What happens:
-
-1. Override path validated against `MemexConfig` schema. Typos fail immediately.
-2. **Local server only.** `--server` pointing at a remote/staging URL is rejected with `SweepNotSupportedRemote` because env-var overrides only take effect at process startup, not on a long-running server.
-3. Parent MLflow run opened in the target experiment.
-4. Per sweep point (serial):
-   - Free port allocated.
-   - Server subprocess spawned with the override env (`MEMEX_SERVER__MEMORY__RETRIEVAL__RERANKING_MW_ALPHA=0.5`).
-   - `/api/v1/health` polled until 200 (60s timeout).
-   - Child MLflow run opened with `start_run(nested=True)` — parent/child relationship registers in the SQL backend; UI tree renders correctly.
-   - Suite runs against `localhost:<free_port>`.
-   - Server gracefully shut down via SIGTERM; if not exiting in 30s, SIGKILL with a `sweep.shutdown_method=kill` tag on the child run.
-5. **Partial-failure tolerance.** If a child raises, the parent does not unwind — the failing child is tagged `sweep.partial_failure=true` and the harness continues.
-6. After all points: parent records `sweep.children_total` + `sweep.children_failed` and finalizes.
-
-Concurrent sweep harnesses against the same Postgres are **not supported** (`pg_try_advisory_lock` contention in the scheduler).
 
 ### 3.5 The longitudinal view — `suite history`
 
@@ -837,8 +794,6 @@ You can tell whether a secret was *configured* without leaking the value. The no
 `memex-eval suite *` defaults to `http://localhost:8000/api/v1/`. Override with:
 - `--server <url>` per command, OR
 - `MEMEX_EVAL_DEFAULT_SERVER=<url>` env var
-
-Sweep mode is **local-only**. `--server <remote-url>` for sweeps hard-errors. Use `memex-eval suite run --server <remote>` for single-point runs.
 
 ### 3.9 Replicates
 
@@ -1074,7 +1029,7 @@ The loader switches on the argument shape: contains `/` or starts with `.` → f
 
 A run's results are only interpretable in context: which version of memex, which knobs, what changed in the code since the last comparable run. The framework auto-captures the easy half (`git.sha`, `memex.version`, `suite.sources_hash`, full config snapshot, etc.) but the human "what did I just change and why" is on you.
 
-Pass `--notes "<text>"` (or `--notes-file <path>` for longer write-ups) on `suite run` and `suite sweep`:
+Pass `--notes "<text>"` (or `--notes-file <path>` for longer write-ups) on `suite run`:
 
 ```bash
 memex-eval suite run basic_extraction \
@@ -1084,10 +1039,10 @@ memex-eval suite run basic_extraction \
 What gets logged:
 
 - `RunResult.notes` — the full text on the run-result object (and the `run_result.json` artifact).
-- MLflow artifact `run_notes.md` — the full text as a separate file, viewable in the MLflow UI without diving into JSON.
+- MLflow artifact `run_notes.md` — the full text as a separate file, viewable in the MLflow UI without diving into JSON (when MLflow is configured).
 - MLflow tag `notes` — the first line, truncated to 240 chars, with a `… (see run_notes.md artifact)` suffix when content was lost. Use this for filtering in the MLflow UI. A search like `tags.notes LIKE "%mw_alpha%"` finds every run that touched that knob — note that `LIKE` only works with the SQL tracking backend (Postgres/MySQL/SQLite); the file-store backend supports only exact `=` / `!=` matches on tags, so put the most-searchable keyword on the first line.
 
-For sweeps, the notes apply to both the parent and every child run (same change, multiple knob points). Comparing two runs months apart, the notes are usually how you remember what each one was actually testing.
+Comparing two runs months apart, the notes are usually how you remember what each one was actually testing.
 
 Convention: lead with what changed, then *why*, then a PR or issue link. The first line is the searchable tag; everything after it is for the future-you who's trying to understand why a metric moved.
 
@@ -1131,11 +1086,18 @@ memex-eval suite run --all \
 ### "I need to find the optimal `mw_alpha` value"
 
 ```bash
-memex-eval suite sweep basic_extraction \
-  --param server.memory.retrieval.reranking_mw_alpha=0.0,0.1,0.2,0.3,0.4,0.5,0.7,1.0 \
-  --mlflow-experiment mw_alpha_sweep_$(date +%Y%m%d)
+# Restart your server with each value, then run the suite. Distinguish the
+# runs via --notes and --mlflow-run-name; compare them in the MLflow UI.
+for v in 0.0 0.1 0.2 0.3 0.5 0.7; do
+  MEMEX_SERVER__MEMORY__RETRIEVAL__RERANKING_MW_ALPHA=$v \
+    memex restart   # or your usual server-restart command
+  memex-eval suite run basic_extraction \
+    --override server.memory.retrieval.reranking_mw_alpha=$v \
+    --notes "mw_alpha=$v" \
+    --mlflow-run-name "mw_alpha-$v"
+done
 
-# Open MLflow → Compare child runs → plot metric.recall_at_10.mean vs override.<knob>
+# Open MLflow → filter experiment → compare runs → plot metric.recall_at_10.mean vs override.*
 ```
 
 ### "I want to validate a new suite without running it"
@@ -1177,9 +1139,7 @@ memex-eval suite history basic_extraction \
 | `SuiteNotFound: <name>` | Directory not discoverable | Verify `__init__.py` exports `SUITE: Suite`, name in `METADATA` matches dir name |
 | `note_key 'X' has zero resolved units` (status='error') | Extraction failed for that note | Inspect server logs; rerun once; if it persists, the note's content may not produce extractable facts |
 | `OverrideValidationError: server.memory.X.Y is not a valid path` | Typo in `--override` | Run `memex-eval suite show <name>` to see the suite's known knobs; or check `MemexConfig.model_fields` |
-| `OverrideValidationError: server.X is a SecretStr` | Tried to override a secret | Secrets cannot be swept; pass via env var only |
-| `SweepNotSupportedRemote` | `--server` pointed at non-localhost | Sweeps are local-only; use `memex-eval suite run --server <remote>` for single-point runs |
-| `MLflowNotInstalled` at import time | mlflow extra not installed | `uv add memex-eval[mlflow]` (or wait for the dep promotion in PR 1c-prep) |
+| `MLflowNotInstalled` at import time | mlflow extra not installed | `uv add memex-eval[mlflow]` |
 | All metrics at zero, vacuous-looking pass_rate | `--no-llm-judge` set with LLM-only suite | Check the suite's `requires_llm_judge` |
 | MLflow run is `KILLED` and a vault `eval-suite-<name>-<id>` lingers | Ctrl-C during a run | Cleanup is best-effort on SIGINT; manually `memex vault delete eval-suite-<name>-<id>` if needed |
 | `sources_content_hash changed without suite_version bump` (CI) | You edited a source note but didn't bump version | Bump `suite_version` in `METADATA` |

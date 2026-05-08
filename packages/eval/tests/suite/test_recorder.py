@@ -1,10 +1,13 @@
-"""Tests for the recorder kwargs/run_id contract used by the sweep harness."""
+"""Tests for the recorder kwargs/run_id contract on MLflowRecorder."""
 
 from __future__ import annotations
 
 from typing import Any
 
 import pytest
+
+# Skip cleanly when the optional [mlflow] extra isn't installed.
+pytest.importorskip('mlflow')
 
 
 def _make_recorder(monkeypatch: pytest.MonkeyPatch):

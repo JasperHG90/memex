@@ -21,9 +21,12 @@ from typing import Any
 from unittest.mock import AsyncMock
 from uuid import uuid4
 
-import mlflow
 import pytest
-from mlflow.tracking import MlflowClient
+
+# MLflow is an optional extra of memex-eval. Skip the whole module cleanly
+# instead of failing collection when [mlflow] isn't installed.
+mlflow = pytest.importorskip('mlflow')
+from mlflow.tracking import MlflowClient  # noqa: E402
 
 from memex_eval.recorders.mlflow_recorder import MLflowRecorder
 from memex_eval.suite import (

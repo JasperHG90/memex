@@ -18,10 +18,15 @@ dependencies = [
     "tiktoken>=0.12.0",
     "matplotlib>=3.10.8",
     "seaborn>=0.13.2",
-    "mlflow>=3.1",
     "python-frontmatter>=1.1",
     "pyyaml>=6.0",
 ]
+
+[project.optional-dependencies]
+# MLflow tracking is optional. When unavailable the framework falls back
+# to NullRecorder + the --output JSON dump. Install with:
+#   uv add memex-eval[mlflow]
+mlflow = ["mlflow>=3.1"]
 
 [project.scripts]
 memex-eval = "memex_eval.cli:app"

@@ -9,11 +9,20 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
+import re
 from pathlib import Path
 from typing import Any
 
 import frontmatter
 from pydantic import BaseModel, ConfigDict, Field
+
+logger = logging.getLogger('memex_eval.suite.sources')
+
+# Filename-stem convention shared by SourceNote (the markdown file's stem)
+# and InlineNote.note_key. Allows digit-leading stems (e.g.
+# ``2023-historical.md``) — many real-world suites date-prefix sources.
+NOTE_KEY_RE = re.compile(r'^[a-z0-9][a-z0-9_-]*$')
 
 
 class SourceNote(BaseModel):
@@ -61,6 +70,25 @@ class SuiteSources(BaseModel):
 
         for md_path in sorted(sources_dir.glob('*.md')):
             note_key = md_path.stem
+            # Underscore-prefixed files (e.g. ``_shared.md``) are intentional
+            # convention for "internal" markdown that ships in sources/ but
+            # isn't itself a note (templates, fixtures, partials).
+            if note_key.startswith('_'):
+                logger.debug('Skipping underscore-prefixed file %s', md_path)
+                continue
+            # Filenames that don't match the note-key shape (e.g. ``README.md``,
+            # capitalized titles, names with spaces) are skipped with a
+            # warning rather than raised. People drop READMEs into sources/
+            # by reflex; we shouldn't take down the whole suite for that.
+            if not NOTE_KEY_RE.match(note_key):
+                logger.warning(
+                    'Skipping %s: stem %r does not match %r '
+                    '(rename to lowercase + hyphens/underscores or move out of sources/)',
+                    md_path,
+                    note_key,
+                    NOTE_KEY_RE.pattern,
+                )
+                continue
             if note_key in seen:
                 raise ValueError(
                     f'Duplicate note_key "{note_key}" in {sources_dir}; filename stems must be unique.'
@@ -72,16 +100,31 @@ class SuiteSources(BaseModel):
             content = post.content
 
             assets_field = metadata.get('assets')
+            resolved_assets: dict[str, Path] = {}
             if isinstance(assets_field, dict):
+                # Explicit per-note frontmatter binding wins.
                 resolved_assets = {
                     name: (sources_dir / rel).resolve() for name, rel in assets_field.items()
                 }
-            else:
-                # Auto-attach: if a sibling directory `assets/` exists, attach all
-                # files in it (referenced by basename).
-                resolved_assets = {}
-                if assets_dir.is_dir():
-                    for asset_path in sorted(assets_dir.iterdir()):
+            elif assets_dir.is_dir():
+                # Per-note subdirectory convention: sources/assets/<note-key>/*
+                # attaches only to <note-key>.md. Files placed directly under
+                # sources/assets/ (no per-note subdir) are NOT auto-attached;
+                # surface them via frontmatter or move them into a per-note dir.
+                per_note_dir = assets_dir / note_key
+                if per_note_dir.is_dir():
+                    for asset_path in sorted(per_note_dir.iterdir()):
+                        # Refuse symlinks: a symlink under sources/assets/<key>/
+                        # could point anywhere on the filesystem (e.g.
+                        # /etc/passwd) and we'd silently upload its bytes as
+                        # part of the run artifact.
+                        if asset_path.is_symlink():
+                            logger.warning(
+                                'Refusing symlinked asset %s; only regular files '
+                                'are auto-attached.',
+                                asset_path,
+                            )
+                            continue
                         if asset_path.is_file():
                             resolved_assets[asset_path.name] = asset_path.resolve()
 
@@ -99,6 +142,28 @@ class SuiteSources(BaseModel):
                     vault_name=metadata.get('vault_name'),
                 )
             )
+
+        # Surface unreferenced bare files in sources/assets/ — they aren't
+        # attached to anything. Help the user understand why their image
+        # didn't appear in the eval run.
+        if assets_dir.is_dir():
+            note_keys_seen = {n.note_key for n in notes}
+            stragglers: list[str] = []
+            for entry in sorted(assets_dir.iterdir()):
+                if entry.is_file():
+                    stragglers.append(entry.name)
+                elif entry.is_dir() and entry.name not in note_keys_seen:
+                    stragglers.append(f'{entry.name}/ (no matching <note-key>.md)')
+            if stragglers:
+                logger.warning(
+                    'Unattached files/dirs in %s: %s. Per-note convention is '
+                    'sources/assets/<note-key>/*; bare files at sources/assets/* '
+                    'are NOT auto-attached. Use frontmatter `assets:` to bind '
+                    'an asset to a specific note, or move it under '
+                    'sources/assets/<note-key>/.',
+                    assets_dir,
+                    ', '.join(stragglers),
+                )
 
         return cls(notes=notes)
 
