@@ -792,6 +792,105 @@ def test_vault_rebind_after_note_initialized_is_ignored(
                 provider.shutdown()
 
 
+def test_wait_for_note_row_retries_on_transient_5xx(provider_with_append_api):
+    """A 5xx during the post-create poll must NOT abort the wait — that
+    would cause _drain_pending to leave the create queued and re-issue
+    another ingest on the next flush, racing the original background job.
+    Regression for round-2 FINDING-2.
+    """
+    import httpx
+
+    provider, api, _ = provider_with_append_api
+    note_id = uuid4()
+
+    fake_503 = httpx.Response(status_code=503, text='busy')
+    fake_503._request = httpx.Request('GET', 'http://test/notes/x')
+    transient = httpx.HTTPStatusError('503', request=fake_503._request, response=fake_503)
+
+    api.get_note = AsyncMock(side_effect=[transient, transient, SimpleNamespace(id=note_id)])
+    provider._api.get_note = api.get_note
+
+    assert provider._wait_for_note_row(timeout=5.0) is True
+    assert api.get_note.await_count == 3
+
+
+def test_wait_for_note_row_bails_on_definitive_4xx(provider_with_append_api):
+    """A non-404 4xx (e.g. 400/422) signals real misconfiguration — bail
+    immediately so the caller can surface the failure rather than burning
+    the full timeout polling a never-going-to-exist note.
+    """
+    import httpx
+
+    provider, api, _ = provider_with_append_api
+
+    fake_400 = httpx.Response(status_code=400, text='bad request')
+    fake_400._request = httpx.Request('GET', 'http://test/notes/x')
+    bad = httpx.HTTPStatusError('400', request=fake_400._request, response=fake_400)
+
+    api.get_note = AsyncMock(side_effect=bad)
+    provider._api.get_note = api.get_note
+
+    assert provider._wait_for_note_row(timeout=10.0) is False
+    # Bailed early — only one call, not the full poll-loop count.
+    assert api.get_note.await_count == 1
+
+
+def test_vault_rebind_with_pending_create_is_ignored(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """A queued create with a snapshotted vault_id has effectively
+    committed the session to that vault. If we let _vault_id drift to a
+    new vault before the create lands, the create writes to vault A but
+    every post-snapshot append targets vault B — note_key is vault-scoped,
+    so vault-B appends 404, and the rebound transcript is silently lost.
+
+    Regression for round-2 FINDING-1.
+    """
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    monkeypatch.setenv('MEMEX_SERVER_URL', 'http://test:8000')
+    monkeypatch.setenv('MEMEX_VAULT', 'vault-A')
+
+    import json
+
+    cfg_dir = tmp_path / 'memex'
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    (cfg_dir / 'config.json').write_text(json.dumps({'briefing_refresh_cadence': 1}))
+
+    fake_api = Mock()
+    vault_a = uuid4()
+    vault_b = uuid4()
+    fake_api.kv_get = AsyncMock(return_value=None)
+    fake_api.resolve_vault_identifier = AsyncMock(side_effect=[vault_a, vault_b])
+    fake_api.get_session_briefing = AsyncMock(return_value='')
+    # Force the create to fail so it stays queued.
+    fake_api.ingest = AsyncMock(side_effect=RuntimeError('down'))
+    fake_api.get_note = AsyncMock(return_value=SimpleNamespace(id=uuid4()))
+
+    with patch('memex_common.client.RemoteMemexAPI', return_value=fake_api):
+        with patch(
+            'memex_hermes_plugin.memex.provider.resolve_vault',
+            side_effect=['vault-A', 'vault-B'],
+        ):
+            provider = MemexMemoryProvider()
+            provider.initialize('s', hermes_home=str(tmp_path), platform='cli')
+            try:
+                # Queue a create against vault A (will fail).
+                provider.sync_turn('q', 'a')
+                provider.on_session_end([])
+                assert len(provider._pending) == 1
+                assert provider._pending[0]['kind'] == 'create'
+                assert provider._pending[0]['vault_id'] == str(vault_a)
+
+                # Trigger rebind cadence; must be IGNORED because a create is queued.
+                provider.on_turn_start(1, 'msg')
+                assert provider._vault_id == vault_a
+                assert provider._vault_name == 'vault-A'
+                # And the queued create still targets vault A.
+                assert provider._pending[0]['vault_id'] == str(vault_a)
+            finally:
+                provider.shutdown()
+
+
 def test_shutdown_is_idempotent_under_concurrent_calls(provider_with_append_api):
     """Concurrent shutdown calls (Hermes' explicit shutdown + atexit
     fallback) must tear down exactly once. No double-close, no double-flush."""

@@ -383,15 +383,20 @@ class MemexMemoryProvider(MemoryProvider):
     def _refresh_vault_binding(self) -> None:
         """Best-effort re-resolve the active vault.
 
-        Once the session note has been created in a vault we hold the
-        binding constant for the rest of the session: appending to the
-        existing note from a different vault would 404 (note_key is
-        vault-scoped) and split the transcript across two notes. Rebinds
-        only take effect for sessions that haven't yet created a note.
+        Once the session has committed to a vault — either because the
+        create landed (``_note_initialized``) OR because a create is
+        already queued with a snapshotted ``vault_id`` — we hold the
+        binding constant. Letting the active vault drift after the queued
+        create would land the create in vault A but every subsequent
+        snapshotted-against-B append in vault B, splitting the transcript.
         """
         if self._api is None or self._config is None:
             return
         if self._note_initialized:
+            return
+        with self._state_lock:
+            has_pending_create = any(p['kind'] == 'create' for p in self._pending)
+        if has_pending_create:
             return
         try:
             new_vault_name = resolve_vault(
@@ -721,9 +726,15 @@ class MemexMemoryProvider(MemoryProvider):
 
         Returns True if the row is visible, False on timeout. The id is
         deterministic from ``note_key`` so we can poll before the server
-        finishes the background insert. 404 means "not yet"; any other
-        exception is also treated as "not yet" — the caller will leave
-        the create queued for the next flush to retry.
+        finishes the background insert. 404 and transient errors (5xx,
+        408, 429, network errors) keep polling within the deadline; only
+        a definitive non-transient HTTP error (4xx) bails early — those
+        won't resolve by waiting and signal a real misconfiguration.
+
+        Bailing on a transient blip would otherwise cause the caller to
+        leave the create queued and re-issue another ingest on the next
+        flush, racing the original background job and creating a redundant
+        note version.
         """
         if self._api is None:
             return False
@@ -734,8 +745,9 @@ class MemexMemoryProvider(MemoryProvider):
                 run_sync(self._api.get_note(note_id), timeout=1.0)
                 return True
             except httpx.HTTPStatusError as e:
-                if e.response.status_code != 404:
-                    return False  # unexpected — let the caller surface
+                code = e.response.status_code
+                if code != 404 and code in _NON_TRANSIENT_HTTP_STATUSES:
+                    return False
                 time.sleep(0.1)
             except Exception:
                 time.sleep(0.1)
