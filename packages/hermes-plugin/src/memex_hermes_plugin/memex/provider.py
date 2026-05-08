@@ -19,7 +19,12 @@ import os
 import threading
 from pathlib import Path
 from typing import Any
-from uuid import UUID
+from uuid import UUID, uuid4
+
+# Hard cap on the in-memory retry queue. If Memex is unreachable for the
+# entire session the queue would otherwise grow with every flush; this bounds
+# the worst case. Beyond the cap, the OLDEST entry is dropped with a warning.
+_PENDING_MAX = 256
 
 import httpx
 from agent.memory_provider import MemoryProvider  # type: ignore[import-not-found]
@@ -65,6 +70,21 @@ class MemexMemoryProvider(MemoryProvider):
         self._asset_cache: SessionAssetCache | None = None
         self._turn_buffer: list[dict[str, str]] = []
         self._turn_count = 0
+        # Watermark into _turn_buffer: turns at index < _flushed_index have
+        # been captured into the pending queue. Pre-compress and session-end
+        # flush only the slice past the watermark to avoid double-writes.
+        self._flushed_index = 0
+        # First write of the session is an ``ingest`` (creates the note);
+        # subsequent writes are ``append_to_note`` (extend the note body).
+        # Flipped to True under ``_state_lock`` after a successful create.
+        self._note_initialized = False
+        # FIFO queue of pending writes. Each entry is a dict:
+        #   {'kind': 'create', 'content': str, 'title': str}
+        #   {'kind': 'append', 'content': str, 'append_id': UUID}
+        # A failed flush leaves its entry at the head; the next flush retries.
+        # Capped at ``_PENDING_MAX`` to bound memory if Memex is unreachable
+        # for the entire session.
+        self._pending: list[dict[str, Any]] = []
         self._shutdown_registered = False
         self._state_lock = threading.Lock()
         self._atexit_lock = threading.Lock()
@@ -354,31 +374,74 @@ class MemexMemoryProvider(MemoryProvider):
                 budget=self._config.briefing_budget,
                 project_id=self._project_id,
             )
+            self._refresh_vault_binding()
+
+    def _refresh_vault_binding(self) -> None:
+        """Best-effort re-resolve the active vault.
+
+        Honors mid-session vault rebinds (e.g., the agent calls
+        ``memex_kv_write('project:<id>:vault', ...)`` and the user expects
+        subsequent transcript writes to land in the new vault). Failures are
+        logged at DEBUG and leave the existing vault binding in place — we
+        never fall back to a vault-less write that could land in the wrong
+        place.
+        """
+        if self._api is None or self._config is None:
+            return
+        try:
+            new_vault_name = resolve_vault(
+                self._api,
+                project_id=self._project_id,
+                agent_identity=self._agent_identity or None,
+                user_id=self._user_id,
+                config_vault=self._config.vault_id,
+            )
+        except Exception as e:
+            logger.debug('Vault re-resolution failed: %s', e)
+            return
+        if not new_vault_name or new_vault_name == self._vault_name:
+            return
+        new_vault_id = self._resolve_or_create_vault_id(new_vault_name)
+        if new_vault_id is None:
+            return
+        with self._state_lock:
+            self._vault_name = new_vault_name
+            self._vault_id = new_vault_id
 
     def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = '') -> None:  # type: ignore[override]
-        """Buffer the turn; we ingest the full transcript in ``on_session_end``."""
+        """Buffer the turn locally. Flushes happen at chunk boundaries
+        (``on_pre_compress`` / ``on_session_end`` / ``shutdown``)."""
         with self._state_lock:
             self._turn_buffer.append({'user': user_content, 'assistant': assistant_content})
 
     def on_session_end(self, messages: list[dict[str, Any]]) -> None:  # type: ignore[override]
         if self._api is None or self._config is None:
             return
-        transcript = _format_transcript(messages or self._turn_buffer)
-        if not transcript.strip():
-            return
-        self._ingest_session_note(transcript, title=self._format_session_title())
+        chunk = self._capture_unflushed_buffer_slice()
+        if not chunk and messages:
+            # Degenerate case: ``sync_turn`` was never called this session
+            # (some Hermes deployments only fire on_session_end). Trust
+            # Hermes' history as the fallback source.
+            chunk = _format_transcript(messages)
+        if chunk:
+            self._enqueue_chunk(chunk, title=self._format_session_title())
+        with self._state_lock:
+            self._turn_buffer = []
+            self._flushed_index = 0
 
     def on_pre_compress(self, messages: list[dict[str, Any]]) -> str:  # type: ignore[override]
-        """Append soon-to-be-compressed messages to the session note so nothing is lost.
+        """Flush the unflushed buffer slice so soon-to-be-evicted turns are
+        persisted before Hermes compacts them.
 
         Returns a short summary that Hermes includes in the compression prompt.
+        We trust the local buffer as the verbatim source of truth — Hermes'
+        ``messages`` parameter is used only to size the summary string.
         """
-        if self._api is None or self._config is None or not messages:
+        if self._api is None or self._config is None:
             return ''
-        chunk = _format_transcript(messages)
-        if chunk.strip():
-            title = f'{self._format_session_title()} (pre-compress fragment)'
-            self._ingest_session_note(chunk, title=title)
+        chunk = self._capture_unflushed_buffer_slice()
+        if chunk:
+            self._enqueue_chunk(chunk, title=self._format_session_title())
         return (
             f'Memex captured {len(messages)} pre-compression messages into '
             f'session note `{self._session_note_key}`.'
@@ -407,13 +470,19 @@ class MemexMemoryProvider(MemoryProvider):
 
     def shutdown(self) -> None:  # type: ignore[override]
         """Flush pending buffers and close the client."""
-        if self._api is not None and self._turn_buffer:
-            transcript = _format_transcript(self._turn_buffer)
-            if transcript.strip():
+        if self._api is not None:
+            chunk = self._capture_unflushed_buffer_slice()
+            if chunk:
                 try:
-                    self._ingest_session_note(transcript, title=self._format_session_title())
+                    self._enqueue_chunk(chunk, title=self._format_session_title())
                 except Exception as e:
-                    logger.debug('Shutdown ingest failed: %s', e)
+                    logger.debug('Shutdown enqueue failed: %s', e)
+            # One last attempt to drain anything queued (including from the
+            # enqueue above) before we close the HTTP client.
+            try:
+                self._drain_pending()
+            except Exception as e:
+                logger.debug('Shutdown drain failed: %s', e)
         client = self._client
         self._client = None
         self._api = None
@@ -473,9 +542,124 @@ class MemexMemoryProvider(MemoryProvider):
             )
             return f'Hermes session — {substitutions["date"]}'
 
-    def _ingest_session_note(self, content: str, *, title: str) -> None:
-        assert self._api is not None and self._config is not None
+    def _capture_unflushed_buffer_slice(self) -> str:
+        """Atomically read and watermark the unflushed slice of the buffer.
 
+        Returns the formatted-transcript string for ``buffer[flushed_index:]``
+        and advances ``_flushed_index`` to the current buffer length. The
+        watermark moves on capture, not on successful flush — the pending
+        queue handles retries via stable ``append_id``s, so we never need to
+        reread the same buffer slice twice.
+        """
+        with self._state_lock:
+            unflushed = self._turn_buffer[self._flushed_index :]
+            if not unflushed:
+                return ''
+            formatted = _format_transcript(unflushed)
+            if not formatted.strip():
+                return ''
+            self._flushed_index = len(self._turn_buffer)
+        return formatted
+
+    def _enqueue_chunk(self, content: str, *, title: str) -> None:
+        """Enqueue a transcript chunk and try to drain the pending queue.
+
+        First chunk of the session (when ``_note_initialized`` is False AND
+        no other create is pending) is enqueued as a ``create``; everything
+        else is an ``append`` with a freshly-minted ``append_id`` for
+        idempotent retry semantics.
+        """
+        if not content.strip():
+            return
+        with self._state_lock:
+            has_pending_create = any(p['kind'] == 'create' for p in self._pending)
+            if not self._note_initialized and not has_pending_create:
+                entry: dict[str, Any] = {
+                    'kind': 'create',
+                    'content': content,
+                    'title': title,
+                }
+            else:
+                entry = {
+                    'kind': 'append',
+                    'content': content,
+                    'append_id': uuid4(),
+                }
+            self._pending.append(entry)
+            if len(self._pending) > _PENDING_MAX:
+                # Never drop a pending create — dropping it would orphan
+                # every queued append (the note wouldn't exist server-side
+                # to append onto). Drop the oldest *append* instead.
+                drop_index = 0
+                for i, e in enumerate(self._pending):
+                    if e['kind'] != 'create':
+                        drop_index = i
+                        break
+                dropped = self._pending.pop(drop_index)
+                logger.warning(
+                    'Pending session-note write queue full (%d); dropped %s entry at index %d.',
+                    _PENDING_MAX,
+                    dropped['kind'],
+                    drop_index,
+                )
+        self._drain_pending()
+
+    def _drain_pending(self) -> None:
+        """Process the pending queue FIFO. Stops at the first failure.
+
+        Successful items are popped; the failed item stays at head so the
+        next flush retries with the same idempotency token (for appends).
+        """
+        if self._api is None or self._config is None:
+            return
+        while True:
+            with self._state_lock:
+                if not self._pending:
+                    return
+                head = self._pending[0]
+            try:
+                if head['kind'] == 'create':
+                    self._do_create(head['content'], title=head['title'])
+                    # Background ingest queued the row; wait for it to be
+                    # visible before issuing appends, otherwise the next
+                    # append would 404. If the row never appears we leave
+                    # the create queued so the next flush retries.
+                    if not self._wait_for_note_row():
+                        logger.warning(
+                            'Session note row did not appear after ingest; '
+                            'will retry on next flush.',
+                        )
+                        return
+                    with self._state_lock:
+                        self._note_initialized = True
+                        if self._pending and self._pending[0] is head:
+                            self._pending.pop(0)
+                else:
+                    self._do_append(head['content'], append_id=head['append_id'])
+                    with self._state_lock:
+                        if self._pending and self._pending[0] is head:
+                            self._pending.pop(0)
+            except Exception as e:
+                logger.warning(
+                    'Session note %s failed; will retry on next flush: %s',
+                    head['kind'],
+                    e,
+                )
+                return
+
+    def _do_create(self, content: str, *, title: str) -> None:
+        """Create the session note via ``api.ingest``. May raise.
+
+        Uses ``background=True`` so the LLM-bound extraction phase runs
+        asynchronously server-side and the call returns quickly. The note
+        row itself is inserted as part of the same transaction that the
+        background job opens, so by the time we issue the next
+        ``append_to_note`` (which takes a row lock by ``note_key``), the
+        row exists. ``_drain_pending`` calls ``_wait_for_note_row`` after
+        a successful create to confirm the row is visible before we fire
+        any appends — without that gate the next append could 404.
+        """
+        assert self._api is not None and self._config is not None
         from memex_common.schemas import NoteCreateDTO
 
         dto = NoteCreateDTO(
@@ -488,12 +672,49 @@ class MemexMemoryProvider(MemoryProvider):
             author='hermes',
             template=self._config.retain.session_template or HERMES_SESSION_TEMPLATE,
         )
-        try:
-            run_sync(self._api.ingest(dto, background=True), timeout=30.0)
-            with self._state_lock:
-                self._turn_buffer = []
-        except Exception as e:
-            logger.warning('Session note ingest failed: %s', e)
+        run_sync(self._api.ingest(dto, background=True), timeout=30.0)
+
+    def _wait_for_note_row(self, *, timeout: float = 10.0) -> bool:
+        """Poll for the session note row to appear server-side.
+
+        Returns True if the row is visible, False on timeout. Called after
+        a successful background ingest to gate subsequent appends. The
+        ``derive_note_uuid_from_key`` is deterministic, so we know the id
+        before the row exists.
+        """
+        if self._api is None:
+            return False
+        from memex_core.services.notes import derive_note_uuid_from_key
+
+        note_id = derive_note_uuid_from_key(self._session_note_key)
+        import time
+
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            try:
+                run_sync(self._api.get_note(note_id), timeout=2.0)
+                return True
+            except Exception:
+                time.sleep(0.1)
+        return False
+
+    def _do_append(self, content: str, *, append_id: UUID) -> None:
+        """Append a delta to the existing session note. May raise.
+
+        Idempotent on ``append_id``: the server replays a cached outcome if
+        the same id was previously processed, so retries are safe.
+        """
+        assert self._api is not None
+        from memex_common.schemas import NoteAppendRequest
+
+        request = NoteAppendRequest(
+            note_key=self._session_note_key,
+            vault_id=str(self._vault_id) if self._vault_id else None,
+            delta=content,
+            append_id=append_id,
+            joiner='paragraph',
+        )
+        run_sync(self._api.append_to_note(request), timeout=30.0)
 
 
 def _format_transcript(messages: list[dict[str, Any]]) -> str:

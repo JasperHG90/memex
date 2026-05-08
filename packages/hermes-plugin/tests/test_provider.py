@@ -20,10 +20,12 @@ def provider_with_stubbed_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
     fake_api = Mock()
     vault_uuid = uuid4()
+    note_uuid = uuid4()
     fake_api.kv_get = AsyncMock(return_value=None)
     fake_api.resolve_vault_identifier = AsyncMock(return_value=vault_uuid)
     fake_api.get_session_briefing = AsyncMock(return_value='# Briefing')
-    fake_api.ingest = AsyncMock(return_value=SimpleNamespace(status='ok', note_id=str(uuid4())))
+    fake_api.ingest = AsyncMock(return_value=SimpleNamespace(status='ok', note_id=str(note_uuid)))
+    fake_api.get_note = AsyncMock(return_value=SimpleNamespace(id=note_uuid))
     fake_api.kv_put = AsyncMock()
 
     with patch('memex_common.client.RemoteMemexAPI', return_value=fake_api):
@@ -321,6 +323,385 @@ def test_on_session_end_ingests_transcript(provider_with_stubbed_api):
     assert 'pong' in body
 
 
+# ---------------------------------------------------------------------------
+# Transcript persistence — ingest→append split (Part A)
+# ---------------------------------------------------------------------------
+#
+# Background: the prior implementation called ``api.ingest`` against a shared
+# ``note_key`` for both pre-compress fragments and the final session-end
+# write. ``note_key`` upsert creates a new VERSION per write — only the
+# latest is surfaced — so each flush silently overwrote the prior. The fix:
+# first flush of the session creates the note; every subsequent flush goes
+# through ``api.append_to_note`` with a stable, idempotent ``append_id``.
+# These tests pin the new contract.
+
+
+@pytest.fixture
+def provider_with_append_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Like ``provider_with_stubbed_api`` but also stubs ``append_to_note``."""
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    monkeypatch.setenv('MEMEX_SERVER_URL', 'http://test:8000')
+    monkeypatch.setenv('MEMEX_VAULT', 'test-vault')
+
+    fake_api = Mock()
+    vault_uuid = uuid4()
+    note_uuid = uuid4()
+    fake_api.kv_get = AsyncMock(return_value=None)
+    fake_api.resolve_vault_identifier = AsyncMock(return_value=vault_uuid)
+    fake_api.get_session_briefing = AsyncMock(return_value='# Briefing')
+    fake_api.ingest = AsyncMock(return_value=SimpleNamespace(status='ok', note_id=str(note_uuid)))
+    fake_api.get_note = AsyncMock(return_value=SimpleNamespace(id=note_uuid))
+    fake_api.append_to_note = AsyncMock(
+        return_value=SimpleNamespace(
+            status='success',
+            note_id=note_uuid,
+            append_id=uuid4(),
+            content_hash='abc123',
+            delta_bytes=10,
+            new_unit_ids=[],
+        )
+    )
+    fake_api.kv_put = AsyncMock()
+
+    with patch('memex_common.client.RemoteMemexAPI', return_value=fake_api):
+        provider = MemexMemoryProvider()
+        provider.initialize('session-abc12345', hermes_home=str(tmp_path), platform='cli')
+        yield provider, fake_api, vault_uuid
+    provider.shutdown()
+
+
+def _decode_ingest_body(api: Mock) -> str:
+    import base64
+
+    dto = api.ingest.call_args.args[0]
+    return base64.b64decode(dto.content).decode('utf-8')
+
+
+def _append_deltas(api: Mock) -> list[str]:
+    return [call.args[0].delta for call in api.append_to_note.await_args_list]
+
+
+def test_first_flush_creates_note_via_ingest(provider_with_append_api):
+    """Single sync_turn → on_session_end ⇒ exactly one ingest, no appends."""
+    provider, api, _ = provider_with_append_api
+    provider.sync_turn('hi', 'hello')
+    provider.sync_turn('ping', 'pong')
+    provider.on_session_end([])
+
+    api.ingest.assert_awaited_once()
+    api.append_to_note.assert_not_awaited()
+    body = _decode_ingest_body(api)
+    assert 'hi' in body and 'hello' in body
+    assert 'ping' in body and 'pong' in body
+
+
+def test_pre_compress_then_session_end_appends(provider_with_append_api):
+    """Pre-compress writes the create; session-end appends the remainder."""
+    provider, api, _ = provider_with_append_api
+    provider.sync_turn('q1', 'a1')
+    provider.sync_turn('q2', 'a2')
+
+    provider.on_pre_compress([{'role': 'user', 'content': 'q1'}])
+    api.ingest.assert_awaited_once()
+    api.append_to_note.assert_not_awaited()
+
+    provider.sync_turn('q3', 'a3')
+    provider.on_session_end([])
+
+    api.ingest.assert_awaited_once()  # still only one create
+    assert api.append_to_note.await_count == 1
+    append_req = api.append_to_note.call_args.args[0]
+    assert append_req.note_key == provider._session_note_key
+    assert append_req.delta  # non-empty
+    assert 'q3' in append_req.delta and 'a3' in append_req.delta
+
+
+def test_pre_compress_does_not_clear_buffer(provider_with_append_api):
+    """The buffer is retained verbatim; only the watermark advances."""
+    provider, _api, _ = provider_with_append_api
+    provider.sync_turn('q1', 'a1')
+    provider.sync_turn('q2', 'a2')
+    provider.sync_turn('q3', 'a3')
+    assert len(provider._turn_buffer) == 3
+
+    provider.on_pre_compress([{'role': 'user', 'content': 'q1'}])
+    # Buffer length is preserved; watermark advanced past all three turns.
+    assert len(provider._turn_buffer) == 3
+    assert provider._flushed_index == 3
+
+
+def test_two_pre_compresses_both_persist(provider_with_append_api):
+    """Regression test for the original missing-chunks symptom.
+
+    The reconstructed body across all writes (one ingest + N appends) must
+    contain every turn verbatim, in order, with no overwrites.
+    """
+    provider, api, _ = provider_with_append_api
+
+    # Compression 1 covers turns 1-2.
+    provider.sync_turn('q1', 'a1')
+    provider.sync_turn('q2', 'a2')
+    provider.on_pre_compress([{'role': 'user', 'content': 'q1'}])
+
+    # Compression 2 covers turns 3-4.
+    provider.sync_turn('q3', 'a3')
+    provider.sync_turn('q4', 'a4')
+    provider.on_pre_compress([{'role': 'user', 'content': 'q3'}])
+
+    # Final tail.
+    provider.sync_turn('q5', 'a5')
+    provider.on_session_end([])
+
+    assert api.ingest.await_count == 1
+    assert api.append_to_note.await_count == 2
+
+    body_parts = [_decode_ingest_body(api), *_append_deltas(api)]
+    full_body = '\n\n'.join(body_parts)
+    for token in ('q1', 'a1', 'q2', 'a2', 'q3', 'a3', 'q4', 'a4', 'q5', 'a5'):
+        assert token in full_body, f'{token} missing from concatenated body'
+    # Order preservation.
+    assert full_body.index('q1') < full_body.index('q3') < full_body.index('q5')
+
+
+def test_append_id_is_stable_for_retry(provider_with_append_api):
+    """A failed append is retried with the SAME append_id on the next flush."""
+    provider, api, _ = provider_with_append_api
+
+    # First flush succeeds (create).
+    provider.sync_turn('q1', 'a1')
+    provider.on_pre_compress([{'role': 'user', 'content': 'q1'}])
+    api.ingest.assert_awaited_once()
+
+    # Force the next append to fail.
+    transient = RuntimeError('connection reset')
+    api.append_to_note = AsyncMock(side_effect=transient)
+    provider._api.append_to_note = api.append_to_note
+
+    provider.sync_turn('q2', 'a2')
+    provider.on_pre_compress([{'role': 'user', 'content': 'q2'}])
+
+    assert api.append_to_note.await_count == 1
+    failed_append_id = api.append_to_note.call_args.args[0].append_id
+    # Item stayed at the head of the queue.
+    assert len(provider._pending) == 1
+    assert provider._pending[0]['append_id'] == failed_append_id
+
+    # Recover. The retry must use the SAME append_id (idempotent replay).
+    api.append_to_note = AsyncMock(
+        return_value=SimpleNamespace(
+            status='replayed',
+            note_id=uuid4(),
+            append_id=failed_append_id,
+            content_hash='x',
+            delta_bytes=1,
+            new_unit_ids=[],
+        )
+    )
+    provider._api.append_to_note = api.append_to_note
+
+    provider.sync_turn('q3', 'a3')
+    provider.on_session_end([])
+
+    sent_append_ids = [c.args[0].append_id for c in api.append_to_note.call_args_list]
+    assert failed_append_id in sent_append_ids
+    assert provider._pending == []
+
+
+def test_session_end_with_empty_messages_falls_back_to_buffer(
+    provider_with_append_api,
+):
+    """Hermes' contract permits ``messages=[]`` at session_end."""
+    provider, api, _ = provider_with_append_api
+    provider.sync_turn('only', 'turn')
+    provider.on_session_end([])
+    api.ingest.assert_awaited_once()
+    body = _decode_ingest_body(api)
+    assert 'only' in body and 'turn' in body
+
+
+def test_session_end_with_empty_buffer_falls_back_to_messages(
+    provider_with_append_api,
+):
+    """Defense in depth: if sync_turn was never called but Hermes hands us
+    a non-empty messages list at session_end, capture it as the create body."""
+    provider, api, _ = provider_with_append_api
+    provider.on_session_end(
+        [
+            {'role': 'user', 'content': 'hello'},
+            {'role': 'assistant', 'content': 'hi back'},
+        ]
+    )
+    api.ingest.assert_awaited_once()
+    body = _decode_ingest_body(api)
+    assert 'hello' in body and 'hi back' in body
+
+
+def test_session_end_with_empty_everything_is_noop(provider_with_append_api):
+    """No turns synced, no messages — no write at all."""
+    provider, api, _ = provider_with_append_api
+    provider.on_session_end([])
+    api.ingest.assert_not_awaited()
+    api.append_to_note.assert_not_awaited()
+
+
+def test_pre_compress_with_empty_buffer_is_noop(provider_with_append_api):
+    """pre_compress trusts the local buffer; an empty buffer means nothing
+    new to persist. Hermes' messages parameter is informational only here."""
+    provider, api, _ = provider_with_append_api
+    summary = provider.on_pre_compress([{'role': 'user', 'content': 'x'}])
+    api.ingest.assert_not_awaited()
+    api.append_to_note.assert_not_awaited()
+    # Summary string is still returned for the compression prompt.
+    assert provider._session_note_key in summary
+
+
+def test_double_session_end_does_not_duplicate(provider_with_append_api):
+    """Calling on_session_end twice in a row must not write twice.
+
+    After the first session_end the buffer is cleared, so the second call
+    finds nothing to flush and is a no-op.
+    """
+    provider, api, _ = provider_with_append_api
+    provider.sync_turn('q', 'a')
+    provider.on_session_end([])
+    provider.on_session_end([])
+    api.ingest.assert_awaited_once()
+    api.append_to_note.assert_not_awaited()
+
+
+def test_create_failure_does_not_flip_initialized(provider_with_append_api):
+    """If the first ingest raises, _note_initialized must stay False so the
+    next flush retries the create — NOT skip ahead to append (which would
+    fail because the note doesn't exist yet)."""
+    provider, api, _ = provider_with_append_api
+    api.ingest = AsyncMock(side_effect=RuntimeError('5xx'))
+    provider._api.ingest = api.ingest
+
+    provider.sync_turn('q', 'a')
+    provider.on_session_end([])
+
+    assert provider._note_initialized is False
+    assert len(provider._pending) == 1
+    assert provider._pending[0]['kind'] == 'create'
+
+    # Recover. Next flush retries the create.
+    api.ingest = AsyncMock(return_value=SimpleNamespace(status='ok', note_id=str(uuid4())))
+    provider._api.ingest = api.ingest
+
+    # Re-buffer some content to trigger a flush. Use shutdown's drain path.
+    provider.shutdown()
+    api.ingest.assert_awaited()
+    assert provider._note_initialized is True
+
+
+def test_pending_queue_capped_to_protect_memory(provider_with_append_api):
+    """If Memex is unreachable for a long session, the queue must not grow
+    without bound. Past the cap, the OLDEST entry is dropped."""
+    provider, api, _ = provider_with_append_api
+    api.ingest = AsyncMock(side_effect=RuntimeError('down'))
+    api.append_to_note = AsyncMock(side_effect=RuntimeError('down'))
+    provider._api.ingest = api.ingest
+    provider._api.append_to_note = api.append_to_note
+
+    from memex_hermes_plugin.memex.provider import _PENDING_MAX
+
+    for i in range(_PENDING_MAX + 5):
+        provider.sync_turn(f'q{i}', f'a{i}')
+        provider.on_pre_compress([])
+
+    assert len(provider._pending) == _PENDING_MAX
+    # Critical: the head 'create' must be preserved across drops, otherwise
+    # all queued appends would orphan onto a non-existent note when Memex
+    # comes back.
+    assert provider._pending[0]['kind'] == 'create'
+
+
+def test_recovery_after_outage_drains_queue(provider_with_append_api):
+    """Memex returns after a transient outage; the queue drains in order."""
+    provider, api, _ = provider_with_append_api
+
+    api.ingest = AsyncMock(side_effect=RuntimeError('5xx'))
+    api.append_to_note = AsyncMock(side_effect=RuntimeError('5xx'))
+    provider._api.ingest = api.ingest
+    provider._api.append_to_note = api.append_to_note
+
+    # Build up backlog: 1 create + 3 appends, all failing.
+    provider.sync_turn('q1', 'a1')
+    provider.on_pre_compress([])
+    provider.sync_turn('q2', 'a2')
+    provider.on_pre_compress([])
+    provider.sync_turn('q3', 'a3')
+    provider.on_pre_compress([])
+    provider.sync_turn('q4', 'a4')
+    provider.on_pre_compress([])
+
+    assert len(provider._pending) == 4
+    assert [p['kind'] for p in provider._pending] == ['create', 'append', 'append', 'append']
+
+    # Recovery.
+    api.ingest = AsyncMock(return_value=SimpleNamespace(status='ok', note_id=str(uuid4())))
+    api.append_to_note = AsyncMock(
+        return_value=SimpleNamespace(
+            status='success',
+            note_id=uuid4(),
+            append_id=uuid4(),
+            content_hash='x',
+            delta_bytes=1,
+            new_unit_ids=[],
+        )
+    )
+    provider._api.ingest = api.ingest
+    provider._api.append_to_note = api.append_to_note
+
+    # Trigger drain via shutdown.
+    provider.shutdown()
+
+    api.ingest.assert_awaited_once()
+    assert api.append_to_note.await_count == 3
+    assert provider._pending == []
+
+
+def test_vault_rebind_reresolves_on_cadence(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Mid-session vault rebinds are honoured at the briefing-refresh cadence."""
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    monkeypatch.setenv('MEMEX_SERVER_URL', 'http://test:8000')
+    monkeypatch.setenv('MEMEX_VAULT', 'vault-A')
+
+    import json
+
+    cfg_dir = tmp_path / 'memex'
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    (cfg_dir / 'config.json').write_text(json.dumps({'briefing_refresh_cadence': 2}))
+
+    fake_api = Mock()
+    vault_a = uuid4()
+    vault_b = uuid4()
+    fake_api.kv_get = AsyncMock(return_value=None)
+    # First resolve returns vault-A, subsequent returns vault-B.
+    fake_api.resolve_vault_identifier = AsyncMock(side_effect=[vault_a, vault_b])
+    fake_api.get_session_briefing = AsyncMock(return_value='')
+    fake_api.ingest = AsyncMock(return_value=SimpleNamespace(status='ok', note_id=str(uuid4())))
+
+    with patch('memex_common.client.RemoteMemexAPI', return_value=fake_api):
+        with patch(
+            'memex_hermes_plugin.memex.provider.resolve_vault',
+            side_effect=['vault-A', 'vault-B'],
+        ):
+            provider = MemexMemoryProvider()
+            provider.initialize('s', hermes_home=str(tmp_path), platform='cli')
+            try:
+                assert provider._vault_name == 'vault-A'
+                assert provider._vault_id == vault_a
+
+                provider.on_turn_start(2, 'msg')
+                # On a refresh-cadence boundary, the resolver re-runs and
+                # vault binding follows the new value.
+                assert provider._vault_name == 'vault-B'
+                assert provider._vault_id == vault_b
+            finally:
+                provider.shutdown()
+
+
 def test_on_memory_write_mirrors_to_kv(provider_with_stubbed_api):
     provider, api, _ = provider_with_stubbed_api
     provider.on_memory_write('add', 'user', 'Prefers Rust')
@@ -383,10 +764,14 @@ class TestSessionTitle:
             )
 
         fake_api = Mock()
+        note_uuid = uuid4()
         fake_api.kv_get = AsyncMock(return_value=None)
         fake_api.resolve_vault_identifier = AsyncMock(return_value=uuid4())
         fake_api.get_session_briefing = AsyncMock(return_value='')
-        fake_api.ingest = AsyncMock(return_value=SimpleNamespace(status='ok', note_id=str(uuid4())))
+        fake_api.ingest = AsyncMock(
+            return_value=SimpleNamespace(status='ok', note_id=str(note_uuid))
+        )
+        fake_api.get_note = AsyncMock(return_value=SimpleNamespace(id=note_uuid))
         fake_api.kv_put = AsyncMock()
 
         with patch('memex_common.client.RemoteMemexAPI', return_value=fake_api):
@@ -458,12 +843,22 @@ class TestSessionTitle:
         finally:
             p.shutdown()
 
-    def test_pre_compress_marks_fragment_in_title(self, tmp_path, monkeypatch):
+    def test_pre_compress_uses_session_title_no_fragment_marker(self, tmp_path, monkeypatch):
+        """All writes to the session note share the same title.
+
+        Regression for the original "missing chunks" bug: the prior
+        implementation tagged pre-compress writes "(pre-compress fragment)"
+        as a workaround for fragments overwriting each other. With ingest +
+        idempotent appends, every write extends a single durable note, so
+        the title stays consistent.
+        """
         p, api = self._provider(tmp_path, monkeypatch)
-        p.on_pre_compress([{'role': 'user', 'content': 'bye'}])
         try:
+            p.sync_turn('hi', 'hello')
+            p.on_pre_compress([{'role': 'user', 'content': 'bye'}])
             api.ingest.assert_awaited()
             dto = api.ingest.call_args.args[0]
-            assert 'pre-compress fragment' in dto.name
+            assert 'fragment' not in dto.name
+            assert 'coder' in dto.name and 'cli' in dto.name
         finally:
             p.shutdown()
