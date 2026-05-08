@@ -739,7 +739,7 @@ async def find_note(
             date = str(date)[:10] if date else ''
         table.add_row(
             r.title or 'Untitled',
-            f'{r.score:.2f}',
+            f'{r.score:.3f}',
             date,
             r.status or '',
             str(r.note_id),
@@ -1282,6 +1282,7 @@ async def search_notes(
 
     table = Table(title=f'Search Results: "{query}"', show_lines=True)
     table.add_column('Score', style='magenta', justify='right', no_wrap=True)
+    table.add_column('RRF', style='dim', justify='right', no_wrap=True)
     table.add_column('Title', style='cyan', ratio=2)
     table.add_column('Preview', style='white', ratio=4)
     table.add_column('ID', style='dim', no_wrap=True)
@@ -1303,9 +1304,10 @@ async def search_notes(
         if len(preview) > 300:
             preview = preview[:297] + '...'
 
-        score_str = f'{doc.score:.2f}' if doc.score > 0 else '-'
+        score_str = f'{doc.score:.3f}' if doc.score > 0 else '-'
+        raw_str = f'{doc.raw_score:.4f}' if doc.raw_score is not None else ''
 
-        table.add_row(score_str, title, preview, str(doc.note_id))
+        table.add_row(score_str, raw_str, title, preview, str(doc.note_id))
 
     console.print(table)
     console.print('\n[dim]Tip: Use `memex note view <ID>` to see full note.[/dim]')

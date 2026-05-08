@@ -192,6 +192,9 @@ class NoteSearchEngine:
         # Cross-encoder reranking
         if request.rerank and self.reranker and results:
             results = await self._rerank_results(request.query, results, best_chunk_text_by_note)
+        else:
+            for r in results:
+                r.raw_score = None
 
         # Skeleton-tree reasoning refinement
         if (request.reason or request.summarize) and self.lm:
@@ -247,6 +250,11 @@ class NoteSearchEngine:
         if not self.reranker or not results:
             return results
 
+        # Snapshot the pre-rerank RRF score so we can preserve it as
+        # ``raw_score`` on success. The helper owns this lifecycle —
+        # callers must not have to remember to pre-set raw_score.
+        rrf_score_by_note = {r.note_id: r.score for r in results}
+
         try:
             # Cap the number of candidates sent to the cross-encoder
             rerank_candidates = results[:MAX_RERANK_DOCS]
@@ -265,6 +273,7 @@ class NoteSearchEngine:
 
             scored = sorted(zip(rerank_candidates, normalized), key=lambda x: x[1], reverse=True)
             for result, score in scored:
+                result.raw_score = rrf_score_by_note.get(result.note_id)
                 result.score = score
 
             # Normalize overflow scores so they don't outrank reranked results.
@@ -277,12 +286,28 @@ class NoteSearchEngine:
                 # Small decrement per position so overflow items stay sorted
                 step = min(1e-4, min_reranked / (len(overflow) + 1)) if min_reranked > 0 else 0.0
                 for i, r in enumerate(overflow):
+                    r.raw_score = rrf_score_by_note.get(r.note_id)
                     r.score = max(0.0, min_reranked - step * (i + 1))
 
             return [r for r, _ in scored] + overflow
-        except (ValueError, RuntimeError, OSError) as e:
+        except (ValueError, RuntimeError, OSError, asyncio.TimeoutError) as e:
             logger.error(f'Note search reranking failed: {e}. Falling back to RRF order.')
+            # Rerank did not run (timeout, model error, OOM, ...): ``score``
+            # is still the RRF score, so leaving ``raw_score == score``
+            # would lie about rerank having succeeded. Wipe to None so
+            # callers can detect the fallback.
+            for r in results:
+                r.raw_score = None
             return results
+        except BaseException:
+            # CancelledError, KeyboardInterrupt, SystemExit, and unexpected
+            # subclasses of Exception not in the recoverable tuple: still
+            # propagate, but null raw_score on the way out so any caller
+            # that observes the (mutated) results list cannot mistake them
+            # for a successful rerank pass.
+            for r in results:
+                r.raw_score = None
+            raise
 
     async def _identify_relevant_sections(
         self,
@@ -709,7 +734,11 @@ class NoteSearchEngine:
 
             final_results.append(
                 NoteSearchResult(
-                    note_id=doc.id, metadata=metadata, summaries=summaries, score=best_score
+                    note_id=doc.id,
+                    metadata=metadata,
+                    summaries=summaries,
+                    score=best_score,
+                    raw_score=best_score,
                 )
             )
 

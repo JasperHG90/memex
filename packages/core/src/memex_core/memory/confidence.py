@@ -1,7 +1,7 @@
 """Beta(1, 1) posterior over a unit's confidence (mean + variance).
 
 Single-prior convention: matches the ``Beta(success + 1, failure + 1)`` in
-``services/outcomes.py:35-55`` so MW counters and confidence variance share
+``services/outcomes.py:35-55`` so Memory Worth counters and confidence variance share
 the same Bayes-Laplace uniform prior. No second prior to reason about.
 
 Closed form

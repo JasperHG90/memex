@@ -904,7 +904,7 @@ class MemexAPI:
         dry_run: bool = False,
         actor: str | None = None,
     ) -> dict[str, Any]:
-        """Vault-wide low-MW unit consolidation.
+        """Vault-wide low-Memory-Worth unit consolidation.
 
         Facade for `LocksService.consolidate_vault`.
         """
@@ -1367,7 +1367,7 @@ class MemexAPI:
     ) -> Any:
         """Deprioritize a memory unit (non-destructive). Delegates to UnitsService.
 
-        ``vault_id`` scopes the mutation per Wave 0 multi-tenant invariant.
+        ``vault_id`` scopes the mutation per vault-scoping invariant.
         When None (legacy callers / CLI), the service mutates without a vault
         check; HTTP/MCP/Hermes routes always supply it.
         """
@@ -1389,7 +1389,7 @@ class MemexAPI:
     ) -> Any:
         """Restore a deprioritized memory unit. Delegates to UnitsService.
 
-        ``vault_id`` scopes the mutation per Wave 0 multi-tenant invariant.
+        ``vault_id`` scopes the mutation per vault-scoping invariant.
         When None (legacy callers / CLI), the service mutates without a vault
         check; HTTP/MCP/Hermes routes always supply it.
         """
@@ -1626,7 +1626,7 @@ class MemexAPI:
         return await self._vaults.truncate_vault(vault_id)
 
     async def set_mw_mode(self, vault_id: UUID, mw_mode: str) -> Vault:
-        """Set the MW mode for a vault. Delegates to VaultService."""
+        """Set the Memory Worth mode for a vault. Delegates to VaultService."""
         return await self._vaults.set_mw_mode(vault_id, mw_mode)
 
     async def add_note_assets(self, note_id: UUID, files: dict[str, bytes]) -> dict[str, Any]:
@@ -1943,7 +1943,7 @@ class MemexAPI:
         context: str | None = None,
         limit: int = 5,
     ) -> list[dict[str, Any]]:
-        """Top procedure outcomes for a vault, ranked by MW score."""
+        """Top procedure outcomes for a vault, ranked by Memory Worth score."""
         return await self._kv.list_top_procedure_outcomes(
             vault_id=vault_id, context=context, limit=limit
         )

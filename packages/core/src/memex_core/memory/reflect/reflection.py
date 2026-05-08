@@ -1,9 +1,4 @@
-"""
-The Hindsight "Reflect" Engine.
-
-This module orchestrates the reflection loop (Phases 0-6) to update Mental Models
-based on new evidence and memories.
-"""
+"""Hindsight Reflect Engine — orchestrates Phases 0-6 to update Mental Models."""
 
 import asyncio
 import logging
@@ -53,28 +48,14 @@ logger = logging.getLogger('memex.core.memory.reflect.reflection')
 
 
 def _variance_key(unit: MemoryUnit) -> float:
-    """Closed-form Beta(1, 1) variance for reflection prioritisation.
-
-    Hoisted to module scope so the closure isn't re-defined on every call
-    to ``_batch_fetch_recent_memories``. Pure function — no captured state.
-
-    This helper is INERT until the operator-flip
-    ``ReflectionConfig.variance_prioritisation_enabled`` toggles to True.
-    The single call site is the ``if
-    self.config.server.memory.reflection.variance_prioritisation_enabled:``
-    branch in ``_batch_fetch_recent_memories``. Defining this function
-    does not affect reflection behaviour; only the gated sort does.
-    """
+    """Beta(1,1) variance for reflection prioritisation. Pure — no captured state."""
     confidence, count = extract_confidence_and_count(unit)
     _, variance = mean_and_variance(confidence, count)
     return variance
 
 
-# Hard ceiling on per-entity recent-memory fetch when ReflectionRequest
-# carries limit_recent_memories=None (scope='full'). Caps per-call LLM cost
-# so a busy entity with thousands of units cannot saturate the prompt budget
-# on a single agent-triggered reflection. The rate limit guards call
-# frequency; this constant guards per-call size.
+# Per-call cap when limit_recent_memories=None ('full' scope). Guards LLM cost;
+# rate-limiting guards call frequency.
 MAX_FULL_SCOPE_UNITS = 100
 
 
@@ -94,10 +75,7 @@ def get_reflection_engine(
 
 
 class ReflectionEngine:
-    """
-    The ReflectionEngine (formerly ReflectAgent) orchestrates the periodic "Reflection" phase
-    of the Hindsight architecture.
-    """
+    """Orchestrates the periodic Reflection phase of the Hindsight architecture."""
 
     def __init__(
         self,
@@ -109,7 +87,7 @@ class ReflectionEngine:
         self.config = config or MemexConfig()
         self.embedder = embedder
 
-        # Ideally, we should receive the LM here, but we'll try to use dspy.settings.lm if not provided
+        # Prefer injected LM; fall back to dspy.settings.lm, then extraction model.
         self.lm: dspy.LM | None
         try:
             if self.config.server.memory.reflection.model:
@@ -143,10 +121,7 @@ class ReflectionEngine:
             self.lm = None
 
     async def reflect_batch(self, requests: list[ReflectionRequest]) -> list[MentalModel]:
-        """
-        Run reflection for multiple entities in parallel.
-        Groups requests by vault_id to ensure correct scoping.
-        """
+        """Run reflection for multiple entities in parallel, grouped by vault_id."""
         if not requests:
             return []
 
@@ -170,10 +145,8 @@ class ReflectionEngine:
             # 1.1 Batch Load Data for this Vault (Serial DB Access)
             models_map = await self._batch_get_or_create_models(entity_ids, vault_id=vault_id)
             entities_map = await self._batch_get_entities(entity_ids)
-            # Mixed-limit batch semantics: a single SQL fetch sized to the
-            # most-permissive limit in the batch (or unbounded → MAX_FULL_SCOPE_UNITS
-            # ceiling) so per-request slicing in _process_entity_reflection yields
-            # correct semantics without multiple roundtrips.
+            # Batch fetch uses the most-permissive limit in the group;
+            # per-request slicing in _process_entity_reflection trims down.
             batch_limit = (
                 None
                 if any(r.limit_recent_memories is None for r in v_requests)
@@ -230,9 +203,8 @@ class ReflectionEngine:
         async with sem:
             try:
                 entity = entities_map.get(eid)
-                # Per-request slice: memories_map carries the batch's
-                # most-permissive fetch; honour each request's own limit here.
-                # None means unbounded (already capped at MAX_FULL_SCOPE_UNITS by SQL).
+                # Per-request slice: batch fetch is already capped at MAX_FULL_SCOPE_UNITS
+                # by SQL; honour each request's own limit here.
                 fetched = memories_map.get(eid, [])
                 recent_memories = (
                     fetched
@@ -281,10 +253,8 @@ class ReflectionEngine:
         entity_name = entity.canonical_name if entity else 'Unknown'
         entity_type = entity.entity_type if entity else None
 
-        # 0. Acquire Advisory Lock for this Entity to prevent concurrent reflection
-        # Use transaction-level lock (automatically released at end of transaction/session)
-        # Using hashtext for consistent 64-bit int generation from UUID string
-        # Note: We rely on the caller's session transaction context.
+        # Advisory lock prevents concurrent reflection on the same entity.
+        # Transaction-level lock (released at session/transaction end).
         lock_query = select(func.pg_try_advisory_xact_lock(func.hashtext(f'reflect:{entity_id}')))
         is_locked = (await self.session.exec(lock_query)).one()
 
@@ -362,10 +332,7 @@ class ReflectionEngine:
         entity_summary: str = '',
         entity_type: str | None = None,
     ) -> None:
-        """
-        Phase 5: Prepare Model (CPU/GPU).
-        Updates observations, version, embedding, and entity metadata.
-        """
+        """Phase 5: Update observations, version, embedding, and entity metadata."""
         mental_model.observations = [obs.model_dump(mode='json') for obs in final_obs]
         mental_model.version += 1
         mental_model.last_refreshed = datetime.now(timezone.utc)
@@ -399,11 +366,7 @@ class ReflectionEngine:
         db_lock: asyncio.Lock,
         vault_id: UUID = GLOBAL_VAULT_ID,
     ) -> None:
-        """
-        Phase 6: Enrich (Memory Evolution).
-        Pushes enriched tags from the mental model back into contributing memory units,
-        making them discoverable for concepts identified during reflection.
-        """
+        """Phase 6: Push enriched tags from mental model back into evidence units."""
         if not final_obs:
             return
 
@@ -490,7 +453,7 @@ class ReflectionEngine:
                 if unit.unit_metadata is None:
                     unit.unit_metadata = {}
 
-                # Set-union: accumulate tags across reflection cycles
+                # Set-union: accumulate tags across cycles
                 existing_tags = set(unit.unit_metadata.get('enriched_tags', []))
                 existing_kw = set(unit.unit_metadata.get('enriched_keywords', []))
 
@@ -510,7 +473,7 @@ class ReflectionEngine:
     async def _batch_get_or_create_models(
         self, entity_ids: list[UUID], vault_id: UUID = GLOBAL_VAULT_ID
     ) -> dict[UUID, MentalModel]:
-        """Batch fetch or create mental models."""
+        """Fetch or create mental models for a batch of entities."""
         query = (
             select(MentalModel)
             .where(col(MentalModel.entity_id).in_(entity_ids))
@@ -545,13 +508,10 @@ class ReflectionEngine:
         vault_id: UUID = GLOBAL_VAULT_ID,
         limit_per_entity: int | None = 20,
     ) -> dict[UUID, list[MemoryUnit]]:
-        """
-        Fetch recent memories for multiple entities in one go using Window Function.
-        Vault scoping follows "Fall-through" logic: (vault_id == active OR vault_id == Global).
+        """Fetch recent memories for multiple entities via window function.
 
-        ``limit_per_entity=None`` requests an unbounded fetch ('full' scope);
-        the engine still applies ``MAX_FULL_SCOPE_UNITS`` as a hard ceiling so per-call
-        LLM cost stays bounded.
+        Vault scoping: (vault_id == active OR vault_id == Global).
+        limit_per_entity=None → unbounded fetch capped at MAX_FULL_SCOPE_UNITS.
         """
 
         effective_limit = MAX_FULL_SCOPE_UNITS if limit_per_entity is None else limit_per_entity
@@ -593,19 +553,9 @@ class ReflectionEngine:
         for unit, eid in results:
             memories_map[eid].append(unit)
 
-        # Prioritise high-variance edges within each entity bucket so the
-        # per-tick LLM budget concentrates on uncertain units (highest
-        # information yield). Stable sort preserves the existing
-        # event_date DESC tiebreak from the SQL window function.
-        #
-        # Gated on ``ReflectionConfig.variance_prioritisation_enabled``
-        # (default False) so variance-based ordering ships inertly —
-        # reflection ordering does not change on deploy. Operators flip
-        # the flag after the ``CONFIDENCE_VARIANCE_OBSERVED`` histogram
-        # (calibration metric in retrieval/engine.py) populates as
-        # expected. This pairs with
-        # ``RetrievalConfig.certainty_modulation_enabled`` for the
-        # certainty boost gating.
+        # Variance-priority sort: concentrates LLM budget on uncertain units.
+        # Gated on ReflectionConfig.variance_prioritisation_enabled (default False).
+        # Stable sort preserves event_date DESC tiebreak from SQL.
         if self.config.server.memory.reflection.variance_prioritisation_enabled:
             for eid, units in memories_map.items():
                 units.sort(key=_variance_key, reverse=True)
@@ -649,15 +599,12 @@ class ReflectionEngine:
         memories: list[MemoryUnit],
         vault_id: UUID = GLOBAL_VAULT_ID,
     ) -> list[Observation]:
-        """
-        Phase 0: Check if existing observations have new supporting/contradicting evidence.
-        Also prunes stale evidence referencing deleted memory units (liveness check).
-        """
+        """Phase 0: Update existing observations with new evidence; prune dead refs."""
         current_observations = [Observation(**obs) for obs in model.observations]
         if not current_observations:
             return current_observations
 
-        # Liveness check: prune evidence citing deleted memory units
+        # Prune evidence citing deleted memory units
         all_evidence_ids: set[UUID] = set()
         for obs in current_observations:
             for ev in obs.evidence:
@@ -684,7 +631,7 @@ class ReflectionEngine:
                         if not obs.evidence:
                             pruned_to_empty.add(obs.id)
 
-                # Only drop observations that were pruned to empty, not naturally empty ones
+                # Drop only observations pruned to empty
                 if pruned_to_empty:
                     current_observations = [
                         obs for obs in current_observations if obs.id not in pruned_to_empty
@@ -752,9 +699,7 @@ class ReflectionEngine:
         existing_obs: list[Observation],
         vault_id: UUID = GLOBAL_VAULT_ID,
     ) -> list[CandidateObservation]:
-        """
-        Phase 1: Generate candidates from recent memories.
-        """
+        """Phase 1: Generate candidate observations from recent memories."""
         if not memories:
             return []
 
@@ -801,9 +746,7 @@ class ReflectionEngine:
         db_lock: asyncio.Lock,
         vault_id: UUID = GLOBAL_VAULT_ID,
     ) -> list[tuple[CandidateObservation, list[MemoryUnit]]]:
-        """
-        Phase 2: Retrieve evidence for candidates.
-        """
+        """Phase 2: Retrieve evidence for candidates via vector search + tail sampling."""
         from memex_core.memory.extraction import storage
 
         if not candidates:
@@ -859,18 +802,12 @@ class ReflectionEngine:
         return results
 
     async def _sample_tail_memories(self, vault_id: UUID) -> list[MemoryUnit]:
-        """
-        Sample random memories from the vault (Tail Sampling).
-        Provides a small percentage of 'non-similar' memories to avoid echo chambers.
-        """
+        """Sample random memories from the vault to avoid echo chambers."""
         rate = self.config.server.memory.reflection.tail_sampling_rate
         if rate <= 0:
             return []
 
-        # Calculate sample size. We want a small bonus proportional to the search limit.
-        # e.g. if rate=0.05 and search_limit=10, we sample at least 1 memory.
-        # Here we use a heuristic: sample_size = max(1, round(search_limit * rate * 5))
-        # This yields ~2-3 memories for default settings (10 * 0.05 * 5 = 2.5).
+        # Heuristic: sample ~2-3 memories for default settings (search_limit * rate * 10).
         sample_size = max(1, int(self.config.server.memory.reflection.search_limit * rate * 10))
 
         # Use random() for sampling. For larger tables, TABLESAMPLE would be better,
@@ -894,9 +831,7 @@ class ReflectionEngine:
         candidates_with_evidence: list[tuple[CandidateObservation, list[MemoryUnit]]],
         vault_id: UUID = GLOBAL_VAULT_ID,
     ) -> list[ValidatedObservation]:
-        """
-        Phase 3: Validate candidates against evidence.
-        """
+        """Phase 3: Validate candidates against evidence."""
         if not candidates_with_evidence:
             return []
 
@@ -953,10 +888,7 @@ class ReflectionEngine:
         vault_id: UUID = GLOBAL_VAULT_ID,
         entity_name: str = '',
     ) -> tuple[list[Observation], str]:
-        """
-        Phase 4: Merge new validated observations with existing ones.
-        Returns (final_observations, entity_summary).
-        """
+        """Phase 4: Merge validated observations with existing. Returns (observations, summary)."""
         if not new_obs:
             return existing, ''
 

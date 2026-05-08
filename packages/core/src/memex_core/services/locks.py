@@ -260,7 +260,7 @@ class LocksService:
     ) -> list[UUID]:
         """Return the list of MemoryUnit IDs linked to an entity in a vault.
 
-        Vault-scoped per Wave 0 invariant — `Entity` is global but `UnitEntity`
+        Vault-scoped per vault-scoping invariant — `Entity` is global but `UnitEntity`
         is vault-scoped, so cross-vault leakage is impossible by construction.
         """
         from memex_core.memory.sql_models import UnitEntity
@@ -370,7 +370,7 @@ class LocksService:
             raise
 
     async def _select_consolidate_candidates(self, vault_id: UUID) -> list[UUID]:
-        """Identify low-MW + 5+-outcomes + non-deprioritized + 30-days-old units.
+        """Identify low-Memory-Worth + 5+-outcomes + non-deprioritized + 30-days-old units.
 
         Predicate (vault-wide consolidate):
             ``mw_score < 0.35
@@ -417,7 +417,7 @@ class LocksService:
         dry_run: bool = False,
         actor: str | None = None,
     ) -> dict[str, Any]:
-        """Vault-wide low-MW unit consolidation.
+        """Vault-wide low-Memory-Worth unit consolidation.
 
         Steps:
             1. Acquire a per-vault rate-limit token (default 1 call per vault
@@ -472,7 +472,7 @@ class LocksService:
 
             has_proposals_table = await self._has_maintenance_proposals_table()
             proposals_written = 0
-            reason = 'vault-wide consolidate: low MW + 5+ outcomes after 30d'
+            reason = 'vault-wide consolidate: low-Memory-Worth + 5+ outcomes after 30d'
 
             if self.units is None:
                 raise RuntimeError(
@@ -566,7 +566,7 @@ class LocksService:
                     'actor': actor,
                 },
                 suggested_action=(
-                    'Unit deprioritized by vault-wide consolidate (low MW + 5+ outcomes after 30d).'
+                    'Unit deprioritized by vault-wide consolidate (low-Memory-Worth + 5+ outcomes after 30d).'
                 ),
                 status=LintStatus.RESOLVED,
                 source=LintSource.RULE,

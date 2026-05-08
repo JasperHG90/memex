@@ -82,7 +82,7 @@ class RiskClass(str, Enum):
     none      — public-safe content (default).
     sensitive — flagged for linter review; still retrievable in default scope.
     private   — excluded from default retrieval; surfaced only on explicit query.
-    safety    — recorded but passed through (blocking deferred to pre-flight assessment).
+    safety    — blocked at ingestion (filter_safety_blocked drops the fact pre-persistence).
     """
 
     NONE = 'none'
@@ -105,7 +105,7 @@ VALID_RISK_CLASSES: frozenset[str] = frozenset(c.value for c in RiskClass)
 # ``packages/common/tests/test_enum_literal_parity.py``) which asserts
 # ``typing.get_args(IntentLiteral) == tuple(c.value for c in IntentClass)``.
 # This collapses three+ duplicate definitions (MCP server, DSPy classifier,
-# Hermes JSON schema) into ONE canonical definition; downstream importers
+# plugin JSON schema) into ONE canonical definition; downstream importers
 # reference these names instead of re-typing the value tuple.
 IntentLiteral = Literal['permanent', 'durable', 'ephemeral']
 RiskLiteral = Literal['none', 'sensitive', 'private', 'safety']
@@ -347,7 +347,7 @@ class RetrievalRequest(BaseModel):
     )
     apply_pre_filter: bool = Field(
         default=True,
-        description='Pre-reranker Memory Worth/FSFM filter. Default True drops low-quality candidates. Set False for audit/lineage queries.',
+        description='Pre-reranker Memory Worth/FSFM filter. Default True drops low-quality candidates. Set False for audit or lineage queries.',
     )
     debug: bool = Field(
         default=False,
@@ -419,6 +419,24 @@ class CreateVaultRequest(BaseModel):
     name: str = Field(..., description='The name of the vault.')
 
     description: str | None = Field(default=None, description='Optional description.')
+
+
+# Mirrors ``memex_core.memory.sql_models.MWMode``. ``memex_common`` cannot
+# import core, so the values are duplicated here as a Literal. Adding a new
+# mode requires updating BOTH definitions; the parity is enforced by
+# ``packages/core/tests/unit/test_mw_mode_literal_parity.py`` which imports
+# both symbols and asserts equality.
+MwModeLiteral = Literal['stationary', 'ema']
+
+
+class SetMwModeRequest(BaseModel):
+    """Request body for ``POST /vaults/{id}/mw-mode``."""
+
+    mode: MwModeLiteral = Field(
+        ...,
+        description='Memory Worth counter mode for the vault.',
+        examples=['stationary', 'ema'],
+    )
 
 
 class MemoryUnitBase(VaultMixin):
@@ -691,7 +709,7 @@ class VaultDTO(BaseModel):
 
     mw_mode: str = Field(
         default='stationary',
-        description='MW mode for the vault: "stationary" or "ema".',
+        description='Memory Worth mode for the vault: "stationary" or "ema".',
     )
 
     is_active: bool = Field(
@@ -1153,6 +1171,10 @@ class NoteSearchResult(BaseModel):
     metadata: dict[str, Any]
     summaries: list[BlockSummaryDTO] = Field(default_factory=list)
     score: float = 0.0
+    raw_score: float | None = Field(
+        default=None,
+        description='Pre-reranker RRF fusion score. Null when reranking is disabled.',
+    )
     vault_id: UUID | None = None
     vault_name: str | None = None
     reasoning: list[dict[str, Any]] | None = Field(
@@ -1358,7 +1380,7 @@ class ProcedureOutcomeDTO(BaseModel):
 
     Returned by ``MemexAPI.list_top_procedure_outcomes`` and the
     ``GET /api/v1/kv/procedure-observations`` endpoint. Each row exposes
-    the procedure KV key, success/failure MW counters, the
+    the procedure KV key, success/failure Memory Worth counters, the
     Beta-Bernoulli posterior-mean Memory Worth score
     (``memex_core.services.outcomes.compute_mw_score``), and the
     ``last_outcome_at`` timestamp.

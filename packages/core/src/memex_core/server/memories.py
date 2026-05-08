@@ -100,7 +100,7 @@ class DeprioritizeRequest(BaseModel):
         ...,
         description=(
             'Vault UUID the unit belongs to. REQUIRED for per-vault auth scoping '
-            '(Wave 0 multi-tenant invariant). Cross-vault calls are rejected with 403.'
+            '(vault-scoping invariant). Cross-vault calls are rejected with 403.'
         ),
     )
 
@@ -110,7 +110,7 @@ class RestoreRequest(BaseModel):
         ...,
         description=(
             'Vault UUID the unit belongs to. REQUIRED for per-vault auth scoping '
-            '(Wave 0 multi-tenant invariant). Cross-vault calls are rejected with 403.'
+            '(vault-scoping invariant). Cross-vault calls are rejected with 403.'
         ),
     )
 
@@ -129,7 +129,7 @@ async def deprioritize_memory_unit(
 ):
     """Deprioritize a memory unit (non-destructive — flips ``is_deprioritized=True``).
 
-    Per Wave 0 §6 #12: this is the NON-destructive curation verb. Archive
+    Per vault-scoping invariant: this is the NON-destructive curation verb. Archive
     remains the destructive counterpart.
     """
     await check_vault_access(auth, [request.vault_id], api, permission=Permission.WRITE)
@@ -193,7 +193,7 @@ class ReconsolidateRequest(BaseModel):
 
 
 class ConsolidateRequest(BaseModel):
-    """Vault-wide low-MW consolidation."""
+    """Vault-wide low-Memory-Worth consolidation."""
 
     vault_id: UUID = Field(..., description='Vault UUID to consolidate.')
     dry_run: bool = Field(
@@ -334,7 +334,7 @@ async def consolidate_vault(
     api: Annotated[MemexAPI, Depends(get_api)],
     auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ) -> Any:
-    """Vault-wide low-MW unit consolidation.
+    """Vault-wide low-Memory-Worth unit consolidation.
 
     Predicate: mw_score<0.35 AND outcomes>=5 AND !is_deprioritized AND
     created_at<now()-30d. dry_run=true returns preview without writes.
@@ -416,7 +416,7 @@ async def get_unit_history(
         ...,
         description=(
             'Vault UUID the unit belongs to. REQUIRED for per-vault auth scoping '
-            '(Wave 0 multi-tenant invariant). Cross-vault calls are rejected with 403.'
+            '(vault-scoping invariant). Cross-vault calls are rejected with 403.'
         ),
     ),
     max_depth: int = Query(

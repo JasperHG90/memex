@@ -1,7 +1,7 @@
 """Outcome recording endpoint.
 
 HTTP wire surface for ``MemexAPI.record_outcome`` (ADD-2). Required so
-remote clients (the Hermes plugin via ``RemoteMemexAPI``) can train MW
+remote clients (the Hermes plugin via ``RemoteMemexAPI``) can train Memory Worth
 scoring on memory units or procedure KV keys. The MCP tool calls
 ``api.record_outcome`` in-process; this route gives non-in-process clients
 the same surface.
@@ -63,7 +63,7 @@ class RecordOutcomeRequest(BaseModel):
     target_type: str = Field(
         default='memory_unit',
         description=(
-            "What the outcome scores. 'memory_unit' increments MW counters on "
+            "What the outcome scores. 'memory_unit' increments Memory Worth counters on "
             "the memory units in unit_ids. 'kv_key' increments counters "
             'on the procedure_outcomes row for kv_key.'
         ),
@@ -89,9 +89,9 @@ async def post_record_outcome(
     (positional ``unit_ids``, ``success`` at the in-process call site).
     Vault is resolved server-side so callers may pass UUID or name.
 
-    Per Wave 0 multi-tenant invariant: when a ``vault_id`` is supplied the
+    Per vault-scoping invariant: when a ``vault_id`` is supplied the
     auth context is gated via :func:`check_vault_access` so a key scoped to
-    vault-A cannot record an outcome against vault-B (HIGH-4 sub-finding).
+    vault-A cannot record an outcome against vault-B (cross-vault check).
     """
     resolved_vault: str | None = None
     if body.vault_id is not None:

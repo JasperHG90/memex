@@ -212,6 +212,7 @@ class McpNoteSearchResult(BaseModel):
     note_id: UUID
     title: str
     score: float
+    raw_score: float | None = None
     vault_name: str | None = None
     status: str | None = None
     description: str | None = None
@@ -355,8 +356,7 @@ class McpDeleteAssetsResult(BaseModel):
 class McpKVEntry(BaseModel):
     key: str
     # value is normally a string; for procedure: keys read with
-    # include_history=True it is a structured dict {value, version, history}
-    # per RFC-007 §114-116.
+    # include_history=True it is a structured dict {value, version, history}.
     value: str | dict[str, Any]
     scope: str
     updated_at: datetime

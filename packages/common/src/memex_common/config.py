@@ -841,7 +841,7 @@ class RetrievalConfig(BaseModel):
     reranking_mw_alpha: float = Field(
         default=0.3,
         description='Multiplicative Memory Worth boost strength for cross-encoder reranking. '
-        '0 = no MW influence. Default 0.3 matches recency/temporal magnitude.',
+        '0 = no Memory Worth influence. Default 0.3 matches recency/temporal magnitude.',
     )
     confidence_alpha: float = Field(
         default=0.0,
@@ -879,7 +879,7 @@ class RetrievalConfig(BaseModel):
     mw_ema_half_life_days: float = Field(
         default=60.0,
         gt=0,
-        description='Half-life in days for EMA decay of MW counters. '
+        description='Half-life in days for EMA decay of Memory Worth counters. '
         'Only applies when the vault mw_mode is set to ema. '
         'Default 60 means outcomes older than 60 days contribute half their weight.',
     )
@@ -942,9 +942,9 @@ class RetrievalConfig(BaseModel):
     )
     exploration_epsilon: float = Field(
         default=0.05,
-        description='Probability of injecting exploration units (low-MW memories) into '
+        description='Probability of injecting exploration units (low-Memory Worth memories) into '
         'retrieval results. 0 = disabled. 0.05 = ~1 in 20 calls. '
-        'Prevents rich-get-richer dynamics per Memory Worth §5.3.',
+        'Prevents rich-get-richer dynamics.',
     )
     exploration_max_injections: int = Field(
         default=2,
@@ -974,7 +974,7 @@ class RetrievalConfig(BaseModel):
             'Pre-reranker filter — Forgetting-Survival-Frequency-Magnitude (FSFM) branch. '
             'Default flipped to True once the importance / stability / '
             'last_outcome_at columns shipped on memory_units. Set to False to keep the '
-            'pre-filter on MW + Confidence branches only — the column migration stays '
+            'pre-filter on Memory Worth + Confidence branches only — the column migration stays '
             'independently revertible from this flag flip.'
         ),
     )
@@ -989,19 +989,31 @@ class ContradictionConfig(BaseModel):
     )
     alpha: float = Field(
         default=0.1,
+        gt=0.0,
+        le=1.0,
         description='Hindsight step size for confidence adjustment.',
     )
     similarity_threshold: float = Field(
         default=0.5,
+        ge=0.0,
+        le=1.0,
         description='Min cosine similarity for candidate retrieval.',
     )
     max_candidates_per_unit: int = Field(
         default=15,
+        ge=1,
         description='Max candidates per flagged unit.',
     )
     superseded_threshold: float = Field(
         default=0.3,
-        description='Confidence below this = superseded.',
+        gt=0.0,
+        lt=1.0,
+        description=(
+            'Confidence below this = superseded. Bounded strictly inside (0, 1) so '
+            'the contradict penalty (1 - threshold + alpha) can both subtract a '
+            'meaningful amount and leave room for it to drop strictly below the '
+            'threshold without trivially clamping to 0.'
+        ),
     )
     model: ModelConfig | None = Field(
         default=None,
@@ -1039,7 +1051,7 @@ class ConsolidationConfig(BaseModel):
 
 
 class ConsolidateRateLimitConfig(BaseModel):
-    """Rate-limit config for memex_memory_consolidate (RFC-008 line 125).
+    """Rate-limit config for memex_memory_consolidate.
 
     Per-vault token bucket (default 1 call per vault per hour). LLM-intensive
     workload + mass-mutation guard — reuses the TokenBucketRateLimiter
@@ -1662,7 +1674,7 @@ class MemoryConfig(BaseModel):
 
     consolidate_rate_limit: ConsolidateRateLimitConfig = Field(
         default_factory=ConsolidateRateLimitConfig,
-        description='per-vault rate limit for memex_memory_consolidate (RFC-008 line 125).',
+        description='per-vault rate limit for memex_memory_consolidate.',
     )
 
     circuit_breaker: CircuitBreakerConfig = Field(

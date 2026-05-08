@@ -56,13 +56,13 @@ def test_seed_chain_is_linear_and_correct() -> None:
     sd = ScriptDirectory.from_config(cfg)
 
     heads = sd.get_heads()
-    assert heads == ['036_fsfm_cooldown_index'], (
-        f'Expected single head 036_fsfm_cooldown_index, got {heads}'
-    )
+    expected_head = '037_backfill_findings'
+    assert heads == [expected_head], f'Expected single head {expected_head}, got {heads}'
 
     walk = list(sd.walk_revisions())
     top10 = [(r.revision, r.down_revision) for r in walk[:10]]
     expected_top10 = [
+        ('037_backfill_findings', '036_fsfm_cooldown_index'),
         ('036_fsfm_cooldown_index', '035_drop_fsrs_revisit_columns'),
         ('035_drop_fsrs_revisit_columns', '034_add_mw_mode'),
         ('034_add_mw_mode', '033_confidence_evidence_count'),
@@ -72,7 +72,6 @@ def test_seed_chain_is_linear_and_correct() -> None:
         ('030_revisit_last_reviewed_at', '029_lint_llm_quota'),
         ('029_lint_llm_quota', '028_procedure_outcomes'),
         ('028_procedure_outcomes', '027_consolidation_ticks'),
-        ('027_consolidation_ticks', '026_revisit_columns'),
     ]
     assert top10 == expected_top10, f'Tier A chain mismatch: got {top10}'
 

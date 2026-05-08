@@ -148,7 +148,7 @@ def _build_pre_filter_clause(
     branches: list[str] = []
     binds: dict[str, float] = {}
 
-    # MW branch (always on — columns exist since the outcomes feature).
+    # Memory Worth branch (always on — columns exist since the outcomes feature).
     # Beta-Bernoulli α=β=1 closed form: mw_score = (succ + 1) / (succ + fail + 2)
     branches.append(
         '((memory_units.success_co_count + memory_units.failure_co_count) >= 5 '
@@ -187,7 +187,7 @@ def _build_pre_filter_clause(
         return None
 
     # OR'd, not AND'd — either signal is sufficient grounds to skip the
-    # cross-encoder. Cold-start safeguards (MW >= 5 outcomes, FSFM exp(elapsed))
+    # cross-encoder. Cold-start safeguards (Memory Worth >= 5 outcomes, FSFM exp(elapsed))
     # are inside the individual branches.
     pre_filter_clause = ' OR '.join(branches)
     clause = text(f'NOT ({pre_filter_clause})')
@@ -708,16 +708,22 @@ class RetrievalEngine:
                 final_results.insert(insert_at, vunit)
         t_mmr = _t() - t0
 
-        # 9b. Exploration floor: ε-greedy injection of low-MW units.
+        # 9b. Exploration floor: ε-greedy injection of low-Memory Worth units.
         #
         # Exploration must run on a separate retrieval path that bypasses
-        # the pre-filter; otherwise low-MW units (the very ones exploration
-        # is meant to re-validate) can never re-surface and MW becomes
+        # the pre-filter; otherwise low-Memory Worth units (the very ones exploration
+        # is meant to re-validate) can never re-surface and Memory Worth becomes
         # monotonic. The bypass query only fires when the ε-greedy roll
         # succeeds *and* the pre-filter is active — paying the extra
         # round-trip on every retrieve call would push the N+1 budget over
         # its threshold for the ~95% of calls (with default ε=0.05) that
         # don't end up injecting.
+        # Track exploration injections so the final ``[: request.limit]``
+        # slice in token-budget=None mode can be widened to keep them in
+        # the response. Without this counter, MMR fills the limit with
+        # main-path winners and the exploration units get truncated off
+        # the tail despite being explicitly appended.
+        exploration_injected = 0
         if final_results and self.retrieval_config.exploration_epsilon > 0:
             from memex_core.memory.retrieval.exploration import inject_exploration_units
             from memex_core.metrics import EXPLORATION_INJECTED_TOTAL
@@ -757,9 +763,9 @@ class RetrievalEngine:
                         max_injections=self.retrieval_config.exploration_max_injections,
                         low_mw_threshold=self.retrieval_config.exploration_low_mw_threshold,
                     )
-                    injected = len(final_results) - pre_inject_count
-                    if injected > 0:
-                        EXPLORATION_INJECTED_TOTAL.inc(injected)
+                    exploration_injected = len(final_results) - pre_inject_count
+                    if exploration_injected > 0:
+                        EXPLORATION_INJECTED_TOTAL.inc(exploration_injected)
 
         # 10. Collect resonance update info (deferred to background)
         t0 = _t()
@@ -824,7 +830,11 @@ class RetrievalEngine:
         if token_budget is not None:
             return (final_results, resonance_context)
 
-        return (final_results[: request.limit], resonance_context)
+        # Widen the slice by ``exploration_injected`` so the appended
+        # exploration units survive the final cap. They sit at the tail
+        # (after MMR-ordered main results), and the slice would otherwise
+        # cut exactly at ``request.limit``, leaving them on the floor.
+        return (final_results[: request.limit + exploration_injected], resonance_context)
 
     def _fuse_multi_query_results(
         self, ranked_batches: list[tuple[Sequence[Any], float]], limit: int
@@ -1245,7 +1255,7 @@ class RetrievalEngine:
         """Fetches actual objects from DB and converts them to MemoryUnits.
 
         When ``apply_pre_filter`` is True, the unit hydration query gains a
-        ``WHERE NOT (...)`` predicate that drops obviously-failed (low-MW)
+        ``WHERE NOT (...)`` predicate that drops obviously-failed (low-Memory Worth)
         and (when ``fsfm_branch_enabled`` is True) decayed candidates before
         they reach the cross-encoder.
 
@@ -1278,7 +1288,7 @@ class RetrievalEngine:
                 .options(selectinload(MemoryUnit.unit_entities))
             )
 
-            # Python-level conditional pre-filter. The MW branch is always
+            # Python-level conditional pre-filter. The Memory Worth branch is always
             # included; the FSFM branch is included only when the config
             # flag is True. SQL-side runtime flags would still reference
             # the missing columns at parse time. The builder owns the
@@ -1490,7 +1500,7 @@ class RetrievalEngine:
             # Normalize cross-encoder scores to [0, 1] via sigmoid
             normalized_scores = [1.0 / (1.0 + math.exp(-s)) for s in scores]
 
-            # Apply multiplicative recency, temporal proximity, MW, confidence,
+            # Apply multiplicative recency, temporal proximity, Memory Worth, confidence,
             # and decay boosts.
             from memex_core.memory.retrieval.decay import compute_decay_boost
             from memex_core.services.outcomes import compute_mw_boost

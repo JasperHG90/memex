@@ -456,7 +456,7 @@ class RawFact(BaseFact):
         "'none' = public-safe (default). "
         "'sensitive' = flagged for review. "
         "'private' = excluded from default retrieval (PII, medical). "
-        "'safety' = recorded but passed through (deferred blocking).",
+        "'safety' = blocked at ingestion (refused before persistence).",
     )
     occurred_start: str | None = Field(
         default=None,

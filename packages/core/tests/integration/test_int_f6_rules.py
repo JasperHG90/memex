@@ -162,10 +162,17 @@ async def _link_unit_entity(
 
 
 async def _make_audit_review(session: AsyncSession, *, unit_id: UUID, days_ago: int) -> None:
-    """Insert an audit_logs row marking unit as reviewed N days ago."""
+    """Insert an audit_logs row marking unit as reviewed N days ago.
+
+    Uses ``lint_finding_resolved`` — one of the three actions the
+    ``sensitive_unreviewed_unit`` rule treats as a governance review
+    (alongside ``memory_deprioritize`` / ``memory_restore``). The
+    pre-merge ``memory_review`` action was tied to the FSRS-5 revisit
+    flow and is gone now that FSRS-5 has been ripped out.
+    """
     when = datetime.now(timezone.utc) - timedelta(days=days_ago)
     al = AuditLog(
-        action='memory_review',
+        action='lint_finding_resolved',
         resource_type='memory_unit',
         resource_id=str(unit_id),
         timestamp=when,

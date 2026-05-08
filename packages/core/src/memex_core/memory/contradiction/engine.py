@@ -2,11 +2,12 @@
 
 import asyncio
 import logging
+import re
 from typing import Any
 from uuid import UUID
 
 import dspy
-from sqlalchemy import func as sa_func, update
+from sqlalchemy import func as sa_func, text as sa_text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import select, col
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -22,9 +23,66 @@ from memex_core.memory.contradiction.signatures import (
     TriageNewUnits,
     TriageUnit,
 )
-from memex_core.memory.sql_models import MemoryLink, MemoryUnit, Note
+from memex_core.memory.sql_models import (
+    LintSource,
+    LintStatus,
+    LintType,
+    MaintenanceProposal,
+    MemoryLink,
+    MemoryUnit,
+    Note,
+)
 
 logger = logging.getLogger('memex.core.memory.contradiction')
+
+
+# Strips ASCII C0 (0x00-0x1F) except tab (0x09) and newline (0x0A);
+# DEL (0x7F); C1 (0x80-0x9F). CR (0x0D) IS stripped — it's terminal-
+# hostile (line-overwrite). Migration 035 mirrors this exact pattern;
+# keep the two in sync.
+_CONTROL_CHAR_RE = re.compile(r'[\x00-\x08\x0B-\x1F\x7F-\x9F]')
+
+# ASCII whitespace set — matches Postgres POSIX ``\s`` and the migration's
+# ``regexp_replace('^\s+|\s+$', '', 'g')`` so runtime and backfill agree
+# on edge-trim semantics. Python's bare ``str.strip()`` would strip a
+# wider Unicode-whitespace class (NBSP, ideographic space, etc.); we
+# deliberately restrict to ASCII to keep the two byte-identical.
+_ASCII_WHITESPACE = ' \t\n\r\f\v'
+
+
+def _sanitise_evidence_text(value: Any, *, max_len: int) -> str | None:
+    """Defensive sanitisation for free-text payloads stored in lint
+    ``evidence`` JSONB. Strips ASCII C0 controls (``0x00–0x1F`` except
+    tab/newline — CR IS stripped), DEL (``0x7F``) and the C1 control
+    range (``0x80–0x9F``); trims ASCII edge whitespace; truncates to
+    ``max_len`` characters with a trailing ``…``; returns ``None`` for
+    empty/None input.
+
+    Migration 035 mirrors this contract in SQL so backfilled rows are
+    byte-identical to runtime emissions for any input whose edges use
+    ASCII whitespace only.
+
+    No pre-truncation guard: the compiled regex runs the per-char work
+    in C, processes a 10 MB pathological NUL payload in well under a
+    second, and is on an async background path where that latency is
+    invisible. A pre-truncate-then-clean strategy would silently drop
+    real content past the cut for any input that mixes real text with
+    a long stretch of control chars.
+
+    Downstream renderers must still escape per their target format
+    (HTML, Markdown, terminal); this only protects the storage layer
+    from payload bombs and terminal-hostile content.
+    """
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        value = str(value)
+    cleaned = _CONTROL_CHAR_RE.sub('', value).strip(_ASCII_WHITESPACE)
+    if not cleaned:
+        return None
+    if len(cleaned) > max_len:
+        cleaned = cleaned[: max_len - 1] + '…'
+    return cleaned
 
 
 class ContradictionEngine:
@@ -87,11 +145,9 @@ class ContradictionEngine:
             )
 
             all_links: list[MemoryLink] = []
-            # Accumulate signed alpha-step deltas per target so multiple
-            # weakens against the same unit in one batch all land, AND apply
-            # them via SQL-level arithmetic (``confidence = clamp(confidence +
-            # :delta, 0, 1)``) so concurrent batches that touch overlapping
-            # units cannot drift the column out of sync with the SQL-atomic
+            # Accumulate signed alpha-step deltas per target; apply via
+            # SQL-level ``clamp(confidence + :delta, 0, 1)`` so concurrent
+            # batches on overlapping units stay in sync with the atomic
             # ``confidence_evidence_count`` increment.
             confidence_deltas: dict[UUID, float] = {}
             evidence_bumps: dict[UUID, int] = {}
@@ -137,9 +193,10 @@ class ContradictionEngine:
                 await session.exec(upsert_stmt)  # type: ignore[arg-type]
                 all_links = list(deduped.values())
 
-            # Accumulate confidence deltas then clamp once to prevent races
-            # on overlapping units. LEAST/GREATEST mirrors the application-level
-            # max(0.0, min(1.0, ...)) clamp.
+                await self._emit_contradiction_findings(session, all_links, vault_id)
+
+            # Clamp per-unit deltas via SQL LEAST/GREATEST to prevent races on
+            # overlapping units (mirrors application-level max(0, min(1, ...))).
             for unit_id, delta in confidence_deltas.items():
                 values: dict[str, Any] = {
                     'confidence': sa_func.greatest(
@@ -149,9 +206,8 @@ class ContradictionEngine:
                 }
                 bump = evidence_bumps.get(unit_id, 0)
                 if bump:
-                    # GREATEST(0, ...) belt-and-suspenders mirrors confidence clamp.
-                    # Bumps are always +1 today; GREATEST is a no-op but guards
-                    # against future negative deltas.
+                    # GREATEST(0, ...) guards against future negative deltas
+                    # (always +1 today, so currently a no-op).
                     values['confidence_evidence_count'] = sa_func.greatest(
                         0,
                         MemoryUnit.confidence_evidence_count + bump,
@@ -166,6 +222,89 @@ class ContradictionEngine:
                 len(confidence_deltas),
                 sum(evidence_bumps.values()),
             )
+
+    async def _emit_contradiction_findings(
+        self,
+        session: AsyncSession,
+        links: list[MemoryLink],
+        vault_id: UUID,
+    ) -> None:
+        """Surface ``contradicts`` links as ``maintenance_proposals`` rows so
+        ``memex lint findings`` shows them immediately, without waiting on the
+        periodic LLM-lint tick.
+
+        Idempotency: the partial unique index on
+        ``(rule_name, target_type, target_id, vault_id) WHERE status='pending'``
+        prevents a second pending row for the same superseded unit while a
+        prior finding is still pending. Once that finding is resolved or
+        dismissed it leaves the index, so a subsequent contradiction against
+        the same unit will create a new pending row — by design: a flagged
+        unit that gets contradicted again after triage deserves a new alert.
+
+        ``evidence`` carries free-text ``reasoning`` and ``superseding_note_title``
+        sourced from upstream (LLM output and note titles). The values are
+        sanitised at write time (control-chars stripped, length-capped) so
+        the JSONB column cannot store arbitrarily large or terminal-hostile
+        payloads. Downstream renderers MUST still escape per their target
+        format (HTML, Markdown, etc.); do not assume the values are safe
+        for direct rendering.
+
+        Within a single call, multiple contradicts links may share the same
+        superseded ``target_id`` (e.g. two new units contradicting the same
+        old fact in one ingestion batch). Postgres rejects duplicate target
+        rows in a single ``ON CONFLICT DO NOTHING`` statement with a
+        ``cardinality_violation`` because the index arbiter cannot resolve
+        them in one pass. We dedupe by ``target_id`` first; ``links`` is
+        sorted by ``(target_id, from_unit_id)`` so the kept finding is
+        deterministic across retries even when upstream LLM ordering shifts.
+        """
+        # Stable sort so the kept link per target is deterministic across
+        # retries — without this, the LLM's flagged_ids ordering decides
+        # which authoritative_unit_id ends up in evidence.
+        sorted_links = sorted(
+            (lk for lk in links if lk.link_type == 'contradicts'),
+            key=lambda lk: (str(lk.to_unit_id), str(lk.from_unit_id)),
+        )
+        seen_targets: set[str] = set()
+        rows: list[dict[str, Any]] = []
+        for link in sorted_links:
+            target_id = str(link.to_unit_id)
+            if target_id in seen_targets:
+                continue
+            seen_targets.add(target_id)
+            metadata = link.link_metadata or {}
+            evidence = {
+                'authoritative_unit_id': metadata.get('authoritative_unit_id'),
+                'superseded_unit_id': target_id,
+                'reasoning': _sanitise_evidence_text(metadata.get('reasoning'), max_len=1000),
+                'superseding_note_title': _sanitise_evidence_text(
+                    metadata.get('superseding_note_title'), max_len=200
+                ),
+            }
+            rows.append(
+                {
+                    'vault_id': vault_id,
+                    'lint_type': LintType.QUALITY.value,
+                    'target_type': 'memory_unit',
+                    'target_id': target_id,
+                    'rule_name': 'semantic_contradiction',
+                    'evidence': evidence,
+                    'suggested_action': (
+                        'Review the contradiction and decide whether the '
+                        'superseded unit should be revised or removed.'
+                    ),
+                    'status': LintStatus.PENDING.value,
+                    'source': LintSource.LLM.value,
+                }
+            )
+        if not rows:
+            return
+        insert_stmt = pg_insert(MaintenanceProposal).values(rows)
+        insert_stmt = insert_stmt.on_conflict_do_nothing(
+            index_elements=['rule_name', 'target_type', 'target_id', 'vault_id'],
+            index_where=sa_text("status = 'pending'"),
+        )
+        await session.exec(insert_stmt)  # type: ignore[arg-type]
 
     async def _load_units(self, session: AsyncSession, unit_ids: list[UUID]) -> list[MemoryUnit]:
         """Load memory units by IDs."""
@@ -219,22 +358,14 @@ class ContradictionEngine:
         relationships = await self._classify(unit, candidates)
 
         links: list[MemoryLink] = []
-        # Per-target confidence deltas (signed alpha steps) and evidence
-        # bumps (always +1).
-        #
-        # ``evidence_bumps[u]`` counts negative-evidence events only —
-        # one per ``weaken`` (delta = -alpha) and one per ``contradict``
-        # (delta = -2*alpha) targeting ``u``. Reinforces are intentionally
-        # excluded from the count (backfill/forward symmetry —
-        # see migration 033 backfill SQL which also filters
-        # ``link_type IN ('contradicts', 'weakens')``). Both paths
-        # count links, not events — a batch with 2 weakens on the same
-        # target produces 2 links (deduped by from/to/link_type at
-        # line 115–117) and evidence_bumps[u]=2.
-        # see BACKLOG "Future symmetric extension" bullet). So a unit
-        # receiving N weakens + M contradicts in one batch lands with
-        # ``bump = N + M`` and ``delta = -(N + 2M) * alpha`` — these
-        # magnitudes are deliberately decoupled.
+        # Per-target confidence deltas and evidence bumps (+1 per
+        # weaken/contradict link). ``evidence_bumps`` counts only
+        # negative-evidence links; reinforces are excluded for
+        # backfill/forward symmetry. Weaken applies a -alpha step;
+        # contradict applies a one-shot supersession penalty
+        # (1 - superseded_threshold + alpha) so the unit lands strictly
+        # below the retrieval-side superseded threshold without
+        # depending on repeated hits.
         confidence_deltas: dict[UUID, float] = {}
         evidence_bumps: dict[UUID, int] = {}
 
@@ -254,9 +385,8 @@ class ContradictionEngine:
             note_title = await self._get_note_title(session, authoritative.note_id)
 
             if relation == 'reinforce':
-                # Symmetric reinforce: both endpoints gain +alpha. Reinforce
-                # does NOT bump evidence_count (design — see BACKLOG
-                # known-v1-limitation: forward/backfill symmetry).
+                # Symmetric reinforce: both endpoints gain +alpha (no evidence
+                # bump — forward/backfill symmetry).
                 for u in [unit, existing_unit]:
                     confidence_deltas[u.id] = confidence_deltas.get(u.id, 0.0) + self.config.alpha
                 link_type = 'reinforces'
@@ -267,8 +397,11 @@ class ContradictionEngine:
                 evidence_bumps[superseded.id] = evidence_bumps.get(superseded.id, 0) + 1
                 link_type = 'weakens'
             elif relation == 'contradict':
+                # Push confidence below superseded_threshold so contradicted
+                # units are immediately recognized as superseded by retrieval.
+                penalty = 1.0 - self.config.superseded_threshold + self.config.alpha
                 confidence_deltas[superseded.id] = (
-                    confidence_deltas.get(superseded.id, 0.0) - 2 * self.config.alpha
+                    confidence_deltas.get(superseded.id, 0.0) - penalty
                 )
                 evidence_bumps[superseded.id] = evidence_bumps.get(superseded.id, 0) + 1
                 link_type = 'contradicts'

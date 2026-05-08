@@ -3,7 +3,7 @@
 import pytest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 from memex_common.config import ContradictionConfig
 from memex_core.memory.contradiction.engine import ContradictionEngine
@@ -124,12 +124,22 @@ class TestTriage:
 class TestConfidenceAdjustment:
     """Test confidence adjustment logic (Hindsight Eq. 26)."""
 
-    def test_contradict_decreases_by_2alpha(self, config):
-        """Contradict should decrease confidence by 2*alpha."""
+    def test_contradict_drops_below_superseded_threshold(self, config):
+        """A single contradict must push confidence strictly below superseded_threshold.
+
+        The retrieval engine treats units with ``confidence < superseded_threshold``
+        as superseded. A weaker penalty (e.g. ``2*alpha``) leaves the unit at 0.8
+        with the default ``superseded_threshold=0.3``, so contradictions never
+        surface as supersession in retrieval. The engine therefore picks the
+        penalty so that ``1.0 - penalty < superseded_threshold``.
+        """
         alpha = config.alpha
+        threshold = config.superseded_threshold
+        penalty = 1.0 - threshold + alpha
         initial = 1.0
-        expected = max(initial - 2 * alpha, 0.0)
-        assert expected == pytest.approx(0.8)
+        final = max(initial - penalty, 0.0)
+        assert final < threshold
+        assert final == pytest.approx(0.2)
 
     def test_weaken_decreases_by_alpha(self, config):
         """Weaken should decrease confidence by alpha."""
@@ -521,6 +531,266 @@ class TestConfidenceDeltaAccumulation:
         assert any(v == pytest.approx(-0.2, abs=1e-9) for v in delta_params), (
             f'expected -0.2 accumulated delta, got float params: {delta_params}'
         )
+
+
+class TestEmitContradictionFindings:
+    """``_emit_contradiction_findings`` writes a maintenance_proposals row for
+    every ``contradicts`` link so ``memex lint findings`` surfaces them.
+    """
+
+    @pytest.mark.asyncio
+    async def test_contradicts_link_emits_one_finding(self, engine):
+        vault_id = uuid4()
+        auth_id, sup_id = uuid4(), uuid4()
+        link = MemoryLink(
+            from_unit_id=auth_id,
+            to_unit_id=sup_id,
+            link_type='contradicts',
+            vault_id=vault_id,
+            weight=1.0,
+            link_metadata={
+                'authoritative_unit_id': str(auth_id),
+                'superseded_unit_id': str(sup_id),
+                'reasoning': 'supersedes prior policy',
+                'superseding_note_title': 'Quick Note',
+            },
+        )
+
+        session = AsyncMock()
+        captured: list = []
+
+        async def _capture_exec(stmt):
+            captured.append(stmt)
+            return MagicMock()
+
+        session.exec = AsyncMock(side_effect=_capture_exec)
+
+        await engine._emit_contradiction_findings(session, [link], vault_id)
+
+        assert len(captured) == 1
+        compiled = str(captured[0])
+        assert 'maintenance_proposals' in compiled.lower()
+        assert 'on conflict' in compiled.lower()
+
+    @pytest.mark.asyncio
+    async def test_non_contradict_links_skipped(self, engine):
+        vault_id = uuid4()
+        link = MemoryLink(
+            from_unit_id=uuid4(),
+            to_unit_id=uuid4(),
+            link_type='reinforces',
+            vault_id=vault_id,
+            weight=1.0,
+            link_metadata={},
+        )
+
+        session = AsyncMock()
+        session.exec = AsyncMock()
+
+        await engine._emit_contradiction_findings(session, [link], vault_id)
+
+        session.exec.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_dupe_targets_in_one_batch_collapsed_to_one_row(self, engine):
+        """Two contradicts links targeting the same superseded unit must
+        produce ONE row in the INSERT statement. Without dedup Postgres
+        rejects the second row with cardinality_violation since the partial
+        unique index arbiter cannot resolve duplicates within a single
+        statement.
+        """
+        vault_id = uuid4()
+        sup_id = uuid4()
+        auth_a, auth_b = uuid4(), uuid4()
+        links = [
+            MemoryLink(
+                from_unit_id=auth_a,
+                to_unit_id=sup_id,
+                link_type='contradicts',
+                vault_id=vault_id,
+                weight=1.0,
+                link_metadata={
+                    'authoritative_unit_id': str(auth_a),
+                    'reasoning': 'first',
+                },
+            ),
+            MemoryLink(
+                from_unit_id=auth_b,
+                to_unit_id=sup_id,
+                link_type='contradicts',
+                vault_id=vault_id,
+                weight=1.0,
+                link_metadata={
+                    'authoritative_unit_id': str(auth_b),
+                    'reasoning': 'second',
+                },
+            ),
+        ]
+
+        captured: list = []
+
+        async def _capture_exec(stmt):
+            captured.append(stmt)
+            return MagicMock()
+
+        session = AsyncMock()
+        session.exec = AsyncMock(side_effect=_capture_exec)
+
+        await engine._emit_contradiction_findings(session, links, vault_id)
+
+        assert len(captured) == 1
+        # Compiled SQL parameters reflect ONE row, not two.
+        params = captured[0].compile().params
+        target_id_keys = [k for k in params if 'target_id' in k]
+        assert len(target_id_keys) == 1, (
+            f'expected 1 target_id parameter (deduped), got {target_id_keys}'
+        )
+
+    @pytest.mark.asyncio
+    async def test_dedup_pick_is_deterministic_under_input_reorder(self, engine):
+        """Dedup orders links by (target_id, from_unit_id) before keeping the
+        first per target. This makes the kept finding deterministic across
+        retries even when upstream LLM ordering shifts.
+        """
+        vault_id = uuid4()
+        sup_id = uuid4()
+        # Build IDs with a known string ordering so we can predict the pick.
+        auth_lo = UUID('00000000-0000-0000-0000-000000000001')
+        auth_hi = UUID('ffffffff-ffff-ffff-ffff-ffffffffffff')
+        link_lo = MemoryLink(
+            from_unit_id=auth_lo,
+            to_unit_id=sup_id,
+            link_type='contradicts',
+            vault_id=vault_id,
+            weight=1.0,
+            link_metadata={
+                'authoritative_unit_id': str(auth_lo),
+                'reasoning': 'lo wins by sort order',
+            },
+        )
+        link_hi = MemoryLink(
+            from_unit_id=auth_hi,
+            to_unit_id=sup_id,
+            link_type='contradicts',
+            vault_id=vault_id,
+            weight=1.0,
+            link_metadata={
+                'authoritative_unit_id': str(auth_hi),
+                'reasoning': 'hi loses',
+            },
+        )
+
+        async def _capture_exec(stmt):
+            captured.append(stmt)
+            return MagicMock()
+
+        for ordering in ([link_lo, link_hi], [link_hi, link_lo]):
+            captured: list = []
+            session = AsyncMock()
+            session.exec = AsyncMock(side_effect=_capture_exec)
+            await engine._emit_contradiction_findings(session, ordering, vault_id)
+            params = captured[0].compile().params
+            evidence_values = [v for k, v in params.items() if 'evidence' in k]
+            assert len(evidence_values) == 1
+            kept = evidence_values[0]
+            assert kept['authoritative_unit_id'] == str(auth_lo), (
+                f'expected the lo authoritative_unit_id (sort-stable pick) regardless of '
+                f'input order, got {kept}'
+            )
+
+    @pytest.mark.asyncio
+    async def test_evidence_text_is_sanitised(self, engine):
+        """``reasoning`` and ``superseding_note_title`` come from upstream
+        free text; the engine strips control characters and caps length so
+        the JSONB column cannot store payload bombs.
+        """
+        vault_id = uuid4()
+        sup_id = uuid4()
+        long_text = 'A' * 5000  # exceeds reasoning cap (1000)
+        bad_chars = 'a\x00b\x07c'  # NUL + bell
+        link = MemoryLink(
+            from_unit_id=uuid4(),
+            to_unit_id=sup_id,
+            link_type='contradicts',
+            vault_id=vault_id,
+            weight=1.0,
+            link_metadata={
+                'authoritative_unit_id': str(uuid4()),
+                'reasoning': long_text + bad_chars,
+                'superseding_note_title': 'T' * 500 + bad_chars,
+            },
+        )
+        captured: list = []
+
+        async def _capture_exec(stmt):
+            captured.append(stmt)
+            return MagicMock()
+
+        session = AsyncMock()
+        session.exec = AsyncMock(side_effect=_capture_exec)
+        await engine._emit_contradiction_findings(session, [link], vault_id)
+        params = captured[0].compile().params
+        evidence = next(v for k, v in params.items() if 'evidence' in k)
+        assert len(evidence['reasoning']) <= 1000
+        assert len(evidence['superseding_note_title']) <= 200
+        assert '\x00' not in evidence['reasoning']
+        assert '\x07' not in evidence['reasoning']
+        assert '\x00' not in evidence['superseding_note_title']
+        assert '\x07' not in evidence['superseding_note_title']
+
+
+class TestProcessFlaggedUnitContradict:
+    """Path-level test: a single contradict relation must emit a delta that
+    drops confidence strictly below ``superseded_threshold`` so retrieval
+    treats the unit as superseded immediately (no need for repeated hits).
+    """
+
+    @pytest.mark.asyncio
+    async def test_single_contradict_emits_supersession_delta(self, engine):
+        vault_id = uuid4()
+        new_unit = _make_unit(
+            text='Key rotation has been discontinued',
+            event_date=datetime(2026, 5, 5, tzinfo=timezone.utc),
+        )
+        existing_unit = _make_unit(
+            text='Keys are rotated every 90 days',
+            event_date=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        )
+
+        rel = ContradictionRelationship(
+            existing_id=str(existing_unit.id),
+            relation='contradict',
+            authoritative='new',
+            reasoning='supersedes prior policy',
+        )
+
+        session = AsyncMock()
+
+        with (
+            patch(
+                'memex_core.memory.contradiction.engine.get_candidates',
+                AsyncMock(return_value=[existing_unit]),
+            ),
+            patch.object(engine, '_classify', AsyncMock(return_value=[rel])),
+            patch.object(engine, '_get_note_title', AsyncMock(return_value='Quick Note')),
+        ):
+            links, deltas, bumps = await engine._process_flagged_unit(session, new_unit, vault_id)
+
+        assert len(links) == 1
+        assert links[0].link_type == 'contradicts'
+
+        delta = deltas[existing_unit.id]
+        # 1.0 - threshold + alpha = 1.0 - 0.3 + 0.1 = 0.8
+        threshold = engine.config.superseded_threshold
+        alpha = engine.config.alpha
+        assert delta == pytest.approx(-(1.0 - threshold + alpha))
+
+        final_confidence = max(0.0, 1.0 + delta)
+        assert final_confidence < threshold, (
+            f'expected confidence below {threshold}, got {final_confidence}'
+        )
+
+        assert bumps[existing_unit.id] == 1
 
 
 class TestTemporalDefault:

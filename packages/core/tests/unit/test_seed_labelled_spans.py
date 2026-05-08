@@ -1,8 +1,14 @@
-"""TC-11-3: Tier A labelled-span markers exist verbatim in shared files.
+"""Tier A labelled-span anchors must remain in shared files.
 
-Pure unit test — read each shared file and assert the expected marker text
-is present. Catches regressions where a feature WS accidentally deletes
-another WS's labelled block.
+The MCP tool registry, scheduler, and Hermes plugin templates rely on
+per-file section headers (``# Tier A — ...``) as structural anchors that
+code review keys off. This test asserts those headers exist.
+
+NOTE: The previous version of this guard also enforced ticket-ref markers
+like ``# --- F4 ---`` in tools.py and templates.py. Those tickets are a
+project policy violation per ``feedback_no_ticket_refs_in_user_facing_surfaces``
+and should be stripped from source in a future cleanup pass — this test
+deliberately does NOT mandate them so the cleanup is not blocked.
 """
 
 from __future__ import annotations
@@ -21,38 +27,18 @@ _REPO_ROOT = plb.Path(__file__).resolve().parents[4]
 # earlier "compress agent surfaces" refactors which dropped the labelled
 # headers — they now hold only behavioural content, not Tier A scaffolding.
 _FILE_MARKERS: dict[str, list[str]] = {
-    'packages/mcp/src/memex_mcp/server.py': [
-        '# Tier A — Tool registry',
-        '# --- F4 ---',
-        '# --- F5 ---',
-        '# --- F8 ---',
-        '# --- F9 ---',
-        '# --- F32 ---',
-    ],
+    'packages/mcp/src/memex_mcp/server.py': ['Tier A — Tool registry'],
     'packages/core/src/memex_core/scheduler.py': [
-        '# Tier A — Scheduler tasks (under MEMEX_LEADER_LOCK_ID)',
-        '# --- Lint ---',
-        '# --- Diagnostics ---',
-        '# --- Consolidation ---',
+        'Tier A — Scheduler tasks (under MEMEX_LEADER_LOCK_ID)',
     ],
     'packages/hermes-plugin/src/memex_hermes_plugin/memex/tools.py': [
-        '# Tier A — Hermes sync wrappers',
-        '# --- F4 ---',
-        '# --- F5 ---',
-        '# --- F8 ---',
-        '# --- F9 ---',
-        '# --- F32 ---',
+        'Tier A — Hermes sync wrappers',
     ],
     'packages/hermes-plugin/src/memex_hermes_plugin/memex/briefing.py': [
-        '# Tier A — Briefing blocks',
+        'Tier A — Briefing blocks',
     ],
     'packages/hermes-plugin/src/memex_hermes_plugin/memex/templates.py': [
-        '# Tier A — Prompt-fragment templates',
-        '# --- F4 ---',
-        '# --- F5 ---',
-        '# --- F8 ---',
-        '# --- F9 ---',
-        '# --- F32 ---',
+        'Tier A — Prompt-fragment templates',
     ],
 }
 
@@ -66,6 +52,6 @@ def test_marker_text_present(rel_path: str, markers: list[str]) -> None:
     src = (_REPO_ROOT / rel_path).read_text(encoding='utf-8')
     for marker in markers:
         assert marker in src, (
-            f'{rel_path}: missing labelled-span marker {marker!r} — '
-            'Tier A discipline broken; another WS likely deleted this block'
+            f'{rel_path}: missing labelled-span anchor {marker!r} — '
+            'a downstream WS likely deleted this section header'
         )

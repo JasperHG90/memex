@@ -178,6 +178,11 @@ class RemoteMemexAPI:
         result = await self._post(f'vaults/{vault_id}/truncate', data={})
         return result.get('deleted', {})
 
+    async def set_mw_mode(self, vault_id: UUID, mw_mode: str) -> VaultDTO:
+        """Set the Memory Worth counter mode for a vault (stationary or ema)."""
+        result = await self._post(f'vaults/{vault_id}/mw-mode', data={'mode': mw_mode})
+        return VaultDTO(**result)
+
     async def set_writer_vault(self, identifier: str) -> dict[str, Any]:
         """Set the active (writer) vault for the current server session."""
         response = await self.client.post(f'vaults/{identifier}/set-writer')
@@ -542,7 +547,7 @@ class RemoteMemexAPI:
                 return False
             raise
 
-    # --- Diagnostics (F32) ---
+    # --- Diagnostics ---
     async def get_diagnostics_summary(self, vault_id: UUID | str) -> dict[str, Any]:
         """Fetch the diagnostics summary for a vault."""
         return await self._get(f'diagnostics/summary/{vault_id}')
@@ -579,7 +584,7 @@ class RemoteMemexAPI:
             response.raise_for_status()
         return response.status_code, response.json()
 
-    # --- Consolidation (F38) ---
+    # --- Consolidation ---
     async def consolidation_tick(
         self,
         vault_id: UUID | str | None = None,
@@ -600,7 +605,7 @@ class RemoteMemexAPI:
         params = {'vault_id': str(vault_id)} if vault_id is not None else None
         return await self._get('consolidation/status', params=params)
 
-    # --- Outcomes (F29) ---
+    # --- Outcomes ---
     async def record_outcome(
         self,
         unit_ids: list[str] | None,
@@ -829,7 +834,7 @@ class RemoteMemexAPI:
     ) -> MemoryUnitDTO:
         """Deprioritize a memory unit (non-destructive).
 
-        ``vault_id`` is REQUIRED by the server (Wave 0 vault-scoping); kept
+        ``vault_id`` is REQUIRED by the server (vault-scoping invariant); kept
         optional here only so legacy callers get a clear server-side 422.
         """
         body: dict[str, Any] = {'reason': reason}
@@ -846,7 +851,7 @@ class RemoteMemexAPI:
     ) -> MemoryUnitDTO:
         """Restore a previously-deprioritized memory unit.
 
-        ``vault_id`` is REQUIRED by the server (Wave 0 vault-scoping); kept
+        ``vault_id`` is REQUIRED by the server (vault-scoping invariant); kept
         optional here only so legacy callers get a clear server-side 422.
         """
         body: dict[str, Any] = {}
@@ -878,9 +883,9 @@ class RemoteMemexAPI:
         *,
         dry_run: bool = False,
     ) -> dict[str, Any]:
-        """Vault-wide low-MW unit consolidation.
+        """Vault-wide low-Memory Worth unit consolidation.
 
-        On HTTP 429 (per-vault rate limit, RFC-008 line 125), raises a
+        On HTTP 429 (per-vault rate limit), raises a
         structured ``RateLimitExceeded`` carrying ``retry_after_seconds``
         so callers can surface the back-off time without re-parsing the
         body. Mirrors :meth:`summarize_node`.
@@ -1198,7 +1203,7 @@ class RemoteMemexAPI:
         context: str | None = None,
         limit: int = 5,
     ) -> list[ProcedureOutcomeDTO]:
-        """Fetch top procedure outcomes for ``vault_id`` (RFC-007 §155-185).
+        """Fetch top procedure outcomes for ``vault_id``.
 
         Rows ranked by Memory Worth score
         ``(s+1)/(s+f+2)`` descending; tie-broken by ``last_outcome_at``.
@@ -1253,7 +1258,8 @@ class RemoteMemexAPI:
         return [KVEntryDTO(**r) for r in result]
 
     # ------------------------------------------------------------------
-    # F6 — maintenance ledger (lint)
+    # ------------------------------------------------------------------
+    # Maintenance ledger (lint)
     # ------------------------------------------------------------------
 
     async def lint_status(

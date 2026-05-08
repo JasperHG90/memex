@@ -247,7 +247,7 @@ class VaultService(BaseService):
             return await session.get(Vault, vault_id)
 
     async def set_mw_mode(self, vault_id: UUID, mw_mode: str) -> Vault:
-        """Set the MW mode for a vault."""
+        """Set the Memory Worth mode for a vault."""
         if mw_mode not in (MWMode.STATIONARY, MWMode.EMA):
             raise ValueError(f"mw_mode must be 'stationary' or 'ema', got '{mw_mode}'")
 

@@ -23,7 +23,7 @@ class UnitsService(BaseService):
     """Memory unit curation: deprioritize / restore.
 
     Non-destructive counterpart to deletion (`StatsService.delete_memory_unit`).
-    Per Wave 0 §6 #12: deprioritize is the NON-destructive verb; archive
+    Per vault-scoping invariant: deprioritize is the NON-destructive verb; archive
     remains the destructive cleanup. They coexist.
     """
 
@@ -38,7 +38,7 @@ class UnitsService(BaseService):
     ) -> Any:
         """Flip ``MemoryUnit.is_deprioritized`` to True and record an audit event.
 
-        ``vault_id`` scopes the mutation per Wave 0 multi-tenant invariant: if
+        ``vault_id`` scopes the mutation per vault-scoping invariant: if
         supplied and the unit's vault does not match, raises
         ``MemoryUnitNotFoundError`` (the route caller maps this to 404). When
         None, no vault check is applied (legacy CLI path).
@@ -122,7 +122,7 @@ class UnitsService(BaseService):
     ) -> Any:
         """Flip ``MemoryUnit.is_deprioritized`` back to False (restore) and audit.
 
-        ``vault_id`` scopes the mutation per Wave 0 multi-tenant invariant: if
+        ``vault_id`` scopes the mutation per vault-scoping invariant: if
         supplied and the unit's vault does not match, raises
         ``MemoryUnitNotFoundError``. When None, no vault check is applied.
         """
@@ -154,7 +154,7 @@ class UnitsService(BaseService):
             if unit is None:
                 raise MemoryUnitNotFoundError(f'Memory unit {unit_id} not found.')
             if vault_id is not None and unit.vault_id != vault_id:
-                # Wave 0 vault-scoping invariant: cross-vault mutation rejected.
+                # Vault-scoping invariant: cross-vault mutation rejected.
                 # Use 404 (not 403) so we don't leak whether the unit_id
                 # exists in another vault — same disclosure stance as the
                 # not-found path. The route layer's `check_vault_access` is
@@ -212,7 +212,7 @@ class UnitsService(BaseService):
         - ``max_depth`` cap is the second line of defense against literal
           cycles. Nodes hit at the cap are returned with ``truncated=True``.
 
-        **Vault scoping** (Wave 0 multi-tenant invariant): every link the walk
+        **Vault scoping** (vault-scoping invariant): every link the walk
         follows must belong to ``vault_id`` (when supplied) AND match the
         starting unit's ``vault_id``. Cross-vault links are filtered out at
         query time. When ``vault_id`` is None, the unit's own ``vault_id`` is

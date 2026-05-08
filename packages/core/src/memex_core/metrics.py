@@ -124,7 +124,7 @@ NOTE_ADD_OVERLAPS_EXISTING_TOTAL = Counter(
 )
 
 # ---------------------------------------------------------------------------
-# Memory Worth (MW) outcome metrics
+# Memory Worth outcome metrics
 # ---------------------------------------------------------------------------
 
 OUTCOME_RECORDED_TOTAL = Counter(
@@ -135,14 +135,14 @@ OUTCOME_RECORDED_TOTAL = Counter(
 
 MW_SCORE_DISTRIBUTION = Histogram(
     'memex_mw_score',
-    'Distribution of MW scores observed during outcome recording.',
+    'Distribution of Memory Worth scores observed during outcome recording.',
     ['vault_id', 'mode'],
     buckets=(0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
 )
 
 MW_BOOST_OBSERVED = Histogram(
     'memex_mw_boost',
-    'MW boost factors applied during reranking. Neutral is 1.0 (cold-start).',
+    'Memory Worth boost factors applied during reranking. Neutral is 1.0 (cold-start).',
     buckets=(0.70, 0.80, 0.85, 0.90, 0.95, 1.0, 1.05, 1.10, 1.15, 1.20, 1.30),
 )
 
@@ -182,7 +182,7 @@ CROSS_ENCODER_INPUT_COUNT_HISTOGRAM = Histogram(
 
 EXPLORATION_INJECTED_TOTAL = Counter(
     'memex_exploration_injected_total',
-    'Count of low-MW candidates that the separate exploration hydration query '
+    'Count of low-Memory Worth candidates that the separate exploration hydration query '
     'surfaced for exploration injection (i.e., units the pre-filter would '
     'have removed but the exploration path bypasses). Validates that the '
     'bypass actually fires.',

@@ -1,9 +1,7 @@
-"""Write-time intent + risk classifier.
+"""Write-time intent + risk safety filter.
 
-Records but does not block facts flagged as ``risk_class='safety'``.
-Safety-classified facts pass through for observability; blocking will be
-handled by a future pre-flight risk assessment. Tracks the safety rate
-per vault for dashboards.
+Post-extraction filter that drops facts flagged as ``risk_class='safety'``
+before persistence. Tracks the drop rate per vault for dashboards.
 
 Intent/risk coercion lives on ``RawFact`` pydantic validators in
 ``extraction/models.py`` — this module does not coerce.
@@ -11,7 +9,7 @@ Intent/risk coercion lives on ``RawFact`` pydantic validators in
 Pipeline: extract_facts → dedup → embedding → filter_safety_blocked → persist.
 
 Risk classes: none (default), sensitive (flagged for linter), private (excluded
-from default retrieval), safety (recorded but passed through).
+from default retrieval), safety (blocked at ingestion).
 
 Intent classes: permanent, durable, ephemeral (mirrors lifecycle split).
 """
@@ -31,22 +29,25 @@ logger = logging.getLogger('memex.core.memory.extraction.classifier')
 
 
 def filter_safety_blocked(facts: list[ProcessedFact]) -> list[ProcessedFact]:
-    """Record but do not drop facts flagged as ``risk_class='safety'``.
+    """Drop facts the classifier flagged as ``risk_class='safety'``.
 
-    Safety-classified facts are passed through — they are logged and
-    tracked via metrics but not blocked at ingestion. A pre-flight risk
-    assessment (not yet implemented) will handle actual blocking upstream.
+    Returns a new list containing only non-safety facts. Per-vault drop
+    counts are emitted to ``CLASSIFIER_BLOCKED_TOTAL`` so dashboards can
+    alert on a sudden surge of blocked content.
     """
-    safety_by_vault: dict[str, int] = {}
+    kept: list[ProcessedFact] = []
+    blocked_by_vault: dict[str, int] = {}
     for f in facts:
         if f.risk_class == 'safety':
-            safety_by_vault[str(f.vault_id)] = safety_by_vault.get(str(f.vault_id), 0) + 1
-    for vault_id, n in safety_by_vault.items():
+            blocked_by_vault[str(f.vault_id)] = blocked_by_vault.get(str(f.vault_id), 0) + 1
+            continue
+        kept.append(f)
+    for vault_id, n in blocked_by_vault.items():
         CLASSIFIER_BLOCKED_TOTAL.labels(vault_id=vault_id).inc(n)
-    if safety_by_vault:
+    if blocked_by_vault:
         logger.info(
-            'Write-time classifier recorded %d safety-classified facts across %d vaults',
-            sum(safety_by_vault.values()),
-            len(safety_by_vault),
+            'Write-time classifier dropped %d safety-classified facts across %d vaults',
+            sum(blocked_by_vault.values()),
+            len(blocked_by_vault),
         )
-    return facts
+    return kept

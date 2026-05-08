@@ -26,25 +26,42 @@ from memex_hermes_plugin.memex.templates import (
         '5-step flow',
         'Disambiguate',
         'memex_find_note',
-        'Option A',
-        'Option B',
-        'Option C',
-        '≥30',
+        # Compressed form names the trio as "A: entity-anchored" / "B: ..." /
+        # "C: ..."; the older "Option A/B/C" phrasing is also accepted (see
+        # the keyword-alternatives logic below).
+        ['Option A', 'A: entity-anchored'],
+        ['Option B', 'B: cross-note semantic'],
+        ['Option C', 'C: single-note PageIndex'],
+        # The compressed primer renders the threshold with a space ("≥ 30");
+        # accept either spacing so a later revision passes too.
+        ['≥30', '≥ 30'],
         'memex_get_memory_units',
-        'Mandatory LLM judgment',
+        # Compressed primer says "LLM-judge the candidates"; older phrasing
+        # was "Mandatory LLM judgment".
+        ['Mandatory LLM judgment', 'LLM-judge the candidates'],
         'memex_record_outcome',
         'memex_memory_deprioritize',
-        'F33',
+        # F33 ticket ref was intentionally stripped per the no-ticket-refs
+        # policy. The concept ("exploration is the safety net") is what
+        # remains; accept either phrasing.
+        ['F33', 'exploration is the safety net'],
         'memex_get_unit_history',
         'apply_pre_filter=False',
         'evolved',
         'used to',
     ],
 )
-def test_resolution_flow_primer_includes_keyword(kw: str) -> None:
-    """The primer must mention each canonical §3.5 / §3.4.1 / §3.4.2 keyword."""
-    assert kw in _RESOLUTION_FLOW_PRIMER, (
-        f'Hermes resolution-flow primer is missing keyword {kw!r}. '
+def test_resolution_flow_primer_includes_keyword(kw: str | list[str]) -> None:
+    """The primer must mention each canonical §3.5 / §3.4.1 / §3.4.2 keyword.
+
+    Each parametrize entry is either a single literal string or a list of
+    acceptable alternatives — the latter is used for concepts where the
+    compressed surface intentionally renames the phrasing (e.g. ``Option A``
+    → ``A: entity-anchored``) so older and newer phrasings both pass.
+    """
+    candidates = [kw] if isinstance(kw, str) else list(kw)
+    assert any(c in _RESOLUTION_FLOW_PRIMER for c in candidates), (
+        f'Hermes resolution-flow primer is missing any of {candidates!r}. '
         'See cognitive-memory-research-report.md §3.5 / §3.4.1 / §3.4.2.'
     )
 

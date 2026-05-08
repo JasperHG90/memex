@@ -1,7 +1,7 @@
 """Polarity-discriminating NLI wrapper.
 
 Augments the surprise gate with a three-way NLI signal so polarity-inverting
-unit/peer pairs (POC-002 result.md) clear the gate even when MiniLM-L12
+unit/peer pairs clear the gate even when MiniLM-L12
 cosine surprise alone keeps them below the surprise threshold.
 
 The composition is OR'd: a unit/peer pair clears the gate when EITHER

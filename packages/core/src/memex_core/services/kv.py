@@ -348,7 +348,7 @@ class KVService(BaseService):
         Returns up to ``limit`` rows from ``procedure_outcomes`` joined to
         ``kv_entries`` for the given ``vault_id``, ordered by
         ``compute_mw_score(success_co_count, failure_co_count) DESC`` and
-        tie-broken by ``last_outcome_at DESC NULLS LAST``. The MW score is
+        tie-broken by ``last_outcome_at DESC NULLS LAST``. The Memory Worth score is
         computed in-database with the SAME Beta-Bernoulli formula as
         :func:`memex_core.services.outcomes.compute_mw_score`
         (``(s + 1) / (s + f + 2)``).
@@ -367,7 +367,7 @@ class KVService(BaseService):
         else:
             vault_uuid = vault_id
 
-        # MW score formula MUST match compute_mw_score: (s+1)/(s+f+2).
+        # Memory Worth score formula MUST match compute_mw_score: (s+1)/(s+f+2).
         sql = (
             'SELECT '
             '  po.kv_key, '

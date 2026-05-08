@@ -1,10 +1,10 @@
-"""F32 Claude Code skill — verb description grep (Test 9).
+"""Claude Code skill — verb description grep (diagnostics).
 
 The recall and remember SKILL.md files are the agent-facing entry points for
-the Claude Code plugin. F32 is surfaced via /recall (vault diagnostics is a
-read action). This test asserts that at least one SKILL.md mentions the verb
-``memex_get_diagnostics_summary`` together with at least one of the documented
-diagnostic keywords (cluster count, MW score, top entities).
+the Claude Code plugin. Diagnostics is surfaced via /recall. This test asserts
+that at least one SKILL.md mentions the verb ``memex_get_diagnostics_summary``
+together with at least one of the documented diagnostic keywords (cluster count,
+Memory Worth score, top entities).
 
 The negative-grep test below codifies the architectural rule that
 diagnostics is a *read* action (recall), not a capture action (remember).
@@ -37,11 +37,13 @@ def test_rule_text_describes_verb():
     )
 
     # At least one mention must include a documented keyword.
-    keyword_pat = re.compile(r'cluster.?count|MW.?score|top.?(retrieved.?)?entit', re.IGNORECASE)
+    keyword_pat = re.compile(
+        r'cluster.?count|Memory.?Worth.?score|MW.?score|top.?(retrieved.?)?entit', re.IGNORECASE
+    )
     has_context = any(keyword_pat.search(text) for _, text in mentions)
     assert has_context, (
         'memex_get_diagnostics_summary mentioned but no diagnostic keyword '
-        '(cluster count / MW score / top entities) appears alongside it.'
+        '(cluster count / Memory Worth score / top entities) appears alongside it.'
     )
 
 

@@ -62,6 +62,11 @@ class ExtractSemanticFacts(dspy.Signature):
     and risk_class:
     intent_class: permanent (never-decay), durable (default), ephemeral (short-lived).
     risk_class: none (default), sensitive (flagged), private (excluded from retrieval), safety (blocked).
+
+    A single declarative sentence asserting a clear claim is a fact. Return
+    an empty list ONLY when the chunk has no factual content (greetings,
+    metadata-only, navigation, formatting noise, partial sentence fragments
+    with no resolvable assertion).
     """
 
     chunk_text: str = dspy.InputField(

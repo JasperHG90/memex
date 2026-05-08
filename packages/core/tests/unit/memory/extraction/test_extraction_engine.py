@@ -408,14 +408,17 @@ class TestClassifyAndFilterMetricsGating:
         assert after_intent - before_intent == 1
         assert after_risk - before_risk == 1
 
-    def test_safety_class_facts_are_passed_through_and_counted(
+    def test_safety_class_facts_are_dropped_and_counted(
         self, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
     ) -> None:
-        """Safety-class facts are recorded but passed through (not dropped).
-        ``CLASSIFIER_RISK_DISTRIBUTION`` increments for all facts including safety,
-        and ``CLASSIFIER_BLOCKED_TOTAL`` also increments for safety facts.
+        """Safety-class facts are dropped before persistence and counted on
+        ``CLASSIFIER_BLOCKED_TOTAL``. The risk distribution metric is
+        incremented for *survivors only* — safety drops are tracked
+        separately by the dedicated blocked counter, and double-counting on
+        the risk distribution would distort dashboards.
         """
         from memex_core.metrics import (
+            CLASSIFIER_BLOCKED_TOTAL,
             CLASSIFIER_INTENT_DISTRIBUTION,
             CLASSIFIER_RISK_DISTRIBUTION,
         )
@@ -425,27 +428,34 @@ class TestClassifyAndFilterMetricsGating:
             cfg, mock_lm, mock_predictor, mock_embedding_model, mock_entity_resolver
         )
 
-        before_safety = CLASSIFIER_RISK_DISTRIBUTION.labels(risk_class='safety')._value.get()
+        facts = [
+            self._processed('durable', 'safety'),  # dropped
+            self._processed('durable', 'none'),  # survives
+        ]
+        vault_id_str = str(facts[0].vault_id)
+        before_blocked = CLASSIFIER_BLOCKED_TOTAL.labels(vault_id=vault_id_str)._value.get()
+        before_safety_dist = CLASSIFIER_RISK_DISTRIBUTION.labels(risk_class='safety')._value.get()
         before_intent_durable = CLASSIFIER_INTENT_DISTRIBUTION.labels(
             intent_class='durable'
         )._value.get()
 
-        facts = [
-            self._processed('durable', 'safety'),  # passed through, not dropped
-            self._processed('durable', 'none'),  # normal
-        ]
         out = engine._classify_and_filter(facts)
 
-        after_safety = CLASSIFIER_RISK_DISTRIBUTION.labels(risk_class='safety')._value.get()
+        after_blocked = CLASSIFIER_BLOCKED_TOTAL.labels(vault_id=vault_id_str)._value.get()
+        after_safety_dist = CLASSIFIER_RISK_DISTRIBUTION.labels(risk_class='safety')._value.get()
         after_intent_durable = CLASSIFIER_INTENT_DISTRIBUTION.labels(
             intent_class='durable'
         )._value.get()
 
-        assert len(out) == 2
-        # Safety-class fact DOES appear on the risk distribution.
-        assert after_safety - before_safety == 1
-        # Both facts' intent classes land on the distribution.
-        assert after_intent_durable - before_intent_durable == 2
+        assert len(out) == 1
+        assert out[0].risk_class != 'safety'
+        # Blocked counter increments for the dropped safety fact.
+        assert after_blocked - before_blocked == 1
+        # Risk distribution does NOT count the dropped safety fact (avoids
+        # double-counting; ``CLASSIFIER_BLOCKED_TOTAL`` already tracks it).
+        assert after_safety_dist - before_safety_dist == 0
+        # The surviving fact's intent class lands on the distribution.
+        assert after_intent_durable - before_intent_durable == 1
 
 
 class TestPartialOverrideSemantics:

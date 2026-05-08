@@ -517,7 +517,8 @@ async def _answer_questions_direct(
     # Allow override via env var (MEMEX_EVAL_ANSWER_MODEL) for environments
     # without Anthropic API access; defaults to Sonnet per the benchmark spec.
     model_name = os.environ.get('MEMEX_EVAL_ANSWER_MODEL', DEFAULT_ANSWER_MODEL)
-    answer_lm = dspy.LM(model_name)
+    # Socket deadline so a hung answer call cannot pin a worker indefinitely.
+    answer_lm = dspy.LM(model_name, timeout=120)
     logger.info('Direct-mode answer model: %s', model_name)
     answered = 0
 

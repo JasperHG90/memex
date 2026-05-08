@@ -120,7 +120,13 @@ def test_routing_guide_explains_vault_scoping():
     """AC-087: Vault scoping bullet must name vault_ids and warn against tags."""
     assert '**Vault scoping**' in _ROUTING_GUIDE
     assert 'vault_ids' in _ROUTING_GUIDE
-    assert 'Do NOT use `tags`' in _ROUTING_GUIDE
+    # The compressed phrasing teaches that `tags` filters note metadata,
+    # not vaults — the same constraint as the older "Do NOT use `tags`"
+    # phrasing, just stated positively.
+    assert (
+        'Do NOT use `tags`' in _ROUTING_GUIDE
+        or '`tags` filters note metadata, NOT vaults' in _ROUTING_GUIDE
+    )
 
 
 def test_routing_guide_documents_vault_discovery():
@@ -155,13 +161,16 @@ def test_routing_guide_documents_kv_store():
 
 def test_routing_guide_documents_lineage():
     """AC-091: Lineage bullet names get_memory_links and get_lineage."""
-    assert '**Lineage / relationships**' in _ROUTING_GUIDE
+    assert '**Lineage**' in _ROUTING_GUIDE or '**Lineage / relationships**' in _ROUTING_GUIDE
     assert 'memex_get_memory_links' in _ROUTING_GUIDE
     assert 'memex_get_lineage' in _ROUTING_GUIDE
-    # Mention of typed-link kinds and provenance chain.
-    assert 'temporal' in _ROUTING_GUIDE
-    assert 'causal' in _ROUTING_GUIDE
-    assert 'mental_model' in _ROUTING_GUIDE
+    # Mention typed-link wording and provenance chain — the compressed
+    # bullet names "typed links" and "provenance chains" generically rather
+    # than enumerating every kind.
+    assert 'typed links' in _ROUTING_GUIDE or 'temporal' in _ROUTING_GUIDE
+    assert 'provenance' in _ROUTING_GUIDE or (
+        'causal' in _ROUTING_GUIDE and 'mental_model' in _ROUTING_GUIDE
+    )
 
 
 def test_routing_guide_documents_batch_fetch():
@@ -175,16 +184,24 @@ def test_routing_guide_documents_templates():
     """Templates bullet must surface the list → get → retain(template=) flow.
 
     Without this, agents skip templates even for content that maps cleanly onto
-    a built-in (ADR, RFC, retro, technical brief).
+    a built-in (ADR, retro, technical brief).
     """
-    assert '**Templates for structured captures**' in _ROUTING_GUIDE
+    assert (
+        '**Templates**' in _ROUTING_GUIDE
+        or '**Templates for structured captures**' in _ROUTING_GUIDE
+    )
     assert 'memex_list_templates' in _ROUTING_GUIDE
     assert 'memex_get_template' in _ROUTING_GUIDE
     assert 'template=slug' in _ROUTING_GUIDE
 
 
 def test_routing_guide_bullets_render_in_formatted_block():
-    """Guide must flow through format_briefing_block end-to-end."""
+    """Guide must flow through format_briefing_block end-to-end.
+
+    Each marker accepts the current compressed bullet header or its older
+    long-form variant, so the test stays green if a future surface either
+    keeps the compression or restores the longer phrasing.
+    """
     block = format_briefing_block(
         '',
         vault_id='v',
@@ -192,16 +209,19 @@ def test_routing_guide_bullets_render_in_formatted_block():
         session_note_key='k',
         kv_instructions_if_no_vault=False,
     )
-    for marker in (
-        '**Vault scoping**',
-        '**Vault discovery**',
-        '**Batch fetch**',
-        '**Lineage / relationships**',
-        '**KV store**',
-        '**Templates for structured captures**',
-        'memex_find_note',
-    ):
-        assert marker in block
+    marker_alternatives = (
+        ('**Vault scoping**',),
+        ('**Vault discovery**',),
+        ('**Batch fetch**',),
+        ('**Lineage**', '**Lineage / relationships**'),
+        ('**KV store**',),
+        ('**Templates**', '**Templates for structured captures**'),
+        ('memex_find_note',),
+    )
+    for alternatives in marker_alternatives:
+        assert any(m in block for m in alternatives), (
+            f'none of {alternatives!r} appeared in formatted briefing block'
+        )
 
 
 # --- Storage-model primer (the OrangeHermes regression fence) ---
@@ -220,8 +240,11 @@ def test_storage_model_primer_states_append_only_invariant():
     # The verbs must appear inside an explicit prohibition. A revert that
     # turns the bullet permissive (e.g. "you can edit, replace, or delete...")
     # would still satisfy a bare "verb in primer" check yet leak the
-    # OrangeHermes regression — so require a negation phrase too.
+    # OrangeHermes regression — so require a negation phrase too. The
+    # compressed primer drops "try to" and uses slashes; the older long-form
+    # phrasings remain accepted so a future expansion still passes.
     negation_phrases = (
+        "Don't edit/replace/delete units",
         "Don't try to edit, replace, or delete",
         'Do NOT try to edit, replace, or delete',
         'Do not try to edit, replace, or delete',
@@ -239,7 +262,7 @@ def test_storage_model_primer_describes_reflection_as_read_only():
     mental models are produced by reflection, not written by the agent."""
     assert 'reflection' in _STORAGE_MODEL_PRIMER.lower()
     assert 'observations' in _STORAGE_MODEL_PRIMER.lower()
-    assert 'read-only' in _STORAGE_MODEL_PRIMER
+    assert 'read-only' in _STORAGE_MODEL_PRIMER.lower()
 
 
 def test_storage_model_primer_renders_in_formatted_block():

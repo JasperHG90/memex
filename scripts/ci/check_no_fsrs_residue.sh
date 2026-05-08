@@ -27,6 +27,7 @@ EXEMPT_PATHS=(
     'packages/core/tests/integration/test_int_alembic_030.py'
     'packages/core/tests/integration/test_int_alembic_035_drop_fsrs.py'
     'packages/core/tests/unit/test_seed_alembic_stubs.py'
+    'packages/core/tests/unit/test_alembic_031_resolved_by.py'
 )
 
 # Build a single regex from the exempt list for grep -E.

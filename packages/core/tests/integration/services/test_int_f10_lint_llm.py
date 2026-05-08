@@ -16,7 +16,7 @@ Maps to ACs:
 
 from __future__ import annotations
 
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta, timezone, tzinfo
 from uuid import UUID, uuid4
 
 import pytest
@@ -304,14 +304,38 @@ async def test_quota_per_vault_independent(
 
 @pytest.mark.asyncio
 async def test_no_calendar_day_reset(
-    session: AsyncSession, metastore, memex_config, filestore
+    session: AsyncSession, metastore, memex_config, filestore, monkeypatch
 ) -> None:
-    """10 buckets across midnight UTC — sum stays at 10 (rolling, not calendar)."""
+    """10 buckets across midnight UTC — sum stays at 10 (rolling, not calendar).
+
+    Pins ``datetime.now`` inside ``lint_llm`` to a deterministic UTC noon
+    on a synthetic day — without it, the rolling-24h window depends on
+    the wall-clock hour at test time, so buckets seeded around "today's"
+    midnight UTC fall outside the window when the suite runs late in the
+    UTC day (cutoff slides past pre-midnight buckets).
+    """
     svc = _service(metastore, memex_config, filestore)
     vault_id = await _make_vault(session)
 
-    # Anchor at most-recent UTC midnight; spread 10 buckets across it.
-    midnight = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+    # Pin "now" at noon UTC of a fixed synthetic day. The most-recent UTC
+    # midnight is 12h ago — comfortably inside the rolling 24h window —
+    # and the post-midnight buckets at midnight + 4h are still 8h before
+    # "now", so all 10 buckets land inside the window regardless of when
+    # the test actually executes.
+    pinned_now = datetime(2026, 5, 7, 12, 0, 0, tzinfo=timezone.utc)
+
+    # Stand-in for the ``datetime`` class — only ``now`` is overridden
+    # because that's all ``lint_llm`` calls. Constructed as a plain object
+    # rather than a ``datetime`` subclass to side-step the LSP-flavored
+    # mypy errors on overriding the classmethod's signature.
+    class _FrozenDatetime:
+        @staticmethod
+        def now(tz: tzinfo | None = None) -> datetime:
+            return pinned_now if tz is not None else pinned_now.replace(tzinfo=None)
+
+    monkeypatch.setattr('memex_core.services.lint_llm.datetime', _FrozenDatetime)
+
+    midnight = pinned_now.replace(hour=0, minute=0, second=0, microsecond=0)
     for h in range(-5, 5):  # 5 before midnight, 5 after
         await _seed_quota_bucket(
             session, vault_id, hour_bucket=midnight + timedelta(hours=h), count=1

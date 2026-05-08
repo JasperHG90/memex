@@ -425,6 +425,7 @@ EXPECTED_GATED_SITES = [
 EXPECTED_EXEMPT_SITES = [
     'memory/extraction/core.py',
     'memory/extraction/engine.py',
+    'memory/models/backends/onnx_nli.py',
     'processing/files.py',  # 2 calls in this file
     'processing/web.py',
     'templates.py',
@@ -470,14 +471,13 @@ class TestToThreadAudit:
         return lines
 
     def test_total_call_count_matches_audit(self) -> None:
-        """RFC-001 §"Step 1.5.1" verified 18 actual calls on 8e59301.
-        AC-009 (d): if origin/main adds a new asyncio.to_thread between
-        this AC and merge it must be classified — this test catches a
-        silent addition.
+        """The audit count is the number of classified to_thread sites; if
+        a new site is added without classification this test fails so the
+        author has to place it into gated / dead / exempt / warmup.
         """
         lines = self._all_call_lines()
-        assert len(lines) == 18, (
-            f'Expected 18 asyncio.to_thread calls per AC-009 four-bucket '
+        assert len(lines) == 19, (
+            f'Expected 19 asyncio.to_thread calls per the four-bucket '
             f'audit; found {len(lines)}. New calls must be classified into '
             f'gated / dead / exempt / warmup.'
         )
