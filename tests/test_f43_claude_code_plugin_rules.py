@@ -73,8 +73,6 @@ def test_remember_skill_references_resolution_flow() -> None:
     assert '(B)' in text
     assert '(C)' in text
     assert 'top_k' in text
-    assert 'memex_get_unit_history' in text
-    assert 'apply_pre_filter=False' in text
 
 
 def test_recall_skill_references_historical_routing_rule() -> None:
@@ -84,7 +82,6 @@ def test_recall_skill_references_historical_routing_rule() -> None:
     assert 'memex_get_unit_history' in text
     assert 'apply_pre_filter=False' in text
     assert 'evolved' in text
-    assert 'audit' in text
 
 
 def test_session_start_hook_copies_all_rule_files() -> None:

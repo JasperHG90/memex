@@ -24,7 +24,7 @@ async def briefing(
     ctx: typer.Context,
     vault: Annotated[
         str | None,
-        typer.Option('--vault', '-v', help='Vault name or UUID. Defaults to active vault.'),
+        typer.Option('--vault', '-v', help='Vault name or UUID. Defaults to the active vault.'),
     ] = None,
     budget: Annotated[
         int,

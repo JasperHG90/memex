@@ -5,12 +5,8 @@ Used by the CLI to interact with a running Memex server.
 
 import datetime as dt
 import logging
-from typing import TYPE_CHECKING, Any, AsyncGenerator
+from typing import Any, AsyncGenerator
 
-if TYPE_CHECKING:
-    # Imported for type hints only; memex_common cannot depend on memex_core
-    # at runtime (memex_core depends on memex_common, not the reverse).
-    from memex_core.memory.revisit import Quality
 from uuid import UUID
 
 import httpx
@@ -27,7 +23,6 @@ from memex_common.schemas import (
     CreateVaultRequest,
     DeadLetterItemDTO,
     DefaultVaultsResponse,
-    DueUnitDTO,
     FindNoteResult,
     IntentClass,
     MemoryLinkDTO,
@@ -864,50 +859,6 @@ class RemoteMemexAPI:
             body['vault_id'] = str(vault_id)
         result = await self._post(f'memories/{unit_id}/restore', body)
         return MemoryUnitDTO(**result)
-
-    async def get_due_for_review(
-        self,
-        vault_id: UUID | str,
-        *,
-        limit: int = 20,
-    ) -> list[DueUnitDTO]:
-        """List memory units due for FSRS-5 revisit in a vault.
-
-        Returns a list of :class:`DueUnitDTO` with attributes ``unit_id``,
-        ``text_preview``, ``revisit_due_at``, and ``intent_class``. The DTO
-        mirrors the in-process ``memex_core.services.revisitation.DueUnit``
-        so callers can use attribute access symmetrically across the
-        in-process and remote APIs.
-        """
-        params = {'vault_id': str(vault_id), 'limit': limit}
-        result = await self._get('memory/due_for_review', params=params)
-        return [DueUnitDTO(**r) for r in result]
-
-    async def review_memory_unit(
-        self,
-        unit_id: UUID,
-        quality: 'Quality | int | str',
-        *,
-        vault_id: UUID | str,
-    ) -> dict[str, Any]:
-        """Record a review outcome on a memory unit.
-
-        Mirrors :meth:`memex_core.api.MemexAPI.review_memory_unit`.
-        ``quality`` accepts the FSRS-5 IntEnum, its int value (1-4), or the
-        case-insensitive string ('again'/'hard'/'good'/'easy'). ``vault_id``
-        is REQUIRED — the server enforces cross-vault rejection (returns
-        HTTP 403 if the unit's vault does not match).
-        """
-        if hasattr(quality, 'name'):
-            quality_payload: int | str = quality.name.lower()
-        else:
-            quality_payload = quality
-        body = {
-            'unit_id': str(unit_id),
-            'quality': quality_payload,
-            'vault_id': str(vault_id),
-        }
-        return await self._post('memory/review', body)
 
     async def reconsolidate_entity(
         self,

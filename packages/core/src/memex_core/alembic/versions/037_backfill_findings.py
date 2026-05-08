@@ -35,8 +35,8 @@ emissions at the schema level except via the ``backfilled`` flag, and a
 naïve DELETE would remove resolved/dismissed transitions operators may
 have made. Operators rolling back must clean up manually if needed.
 
-Revision ID: 035_backfill_findings
-Revises: 034_add_mw_mode
+Revision ID: 037_backfill_findings
+Revises: 036_fsfm_cooldown_index
 Create Date: 2026-05-07
 """
 
@@ -45,8 +45,8 @@ from collections.abc import Sequence
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = '035_backfill_findings'
-down_revision: str | None = '034_add_mw_mode'
+revision: str = '037_backfill_findings'
+down_revision: str | None = '036_fsfm_cooldown_index'
 branch_labels: str | Sequence[str] | None = None
 depends_on: str | Sequence[str] | None = None
 

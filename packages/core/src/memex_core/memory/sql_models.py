@@ -628,42 +628,6 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
         ),
     )
 
-    revisit_due_at: datetime | None = Field(
-        default=None,
-        sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
-        description='When this unit is next due for FSRS-5 review (NULL if not scheduled).',
-    )
-
-    revisit_stability: float | None = Field(
-        default=None,
-        sa_column=Column(Float, nullable=True),
-        description='FSRS-5 stability state (NULL until first review).',
-    )
-
-    revisit_difficulty: float | None = Field(
-        default=None,
-        sa_column=Column(Float, nullable=True),
-        description='FSRS-5 difficulty state (NULL until first review).',
-    )
-
-    revisit_review_count: int = Field(
-        default=0,
-        sa_column=Column(Integer, nullable=False, server_default='0'),
-        description=(
-            'Consecutive Again-rating count for the sticky auto-deprioritize gate. '
-            'Resets to 0 on Hard/Good/Easy.'
-        ),
-    )
-
-    revisit_last_reviewed_at: datetime | None = Field(
-        default=None,
-        sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
-        description=(
-            'Wall-clock timestamp of the most recent review. Distinct from '
-            'revisit_due_at (next-due); FSRS-5 elapsed-days uses this column.'
-        ),
-    )
-
     importance: float | None = Field(
         default=None,
         sa_column=Column(Float, nullable=True),

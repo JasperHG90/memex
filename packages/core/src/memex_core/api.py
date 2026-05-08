@@ -9,13 +9,15 @@ import logging
 import re
 from uuid import UUID
 from functools import cached_property
-from datetime import datetime
+from dataclasses import dataclass, field
+from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.exc import IntegrityError
 
 import dspy
 
 from memex_common.exceptions import (
+    MemoryUnitNotFoundError,
     VaultNotFoundError,
 )
 from memex_common.schemas import (
@@ -72,9 +74,40 @@ from memex_core.services.lineage import LineageService
 from memex_core.services.lint import LintService
 from memex_core.services.locks import LocksService
 from memex_core.services.notes import NoteService
+from memex_core.services.deprioritize_score import DeprioritizeScorer, ScoreBreakdown
+
+
+# 32-bit namespace key for per-vault auto-band advisory locks. Distinct from
+# MEMEX_LEADER_LOCK_ID (the scheduler-leader lock) so a brief leader flap can
+# still acquire this without colliding.
+_AUTO_BAND_LOCK_NAMESPACE = 0x46_53_46_4D  # "FSFM" ASCII as int32
+
+
+@dataclass
+class AutoDeprioritizeSummary:
+    """Per-vault outcome of one FSFM auto-band tick.
+
+    ``skipped_lock_held`` is True when another leader held the per-vault
+    advisory lock and this tick yielded immediately — distinguishes
+    "ran cleanly with zero candidates" from "skipped because contended".
+    """
+
+    vault_id: UUID
+    enabled: bool = True
+    skipped_lock_held: bool = False
+    deprioritized: list[str] = field(default_factory=list)
+    skipped_below_threshold: list[str] = field(default_factory=list)
+    skipped_escalation: list[str] = field(default_factory=list)
+    skipped_cooldown: list[str] = field(default_factory=list)
+    errors: list[str] = field(default_factory=list)
+
+    @property
+    def total_deprioritized(self) -> int:
+        return len(self.deprioritized)
+
+
 from memex_core.services.outcomes import OutcomeService
 from memex_core.services.reflection import ReflectionService
-from memex_core.services.revisitation import RevisitationService
 from memex_core.services.search import SearchService
 from memex_core.services.stats import StatsService
 from memex_core.services.units import UnitsService
@@ -528,15 +561,15 @@ class MemexAPI:
             reflection=self._reflection,
             contradiction=self._contradiction,
         )
-        self._revisit = RevisitationService(
+        from memex_core.services.lint_llm import LintLLMService
+
+        self._lint_llm = LintLLMService(
             metastore=self.metastore,
             filestore=self.filestore,
             config=self.config,
         )
 
-        from memex_core.services.lint_llm import LintLLMService
-
-        self._lint_llm = LintLLMService(
+        self._deprioritize_scorer = DeprioritizeScorer(
             metastore=self.metastore,
             filestore=self.filestore,
             config=self.config,
@@ -584,7 +617,6 @@ class MemexAPI:
             self._search,
             self._lineage,
             self._units,
-            self._revisit,
         ):
             svc._audit_service = self._audit_svc  # type: ignore[attr-defined]
 
@@ -608,17 +640,247 @@ class MemexAPI:
         return self._consolidation
 
     @property
-    def revisit(self) -> RevisitationService:
-        return self._revisit
-
-    @property
     def lint_llm(self) -> 'LintLLMService':
         """Surprise-gated LLM lint service."""
         return self._lint_llm
 
     @property
+    def deprioritize_scorer(self) -> DeprioritizeScorer:
+        """FSFM-inspired graph-aware deprioritization scorer."""
+        return self._deprioritize_scorer
+
+    @property
     def locks(self) -> LocksService:
         return self._locks
+
+    async def score_memory_unit(
+        self,
+        unit_id: UUID,
+        vault_id: UUID,
+    ) -> ScoreBreakdown | None:
+        """Compute the FSFM composite deprioritization score for a unit.
+
+        Returns ``None`` if the unit doesn't exist in ``vault_id``. Used by
+        ``memex memory score <unit_id>`` for tuning and by tests for
+        SQL/Python parity assertions.
+        """
+        async with self.metastore.session() as session:
+            return await self._deprioritize_scorer.score(unit_id, vault_id, session)
+
+    async def auto_deprioritize_after_lint(
+        self,
+        vault_id: UUID,
+        *,
+        now: datetime | None = None,
+    ) -> 'AutoDeprioritizeSummary':
+        """Apply the FSFM auto-deprioritize band.
+
+        Reads the proposals just emitted by ``LintService.run_rules`` and flips
+        ``is_deprioritized`` on every unit that:
+
+        - has a pending ``composite_deprioritize_candidate`` proposal whose
+          ``evidence.flag_reason = 'composite'`` (rows with
+          ``flag_reason ∈ {high_mw_with_nonmw_pressure, components_disagree,
+          low_credibility_contradiction_only}`` go to ``summary.skipped_escalation``
+          for human review)
+        - whose evidence ``composite_score`` is at or above the
+          ``thresholds.auto_deprioritize`` configured value
+        - has NOT been ``memory_restore``-d within ``cooldown_days``
+
+        Resolves the consumed proposals (``status='resolved'``,
+        ``resolved_by='fsfm_auto'``) so subsequent runs don't re-process
+        them. Idempotent on reruns. Audit trail uses ``actor='fsfm_auto'``
+        on the deprioritize action — single canonical actor string.
+        """
+        from sqlalchemy import text as _sa_text
+
+        from memex_core.metrics import (
+            FSFM_AUTO_BAND_SKIPPED_TOTAL,
+            FSFM_AUTO_DEPRIORITIZED_TOTAL,
+            FSFM_SCORER_RUNS_TOTAL,
+        )
+
+        cfg = self.config.server.memory.deprioritize_score
+        if not cfg.enabled:
+            FSFM_SCORER_RUNS_TOTAL.labels(outcome='disabled').inc()
+            return AutoDeprioritizeSummary(vault_id=vault_id, enabled=False)
+
+        auto_threshold = cfg.thresholds.auto_deprioritize
+        cooldown_days = cfg.cooldown_days
+        resolved_now = now or datetime.now(timezone.utc)
+        cooldown_cutoff = resolved_now - timedelta(days=cooldown_days)
+
+        summary = AutoDeprioritizeSummary(vault_id=vault_id, enabled=True)
+
+        try:
+            async with self.metastore.session() as session:
+                # Per-vault advisory lock so two leaders can't double-process
+                # the same proposals during a brief leader flap. Use the
+                # *non-blocking* try-form: a contending leader skips the
+                # vault on this tick instead of blocking until the holding
+                # leader's tick finishes (which can be minutes for a vault
+                # with thousands of pending composites). The lock is
+                # transaction-scoped (released on COMMIT/ROLLBACK).
+                # The two-arg form ``pg_(try_)advisory_xact_lock(int4, int4)``
+                # takes 32-bit ints — derive the per-vault key from the
+                # first 4 bytes of the UUID, which gives ~4B distinct keys.
+                vault_lock_key = int.from_bytes(vault_id.bytes[:4], 'big', signed=True)
+                lock_acquired = (
+                    await session.execute(
+                        _sa_text('SELECT pg_try_advisory_xact_lock(:k, :v)'),
+                        {'k': _AUTO_BAND_LOCK_NAMESPACE, 'v': vault_lock_key},
+                    )
+                ).scalar()
+                if not lock_acquired:
+                    FSFM_AUTO_BAND_SKIPPED_TOTAL.labels(reason='lock_held').inc()
+                    FSFM_SCORER_RUNS_TOTAL.labels(outcome='skipped_locked').inc()
+                    summary.skipped_lock_held = True
+                    return summary
+
+                # Candidates: pending composite_deprioritize_candidate
+                # proposals whose target unit is STILL not deprioritized.
+                # Auto-band only acts on rows with
+                # ``evidence.flag_reason = 'composite'`` — escalation
+                # reasons (high_mw_with_nonmw_pressure /
+                # components_disagree / low_credibility_contradiction_only)
+                # share the same rule but go to the ledger for human
+                # review. The flag_reason filter lives in the loop so
+                # the summary surfaces escalation skips. The JOIN guards
+                # against re-processing units whose pending row has
+                # lingered from an earlier failed run — a stale pending
+                # row plus a unit already flipped is a no-op (the row is
+                # resolved below).
+                candidates = (
+                    await session.execute(
+                        _sa_text("""
+                            SELECT mp.id::text AS proposal_id,
+                                   mp.target_id,
+                                   mp.evidence,
+                                   mu.is_deprioritized AS unit_already_deprioritized
+                            FROM maintenance_proposals mp
+                            JOIN memory_units mu ON mu.id::text = mp.target_id
+                            WHERE mp.vault_id = :vault_id
+                              AND mu.vault_id = :vault_id
+                              AND mp.rule_name = 'composite_deprioritize_candidate'
+                              AND mp.target_type = 'memory_unit'
+                              AND mp.status = 'pending'
+                            FOR UPDATE OF mp SKIP LOCKED
+                        """),
+                        {'vault_id': str(vault_id)},
+                    )
+                ).all()
+
+                # Cooldown: filter to units in THIS vault for index efficiency
+                # and to avoid scanning global memory_restore audits per vault.
+                # Cast ``al.resource_id::uuid = mu.id`` (PK) so the planner
+                # can index-scan both sides — the partial index from
+                # migration 036 covers the audit_logs side and the
+                # memory_units PK covers the join. The ``mu.id::text``
+                # form (non-sargable text comparison) forced a hash join
+                # over the full memory_units rowset.
+                cooldown_unit_ids: set[str] = set(
+                    (
+                        await session.execute(
+                            _sa_text("""
+                                SELECT DISTINCT al.resource_id
+                                FROM audit_logs al
+                                JOIN memory_units mu
+                                  ON mu.id = al.resource_id::uuid
+                                WHERE al.action = 'memory_restore'
+                                  AND al.resource_type = 'memory_unit'
+                                  AND al.timestamp > :cutoff
+                                  AND mu.vault_id = :vault_id
+                            """),
+                            {'cutoff': cooldown_cutoff, 'vault_id': str(vault_id)},
+                        )
+                    ).scalars()
+                )
+
+                for cand in candidates:
+                    target_id = str(cand.target_id)
+                    if cand.unit_already_deprioritized:
+                        # Stale pending row; the unit was already deprioritized
+                        # by an earlier action. Resolve the row, don't re-act.
+                        # Vault-scoped UPDATE matches LintService.set_status's
+                        # defense-in-depth posture.
+                        await session.execute(
+                            _sa_text(
+                                'UPDATE maintenance_proposals '
+                                "SET status = 'resolved', resolved_at = now(), "
+                                "    resolved_by = 'fsfm_auto' "
+                                'WHERE id = :id AND vault_id = :vault_id'
+                            ),
+                            {'id': cand.proposal_id, 'vault_id': str(vault_id)},
+                        )
+                        continue
+
+                    evidence = cand.evidence or {}
+                    composite_score = float(evidence.get('composite_score', 0.0))
+                    flag_reason = evidence.get('flag_reason', 'composite')
+
+                    if flag_reason != 'composite':
+                        # Escalation reasons go to the ledger for human
+                        # review; the auto-band must not act on them.
+                        summary.skipped_escalation.append(target_id)
+                        FSFM_AUTO_BAND_SKIPPED_TOTAL.labels(reason='escalation_pending').inc()
+                        continue
+                    if composite_score < auto_threshold:
+                        summary.skipped_below_threshold.append(target_id)
+                        FSFM_AUTO_BAND_SKIPPED_TOTAL.labels(reason='below_threshold').inc()
+                        continue
+                    if target_id in cooldown_unit_ids:
+                        summary.skipped_cooldown.append(target_id)
+                        FSFM_AUTO_BAND_SKIPPED_TOTAL.labels(reason='cooldown_active').inc()
+                        continue
+
+                    try:
+                        await self._units.set_unit_deprioritized(
+                            UUID(target_id),
+                            reason=f'fsfm_auto: composite_score={composite_score:.4f}',
+                            vault_id=vault_id,
+                            actor='fsfm_auto',
+                        )
+                    except (MemoryUnitNotFoundError, IntegrityError) as exc:
+                        logger.warning(
+                            'FSFM auto-band: deprioritize failed for unit %s: %s',
+                            target_id,
+                            exc,
+                        )
+                        summary.errors.append(target_id)
+                        continue
+
+                    # Resolve the consumed proposal in the SAME session that
+                    # holds the FOR UPDATE OF mp lock from the candidates
+                    # SELECT. Calling LintService.set_status here would open
+                    # a fresh session that blocks on the row lock until the
+                    # statement timeout fires (verified failure mode).
+                    # Vault-scoped UPDATE matches LintService.set_status's
+                    # defense-in-depth posture.
+                    await session.execute(
+                        _sa_text(
+                            'UPDATE maintenance_proposals '
+                            "SET status = 'resolved', resolved_at = now(), "
+                            "    resolved_by = 'fsfm_auto' "
+                            'WHERE id = :id AND vault_id = :vault_id'
+                        ),
+                        {'id': cand.proposal_id, 'vault_id': str(vault_id)},
+                    )
+
+                    summary.deprioritized.append(target_id)
+                    FSFM_AUTO_DEPRIORITIZED_TOTAL.inc()
+
+                # Commit the proposal-resolution UPDATEs (and release the
+                # advisory lock + FOR UPDATE row locks) before exiting the
+                # session context manager — the metastore's session does
+                # not auto-commit.
+                await session.commit()
+
+            FSFM_SCORER_RUNS_TOTAL.labels(outcome='success').inc()
+        except Exception:
+            FSFM_SCORER_RUNS_TOTAL.labels(outcome='error').inc()
+            raise
+
+        return summary
 
     async def reconsolidate_entity(
         self,
@@ -1157,26 +1419,6 @@ class MemexAPI:
             max_depth=max_depth,
             vault_id=vault_id,
         )
-
-    async def get_due_for_review(
-        self,
-        vault_id: UUID,
-        *,
-        limit: int = 20,
-    ) -> list[Any]:
-        """List memory units due for revisit in `vault_id`. Delegates to RevisitationService."""
-        return await self._revisit.list_due(vault_id, limit=limit)
-
-    async def review_memory_unit(
-        self,
-        unit_id: UUID,
-        quality: Any,
-        *,
-        vault_id: UUID,
-        actor: UUID | None = None,
-    ) -> dict[str, Any]:
-        """Record a review outcome on a memory unit. Delegates to RevisitationService."""
-        return await self._revisit.review(unit_id, quality, vault_id=vault_id, actor=actor)
 
     async def retrieve(self, request: RetrievalRequest) -> tuple[list[MemoryUnit], Any]:
         """Retrieve memories using TEMPR Recall. Delegates to SearchService."""

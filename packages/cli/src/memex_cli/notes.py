@@ -83,7 +83,8 @@ async def add_note(
         typer.Option('--asset', '-a', help='Path to an asset file to attach to the note.'),
     ] = None,
     vault: Annotated[
-        str | None, typer.Option('--vault', '-v', help='Target vault (write).')
+        str | None,
+        typer.Option('--vault', '-v', help='Vault name or UUID. Defaults to the active vault.'),
     ] = None,
     key: Annotated[
         str | None, typer.Option('--key', '-k', help='Unique stable key for the note.')
@@ -126,9 +127,6 @@ async def add_note(
     Use --asset to attach auxiliary files (images, PDFs) to a note.
     """
     config: MemexConfig = ctx.obj
-    # Override active vault if specified
-    if vault:
-        config.vault.active = vault
 
     # Determine input source
     if file:
@@ -143,6 +141,8 @@ async def add_note(
     else:
         console.print('[red]Error: Must provide content, --file, or --url.[/red]')
         raise typer.Exit(1)
+
+    effective_vault = vault if vault is not None else config.write_vault
 
     console.print('[bold green]Adding Note[/bold green]')
 
@@ -168,7 +168,7 @@ async def add_note(
                 req = IngestURLRequest(
                     url=url,
                     assets=assets_dict,
-                    vault_id=config.write_vault,
+                    vault_id=effective_vault,
                     user_notes=user_notes,
                 )
                 result = await api.ingest_url(req, background=background)
@@ -207,8 +207,8 @@ async def add_note(
                     f'[cyan]Uploading and summarizing {len(files_to_upload)} file(s)...[/cyan]'
                 )
                 metadata = {}
-                if config.write_vault:
-                    metadata['vault_id'] = str(config.write_vault)
+                if effective_vault:
+                    metadata['vault_id'] = str(effective_vault)
                 if user_notes:
                     metadata['user_notes'] = user_notes
 
@@ -282,7 +282,7 @@ async def add_note(
                     files=assets_dict,
                     tags=effective_tags,
                     note_key=key,
-                    vault_id=config.write_vault,
+                    vault_id=effective_vault,
                     user_notes=user_notes,
                     author=author,
                     template=template,
@@ -323,7 +323,7 @@ async def append_note(
     ] = None,
     vault: Annotated[
         str | None,
-        typer.Option('--vault', '-v', help='Vault scope. Required when --key is given.'),
+        typer.Option('--vault', '-v', help='Vault name or UUID. Defaults to the active vault.'),
     ] = None,
     delta: Annotated[
         str | None,
@@ -387,9 +387,9 @@ async def append_note(
             'If you meant --key, drop the positional note_id.[/red]'
         )
         raise typer.Exit(1)
-    if key and not vault:
-        console.print('[red]--vault is required when identifying by --key.[/red]')
-        raise typer.Exit(1)
+
+    config: MemexConfig = ctx.obj
+    effective_vault = vault if vault is not None else config.write_vault
 
     try:
         resolved_append_id = UUID(append_id) if append_id else uuid4()
@@ -405,14 +405,13 @@ async def append_note(
     request = NoteAppendRequest(
         note_id=resolved_note_id,
         note_key=key,
-        vault_id=vault,
+        vault_id=effective_vault,
         delta=delta_text,
         append_id=resolved_append_id,
         joiner=joiner,
         user_notes=user_notes,
     )
 
-    config: MemexConfig = ctx.obj
     async with get_api_context(config) as api:
         try:
             response = await api.append_to_note(request)
@@ -439,7 +438,9 @@ async def list_notes(
     offset: int = 0,
     vault: Annotated[
         list[str],
-        typer.Option('--vault', '-v', help='Vault(s) to filter by. Use "*" for all vaults.'),
+        typer.Option(
+            '--vault', '-v', help='Vault(s) to search. Accepts names or UUIDs. Use "*" for all.'
+        ),
     ] = [],
     after: Annotated[
         str | None,
@@ -560,7 +561,9 @@ async def list_recent(
     limit: int = 10,
     vault: Annotated[
         list[str],
-        typer.Option('--vault', '-v', help='Vault(s) to filter by. Use "*" for all vaults.'),
+        typer.Option(
+            '--vault', '-v', help='Vault(s) to search. Accepts names or UUIDs. Use "*" for all.'
+        ),
     ] = [],
     after: Annotated[
         str | None,
@@ -690,7 +693,9 @@ async def find_note(
     limit: int = 5,
     vault: Annotated[
         list[str],
-        typer.Option('--vault', '-v', help='Vault(s) to filter by. Use "*" for all vaults.'),
+        typer.Option(
+            '--vault', '-v', help='Vault(s) to search. Accepts names or UUIDs. Use "*" for all.'
+        ),
     ] = [],
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
 ):
@@ -1182,7 +1187,9 @@ async def search_notes(
     blend: Annotated[bool, typer.Option('--blend', help='Enable position-aware blending.')] = False,
     vault: Annotated[
         list[str],
-        typer.Option('--vault', '-v', help='Vault(s) to search. Use "*" for all vaults.'),
+        typer.Option(
+            '--vault', '-v', help='Vault(s) to search. Accepts names or UUIDs. Use "*" for all.'
+        ),
     ] = [],
     reason: Annotated[
         bool,
@@ -1411,7 +1418,9 @@ async def export_notes(
     ] = './memex-export',
     vault: Annotated[
         list[str],
-        typer.Option('--vault', '-v', help='Vault(s) to filter by. Use "*" for all vaults.'),
+        typer.Option(
+            '--vault', '-v', help='Vault(s) to search. Accepts names or UUIDs. Use "*" for all.'
+        ),
     ] = [],
 ):
     """

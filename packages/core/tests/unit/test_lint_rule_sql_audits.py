@@ -45,11 +45,13 @@ def test_each_rule_filters_on_vault_id(spec) -> None:
 
 
 @pytest.mark.parametrize('spec', V1_RULES, ids=lambda s: s.name)
-def test_each_rule_select_starts_with_select(spec) -> None:
-    """Spec-level read-only guard: ``select_sql`` must start with SELECT."""
+def test_each_rule_select_is_read_only(spec) -> None:
+    """Spec-level read-only guard: ``select_sql`` must begin with SELECT
+    or a CTE prefix (``WITH ... AS (...) SELECT``) and must not contain
+    any write keywords."""
     norm = _normalize(spec.select_sql)
-    assert norm.startswith('select '), (
-        f'Rule {spec.name} select_sql does not start with SELECT: {norm[:60]!r}'
+    assert norm.startswith('select ') or norm.startswith('with '), (
+        f'Rule {spec.name} select_sql does not start with SELECT/WITH: {norm[:60]!r}'
     )
     forbidden = ('insert ', 'update ', 'delete ', 'truncate ', 'merge ', 'copy ')
     assert not any(tok in norm for tok in forbidden), (

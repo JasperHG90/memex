@@ -1398,20 +1398,6 @@ class LintConfig(BaseModel):
     )
 
 
-class RevisitConfig(BaseModel):
-    """Configuration for the FSRS-5 revisitation scheduler."""
-
-    enabled: bool = Field(
-        default=True,
-        description='Enable periodic revisit-schedule populator via the scheduler.',
-    )
-    interval_seconds: int = Field(
-        default=24 * 3600,
-        ge=60,
-        description='Interval in seconds between revisit populator runs. Default: 24 hours.',
-    )
-
-
 class LintLLMCheckConfig(BaseModel):
     """Per-check feature flag for a DSPy lint signature."""
 
@@ -1514,6 +1500,151 @@ class LintLLMConfig(BaseModel):
     )
 
 
+class DeprioritizeScoreWeights(BaseModel):
+    """Per-component weights for the FSFM-inspired composite score."""
+
+    graph: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description='Weight on the graph-pressure component (inbound MemoryLink aggregate).',
+    )
+    mw: float = Field(
+        default=0.25,
+        ge=0.0,
+        le=1.0,
+        description='Weight on (1 - Memory Worth posterior).',
+    )
+    temporal: float = Field(
+        default=0.15,
+        ge=0.0,
+        le=1.0,
+        description='Weight on temporal staleness (1 - exp(-age / stability)).',
+    )
+    entity: float = Field(
+        default=0.10,
+        ge=0.0,
+        le=1.0,
+        description='Weight on entity-dormancy via the freshest linked entity.last_seen.',
+    )
+
+    def as_dict(self) -> dict[str, float]:
+        return {
+            'graph': self.graph,
+            'mw': self.mw,
+            'temporal': self.temporal,
+            'entity': self.entity,
+        }
+
+
+class DeprioritizeScoreThresholds(BaseModel):
+    """Threshold band for the FSFM scorer's downstream actions."""
+
+    propose: float = Field(
+        default=0.30,
+        ge=0.0,
+        le=1.0,
+        description=(
+            'Score above which a MaintenanceProposal is emitted (lint rule predicate). '
+            'Calibrated against the ephemeral-max ceiling: with ``importance=0.3`` the '
+            'composite caps at ~0.63 so anything above 0.30 reflects meaningful negative '
+            'signal accumulation. Durable items (importance=0.7, max ~0.27) effectively '
+            'never trip this — by design.'
+        ),
+    )
+    auto_deprioritize: float = Field(
+        default=0.55,
+        ge=0.0,
+        le=1.0,
+        description=(
+            'Score above which the auto-band flips is_deprioritized to true. '
+            'Skipped if the proposal carries an escalation flag_reason or any '
+            'hard-override class is set. Below the ephemeral-max ceiling so '
+            'units actually reach this band; durable units never do — that is the '
+            'protective intent of the importance multiplier.'
+        ),
+    )
+    disagreement_range: float = Field(
+        default=0.45,
+        ge=0.0,
+        le=1.0,
+        description=(
+            'Range (max − min) across the four normalized components above which the '
+            'rule emits the ``components_disagree`` flag_reason. Range is a cheap '
+            'in-SQL proxy for variance; range > 0.45 corresponds (loosely) to '
+            'population variance > 0.05.'
+        ),
+    )
+    contradicted_low_credibility_max: float = Field(
+        default=0.3,
+        ge=0.0,
+        le=1.0,
+        description=(
+            'Σ source-credibility threshold below which a unit contradicted only '
+            'by low-credibility sources escalates for human review.'
+        ),
+    )
+    high_mw_threshold: float = Field(
+        default=0.7,
+        ge=0.0,
+        le=1.0,
+        description=(
+            'MW posterior above which a unit is considered "previously high MW". '
+            'Combined with ``high_mw_min_outcomes`` to detect the high-MW-yet-flagged '
+            'pattern that signals a likely false positive.'
+        ),
+    )
+    high_mw_min_outcomes: int = Field(
+        default=5,
+        ge=1,
+        description=(
+            'Minimum (success_co_count + failure_co_count) for the high-MW '
+            'escalation pattern. Prevents flagging units whose MW is "high" only '
+            'because the Beta prior dominates a tiny outcome count.'
+        ),
+    )
+
+
+class DeprioritizeScoreConfig(BaseModel):
+    """Configuration for the FSFM-inspired graph-aware deprioritization scorer."""
+
+    enabled: bool = Field(
+        default=True,
+        description='Enable the deprioritize-score lint rules + auto-band step.',
+    )
+    interval_seconds: int = Field(
+        default=24 * 3600,
+        ge=60,
+        description='Interval between scorer runs when invoked from the periodic lint task.',
+    )
+    weights: DeprioritizeScoreWeights = Field(
+        default_factory=DeprioritizeScoreWeights,
+        description='Per-component weights for the composite.',
+    )
+    lambda_link: float = Field(
+        default=0.01,
+        ge=0.0,
+        description='Per-link recency decay rate (per day) — older links weigh less.',
+    )
+    mu_entity: float = Field(
+        default=0.005,
+        ge=0.0,
+        description='Entity-dormancy decay rate (per day) over the freshest entity.last_seen.',
+    )
+    thresholds: DeprioritizeScoreThresholds = Field(
+        default_factory=DeprioritizeScoreThresholds,
+        description='Threshold band for proposal emission, auto-deprioritization, and escalation.',
+    )
+    cooldown_days: int = Field(
+        default=14,
+        ge=0,
+        description=(
+            'Days after a memory_restore audit during which the auto-band MUST NOT '
+            're-deprioritize the unit (prevents user-restore <-> auto-band loops).'
+        ),
+    )
+
+
 class MemoryConfig(BaseModel):
     """Configuration for memory subsystems."""
 
@@ -1556,14 +1687,17 @@ class MemoryConfig(BaseModel):
         description='Configuration for the maintenance ledger / rule-based linter.',
     )
 
-    revisit: RevisitConfig = Field(
-        default_factory=RevisitConfig,
-        description='FSRS-5 revisitation scheduler configuration.',
-    )
-
     lint_llm: LintLLMConfig = Field(
         default_factory=LintLLMConfig,
         description='Configuration for surprise-gated LLM-assisted lint.',
+    )
+
+    deprioritize_score: DeprioritizeScoreConfig = Field(
+        default_factory=DeprioritizeScoreConfig,
+        description=(
+            'FSFM-inspired graph-aware deprioritization scorer configuration '
+            '(composite score driving lint proposals and auto-deprioritization).'
+        ),
     )
 
 

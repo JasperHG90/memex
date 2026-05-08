@@ -20,7 +20,6 @@ from fastmcp.exceptions import ToolError
 
 from memex_common.asset_cache import MAX_GET_RESOURCES_PATHS, MAX_RESOURCE_BYTES
 from memex_common.asset_resize import validate_and_resize
-from memex_common.revisit import reject_bool_quality
 from fastmcp.utilities.logging import configure_logging
 import json
 
@@ -28,7 +27,7 @@ from pydantic import BeforeValidator, Field
 
 from memex_mcp.lifespan import lifespan, get_api, get_asset_cache, get_config
 from memex_mcp._layer_primer_descriptions import (
-    LAYER_ROUTING_PRIMER_PROSE as _LAYER_ROUTING_PRIMER,
+    LAYER_ROUTING_PRIMER_PROSE as _F3_LAYER_ROUTING_PRIMER_PROSE,
 )
 from memex_mcp.models import (
     McpAddAssetsResult,
@@ -1075,7 +1074,7 @@ async def memex_add_note(
             description=(
                 'Optional intent override applied to all extracted facts: '
                 '"permanent" (enduring user preferences/conventions), "durable" '
-                '(default), or "ephemeral" (transient context — drains Memory Worth faster). '
+                '(default), or "ephemeral" (transient context — drains MW faster). '
                 'Omit to let the write-time classifier decide.'
             ),
         ),
@@ -1535,7 +1534,7 @@ def _build_memory_unit_model(
         'Contradiction links are always included on returned units. '
         'For other link types (temporal, semantic, causal), use `memex_get_memory_links`. '
         'For targeted document lookup, use memex_note_search. When unsure, run both in parallel.'
-        '\n\n## Memory layers\n\n' + _LAYER_ROUTING_PRIMER
+        '\n\n## Memory layers\n\n' + _F3_LAYER_ROUTING_PRIMER_PROSE
     ),
     tags={'search'},
     annotations={'readOnlyHint': True},
@@ -1676,7 +1675,7 @@ async def memex_memory_search(
         Field(
             default=True,
             description=(
-                'Pre-reranker Memory Worth/FSFM filter at hydration. Default True drops '
+                'Pre-reranker MW/FSFM filter at hydration. Default True drops '
                 'obviously-failed (low Memory Worth) or decayed candidates before the '
                 'cross-encoder runs. Set False for HISTORICAL / AUDIT / LINEAGE queries '
                 '("how has my view on X evolved", "show me everything I used to think '
@@ -1853,7 +1852,7 @@ async def memex_search_user_notes(
         'For other link types (temporal, semantic, causal), use `memex_get_memory_links`. '
         'Best for targeted document lookup. '
         'For broad exploration, use memex_memory_search. When unsure, run both in parallel.'
-        '\n\n## Memory layers\n\n' + _LAYER_ROUTING_PRIMER
+        '\n\n## Memory layers\n\n' + _F3_LAYER_ROUTING_PRIMER_PROSE
     ),
     tags={'search'},
     annotations={'readOnlyHint': True},
@@ -2043,7 +2042,6 @@ async def memex_note_search(
                         note_id=doc.note_id,
                         title=title,
                         score=doc.score,
-                        raw_score=doc.raw_score,
                         vault_name=doc.vault_name,
                         status=getattr(doc, 'note_status', None),
                         description=description,
@@ -2814,7 +2812,7 @@ async def memex_get_entities(
     description=(
         'Get facts, observations, and events that mention an entity. '
         'Each mention links to its source note, revealing cross-note connections.'
-        '\n\n## Memory layers\n\n' + _LAYER_ROUTING_PRIMER
+        '\n\n## Memory layers\n\n' + _F3_LAYER_ROUTING_PRIMER_PROSE
     ),
     tags={'entities'},
     annotations={'readOnlyHint': True},
@@ -3205,7 +3203,7 @@ async def memex_get_unit_history(
         Field(
             description=(
                 'Vault UUID or name the unit belongs to. REQUIRED for per-vault '
-                'auth scoping (vault-scoping invariant). Cross-vault '
+                'auth scoping (Wave 0 multi-tenant invariant). Cross-vault '
                 'links are filtered out.'
             ),
         ),
@@ -3392,7 +3390,7 @@ async def memex_kv_write(
 @mcp.tool(
     name='memex_kv_get',
     description=(
-        'Get a KV entry by exact key. For procedure: keys, the '
+        'Get a KV entry by exact key. For procedure: keys (RFC-007), the '
         'default response value is the unwrapped active procedure text. Pass '
         'include_history=true to receive the structured envelope '
         '({value, version, history}) so you can review prior versions.'
@@ -3410,7 +3408,7 @@ async def memex_kv_get(
         Field(
             default=False,
             description=(
-                'For procedure: keys, return the full envelope '
+                'For procedure: keys (RFC-007), return the full envelope '
                 '(value, version, capped history of 5 prior versions) instead '
                 'of just the active value. Ignored for non-procedure keys.'
             ),
@@ -3449,7 +3447,7 @@ async def memex_kv_get(
         'Fuzzy search KV entries by semantic similarity. '
         'Returns the closest matching entries. '
         'Optionally filter by namespace prefixes (global, user, project).'
-        '\n\n## Memory layers\n\n' + _LAYER_ROUTING_PRIMER
+        '\n\n## Memory layers\n\n' + _F3_LAYER_ROUTING_PRIMER_PROSE
     ),
     tags={'storage'},
     annotations={'readOnlyHint': True},
@@ -3547,7 +3545,7 @@ async def memex_kv_list(
         'runs parallel searches, deduplicates, and returns facts grouped by source note. '
         'Use for panoramic queries like "what do you know about X?" instead of '
         'making many manual search calls.'
-        '\n\n## Memory layers\n\n' + _LAYER_ROUTING_PRIMER
+        '\n\n## Memory layers\n\n' + _F3_LAYER_ROUTING_PRIMER_PROSE
     ),
     tags={'search'},
     annotations={'readOnlyHint': True},
@@ -3696,14 +3694,14 @@ async def memex_get_vault_summary(
 
 
 from memex_mcp._resolution_flow_descriptions import (
-    MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION as _DEPRIORITIZE_DESCRIPTION,
-    MEMEX_RECORD_OUTCOME_DESCRIPTION as _RECORD_OUTCOME_DESCRIPTION,
+    MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION as _F43_MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION,
+    MEMEX_RECORD_OUTCOME_DESCRIPTION as _F43_MEMEX_RECORD_OUTCOME_DESCRIPTION,
 )
 
 
 @mcp.tool(
     name='memex_record_outcome',
-    description=_RECORD_OUTCOME_DESCRIPTION,
+    description=_F43_MEMEX_RECORD_OUTCOME_DESCRIPTION,
     tags={'write'},
     annotations={'readOnlyHint': False},
 )
@@ -3755,7 +3753,7 @@ async def memex_record_outcome(
             default='memory_unit',
             description=(
                 'What the outcome scores. "memory_unit" (default) increments '
-                'Memory Worth counters on memory units in unit_ids. "kv_key" '
+                'MW counters on memory units in unit_ids. "kv_key" '
                 'increments vault-scoped counters on the procedure_outcomes '
                 'row for kv_key.'
             ),
@@ -3766,14 +3764,14 @@ async def memex_record_outcome(
         Field(
             default=None,
             description=(
-                'kv_key mode only. Procedure KV key (procedure:<verb>:<context-tag>) '
-                'whose Memory Worth counters should be incremented. '
+                'kv_key mode only. Procedure KV key (procedure:<verb>:<context-tag>, '
+                'RFC-007) whose MW counters should be incremented. '
                 'Required when target_type="kv_key".'
             ),
         ),
     ] = None,
 ) -> dict:
-    """Record an outcome for memory units or a procedure key to train Memory Worth scoring."""
+    """Record an outcome for memory units or a procedure key to train MW scoring."""
     try:
         api = get_api(ctx)
         vault_id = vault_id or _default_write_vault(ctx)
@@ -3821,7 +3819,7 @@ if __name__ == '__main__':
 # Tier A — Tool registry
 # ============================================================
 
-# --- Deprioritize / Restore ---
+# --- deprioritize / restore ---
 
 from memex_mcp._deprioritize_descriptions import (
     MEMEX_MEMORY_RESTORE_DESCRIPTION,
@@ -3830,7 +3828,7 @@ from memex_mcp._deprioritize_descriptions import (
 
 @mcp.tool(
     name='memex_memory_deprioritize',
-    description=_DEPRIORITIZE_DESCRIPTION,
+    description=_F43_MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION,
     tags={'write', 'storage'},
     annotations={'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True},
     timeout=30.0,
@@ -3928,7 +3926,7 @@ async def memex_memory_restore(
         raise ToolError(f'Restore failed: {e}')
 
 
-# --- Summarize ---
+# --- summarize_node ---
 
 from memex_mcp._summarize_descriptions import MEMEX_MEMORY_SUMMARIZE_NODE_DESCRIPTION
 
@@ -3948,7 +3946,7 @@ async def memex_memory_summarize_node(
         Field(
             description=(
                 "'incremental' (default — only new evidence) or 'full' "
-                '(re-evaluate all evidence; capped at 100 units).'
+                '(re-evaluate all evidence; capped at MAX_FULL_SCOPE_UNITS=1000).'
             ),
         ),
     ] = 'incremental',
@@ -3998,7 +3996,7 @@ async def memex_memory_summarize_node(
         raise ToolError(f'memex_memory_summarize_node failed: {e}')
 
 
-# --- Lint ---
+# --- get_lint_flags ---
 
 from memex_mcp._lint_flags_descriptions import MEMEX_GET_LINT_FLAGS_DESCRIPTION
 
@@ -4039,7 +4037,7 @@ async def memex_get_lint_flags(
 ) -> dict[str, Any]:
     """Read-only surface: list pending memory-hygiene findings.
 
-    Previously a missing ``vault_id`` would fall through to a
+    HIGH-006: previously a missing ``vault_id`` would fall through to a
     global all-vault view, leaking findings across tenants. The tool now
     binds to the session's active write vault when no ``vault_id`` is
     provided. Cross-tenant probing requires an explicit ``vault_id`` that
@@ -4047,8 +4045,9 @@ async def memex_get_lint_flags(
     """
     try:
         api = get_api(ctx)
-        # Never fall through to all-vault — always scope to a concrete vault.
-        # Default to the session's active write vault when vault_id is omitted.
+        # HIGH-006: never fall through to all-vault — always scope to a
+        # concrete vault. Default to the session's active write vault when
+        # the agent omits vault_id.
         effective_vault = vault_id if vault_id is not None else _default_write_vault(ctx)
         resolved_vault = str(await _resolve_vault_id(api, effective_vault))
         try:
@@ -4076,7 +4075,7 @@ async def memex_get_lint_flags(
         raise ToolError(f'memex_get_lint_flags failed: {e}')
 
 
-# --- Consolidation ---
+# --- reconsolidate / consolidate ---
 
 from memex_mcp._reconsolidate_descriptions import (
     MEMEX_MEMORY_CONSOLIDATE_DESCRIPTION,
@@ -4141,9 +4140,9 @@ async def memex_memory_consolidate(
         Field(description='If true, return preview without making changes.'),
     ] = False,
 ) -> dict[str, Any]:
-    """Vault-wide low-Memory-Worth unit consolidation.
+    """Vault-wide low-MW unit consolidation.
 
-    Rate-limited per vault (default 1 call per vault per
+    Rate-limited per vault (RFC-008 line 125; default 1 call per vault per
     hour). On 429 the tool returns a structured envelope with
     ``retry_after_seconds`` rather than raising — mirrors the
     summarize-node contract so agents can back off without retry loops.
@@ -4172,135 +4171,12 @@ async def memex_memory_consolidate(
         raise ToolError(f'memex_memory_consolidate failed: {e}')
 
 
-# --- Review / Revisit ---
-
-from memex_mcp._revisit_descriptions import (
-    MEMEX_GET_DUE_FOR_REVIEW_DESCRIPTION,
-    MEMEX_MEMORY_REVIEW_DESCRIPTION,
-)
-
-
-@mcp.tool(
-    name='memex_get_due_for_review',
-    description=MEMEX_GET_DUE_FOR_REVIEW_DESCRIPTION,
-    tags={'read', 'storage'},
-    annotations={'readOnlyHint': True},
-    timeout=30.0,
-)
-async def memex_get_due_for_review(
-    ctx: Context,
-    vault_id: Annotated[
-        str | None,
-        Field(description='Vault UUID or name (defaults to active vault if omitted).'),
-    ] = None,
-    limit: Annotated[
-        int,
-        Field(ge=1, le=200, description='Maximum due units to return (default 20).'),
-    ] = 20,
-) -> list[dict[str, Any]]:
-    """List memory units due for FSRS-5 revisit in a vault."""
-    try:
-        api = get_api(ctx)
-        config = get_config(ctx)
-        if vault_id is None:
-            resolved_vault_id = await api.resolve_vault_identifier(
-                config.server.default_active_vault
-            )
-        else:
-            resolved_vault_id = await _resolve_vault_id(api, vault_id)
-        due = await api.get_due_for_review(resolved_vault_id, limit=limit)
-        return [
-            {
-                'unit_id': str(d.unit_id),
-                'text_preview': d.text_preview,
-                'revisit_due_at': d.revisit_due_at.isoformat(),
-                'intent_class': d.intent_class,
-            }
-            for d in due
-        ]
-    except ToolError:
-        raise
-    except Exception as e:
-        logger.error(f'memex_get_due_for_review failed: {e}', exc_info=True)
-        raise ToolError(f'memex_get_due_for_review failed: {e}')
-
-
-@mcp.tool(
-    name='memex_memory_review',
-    description=MEMEX_MEMORY_REVIEW_DESCRIPTION,
-    tags={'write', 'storage'},
-    annotations={'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': False},
-    timeout=30.0,
-)
-async def memex_memory_review(
-    ctx: Context,
-    unit_id: Annotated[str, Field(description='Memory unit UUID being reviewed.')],
-    quality: Annotated[
-        int | str,
-        BeforeValidator(reject_bool_quality),
-        Field(
-            description=(
-                'Review rating. Accepts the FSRS-5 IntEnum value (1=again, 2=hard, '
-                "3=good, 4=easy) or the case-insensitive string ('again' / 'hard' / "
-                "'good' / 'easy'). AGAIN/HARD record a failure outcome; GOOD/EASY "
-                'record a success outcome.'
-            ),
-        ),
-    ],
-    vault_id: Annotated[
-        str,
-        Field(
-            description=(
-                'Vault UUID or name the memory unit belongs to. REQUIRED — '
-                'the service rejects cross-vault review (vault-scoping invariant).'
-            ),
-        ),
-    ],
-) -> dict[str, Any]:
-    """Record a review outcome on a memory unit (FSRS-5 advance + outcome + audit)."""
-    try:
-        from memex_core.memory.revisit import Quality
-
-        api = get_api(ctx)
-        try:
-            uuid_obj = UUID(unit_id)
-        except ValueError:
-            raise ToolError(f'Invalid memory unit UUID: {unit_id}')
-
-        if isinstance(quality, int):
-            try:
-                quality_enum = Quality(quality)
-            except ValueError:
-                raise ToolError(
-                    f'Invalid quality {quality!r}; must be 1 (again), 2 (hard), '
-                    '3 (good), or 4 (easy).'
-                )
-        else:
-            quality_lc = quality.strip().lower()
-            try:
-                quality_enum = Quality[quality_lc.upper()]
-            except KeyError:
-                raise ToolError(
-                    f"Invalid quality {quality!r}; must be one of 'again', 'hard', 'good', 'easy'."
-                )
-
-        resolved_vault_id = await _resolve_vault_id(api, vault_id)
-        return await api.review_memory_unit(uuid_obj, quality_enum, vault_id=resolved_vault_id)
-    except ToolError:
-        raise
-    except PermissionError as exc:
-        raise ToolError(str(exc))
-    except Exception as e:
-        logger.error(f'memex_memory_review failed: {e}', exc_info=True)
-        raise ToolError(f'memex_memory_review failed: {e}')
-
-
-# --- Diagnostics ---
+# --- get_diagnostics_summary ---
 @mcp.tool(
     name='memex_get_diagnostics_summary',
     description=(
         'Vault diagnostics summary: unit counts by status (active/stale/deprioritized), '
-        'lint pending counts by type, cluster_count (null on cold cache), avg Memory Worth score, '
+        'lint pending counts by type, cluster_count (null on cold cache), avg MW score, '
         'and top-5 retrieved entities. Synchronous (no UMAP block) — surfaces '
         'manifold status without waiting on compute.'
     ),

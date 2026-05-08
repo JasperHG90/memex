@@ -1,9 +1,10 @@
-"""Typer CLI for memex-eval: `memex-eval run`, `memex-eval locomo-*`, `memex-eval longmemeval-*`."""
+"""Typer CLI for memex-eval: `memex-eval internal run`, `memex-eval locomo <sub>`, `memex-eval longmemeval <sub>`."""
 
 from __future__ import annotations
 
 import asyncio
 import logging
+import warnings
 from uuid import uuid4
 
 import typer
@@ -34,7 +35,19 @@ def _make_recorder(
     )
 
 
-@app.command()
+# ---------------------------------------------------------------------------
+# Internal benchmark
+# ---------------------------------------------------------------------------
+
+internal_app = typer.Typer(
+    name='internal',
+    help='Internal quality benchmark.',
+    no_args_is_help=True,
+)
+app.add_typer(internal_app, name='internal')
+
+
+@internal_app.command('run')
 def run(
     server: str = typer.Option(DEFAULT_SERVER, '--server', '-s', help='Memex API server URL.'),
     group: str | None = typer.Option(
@@ -125,7 +138,19 @@ def run(
         raise typer.Exit(code=1)
 
 
-@app.command('locomo-ingest')
+# ---------------------------------------------------------------------------
+# LoCoMo benchmark
+# ---------------------------------------------------------------------------
+
+locomo_app = typer.Typer(
+    name='locomo',
+    help='LoCoMo benchmark: ingest, export, answer, judge, report, efficiency.',
+    no_args_is_help=True,
+)
+app.add_typer(locomo_app, name='locomo')
+
+
+@locomo_app.command('ingest')
 def locomo_ingest_cmd(
     dataset_path: str = typer.Option(
         ..., '--dataset-path', '-d', help='Path to the LoCoMo dataset directory.'
@@ -173,7 +198,7 @@ def locomo_ingest_cmd(
         )
 
 
-@app.command('locomo-export')
+@locomo_app.command('export')
 def locomo_export_cmd(
     dataset_path: str = typer.Option(
         ..., '--dataset-path', '-d', help='Path to the LoCoMo dataset directory.'
@@ -224,7 +249,7 @@ def locomo_export_cmd(
         recorder.log_artifact(output)
 
 
-@app.command('locomo-answer')
+@locomo_app.command('answer')
 def locomo_answer_cmd(
     method: str = typer.Option(
         'claude-code',
@@ -276,7 +301,7 @@ def locomo_answer_cmd(
         recorder.log_artifact(output)
 
 
-@app.command('locomo-judge')
+@locomo_app.command('judge')
 def locomo_judge_cmd(
     questions: str = typer.Option(
         'questions.jsonl', '--questions', '-q', help='Input questions JSONL.'
@@ -327,7 +352,7 @@ def locomo_judge_cmd(
         recorder.log_artifact(output)
 
 
-@app.command('locomo-report')
+@locomo_app.command('report')
 def locomo_report_cmd(
     results: str = typer.Option(
         'results.json', '--results', '-r', help='Input judge results JSON.'
@@ -376,7 +401,7 @@ def locomo_report_cmd(
         )
 
 
-@app.command('locomo-efficiency')
+@locomo_app.command('efficiency')
 def locomo_efficiency_cmd(
     answers: str = typer.Option('answers.jsonl', '--answers', '-a', help='Input answers JSONL.'),
     traces_dir: str = typer.Option(
@@ -418,6 +443,221 @@ def locomo_efficiency_cmd(
             traces_dir=traces_dir,
         )
         recorder.log_artifact(output)
+
+
+# ---------------------------------------------------------------------------
+# Deprecated LoCoMo aliases (backward compat — remove in next major version)
+# ----------------------------------------------------------------------------
+
+
+@app.command('locomo-ingest', deprecated=True)
+def locomo_ingest_deprecated(
+    dataset_path: str = typer.Option(
+        ..., '--dataset-path', '-d', help='Path to the LoCoMo dataset directory.'
+    ),
+    server: str = typer.Option(DEFAULT_SERVER, '--server', '-s', help='Memex API server URL.'),
+    conversation: int = typer.Option(0, '--conversation', '-c', help='Conversation index (0-9).'),
+    clean: bool = typer.Option(False, '--clean', help='Delete existing notes and re-ingest.'),
+    mlflow_uri: str | None = typer.Option(
+        None,
+        '--mlflow-uri',
+        envvar='MLFLOW_TRACKING_URI',
+        help='Optional MLflow tracking URI.',
+    ),
+    mlflow_experiment: str = typer.Option(
+        'memex-eval',
+        '--mlflow-experiment',
+        envvar='MEMEX_EVAL_MLFLOW_EXPERIMENT',
+    ),
+    mlflow_run_name: str | None = typer.Option(None, '--mlflow-run-name'),
+    verbose: bool = typer.Option(False, '--verbose', '-v', help='Enable verbose logging.'),
+) -> None:
+    """Deprecated: use 'memex-eval locomo ingest'."""
+    warnings.warn(
+        "'locomo-ingest' is deprecated, use 'locomo ingest'", DeprecationWarning, stacklevel=2
+    )
+    locomo_ingest_cmd(
+        dataset_path=dataset_path,
+        server=server,
+        conversation=conversation,
+        clean=clean,
+        mlflow_uri=mlflow_uri,
+        mlflow_experiment=mlflow_experiment,
+        mlflow_run_name=mlflow_run_name,
+        verbose=verbose,
+    )
+
+
+@app.command('locomo-export', deprecated=True)
+def locomo_export_deprecated(
+    dataset_path: str = typer.Option(
+        ..., '--dataset-path', '-d', help='Path to the LoCoMo dataset directory.'
+    ),
+    output: str = typer.Option('questions.jsonl', '--output', '-o', help='Output JSONL file.'),
+    limit: int | None = typer.Option(
+        None, '--limit', '-n', help='Randomly sample this many QA pairs.'
+    ),
+    seed: int = typer.Option(42, '--seed', help='Random seed for sampling.'),
+    conversation: int = typer.Option(0, '--conversation', '-c', help='Conversation index (0-9).'),
+    mlflow_uri: str | None = typer.Option(
+        None,
+        '--mlflow-uri',
+        envvar='MLFLOW_TRACKING_URI',
+        help='Optional MLflow tracking URI.',
+    ),
+    mlflow_experiment: str = typer.Option(
+        'memex-eval',
+        '--mlflow-experiment',
+        envvar='MEMEX_EVAL_MLFLOW_EXPERIMENT',
+    ),
+    mlflow_run_name: str | None = typer.Option(None, '--mlflow-run-name'),
+    verbose: bool = typer.Option(False, '--verbose', '-v', help='Enable verbose logging.'),
+) -> None:
+    """Deprecated: use 'memex-eval locomo export'."""
+    warnings.warn(
+        "'locomo-export' is deprecated, use 'locomo export'", DeprecationWarning, stacklevel=2
+    )
+    locomo_export_cmd(
+        dataset_path=dataset_path,
+        output=output,
+        limit=limit,
+        seed=seed,
+        conversation=conversation,
+        mlflow_uri=mlflow_uri,
+        mlflow_experiment=mlflow_experiment,
+        mlflow_run_name=mlflow_run_name,
+        verbose=verbose,
+    )
+
+
+@app.command('locomo-answer', deprecated=True)
+def locomo_answer_deprecated(
+    method: str = typer.Option('claude-code', '--method', '-m', help='Answer method.'),
+    questions: str = typer.Option(
+        'questions.jsonl', '--questions', '-q', help='Input questions JSONL.'
+    ),
+    output: str = typer.Option('answers.jsonl', '--output', '-o', help='Output answers JSONL.'),
+    server: str = typer.Option(DEFAULT_SERVER, '--server', '-s', help='Memex API server URL.'),
+    mlflow_uri: str | None = typer.Option(None, '--mlflow-uri', envvar='MLFLOW_TRACKING_URI'),
+    mlflow_experiment: str = typer.Option(
+        'memex-eval', '--mlflow-experiment', envvar='MEMEX_EVAL_MLFLOW_EXPERIMENT'
+    ),
+    mlflow_run_name: str | None = typer.Option(None, '--mlflow-run-name'),
+    verbose: bool = typer.Option(False, '--verbose', '-v', help='Enable verbose logging.'),
+) -> None:
+    """Deprecated: use 'memex-eval locomo answer'."""
+    warnings.warn(
+        "'locomo-answer' is deprecated, use 'locomo answer'", DeprecationWarning, stacklevel=2
+    )
+    locomo_answer_cmd(
+        method=method,
+        questions=questions,
+        output=output,
+        server=server,
+        mlflow_uri=mlflow_uri,
+        mlflow_experiment=mlflow_experiment,
+        mlflow_run_name=mlflow_run_name,
+        verbose=verbose,
+    )
+
+
+@app.command('locomo-judge', deprecated=True)
+def locomo_judge_deprecated(
+    questions: str = typer.Option(
+        'questions.jsonl', '--questions', '-q', help='Input questions JSONL.'
+    ),
+    answers: str = typer.Option('answers.jsonl', '--answers', '-a', help='Input answers JSONL.'),
+    output: str = typer.Option('report.json', '--output', '-o', help='Output report JSON.'),
+    judge_model: str | None = typer.Option(
+        None, '--judge-model', help='Override the LLM judge model.'
+    ),
+    mlflow_uri: str | None = typer.Option(None, '--mlflow-uri', envvar='MLFLOW_TRACKING_URI'),
+    mlflow_experiment: str = typer.Option(
+        'memex-eval', '--mlflow-experiment', envvar='MEMEX_EVAL_MLFLOW_EXPERIMENT'
+    ),
+    mlflow_run_name: str | None = typer.Option(None, '--mlflow-run-name'),
+    verbose: bool = typer.Option(False, '--verbose', '-v', help='Enable verbose logging.'),
+) -> None:
+    """Deprecated: use 'memex-eval locomo judge'."""
+    warnings.warn(
+        "'locomo-judge' is deprecated, use 'locomo judge'", DeprecationWarning, stacklevel=2
+    )
+    locomo_judge_cmd(
+        questions=questions,
+        answers=answers,
+        output=output,
+        judge_model=judge_model,
+        mlflow_uri=mlflow_uri,
+        mlflow_experiment=mlflow_experiment,
+        mlflow_run_name=mlflow_run_name,
+        verbose=verbose,
+    )
+
+
+@app.command('locomo-report', deprecated=True)
+def locomo_report_deprecated(
+    results: str = typer.Option(
+        'results.json', '--results', '-r', help='Input judge results JSON.'
+    ),
+    answers: str = typer.Option('answers.jsonl', '--answers', '-a', help='Input answers JSONL.'),
+    traces_dir: str = typer.Option(
+        'traces', '--traces-dir', '-t', help='Directory with trace JSONL files.'
+    ),
+    output_dir: str = typer.Option(
+        'report', '--output-dir', '-o', help='Output directory for report and plots.'
+    ),
+    mlflow_uri: str | None = typer.Option(None, '--mlflow-uri', envvar='MLFLOW_TRACKING_URI'),
+    mlflow_experiment: str = typer.Option(
+        'memex-eval', '--mlflow-experiment', envvar='MEMEX_EVAL_MLFLOW_EXPERIMENT'
+    ),
+    mlflow_run_name: str | None = typer.Option(None, '--mlflow-run-name'),
+    verbose: bool = typer.Option(False, '--verbose', '-v', help='Enable verbose logging.'),
+) -> None:
+    """Deprecated: use 'memex-eval locomo report'."""
+    warnings.warn(
+        "'locomo-report' is deprecated, use 'locomo report'", DeprecationWarning, stacklevel=2
+    )
+    locomo_report_cmd(
+        results=results,
+        answers=answers,
+        traces_dir=traces_dir,
+        output_dir=output_dir,
+        mlflow_uri=mlflow_uri,
+        mlflow_experiment=mlflow_experiment,
+        mlflow_run_name=mlflow_run_name,
+        verbose=verbose,
+    )
+
+
+@app.command('locomo-efficiency', deprecated=True)
+def locomo_efficiency_deprecated(
+    answers: str = typer.Option('answers.jsonl', '--answers', '-a', help='Input answers JSONL.'),
+    traces_dir: str = typer.Option(
+        ..., '--traces-dir', '-t', help='Directory with trace JSONL files.'
+    ),
+    output: str = typer.Option('efficiency.json', '--output', '-o', help='Output efficiency JSON.'),
+    mlflow_uri: str | None = typer.Option(None, '--mlflow-uri', envvar='MLFLOW_TRACKING_URI'),
+    mlflow_experiment: str = typer.Option(
+        'memex-eval', '--mlflow-experiment', envvar='MEMEX_EVAL_MLFLOW_EXPERIMENT'
+    ),
+    mlflow_run_name: str | None = typer.Option(None, '--mlflow-run-name'),
+    verbose: bool = typer.Option(False, '--verbose', '-v', help='Enable verbose logging.'),
+) -> None:
+    """Deprecated: use 'memex-eval locomo efficiency'."""
+    warnings.warn(
+        "'locomo-efficiency' is deprecated, use 'locomo efficiency'",
+        DeprecationWarning,
+        stacklevel=2,
+    )
+    locomo_efficiency_cmd(
+        answers=answers,
+        traces_dir=traces_dir,
+        output=output,
+        mlflow_uri=mlflow_uri,
+        mlflow_experiment=mlflow_experiment,
+        mlflow_run_name=mlflow_run_name,
+        verbose=verbose,
+    )
 
 
 # ---------------------------------------------------------------------------

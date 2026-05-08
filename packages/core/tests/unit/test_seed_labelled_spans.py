@@ -21,6 +21,11 @@ import pytest
 _REPO_ROOT = plb.Path(__file__).resolve().parents[4]
 
 
+# NOTE: F20 was the FSRS-5 revisit slot; it is removed (no longer a Tier A
+# feature). All F20 markers have been deleted from the source files. The
+# remember/SKILL.md and recall/SKILL.md entries were also rewritten by
+# earlier "compress agent surfaces" refactors which dropped the labelled
+# headers — they now hold only behavioural content, not Tier A scaffolding.
 _FILE_MARKERS: dict[str, list[str]] = {
     'packages/mcp/src/memex_mcp/server.py': ['Tier A — Tool registry'],
     'packages/core/src/memex_core/scheduler.py': [
