@@ -338,3 +338,25 @@ CROSS_ENCODER_CACHE_MISSES_TOTAL = Counter(
     'Cross-encoder reranker score cache misses. '
     'A miss triggers a cross-encoder forward pass and a fill.',
 )
+
+
+# ---------------------------------------------------------------------------
+# FSFM-inspired deprioritization scorer
+# ---------------------------------------------------------------------------
+
+FSFM_SCORER_RUNS_TOTAL = Counter(
+    'memex_fsfm_scorer_runs_total',
+    'Total FSFM scorer batch runs (auto-deprioritize ticks) by outcome.',
+    ['outcome'],  # success | error | disabled | skipped_locked
+)
+
+FSFM_AUTO_DEPRIORITIZED_TOTAL = Counter(
+    'memex_fsfm_auto_deprioritized_total',
+    'Total memory units auto-deprioritized by the FSFM auto-band.',
+)
+
+FSFM_AUTO_BAND_SKIPPED_TOTAL = Counter(
+    'memex_fsfm_auto_band_skipped_total',
+    'Total candidates the FSFM auto-band skipped, by reason.',
+    ['reason'],  # below_threshold | escalation_pending | cooldown_active | unit_missing | lock_held
+)

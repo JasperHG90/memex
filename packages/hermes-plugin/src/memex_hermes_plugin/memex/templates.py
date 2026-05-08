@@ -28,7 +28,6 @@ __all__ = [
 # F5:  WS-quick-wins  (summarize_node prompt)
 # F8:  WS-linter      (get_lint_flags discoverability)
 # F9:  WS-locks       (reconsolidate/consolidate disclosure)
-# F20: WS-revisit     (memory_review prompt)
 # F32: WS-diagnostics (diagnostics_summary disclosure)
 # ============================================================
 
@@ -39,8 +38,6 @@ __all__ = [
 # --- F8 ---  (filled by WS-linter)
 
 # --- F9 ---  (filled by WS-locks)
-
-# --- F20 --- (filled by WS-revisit)
 
 # --- F32 --- (filled by WS-diagnostics)
 DIAGNOSTICS_SUMMARY_PROMPT_FRAGMENT = (

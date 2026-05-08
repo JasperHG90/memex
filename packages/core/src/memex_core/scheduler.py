@@ -127,7 +127,20 @@ async def periodic_diagnostics_refresh_task(api: 'MemexAPI'):
 
 
 async def periodic_lint_task(api: 'MemexAPI'):
-    """Per-vault lint run under existing MEMEX_LEADER_LOCK_ID."""
+    """Per-vault lint run + FSFM auto-deprioritize step.
+
+    Two phases per vault, run sequentially under MEMEX_LEADER_LOCK_ID:
+
+    1. ``api.lint.run_rules(vault.id)`` evaluates the rule registry (including
+       the four FSFM-inspired rules) and writes pending ``MaintenanceProposal``
+       rows.
+    2. ``api.auto_deprioritize_after_lint(vault.id)`` reads those proposals
+       and flips ``is_deprioritized`` on units that satisfy every gate
+       (auto-threshold, no escalation, no recent restore in cooldown window).
+
+    Per-vault failures in either phase are warning-logged and never raise —
+    one bad vault must not stop other vaults from getting linted this tick.
+    """
     async with background_session('bg-sched-lint'):
         try:
             vaults = await api.list_vaults()
@@ -142,6 +155,23 @@ async def periodic_lint_task(api: 'MemexAPI'):
                         )
                 except Exception as e:
                     logger.warning(f'Scheduler: Lint run failed for vault {vault.name}: {e}')
+                    continue
+
+                try:
+                    auto = await api.auto_deprioritize_after_lint(vault.id)
+                    if auto.enabled and auto.total_deprioritized:
+                        logger.info(
+                            'Scheduler: FSFM auto-band deprioritized %d unit(s) in vault %s '
+                            '(skipped: below=%d, escalation=%d, cooldown=%d, errors=%d)',
+                            auto.total_deprioritized,
+                            vault.name,
+                            len(auto.skipped_below_threshold),
+                            len(auto.skipped_escalation),
+                            len(auto.skipped_cooldown),
+                            len(auto.errors),
+                        )
+                except Exception as e:
+                    logger.warning(f'Scheduler: FSFM auto-band failed for vault {vault.name}: {e}')
         except (OSError, RuntimeError, ValueError) as e:
             logger.error(f'Scheduler: Lint task failed: {e}', exc_info=True)
 
@@ -166,37 +196,6 @@ async def periodic_consolidation_task(api: 'MemexAPI', units_per_tick: int):
                     )
         except (OSError, RuntimeError, ValueError) as e:
             logger.error(f'Scheduler: Consolidation failed: {e}', exc_info=True)
-
-
-async def periodic_revisit_task(api: 'MemexAPI'):
-    """Per-vault revisit-schedule populator under existing MEMEX_LEADER_LOCK_ID.
-
-    Walks every vault and seeds `revisit_due_at` for never-evaluated eligible
-    units. Idempotent — already-scheduled units and previously-evaluated-and-
-    excluded units are skipped (re-eligibility flows through this same path
-    on the next tick once the eligibility predicate flips).
-
-    Per-vault failures are warning-logged and never raise — one bad vault
-    must not stop other vaults from being seeded this tick.
-    """
-    async with background_session('bg-sched-revisit'):
-        try:
-            vaults = await api.list_vaults()
-            for vault in vaults:
-                try:
-                    scheduled = await api.revisit.populate_initial_schedules(vault.id)
-                    if scheduled:
-                        logger.info(
-                            'Scheduler: Revisit scheduled %d unit(s) in vault %s',
-                            scheduled,
-                            vault.name,
-                        )
-                except Exception as e:
-                    logger.warning(
-                        f'Scheduler: Revisit populator failed for vault {vault.name}: {e}'
-                    )
-        except (OSError, RuntimeError, ValueError) as e:
-            logger.error(f'Scheduler: Revisit task failed: {e}', exc_info=True)
 
 
 async def periodic_lint_llm_task(api: 'MemexAPI'):
@@ -360,14 +359,6 @@ async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI
             await periodic_lint_llm_task(api)
     else:
         logger.info('Scheduler: Lint_llm DISABLED (enabled=False or cost_cap_per_24h=0).')
-
-    # --- Revisit ---
-    if config.server.memory.revisit.enabled:
-        revisit_interval = config.server.memory.revisit.interval_seconds
-
-        @clock.task(trigger=Every(seconds=revisit_interval))
-        async def run_revisit_job():
-            await periodic_revisit_task(api)
 
     # --- Diagnostics ---
     @clock.task(trigger=Every(seconds=7 * 86400))

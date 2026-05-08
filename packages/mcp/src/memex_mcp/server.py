@@ -20,7 +20,6 @@ from fastmcp.exceptions import ToolError
 
 from memex_common.asset_cache import MAX_GET_RESOURCES_PATHS, MAX_RESOURCE_BYTES
 from memex_common.asset_resize import validate_and_resize
-from memex_common.revisit import reject_bool_quality
 from fastmcp.utilities.logging import configure_logging
 import json
 
@@ -3810,16 +3809,10 @@ if __name__ == '__main__':
 
 
 # ============================================================
-# Tier A — Tool registry (peer-reviewed conventions)
-# F4 (deprioritize, restore):       WS-quick-wins
-# F5 (summarize_node):              WS-quick-wins
-# F8 (get_lint_flags):              WS-linter
-# F9 (reconsolidate, consolidate):  WS-locks
-# F20 (get_due_for_review, review): WS-revisit
-# F32 (get_diagnostics_summary):    WS-diagnostics
+# Tier A — Tool registry
 # ============================================================
 
-# --- F4 ---  (filled by WS-quick-wins)
+# --- deprioritize / restore ---
 
 from memex_mcp._deprioritize_descriptions import (
     MEMEX_MEMORY_RESTORE_DESCRIPTION,
@@ -3926,7 +3919,7 @@ async def memex_memory_restore(
         raise ToolError(f'Restore failed: {e}')
 
 
-# --- F5 ---  (filled by WS-quick-wins)
+# --- summarize_node ---
 
 from memex_mcp._summarize_descriptions import MEMEX_MEMORY_SUMMARIZE_NODE_DESCRIPTION
 
@@ -3996,7 +3989,7 @@ async def memex_memory_summarize_node(
         raise ToolError(f'memex_memory_summarize_node failed: {e}')
 
 
-# --- F8 ---  (filled by WS-linter)
+# --- get_lint_flags ---
 
 from memex_mcp._lint_flags_descriptions import MEMEX_GET_LINT_FLAGS_DESCRIPTION
 
@@ -4075,7 +4068,7 @@ async def memex_get_lint_flags(
         raise ToolError(f'memex_get_lint_flags failed: {e}')
 
 
-# --- F9 ---  (filled by WS-locks)
+# --- reconsolidate / consolidate ---
 
 from memex_mcp._reconsolidate_descriptions import (
     MEMEX_MEMORY_CONSOLIDATE_DESCRIPTION,
@@ -4171,130 +4164,7 @@ async def memex_memory_consolidate(
         raise ToolError(f'memex_memory_consolidate failed: {e}')
 
 
-# --- F20 --- (filled by WS-revisit)
-
-from memex_mcp._revisit_descriptions import (
-    MEMEX_GET_DUE_FOR_REVIEW_DESCRIPTION,
-    MEMEX_MEMORY_REVIEW_DESCRIPTION,
-)
-
-
-@mcp.tool(
-    name='memex_get_due_for_review',
-    description=MEMEX_GET_DUE_FOR_REVIEW_DESCRIPTION,
-    tags={'read', 'storage'},
-    annotations={'readOnlyHint': True},
-    timeout=30.0,
-)
-async def memex_get_due_for_review(
-    ctx: Context,
-    vault_id: Annotated[
-        str | None,
-        Field(description='Vault UUID or name (defaults to active vault if omitted).'),
-    ] = None,
-    limit: Annotated[
-        int,
-        Field(ge=1, le=200, description='Maximum due units to return (default 20).'),
-    ] = 20,
-) -> list[dict[str, Any]]:
-    """List memory units due for FSRS-5 revisit in a vault."""
-    try:
-        api = get_api(ctx)
-        config = get_config(ctx)
-        if vault_id is None:
-            resolved_vault_id = await api.resolve_vault_identifier(
-                config.server.default_active_vault
-            )
-        else:
-            resolved_vault_id = await _resolve_vault_id(api, vault_id)
-        due = await api.get_due_for_review(resolved_vault_id, limit=limit)
-        return [
-            {
-                'unit_id': str(d.unit_id),
-                'text_preview': d.text_preview,
-                'revisit_due_at': d.revisit_due_at.isoformat(),
-                'intent_class': d.intent_class,
-            }
-            for d in due
-        ]
-    except ToolError:
-        raise
-    except Exception as e:
-        logger.error(f'memex_get_due_for_review failed: {e}', exc_info=True)
-        raise ToolError(f'memex_get_due_for_review failed: {e}')
-
-
-@mcp.tool(
-    name='memex_memory_review',
-    description=MEMEX_MEMORY_REVIEW_DESCRIPTION,
-    tags={'write', 'storage'},
-    annotations={'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': False},
-    timeout=30.0,
-)
-async def memex_memory_review(
-    ctx: Context,
-    unit_id: Annotated[str, Field(description='Memory unit UUID being reviewed.')],
-    quality: Annotated[
-        int | str,
-        BeforeValidator(reject_bool_quality),
-        Field(
-            description=(
-                'Review rating. Accepts the FSRS-5 IntEnum value (1=again, 2=hard, '
-                "3=good, 4=easy) or the case-insensitive string ('again' / 'hard' / "
-                "'good' / 'easy'). AGAIN/HARD record a failure outcome; GOOD/EASY "
-                'record a success outcome.'
-            ),
-        ),
-    ],
-    vault_id: Annotated[
-        str,
-        Field(
-            description=(
-                'Vault UUID or name the memory unit belongs to. REQUIRED — '
-                'the service rejects cross-vault review (vault-scoping invariant).'
-            ),
-        ),
-    ],
-) -> dict[str, Any]:
-    """Record a review outcome on a memory unit (FSRS-5 advance + outcome + audit)."""
-    try:
-        from memex_core.memory.revisit import Quality
-
-        api = get_api(ctx)
-        try:
-            uuid_obj = UUID(unit_id)
-        except ValueError:
-            raise ToolError(f'Invalid memory unit UUID: {unit_id}')
-
-        if isinstance(quality, int):
-            try:
-                quality_enum = Quality(quality)
-            except ValueError:
-                raise ToolError(
-                    f'Invalid quality {quality!r}; must be 1 (again), 2 (hard), '
-                    '3 (good), or 4 (easy).'
-                )
-        else:
-            quality_lc = quality.strip().lower()
-            try:
-                quality_enum = Quality[quality_lc.upper()]
-            except KeyError:
-                raise ToolError(
-                    f"Invalid quality {quality!r}; must be one of 'again', 'hard', 'good', 'easy'."
-                )
-
-        resolved_vault_id = await _resolve_vault_id(api, vault_id)
-        return await api.review_memory_unit(uuid_obj, quality_enum, vault_id=resolved_vault_id)
-    except ToolError:
-        raise
-    except PermissionError as exc:
-        raise ToolError(str(exc))
-    except Exception as e:
-        logger.error(f'memex_memory_review failed: {e}', exc_info=True)
-        raise ToolError(f'memex_memory_review failed: {e}')
-
-
-# --- F32 --- (filled by WS-diagnostics)
+# --- get_diagnostics_summary ---
 @mcp.tool(
     name='memex_get_diagnostics_summary',
     description=(
