@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
 
@@ -887,6 +888,71 @@ def test_vault_rebind_with_pending_create_is_ignored(
                 assert provider._vault_name == 'vault-A'
                 # And the queued create still targets vault A.
                 assert provider._pending[0]['vault_id'] == str(vault_a)
+            finally:
+                provider.shutdown()
+
+
+def test_vault_rebind_toctou_reverify_under_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """If a create is enqueued WHILE _refresh_vault_binding's network
+    calls are in flight, the second-pass check under the lock must reject
+    the rebind. Otherwise the binding flips between the fast-path check
+    and the mutation, splitting the transcript across vaults.
+
+    Round-3 regression: simulate the race by patching resolve_vault to
+    enqueue a create as a side effect.
+    """
+    monkeypatch.setenv('HERMES_HOME', str(tmp_path))
+    monkeypatch.setenv('MEMEX_SERVER_URL', 'http://test:8000')
+    monkeypatch.setenv('MEMEX_VAULT', 'vault-A')
+
+    import json
+
+    cfg_dir = tmp_path / 'memex'
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    (cfg_dir / 'config.json').write_text(json.dumps({'briefing_refresh_cadence': 1}))
+
+    fake_api = Mock()
+    vault_a = uuid4()
+    vault_b = uuid4()
+    fake_api.kv_get = AsyncMock(return_value=None)
+    fake_api.resolve_vault_identifier = AsyncMock(side_effect=[vault_a, vault_b])
+    fake_api.get_session_briefing = AsyncMock(return_value='')
+    fake_api.ingest = AsyncMock(side_effect=RuntimeError('down'))
+
+    provider_holder: dict[str, Any] = {}
+
+    def resolve_vault_side_effect(*args, **kwargs):
+        # First call: returns vault-A (initial init).
+        # Second call: simulate a concurrent flush enqueuing a create
+        # WHILE we're mid-resolution.
+        call_count = resolve_vault_mock.call_count
+        if call_count == 2:
+            p = provider_holder.get('p')
+            if p is not None:
+                p.sync_turn('q', 'a')
+                p.on_session_end([])
+                # A create is now queued (ingest fails, stays in queue).
+        return ['vault-A', 'vault-B'][call_count - 1]
+
+    with patch('memex_common.client.RemoteMemexAPI', return_value=fake_api):
+        with patch(
+            'memex_hermes_plugin.memex.provider.resolve_vault',
+            side_effect=resolve_vault_side_effect,
+        ) as resolve_vault_mock:
+            provider = MemexMemoryProvider()
+            provider.initialize('s', hermes_home=str(tmp_path), platform='cli')
+            provider_holder['p'] = provider
+            try:
+                # No create queued yet; refresh_vault would normally rotate.
+                # The side-effect injects a create during the network call.
+                provider.on_turn_start(1, 'msg')
+
+                # The create should be queued (from the side-effect).
+                assert any(p['kind'] == 'create' for p in provider._pending)
+                # Vault binding must NOT have rotated to B — the
+                # under-lock re-check rejected the rebind.
+                assert provider._vault_id == vault_a
+                assert provider._vault_name == 'vault-A'
             finally:
                 provider.shutdown()
 

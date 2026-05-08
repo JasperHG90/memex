@@ -389,14 +389,15 @@ class MemexMemoryProvider(MemoryProvider):
         binding constant. Letting the active vault drift after the queued
         create would land the create in vault A but every subsequent
         snapshotted-against-B append in vault B, splitting the transcript.
+
+        The gate is checked twice: once as a fast-path before the network
+        calls, and once again under the lock at the point of mutation. The
+        second check closes the TOCTOU window where a queued create could
+        appear (or land) while the network calls were in flight.
         """
         if self._api is None or self._config is None:
             return
-        if self._note_initialized:
-            return
-        with self._state_lock:
-            has_pending_create = any(p['kind'] == 'create' for p in self._pending)
-        if has_pending_create:
+        if self._committed_to_vault():
             return
         try:
             new_vault_name = resolve_vault(
@@ -415,8 +416,27 @@ class MemexMemoryProvider(MemoryProvider):
         if new_vault_id is None:
             return
         with self._state_lock:
+            # Re-validate under the lock at the point of mutation: a create
+            # may have been enqueued or initialized while the network calls
+            # above were in flight. Mutating the binding now would split
+            # the transcript across vaults.
+            if self._note_initialized or any(p['kind'] == 'create' for p in self._pending):
+                return
             self._vault_name = new_vault_name
             self._vault_id = new_vault_id
+
+    def _committed_to_vault(self) -> bool:
+        """True if the session has effectively bound a vault.
+
+        Either the create has succeeded (``_note_initialized``) or a
+        create is queued with a snapshotted ``vault_id``. Reads of
+        ``_pending`` are protected by ``_state_lock``; ``_note_initialized``
+        is sampled cheaply outside the lock as a fast-path.
+        """
+        if self._note_initialized:
+            return True
+        with self._state_lock:
+            return any(p['kind'] == 'create' for p in self._pending)
 
     def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = '') -> None:  # type: ignore[override]
         """Buffer the turn locally. Flushes happen at chunk boundaries
@@ -726,15 +746,15 @@ class MemexMemoryProvider(MemoryProvider):
 
         Returns True if the row is visible, False on timeout. The id is
         deterministic from ``note_key`` so we can poll before the server
-        finishes the background insert. 404 and transient errors (5xx,
-        408, 429, network errors) keep polling within the deadline; only
-        a definitive non-transient HTTP error (4xx) bails early — those
-        won't resolve by waiting and signal a real misconfiguration.
+        finishes the background insert.
 
-        Bailing on a transient blip would otherwise cause the caller to
-        leave the create queued and re-issue another ingest on the next
-        flush, racing the original background job and creating a redundant
-        note version.
+        Status semantics here differ from the append site:
+        - **404** means "not yet visible" — keep polling. (At the append
+          site, 404 means "note doesn't exist" and is hard-fail.)
+        - **400 / 409 / 410 / 422** are non-transient — bail early; waiting
+          won't change the outcome.
+        - Everything else (5xx, 408, 429, network errors) is transient —
+          retry within the deadline.
         """
         if self._api is None:
             return False
@@ -746,9 +766,12 @@ class MemexMemoryProvider(MemoryProvider):
                 return True
             except httpx.HTTPStatusError as e:
                 code = e.response.status_code
-                if code != 404 and code in _NON_TRANSIENT_HTTP_STATUSES:
+                if code == 404:
+                    time.sleep(0.1)
+                    continue
+                if code in _NON_TRANSIENT_HTTP_STATUSES:
                     return False
-                time.sleep(0.1)
+                time.sleep(0.1)  # transient
             except Exception:
                 time.sleep(0.1)
         return False
