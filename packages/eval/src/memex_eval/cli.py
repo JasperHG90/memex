@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import warnings
 from uuid import uuid4
 
 import typer
@@ -446,218 +445,424 @@ def locomo_efficiency_cmd(
 
 
 # ---------------------------------------------------------------------------
-# Deprecated LoCoMo aliases (backward compat — remove in next major version)
-# ----------------------------------------------------------------------------
+# Suite subcommands (the new framework — see docs/how-to/evaluation-suite.md)
+# ---------------------------------------------------------------------------
 
 
-@app.command('locomo-ingest', deprecated=True)
-def locomo_ingest_deprecated(
-    dataset_path: str = typer.Option(
-        ..., '--dataset-path', '-d', help='Path to the LoCoMo dataset directory.'
+suite_app = typer.Typer(
+    name='suite',
+    help='Run, list, and sweep evaluation suites with MLflow tracking.',
+    no_args_is_help=True,
+)
+app.add_typer(suite_app, name='suite')
+
+
+def _resolve_overrides_to_env(
+    overrides: list[str],
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Translate dotted-path key=value overrides to MEMEX env-var form.
+
+    Returns ``(override_dict, env_dict)`` where ``override_dict`` is the
+    raw user input (logged as MLflow params) and ``env_dict`` is the env
+    overlay used by ``sweep`` to spawn server subprocesses.
+    """
+    out_overrides: dict[str, str] = {}
+    out_env: dict[str, str] = {}
+    for ov in overrides:
+        if '=' not in ov:
+            raise typer.BadParameter(f'--override must be KEY=VALUE; got {ov!r}')
+        key, value = ov.split('=', 1)
+        out_overrides[key.strip()] = value.strip()
+        env_key = 'MEMEX_' + key.strip().upper().replace('.', '__')
+        out_env[env_key] = value.strip()
+    return out_overrides, out_env
+
+
+@suite_app.command('list')
+def suite_list(
+    json_output: bool = typer.Option(False, '--json', help='Machine-readable output.'),
+) -> None:
+    """List every discoverable suite with metadata."""
+    from memex_eval.suite import discover_suites
+
+    suites = discover_suites()
+    if json_output:
+        import json as _json
+
+        payload = [
+            {
+                'name': s.metadata.name,
+                'version': s.metadata.suite_version,
+                'schema_version': s.metadata.schema_version,
+                'tags': s.metadata.tags,
+                'primary_metrics': s.metadata.primary_metrics,
+                'requires_llm_judge': s.metadata.requires_llm_judge,
+                'default_answer_mode': s.metadata.default_answer_mode,
+                'scenario_count': len(s.scenarios),
+            }
+            for s in suites
+        ]
+        console.print(_json.dumps(payload, indent=2))
+        return
+
+    if not suites:
+        console.print('[yellow]No suites discovered under memex_eval.suites.[/yellow]')
+        return
+
+    from rich.table import Table
+
+    table = Table(title='Evaluation Suites', show_lines=True)
+    for col in (
+        'Name',
+        'Version',
+        'Tags',
+        'Primary metrics',
+        'Backend',
+        'Scenarios',
+        'LLM?',
+    ):
+        table.add_column(col)
+    for s in suites:
+        table.add_row(
+            s.metadata.name,
+            s.metadata.suite_version,
+            ','.join(s.metadata.tags) or '-',
+            ','.join(s.metadata.primary_metrics) or '-',
+            s.metadata.default_answer_mode,
+            str(len(s.scenarios)),
+            'yes' if s.metadata.requires_llm_judge else 'no',
+        )
+    console.print(table)
+
+
+@suite_app.command('show')
+def suite_show(
+    name: str = typer.Argument(..., help='Suite name.'),
+    scenarios_only: bool = typer.Option(False, '--scenarios-only'),
+    metadata_only: bool = typer.Option(False, '--metadata-only'),
+) -> None:
+    """Render a suite's README + scenarios summary for inspection."""
+    from memex_eval.suite import load_suite, SuiteNotFound
+
+    try:
+        suite = load_suite(name)
+    except SuiteNotFound as e:
+        console.print(f'[red]{e}[/red]')
+        raise typer.Exit(code=1) from None
+
+    if not scenarios_only:
+        console.rule(f'[bold]{suite.metadata.name}[/bold]')
+        console.print(f'Version: {suite.metadata.suite_version}')
+        console.print(f'Description: {suite.metadata.description}')
+        console.print(f'Tags: {", ".join(suite.metadata.tags) or "-"}')
+        console.print(f'Default backend: {suite.metadata.default_answer_mode}')
+        console.print(f'Components: {", ".join(suite.metadata.components_under_test) or "-"}')
+        console.print(f'Knobs: {", ".join(suite.metadata.knobs) or "-"}')
+        if suite.readme_path and suite.readme_path.is_file():
+            console.print('')
+            console.print(suite.readme_path.read_text())
+
+    if not metadata_only:
+        console.rule('Scenarios')
+        for sc in suite.scenarios:
+            console.print(
+                f'  • [bold]{sc.id}[/bold] '
+                f'({sc.expected.type}, top_k={sc.top_k}, '
+                f'mode={sc.answer_mode or suite.metadata.default_answer_mode})'
+            )
+            console.print(f'      {sc.description}')
+
+
+@suite_app.command('validate')
+def suite_validate(
+    name: str | None = typer.Argument(None, help='Suite name. Omit with --all.'),
+    all_suites: bool = typer.Option(False, '--all'),
+) -> None:
+    """Validate a suite (or all) loads cleanly without running it."""
+    from memex_eval.suite import discover_suite_names, load_suite, SuiteNotFound
+
+    if all_suites:
+        names = discover_suite_names()
+    elif name:
+        names = [name]
+    else:
+        console.print('[red]Provide a suite name or pass --all.[/red]')
+        raise typer.Exit(code=1)
+
+    failed = 0
+    for n in names:
+        try:
+            suite = load_suite(n)
+            console.print(
+                f'[green]✓[/green] {n} (v{suite.metadata.suite_version}, '
+                f'{len(suite.scenarios)} scenarios)'
+            )
+        except SuiteNotFound as e:
+            console.print(f'[red]✗[/red] {n}: {e}')
+            failed += 1
+        except Exception as e:
+            console.print(f'[red]✗[/red] {n}: {type(e).__name__}: {e}')
+            failed += 1
+    if failed:
+        raise typer.Exit(code=1)
+
+
+@suite_app.command('run')
+def suite_run(
+    name: str | None = typer.Argument(None, help='Suite name. Omit with --all.'),
+    all_suites: bool = typer.Option(False, '--all', help='Run every discoverable suite serially.'),
+    server: str = typer.Option(
+        DEFAULT_SERVER, '--server', '-s', envvar='MEMEX_EVAL_DEFAULT_SERVER'
     ),
-    server: str = typer.Option(DEFAULT_SERVER, '--server', '-s', help='Memex API server URL.'),
-    conversation: int = typer.Option(0, '--conversation', '-c', help='Conversation index (0-9).'),
-    clean: bool = typer.Option(False, '--clean', help='Delete existing notes and re-ingest.'),
-    mlflow_uri: str | None = typer.Option(
+    mlflow_uri: str | None = typer.Option(None, '--mlflow-uri', envvar='MLFLOW_TRACKING_URI'),
+    mlflow_experiment: str | None = typer.Option(
+        None, '--mlflow-experiment', envvar='MEMEX_EVAL_MLFLOW_EXPERIMENT'
+    ),
+    mlflow_run_name: str | None = typer.Option(None, '--mlflow-run-name'),
+    answer_mode: str | None = typer.Option(
         None,
-        '--mlflow-uri',
-        envvar='MLFLOW_TRACKING_URI',
-        help='Optional MLflow tracking URI.',
+        '--answer-mode',
+        help='Override Suite.default_answer_mode for this run (api / claude-code / hermes / custom).',
     ),
-    mlflow_experiment: str = typer.Option(
-        'memex-eval',
-        '--mlflow-experiment',
-        envvar='MEMEX_EVAL_MLFLOW_EXPERIMENT',
+    overrides: list[str] = typer.Option(
+        [], '--override', help='Repeatable. KEY=VALUE for MLflow params (logged only).'
     ),
-    mlflow_run_name: str | None = typer.Option(None, '--mlflow-run-name'),
-    verbose: bool = typer.Option(False, '--verbose', '-v', help='Enable verbose logging.'),
+    replicates: int = typer.Option(1, '--replicates', min=1, max=20),
+    seed: int | None = typer.Option(None, '--seed'),
+    no_llm_judge: bool = typer.Option(False, '--no-llm-judge'),
+    judge_model: str | None = typer.Option(None, '--judge-model', envvar='EVAL_JUDGE_MODEL'),
+    output: str | None = typer.Option(None, '--output', '-o'),
+    verbose: bool = typer.Option(False, '--verbose', '-v'),
 ) -> None:
-    """Deprecated: use 'memex-eval locomo ingest'."""
-    warnings.warn(
-        "'locomo-ingest' is deprecated, use 'locomo ingest'", DeprecationWarning, stacklevel=2
-    )
-    locomo_ingest_cmd(
-        dataset_path=dataset_path,
-        server=server,
-        conversation=conversation,
-        clean=clean,
-        mlflow_uri=mlflow_uri,
-        mlflow_experiment=mlflow_experiment,
-        mlflow_run_name=mlflow_run_name,
-        verbose=verbose,
-    )
+    """Run a suite (or all) once."""
+    _setup_logging(verbose)
+    from memex_eval.recorders.mlflow_recorder import get_recorder
+    from memex_eval.suite import discover_suite_names, load_suite, SuiteNotFound
+    from memex_eval.suite.runner import run_suite
+
+    if all_suites:
+        names = discover_suite_names()
+    elif name:
+        names = [name]
+    else:
+        console.print('[red]Provide a suite name or pass --all.[/red]')
+        raise typer.Exit(code=1)
+
+    cfg_overrides, _env = _resolve_overrides_to_env(overrides)
+    if cfg_overrides:
+        console.print(
+            '[yellow]warning:[/yellow] --override on `suite run` is logged to MLflow '
+            'only — the running server is NOT restarted with these values. To '
+            'actually exercise different config, use `memex-eval suite sweep`.'
+        )
+
+    any_failure = False
+    for n in names:
+        try:
+            suite = load_suite(n)
+        except SuiteNotFound as e:
+            console.print(f'[red]✗[/red] {n}: {e}')
+            any_failure = True
+            continue
+
+        # Optional per-run answer-mode override (modifies suite metadata in-place).
+        if answer_mode:
+            suite.metadata.default_answer_mode = answer_mode
+
+        experiment = (
+            mlflow_experiment or f'memex-suite-{suite.name}-v{suite.metadata.schema_version}'
+        )
+        recorder = get_recorder(
+            mlflow_uri=mlflow_uri,
+            mlflow_experiment=experiment,
+            mlflow_run_name=mlflow_run_name,
+        )
+        try:
+            result = asyncio.run(
+                run_suite(
+                    suite,
+                    server_url=server,
+                    config_overrides=cfg_overrides,
+                    judge_model=judge_model,
+                    use_llm_judge=not no_llm_judge,
+                    replicates=replicates,
+                    seed=seed,
+                    recorder=recorder,
+                )
+            )
+        except KeyboardInterrupt:
+            console.print('[yellow]Run interrupted.[/yellow]')
+            raise typer.Exit(code=130) from None
+
+        passed = result.total_passed
+        failed = result.total_failed
+        errored = result.total_errored
+        skipped = result.total_skipped
+        console.rule(f'[bold]{suite.name}[/bold]')
+        console.print(f'  passed={passed} failed={failed} errored={errored} skipped={skipped}')
+        for k, v in sorted(result.suite_metrics.items()):
+            console.print(f'  {k}: {v:.4f}' if isinstance(v, float) else f'  {k}: {v}')
+
+        if output:
+            from pathlib import Path as _P
+
+            _P(output).write_text(result.model_dump_json(indent=2, default=str))
+
+        if failed > 0 or errored > 0:
+            any_failure = True
+
+    if any_failure:
+        raise typer.Exit(code=1)
 
 
-@app.command('locomo-export', deprecated=True)
-def locomo_export_deprecated(
-    dataset_path: str = typer.Option(
-        ..., '--dataset-path', '-d', help='Path to the LoCoMo dataset directory.'
-    ),
-    output: str = typer.Option('questions.jsonl', '--output', '-o', help='Output JSONL file.'),
-    limit: int | None = typer.Option(
-        None, '--limit', '-n', help='Randomly sample this many QA pairs.'
-    ),
-    seed: int = typer.Option(42, '--seed', help='Random seed for sampling.'),
-    conversation: int = typer.Option(0, '--conversation', '-c', help='Conversation index (0-9).'),
-    mlflow_uri: str | None = typer.Option(
-        None,
-        '--mlflow-uri',
-        envvar='MLFLOW_TRACKING_URI',
-        help='Optional MLflow tracking URI.',
-    ),
-    mlflow_experiment: str = typer.Option(
-        'memex-eval',
-        '--mlflow-experiment',
-        envvar='MEMEX_EVAL_MLFLOW_EXPERIMENT',
-    ),
-    mlflow_run_name: str | None = typer.Option(None, '--mlflow-run-name'),
-    verbose: bool = typer.Option(False, '--verbose', '-v', help='Enable verbose logging.'),
-) -> None:
-    """Deprecated: use 'memex-eval locomo export'."""
-    warnings.warn(
-        "'locomo-export' is deprecated, use 'locomo export'", DeprecationWarning, stacklevel=2
-    )
-    locomo_export_cmd(
-        dataset_path=dataset_path,
-        output=output,
-        limit=limit,
-        seed=seed,
-        conversation=conversation,
-        mlflow_uri=mlflow_uri,
-        mlflow_experiment=mlflow_experiment,
-        mlflow_run_name=mlflow_run_name,
-        verbose=verbose,
-    )
+@suite_app.command('backends')
+def suite_backends() -> None:
+    """List all registered answer backends."""
+    from memex_eval.suite import list_backends
+
+    for n in list_backends():
+        console.print(f'  • {n}')
 
 
-@app.command('locomo-answer', deprecated=True)
-def locomo_answer_deprecated(
-    method: str = typer.Option('claude-code', '--method', '-m', help='Answer method.'),
-    questions: str = typer.Option(
-        'questions.jsonl', '--questions', '-q', help='Input questions JSONL.'
+@suite_app.command('sweep')
+def suite_sweep(
+    name: str = typer.Argument(..., help='Suite name.'),
+    params: list[str] = typer.Option(
+        ...,
+        '--param',
+        help='Repeatable. KEY=v1,v2,v3 — sweep cartesian product across all --param flags.',
     ),
-    output: str = typer.Option('answers.jsonl', '--output', '-o', help='Output answers JSONL.'),
-    server: str = typer.Option(DEFAULT_SERVER, '--server', '-s', help='Memex API server URL.'),
-    mlflow_uri: str | None = typer.Option(None, '--mlflow-uri', envvar='MLFLOW_TRACKING_URI'),
-    mlflow_experiment: str = typer.Option(
-        'memex-eval', '--mlflow-experiment', envvar='MEMEX_EVAL_MLFLOW_EXPERIMENT'
-    ),
-    mlflow_run_name: str | None = typer.Option(None, '--mlflow-run-name'),
-    verbose: bool = typer.Option(False, '--verbose', '-v', help='Enable verbose logging.'),
-) -> None:
-    """Deprecated: use 'memex-eval locomo answer'."""
-    warnings.warn(
-        "'locomo-answer' is deprecated, use 'locomo answer'", DeprecationWarning, stacklevel=2
-    )
-    locomo_answer_cmd(
-        method=method,
-        questions=questions,
-        output=output,
-        server=server,
-        mlflow_uri=mlflow_uri,
-        mlflow_experiment=mlflow_experiment,
-        mlflow_run_name=mlflow_run_name,
-        verbose=verbose,
-    )
-
-
-@app.command('locomo-judge', deprecated=True)
-def locomo_judge_deprecated(
-    questions: str = typer.Option(
-        'questions.jsonl', '--questions', '-q', help='Input questions JSONL.'
-    ),
-    answers: str = typer.Option('answers.jsonl', '--answers', '-a', help='Input answers JSONL.'),
-    output: str = typer.Option('report.json', '--output', '-o', help='Output report JSON.'),
-    judge_model: str | None = typer.Option(
-        None, '--judge-model', help='Override the LLM judge model.'
-    ),
-    mlflow_uri: str | None = typer.Option(None, '--mlflow-uri', envvar='MLFLOW_TRACKING_URI'),
-    mlflow_experiment: str = typer.Option(
-        'memex-eval', '--mlflow-experiment', envvar='MEMEX_EVAL_MLFLOW_EXPERIMENT'
-    ),
-    mlflow_run_name: str | None = typer.Option(None, '--mlflow-run-name'),
-    verbose: bool = typer.Option(False, '--verbose', '-v', help='Enable verbose logging.'),
-) -> None:
-    """Deprecated: use 'memex-eval locomo judge'."""
-    warnings.warn(
-        "'locomo-judge' is deprecated, use 'locomo judge'", DeprecationWarning, stacklevel=2
-    )
-    locomo_judge_cmd(
-        questions=questions,
-        answers=answers,
-        output=output,
-        judge_model=judge_model,
-        mlflow_uri=mlflow_uri,
-        mlflow_experiment=mlflow_experiment,
-        mlflow_run_name=mlflow_run_name,
-        verbose=verbose,
-    )
-
-
-@app.command('locomo-report', deprecated=True)
-def locomo_report_deprecated(
-    results: str = typer.Option(
-        'results.json', '--results', '-r', help='Input judge results JSON.'
-    ),
-    answers: str = typer.Option('answers.jsonl', '--answers', '-a', help='Input answers JSONL.'),
-    traces_dir: str = typer.Option(
-        'traces', '--traces-dir', '-t', help='Directory with trace JSONL files.'
-    ),
-    output_dir: str = typer.Option(
-        'report', '--output-dir', '-o', help='Output directory for report and plots.'
+    server: str = typer.Option(
+        DEFAULT_SERVER, '--server', '-s', envvar='MEMEX_EVAL_DEFAULT_SERVER'
     ),
     mlflow_uri: str | None = typer.Option(None, '--mlflow-uri', envvar='MLFLOW_TRACKING_URI'),
-    mlflow_experiment: str = typer.Option(
-        'memex-eval', '--mlflow-experiment', envvar='MEMEX_EVAL_MLFLOW_EXPERIMENT'
-    ),
-    mlflow_run_name: str | None = typer.Option(None, '--mlflow-run-name'),
-    verbose: bool = typer.Option(False, '--verbose', '-v', help='Enable verbose logging.'),
+    mlflow_experiment: str | None = typer.Option(None, '--mlflow-experiment'),
+    answer_mode: str | None = typer.Option(None, '--answer-mode'),
+    no_llm_judge: bool = typer.Option(False, '--no-llm-judge'),
+    judge_model: str | None = typer.Option(None, '--judge-model'),
+    replicates: int = typer.Option(1, '--replicates', min=1, max=20),
+    seed: int | None = typer.Option(None, '--seed'),
+    server_startup_timeout: float = typer.Option(60.0, '--server-startup-timeout'),
+    graceful_shutdown_seconds: float = typer.Option(30.0, '--graceful-shutdown-seconds'),
+    verbose: bool = typer.Option(False, '--verbose', '-v'),
 ) -> None:
-    """Deprecated: use 'memex-eval locomo report'."""
-    warnings.warn(
-        "'locomo-report' is deprecated, use 'locomo report'", DeprecationWarning, stacklevel=2
-    )
-    locomo_report_cmd(
-        results=results,
-        answers=answers,
-        traces_dir=traces_dir,
-        output_dir=output_dir,
-        mlflow_uri=mlflow_uri,
-        mlflow_experiment=mlflow_experiment,
-        mlflow_run_name=mlflow_run_name,
-        verbose=verbose,
-    )
+    """Sweep a suite across knob values; spawns a fresh server per point."""
+    _setup_logging(verbose)
+    from memex_eval.suite.sweep import sweep_suite, SweepNotSupportedRemote
+
+    try:
+        summary = sweep_suite(
+            suite_name=name,
+            params=params,
+            server=server,
+            mlflow_uri=mlflow_uri,
+            mlflow_experiment=mlflow_experiment,
+            use_llm_judge=not no_llm_judge,
+            judge_model=judge_model,
+            replicates=replicates,
+            seed=seed,
+            answer_mode=answer_mode,
+            startup_timeout_s=server_startup_timeout,
+            graceful_shutdown_s=graceful_shutdown_seconds,
+        )
+    except SweepNotSupportedRemote as e:
+        console.print(f'[red]{e}[/red]')
+        raise typer.Exit(code=1) from None
+
+    console.rule(f'sweep {summary["sweep.id"]}')
+    for child in summary['children']:
+        if 'error' in child:
+            console.print(
+                f'  [red]point {child["point_index"]}[/red] {child["overrides"]} '
+                f'→ {child["error"][:80]}'
+            )
+        else:
+            console.print(
+                f'  [green]point {child["point_index"]}[/green] '
+                f'{child["overrides"]} → pass_rate={child["pass_rate"]:.3f}'
+            )
+    if summary['children_failed']:
+        raise typer.Exit(code=1)
 
 
-@app.command('locomo-efficiency', deprecated=True)
-def locomo_efficiency_deprecated(
-    answers: str = typer.Option('answers.jsonl', '--answers', '-a', help='Input answers JSONL.'),
-    traces_dir: str = typer.Option(
-        ..., '--traces-dir', '-t', help='Directory with trace JSONL files.'
+@suite_app.command('history')
+def suite_history(
+    name: str = typer.Argument(..., help='Suite name.'),
+    metric: str = typer.Option(..., '--metric', help='MLflow metric key.'),
+    since_git_rev: str = typer.Option(
+        ..., '--since-git-rev', help='Git commit/branch/HEAD~N — range is <since>..HEAD'
     ),
-    output: str = typer.Option('efficiency.json', '--output', '-o', help='Output efficiency JSON.'),
     mlflow_uri: str | None = typer.Option(None, '--mlflow-uri', envvar='MLFLOW_TRACKING_URI'),
-    mlflow_experiment: str = typer.Option(
-        'memex-eval', '--mlflow-experiment', envvar='MEMEX_EVAL_MLFLOW_EXPERIMENT'
-    ),
-    mlflow_run_name: str | None = typer.Option(None, '--mlflow-run-name'),
-    verbose: bool = typer.Option(False, '--verbose', '-v', help='Enable verbose logging.'),
+    mlflow_experiment: str | None = typer.Option(None, '--mlflow-experiment'),
+    limit: int = typer.Option(100, '--limit', min=1, max=1000),
+    json_output: bool = typer.Option(False, '--json'),
 ) -> None:
-    """Deprecated: use 'memex-eval locomo efficiency'."""
-    warnings.warn(
-        "'locomo-efficiency' is deprecated, use 'locomo efficiency'",
-        DeprecationWarning,
-        stacklevel=2,
-    )
-    locomo_efficiency_cmd(
-        answers=answers,
-        traces_dir=traces_dir,
-        output=output,
-        mlflow_uri=mlflow_uri,
-        mlflow_experiment=mlflow_experiment,
-        mlflow_run_name=mlflow_run_name,
-        verbose=verbose,
-    )
+    """Tabulate a metric across MLflow runs filtered by git commit range."""
+    import subprocess as _sp
+
+    from memex_eval.suite import load_suite
+
+    suite = load_suite(name)
+    experiment = mlflow_experiment or f'memex-suite-{suite.name}-v{suite.metadata.schema_version}'
+    # Resolve git commit set
+    try:
+        proc = _sp.run(
+            ['git', 'rev-list', '--reverse', f'{since_git_rev}..HEAD'],
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except _sp.CalledProcessError as e:
+        console.print(f'[red]git rev-list failed: {e.stderr}[/red]')
+        raise typer.Exit(code=1) from None
+    sha_set = {sha for sha in proc.stdout.split() if sha}
+
+    try:
+        import mlflow
+    except ImportError:
+        console.print('[red]mlflow not installed[/red]')
+        raise typer.Exit(code=1) from None
+
+    if mlflow_uri:
+        mlflow.set_tracking_uri(mlflow_uri)
+    runs_df = mlflow.search_runs(experiment_names=[experiment], max_results=limit)
+    if runs_df.empty:
+        console.print(f'[yellow]No runs in experiment {experiment}[/yellow]')
+        return
+
+    rows = []
+    for _, run in runs_df.iterrows():
+        sha = run.get('params.git.sha', '')
+        if sha not in sha_set:
+            continue
+        rows.append(
+            {
+                'git_sha_short': sha[:8] if sha else '',
+                'start_time': str(run.get('start_time', '')),
+                metric: run.get(f'metrics.{metric}'),
+                'suite.version': run.get('params.suite.version'),
+            }
+        )
+
+    if json_output:
+        import json as _json
+
+        console.print(_json.dumps(rows, indent=2, default=str))
+        return
+
+    from rich.table import Table
+
+    table = Table(title=f'{name} — {metric} over {since_git_rev}..HEAD')
+    for col in ('git_sha', 'start_time', metric, 'suite.version'):
+        table.add_column(col)
+    for r in rows:
+        table.add_row(
+            r['git_sha_short'],
+            r['start_time'],
+            f'{r[metric]:.4f}' if isinstance(r[metric], float) else str(r[metric]),
+            str(r['suite.version']),
+        )
+    console.print(table)
 
 
 # ---------------------------------------------------------------------------

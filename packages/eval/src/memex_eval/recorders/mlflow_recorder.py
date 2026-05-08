@@ -43,8 +43,18 @@ class NullRecorder:
     def log_artifact(self, local_path: str | Path) -> None:
         pass
 
+    def set_tag(self, key: str, value: str) -> None:
+        pass
+
+    def log_dict_artifact(self, name: str, data: dict[str, Any]) -> None:
+        pass
+
     def end_run(self) -> None:
         pass
+
+    @property
+    def run_id(self) -> str | None:
+        return None
 
 
 class MLflowRecorder:
@@ -109,8 +119,19 @@ class MLflowRecorder:
         self._run: Any = None
 
     def start_run(self, **kwargs: Any) -> None:
-        self._run = self._mlflow.start_run(run_name=self._run_name, tags=self._tags, **kwargs)
+        # Allow callers to override run_name / tags without TypeError on duplicate.
+        run_name = kwargs.pop('run_name', None) or self._run_name
+        caller_tags = kwargs.pop('tags', None) or {}
+        merged_tags = {**self._tags, **caller_tags}
+        self._run = self._mlflow.start_run(run_name=run_name, tags=merged_tags, **kwargs)
         logger.info('MLflow run started: %s', self._run.info.run_id)
+
+    @property
+    def run_id(self) -> str | None:
+        """Public accessor for the active run's ID. None if no run is open."""
+        if self._run is None or getattr(self._run, 'info', None) is None:
+            return None
+        return str(self._run.info.run_id)
 
     def log_params(self, params: dict[str, Any]) -> None:
         self._mlflow.log_params({k: str(v) for k, v in params.items()})
@@ -120,6 +141,20 @@ class MLflowRecorder:
 
     def log_artifact(self, local_path: str | Path) -> None:
         self._mlflow.log_artifact(str(local_path))
+
+    def set_tag(self, key: str, value: str) -> None:
+        self._mlflow.set_tag(key, value)
+
+    def log_dict_artifact(self, name: str, data: dict[str, Any]) -> None:
+        """Log a JSON artifact from an in-memory dict, preserving ``name``."""
+        import json
+        import tempfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp) / name
+            tmp_path.parent.mkdir(parents=True, exist_ok=True)
+            tmp_path.write_text(json.dumps(data, indent=2, default=str))
+            self._mlflow.log_artifact(str(tmp_path))
 
     def end_run(self) -> None:
         if self._run is not None:
