@@ -53,10 +53,27 @@ claude --plugin-dir ./packages/claude-code-plugin
 
 ## What's included
 
-- **Skills**: `/remember` and `/recall` slash commands for manual memory capture and retrieval
-- **Hooks**: Automatic session lifecycle integration (startup context, pre-compaction reminders, post-commit capture prompts)
+- **Skills**: `/remember`, `/recall`, and `/retro` slash commands for manual memory capture, retrieval, and structured session postmortems.
+- **Hooks**: Full session lifecycle integration:
+  - `SessionStart` — installs rules, fetches a token-budgeted briefing, resolves the active vault, generates a per-session note key.
+  - `SessionEnd` — auto-captures the full session transcript to long-term memory (safety net under `/remember`).
+  - `PreCompact` — captures transcript-since-last-compact to the session note before context is discarded.
+  - `UserPromptExpansion` — when `/recall` is invoked without arguments, composes a query from the last N transcript turns.
+  - `PreToolUse` (on `memex_add_note`) — auto-injects ambient capture metadata (git, session, project, model, plugin version) and defaults `background: true`.
+  - `PostToolUse` (on `memex_add_note`, `Bash`, `Write`/`Edit`) — capture-counter, commit-nudge, edit-spiral nudge.
 - **MCP Server**: Memex tools available as MCP tools (search, entities, notes, KV store)
 - **Behavioral Instructions**: Injected at session start via `additionalContext` — covers proactive capture rules, retrieval routing, and citation requirements
+
+## Auto-capture safety net
+
+The plugin captures every session as a Memex note keyed by `session:<timestamp>`. The capture is layered:
+
+1. **PreCompact** — when Claude Code is about to compact context, the plugin appends transcript-since-last-compact to the session note. The first append creates the note; subsequent appends extend it in place.
+2. **SessionEnd** — when the session ends (`reason ∈ {prompt_input_exit, logout, other}`), the plugin appends the remaining transcript. `clear` and `resume` events are skipped (the session is continuing).
+
+Both layers share one `note_key` per CC session, so the final note is a single document with the full transcript — not a series of fragments. Server-side extraction processes the note's content into memory units regardless of how many appends happened.
+
+This is a safety net, not a replacement for `/remember`. Use `/remember` for high-signal curated notes; rely on the auto-capture as background context the LLM can rediscover via `/recall`.
 
 ## Prerequisites
 
@@ -83,19 +100,35 @@ claude --plugin-dir ./packages/claude-code-plugin
 
 The plugin resolves which vault to use per project via the Memex KV store. The project identifier is derived from the git remote origin URL (portable across team members' machines), falling back to the directory name for non-git projects.
 
-On session start, it looks up the KV key `claude-code:vault:<project_id>` — for example, `claude-code:vault:https://github.com/acme/myapp`.
+### Vault resolution chain
 
-To bind a project to a vault, ask Claude:
+The plugin walks five sources in order, mirroring the Hermes plugin's chain:
+
+1. `app:claude-code:project:<project_id>:vault` — per-project binding (most specific).
+2. `app:claude-code:user:<$USER>:vault` — per-user default for this OS user.
+3. `app:claude-code:agent:<MEMEX_CC_AGENT_ID>:vault` — per-subagent binding (only when the env var is set).
+4. `MEMEX_VAULT` environment variable.
+5. Memex server-side default (configured in `~/.memex.yaml`).
+
+The first source that resolves to a non-empty value wins. Results are cached for the duration of the hook invocation.
+
+### Binding a project
+
+Ask Claude:
 
 > Set this project's vault to "my-vault"
 
 Or call the MCP tool directly:
 
 ```
-memex_kv_write(key="claude-code:vault:https://github.com/acme/myapp", value="my-vault")
+memex_kv_write(key="app:claude-code:project:github.com/acme/myapp:vault", value="my-vault")
 ```
 
 If no per-project vault is set, writes go to the default vault from your Memex config.
+
+### Migration from the legacy namespace
+
+Earlier plugin versions wrote to bare `project:<id>:vault` keys. The plugin now reads from `app:claude-code:project:<id>:vault` first; if absent, it falls back to the legacy key and forward-migrates the value (writing to the new key). The legacy key is left in place — KV deletions are user-initiated only.
 
 ## Configuration
 

@@ -5,7 +5,20 @@
         "hooks": [
           {
             "type": "command",
+            "description": "Memex: install rules, fetch session briefing, resolve active vault, generate session note key.",
             "command": "${CLAUDE_PLUGIN_ROOT}/scripts/on_session_start.sh"
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "description": "Memex: auto-capture session transcript to long-term memory (safety net under /remember).",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/on_session_end_capture.sh",
+            "async": true
           }
         ]
       }
@@ -15,7 +28,31 @@
         "hooks": [
           {
             "type": "command",
+            "description": "Memex: capture transcript-since-last-compact into the session note before context is discarded.",
             "command": "${CLAUDE_PLUGIN_ROOT}/scripts/on_pre_compact.sh"
+          }
+        ]
+      }
+    ],
+    "UserPromptExpansion": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "description": "Memex: when /recall is invoked without arguments, compose a query from the last N transcript turns.",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/recall_compose.sh"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "mcp__memex__memex_add_note",
+        "hooks": [
+          {
+            "type": "command",
+            "description": "Memex: inject ambient capture metadata (git/session/project/model/plugin) and default background=true on every memex_add_note call.",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/inject_memex_tags.sh"
           }
         ]
       }
@@ -26,6 +63,7 @@
         "hooks": [
           {
             "type": "command",
+            "description": "Memex: nudge to capture commits worth remembering.",
             "command": "${CLAUDE_PLUGIN_ROOT}/scripts/on_post_commit.sh"
           }
         ]
@@ -35,7 +73,18 @@
         "hooks": [
           {
             "type": "command",
+            "description": "Memex: track per-file edit counts and surface edit-spiral nudges.",
             "command": "${CLAUDE_PLUGIN_ROOT}/scripts/on_post_write.sh"
+          }
+        ]
+      },
+      {
+        "matcher": "mcp__memex__memex_add_note",
+        "hooks": [
+          {
+            "type": "command",
+            "description": "Memex: increment the per-session capture counter (used by safety-net heuristics).",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/track_capture.sh"
           }
         ]
       }
