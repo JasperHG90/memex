@@ -80,6 +80,11 @@ def metrics_locks_service(metastore, memex_config, asyncpg_dsn) -> LocksService:
     # ``_get_pool`` and ``consolidate_vault`` read must be set explicitly.
     svc._pool = None
     svc._has_maintenance_proposals_table_cache = None
+    # Defensive: tests in this file only exercise dry_run consolidate +
+    # reconsolidate paths (neither touches the limiter), but match the
+    # full ``__init__`` shape so future test additions don't trip on a
+    # missing attribute.
+    svc._consolidate_limiter = None
     return svc
 
 

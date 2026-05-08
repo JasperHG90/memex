@@ -1554,7 +1554,14 @@ async def memex_memory_search(
     limit: Annotated[
         int,
         BeforeValidator(_coerce_int),
-        Field(description='Max results. Ignored when token_budget is set.'),
+        Field(
+            description=(
+                'Max main-path results. Ignored when token_budget is set. The '
+                'ε-greedy exploration path may append up to '
+                '``exploration_max_injections`` extra low-Memory-Worth units '
+                'beyond this cap when its dice roll fires.'
+            )
+        ),
     ] = 10,
     token_budget: Annotated[
         int | None,
