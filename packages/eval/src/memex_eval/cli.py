@@ -1,4 +1,4 @@
-"""Typer CLI for memex-eval: `memex-eval internal run`, `memex-eval locomo <sub>`, `memex-eval longmemeval <sub>`."""
+"""Typer CLI for memex-eval: `memex-eval suite <sub>`, `memex-eval locomo <sub>`, `memex-eval longmemeval <sub>`."""
 
 from __future__ import annotations
 
@@ -32,109 +32,6 @@ def _make_recorder(
         mlflow_experiment=mlflow_experiment,
         mlflow_run_name=mlflow_run_name,
     )
-
-
-# ---------------------------------------------------------------------------
-# Internal benchmark
-# ---------------------------------------------------------------------------
-
-internal_app = typer.Typer(
-    name='internal',
-    help='Internal quality benchmark.',
-    no_args_is_help=True,
-)
-app.add_typer(internal_app, name='internal')
-
-
-@internal_app.command('run')
-def run(
-    server: str = typer.Option(DEFAULT_SERVER, '--server', '-s', help='Memex API server URL.'),
-    group: str | None = typer.Option(
-        None, '--group', '-g', help='Run only a specific scenario group.'
-    ),
-    no_llm_judge: bool = typer.Option(
-        False, '--no-llm-judge', help='Skip LLM-judged checks (deterministic only).'
-    ),
-    judge_model: str | None = typer.Option(
-        None, '--judge-model', help='Override the LLM judge model.'
-    ),
-    output: str | None = typer.Option(None, '--output', '-o', help='Export results to JSON file.'),
-    mlflow_uri: str | None = typer.Option(
-        None,
-        '--mlflow-uri',
-        envvar='MLFLOW_TRACKING_URI',
-        help='Optional MLflow tracking URI.',
-    ),
-    mlflow_experiment: str = typer.Option(
-        'memex-eval',
-        '--mlflow-experiment',
-        envvar='MEMEX_EVAL_MLFLOW_EXPERIMENT',
-        help='MLflow experiment name.',
-    ),
-    mlflow_run_name: str | None = typer.Option(
-        None,
-        '--mlflow-run-name',
-        help='Override default MLflow run name.',
-    ),
-    verbose: bool = typer.Option(False, '--verbose', '-v', help='Enable verbose logging.'),
-) -> None:
-    """Run the internal quality benchmark against a Memex server."""
-    _setup_logging(verbose)
-
-    from memex_eval.internal.runner import run_benchmark
-    from memex_eval.report import print_report, export_json
-
-    recorder = _make_recorder(mlflow_uri, mlflow_experiment, mlflow_run_name)
-
-    with recorder:
-        recorder.start_run()
-        recorder.log_params(
-            {
-                'benchmark': 'internal',
-                'server_url': server,
-                'group_filter': group or 'all',
-                'use_llm_judge': str(not no_llm_judge),
-                'judge_model': judge_model or 'default',
-            }
-        )
-
-        result = asyncio.run(
-            run_benchmark(
-                server_url=server,
-                group_filter=group,
-                use_llm_judge=not no_llm_judge,
-                judge_model=judge_model,
-            )
-        )
-
-        print_report(result)
-
-        if output:
-            export_json(result, output)
-            recorder.log_artifact(output)
-
-        # Log metrics from BenchmarkResult.to_dict()
-        summary = result.to_dict()['summary']
-        recorder.log_metrics(
-            {
-                'summary.pass_rate': summary['pass_rate'],
-                'summary.duration_ms': summary.get('duration_ms', 0),
-            }
-        )
-        for group_data in result.to_dict()['groups']:
-            prefix = f'groups.{group_data["name"]}'
-            recorder.log_metrics(
-                {
-                    f'{prefix}.pass_rate': group_data['pass_rate'],
-                    f'{prefix}.passed': group_data['passed'],
-                    f'{prefix}.failed': group_data['failed'],
-                    f'{prefix}.ingest_duration_ms': group_data.get('ingest_duration_ms', 0),
-                    f'{prefix}.reflection_duration_ms': group_data.get('reflection_duration_ms', 0),
-                }
-            )
-
-    if result.total_failed > 0 or result.total_errored > 0:
-        raise typer.Exit(code=1)
 
 
 # ---------------------------------------------------------------------------

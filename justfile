@@ -83,8 +83,8 @@ update_collections: embed_collections
 benchmark:
   uv run pytest packages/core/tests/benchmarks --benchmark-only -v
 
-# Start postgres, run server in a temp dir, execute benchmark, then tear down
-benchmark-internal server='http://localhost:8001/api/v1/' *args='':
+# Start postgres + a temp memex server, run every suite (with LLM judge), then tear down
+benchmark-suites server='http://localhost:8001/api/v1/' *args='':
   #!/usr/bin/env bash
   set -euo pipefail
   docker compose up -d db
@@ -97,10 +97,10 @@ benchmark-internal server='http://localhost:8001/api/v1/' *args='':
   SERVER_PID=$!
   echo "Waiting for server on :8001..."
   until curl -sf http://localhost:8001/api/v1/vaults >/dev/null 2>&1; do sleep 1; done
-  uv run memex-eval run --server {{server}} {{args}}
+  uv run memex-eval suite run --all --server {{server}} {{args}}
 
-# Start postgres, run server in a temp dir, execute benchmark (no LLM judge), then tear down
-benchmark-internal-fast server='http://localhost:8001/api/v1/' *args='':
+# Same as benchmark-suites but without the LLM judge (deterministic checks only)
+benchmark-suites-fast server='http://localhost:8001/api/v1/' *args='':
   #!/usr/bin/env bash
   set -euo pipefail
   docker compose up -d db
@@ -113,7 +113,7 @@ benchmark-internal-fast server='http://localhost:8001/api/v1/' *args='':
   SERVER_PID=$!
   echo "Waiting for server on :8001..."
   until curl -sf http://localhost:8001/api/v1/vaults >/dev/null 2>&1; do sleep 1; done
-  uv run memex-eval run --server {{server}} --no-llm-judge {{args}}
+  uv run memex-eval suite run --all --server {{server}} --no-llm-judge {{args}}
 
 # Run LongMemEval external benchmark
 benchmark-longmemeval dataset_path server='http://localhost:8001/api/v1/':

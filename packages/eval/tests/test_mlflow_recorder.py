@@ -123,15 +123,15 @@ class TestRecorderWithBenchmarkResult:
     """Test that the CLI wiring passes correct data through the recorder."""
 
     def test_null_recorder_used_in_run_command(self) -> None:
-        """Verify NullRecorder is used when --mlflow-uri is not set."""
+        """Verify the suite-run command exposes the --mlflow-* flags so a
+        NullRecorder fallback path is reachable (used when --mlflow-uri
+        is not set)."""
         from typer.testing import CliRunner
 
         from memex_eval.cli import app
 
         runner = CliRunner()
-        # Just verify the --mlflow-uri flag is accepted without error
-        # (the actual benchmark won't run without a server)
-        result = runner.invoke(app, ['internal', 'run', '--help'])
+        result = runner.invoke(app, ['suite', 'run', '--help'])
         assert result.exit_code == 0
         assert '--mlflow-uri' in result.output
         assert '--mlflow-experiment' in result.output
