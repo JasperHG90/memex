@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from memex_eval.suite import (
+    InlineNote,
     KeywordsPresent,
     LLMJudge,
     RankingOrder,
@@ -91,6 +92,71 @@ SCENARIOS = [
                 '3.11 → 3.12 upgrade.'
             ),
             threshold=0.5,
+        ),
+    ),
+    # ------------------------------------------------------------------
+    # Inline-note scenarios — each declares its own per-scenario note that
+    # contradicts a claim in the shared tech-stack-v2.md source. Because
+    # inline notes persist in the suite vault for the rest of the run
+    # (see the framework's how-to §1.3), these scenarios run LAST so the
+    # earlier supersession scenarios above are not contaminated by the
+    # third-generation updates introduced here.
+    # ------------------------------------------------------------------
+    Scenario(
+        id='inline_circleci_supersedes_gh_actions',
+        description=(
+            'Inline note announcing a Q4 2025 CI/CD migration must surface '
+            'CircleCI as the current system, superseding GitHub Actions '
+            'from tech-stack-v2.md.'
+        ),
+        query='What CI/CD system does Project Nexus use?',
+        top_k=10,
+        inline_notes=[
+            InlineNote(
+                note_key='ci-cd-q4-2025-update',
+                title='Project Nexus — CI/CD update (Q4 2025)',
+                content=(
+                    '# Project Nexus CI/CD update — Q4 2025\n\n'
+                    'Effective October 2025, Project Nexus has migrated its '
+                    'CI/CD pipelines from GitHub Actions to CircleCI. The '
+                    "switch was driven by CircleCI's superior support for "
+                    'parallelized integration tests and our enterprise '
+                    'contract with their security tier.\n\n'
+                    'GitHub Actions usage is being wound down over Q4 2025; '
+                    'all new pipelines target CircleCI. Project Nexus uses '
+                    'CircleCI for build, test, and deployment.\n'
+                ),
+                tags=['tech-stack', 'project-nexus', 'ci-cd', 'migration'],
+            ),
+        ],
+        expected=KeywordsPresent(type='keywords_present', keywords=['CircleCI']),
+    ),
+    Scenario(
+        id='inline_python_313_outranks_312',
+        description=(
+            'Inline note announcing Python 3.13 upgrade ranks above the '
+            '3.12 mention in tech-stack-v2.md.'
+        ),
+        query='Project Nexus Python version',
+        top_k=10,
+        inline_notes=[
+            InlineNote(
+                note_key='python-313-upgrade',
+                title='Project Nexus — Python 3.13 upgrade (Nov 2025)',
+                content=(
+                    '# Project Nexus Python 3.13 upgrade\n\n'
+                    'Project Nexus completed its Python 3.12 → Python 3.13 '
+                    'upgrade in November 2025. All services now run on '
+                    'Python 3.13. The 3.13 release brings the experimental '
+                    'free-threaded build and improved error messages, both '
+                    'of which we exercise in production.\n'
+                ),
+                tags=['tech-stack', 'project-nexus', 'python', 'upgrade'],
+            ),
+        ],
+        expected=RankingOrder(
+            type='ranking_order',
+            expected_keyword_order=['Python 3.13', 'Python 3.12'],
         ),
     ),
 ]
