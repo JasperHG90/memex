@@ -176,6 +176,7 @@ memex-eval suite run [<name>|--all]
 | `--notes-file` | none | Read `--notes` body from a file (mutually exclusive with `--notes`) |
 | `--no-llm-judge` | off | Skip LLMJudge / UsefulAtK scenarios; deterministic-only run (faster, free) |
 | `--judge-model` | `gemini/gemini-3-flash-preview` (or `EVAL_JUDGE_MODEL` env) | Override LLM judge model (litellm format) |
+| `--from-snapshot` | none | Server-local path to a V3 snapshot directory. When set, the runner imports the snapshot into a fresh ephemeral vault and skips ingest + extraction. Server must run with `MEMEX_SERVER__EVAL_MODE=1`. Single-vault suites only (multi-vault → `MultiVaultImportNotSupported`). See "Snapshot import" below |
 | `--verbose` / `-v` | off | DEBUG-level logging |
 
 Exit code is non-zero if any scenario fails or errors.
@@ -240,6 +241,83 @@ MEMEX_SERVER__MEMORY__RETRIEVAL__RERANKING_MW_ALPHA=0.5
 ```
 
 Validation runs at parse time so typos fail before any server is spawned.
+
+---
+
+## Snapshot import — skip extraction on reruns
+
+Every `memex-eval suite run` re-ingests the suite's source notes and re-extracts memory units, chunks, entities, etc. via the LLM. For an unchanged corpus that's wasted work — minutes per run, multiplied by every iteration. V12 lets you export the post-extraction state once, then import it on every subsequent run.
+
+### Lifecycle
+
+```
+1. Build vault once    : memex vault snapshot export <vault> --output <dir>
+                         (or: memex-eval snapshot create <vault>)
+2. Run with snapshot N : memex-eval suite run <name> --from-snapshot <dir>
+```
+
+The runner detects `--from-snapshot`, imports the snapshot into a fresh ephemeral vault, and skips ingest + extraction-wait. Subsequent retrieval/scoring phases see an indistinguishable vault state from a freshly-extracted one.
+
+### Server-side prerequisite — `MEMEX_SERVER__EVAL_MODE=1`
+
+The import route is **disabled by default**. Production servers never see it. To enable:
+
+```bash
+MEMEX_SERVER__EVAL_MODE=1 memex server start
+```
+
+When eval mode is on, the server logs a loud `EVAL MODE ENABLED — DO NOT RUN IN PRODUCTION` banner and short-circuits the entire background scheduler — no reflection, no vault-summary refresh, no KV-TTL cleanup, no lint, no consolidation. This keeps imported MentalModel/VaultSummary rows byte-identical to the snapshot, so eval results are reproducible.
+
+### Snapshot CLI surface
+
+```
+memex-eval snapshot create <vault> [--output DIR]   # thin wrapper around `memex vault snapshot export`
+memex-eval snapshot list                            # enumerate snapshots under the allowlist root
+```
+
+`--output` defaults to `$MEMEX_EVAL_SNAPSHOT_ROOT/<vault>-<timestamp>/` (env fallback `~/.memex-eval/snapshots/`). The allowlist root is the only path the eval-import route will accept.
+
+### Path validation (security)
+
+The route validates the path strictly:
+- Resolves symlinks, requires the path to exist
+- Refuses paths outside the allowlist root
+- Opens every file with `O_NOFOLLOW` and re-checks the resolved path post-open (TOCTOU defense)
+
+Set `MEMEX_EVAL_SNAPSHOT_ROOT` to override the default allowlist root.
+
+### Refusal cases
+
+| Refusal | Cause |
+|---|---|
+| `Snapshot MAJOR=N != pinned 1` | Snapshot from a future MAJOR; rebuild or upgrade the importer |
+| `Snapshot MINOR=N < pinned 1` | Snapshot from an older minor; refused (may lack required fields) |
+| `Alembic head mismatch` | Importing DB schema diverged from the source; run `just db-upgrade` |
+| `Embedding-model name/revision mismatch` | Server's embedding model differs from the snapshot's; embeddings would not be comparable |
+| `Remote (LiteLLM) embedding backend is disallowed` | Switch to a local ONNX backend before importing |
+| `Refusing to import the global vault` | `vault.json::id == GLOBAL_VAULT_ID` — protect default state |
+| `MultiVaultImportNotSupported` | Suite declares per-note/per-scenario `vault_name`; v1 ships single-vault only |
+| `Cannot import: vault X already imported` | Single-snapshot-per-DB rule (Decision 20). Delete first, re-import second |
+
+### MLflow params
+
+When `--from-snapshot` is set, three params are logged on the run:
+
+| Param | Description |
+|---|---|
+| `snapshot.path` | The resolved snapshot directory |
+| `snapshot.import_id` | UUID of this import attempt (matches `eval_import_state.import_id`) |
+| `snapshot.cache_hit` | Always `true` when `--from-snapshot` is explicit (the `auto` cache mode is out of v1 scope) |
+
+### Limitations (v1)
+
+- Single snapshot per DB. A second import refuses unless the existing vault is deleted first.
+- Multi-vault suites (any source note or scenario with a `vault_name`) are not supported.
+- Remote (LiteLLM) embedding backends are disallowed.
+- The embedding model identity must match between export and import (refused otherwise).
+- Sync-engine compatibility is not supported on imported vaults.
+- Cache-keyed `auto` mode (snapshot lazy-populate) is deferred to a follow-up.
+- External runners (`locomo-ingest`, `longmemeval-ingest`) `--from-snapshot` is deferred — only the suite framework runner is wired in v1.
 
 ---
 

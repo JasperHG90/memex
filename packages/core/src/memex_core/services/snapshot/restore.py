@@ -34,7 +34,7 @@ from typing import Any, Iterable
 from uuid import UUID, uuid4
 
 from sqlalchemy import insert as sa_insert
-from sqlalchemy import select, text
+from sqlalchemy import select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -101,6 +101,12 @@ logger = logging.getLogger('memex.core.services.snapshot.restore')
 RESERVED_VAULT_NAMES = {GLOBAL_VAULT_NAME.lower(), 'global', 'default'}
 
 EMBED_BATCH_SIZE = 64
+
+_MODEL_BY_TABLE: dict[str, Any] = {
+    'chunks': Chunk,
+    'memory_units': MemoryUnit,
+    'mental_models': MentalModel,
+}
 
 
 class SnapshotImportError(Exception):
@@ -540,24 +546,27 @@ class SnapshotImporter:
             )
             await self._session.execute(
                 sa_insert(Note.__table__).values(  # type: ignore[arg-type]
-                    id=note.id,
-                    vault_id=self._target_vault_id,
-                    session_id=note.session_id,
-                    title=note.title,
-                    description=note.description,
-                    original_text=original_text,
-                    page_index=note.page_index,
-                    content_hash=note.content_hash,
-                    filestore_path=rewritten_filestore,
-                    assets=rewritten_assets,
-                    doc_metadata=note.doc_metadata,
-                    publish_date=note.publish_date,
-                    status=note.status,
-                    superseded_by=note.superseded_by,
-                    appended_to=note.appended_to,
-                    summary_version_incorporated=note.summary_version_incorporated,
-                    created_at=note.created_at,
-                    updated_at=note.updated_at,
+                    {
+                        'id': note.id,
+                        'vault_id': self._target_vault_id,
+                        'session_id': note.session_id,
+                        'title': note.title,
+                        'description': note.description,
+                        'original_text': original_text,
+                        'page_index': note.page_index,
+                        'content_hash': note.content_hash,
+                        'filestore_path': rewritten_filestore,
+                        'assets': rewritten_assets,
+                        # SQL column name is 'metadata' (attr: doc_metadata).
+                        'metadata': note.doc_metadata,
+                        'publish_date': note.publish_date,
+                        'status': note.status,
+                        'superseded_by': note.superseded_by,
+                        'appended_to': note.appended_to,
+                        'summary_version_incorporated': note.summary_version_incorporated,
+                        'created_at': note.created_at,
+                        'updated_at': note.updated_at,
+                    }
                 )
             )
             ids.append(note.id)
@@ -636,7 +645,8 @@ class SnapshotImporter:
             _check_no_nan_floats(raw.get('stability'), where='memory_units.stability')
             u = MemoryUnitImport.model_validate(raw)
             await self._session.execute(
-                sa_insert(MemoryUnit.__table__).values(  # type: ignore[arg-type]
+                sa_insert(MemoryUnit.__table__)
+                .values(  # type: ignore[arg-type]
                     id=u.id,
                     vault_id=self._target_vault_id,
                     note_id=u.note_id,
@@ -660,10 +670,10 @@ class SnapshotImporter:
                     importance=u.importance,
                     stability=u.stability,
                     last_outcome_at=u.last_outcome_at,
-                    unit_metadata=u.unit_metadata,
                     created_at=u.created_at,
                     updated_at=u.updated_at,
                 )
+                .values({'metadata': u.unit_metadata})  # SQL col name (attr: unit_metadata)
             )
 
     async def _insert_unit_entities(self) -> None:
@@ -860,7 +870,7 @@ class SnapshotImporter:
     async def _phase_d_embeddings_and_reindex(self) -> None:
         embedder = await get_embedding_model(self._embedding_backend)
 
-        # Chunks
+        # Chunks (no `updated_at` column).
         await self._embed_table_text(
             embedder,
             select(Chunk.id, Chunk.text).where(  # type: ignore[arg-type]
@@ -869,16 +879,21 @@ class SnapshotImporter:
             ),
             'chunks',
             'embedding',
+            preserve_updated_at=False,
         )
-        # Memory units
+        # Memory units — preserve `updated_at` verbatim (Decision 3) by
+        # re-asserting it on every UPDATE. Otherwise the column's
+        # `onupdate=func.now()` (memory/mixins.py:28) fires when Phase D
+        # writes the embedding and the snapshot timestamp is lost.
         await self._embed_table_text(
             embedder,
-            select(MemoryUnit.id, MemoryUnit.text).where(  # type: ignore[arg-type]
+            select(MemoryUnit.id, MemoryUnit.text, MemoryUnit.updated_at).where(  # type: ignore[arg-type]
                 MemoryUnit.vault_id == self._target_vault_id,
                 MemoryUnit.embedding.is_(None),  # type: ignore[union-attr]
             ),
             'memory_units',
             'embedding',
+            preserve_updated_at=True,
         )
         # MentalModel embedding source is the centroid of observation
         # embeddings — see sql_models docstring. We approximate by
@@ -925,25 +940,37 @@ class SnapshotImporter:
         stmt: Any,
         table_name: str,
         embedding_col: str,
+        *,
+        preserve_updated_at: bool = False,
     ) -> None:
+        # Resolve the SQLAlchemy model + column from the table name so that
+        # `update().values(embedding=vec)` routes through the typed Vector
+        # column (raw text() bypasses type-side serialization, breaking
+        # pgvector's list[float] -> '[...]'::vector conversion).
+        model = _MODEL_BY_TABLE[table_name]
+        col_attr = getattr(model, embedding_col)
+
         result = await self._session.execute(stmt)
         rows = list(result.all())
         if not rows:
             return
         ids = [r[0] for r in rows]
         texts = [r[1] or '' for r in rows]
+        # When preserving updated_at, the SELECT MUST include it as the third
+        # column. Re-assert it on every UPDATE so SQLAlchemy's
+        # `onupdate=func.now()` does not override the snapshot value.
+        updated_ats: list[Any] = [r[2] for r in rows] if preserve_updated_at else [None] * len(rows)
 
         for start in range(0, len(rows), EMBED_BATCH_SIZE):
             chunk_ids = ids[start : start + EMBED_BATCH_SIZE]
             chunk_texts = texts[start : start + EMBED_BATCH_SIZE]
+            chunk_uat = updated_ats[start : start + EMBED_BATCH_SIZE]
             vectors = embedder.encode(chunk_texts)
-            updates = []
-            for row_id, vec in zip(chunk_ids, vectors, strict=True):
-                updates.append({'id': str(row_id), 'embedding': list(map(float, vec))})
-            await self._session.execute(
-                text(f'UPDATE {table_name} SET {embedding_col} = :embedding WHERE id = :id'),
-                updates,
-            )
+            for row_id, vec, uat in zip(chunk_ids, vectors, chunk_uat, strict=True):
+                values = {col_attr: list(map(float, vec))}
+                if preserve_updated_at and uat is not None:
+                    values[model.updated_at] = uat
+                await self._session.execute(update(model).where(model.id == row_id).values(values))
             await self._session.commit()
 
     async def _update_embeddings(
@@ -956,22 +983,24 @@ class SnapshotImporter:
     ) -> None:
         if not ids:
             return
+        col_attr = getattr(model, col)
         for start in range(0, len(ids), EMBED_BATCH_SIZE):
             chunk_ids = ids[start : start + EMBED_BATCH_SIZE]
             chunk_texts = texts[start : start + EMBED_BATCH_SIZE]
             vectors = embedder.encode(chunk_texts)
-            updates = [
-                {'id': str(rid), 'embedding': list(map(float, vec))}
-                for rid, vec in zip(chunk_ids, vectors, strict=True)
-            ]
-            table_name = model.__tablename__
-            await self._session.execute(
-                text(f'UPDATE {table_name} SET {col} = :embedding WHERE id = :id'),
-                updates,
-            )
+            for rid, vec in zip(chunk_ids, vectors, strict=True):
+                await self._session.execute(
+                    update(model).where(model.id == rid).values({col_attr: list(map(float, vec))})
+                )
             await self._session.commit()
 
     async def _reindex_hnsw(self) -> None:
+        # REINDEX cannot run inside a transaction block; commit first and
+        # then issue each REINDEX on its own AUTOCOMMIT connection. Failures
+        # are logged but non-fatal — eval results don't depend on HNSW
+        # latency, only correctness, and a missed REINDEX just degrades
+        # query latency.
+        await self._session.commit()
         result = await self._session.execute(
             text(
                 'SELECT indexname FROM pg_indexes '
@@ -979,14 +1008,26 @@ class SnapshotImporter:
             )
         )
         indexes = [r[0] for r in result.all()]
+        await self._session.commit()
+
+        engine = self._session.bind
+        if engine is None:
+            logger.warning('No engine bound to session; skipping REINDEX')
+            return
+
         for idx in indexes:
             try:
-                await self._session.execute(text(f'REINDEX INDEX CONCURRENTLY "{idx}"'))
+                async with engine.connect() as conn:
+                    autocommit = await conn.execution_options(isolation_level='AUTOCOMMIT')
+                    try:
+                        await autocommit.execute(text(f'REINDEX INDEX CONCURRENTLY "{idx}"'))
+                    except Exception as e:
+                        logger.warning(
+                            'REINDEX CONCURRENTLY failed on %s: %s — falling back', idx, e
+                        )
+                        await autocommit.execute(text(f'REINDEX INDEX "{idx}"'))
             except Exception as e:
-                logger.warning('REINDEX CONCURRENTLY failed on %s: %s — falling back', idx, e)
-                # Fallback: plain REINDEX (locks but always works).
-                await self._session.execute(text(f'REINDEX INDEX "{idx}"'))
-        await self._session.commit()
+                logger.warning('REINDEX skipped for %s: %s', idx, e)
 
     # ------------------------------------------------------------------
     # Phase E — mark complete
