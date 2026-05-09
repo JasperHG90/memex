@@ -7,16 +7,20 @@ from types import SimpleNamespace
 from memex_eval.suite import (
     AgentAnswer,
     EntityCooccurs,
+    EntityMentionContains,
     EntityResolves,
     ExcludedByDefault,
     GoldUnitIds,
     KeywordsAbsent,
     KeywordsPresent,
+    KvRoundtrip,
     LintFindingPresent,
     LLMJudge,
     RankingOrder,
     Scenario,
+    SummaryNonempty,
     ToolCallContains,
+    UnitMetadataMatches,
 )
 
 
@@ -279,3 +283,139 @@ class TestLLMJudgeUsageAbsorption:
         assert ans.tokens_in == 123
         assert ans.tokens_out == 45
         assert ans.cost_usd == 0.00078
+
+
+class TestEntityMentionContains:
+    def test_keyword_present_in_mention_text_passes(self) -> None:
+        outcome = EntityMentionContains(
+            type='entity_mention_contains',
+            expected_name='Sarah Chen',
+            expected_keywords=['Project Alpha'],
+        )
+        ans = AgentAnswer(
+            entities=[SimpleNamespace(name='Sarah Chen', id='e1')],
+            entity_mentions=[
+                {'unit': SimpleNamespace(text='Sarah Chen leads Project Alpha at Acme.')}
+            ],
+        )
+        assert outcome.score(ans, _scenario()) == {'pass': 1.0}
+
+    def test_keyword_missing_fails(self) -> None:
+        outcome = EntityMentionContains(
+            type='entity_mention_contains',
+            expected_name='Sarah Chen',
+            expected_keywords=['Project Beta'],
+        )
+        ans = AgentAnswer(
+            entities=[SimpleNamespace(name='Sarah Chen', id='e1')],
+            entity_mentions=[{'unit': SimpleNamespace(text='Sarah Chen leads Project Alpha.')}],
+        )
+        assert outcome.score(ans, _scenario()) == {'pass': 0.0}
+
+    def test_no_mentions_fails(self) -> None:
+        outcome = EntityMentionContains(
+            type='entity_mention_contains',
+            expected_keywords=['anything'],
+        )
+        ans = AgentAnswer()
+        assert outcome.score(ans, _scenario()) == {'pass': 0.0}
+
+    def test_min_mentions_threshold(self) -> None:
+        outcome = EntityMentionContains(
+            type='entity_mention_contains',
+            expected_keywords=['lead'],
+            min_mentions=3,
+        )
+        ans = AgentAnswer(
+            entity_mentions=[{'unit': SimpleNamespace(text='lead')}],
+        )
+        assert outcome.score(ans, _scenario()) == {'pass': 0.0}
+
+
+class TestKvRoundtrip:
+    def test_value_matches(self) -> None:
+        outcome = KvRoundtrip(
+            type='kv_roundtrip', kv_key='project:acme:vault', expected_value='engineering'
+        )
+        ans = AgentAnswer(kv_value='engineering')
+        assert outcome.score(ans, _scenario()) == {'pass': 1.0}
+
+    def test_value_mismatch(self) -> None:
+        outcome = KvRoundtrip(
+            type='kv_roundtrip', kv_key='project:acme:vault', expected_value='engineering'
+        )
+        ans = AgentAnswer(kv_value='marketing')
+        assert outcome.score(ans, _scenario()) == {'pass': 0.0}
+
+    def test_missing_value_fails(self) -> None:
+        outcome = KvRoundtrip(type='kv_roundtrip', kv_key='missing', expected_value='x')
+        ans = AgentAnswer(kv_value=None)
+        assert outcome.score(ans, _scenario()) == {'pass': 0.0}
+
+
+class TestSummaryNonempty:
+    def test_nonempty_passes(self) -> None:
+        outcome = SummaryNonempty(type='summary_nonempty', entity_query='Sarah Chen')
+        ans = AgentAnswer(summary_text='Sarah Chen is the engineering lead.')
+        result = outcome.score(ans, _scenario())
+        assert result['pass'] == 1.0
+        assert result['summary_chars'] == 35.0
+
+    def test_empty_fails(self) -> None:
+        outcome = SummaryNonempty(type='summary_nonempty')
+        ans = AgentAnswer(summary_text='')
+        assert outcome.score(ans, _scenario())['pass'] == 0.0
+
+    def test_below_min_chars_fails(self) -> None:
+        outcome = SummaryNonempty(type='summary_nonempty', min_chars=50)
+        ans = AgentAnswer(summary_text='too short')
+        result = outcome.score(ans, _scenario())
+        assert result['pass'] == 0.0
+        assert result['summary_chars'] == 9.0
+
+
+class TestUnitMetadataMatches:
+    def test_metadata_matches_passes(self) -> None:
+        outcome = UnitMetadataMatches(
+            type='unit_metadata_matches',
+            expected_metadata={'intent_class': 'durable'},
+        )
+        ans = AgentAnswer(
+            units=[
+                SimpleNamespace(
+                    text='roadmap',
+                    id='u1',
+                    metadata={'intent_class': 'durable', 'risk_class': 'low'},
+                )
+            ]
+        )
+        assert outcome.score(ans, _scenario()) == {'pass': 1.0}
+
+    def test_metadata_mismatch_fails(self) -> None:
+        outcome = UnitMetadataMatches(
+            type='unit_metadata_matches',
+            expected_metadata={'intent_class': 'durable'},
+        )
+        ans = AgentAnswer(
+            units=[SimpleNamespace(text='standup', id='u1', metadata={'intent_class': 'ephemeral'})]
+        )
+        assert outcome.score(ans, _scenario()) == {'pass': 0.0}
+
+    def test_finds_match_among_many(self) -> None:
+        outcome = UnitMetadataMatches(
+            type='unit_metadata_matches',
+            expected_metadata={'intent_class': 'permanent'},
+        )
+        ans = AgentAnswer(
+            units=[
+                SimpleNamespace(metadata={'intent_class': 'ephemeral'}),
+                SimpleNamespace(metadata={'intent_class': 'durable'}),
+                SimpleNamespace(metadata={'intent_class': 'permanent'}),
+            ]
+        )
+        assert outcome.score(ans, _scenario()) == {'pass': 1.0}
+
+    def test_empty_units_fails(self) -> None:
+        outcome = UnitMetadataMatches(type='unit_metadata_matches', expected_metadata={'k': 'v'})
+        ans = AgentAnswer()
+        assert outcome.score(ans, _scenario()) == {'pass': 0.0}

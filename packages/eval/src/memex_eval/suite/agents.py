@@ -70,9 +70,12 @@ class AgentAnswer(BaseModel):
     units: list[Any] = Field(default_factory=list)
     entities: list[Any] = Field(default_factory=list)
     cooccurrences: list[Any] = Field(default_factory=list)
+    entity_mentions: list[Any] = Field(default_factory=list)
     lint_findings: list[Any] = Field(default_factory=list)
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
     retrieved_unit_ids: list[str] = Field(default_factory=list)
+    kv_value: str | None = None
+    summary_text: str | None = None
     duration_ms: float = 0.0
     tokens_in: int = 0
     tokens_out: int = 0
@@ -230,9 +233,12 @@ class DirectApiBackend(AnswerBackend):
     ) -> AgentAnswer:
         from memex_eval.suite.base import (
             EntityCooccurs,
+            EntityMentionContains,
             EntityResolves,
+            KvRoundtrip,
             LintFindingPresent,
             LLMLintFlagsUnit,
+            SummaryNonempty,
         )
 
         started = time.monotonic()
@@ -250,6 +256,26 @@ class DirectApiBackend(AnswerBackend):
                     out.entities = [found[0]]
                     coocc = await api.get_entity_cooccurrences(found[0].id, vault_id=vault_id)
                     out.cooccurrences = list(coocc)
+            elif isinstance(outcome, EntityMentionContains):
+                name = outcome.expected_name or scenario.query
+                found = await api.search_entities(query=name, limit=1, vault_id=vault_id)
+                if found:
+                    out.entities = [found[0]]
+                    mentions = await api.get_entity_mentions(found[0].id, vault_id=vault_id)
+                    out.entity_mentions = list(mentions)
+            elif isinstance(outcome, KvRoundtrip):
+                entry = await api.kv_get(key=outcome.kv_key)
+                out.kv_value = getattr(entry, 'value', None) if entry is not None else None
+            elif isinstance(outcome, SummaryNonempty):
+                q = outcome.entity_query or scenario.query
+                found = await api.search_entities(query=q, limit=1, vault_id=vault_id)
+                if found:
+                    out.entities = [found[0]]
+                    try:
+                        summary = await api.summarize_node(entity_id=found[0].id, vault_id=vault_id)
+                        out.summary_text = getattr(summary, 'summary', '') or ''
+                    except Exception as exc:
+                        out.error = f'summarize_node failed: {type(exc).__name__}: {exc}'
             elif isinstance(outcome, (LintFindingPresent, LLMLintFlagsUnit)):
                 payload = await api.lint_findings(vault_id=str(vault_id))
                 # /lint/findings returns {'findings': [...], ...} — extract the list.

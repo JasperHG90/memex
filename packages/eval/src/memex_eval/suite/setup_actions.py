@@ -206,6 +206,77 @@ class _ConsolidationTick(SetupActionHandler):
         return None
 
 
+@register_setup_action('trigger_reflections')
+class _TriggerReflections(SetupActionHandler):
+    """Trigger reflection on the top-N entities in the vault and wait for
+    at least one mental_model search hit (matches legacy
+    ``internal/runner.py:_trigger_reflections``).
+
+    Params:
+    - ``count``: how many top entities to reflect on (default 5)
+    - ``timeout_s``: seconds to wait for the first mental_model result
+      (default 120; matches legacy)
+
+    The action ranks entities by mention_count via ``api.get_top_entities``
+    so reflection focuses on the most-mentioned subjects in the vault.
+    Probe-search uses the top entity's name with strategies=['mental_model']
+    to confirm reflections actually landed; partial timeouts return a
+    ``timed_out: True`` marker that downstream scenarios can ignore.
+    """
+
+    async def run(
+        self, api: 'RemoteMemexAPI', vault_id: UUID, params: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        import asyncio
+        import logging
+        import time
+
+        from memex_common.schemas import ReflectionRequest
+
+        logger = logging.getLogger('memex_eval.suite.setup_actions.trigger_reflections')
+
+        limit = int(params.get('count', 5) or 5)
+        timeout_s = float(params.get('timeout_s', 120) or 120)
+
+        entities = await api.get_top_entities(limit=limit, vault_id=vault_id)
+        if not entities:
+            return {'reflected_count': 0}
+
+        for ent in entities:
+            try:
+                await api.reflect(ReflectionRequest(entity_id=ent.id, vault_id=str(vault_id)))
+            except Exception as exc:
+                logger.warning('reflect(%s) failed: %s', getattr(ent, 'name', '?'), exc)
+
+        probe_name = getattr(entities[0], 'name', None) or ''
+        if not probe_name:
+            return {'reflected_count': len(entities)}
+
+        deadline = time.monotonic() + timeout_s
+        while time.monotonic() < deadline:
+            await asyncio.sleep(3)
+            try:
+                results = await api.search(
+                    query=probe_name,
+                    limit=1,
+                    strategies=['mental_model'],
+                    vault_ids=[vault_id],
+                )
+            except Exception as exc:
+                logger.warning('mental_model probe failed: %s', exc)
+                results = []
+            if results:
+                return {
+                    'reflected_count': len(entities),
+                    'probe_entity': probe_name,
+                }
+        return {
+            'reflected_count': len(entities),
+            'probe_entity': probe_name,
+            'timed_out': True,
+        }
+
+
 __all__ = [
     'SetupActionHandler',
     'register_setup_action',

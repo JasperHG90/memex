@@ -610,6 +610,120 @@ class LLMLintFlagsUnit(ExpectedOutcomeBase):
         return ['pass']
 
 
+@register_outcome('entity_mention_contains')
+class EntityMentionContains(ExpectedOutcomeBase):
+    """Resolve an entity, then assert at least one of its mentions contains
+    the expected keywords.
+
+    Walks: ``search_entities(expected_name or scenario.query) → take top
+    hit → get_entity_mentions(entity_id) → join unit text → keyword scan``.
+    Used for "this entity is grounded in source content X" assertions
+    that are stronger than name-only resolution.
+    """
+
+    type: Literal['entity_mention_contains']
+    expected_name: str = ''
+    expected_keywords: list[str]
+    min_mentions: int = 1
+
+    def score(self, answer: AgentAnswer, scenario, **_kw) -> dict[str, float]:
+        if len(answer.entity_mentions) < self.min_mentions:
+            return {'pass': 0.0}
+        joined: list[str] = []
+        for m in answer.entity_mentions:
+            unit = m.get('unit') if isinstance(m, dict) else getattr(m, 'unit', None)
+            if unit is None:
+                # Fallback: maybe the mention IS the unit (DTO shape varies).
+                unit = m
+            text = ''
+            if isinstance(unit, dict):
+                text = str(unit.get('text', '') or '')
+            else:
+                text = str(getattr(unit, 'text', '') or '')
+            if text:
+                joined.append(text)
+        blob = '\n'.join(joined).lower()
+        if all(kw.lower() in blob for kw in self.expected_keywords):
+            return {'pass': 1.0}
+        return {'pass': 0.0}
+
+    def metric_keys(self, top_k: int | None = None) -> list[str]:
+        return ['pass']
+
+
+@register_outcome('kv_roundtrip')
+class KvRoundtrip(ExpectedOutcomeBase):
+    """Assert that a KV key returns the expected value.
+
+    The write happens via the ``kv_write`` setup_action; this outcome
+    only reads (``api.kv_get``) and compares. Together they exercise the
+    full write→read cycle without coupling write logic into the outcome.
+    """
+
+    type: Literal['kv_roundtrip']
+    kv_key: str
+    expected_value: str
+
+    def score(self, answer: AgentAnswer, scenario, **_kw) -> dict[str, float]:
+        if answer.kv_value is None:
+            return {'pass': 0.0}
+        return {'pass': 1.0 if answer.kv_value == self.expected_value else 0.0}
+
+    def metric_keys(self, top_k: int | None = None) -> list[str]:
+        return ['pass']
+
+
+@register_outcome('summary_nonempty')
+class SummaryNonempty(ExpectedOutcomeBase):
+    """Resolve an entity, call ``summarize_node``, assert non-empty summary.
+
+    The ``min_chars`` field lets a scenario require more than a stub
+    response (e.g. ``min_chars=50`` to catch summaries that returned
+    a one-word "Acme" rather than a full sentence).
+    """
+
+    type: Literal['summary_nonempty']
+    entity_query: str = ''
+    min_chars: int = 1
+
+    def score(self, answer: AgentAnswer, scenario, **_kw) -> dict[str, float]:
+        text = (answer.summary_text or '').strip()
+        return {
+            'pass': 1.0 if len(text) >= self.min_chars else 0.0,
+            'summary_chars': float(len(text)),
+        }
+
+    def metric_keys(self, top_k: int | None = None) -> list[str]:
+        return ['pass', 'summary_chars']
+
+
+@register_outcome('unit_metadata_matches')
+class UnitMetadataMatches(ExpectedOutcomeBase):
+    """Assert at least one returned memory unit has metadata matching every
+    ``expected_metadata`` (key, value) pair.
+
+    Reuses the default memory-search dispatch in ``DirectApiBackend`` —
+    ``answer.units`` already carries the DTOs with ``.metadata``.
+    """
+
+    type: Literal['unit_metadata_matches']
+    expected_metadata: dict[str, str]
+
+    def score(self, answer: AgentAnswer, scenario, **_kw) -> dict[str, float]:
+        if not answer.units:
+            return {'pass': 0.0}
+        for unit in answer.units:
+            meta = getattr(unit, 'metadata', None) or {}
+            if isinstance(meta, dict) and all(
+                str(meta.get(k, '')) == str(v) for k, v in self.expected_metadata.items()
+            ):
+                return {'pass': 1.0}
+        return {'pass': 0.0}
+
+    def metric_keys(self, top_k: int | None = None) -> list[str]:
+        return ['pass']
+
+
 @register_outcome('tool_call_contains')
 class ToolCallContains(ExpectedOutcomeBase):
     """Agent-mode outcome: assert the agent called specific MCP tool(s).

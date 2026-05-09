@@ -240,7 +240,8 @@ class TestSetupActionRegistry:
                 'kind': 'nonexistent_action_kind_xyz',
                 'error': (
                     "\"Unknown setup action 'nonexistent_action_kind_xyz'. Registered: ['"
-                    "consolidation_tick', 'deprioritize', 'kv_write', 'record_outcome']\""
+                    "consolidation_tick', 'deprioritize', 'kv_write', 'record_outcome', "
+                    "'trigger_reflections']\""
                 ),
             }
         ]
