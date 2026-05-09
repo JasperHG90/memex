@@ -291,14 +291,39 @@ def _aggregate_text(answer: AgentAnswer) -> str:
 
     Agent backends populate ``answer_text``; the API backend populates
     ``units`` whose joined text serves the same purpose.
+
+    ``units`` may contain ``MemoryUnitDTO`` (memory search) OR ``NoteDTO``
+    (note search via ``search_type='note'``). MemoryUnitDTO has ``.text``;
+    NoteDTO does NOT — its searchable surface is ``title`` / ``name`` /
+    ``description`` / ``original_text``. Aggregate every populated string
+    field so a ``KeywordsPresent`` outcome over note-search results
+    actually has something to match against.
     """
     if answer.answer_text:
         return answer.answer_text.lower()
     parts: list[str] = []
     for u in answer.units:
-        text = getattr(u, 'text', '') or ''
-        if text:
-            parts.append(text)
+        # MemoryUnitDTO / NoteDTO scalar text fields.
+        for fld in ('text', 'title', 'name', 'description', 'original_text'):
+            val = getattr(u, fld, None)
+            if val:
+                parts.append(str(val))
+        # NoteSearchResult exposes topic strings via summaries[] (each
+        # BlockSummaryDTO has ``topic`` + ``key_points``) and a free-form
+        # ``metadata`` dict that typically carries ``title``/``name``.
+        for summary in getattr(u, 'summaries', None) or []:
+            topic = getattr(summary, 'topic', None) or ''
+            if topic:
+                parts.append(str(topic))
+            for kp in getattr(summary, 'key_points', None) or []:
+                if kp:
+                    parts.append(str(kp))
+        meta = getattr(u, 'metadata', None)
+        if isinstance(meta, dict):
+            for key in ('title', 'name', 'description', 'note_title'):
+                val = meta.get(key)
+                if val:
+                    parts.append(str(val))
     return ' '.join(parts).lower()
 
 
@@ -367,7 +392,14 @@ class EntityResolves(ExpectedOutcomeBase):
         if not all_found:
             return {'pass': 0.0}
         if self.expected_type:
-            types = {str(getattr(e, 'type', None) or '').lower() for e in answer.entities}
+            # EntityDTO field is `entity_type` (schemas.py:661); legacy
+            # `type` lookup always returned None and silently failed every
+            # type check. Probe both for forward compatibility.
+            types: set[str] = set()
+            for e in answer.entities:
+                t = getattr(e, 'entity_type', None) or getattr(e, 'type', None)
+                if t is not None:
+                    types.add(str(t).lower())
             if self.expected_type.lower() not in types:
                 return {'pass': 0.0}
         return {'pass': 1.0}
@@ -716,24 +748,48 @@ class SummaryNonempty(ExpectedOutcomeBase):
 
 @register_outcome('unit_metadata_matches')
 class UnitMetadataMatches(ExpectedOutcomeBase):
-    """Assert at least one returned memory unit has metadata matching every
+    """Assert at least one returned memory unit matches every
     ``expected_metadata`` (key, value) pair.
 
-    Reuses the default memory-search dispatch in ``DirectApiBackend`` —
-    ``answer.units`` already carries the DTOs with ``.metadata``.
+    Lookup order per key:
+      1. ``unit.metadata[key]`` (the dict-shaped metadata blob).
+      2. ``getattr(unit, key)`` — top-level DTO fields like
+         ``intent_class``, ``risk_class``, ``fact_type``, ``status``
+         live here, NOT in the metadata dict. Without this fallback a
+         scenario asking for ``intent_class='ephemeral'`` would always
+         fail because that key never appears under ``.metadata``.
+
+    Comparison is string-coerced (Enum values stringify to their
+    ``.value``) so callers can write plain string expectations.
     """
 
     type: Literal['unit_metadata_matches']
     expected_metadata: dict[str, str]
 
+    @staticmethod
+    def _coerce(value: Any) -> str:
+        if value is None:
+            return ''
+        inner = getattr(value, 'value', None)
+        return str(inner if inner is not None else value)
+
+    def _matches(self, unit: Any) -> bool:
+        meta = getattr(unit, 'metadata', None) or {}
+        for key, expected in self.expected_metadata.items():
+            actual: Any = None
+            if isinstance(meta, dict) and key in meta:
+                actual = meta[key]
+            else:
+                actual = getattr(unit, key, None)
+            if self._coerce(actual) != self._coerce(expected):
+                return False
+        return True
+
     def score(self, answer: AgentAnswer, scenario, **_kw) -> dict[str, float]:
         if not answer.units:
             return {'pass': 0.0}
         for unit in answer.units:
-            meta = getattr(unit, 'metadata', None) or {}
-            if isinstance(meta, dict) and all(
-                str(meta.get(k, '')) == str(v) for k, v in self.expected_metadata.items()
-            ):
+            if self._matches(unit):
                 return {'pass': 1.0}
         return {'pass': 0.0}
 

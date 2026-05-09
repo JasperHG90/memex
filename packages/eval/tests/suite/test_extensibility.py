@@ -189,7 +189,13 @@ class TestOutcomeRegistry:
 class TestSetupActionRegistry:
     def test_built_in_actions_registered(self) -> None:
         names = list_setup_actions()
-        for expected in ('record_outcome', 'deprioritize', 'kv_write', 'consolidation_tick'):
+        for expected in (
+            'record_outcome',
+            'deprioritize',
+            'kv_write',
+            'consolidation_tick',
+            'trigger_reflections',
+        ):
             assert expected in names
 
     @pytest.mark.asyncio
@@ -386,6 +392,192 @@ class TestSetupActionRegistry:
         }
         ids = await _resolve_unit_ids(api=None, vault_id=uuid4(), params=params)
         assert ids == []
+
+
+class TestBuiltInSetupActionDispatch:
+    """Dispatch tests for the built-in handlers (record_outcome, deprioritize,
+    kv_write, consolidation_tick). Each test injects a mock RemoteMemexAPI
+    and asserts the right method was called with the right args."""
+
+    @pytest.mark.asyncio
+    async def test_record_outcome_dispatches_with_resolved_unit_ids(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from memex_eval.suite.setup_actions import get_setup_action
+
+        api = MagicMock()
+        api.record_outcome = AsyncMock(return_value=None)
+        vault_id = uuid4()
+        handler = get_setup_action('record_outcome')
+        result = await handler.run(
+            api=api,
+            vault_id=vault_id,
+            params={
+                'note_key': 'k1',
+                '_note_key_to_unit_ids': {'k1': ['u1', 'u2']},
+                'success': True,
+                'count': 2,
+                'reason': 'because',
+            },
+        )
+        assert result == {'unit_ids': ['u1', 'u2']}
+        # 2 calls (count=2), each with both unit_ids passed in one shot.
+        assert api.record_outcome.call_count == 2
+        for call in api.record_outcome.call_args_list:
+            assert call.kwargs['unit_ids'] == ['u1', 'u2']
+            assert call.kwargs['success'] is True
+            assert call.kwargs['vault_id'] == str(vault_id)
+            assert call.kwargs['reason'] == 'because'
+
+    @pytest.mark.asyncio
+    async def test_deprioritize_dispatches_per_unit(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+        from uuid import UUID
+
+        from memex_eval.suite.setup_actions import get_setup_action
+
+        api = MagicMock()
+        api.deprioritize_memory_unit = AsyncMock(return_value=None)
+        u1 = uuid4()
+        u2 = uuid4()
+        vault_id = uuid4()
+        handler = get_setup_action('deprioritize')
+        result = await handler.run(
+            api=api,
+            vault_id=vault_id,
+            params={
+                'note_key': 'k1',
+                '_note_key_to_unit_ids': {'k1': [str(u1), str(u2)]},
+                'reason': 'eol',
+            },
+        )
+        assert result == {'unit_ids': [str(u1), str(u2)]}
+        assert api.deprioritize_memory_unit.call_count == 2
+        called_ids = {
+            call.kwargs['unit_id'] for call in api.deprioritize_memory_unit.call_args_list
+        }
+        assert called_ids == {UUID(str(u1)), UUID(str(u2))}
+        for call in api.deprioritize_memory_unit.call_args_list:
+            assert call.kwargs['reason'] == 'eol'
+            assert call.kwargs['vault_id'] == vault_id
+
+    @pytest.mark.asyncio
+    async def test_kv_write_dispatches_to_api_kv_put(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from memex_eval.suite.setup_actions import get_setup_action
+
+        api = MagicMock()
+        api.kv_put = AsyncMock(return_value=None)
+        handler = get_setup_action('kv_write')
+        result = await handler.run(
+            api=api,
+            vault_id=uuid4(),
+            params={'kv_key': 'project:demo:lead', 'kv_value': 'Sarah'},
+        )
+        api.kv_put.assert_called_once_with(value='Sarah', key='project:demo:lead')
+        assert result == {'kv_key': 'project:demo:lead'}
+
+    @pytest.mark.asyncio
+    async def test_kv_write_rejects_empty_key(self) -> None:
+        from memex_eval.suite.setup_actions import get_setup_action
+
+        handler = get_setup_action('kv_write')
+        with pytest.raises(ValueError, match='non-empty kv_key'):
+            await handler.run(
+                api=None,
+                vault_id=uuid4(),
+                params={'kv_key': '', 'kv_value': 'v'},
+            )
+        with pytest.raises(ValueError, match='non-empty kv_key'):
+            await handler.run(
+                api=None,
+                vault_id=uuid4(),
+                params={'kv_key': '   ', 'kv_value': 'v'},
+            )
+
+    @pytest.mark.asyncio
+    async def test_kv_write_rejects_none_value(self) -> None:
+        from memex_eval.suite.setup_actions import get_setup_action
+
+        handler = get_setup_action('kv_write')
+        with pytest.raises(ValueError, match='kv_value to be set explicitly'):
+            await handler.run(
+                api=None,
+                vault_id=uuid4(),
+                params={'kv_key': 'k', 'kv_value': None},
+            )
+
+    @pytest.mark.asyncio
+    async def test_consolidation_tick_dispatches_with_vault_id(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+
+        from memex_eval.suite.setup_actions import get_setup_action
+
+        api = MagicMock()
+        api.consolidation_tick = AsyncMock(return_value=None)
+        vault_id = uuid4()
+        handler = get_setup_action('consolidation_tick')
+        result = await handler.run(api=api, vault_id=vault_id, params={})
+        api.consolidation_tick.assert_called_once_with(vault_id=vault_id)
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_trigger_reflections_raises_when_all_reflect_calls_fail(self) -> None:
+        """If every entity's reflect() raises, the handler must surface a
+        RuntimeError so a downstream scenario doesn't silently score against
+        an un-reflected vault."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from memex_eval.suite.setup_actions import get_setup_action
+
+        api = MagicMock()
+        ent = MagicMock()
+        ent.id = uuid4()
+        ent.name = 'Acme'
+        api.get_top_entities = AsyncMock(return_value=[ent])
+        api.reflect = AsyncMock(side_effect=RuntimeError('upstream'))
+        handler = get_setup_action('trigger_reflections')
+        with pytest.raises(RuntimeError, match='all 1 reflect'):
+            await handler.run(api=api, vault_id=uuid4(), params={'count': 1, 'timeout_s': 0})
+
+    @pytest.mark.asyncio
+    async def test_trigger_reflections_reports_partial_failure(self) -> None:
+        """Some reflect() calls succeed, some fail — handler returns a context
+        dict with succeeded count + failed entity names so the runner can
+        surface partial degradation."""
+        import asyncio
+        from unittest.mock import AsyncMock, MagicMock
+
+        from memex_eval.suite.setup_actions import get_setup_action
+
+        api = MagicMock()
+        ents = []
+        for nm in ('Acme', 'Beta', 'Gamma'):
+            e = MagicMock()
+            e.id = uuid4()
+            e.name = nm
+            ents.append(e)
+        api.get_top_entities = AsyncMock(return_value=ents)
+
+        async def _reflect(req):
+            if 'Beta' in str(req):  # entity_id is a UUID, so this never hits
+                raise RuntimeError('beta-broken')
+            return None
+
+        # Use side_effect with a list to inject one failure deterministically.
+        api.reflect = AsyncMock(side_effect=[None, RuntimeError('beta-broken'), None])
+        # Make probe-search return a hit immediately so we don't loop.
+        api.search = AsyncMock(return_value=[MagicMock()])
+
+        handler = get_setup_action('trigger_reflections')
+        ctx = await handler.run(api=api, vault_id=uuid4(), params={'count': 3, 'timeout_s': 5})
+        assert ctx['reflected_count'] == 2
+        assert ctx['failed_count'] == 1
+        assert ctx['failed_entities'] == ['Beta']
+        assert ctx['requested_count'] == 3
+        # Drain pending coroutines created by AsyncMock
+        await asyncio.sleep(0)
 
 
 class TestSetupActionExtraFields:

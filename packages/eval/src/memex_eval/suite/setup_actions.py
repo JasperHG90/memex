@@ -219,14 +219,25 @@ class _Deprioritize(SetupActionHandler):
 
 @register_setup_action('kv_write')
 class _KvWrite(SetupActionHandler):
+    required: ClassVar[bool] = True
+
     async def run(
         self, api: 'RemoteMemexAPI', vault_id: UUID, params: dict[str, Any]
     ) -> dict[str, Any] | None:
-        await api.kv_put(
-            value=params.get('kv_value') or '',
-            key=params.get('kv_key') or '',
-        )
-        return None
+        key = (params.get('kv_key') or '').strip()
+        value = params.get('kv_value')
+        if not key:
+            raise ValueError(
+                'kv_write setup action requires a non-empty kv_key. '
+                'Empty keys silently no-op when the API path-encodes them.'
+            )
+        if value is None:
+            raise ValueError(
+                'kv_write setup action requires kv_value to be set explicitly '
+                '(use empty string to write a sentinel; None signals a misconfigured suite).'
+            )
+        await api.kv_put(value=value, key=key)
+        return {'kv_key': key}
 
 
 @register_setup_action('consolidation_tick')
@@ -272,17 +283,34 @@ class _TriggerReflections(SetupActionHandler):
 
         entities = await api.get_top_entities(limit=limit, vault_id=vault_id)
         if not entities:
-            return {'reflected_count': 0}
+            return {'reflected_count': 0, 'requested_count': 0, 'failed_count': 0}
 
+        failed: list[str] = []
+        succeeded: list[str] = []
         for ent in entities:
+            ent_name = getattr(ent, 'name', '?') or '?'
             try:
                 await api.reflect(ReflectionRequest(entity_id=ent.id, vault_id=str(vault_id)))
+                succeeded.append(ent_name)
             except Exception as exc:
-                logger.warning('reflect(%s) failed: %s', getattr(ent, 'name', '?'), exc)
+                failed.append(ent_name)
+                logger.warning('reflect(%s) failed: %s', ent_name, exc)
+
+        if not succeeded:
+            raise RuntimeError(
+                f'trigger_reflections: all {len(entities)} reflect() calls failed '
+                f'(entities tried: {failed}). Suite cannot exercise reflection paths.'
+            )
 
         probe_name = getattr(entities[0], 'name', None) or ''
+        base_ctx: dict[str, Any] = {
+            'reflected_count': len(succeeded),
+            'requested_count': len(entities),
+            'failed_count': len(failed),
+            'failed_entities': failed,
+        }
         if not probe_name:
-            return {'reflected_count': len(entities)}
+            return base_ctx
 
         deadline = time.monotonic() + timeout_s
         while time.monotonic() < deadline:
@@ -298,15 +326,8 @@ class _TriggerReflections(SetupActionHandler):
                 logger.warning('mental_model probe failed: %s', exc)
                 results = []
             if results:
-                return {
-                    'reflected_count': len(entities),
-                    'probe_entity': probe_name,
-                }
-        return {
-            'reflected_count': len(entities),
-            'probe_entity': probe_name,
-            'timed_out': True,
-        }
+                return {**base_ctx, 'probe_entity': probe_name}
+        return {**base_ctx, 'probe_entity': probe_name, 'timed_out': True}
 
 
 __all__ = [

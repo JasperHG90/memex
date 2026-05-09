@@ -273,7 +273,18 @@ class DirectApiBackend(AnswerBackend):
                     out.entities = [found[0]]
                     try:
                         summary = await api.summarize_node(entity_id=found[0].id, vault_id=vault_id)
-                        out.summary_text = getattr(summary, 'summary', '') or ''
+                        observations = getattr(summary, 'new_observations', None) or []
+                        parts: list[str] = []
+                        for obs in observations:
+                            title = (getattr(obs, 'title', '') or '').strip()
+                            content = (getattr(obs, 'content', '') or '').strip()
+                            if title and content:
+                                parts.append(f'{title}: {content}')
+                            elif content:
+                                parts.append(content)
+                            elif title:
+                                parts.append(title)
+                        out.summary_text = '\n'.join(parts)
                     except Exception as exc:
                         out.error = f'summarize_node failed: {type(exc).__name__}: {exc}'
             elif isinstance(outcome, (LintFindingPresent, LLMLintFlagsUnit)):
