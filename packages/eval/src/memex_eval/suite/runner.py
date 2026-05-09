@@ -1354,6 +1354,14 @@ def _aggregate_results(
     return aggregated
 
 
+class MultiVaultImportNotSupported(RuntimeError):
+    """Raised when ``--from-snapshot`` targets a multi-vault suite.
+
+    V12 v1 ships single-snapshot per import. A future revision could ship
+    one snapshot per named vault.
+    """
+
+
 async def run_suite(
     suite: Suite,
     server_url: str,
@@ -1371,6 +1379,7 @@ async def run_suite(
     manifest_dir: Path | None = None,
     scenario_ids: list[str] | None = None,
     groups: list[str] | None = None,
+    from_snapshot: str | Path | None = None,
 ) -> RunResult:
     """Run one suite end-to-end.
 
@@ -1395,6 +1404,12 @@ async def run_suite(
             skip_reason='setup_action_not_reusable'.
         manifest_dir: Directory for keep/reuse manifest files. Defaults
             to ``~/.memex/eval/keep-vault-manifests/``.
+        from_snapshot: When set, restore a V3 snapshot from this server-local
+            path into a fresh vault and skip ingest + extraction-wait. The
+            target server must be running with ``MEMEX_SERVER__EVAL_MODE=1``.
+            Multi-vault suites (any source note or scenario with a
+            ``vault_name``) raise ``MultiVaultImportNotSupported``.
+            Mutually exclusive with ``keep_vault`` / ``reuse_vault``.
 
     Logs to ``recorder`` if provided. Returns the full ``RunResult``.
     """
@@ -1516,10 +1531,14 @@ async def run_suite(
             except Exception as e:
                 logger.warning('Could not fetch /system/config: %s', e)
 
-            # P8: Vault setup — branch on reuse_vault. ``vault_map`` is declared
-            # once with explicit Optional[str] keys so both branches narrow
-            # cleanly under mypy.
+            # Vault setup. Three paths:
+            #   (a) --reuse-vault: bind to vaults from a prior --keep-vault
+            #       manifest, skipping ingest + extraction.
+            #   (b) --from-snapshot: import a V3 snapshot into a fresh vault,
+            #       skipping ingest + extraction. Multi-vault suites unsupported.
+            #   (c) default: create vault(s) and ingest sources as today.
             vault_map: dict[str | None, UUID] = {}
+            note_id_by_key: dict[str, str] = {}
             if reuse_vault is not None:
                 manifest_path = manifest_dir / f'{reuse_vault}.json'
                 if not manifest_path.exists():
@@ -1556,6 +1575,27 @@ async def run_suite(
                     default_vault_id,
                     manifest_path,
                 )
+            elif from_snapshot is not None:
+                multi_vault_sources = {n.vault_name for n in suite.sources.notes if n.vault_name}
+                multi_vault_scenarios = {s.vault_name for s in suite.scenarios if s.vault_name}
+                if multi_vault_sources or multi_vault_scenarios:
+                    raise MultiVaultImportNotSupported(
+                        f'Suite {suite.name!r} declares per-note/per-scenario '
+                        f'vault_name; --from-snapshot v1 supports only single-vault '
+                        f'suites. Drop the snapshot flag or split the suite.'
+                    )
+                logger.info(
+                    'Importing snapshot %s into target vault %s (skipping ingest + extraction)',
+                    from_snapshot,
+                    vault_name,
+                )
+                default_vault_id, _import_id = await api.import_snapshot(
+                    str(from_snapshot), vault_name
+                )
+                vault_map[None] = default_vault_id
+                extra_params['snapshot.path'] = str(from_snapshot)
+                extra_params['snapshot.import_id'] = str(_import_id)
+                extra_params['snapshot.cache_hit'] = 'true'
             else:
                 default_vault_id = await _setup_vault(
                     api, vault_name, f'Eval suite vault: {suite.name}'
@@ -1639,6 +1679,13 @@ async def run_suite(
                             f'Give each source note a unique title, or drop '
                             f'--reuse-vault and re-ingest fresh.'
                         )
+                elif from_snapshot is not None:
+                    # Snapshot path: extraction is pre-baked. note_key_to_unit_ids
+                    # remains empty; scenarios that depend on per-note unit IDs
+                    # via the snapshot path are out of scope for v1 (the
+                    # MultiVaultImportNotSupported check above already filters
+                    # most of these). Document and move on.
+                    note_id_by_key = {}
                 else:
                     # Ingest source notes
                     note_id_by_key = await _ingest_sources(api, default_vault_id, vault_map, suite)
@@ -1657,19 +1704,22 @@ async def run_suite(
                                 max_consecutive_errors=5,
                             )
 
-                # Build per-note vault map: each note_key polls under its
-                # actual target vault, not blindly under default_vault_id —
-                # otherwise notes routed to a non-default vault timeout
-                # spuriously even though extraction succeeded.
-                note_key_to_vault_id: dict[str, UUID] = {
-                    n.note_key: vault_map.get(n.vault_name, default_vault_id)
-                    for n in suite.sources.notes
-                    if n.note_key in note_id_by_key
-                }
-                # Per-note unit-id resolution (also serves as per-note extraction wait)
-                note_key_to_unit_ids = await _wait_extraction_per_note(
-                    api, note_id_by_key, note_key_to_vault_id
-                )
+                if from_snapshot is not None:
+                    note_key_to_unit_ids = {}
+                else:
+                    # Build per-note vault map: each note_key polls under its
+                    # actual target vault, not blindly under default_vault_id —
+                    # otherwise notes routed to a non-default vault timeout
+                    # spuriously even though extraction succeeded.
+                    note_key_to_vault_id: dict[str, UUID] = {
+                        n.note_key: vault_map.get(n.vault_name, default_vault_id)
+                        for n in suite.sources.notes
+                        if n.note_key in note_id_by_key
+                    }
+                    # Per-note unit-id resolution (also serves as per-note extraction wait)
+                    note_key_to_unit_ids = await _wait_extraction_per_note(
+                        api, note_id_by_key, note_key_to_vault_id
+                    )
 
                 # Run scenarios in DEFINITION ORDER. The runner is contractually
                 # required to iterate suite.scenarios in the same order they

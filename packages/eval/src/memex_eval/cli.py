@@ -397,6 +397,82 @@ suite_app = typer.Typer(
 app.add_typer(suite_app, name='suite')
 
 
+snapshot_app = typer.Typer(
+    name='snapshot',
+    help='Create / list V3 vault snapshots used to skip extraction on eval reruns.',
+    no_args_is_help=True,
+)
+app.add_typer(snapshot_app, name='snapshot')
+
+
+@snapshot_app.command('create')
+def snapshot_create(
+    vault: str = typer.Argument(..., help='Vault name or UUID to export.'),
+    output: str | None = typer.Option(
+        None,
+        '--output',
+        '-o',
+        help=(
+            'Snapshot output directory. Defaults to '
+            '$MEMEX_EVAL_SNAPSHOT_ROOT/<vault>-<timestamp>/ '
+            '(env fallback: ~/.memex-eval/snapshots/).'
+        ),
+    ),
+) -> None:
+    """Thin wrapper around `memex vault snapshot export`.
+
+    The snapshot is written under the eval allowlist root so it can be
+    re-imported by `memex-eval suite run --from-snapshot`.
+    """
+    import datetime as _dt
+    import os as _os
+    import shutil as _shutil
+    import subprocess as _sp
+    from pathlib import Path as _P
+
+    if output is None:
+        root = _os.environ.get('MEMEX_EVAL_SNAPSHOT_ROOT') or '~/.memex-eval/snapshots'
+        ts = _dt.datetime.now(_dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ')
+        output = str(_P(root).expanduser() / f'{vault}-{ts}')
+
+    _P(output).expanduser().parent.mkdir(parents=True, exist_ok=True)
+    memex_bin = _shutil.which('memex')
+    if memex_bin is None:
+        console.print('[red]`memex` CLI not found on PATH.[/red]')
+        raise typer.Exit(code=1)
+    cmd = [memex_bin, 'vault', 'snapshot', 'export', vault, '--output', output]
+    console.print(f'[dim]running:[/dim] {" ".join(cmd)}')
+    rc = _sp.call(cmd)
+    if rc != 0:
+        raise typer.Exit(code=rc)
+    console.print(f'[green]✓[/green] snapshot at {output}')
+
+
+@snapshot_app.command('list')
+def snapshot_list() -> None:
+    """List snapshots under the eval allowlist root."""
+    import os as _os
+    from pathlib import Path as _P
+
+    root = _P(_os.environ.get('MEMEX_EVAL_SNAPSHOT_ROOT') or '~/.memex-eval/snapshots').expanduser()
+    if not root.exists():
+        console.print(f'[yellow]no snapshots: {root} does not exist[/yellow]')
+        return
+    rows = []
+    for entry in sorted(root.iterdir()):
+        if not entry.is_dir():
+            continue
+        manifest = entry / 'manifest.json'
+        ok = manifest.exists()
+        rows.append((entry.name, str(entry), 'ok' if ok else 'incomplete'))
+    if not rows:
+        console.print(f'[yellow]no snapshots under {root}[/yellow]')
+        return
+    for name, path, status in rows:
+        marker = '[green]✓[/green]' if status == 'ok' else '[yellow]⚠[/yellow]'
+        console.print(f'{marker} {name}  [dim]{path}[/dim]  {status}')
+
+
 def _read_notes_file(path: str) -> str:
     """Read --notes-file with helpful errors instead of raw stack traces."""
     from pathlib import Path as _NP
@@ -646,6 +722,16 @@ def suite_run(
             'are skipped with reason setup_action_not_reusable.'
         ),
     ),
+    from_snapshot: str | None = typer.Option(
+        None,
+        '--from-snapshot',
+        help=(
+            'Server-local path to a V3 snapshot directory. When set, the runner '
+            'imports the snapshot into a fresh ephemeral vault and skips ingest '
+            '+ extraction. The target server must be running with '
+            'MEMEX_SERVER__EVAL_MODE=1. Single-vault suites only.'
+        ),
+    ),
     verbose: bool = typer.Option(False, '--verbose', '-v'),
 ) -> None:
     """Run a suite (or all) once."""
@@ -731,6 +817,7 @@ def suite_run(
                     reuse_vault=reuse_vault,
                     scenario_ids=scenarios or None,
                     groups=groups or None,
+                    from_snapshot=from_snapshot,
                 )
             )
         except KeyboardInterrupt:
