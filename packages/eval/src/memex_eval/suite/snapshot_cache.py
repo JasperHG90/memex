@@ -26,13 +26,18 @@ crashed populate is observable as a miss.
 
 Atomic publish: ``stage_path()`` returns a unique tmp directory under the
 same cache root; the runner exports into it, calls ``mark_complete()``,
-then ``publish()`` atomically renames it to the final cache slot. The
-old entry (if any) is preserved until the new one is fully written and
-only deleted after the rename succeeds.
+then ``publish()`` atomically renames it to the final cache slot under a
+per-slot ``fcntl.flock`` advisory lock. Concurrent populates serialize on
+the lock — losers see the winner's marker after acquiring and discard
+their staged work, so the cache slot resolves to exactly one entry with
+no leaked ``.old-`` / ``.tmp-`` dirs.
 """
 
 from __future__ import annotations
 
+import contextlib
+import errno
+import fcntl
 import logging
 import os
 import shutil
@@ -49,6 +54,7 @@ logger = logging.getLogger('memex_eval.suite.snapshot_cache')
 CACHE_COMPLETE_MARKER = '_complete.marker'
 _TMP_PREFIX = '.tmp-'
 _OLD_PREFIX = '.old-'
+_LOCK_PREFIX = '.lock-'
 
 
 def default_cache_root() -> Path:
@@ -129,61 +135,133 @@ def mark_complete(cache_path: Path) -> None:
     Called AFTER the export has finished writing manifest.json. The
     marker order matters: lookup() requires both files to be present, so
     a crash between manifest write and marker write leaves the cache
-    visible as a miss (correct fail-safe). Caller fsyncs by default —
-    we open with O_DSYNC so the marker is durable before this function
-    returns.
+    visible as a miss (correct fail-safe).
+
+    Durability: ``O_DSYNC`` is requested when the platform supports it;
+    we ALSO call ``os.fsync(fd)`` after write so platforms missing
+    ``O_DSYNC`` (Windows, some BSDs) still persist before return. The
+    parent directory is fsync'd separately so the marker's directory
+    entry survives crashes.
     """
     marker = cache_path / CACHE_COMPLETE_MARKER
     flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, 'O_DSYNC', 0)
     fd = os.open(marker, flags, 0o644)
     try:
         os.write(fd, b'cache populated by memex-eval suite runner\n')
+        with contextlib.suppress(OSError):
+            os.fsync(fd)
     finally:
         os.close(fd)
+    # fsync parent dir so the marker's dirent is durable.
+    with contextlib.suppress(OSError):
+        dfd = os.open(cache_path, os.O_RDONLY)
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
 
 
 def stage_path(cache_root: Path, cache_key_str: str) -> Path:
     """Allocate a unique tmp staging directory inside ``cache_root``.
 
-    Two concurrent populates race-safe: each gets a distinct uuid suffix
-    and writes independently. The race resolves at ``publish()`` time —
-    one wins, the other replaces.
+    Two concurrent populates each get a distinct uuid suffix and write
+    independently. ``publish()`` then serializes the final rename via a
+    per-slot ``fcntl.flock`` so the cache slot ends up holding exactly
+    one entry.
     """
     tmp = cache_root / f'{_TMP_PREFIX}{cache_key_str}-{uuid.uuid4().hex}'
     tmp.mkdir(parents=True, exist_ok=False)
     return tmp
 
 
+@contextlib.contextmanager
+def _slot_lock(cache_root: Path, slot_name: str):
+    """Acquire an advisory ``fcntl.flock`` on a per-slot lock file.
+
+    The lock file lives at ``<cache_root>/.lock-<slot_name>`` and is
+    NEVER deleted — flock semantics on Linux require the file to remain
+    on disk for fairness. Held only for the duration of the publish
+    rename, never around the (slow) export, so the lock window is tiny.
+    """
+    cache_root.mkdir(parents=True, exist_ok=True)
+    lock_path = cache_root / f'{_LOCK_PREFIX}{slot_name}'
+    fd = os.open(lock_path, os.O_WRONLY | os.O_CREAT, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            with contextlib.suppress(OSError):
+                fcntl.flock(fd, fcntl.LOCK_UN)
+    finally:
+        os.close(fd)
+
+
 def publish(staged: Path, final: Path) -> None:
     """Atomically replace ``final`` with ``staged``.
 
     ``staged`` MUST already contain a complete export (incl. the
-    ``_complete.marker``). On success, ``staged`` no longer exists and
+    ``_complete.marker``). On success ``staged`` no longer exists and
     ``final`` points to a complete cache entry.
 
-    If ``final`` already exists (e.g. ``--reingest`` or a concurrent
-    populate beat us), it is moved aside to a ``.old-`` prefix and
-    rmtree'd AFTER the new entry is in place — so a crash between the
-    two renames leaves a discoverable leftover (sweepable) rather than
-    losing the cache slot.
+    Concurrency: serialized via a per-slot ``fcntl.flock`` on
+    ``<final.parent>/.lock-<final.name>`` so two concurrent populates
+    can't interleave their renames. The lock is held only across the
+    rename pair (not the export), so its window is microseconds.
+    Last-writer-wins by design — every populate produces a valid
+    independently-exported snapshot, so overwriting is correctness-
+    neutral; the lock just keeps the on-disk shape consistent.
+
+    Cross-filesystem ``EXDEV`` raises ``RuntimeError`` with an
+    actionable hint pointing the user at ``MEMEX_EVAL_SNAPSHOT_ROOT``.
     """
     if not (staged / CACHE_COMPLETE_MARKER).is_file():
         raise RuntimeError(f'Refusing to publish staged cache at {staged}: missing marker')
 
-    if final.exists():
-        old = final.parent / f'{_OLD_PREFIX}{final.name}-{uuid.uuid4().hex}'
-        os.rename(final, old)
-        try:
-            os.rename(staged, final)
-        except Exception:
-            # Restore the original on rename failure so we don't lose
-            # the previously-valid cache entry.
-            with _suppress_rename_errors():
-                os.rename(old, final)
-            raise
-        shutil.rmtree(old, ignore_errors=True)
-    else:
-        os.rename(staged, final)
+    with _slot_lock(final.parent, final.name):
+        if final.exists():
+            old = final.parent / f'{_OLD_PREFIX}{final.name}-{uuid.uuid4().hex}'
+            try:
+                os.rename(final, old)
+            except OSError as e:
+                _raise_with_xdev_hint(e, staged, final)
+            try:
+                os.rename(staged, final)
+            except OSError as e:
+                # Restore the original so we don't lose the
+                # previously-valid cache entry.
+                try:
+                    os.rename(old, final)
+                except OSError as restore_err:
+                    logger.error(
+                        'Cache publish recovery failed at %s; leaked .old- dir at %s '
+                        '(original error: %s; recovery error: %s)',
+                        final,
+                        old,
+                        e,
+                        restore_err,
+                    )
+                _raise_with_xdev_hint(e, staged, final)
+            shutil.rmtree(old, ignore_errors=True)
+        else:
+            try:
+                os.rename(staged, final)
+            except OSError as e:
+                _raise_with_xdev_hint(e, staged, final)
+
+
+def _raise_with_xdev_hint(err: OSError, staged: Path, final: Path) -> None:
+    """Re-raise OSError, wrapping cross-filesystem (EXDEV) errors with a
+    config hint. Used by publish() so users see actionable text rather
+    than a bare 'Invalid cross-device link'."""
+    if err.errno == errno.EXDEV:
+        raise RuntimeError(
+            f'Cannot publish snapshot cache: {staged} and {final} live on '
+            f'different filesystems. The cache root must be on the same fs '
+            f'as its tmp staging dir. Set MEMEX_EVAL_SNAPSHOT_ROOT to a path '
+            f'on the same filesystem as the export target.'
+        ) from err
+    raise err
 
 
 def discard_staged(staged: Path) -> None:
@@ -199,16 +277,3 @@ def clear_cache_entry(cache_path: Path) -> None:
     """
     if cache_path.exists():
         shutil.rmtree(cache_path, ignore_errors=False)
-
-
-class _suppress_rename_errors:
-    """Tiny context manager: swallow OSError from a recovery rename so
-    the original exception (the one that triggered recovery) propagates
-    cleanly. Standalone class because contextlib.suppress would also
-    swallow the original raise."""
-
-    def __enter__(self) -> None:
-        return None
-
-    def __exit__(self, exc_type, exc, tb) -> bool:
-        return exc_type is not None and issubclass(exc_type, OSError)
