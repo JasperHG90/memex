@@ -12,7 +12,6 @@ from memex_core.services.snapshot.manifest import (
     SnapshotVersion,
 )
 from memex_core.services.snapshot.path_validation import (
-    DEFAULT_ALLOWLIST_ROOT,
     SnapshotPathError,
     get_allowlist_root,
     validate_snapshot_dir,
@@ -24,7 +23,6 @@ from memex_core.services.snapshot.restore import (
 )
 
 __all__ = [
-    'DEFAULT_ALLOWLIST_ROOT',
     'EmbeddingModelIdentity',
     'EVAL_IMPORT_STATE_DDL_STATEMENTS',
     'OBSERVATION_SCHEMA_VERSION',

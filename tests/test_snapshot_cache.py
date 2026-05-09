@@ -71,21 +71,25 @@ class TestCacheLookup:
         assert result.cache_path == path
         assert result.hit
 
-    def test_miss_when_marker_absent(self, tmp_path: Path) -> None:
+    def test_miss_when_marker_absent_and_cleans_partial(self, tmp_path: Path) -> None:
         full_hash = 'abc' + 'x' * 13
         path = tmp_path / f'suite_a-{full_hash}'
         path.mkdir()
         (path / 'manifest.json').write_text('{}', encoding='utf-8')
         result = _cache.lookup(tmp_path, 'suite_a', full_hash)
         assert not result.hit
+        # Partial entry must be cleaned so a subsequent populate doesn't
+        # commingle stale + fresh files.
+        assert not path.exists()
 
-    def test_miss_when_manifest_absent(self, tmp_path: Path) -> None:
+    def test_miss_when_manifest_absent_and_cleans_partial(self, tmp_path: Path) -> None:
         full_hash = 'abc' + 'x' * 13
         path = tmp_path / f'suite_a-{full_hash}'
         path.mkdir()
         _cache.mark_complete(path)
         result = _cache.lookup(tmp_path, 'suite_a', full_hash)
         assert not result.hit
+        assert not path.exists()
 
     def test_clear_entry_idempotent(self, tmp_path: Path) -> None:
         path = tmp_path / 'gone'
@@ -95,6 +99,94 @@ class TestCacheLookup:
         (path / 'x').write_text('y')
         _cache.clear_cache_entry(path)
         assert not path.exists()
+
+
+class TestAtomicPublish:
+    def test_stage_path_creates_unique_tmp_dirs(self, tmp_path: Path) -> None:
+        a = _cache.stage_path(tmp_path, 'suite-deadbeefcafef00d')
+        b = _cache.stage_path(tmp_path, 'suite-deadbeefcafef00d')
+        assert a != b
+        assert a.is_dir() and b.is_dir()
+        assert a.name.startswith('.tmp-suite-deadbeefcafef00d-')
+
+    def test_publish_into_empty_slot(self, tmp_path: Path) -> None:
+        staged = _cache.stage_path(tmp_path, 'k')
+        (staged / 'manifest.json').write_text('{}', encoding='utf-8')
+        _cache.mark_complete(staged)
+        final = tmp_path / 'k'
+        _cache.publish(staged, final)
+        assert not staged.exists()
+        assert (final / 'manifest.json').is_file()
+        assert (final / _cache.CACHE_COMPLETE_MARKER).is_file()
+
+    def test_publish_replaces_existing(self, tmp_path: Path) -> None:
+        # Pre-existing cache entry with old content.
+        final = tmp_path / 'k'
+        final.mkdir()
+        (final / 'manifest.json').write_text('{"old": true}', encoding='utf-8')
+        _cache.mark_complete(final)
+        # Stage a new export with different content.
+        staged = _cache.stage_path(tmp_path, 'k')
+        (staged / 'manifest.json').write_text('{"new": true}', encoding='utf-8')
+        _cache.mark_complete(staged)
+        _cache.publish(staged, final)
+        assert not staged.exists()
+        loaded = json.loads((final / 'manifest.json').read_text())
+        assert loaded == {'new': True}
+        # No stray .old- prefixes left over after a successful publish.
+        assert not any(p.name.startswith('.old-') for p in tmp_path.iterdir())
+
+    def test_publish_refuses_unmarked_staging(self, tmp_path: Path) -> None:
+        staged = _cache.stage_path(tmp_path, 'k')
+        (staged / 'manifest.json').write_text('{}', encoding='utf-8')
+        # No mark_complete call.
+        with pytest.raises(RuntimeError, match='missing marker'):
+            _cache.publish(staged, tmp_path / 'k')
+
+    def test_discard_staged_is_idempotent(self, tmp_path: Path) -> None:
+        staged = _cache.stage_path(tmp_path, 'k')
+        (staged / 'a.txt').write_text('x')
+        _cache.discard_staged(staged)
+        assert not staged.exists()
+        # No raise on missing.
+        _cache.discard_staged(staged)
+
+    def test_failure_during_populate_preserves_existing_cache(self, tmp_path: Path) -> None:
+        # Existing valid cache entry.
+        final = tmp_path / 'k'
+        final.mkdir()
+        (final / 'manifest.json').write_text('{"existing": true}', encoding='utf-8')
+        _cache.mark_complete(final)
+        # Simulate a populate that fails before mark_complete (e.g. an
+        # export error). The runner calls discard_staged on failure;
+        # the old final entry must remain intact.
+        staged = _cache.stage_path(tmp_path, 'k')
+        (staged / 'manifest.json').write_text('{"new": "partial"}', encoding='utf-8')
+        # NOTE: no mark_complete — the populate "failed" mid-flight.
+        _cache.discard_staged(staged)
+        # Existing entry untouched.
+        assert (final / _cache.CACHE_COMPLETE_MARKER).is_file()
+        assert json.loads((final / 'manifest.json').read_text()) == {'existing': True}
+
+    def test_concurrent_stage_paths_do_not_collide(self, tmp_path: Path) -> None:
+        # Two concurrent populates allocate distinct staging dirs.
+        staged_paths = [_cache.stage_path(tmp_path, 'k') for _ in range(5)]
+        assert len({p.name for p in staged_paths}) == 5
+        # All five can publish independently without raising; the last
+        # one wins the final slot.
+        final = tmp_path / 'k'
+        for i, sp in enumerate(staged_paths):
+            (sp / 'manifest.json').write_text(f'{{"i": {i}}}', encoding='utf-8')
+            _cache.mark_complete(sp)
+            _cache.publish(sp, final)
+        assert json.loads((final / 'manifest.json').read_text()) == {'i': 4}
+        # No leftover staging or .old- dirs after all five publish cycles.
+        leftovers = [
+            p
+            for p in tmp_path.iterdir()
+            if p.name.startswith('.tmp-') or p.name.startswith('.old-')
+        ]
+        assert leftovers == []
 
 
 # ----------------------------------------------------------------------

@@ -274,7 +274,7 @@ Two modes, manual and auto-cached.
                          → clears the cache entry, re-extracts, repopulates
 ```
 
-The cache root resolves in priority order: `--snapshot-cache-dir` flag → `MEMEX_EVAL_SNAPSHOT_ROOT` env → platformdirs default (`~/.cache/memex-eval/` on Linux). Cache key format: `<suite_name>-<sources_hash[:16]>`. A cache entry is valid only when both `manifest.json` and `_complete.marker` are present — partially-written entries are treated as a miss.
+The cache root resolves in priority order: `--snapshot-cache-dir` flag → `MEMEX_EVAL_SNAPSHOT_ROOT` env → platformdirs default (`~/.cache/memex-eval/` on Linux). The server's import/export-route allowlist root resolves through the SAME env + the SAME platformdirs default — they MUST agree (the populate path posts the cache directory to the export route, which validates it against the allowlist). Cache key format: `<suite_name>-<sources_hash[:16]>`. A cache entry is valid only when both `manifest.json` and `_complete.marker` are present; partially-written entries are cleaned up by the next lookup. Populate is atomic — the runner stages into a tmp directory and renames into the final slot only after the marker is written, so a partial export never replaces an existing valid cache entry.
 
 The runner detects `--from-snapshot`, imports the snapshot into a fresh ephemeral vault, and skips ingest + extraction-wait. Subsequent retrieval/scoring phases see an indistinguishable vault state from a freshly-extracted one.
 
@@ -295,7 +295,7 @@ memex-eval snapshot create <vault> [--output DIR]   # thin wrapper around `memex
 memex-eval snapshot list                            # enumerate snapshots under the allowlist root
 ```
 
-`--output` defaults to `$MEMEX_EVAL_SNAPSHOT_ROOT/<vault>-<timestamp>/` (env fallback `~/.memex-eval/snapshots/`). The allowlist root is the only path the eval-import route will accept.
+`--output` defaults to `$MEMEX_EVAL_SNAPSHOT_ROOT/<vault>-<timestamp>/` (env fallback: platformdirs user cache, e.g. `~/.cache/memex-eval/` on Linux). The allowlist root is the only path the eval-import/export route will accept; the cache root for `--from-snapshot=auto` resolves through the same env + default so manual snapshots and cached snapshots coexist in the same root.
 
 ### Path validation (security)
 

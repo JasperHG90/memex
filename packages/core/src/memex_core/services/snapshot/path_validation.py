@@ -13,8 +13,13 @@ Defense layers:
    file actually opened — defends against post-validation symlink swaps
    (TOCTOU).
 
-The allowlist root defaults to ``~/.memex-eval/snapshots/`` and is
-overridable via the ``MEMEX_EVAL_SNAPSHOT_ROOT`` env var.
+The allowlist root defaults to platformdirs' user cache directory
+(``~/.cache/memex-eval/`` on Linux) and is overridable via the
+``MEMEX_EVAL_SNAPSHOT_ROOT`` env var. The eval client's snapshot cache
+shares this root by default — see
+``memex_eval.suite.snapshot_cache.default_cache_root``. They MUST agree:
+the cache populate path posts the cache directory to the export route,
+which validates it against this allowlist.
 """
 
 from __future__ import annotations
@@ -22,9 +27,19 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import platformdirs
 
-DEFAULT_ALLOWLIST_ROOT = '~/.memex-eval/snapshots'
+
 ALLOWLIST_ROOT_ENV = 'MEMEX_EVAL_SNAPSHOT_ROOT'
+
+
+def _default_allowlist_root() -> str:
+    """Resolve the platform-default allowlist root.
+
+    Wrapped in a function (vs. a module-level constant) so tests can
+    monkeypatch ``platformdirs.user_cache_dir`` if needed.
+    """
+    return platformdirs.user_cache_dir('memex-eval', 'memex')
 
 
 class SnapshotPathError(ValueError):
@@ -39,7 +54,7 @@ def get_allowlist_root() -> Path:
     nobody has run ``memex-eval snapshot create`` yet would be a worse UX
     than creating an empty directory.
     """
-    raw = os.environ.get(ALLOWLIST_ROOT_ENV) or DEFAULT_ALLOWLIST_ROOT
+    raw = os.environ.get(ALLOWLIST_ROOT_ENV) or _default_allowlist_root()
     root = Path(raw).expanduser()
     root.mkdir(parents=True, exist_ok=True)
     return root.resolve(strict=True)
@@ -100,9 +115,15 @@ def validate_path_under_root(
         probe = probe.parent
     if probe.exists():
         probe_resolved = probe.resolve(strict=True)
-        # Reattach the non-existent suffix.
+        # Reattach the non-existent suffix and re-normalize. The reattached
+        # path may contain `..` components from the candidate's lexical
+        # form; resolve(strict=False) collapses them so the containment
+        # check below sees the canonical path.
         suffix = resolved.relative_to(probe) if resolved != probe else Path()
-        resolved = probe_resolved / suffix if str(suffix) != '.' else probe_resolved
+        if str(suffix) != '.':
+            resolved = (probe_resolved / suffix).resolve(strict=False)
+        else:
+            resolved = probe_resolved
 
     if not resolved.is_relative_to(root):
         raise SnapshotPathError(

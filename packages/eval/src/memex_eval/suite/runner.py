@@ -1553,8 +1553,10 @@ async def run_suite(
             #       fresh vault. Multi-vault suites unsupported.
             #   (c) --from-snapshot=auto: cache lookup on
             #       (suite_name, sources_hash). Hit (and not --reingest)
-            #       → import; miss/reingest → ingest path + populate cache
-            #       after extraction completes.
+            #       → import; miss/reingest → ingest path + populate the
+            #       cache from the post-extraction baseline (BEFORE
+            #       scenarios run, so scenario-side mutations don't
+            #       contaminate the cached vault).
             #   (d) default: create vault(s) and ingest sources as today.
             vault_map: dict[str | None, UUID] = {}
             note_id_by_key: dict[str, str] = {}
@@ -1767,6 +1769,33 @@ async def run_suite(
                         api, note_id_by_key, note_key_to_vault_id
                     )
 
+                    # Cache-populate IMMEDIATELY after extraction completes,
+                    # BEFORE scenarios run. Scenarios mutate vault state
+                    # (KV writes, inline-note ingestion, contradiction
+                    # links) — the cache must capture the clean post-
+                    # extraction baseline, not post-scenario state.
+                    # Atomic publish via tmp-dir + rename so a partial
+                    # populate never replaces a known-good entry.
+                    if cache_lookup is not None:
+                        staged = _snapshot_cache.stage_path(
+                            cache_lookup.cache_root,
+                            cache_lookup.cache_path.name,
+                        )
+                        try:
+                            await api.export_snapshot(str(default_vault_id), str(staged))
+                            _snapshot_cache.mark_complete(staged)
+                            _snapshot_cache.publish(staged, cache_lookup.cache_path)
+                            extra_params['snapshot.cache_populated'] = 'true'
+                            extra_params['snapshot.path'] = str(cache_lookup.cache_path)
+                            logger.info(
+                                'Snapshot cache populated at %s',
+                                cache_lookup.cache_path,
+                            )
+                        except Exception as e:
+                            logger.warning('Snapshot cache populate failed: %s', e)
+                            extra_params['snapshot.cache_populated'] = 'false'
+                            _snapshot_cache.discard_staged(staged)
+
                 # Run scenarios in DEFINITION ORDER. The runner is contractually
                 # required to iterate suite.scenarios in the same order they
                 # appear in SCENARIOS = [...]; downstream scenarios may rely on
@@ -1964,36 +1993,6 @@ async def run_suite(
                 # KeyboardInterrupt, no abort). Safe to write the keep-vault
                 # manifest.
                 run_completed = True
-
-                # Cache-populate after scenarios complete (Phase F lazy-
-                # populate from the V12 plan). Only fires on the ingest
-                # path with `from_snapshot='auto'` set. Failures are
-                # logged + recorded as `snapshot.cache_populated=false`
-                # but do NOT fail the run.
-                if (
-                    cache_lookup is not None
-                    and not use_import
-                    and not any(o.status == 'error' for o in outcomes)
-                ):
-                    try:
-                        if reingest:
-                            _snapshot_cache.clear_cache_entry(cache_lookup.cache_path)
-                        cache_lookup.cache_path.mkdir(parents=True, exist_ok=True)
-                        await api.export_snapshot(
-                            str(default_vault_id), str(cache_lookup.cache_path)
-                        )
-                        _snapshot_cache.mark_complete(cache_lookup.cache_path)
-                        extra_params['snapshot.cache_populated'] = 'true'
-                        extra_params['snapshot.path'] = str(cache_lookup.cache_path)
-                        logger.info('Snapshot cache populated at %s', cache_lookup.cache_path)
-                    except Exception as e:
-                        logger.warning('Snapshot cache populate failed: %s', e)
-                        extra_params['snapshot.cache_populated'] = 'false'
-                        # Best-effort: clear partial entry so the next run
-                        # cleanly misses rather than seeing a half-baked
-                        # cache without a marker.
-                        with contextlib.suppress(Exception):
-                            _snapshot_cache.clear_cache_entry(cache_lookup.cache_path)
             finally:
                 # Tear down cached backends (frees temp HERMES_HOME etc.)
                 # before deleting the vaults — the backends may try one
