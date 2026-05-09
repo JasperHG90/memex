@@ -31,16 +31,16 @@ def _write_suite(tmp_path: Path, name: str, init_py: str, sources: dict[str, str
     return suite_dir
 
 
-def test_loads_built_in_basic_extraction() -> None:
-    suite = load_suite('basic_extraction')
-    assert suite.name == 'basic_extraction'
-    assert len(suite.scenarios) == 5
+def test_loads_built_in_acme_corp() -> None:
+    suite = load_suite('acme_corp')
+    assert suite.name == 'acme_corp'
+    assert len(suite.scenarios) >= 30
 
 
 def test_discover_lists_built_ins() -> None:
     names = discover_suite_names()
-    assert 'basic_extraction' in names
-    assert 'contradiction' in names
+    assert 'acme_corp' in names
+    assert 'agent_integration' in names
 
 
 def test_unknown_suite_raises() -> None:
@@ -143,7 +143,7 @@ def test_scenario_id_must_be_snake_case() -> None:
 
 
 def test_sources_content_hash_is_stable() -> None:
-    suite = load_suite('basic_extraction')
+    suite = load_suite('acme_corp')
     h1 = suite.sources.content_hash()
     h2 = suite.sources.content_hash()
     assert h1 == h2

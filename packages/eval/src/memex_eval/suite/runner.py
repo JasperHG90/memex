@@ -113,7 +113,10 @@ async def _setup_vault(api: RemoteMemexAPI, name: str, description: str) -> UUID
 
 
 async def _run_setup_actions(
-    api: RemoteMemexAPI, vault_id: UUID, actions: list[SetupAction]
+    api: RemoteMemexAPI,
+    vault_id: UUID,
+    actions: list[SetupAction],
+    note_key_to_unit_ids: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     """Dispatch each action through the setup-action registry.
 
@@ -127,6 +130,12 @@ async def _run_setup_actions(
     - ``_required_setup_failed`` — True if any handler with
       ``required=True`` raised; the runner short-circuits the scenario to
       status='error' in this case.
+
+    ``note_key_to_unit_ids`` is the runner's post-extraction map of
+    source ``note_key`` → list of unit IDs. It's threaded into each
+    handler's params under the private key ``_note_key_to_unit_ids``
+    so ``_resolve_unit_ids`` can do deterministic note-key-scoped
+    resolution (preferred over ``search_query``).
     """
     context: dict[str, Any] = {'_setup_failures': []}
     for action in actions:
@@ -145,6 +154,10 @@ async def _run_setup_actions(
             params = {
                 k: v for k, v in action.model_dump().items() if k not in _RUNNER_RESERVED_PARAM_KEYS
             }
+            if note_key_to_unit_ids is not None:
+                # Underscore-prefixed runner-injected key. Handlers MAY read
+                # it via _resolve_unit_ids; custom handlers ignore it freely.
+                params['_note_key_to_unit_ids'] = note_key_to_unit_ids
             result = await handler.run(api, vault_id, params)
             if isinstance(result, dict):
                 # Look up the registered name from the registry so we never
@@ -426,7 +439,12 @@ async def _execute_scenario(
     try:
         scenario_context: dict[str, Any] = {}
         if scenario.setup_actions:
-            scenario_context = await _run_setup_actions(api, vault_id, scenario.setup_actions)
+            scenario_context = await _run_setup_actions(
+                api,
+                vault_id,
+                scenario.setup_actions,
+                note_key_to_unit_ids=note_key_to_unit_ids,
+            )
             if scenario_context.get('_required_setup_failed'):
                 return ScenarioOutcome(
                     scenario_id=scenario.id,

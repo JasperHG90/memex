@@ -109,6 +109,23 @@ class SetupAction(BaseModel):
     model_config = ConfigDict(extra='allow')
 
     kind: str
+    # Unit-id resolution sources (checked in this priority order by
+    # ``_resolve_unit_ids``):
+    # 1. ``unit_ids`` — explicit UUIDs (most precise; rare in practice
+    #    because eval vaults are freshly ingested per run).
+    # 2. ``note_key`` — name of a SourceNote / InlineNote in the suite;
+    #    resolves to all memory units extracted from that note via the
+    #    runner's ``note_key_to_unit_ids`` map. **Deterministic** — the
+    #    only fragility is whether extraction produced the expected
+    #    units, which is testable elsewhere.
+    # 3. ``search_query`` — top-5 results of a memory search. Legacy
+    #    pattern; brittle (semantic drift can deprioritize the wrong
+    #    units). Use ``note_key`` for new scenarios; keep
+    #    ``search_query`` only when you genuinely want to test
+    #    "deprioritize whatever the search engine considers most
+    #    relevant" — almost never the right semantic for OUTCOMES_MW or
+    #    DEPRIORITIZATION scenarios.
+    note_key: str | None = None
     search_query: str | None = None
     unit_ids: list[str] | None = None
     success: bool = True

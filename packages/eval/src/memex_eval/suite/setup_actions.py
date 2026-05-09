@@ -140,9 +140,41 @@ def list_setup_actions() -> list[str]:
 async def _resolve_unit_ids(
     api: 'RemoteMemexAPI', vault_id: UUID, params: dict[str, Any]
 ) -> list[str]:
+    """Resolve unit IDs for a setup action, in priority order.
+
+    1. ``unit_ids``: explicit UUIDs.
+    2. ``note_key``: deterministic — looked up in ``_note_key_to_unit_ids``,
+       a private params key the runner injects. Resolves to every unit
+       extracted from that source note. Use this for OUTCOMES_MW /
+       DEPRIORITIZATION scenarios where you know which note's units
+       should be affected.
+    3. ``search_query``: brittle — top-5 results of a memory search.
+       Kept for backwards compatibility but emits a one-time WARNING
+       per session so callers know they're using an unstable resolver.
+    """
     if params.get('unit_ids'):
         return [str(uid) for uid in params['unit_ids']]
+    note_key = params.get('note_key')
+    if note_key:
+        nk_map: dict[str, list[str]] = params.get('_note_key_to_unit_ids') or {}
+        ids = nk_map.get(note_key)
+        if not ids:
+            logger.warning(
+                '  Setup: note_key=%r resolved to 0 units. Was the note ingested? '
+                'Check Suite.sources.notes and the per-note extraction wait.',
+                note_key,
+            )
+            return []
+        return list(ids)
     if params.get('search_query'):
+        if not getattr(_resolve_unit_ids, '_warned_search_query', False):
+            logger.warning(
+                "Setup actions using search_query='%s' for unit resolution are brittle "
+                '(top-5 search hit; semantic drift can deprioritize unrelated units). '
+                'Prefer note_key= for deterministic scoping.',
+                params['search_query'],
+            )
+            _resolve_unit_ids._warned_search_query = True  # type: ignore[attr-defined]
         units = await api.search(query=params['search_query'], limit=5, vault_ids=[vault_id])
         return [str(u.id) for u in units]
     return []

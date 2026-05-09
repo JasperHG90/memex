@@ -36,9 +36,9 @@ class TestBuiltInSuitesLoad:
     """Every shipped suite must load — catches regressions like a stricter
     filename regex that breaks digit-leading sources (the temporal suite)."""
 
-    def test_temporal_suite_loads(self) -> None:
-        suite = load_suite('temporal')
-        assert suite.name == 'temporal'
+    def test_acme_corp_suite_loads(self) -> None:
+        suite = load_suite('acme_corp')
+        assert suite.name == 'acme_corp'
 
     def test_all_built_in_suites_load(self) -> None:
         from memex_eval.suite import discover_suite_names

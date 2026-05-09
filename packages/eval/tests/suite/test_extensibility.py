@@ -334,6 +334,59 @@ class TestSetupActionRegistry:
         assert 'required' not in seen_params
         assert seen_params['custom_arg'] == 42
 
+    @pytest.mark.asyncio
+    async def test_resolve_unit_ids_via_note_key_is_deterministic(self) -> None:
+        """``note_key`` resolves to every unit extracted from that note via
+        the runner-injected ``_note_key_to_unit_ids`` map. No search call,
+        no ambiguity."""
+        from memex_eval.suite.setup_actions import _resolve_unit_ids
+
+        nk_map = {
+            'widget-lite-discontinued': ['u-lite-1', 'u-lite-2', 'u-lite-3'],
+            'widget-pro': ['u-pro-1', 'u-pro-2'],
+        }
+        params = {
+            'note_key': 'widget-lite-discontinued',
+            '_note_key_to_unit_ids': nk_map,
+        }
+        ids = await _resolve_unit_ids(api=None, vault_id=uuid4(), params=params)
+        # Exact set; nothing from widget-pro leaks in.
+        assert ids == ['u-lite-1', 'u-lite-2', 'u-lite-3']
+
+    @pytest.mark.asyncio
+    async def test_resolve_unit_ids_note_key_priority_over_search_query(self) -> None:
+        """When both ``note_key`` and ``search_query`` are set, ``note_key``
+        wins — the deterministic path takes priority and ``search`` is
+        never called."""
+        from unittest.mock import AsyncMock, MagicMock
+
+        from memex_eval.suite.setup_actions import _resolve_unit_ids
+
+        api = MagicMock()
+        api.search = AsyncMock(return_value=[])  # would be called under search_query
+        params = {
+            'note_key': 'foo',
+            'search_query': 'this should be ignored',
+            '_note_key_to_unit_ids': {'foo': ['u-foo-1']},
+        }
+        ids = await _resolve_unit_ids(api=api, vault_id=uuid4(), params=params)
+        assert ids == ['u-foo-1']
+        api.search.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_resolve_unit_ids_unknown_note_key_returns_empty(self) -> None:
+        """A note_key that doesn't appear in the runner's map returns []
+        (with a warning logged); the handler short-circuits without
+        firing destructive ops on random units."""
+        from memex_eval.suite.setup_actions import _resolve_unit_ids
+
+        params = {
+            'note_key': 'does-not-exist',
+            '_note_key_to_unit_ids': {'other-note': ['u1']},
+        }
+        ids = await _resolve_unit_ids(api=None, vault_id=uuid4(), params=params)
+        assert ids == []
+
 
 class TestSetupActionExtraFields:
     def test_setup_action_accepts_arbitrary_extra_fields(self) -> None:
@@ -450,7 +503,7 @@ class TestEntryPointDiscovery:
         from memex_eval.suite.loader import load_suite
 
         class FakeEntryPoint:
-            name = 'basic_extraction'
+            name = 'acme_corp'
             value = 'fake.mod'
 
             def load(self_inner):
@@ -460,5 +513,5 @@ class TestEntryPointDiscovery:
             'memex_eval.suite.loader.importlib.metadata.entry_points',
             return_value=[FakeEntryPoint()],
         ):
-            suite = load_suite('basic_extraction')
-            assert suite.name == 'basic_extraction'
+            suite = load_suite('acme_corp')
+            assert suite.name == 'acme_corp'
