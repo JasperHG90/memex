@@ -926,6 +926,144 @@ async def test_higher_minor_manifest_accepted(
     assert target_vault_id is not None
 
 
+async def _set_state(db_session: AsyncSession, target_vault_id: UUID, state: str) -> None:
+    from sqlalchemy import text as sa_text
+
+    await db_session.execute(
+        sa_text('UPDATE eval_import_state SET state = :s WHERE target_vault_id = :v'),
+        {'s': state, 'v': str(target_vault_id)},
+    )
+    await db_session.commit()
+
+
+@pytest.mark.parametrize('forced_state', ['db_committed', 'assets_committed', 'embedded'])
+async def test_import_resume_per_state(
+    db_session: AsyncSession,
+    populated_vault: dict[str, UUID],
+    tmp_path: Path,
+    eval_state_table: None,
+    forced_state: str,
+) -> None:
+    """Resume from any post-Phase-B state lands at 'complete' without
+    PK collisions on a re-invocation.
+
+    Walks the eval_import_state row to ``forced_state`` after a successful
+    initial import, then re-invokes ``import_snapshot`` and asserts the
+    second call succeeds, returns the same target_vault_id, and leaves
+    the state at 'complete'. State 'staging' is excluded — it semantically
+    means Phase B never committed, so a forced regression doesn't model
+    any realistic crash point.
+    """
+    from sqlalchemy import text as sa_text
+
+    src_vault = populated_vault['vault_id']
+    snapshot_dir = tmp_path / 'snapshot'
+    snapshot_dir.mkdir()
+    await _export(db_session, src_vault, snapshot_dir)
+    await _delete_source_vault(db_session, src_vault)
+
+    # First attempt — succeed end-to-end.
+    importer1 = SnapshotImporter(
+        session=db_session,
+        filestore=None,
+        embedding_backend=OnnxBackend(),
+        snapshot_dir=snapshot_dir,
+        allowlist_root=tmp_path,
+        target_vault_name=f'resume-{forced_state}',
+    )
+    target_vault_id = await importer1.import_snapshot()
+
+    # Walk state back to a non-complete checkpoint.
+    await _set_state(db_session, target_vault_id, forced_state)
+
+    importer2 = SnapshotImporter(
+        session=db_session,
+        filestore=None,
+        embedding_backend=OnnxBackend(),
+        snapshot_dir=snapshot_dir,
+        allowlist_root=tmp_path,
+        target_vault_name=f'resume-{forced_state}',
+    )
+    target_vault_id_2 = await importer2.import_snapshot()
+    assert target_vault_id_2 == target_vault_id
+
+    final_state = (
+        await db_session.execute(
+            sa_text('SELECT state FROM eval_import_state WHERE target_vault_id = :v'),
+            {'v': str(target_vault_id)},
+        )
+    ).scalar_one()
+    assert final_state == 'complete'
+
+
+async def test_import_resume_does_not_clobber_state(
+    db_session: AsyncSession,
+    populated_vault: dict[str, UUID],
+    tmp_path: Path,
+    eval_state_table: None,
+) -> None:
+    """Resume from 'embedded' must NOT first overwrite state to 'staging'.
+
+    Catches the regression where the orchestrator unconditionally wrote
+    state='staging' before checking phases — a crash mid-Phase-E would
+    then make the next attempt re-run Phase B and PK-collide.
+    """
+    from sqlalchemy import text as sa_text
+
+    src_vault = populated_vault['vault_id']
+    snapshot_dir = tmp_path / 'snapshot'
+    snapshot_dir.mkdir()
+    await _export(db_session, src_vault, snapshot_dir)
+    await _delete_source_vault(db_session, src_vault)
+
+    importer1 = SnapshotImporter(
+        session=db_session,
+        filestore=None,
+        embedding_backend=OnnxBackend(),
+        snapshot_dir=snapshot_dir,
+        allowlist_root=tmp_path,
+        target_vault_name='resume-noclobber',
+    )
+    target_vault_id = await importer1.import_snapshot()
+    await _set_state(db_session, target_vault_id, 'embedded')
+
+    # Patch _phase_e_mark_complete to crash AFTER reading current state but
+    # BEFORE the final commit, so we can observe whether _record_import_state
+    # was called pre-phases (the regression).
+    import memex_core.services.snapshot.restore as restore_mod
+
+    original_phase_e = restore_mod.SnapshotImporter._phase_e_mark_complete
+
+    async def boom(self):  # type: ignore[no-untyped-def]
+        raise RuntimeError('simulated crash before Phase E commit')
+
+    restore_mod.SnapshotImporter._phase_e_mark_complete = boom  # type: ignore[method-assign]
+    importer2 = SnapshotImporter(
+        session=db_session,
+        filestore=None,
+        embedding_backend=OnnxBackend(),
+        snapshot_dir=snapshot_dir,
+        allowlist_root=tmp_path,
+        target_vault_name='resume-noclobber',
+    )
+    try:
+        with pytest.raises(RuntimeError, match='simulated crash'):
+            await importer2.import_snapshot()
+    finally:
+        restore_mod.SnapshotImporter._phase_e_mark_complete = original_phase_e  # type: ignore[method-assign]
+
+    # State must NOT have been clobbered to 'staging'.
+    state_now = (
+        await db_session.execute(
+            sa_text('SELECT state FROM eval_import_state WHERE target_vault_id = :v'),
+            {'v': str(target_vault_id)},
+        )
+    ).scalar_one()
+    assert state_now == 'embedded', (
+        f"resume clobbered state to {state_now!r}; should still be 'embedded'"
+    )
+
+
 async def test_import_resumes_partial(
     db_session: AsyncSession,
     populated_vault: dict[str, UUID],

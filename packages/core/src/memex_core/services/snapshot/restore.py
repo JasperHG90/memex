@@ -27,6 +27,7 @@ sync-engine compatibility. Those concerns are why V12 is eval-only.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 from pathlib import Path
@@ -244,17 +245,29 @@ def _read_jsonl_lines(path: Path, allowlist_root: Path) -> Iterable[dict[str, An
         yield obj
 
 
-def _check_no_nan_floats(value: Any, *, where: str) -> None:
-    """Reject NaN/Inf in numeric fields (Decision 14)."""
+_NAN_CHECK_MAX_DEPTH = 64
+
+
+def _check_no_nan_floats(value: Any, *, where: str, depth: int = 0) -> None:
+    """Reject NaN/Inf in numeric fields (Decision 14).
+
+    Capped at ``_NAN_CHECK_MAX_DEPTH`` so a maliciously deep JSON object
+    cannot exhaust Python's recursion limit before any structured error
+    surfaces.
+    """
+    if depth > _NAN_CHECK_MAX_DEPTH:
+        raise SnapshotImportError(
+            f'JSON depth > {_NAN_CHECK_MAX_DEPTH} in {where}; refusing to recurse further.'
+        )
     if isinstance(value, float):
         if value != value or value in (float('inf'), float('-inf')):
             raise SnapshotImportError(f'NaN/Infinity in {where}')
     elif isinstance(value, dict):
         for k, v in value.items():
-            _check_no_nan_floats(v, where=f'{where}.{k}')
+            _check_no_nan_floats(v, where=f'{where}.{k}', depth=depth + 1)
     elif isinstance(value, list):
         for i, v in enumerate(value):
-            _check_no_nan_floats(v, where=f'{where}[{i}]')
+            _check_no_nan_floats(v, where=f'{where}[{i}]', depth=depth + 1)
 
 
 # ----------------------------------------------------------------------
@@ -378,17 +391,24 @@ class SnapshotImporter:
         )
         await self._validate_preflight()
         try:
-            await _record_import_state(
-                self._session,
-                self._target_vault_id,
-                self._import_id,
-                self._snapshot_dir,
-                'staging',
-            )
-            await self._session.commit()
-
             # Idempotent resume — skip phases that have already committed.
+            # Note: do NOT unconditionally write state='staging' here; on
+            # resume from a higher state (`db_committed`/`assets_committed`/
+            # `embedded`) that would clobber the persisted progress, and a
+            # subsequent crash would force re-running already-committed
+            # phases against existing rows (PK collision in Phase B).
             phases_done = self._phases_completed()
+            if not self._resumed:
+                # Fresh import: record initial 'staging' so a partial
+                # Phase A leaves a discoverable row.
+                await _record_import_state(
+                    self._session,
+                    self._target_vault_id,
+                    self._import_id,
+                    self._snapshot_dir,
+                    'staging',
+                )
+                await self._session.commit()
 
             if 'A' not in phases_done:
                 await self._phase_a_stage_assets()
@@ -463,10 +483,12 @@ class SnapshotImporter:
                 existing_target,
                 existing_import,
             )
-        else:
-            # Fresh import: refuse if the proposed vault NAME already exists,
-            # since Phase B's vault insert is unconditional.
-            await self._refuse_on_existing_vault_name()
+        # Vault-name pre-check applies on both fresh and resume paths:
+        # - Fresh: any existing vault with the same name blocks Phase B.
+        # - Resume from 'staging': Phase B hasn't inserted yet; same blocker.
+        # - Resume from 'db_committed' or later: the target row already
+        #   exists with this name and target_vault_id, so it's allowed.
+        await self._refuse_on_existing_vault_name()
 
         self._manifest = manifest
         self._vault = vault
@@ -476,7 +498,9 @@ class SnapshotImporter:
             select(Vault.id).where(Vault.name == self._target_vault_name)
         )
         existing_id = result.scalar_one_or_none()
-        if existing_id is not None:
+        # Allow the resume case where Phase B has already inserted our own
+        # target row.
+        if existing_id is not None and existing_id != self._target_vault_id:
             raise SnapshotImportRefused(
                 f'Vault name {self._target_vault_name!r} already exists '
                 f'(id={existing_id}). Pass a unique target_vault_name or '
@@ -586,25 +610,33 @@ class SnapshotImporter:
 
     async def _insert_entities_and_aliases(self) -> None:
         derived = self._snapshot_dir / 'derived'
-        for raw in _read_jsonl_lines(derived / 'entities.jsonl', self._allowlist_root):
-            entity = EntityImport.model_validate(raw)
-            # ``Entity.canonical_name`` carries a UNIQUE constraint
-            # (sql_models.py — idx_entities_canonical_name_unique). PG
-            # supports only one ON CONFLICT target, so we pre-check for the
-            # cross-id name collision and refuse with a clear error rather
-            # than letting Phase B blow up with a raw IntegrityError.
-            existing = (
-                await self._session.execute(
-                    select(Entity.id).where(Entity.canonical_name == entity.canonical_name)
+        # Materialize entities once so we can batch the canonical_name
+        # cross-id collision pre-check. ``Entity.canonical_name`` carries a
+        # UNIQUE constraint (idx_entities_canonical_name_unique); Postgres
+        # supports only one ON CONFLICT target, so we refuse on collision
+        # with a clear error rather than letting Phase B raise a raw
+        # IntegrityError.
+        entities: list[EntityImport] = [
+            EntityImport.model_validate(raw)
+            for raw in _read_jsonl_lines(derived / 'entities.jsonl', self._allowlist_root)
+        ]
+        if entities:
+            names = {e.canonical_name: e.id for e in entities}
+            existing = await self._session.execute(
+                select(Entity.id, Entity.canonical_name).where(
+                    Entity.canonical_name.in_(list(names.keys()))  # type: ignore[attr-defined]
                 )
-            ).scalar_one_or_none()
-            if existing is not None and existing != entity.id:
-                raise SnapshotImportRefused(
-                    f'Entity canonical_name {entity.canonical_name!r} already exists '
-                    f'with id={existing} on the importing DB; snapshot has id={entity.id}. '
-                    f'Eval testcontainers must start empty — drop the conflicting entity '
-                    f'or import into a fresh DB.'
-                )
+            )
+            for row_id, row_name in existing.all():
+                snapshot_id = names[row_name]
+                if row_id != snapshot_id:
+                    raise SnapshotImportRefused(
+                        f'Entity canonical_name {row_name!r} already exists with '
+                        f'id={row_id} on the importing DB; snapshot has id={snapshot_id}. '
+                        f'Eval testcontainers must start empty — drop the conflicting '
+                        f'entity or import into a fresh DB.'
+                    )
+        for entity in entities:
             stmt = pg_insert(Entity.__table__).values(  # type: ignore[arg-type]
                 id=entity.id,
                 canonical_name=entity.canonical_name,
@@ -650,8 +682,6 @@ class SnapshotImporter:
             # corrupted note.md. Mismatch is treated as a hard refusal so
             # silent corruption can't propagate into eval results.
             if note.content_hash and original_text is not None:
-                import hashlib
-
                 actual = hashlib.md5(original_text.encode('utf-8')).hexdigest()
                 if actual != note.content_hash:
                     raise SnapshotImportError(
