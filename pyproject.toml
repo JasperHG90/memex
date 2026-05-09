@@ -21,6 +21,7 @@ memex_cli = { workspace = true }
 memex_mcp = { workspace = true }
 memex_common = { workspace = true }
 memex_eval = { workspace = true }
+memex-hermes-plugin = { workspace = true }
 hermes-agent = { git = "https://github.com/NousResearch/hermes-agent.git", branch = "main" }
 
 [tool.uv.workspace]
@@ -88,6 +89,7 @@ asyncio_mode = "auto"
 [dependency-groups]
 hermes-integration = [
     "hermes-agent",
+    "memex-hermes-plugin",
 ]
 dev = [
     "nest-asyncio>=1.6.0",

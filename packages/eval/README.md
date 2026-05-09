@@ -10,6 +10,24 @@ Requires a running Memex server (default: `http://localhost:8000/api/v1/`).
 
 For LLM-judged checks, set `GOOGLE_API_KEY` in your environment (uses Gemini via dspy).
 
+### Hermes integration suite
+
+The `agent_integration` suite drives the Nous Hermes Agent against the
+`memex-hermes-plugin` to verify the integration end-to-end. It needs
+both `hermes-agent` (a Python library) and `memex-hermes-plugin`
+(workspace package), neither of which ships in the default sync:
+
+```bash
+uv sync --extra hermes --group hermes-integration
+```
+
+Plus an LLM API key for the Hermes agent itself. The backend routes by
+model prefix — `GOOGLE_API_KEY` for `gemini/*` (default),
+`ANTHROPIC_API_KEY` for `anthropic/*`, `OPENAI_API_KEY` for `openai/*`,
+`OPENROUTER_API_KEY` for `openrouter/*`. See
+`packages/eval/src/memex_eval/suites/agent_integration/README.md` for
+details.
+
 ## Usage
 
 ### Internal benchmark

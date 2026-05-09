@@ -11,17 +11,39 @@ Internal suites test memex's API directly. This suite tests the
 A regression in the MCP tool descriptions, the plugin provider, or
 the prompt templates surfaces here.
 
+## Setup
+
+The hermes backend needs `hermes-agent` (the Python library) and
+`memex-hermes-plugin` (workspace package). Install both with:
+
+```bash
+uv sync --extra hermes --group hermes-integration
+```
+
+You also need an LLM API key for the agent itself. The backend routes
+by model prefix:
+
+- `gemini/*` (default `gemini/gemini-2.5-flash`) → `GOOGLE_API_KEY` or `GEMINI_API_KEY`
+- `anthropic/*` → `ANTHROPIC_API_KEY`
+- `openai/*` → `OPENAI_API_KEY`
+- `openrouter/*` → `OPENROUTER_API_KEY`
+- Anything else → `HERMES_API_KEY`
+
+Override the model with `HERMES_MODEL`.
+
 ## Backends
 
-- `--answer-mode api` (default for CI smoke): direct API; 1 of 3
-  scenarios will fail (`agent_calls_memex_search` — there are no tool
-  calls in API mode). This is expected.
+- `--answer-mode hermes` (**default**): runs the Hermes Agent in-process
+  via its Python library. The plugin is auto-symlinked into a temp
+  `HERMES_HOME` — no `memex hermes install` step needed. This is the
+  integration this suite exists to test.
 - `--answer-mode claude-code`: spawns the `claude` CLI as a subagent
   with `.mcp.json` pointing at the eval vault. Captures answer + tool
   trace + cost.
-- `--answer-mode hermes`: spawns `hermes` CLI with the
-  `memex-hermes-plugin` providing memory. Run `memex hermes install`
-  once before invoking.
+- `--answer-mode api`: direct REST against the eval vault. There is no
+  agent in this mode, so `agent_calls_memex_search` cannot pass. Use
+  only for sanity-checking that ingest + scoring plumbing works; do
+  not rely on this for integration signal.
 
 ## Components under test
 

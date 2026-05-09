@@ -8,8 +8,10 @@ subclasses can score against a single shape. Built-in backends:
 - ``claude-code`` — subprocess to the ``claude`` CLI with a temp
   workspace + ``.mcp.json`` pointing at the eval vault. Captures answer
   text + tool-call trace + retrieved unit IDs from the trace.
-- ``hermes`` — subprocess to the ``hermes`` CLI with the
-  ``memex-hermes-plugin`` providing memory. Same trace-parsing pattern.
+- ``hermes`` — runs the Hermes Agent in-process via its Python library
+  (``run_agent.AIAgent``) with the bundled ``memex-hermes-plugin``
+  symlinked into a temp ``HERMES_HOME``. No CLI/subprocess hop; setup
+  happens automatically when the backend is instantiated.
 
 Custom backends register via ``@register_backend('myname')`` on a
 subclass of ``AnswerBackend``. Suites pick a backend per scenario via
@@ -20,6 +22,7 @@ subclass of ``AnswerBackend``. Suites pick a backend per scenario via
 from __future__ import annotations
 
 import abc
+import contextlib
 import json
 import logging
 import os
@@ -473,6 +476,20 @@ def _absorb_claude_message(msg: dict[str, Any], out: AgentAnswer) -> None:
                 _extract_unit_ids_from_tool_result(block, out)
 
 
+# Tool-name prefixes that emit memory-unit IDs in their results. Used by
+# the answer-text UUID fallback to avoid scraping non-unit UUIDs (vault,
+# note, entity, citation block) that the agent may mention in unrelated
+# answers.
+_SEARCH_TOOL_PREFIXES: tuple[str, ...] = (
+    'memex_memory_search',
+    'memex_note_search',
+    'memex_survey',
+    'memex_search_user_notes',
+    'memex_recent_notes',
+    'memex_find_note',
+)
+
+
 def _extract_unit_ids_from_tool_result(block: dict[str, Any], out: AgentAnswer) -> None:
     content = block.get('content')
     text_blob = ''
@@ -495,33 +512,133 @@ def _extract_unit_ids_from_tool_result(block: dict[str, Any], out: AgentAnswer) 
 
 
 # ---------------------------------------------------------------------------
-# Built-in: Hermes subprocess
+# Built-in: Hermes Python library (no subprocess, no CLI)
 # ---------------------------------------------------------------------------
 
 
 @register_backend('hermes')
 class HermesBackend(AnswerBackend):
-    """Spawn the ``hermes`` CLI with the memex-hermes-plugin providing memory.
+    """Run the Hermes Agent via its Python library (``run_agent.AIAgent``).
 
-    Assumes ``hermes`` is on PATH and the plugin is installed in the
-    Hermes home (run ``memex hermes install`` once before evaluating).
-    Captures the agent's final answer + any tool/memory traces.
+    The eval framework owns the integration setup end-to-end — no
+    ``memex hermes install``, no ``hermes`` CLI on PATH. On first use,
+    the backend:
 
-    The exact CLI invocation depends on your Hermes build — override
-    via ``HERMES_BIN`` env or by subclassing this backend. The default
-    invocation is ``hermes -p <prompt> --output-format json``; if your
-    Hermes uses a different flag set, register a custom backend.
+    1. Creates a temp ``HERMES_HOME`` directory.
+    2. Symlinks the bundled ``memex-hermes-plugin`` directory
+       (``memex_hermes_plugin.PLUGIN_DIR``) into
+       ``$HERMES_HOME/plugins/memex/``.
+    3. Writes a minimal ``config.yaml`` selecting the memex provider.
+    4. Sets ``MEMEX_SERVER_URL`` and ``MEMEX_VAULT`` so the plugin binds
+       to the eval vault.
+
+    Then for each scenario, it instantiates ``AIAgent`` and calls
+    ``run_conversation(scenario.query)``, capturing the final answer,
+    tool calls, and per-session token / cost stats.
+
+    Required (single canonical install command — used everywhere):
+
+        uv sync --extra hermes --group hermes-integration
+
+    That pulls in ``hermes-agent`` (Python library) and
+    ``memex-hermes-plugin`` (workspace package) together.
+
+    Plus an LLM API key for the Hermes agent itself. The backend routes
+    by model prefix (see ``_PROVIDER_KEY_ORDER``):
+
+    - ``gemini/*`` → ``GOOGLE_API_KEY`` or ``GEMINI_API_KEY``
+    - ``anthropic/*`` → ``ANTHROPIC_API_KEY``
+    - ``openai/*`` → ``OPENAI_API_KEY``
+    - ``openrouter/*`` → ``OPENROUTER_API_KEY``
+    - Anything else → falls back to ``HERMES_API_KEY``, with a
+      provider-key sweep in between for slash-less model strings.
+
+    Override the model with ``HERMES_MODEL`` (default
+    ``gemini/gemini-2.5-flash``). No CLI flags beyond model + key.
     """
+
+    # Provider→env-var preference order, used by ``_discover_api_key``.
+    # The first var matching the model's provider wins; if none match, fall
+    # back to ``HERMES_API_KEY`` (caller-supplied generic).
+    _PROVIDER_KEY_ORDER: ClassVar[dict[str, tuple[str, ...]]] = {
+        'gemini': ('GOOGLE_API_KEY', 'GEMINI_API_KEY'),
+        'anthropic': ('ANTHROPIC_API_KEY',),
+        'openai': ('OPENAI_API_KEY',),
+        'openrouter': ('OPENROUTER_API_KEY',),
+    }
 
     def __init__(
         self,
-        hermes_bin: str | None = None,
-        extra_args: list[str] | None = None,
-        timeout_s: float = 300.0,
+        model: str | None = None,
+        api_key: str | None = None,
+        max_iterations: int = 12,
     ) -> None:
-        self.hermes_bin: str = hermes_bin or os.environ.get('HERMES_BIN') or 'hermes'
-        self.extra_args = list(extra_args or [])
-        self.timeout_s = timeout_s
+        self.model = model or os.environ.get('HERMES_MODEL') or 'gemini/gemini-2.5-flash'
+        self.api_key = api_key or self._discover_api_key(self.model)
+        self.max_iterations = max_iterations
+        # Created lazily on first ``answer()`` call so the symlink lifetime
+        # is bounded by the backend instance, not the import.
+        self._hermes_home: Path | None = None
+
+    @classmethod
+    def _discover_api_key(cls, model: str) -> str | None:
+        """Resolve the API key for ``model`` by routing on its provider prefix.
+
+        Picking the first non-empty env var without checking the model
+        produces confusing auth failures (e.g. handing an Anthropic key
+        to a Gemini call). The provider prefix is taken from ``model``.
+
+        If the model has no ``provider/`` prefix (e.g. ``gpt-4o``), or
+        the prefix is unknown, we fall back to probing every provider
+        key in deterministic order — a user with ``OPENAI_API_KEY`` set
+        and ``HERMES_MODEL=gpt-4o`` should not see "no key" errors.
+        ``HERMES_API_KEY`` is the final fallback.
+        """
+        provider = model.split('/', 1)[0].lower() if '/' in model else ''
+        primary = cls._PROVIDER_KEY_ORDER.get(provider, ())
+        if primary:
+            for var in primary:
+                v = os.environ.get(var)
+                if v:
+                    return v
+            # Provider was recognized but its key wasn't set — fall back
+            # to HERMES_API_KEY only. Don't grab a sibling provider's key.
+            return os.environ.get('HERMES_API_KEY')
+        # No prefix or unrecognized prefix — sweep every known provider.
+        seen: set[str] = set()
+        for vars_tuple in cls._PROVIDER_KEY_ORDER.values():
+            for var in vars_tuple:
+                if var in seen:
+                    continue
+                seen.add(var)
+                v = os.environ.get(var)
+                if v:
+                    return v
+        return os.environ.get('HERMES_API_KEY')
+
+    def _ensure_hermes_home(self) -> Path:
+        """Create HERMES_HOME with the memex plugin symlinked in. Idempotent."""
+        if self._hermes_home is not None and self._hermes_home.exists():
+            return self._hermes_home
+
+        try:
+            from memex_hermes_plugin import PLUGIN_DIR
+        except ImportError as e:
+            raise RuntimeError(
+                'memex-hermes-plugin not importable; the eval-suite hermes backend '
+                'needs it. Run `uv sync --extra hermes --group hermes-integration`.'
+            ) from e
+
+        hermes_home = Path(tempfile.mkdtemp(prefix='memex-eval-hermes-'))
+        plugins_dir = hermes_home / 'plugins'
+        plugins_dir.mkdir(parents=True)
+        (plugins_dir / 'memex').symlink_to(PLUGIN_DIR.resolve(), target_is_directory=True)
+        # Minimal config so plugin discovery finds memex as the active provider.
+        (hermes_home / 'config.yaml').write_text('memory:\n  provider: memex\n')
+        os.environ['HERMES_HOME'] = str(hermes_home)
+        self._hermes_home = hermes_home
+        logger.info('Hermes plugin set up at %s', hermes_home)
+        return hermes_home
 
     async def answer(
         self,
@@ -532,68 +649,146 @@ class HermesBackend(AnswerBackend):
         server_url: str,
         judge: 'Judge | None' = None,
     ) -> AgentAnswer:
-        if not shutil.which(self.hermes_bin):
-            return AgentAnswer(
-                backend_name=self.name,
-                error=(
-                    f'{self.hermes_bin!r} not on PATH; install Hermes + run '
-                    f'`memex hermes install`, or set HERMES_BIN'
-                ),
-            )
-
         out = AgentAnswer(backend_name=self.name)
         started = time.monotonic()
-        env = os.environ.copy()
-        env.setdefault('MEMEX_SERVER_URL', server_url)
 
-        cmd = [
-            self.hermes_bin,
-            '-p',
-            scenario.query,
-            '--output-format',
-            'json',
-            *self.extra_args,
-        ]
-        try:
-            proc = subprocess.run(
-                cmd,
-                env=env,
-                capture_output=True,
-                text=True,
-                timeout=self.timeout_s,
-                check=False,
+        if not self.api_key:
+            out.error = (
+                'No API key for the Hermes agent LLM. Set HERMES_API_KEY '
+                '(or a provider-specific key matching --hermes-model, e.g. '
+                'GOOGLE_API_KEY for gemini/*, ANTHROPIC_API_KEY for anthropic/*).'
             )
-        except subprocess.TimeoutExpired:
-            out.error = f'hermes subprocess timed out after {self.timeout_s}s'
             out.duration_ms = (time.monotonic() - started) * 1000
             return out
 
-        if proc.returncode != 0:
-            out.error = f'hermes exited {proc.returncode}: {(proc.stderr or "").strip()[:500]}'
-
-        # Best-effort trace parsing: try JSON first, fall back to plain text.
+        # ``run_agent`` reads HERMES_HOME at module-import time for .env
+        # discovery. Make sure HERMES_HOME is set BEFORE the import so any
+        # plugin .env (now or in the future) is loaded from the right dir.
         try:
-            payload = json.loads(proc.stdout or '{}')
-            if isinstance(payload, dict):
-                out.answer_text = payload.get('answer') or payload.get('result')
-                out.tool_calls = list(payload.get('tool_calls') or [])
-                out.retrieved_unit_ids = list(payload.get('retrieved_unit_ids') or [])
-                out.tokens_in = int(payload.get('tokens_in') or 0)
-                out.tokens_out = int(payload.get('tokens_out') or 0)
-                out.cost_usd = float(payload.get('cost_usd') or 0.0)
-                out.raw_trace = payload
-        except json.JSONDecodeError:
-            out.answer_text = proc.stdout
+            self._ensure_hermes_home()
+        except RuntimeError as e:
+            out.error = str(e)
+            out.duration_ms = (time.monotonic() - started) * 1000
+            return out
 
-        # If the Hermes invocation didn't surface unit IDs in structured form,
-        # pull any UUIDs from the answer text as a fallback.
-        if not out.retrieved_unit_ids and out.answer_text:
+        try:
+            from run_agent import AIAgent  # type: ignore[import-not-found]
+        except ImportError as e:
+            out.error = (
+                'hermes-agent not importable. Install with: '
+                '`uv sync --extra hermes --group hermes-integration`. '
+                'Original error: ' + str(e)
+            )
+            out.duration_ms = (time.monotonic() - started) * 1000
+            return out
+
+        # Bind the plugin to the eval vault for this scenario. Strip the
+        # ``/api/v1/`` suffix — the plugin expects the bare server origin.
+        bare_url = re.sub(r'/api/v1/?$', '', server_url.rstrip('/'))
+        os.environ['MEMEX_SERVER_URL'] = bare_url
+        os.environ['MEMEX_VAULT'] = str(vault_id)
+
+        # Capture tool calls in order. AIAgent invokes
+        # ``tool_start_callback(tool_id, name, args)`` from the agent's
+        # main thread (not the per-tool worker pool).
+        tool_calls: list[dict[str, Any]] = []
+
+        def _on_tool_start(_tool_id: str, name: str, args: Any) -> None:
+            tool_calls.append({'tool': name, 'input': args})
+
+        agent: Any = None
+        try:
+            agent = AIAgent(
+                model=self.model,
+                api_key=self.api_key,
+                max_iterations=self.max_iterations,
+                save_trajectories=False,
+                quiet_mode=True,
+                tool_start_callback=_on_tool_start,
+            )
+            # AIAgent.run_conversation is sync; offload to a worker thread so
+            # the asyncio event loop in the runner stays responsive.
+            import asyncio
+
+            final_response = await asyncio.to_thread(agent.run_conversation, scenario.query)
+            self._populate_answer_from_response(out, final_response, tool_calls)
+        except Exception as e:
+            out.error = f'hermes agent failed: {type(e).__name__}: {e}'
+            logger.exception('HermesBackend.answer raised')
+        finally:
+            if agent is not None:
+                out.tokens_in = int(getattr(agent, 'session_input_tokens', 0) or 0)
+                out.tokens_out = int(getattr(agent, 'session_output_tokens', 0) or 0)
+                out.cost_usd = float(getattr(agent, 'session_estimated_cost_usd', 0.0) or 0.0)
+                # Drop the agent reference promptly so its internal threads /
+                # provider clients can be GC'd before the next scenario.
+                shutdown = getattr(agent, 'shutdown', None)
+                if callable(shutdown):
+                    with contextlib.suppress(Exception):
+                        shutdown()
+
+        # Fallback UUID extraction from the answer text is intentionally
+        # gated on the agent having surfaced search-shaped tool calls — see
+        # _SEARCH_TOOL_PREFIXES — so non-unit UUIDs (vault, note, entity)
+        # mentioned in unrelated answers don't poison GoldUnitIds recall.
+        if (
+            not out.retrieved_unit_ids
+            and out.answer_text
+            and any(tc.get('tool', '').startswith(_SEARCH_TOOL_PREFIXES) for tc in out.tool_calls)
+        ):
             _extract_unit_ids_from_tool_result(
                 {'content': [{'type': 'text', 'text': out.answer_text}]}, out
             )
 
         out.duration_ms = (time.monotonic() - started) * 1000
         return out
+
+    @staticmethod
+    def _populate_answer_from_response(
+        out: AgentAnswer, response: Any, tool_calls: list[dict[str, Any]]
+    ) -> None:
+        """Translate ``run_conversation``'s return value into the AgentAnswer.
+
+        ``run_conversation`` returns a dict on the success path with
+        ``final_response`` (str). Failure / partial / interrupted paths
+        return a dict that may carry ``failed=True``, ``partial=True``,
+        ``interrupted=True``, or an ``error`` string with no usable text.
+        We surface those as ``out.error`` so the runner records the
+        scenario as ``status='error'`` (excluded from suite.pass_rate)
+        instead of a degenerate ``fail`` against an empty answer.
+        """
+        out.tool_calls = tool_calls
+        if isinstance(response, dict):
+            out.raw_trace = response
+            text = response.get('final_response') or response.get('response') or ''
+            out.answer_text = text or None
+            err = response.get('error')
+            failed = bool(
+                response.get('failed') or response.get('partial') or response.get('interrupted')
+            )
+            if not text and (err or failed):
+                flags = {
+                    k: response.get(k)
+                    for k in ('failed', 'partial', 'interrupted', 'completed')
+                    if k in response
+                }
+                out.error = f'hermes run did not complete: error={err!r} flags={flags}'
+        else:
+            out.answer_text = str(response or '') or None
+
+    def close(self) -> None:
+        """Tear down the temp HERMES_HOME. Called by the runner on suite end."""
+        if self._hermes_home and self._hermes_home.exists():
+            with contextlib.suppress(Exception):
+                shutil.rmtree(self._hermes_home, ignore_errors=True)
+        self._hermes_home = None
+
+    def __del__(self) -> None:
+        # Backstop for the unusual path where the runner doesn't call
+        # close() (test code, ad-hoc usage). Cannot be relied on for
+        # production correctness — finalizer ordering is non-deterministic.
+        with contextlib.suppress(Exception):
+            self.close()
 
 
 __all__ = [

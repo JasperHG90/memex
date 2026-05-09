@@ -1,9 +1,10 @@
-"""Agent integration suite — verifies that an LLM agent (Claude Code or
-Hermes) can answer questions about a vault using Memex MCP tools.
+"""Agent integration suite — verifies the Nous Hermes Agent, running with
+the ``memex-hermes-plugin`` from ``packages/hermes-plugin``, answers
+questions about a vault using the plugin's memory tools.
 
-Default backend is ``api`` for fast smoke-testing. Run with
-``--answer-mode claude-code`` or ``--answer-mode hermes`` to exercise the
-real agents end-to-end.
+Default backend is ``hermes`` because that is the integration this suite
+exists to test. Override with ``--answer-mode claude-code`` if you want
+to run the same scenarios against the Claude Code MCP integration.
 """
 
 from pathlib import Path
@@ -42,7 +43,7 @@ METADATA = SuiteMetadata(
     ],
     knobs=[],
     requires_llm_judge=True,
-    default_answer_mode='api',
+    default_answer_mode='hermes',
 )
 
 SCENARIOS = [
@@ -74,9 +75,10 @@ SCENARIOS = [
     Scenario(
         id='agent_calls_memex_search',
         description=(
-            'The agent must use a Memex search tool at least once before answering. '
-            "(Direct-API mode trivially fails this — that's expected; rerun with "
-            '--answer-mode claude-code or hermes to exercise it.)'
+            'The hermes agent must call at least one Memex search tool '
+            '(via the memex-hermes-plugin) before answering. Either of '
+            'the listed tools satisfies the integration check; agents '
+            'legitimately route a single question through only one.'
         ),
         query='Tell me about Project Alpha at Acme Corp.',
         top_k=10,
@@ -84,6 +86,7 @@ SCENARIOS = [
             type='tool_call_contains',
             expected_tools=['memex_memory_search', 'memex_note_search'],
             min_count=1,
+            match_mode='any',
         ),
     ),
 ]

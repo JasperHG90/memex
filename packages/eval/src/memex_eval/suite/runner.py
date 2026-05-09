@@ -11,7 +11,7 @@ import subprocess
 import time
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
 import httpx
@@ -363,6 +363,7 @@ async def _execute_scenario(
     judge: Judge | None,
     note_key_to_unit_ids: dict[str, list[str]],
     replicate_index: int,
+    backend_cache: dict[str, Any] | None = None,
 ) -> ScenarioOutcome:
     started = time.monotonic()
     answer_mode = suite.answer_mode_for(scenario)
@@ -399,9 +400,17 @@ async def _execute_scenario(
             answer_mode=answer_mode,
         )
 
-    # Resolve the answer backend (registered name → instance).
+    # Resolve the answer backend (registered name → instance). Cached
+    # per-run so backends with non-trivial setup (e.g. HermesBackend, which
+    # symlinks a temp HERMES_HOME and instantiates AIAgent) don't redo
+    # their work on every scenario × replicate.
     try:
-        backend = get_backend(answer_mode)
+        if backend_cache is not None and answer_mode in backend_cache:
+            backend = backend_cache[answer_mode]
+        else:
+            backend = get_backend(answer_mode)
+            if backend_cache is not None:
+                backend_cache[answer_mode] = backend
     except KeyError as e:
         return ScenarioOutcome(
             scenario_id=scenario.id,
@@ -463,6 +472,11 @@ async def _execute_scenario(
             # No explicit pass — pass if any metric > 0 (e.g. recall > 0)
             passed = any(v > 0 for v in metrics.values())
 
+        # pytest-style xfail: if the scenario declares the active answer_mode
+        # as expected-failure, recolor pass→xpass and fail→xfail. Time-budget
+        # violation always fails (xfail expectation does not extend to SLA).
+        is_xfail_mode = answer_mode in scenario.expected_failure_modes
+
         # Time-budget assertion
         if scenario.max_duration_ms is not None and duration_ms > scenario.max_duration_ms:
             return ScenarioOutcome(
@@ -483,9 +497,23 @@ async def _execute_scenario(
                 answer_text=answer.answer_text,
                 tool_calls=answer.tool_calls,
             )
+        if is_xfail_mode:
+            status: Literal['pass', 'fail', 'skip', 'error', 'xfail', 'xpass'] = (
+                'xpass' if passed else 'xfail'
+            )
+            error_note = (
+                f'unexpected pass: scenario marked expected_failure_modes={scenario.expected_failure_modes!r} '
+                f'but passed in mode {answer_mode!r} — the constraint is wrong or the bug is fixed'
+                if passed
+                else None
+            )
+        else:
+            status = 'pass' if passed else 'fail'
+            error_note = None
+
         return ScenarioOutcome(
             scenario_id=scenario.id,
-            status='pass' if passed else 'fail',
+            status=status,
             metrics=metrics,
             actual_summary={
                 'unit_count': len(answer.units),
@@ -496,6 +524,7 @@ async def _execute_scenario(
                 'backend_error': answer.error,
             },
             duration_ms=duration_ms,
+            error=error_note,
             replicate_index=replicate_index,
             answer_mode=answer_mode,
             tokens_in=answer.tokens_in,
@@ -526,23 +555,37 @@ def _aggregate_results(
     fail_count = sum(1 for o in outcomes if o.status == 'fail')
     error_count = sum(1 for o in outcomes if o.status == 'error')
     skip_count = sum(1 for o in outcomes if o.status == 'skip')
+    xfail_count = sum(1 for o in outcomes if o.status == 'xfail')
+    xpass_count = sum(1 for o in outcomes if o.status == 'xpass')
 
     metrics_only = [o.metrics for o in runnable_outcomes if o.metrics]
     aggregated = aggregate_metric_keys(metrics_only)
 
-    durations = [o.duration_ms for o in runnable_outcomes]
+    # Latency only over outcomes that actually exercised the system.
+    # Errored runs (setup-action crash, ingest fail, backend exception)
+    # carry meaningless durations — including them would skew p50/p95.
+    duration_outcomes = [o for o in runnable_outcomes if o.status != 'error']
+    durations = [o.duration_ms for o in duration_outcomes]
     aggregated['latency_ms.p50'] = percentile(durations, 50)
     aggregated['latency_ms.p95'] = percentile(durations, 95)
     aggregated['latency_ms.mean'] = (sum(durations) / len(durations)) if durations else 0.0
 
+    # pass_rate semantics (pytest-style):
+    #   numerator   = pass + xfail   (expected outcome achieved)
+    #   denominator = pass + fail + xfail + xpass  (every scenario that produced a verdict)
+    # error and skip are excluded from both. xpass counts as failure because
+    # the embedded constraint (expected_failure_modes) is wrong or stale.
+    verdict_total = pass_count + fail_count + xfail_count + xpass_count
     aggregated['suite.pass_rate'] = (
-        pass_count / len(runnable_outcomes) if runnable_outcomes else 0.0
+        (pass_count + xfail_count) / verdict_total if verdict_total else 0.0
     )
     aggregated['count.scenarios'] = float(len(outcomes))
     aggregated['count.passed'] = float(pass_count)
     aggregated['count.failed'] = float(fail_count)
     aggregated['count.errored'] = float(error_count)
     aggregated['count.skipped'] = float(skip_count)
+    aggregated['count.xfailed'] = float(xfail_count)
+    aggregated['count.xpassed'] = float(xpass_count)
     return aggregated
 
 
@@ -599,6 +642,10 @@ async def run_suite(
             judge_model_value = judge.lm.model
             with contextlib.suppress(Exception):
                 judge.judge_correctness('probe', 'probe', 'probe')
+            # Drain the probe call so its tokens/cost don't bill to the
+            # first scenario's _absorb_judge_usage drain.
+            with contextlib.suppress(Exception):
+                judge.consume_usage()
             judge_kwargs = getattr(judge.lm, 'kwargs', None)
             judge_temp = (
                 judge_kwargs.get('temperature', 0.0) if isinstance(judge_kwargs, dict) else 0.0
@@ -657,6 +704,11 @@ async def run_suite(
                     api, f'{vault_name}-{name}', f'Eval extra vault: {name}'
                 )
 
+            # Per-run backend cache. Backends with non-trivial setup
+            # (HermesBackend) are reused across scenarios; teardown happens
+            # in the finally block below.
+            backend_cache: dict[str, Any] = {}
+
             try:
                 # Ingest source notes
                 note_id_by_key = await _ingest_sources(api, default_vault_id, vault_map, suite)
@@ -711,9 +763,18 @@ async def run_suite(
                             judge,
                             note_key_to_unit_ids,
                             replicate,
+                            backend_cache=backend_cache,
                         )
                         outcomes.append(outcome)
             finally:
+                # Tear down cached backends (frees temp HERMES_HOME etc.)
+                # before deleting the vaults — the backends may try one
+                # last cleanup call into the vault.
+                for backend in backend_cache.values():
+                    teardown = getattr(backend, 'close', None) or getattr(backend, 'shutdown', None)
+                    if callable(teardown):
+                        with contextlib.suppress(Exception):
+                            teardown()
                 # Best-effort cleanup: delete the temp vault(s) so we don't leak state.
                 with contextlib.suppress(Exception):
                     await api.delete_vault(default_vault_id)

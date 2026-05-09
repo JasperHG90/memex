@@ -292,6 +292,24 @@ def _aggregate_unit_ids(answer: AgentAnswer) -> list[str]:
     return [str(getattr(u, 'id', '')) for u in answer.units if getattr(u, 'id', None)]
 
 
+def _absorb_judge_usage(answer: AgentAnswer, judge: Any) -> None:
+    """Drain token/cost since the last judge call into the answer object.
+
+    The runner copies these into ScenarioOutcome and they aggregate into
+    suite metrics ``tokens.total_in/out`` and ``cost.total_usd``.
+    """
+    consume = getattr(judge, 'consume_usage', None)
+    if not callable(consume):
+        return
+    try:
+        usage = consume()
+    except Exception:
+        return
+    answer.tokens_in += int(usage.get('tokens_in', 0) or 0)
+    answer.tokens_out += int(usage.get('tokens_out', 0) or 0)
+    answer.cost_usd += float(usage.get('cost_usd', 0.0) or 0.0)
+
+
 @register_outcome('keywords_present')
 class KeywordsPresent(ExpectedOutcomeBase):
     type: Literal['keywords_present']
@@ -349,9 +367,35 @@ class EntityCooccurs(ExpectedOutcomeBase):
     def score(self, answer: AgentAnswer, scenario, **_kw) -> dict[str, float]:
         if not answer.entities:
             return {'pass': 0.0}
-        names = {(getattr(c, 'name', '') or '').lower() for c in answer.cooccurrences}
-        all_found = all(n.lower() in names for n in self.expected_neighbors)
-        return {'pass': 1.0 if all_found else 0.0}
+        # Server returns dicts with entity_1_name/entity_2_name (see
+        # core/server/entities.py:222). The neighbor is whichever endpoint
+        # is NOT the queried entity; fall back to both names if the queried
+        # entity id is not on either side (shouldn't happen but defensive).
+        queried_id = str(getattr(answer.entities[0], 'id', '') or '')
+        names: set[str] = set()
+        for c in answer.cooccurrences:
+            if isinstance(c, dict):
+                id1, id2 = str(c.get('entity_id_1') or ''), str(c.get('entity_id_2') or '')
+                n1 = (c.get('entity_1_name') or '').lower()
+                n2 = (c.get('entity_2_name') or '').lower()
+            else:
+                id1 = str(getattr(c, 'entity_id_1', '') or '')
+                id2 = str(getattr(c, 'entity_id_2', '') or '')
+                n1 = (getattr(c, 'entity_1_name', '') or '').lower()
+                n2 = (getattr(c, 'entity_2_name', '') or '').lower()
+            if queried_id and id1 == queried_id:
+                if n2:
+                    names.add(n2)
+            elif queried_id and id2 == queried_id:
+                if n1:
+                    names.add(n1)
+            else:
+                if n1:
+                    names.add(n1)
+                if n2:
+                    names.add(n2)
+        expected = {n.lower() for n in self.expected_neighbors}
+        return {'pass': 1.0 if expected.issubset(names) else 0.0}
 
     def metric_keys(self, top_k: int | None = None) -> list[str]:
         return ['pass']
@@ -482,6 +526,7 @@ class LLMJudge(ExpectedOutcomeBase):
         if not candidate:
             return {'graded_score': 0.0, 'pass': 0.0}
         score, _reasoning = judge.judge_graded_correctness(scenario.query, self.rubric, candidate)
+        _absorb_judge_usage(answer, judge)
         return {
             'graded_score': float(score),
             'pass': 1.0 if float(score) >= self.threshold else 0.0,
@@ -524,6 +569,7 @@ class UsefulAtK(ExpectedOutcomeBase):
             ratio = 1.0 if is_relevant else 0.0
         else:
             ratio = 0.0
+        _absorb_judge_usage(answer, judge)
         return {
             f'useful_at_{self.k}': ratio,
             'pass': 1.0 if ratio >= self.threshold else 0.0,
@@ -571,14 +617,31 @@ class ToolCallContains(ExpectedOutcomeBase):
     Useful for verifying integration patterns — e.g. "the agent must
     call ``memex_memory_search`` at least once before answering."
     Direct-API backend trivially fails this (no tool calls happen).
+
+    ``match_mode`` controls how ``expected_tools`` is interpreted:
+
+    - ``'all'`` (default): every listed tool must be called ``min_count``
+      times. Use when each tool fills a distinct role and skipping any
+      one of them indicates a real integration regression.
+    - ``'any'``: at least ONE listed tool must be called ``min_count``
+      times. Use when several tools satisfy the same need (e.g.
+      ``memex_memory_search`` OR ``memex_note_search`` to discover a
+      fact) — agents legitimately pick one route per question, and
+      ``'all'`` would over-constrain.
     """
 
     type: Literal['tool_call_contains']
     expected_tools: list[str]
     min_count: int = 1
+    match_mode: Literal['all', 'any'] = 'all'
 
     def score(self, answer: AgentAnswer, scenario, **_kw) -> dict[str, float]:
         seen = [c.get('tool', '') for c in answer.tool_calls]
+        if self.match_mode == 'any':
+            for expected in self.expected_tools:
+                if sum(1 for t in seen if t == expected) >= self.min_count:
+                    return {'pass': 1.0}
+            return {'pass': 0.0}
         for expected in self.expected_tools:
             if sum(1 for t in seen if t == expected) < self.min_count:
                 return {'pass': 0.0}
@@ -665,6 +728,15 @@ class Scenario(BaseModel):
     # Pluggable answer-generation backend. Defaults to inheriting from the
     # suite-level default; fall back to 'api' if neither is set.
     answer_mode: str | None = None
+
+    # pytest-style xfail. When the active answer_mode is in this list, a
+    # scenario fail is reported as ``xfail`` (expected failure → counted as
+    # success in pass_rate) and an unexpected pass becomes ``xpass`` (counted
+    # as failure — the constraint embedded here is wrong / now stale).
+    # Example: ``ToolCallContains`` is unsatisfiable in api mode, so
+    # ``expected_failure_modes=['api']`` keeps the scenario visible and
+    # measurable rather than hiding it behind a skip.
+    expected_failure_modes: list[str] = Field(default_factory=list)
 
     @model_validator(mode='after')
     def _validate_id(self) -> Scenario:
@@ -779,7 +851,7 @@ class Suite(BaseModel):
 
 class ScenarioOutcome(BaseModel):
     scenario_id: str
-    status: Literal['pass', 'fail', 'skip', 'error']
+    status: Literal['pass', 'fail', 'skip', 'error', 'xfail', 'xpass']
     metrics: dict[str, float] = Field(default_factory=dict)
     actual_summary: dict[str, Any] = Field(default_factory=dict)
     duration_ms: float = 0.0
@@ -836,9 +908,21 @@ class RunResult(BaseModel):
         return sum(1 for o in self.scenario_outcomes if o.status == 'skip')
 
     @property
+    def total_xfailed(self) -> int:
+        return sum(1 for o in self.scenario_outcomes if o.status == 'xfail')
+
+    @property
+    def total_xpassed(self) -> int:
+        return sum(1 for o in self.scenario_outcomes if o.status == 'xpass')
+
+    @property
     def overall_pass_rate(self) -> float:
-        runnable = len(self.scenario_outcomes) - self.total_skipped
-        return self.total_passed / runnable if runnable else 0.0
+        # Mirrors _aggregate_results: numerator = pass + xfail; denominator =
+        # every scenario that produced a verdict (pass + fail + xfail + xpass).
+        verdict_total = (
+            self.total_passed + self.total_failed + self.total_xfailed + self.total_xpassed
+        )
+        return (self.total_passed + self.total_xfailed) / verdict_total if verdict_total else 0.0
 
 
 __all__ = [

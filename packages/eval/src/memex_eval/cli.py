@@ -738,8 +738,13 @@ def suite_run(
         failed = result.total_failed
         errored = result.total_errored
         skipped = result.total_skipped
+        xfailed = result.total_xfailed
+        xpassed = result.total_xpassed
         console.rule(f'[bold]{suite.name}[/bold]')
-        console.print(f'  passed={passed} failed={failed} errored={errored} skipped={skipped}')
+        line = f'  passed={passed} failed={failed} errored={errored} skipped={skipped}'
+        if xfailed or xpassed:
+            line += f' xfailed={xfailed} xpassed={xpassed}'
+        console.print(line)
         for k, v in sorted(result.suite_metrics.items()):
             console.print(f'  {k}: {v:.4f}' if isinstance(v, float) else f'  {k}: {v}')
 

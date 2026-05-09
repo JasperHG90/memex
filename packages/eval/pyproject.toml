@@ -27,6 +27,12 @@ dependencies = [
 # to NullRecorder + the --output JSON dump. Install with:
 #   uv add memex-eval[mlflow]
 mlflow = ["mlflow>=3.1"]
+# Hermes integration suite needs the plugin (workspace member) AND the
+# hermes-agent Python library, which is git-only via the
+# ``hermes-integration`` group at the repo root. The plugin dep is added
+# here so ``memex-eval[hermes]`` makes the import work; hermes-agent
+# itself comes in via ``uv sync --group hermes-integration``.
+hermes = ["memex-hermes-plugin"]
 
 [project.scripts]
 memex-eval = "memex_eval.cli:app"
@@ -34,6 +40,7 @@ memex-eval = "memex_eval.cli:app"
 [tool.uv.sources]
 memex-common = { workspace = true }
 memex-core = { workspace = true }
+memex-hermes-plugin = { workspace = true }
 
 [build-system]
 requires = ["hatchling", "hatch-vcs"]

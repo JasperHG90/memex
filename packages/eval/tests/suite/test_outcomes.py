@@ -13,6 +13,7 @@ from memex_eval.suite import (
     KeywordsAbsent,
     KeywordsPresent,
     LintFindingPresent,
+    LLMJudge,
     RankingOrder,
     Scenario,
     ToolCallContains,
@@ -129,13 +130,54 @@ class TestEntityResolves:
 
 
 class TestEntityCooccurs:
+    """Cooccurrences come back as dicts from the server with
+    ``entity_1_name`` / ``entity_2_name`` / ``entity_id_1`` / ``entity_id_2``
+    keys (see ``packages/core/src/memex_core/server/entities.py``)."""
+
     def test_neighbor_present(self) -> None:
         outcome = EntityCooccurs(type='entity_cooccurs', expected_neighbors=['Raj Mehta'])
         ans = AgentAnswer(
-            entities=[SimpleNamespace(name='Elena')],
-            cooccurrences=[SimpleNamespace(name='Raj Mehta')],
+            entities=[SimpleNamespace(name='Elena Vasquez', id='elena-id')],
+            cooccurrences=[
+                {
+                    'entity_id_1': 'elena-id',
+                    'entity_id_2': 'raj-id',
+                    'entity_1_name': 'Elena Vasquez',
+                    'entity_2_name': 'Raj Mehta',
+                }
+            ],
         )
         assert outcome.score(ans, _scenario()) == {'pass': 1.0}
+
+    def test_neighbor_present_when_queried_is_entity_2(self) -> None:
+        outcome = EntityCooccurs(type='entity_cooccurs', expected_neighbors=['Raj Mehta'])
+        ans = AgentAnswer(
+            entities=[SimpleNamespace(name='Elena Vasquez', id='elena-id')],
+            cooccurrences=[
+                {
+                    'entity_id_1': 'raj-id',
+                    'entity_id_2': 'elena-id',
+                    'entity_1_name': 'Raj Mehta',
+                    'entity_2_name': 'Elena Vasquez',
+                }
+            ],
+        )
+        assert outcome.score(ans, _scenario()) == {'pass': 1.0}
+
+    def test_neighbor_missing(self) -> None:
+        outcome = EntityCooccurs(type='entity_cooccurs', expected_neighbors=['Raj Mehta'])
+        ans = AgentAnswer(
+            entities=[SimpleNamespace(name='Elena Vasquez', id='elena-id')],
+            cooccurrences=[
+                {
+                    'entity_id_1': 'elena-id',
+                    'entity_id_2': 'lisa-id',
+                    'entity_1_name': 'Elena Vasquez',
+                    'entity_2_name': 'Lisa Chang',
+                }
+            ],
+        )
+        assert outcome.score(ans, _scenario()) == {'pass': 0.0}
 
     def test_no_entity(self) -> None:
         outcome = EntityCooccurs(type='entity_cooccurs', expected_neighbors=['x'])
@@ -180,3 +222,60 @@ class TestToolCallContains:
         )
         ans = AgentAnswer(tool_calls=[{'tool': 'memex_memory_search', 'input': {}}])
         assert outcome.score(ans, _scenario()) == {'pass': 0.0}
+
+    def test_match_mode_any_passes_when_one_listed_tool_called(self) -> None:
+        """``match_mode='any'`` accepts any listed tool — used when several
+        tools satisfy the same role (regression guard for review feedback M2)."""
+        outcome = ToolCallContains(
+            type='tool_call_contains',
+            expected_tools=['memex_memory_search', 'memex_note_search'],
+            min_count=1,
+            match_mode='any',
+        )
+        # Only memex_note_search was called; under default 'all' mode this
+        # would fail because memex_memory_search wasn't called.
+        ans = AgentAnswer(tool_calls=[{'tool': 'memex_note_search', 'input': {}}])
+        assert outcome.score(ans, _scenario()) == {'pass': 1.0}
+
+    def test_match_mode_any_fails_when_no_listed_tool_called(self) -> None:
+        outcome = ToolCallContains(
+            type='tool_call_contains',
+            expected_tools=['memex_memory_search', 'memex_note_search'],
+            min_count=1,
+            match_mode='any',
+        )
+        ans = AgentAnswer(tool_calls=[{'tool': 'memex_list_entities', 'input': {}}])
+        assert outcome.score(ans, _scenario()) == {'pass': 0.0}
+
+
+class _FakeJudge:
+    """Stub matching the Judge.consume_usage contract used by LLMJudge.score."""
+
+    def __init__(self, score: float, usage: dict[str, float]) -> None:
+        self._score = score
+        self._usage = usage
+        self._consumed = False
+
+    def judge_graded_correctness(self, *_args, **_kwargs):
+        return self._score, 'reasoning'
+
+    def consume_usage(self) -> dict[str, float]:
+        if self._consumed:
+            return {'tokens_in': 0.0, 'tokens_out': 0.0, 'cost_usd': 0.0}
+        self._consumed = True
+        return dict(self._usage)
+
+
+class TestLLMJudgeUsageAbsorption:
+    def test_judge_usage_drained_into_answer(self) -> None:
+        outcome = LLMJudge(type='llm_judge', rubric='rubric', threshold=0.5)
+        ans = AgentAnswer(answer_text='answer body')
+        judge = _FakeJudge(
+            score=1.0,
+            usage={'tokens_in': 123.0, 'tokens_out': 45.0, 'cost_usd': 0.00078},
+        )
+        result = outcome.score(ans, _scenario(), judge=judge)
+        assert result == {'graded_score': 1.0, 'pass': 1.0}
+        assert ans.tokens_in == 123
+        assert ans.tokens_out == 45
+        assert ans.cost_usd == 0.00078
