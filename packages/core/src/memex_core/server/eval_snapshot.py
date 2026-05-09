@@ -102,7 +102,9 @@ async def snapshot_import(request: Request, body: SnapshotImportRequest) -> Snap
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
     except Exception as e:
         logger.exception('Snapshot import failed unexpectedly')
+        # Don't leak internal exception text — could include filesystem
+        # paths, DSN fragments, etc. The traceback is in the server logs.
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f'Internal error: {e}',
+            detail='Internal error during import; check server logs.',
         ) from e

@@ -234,6 +234,34 @@ class ProcedureOutcomeImport(_ImportBase):
     updated_at: datetime
 
 
+class EmbeddingModelIdentityImport(_ImportBase):
+    """Mirror of ``EmbeddingModelIdentity`` with forward-compat."""
+
+    name: str
+    dim: int
+    hash: str = ''
+
+
+class SnapshotManifestImport(_ImportBase):
+    """Mirror of ``SnapshotManifest`` with ``extra='ignore'``.
+
+    The export-side ``SnapshotManifest`` declares ``extra='forbid'`` so a
+    future MINOR-bumped manifest crashes when read by the V12 importer
+    BEFORE ``_check_version`` ever runs — defeating the documented
+    forward-compat contract. This import-side mirror ignores extra fields
+    so v1.2+ snapshots remain importable on a v1.1-pinned importer.
+    """
+
+    snapshot_version: str
+    source_vault_id: UUID
+    source_vault_name: str
+    exported_at: datetime
+    alembic_head: str
+    embedding_model: EmbeddingModelIdentityImport
+    observation_schema_version: str
+    table_counts: dict[str, int] = Field(default_factory=dict)
+
+
 class ObservationV1(_ImportBase):
     """MentalModel.observations entry — frozen v1 shape (Decision 15).
 

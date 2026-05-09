@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -63,17 +64,20 @@ pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 
 @pytest_asyncio.fixture
 async def populated_vault(db_session: AsyncSession) -> dict[str, UUID]:
+    import hashlib
+
     vault = Vault(name='import-test', description='V12 round-trip fixture')
     db_session.add(vault)
     await db_session.flush()
 
+    note_text = 'Body text used for V12 round-trip.'
     note = Note(
         id=uuid4(),
         vault_id=vault.id,
         title='Round-trip kickoff',
         description='import test note',
-        original_text='Body text used for V12 round-trip.',
-        content_hash='hash-note-1',
+        original_text=note_text,
+        content_hash=hashlib.md5(note_text.encode('utf-8')).hexdigest(),
         status='active',
         doc_metadata={'source': 'fixture'},
     )
@@ -323,6 +327,56 @@ class TestPathValidation:
         root.mkdir()
         with pytest.raises(SnapshotPathError):
             validate_snapshot_dir(root / 'does-not-exist', allowlist_root=root)
+
+
+class TestPathValidationTOCTOU:
+    """O_NOFOLLOW + post-open realpath defense (Decision 9)."""
+
+    def test_open_validated_rejects_path_outside_root(self, tmp_path: Path) -> None:
+        """O_NOFOLLOW + /proc/self/fd realpath catches a file outside the root."""
+        from memex_core.services.snapshot.path_validation import open_validated
+
+        root = tmp_path / 'allowlist'
+        root.mkdir()
+        outside = tmp_path / 'outside.txt'
+        outside.write_text('secret', encoding='utf-8')
+        # Caller passes the absolute path of `outside`. Even if a clever
+        # attacker tricked validate_snapshot_dir, open_validated's
+        # post-open realpath check refuses.
+        with pytest.raises(SnapshotPathError, match='escaped allowlist'):
+            open_validated(outside.resolve(), expected_root=root)
+
+    def test_open_validated_refuses_symlink_at_leaf(self, tmp_path: Path) -> None:
+        """O_NOFOLLOW on the leaf path makes os.open raise ELOOP."""
+        from memex_core.services.snapshot.path_validation import open_validated
+
+        root = tmp_path / 'allowlist'
+        root.mkdir()
+        target = root / 'real.txt'
+        target.write_text('hi', encoding='utf-8')
+        link = root / 'leaf-link.txt'
+        link.symlink_to(target)
+        with pytest.raises(OSError):
+            # O_NOFOLLOW refuses to follow a leaf symlink → ELOOP.
+            open_validated(link, expected_root=root)
+
+    def test_open_validated_accepts_real_file(self, tmp_path: Path) -> None:
+        from memex_core.services.snapshot.path_validation import (
+            open_validated,
+            read_validated_text,
+        )
+
+        root = tmp_path / 'allowlist'
+        root.mkdir()
+        f = root / 'real.txt'
+        f.write_text('hello', encoding='utf-8')
+        fd = open_validated(f.resolve(), expected_root=root)
+        # open_validated returns a fd; close it.
+        import os as _os
+
+        _os.close(fd)
+        # read_validated_text round-trip
+        assert read_validated_text(f.resolve(), expected_root=root) == 'hello'
 
 
 class TestObservationV1:
@@ -837,6 +891,224 @@ async def test_import_second_attempt_refused(
     importer2._target_vault_id = target_id  # force collision
     with pytest.raises(SnapshotImportRefused, match='already imported'):
         await importer2.import_snapshot()
+
+
+async def test_higher_minor_manifest_accepted(
+    db_session: AsyncSession,
+    populated_vault: dict[str, UUID],
+    tmp_path: Path,
+    eval_state_table: None,
+) -> None:
+    """A v1.2 manifest with a future field still imports on a v1.1 importer."""
+    src_vault = populated_vault['vault_id']
+    snapshot_dir = tmp_path / 'snapshot'
+    snapshot_dir.mkdir()
+    await _export(db_session, src_vault, snapshot_dir)
+    await _delete_source_vault(db_session, src_vault)
+
+    # Inject a future-MINOR manifest on top of the freshly-exported one.
+    manifest_path = snapshot_dir / 'manifest.json'
+    raw = json.loads(manifest_path.read_text())
+    raw['snapshot_version'] = '1.2.0'
+    raw['some_v1_2_field'] = 'should-be-ignored'
+    raw['embedding_model']['some_future_attr'] = 'also-ignored'
+    manifest_path.write_text(json.dumps(raw))
+
+    importer = SnapshotImporter(
+        session=db_session,
+        filestore=None,
+        embedding_backend=OnnxBackend(),
+        snapshot_dir=snapshot_dir,
+        allowlist_root=tmp_path,
+        target_vault_name='minor-bump',
+    )
+    target_vault_id = await importer.import_snapshot()
+    assert target_vault_id is not None
+
+
+async def test_import_resumes_partial(
+    db_session: AsyncSession,
+    populated_vault: dict[str, UUID],
+    tmp_path: Path,
+    eval_state_table: None,
+) -> None:
+    """Decision 10 idempotency: a partial import resumes by source path."""
+    from sqlalchemy import text as sa_text
+
+    src_vault = populated_vault['vault_id']
+    snapshot_dir = tmp_path / 'snapshot'
+    snapshot_dir.mkdir()
+    await _export(db_session, src_vault, snapshot_dir)
+    await _delete_source_vault(db_session, src_vault)
+
+    # First attempt — succeed all the way through.
+    importer1 = SnapshotImporter(
+        session=db_session,
+        filestore=None,
+        embedding_backend=OnnxBackend(),
+        snapshot_dir=snapshot_dir,
+        allowlist_root=tmp_path,
+        target_vault_name='resume-target',
+    )
+    target_vault_id_1 = await importer1.import_snapshot()
+
+    # Manually walk the state back to 'embedded' to simulate a crash AFTER
+    # Phase D succeeded but BEFORE Phase E flipped to 'complete'.
+    await db_session.execute(
+        sa_text("UPDATE eval_import_state SET state='embedded' WHERE target_vault_id = :v"),
+        {'v': str(target_vault_id_1)},
+    )
+    await db_session.commit()
+
+    # Second attempt — must adopt the existing target_vault_id and import_id,
+    # not allocate new ones (which would PK-collide on Note.id etc.).
+    importer2 = SnapshotImporter(
+        session=db_session,
+        filestore=None,
+        embedding_backend=OnnxBackend(),
+        snapshot_dir=snapshot_dir,
+        allowlist_root=tmp_path,
+        target_vault_name='resume-target',
+    )
+    target_vault_id_2 = await importer2.import_snapshot()
+    assert target_vault_id_2 == target_vault_id_1
+    # Single eval_import_state row.
+    count = (
+        await db_session.execute(
+            sa_text('SELECT COUNT(*) FROM eval_import_state WHERE source_snapshot_path = :p'),
+            {'p': str(snapshot_dir.resolve())},
+        )
+    ).scalar_one()
+    assert count == 1
+
+
+async def test_import_refuses_completed_resubmit(
+    db_session: AsyncSession,
+    populated_vault: dict[str, UUID],
+    tmp_path: Path,
+    eval_state_table: None,
+) -> None:
+    """Resubmitting a completed import for the same source path refuses."""
+    src_vault = populated_vault['vault_id']
+    snapshot_dir = tmp_path / 'snapshot'
+    snapshot_dir.mkdir()
+    await _export(db_session, src_vault, snapshot_dir)
+    await _delete_source_vault(db_session, src_vault)
+
+    importer1 = SnapshotImporter(
+        session=db_session,
+        filestore=None,
+        embedding_backend=OnnxBackend(),
+        snapshot_dir=snapshot_dir,
+        allowlist_root=tmp_path,
+        target_vault_name='complete-1',
+    )
+    await importer1.import_snapshot()
+
+    importer2 = SnapshotImporter(
+        session=db_session,
+        filestore=None,
+        embedding_backend=OnnxBackend(),
+        snapshot_dir=snapshot_dir,
+        allowlist_root=tmp_path,
+        target_vault_name='complete-2',
+    )
+    with pytest.raises(SnapshotImportRefused, match='already imported'):
+        await importer2.import_snapshot()
+
+
+async def test_import_refuses_existing_vault_name(
+    db_session: AsyncSession,
+    populated_vault: dict[str, UUID],
+    tmp_path: Path,
+    eval_state_table: None,
+) -> None:
+    """Pre-flight refuses on Vault.name UNIQUE collision (no Phase B ugly error)."""
+    src_vault = populated_vault['vault_id']
+    snapshot_dir = tmp_path / 'snapshot'
+    snapshot_dir.mkdir()
+    await _export(db_session, src_vault, snapshot_dir)
+    # Don't delete source — its vault stays around with name 'import-test'.
+
+    importer = SnapshotImporter(
+        session=db_session,
+        filestore=None,
+        embedding_backend=OnnxBackend(),
+        snapshot_dir=snapshot_dir,
+        allowlist_root=tmp_path,
+        target_vault_name='import-test',  # collides
+    )
+    with pytest.raises(SnapshotImportRefused, match='already exists'):
+        await importer.import_snapshot()
+
+
+async def test_import_refuses_entity_canonical_name_collision(
+    db_session: AsyncSession,
+    populated_vault: dict[str, UUID],
+    tmp_path: Path,
+    eval_state_table: None,
+) -> None:
+    """Pre-check refuses when an Entity.canonical_name in the snapshot
+    already exists in the importing DB with a different id."""
+    src_vault = populated_vault['vault_id']
+    snapshot_dir = tmp_path / 'snapshot'
+    snapshot_dir.mkdir()
+    await _export(db_session, src_vault, snapshot_dir)
+
+    # Delete the source vault rows but KEEP its entities (global table).
+    # Then drop+re-add an Entity with the same canonical_name but a new id,
+    # so the imported snapshot tries to create a duplicate-name with a
+    # different id.
+    from sqlalchemy import delete as sa_delete
+
+    src_entity_a = populated_vault['entity_a_id']
+    await db_session.execute(sa_delete(MemoryLink).where(MemoryLink.vault_id == src_vault))
+    await db_session.execute(sa_delete(UnitEntity).where(UnitEntity.vault_id == src_vault))
+    await db_session.execute(
+        sa_delete(EntityCooccurrence).where(EntityCooccurrence.vault_id == src_vault)
+    )
+    await db_session.execute(sa_delete(MentalModel).where(MentalModel.vault_id == src_vault))
+    await db_session.execute(sa_delete(MemoryUnit).where(MemoryUnit.vault_id == src_vault))
+    await db_session.execute(sa_delete(Chunk).where(Chunk.vault_id == src_vault))
+    await db_session.execute(sa_delete(VaultSummary).where(VaultSummary.vault_id == src_vault))
+    await db_session.execute(
+        sa_delete(MaintenanceProposal).where(MaintenanceProposal.vault_id == src_vault)
+    )
+    await db_session.execute(sa_delete(Note).where(Note.vault_id == src_vault))
+    await db_session.execute(sa_delete(Vault).where(Vault.id == src_vault))
+    await db_session.execute(sa_delete(Entity).where(Entity.id == src_entity_a))
+    db_session.add(
+        Entity(
+            id=uuid4(),
+            canonical_name='Sarah Chen',  # same name, different id
+            entity_type='Person',
+            first_seen=datetime.now(timezone.utc),
+            last_seen=datetime.now(timezone.utc),
+        )
+    )
+    await db_session.commit()
+
+    importer = SnapshotImporter(
+        session=db_session,
+        filestore=None,
+        embedding_backend=OnnxBackend(),
+        snapshot_dir=snapshot_dir,
+        allowlist_root=tmp_path,
+        target_vault_name='entity-collision',
+    )
+    with pytest.raises(SnapshotImportRefused, match='canonical_name'):
+        await importer.import_snapshot()
+
+
+def test_eval_route_absent_when_eval_mode_off(client: Any) -> None:
+    """The eval-mode test fixture starts the server WITHOUT eval_mode set,
+    so the snapshot-import route must not be reachable."""
+    response = client.post(
+        '/api/v1/_eval/snapshot-import',
+        json={'snapshot_path': '/tmp/whatever', 'target_vault_name': 'x'},
+    )
+    # 404 (route not registered) — NOT 400/403/422.
+    assert response.status_code == 404
 
 
 async def test_import_skips_missing_optional_files(

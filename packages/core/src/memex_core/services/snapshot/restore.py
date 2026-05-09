@@ -79,6 +79,7 @@ from memex_core.services.snapshot.import_models import (
     NoteImport,
     ObservationV1,
     ProcedureOutcomeImport,
+    SnapshotManifestImport,
     UnitEntityImport,
     VaultImport,
     VaultSummaryImport,
@@ -86,7 +87,6 @@ from memex_core.services.snapshot.import_models import (
 from memex_core.services.snapshot.import_state import VALID_STATES
 from memex_core.services.snapshot.manifest import (
     OBSERVATION_SCHEMA_VERSION,
-    SnapshotManifest,
     SnapshotVersion,
 )
 from memex_core.services.snapshot.path_validation import (
@@ -121,13 +121,15 @@ class SnapshotImportRefused(SnapshotImportError):
 # Manifest + version validation
 
 
-async def _read_manifest(snapshot_dir: Path, allowlist_root: Path) -> SnapshotManifest:
+async def _read_manifest(snapshot_dir: Path, allowlist_root: Path) -> SnapshotManifestImport:
     raw = read_validated_text(snapshot_dir / 'manifest.json', expected_root=allowlist_root)
     data = json.loads(raw)
-    return SnapshotManifest.model_validate(data)
+    # SnapshotManifestImport allows ``extra='ignore'`` so a v1.2+ manifest
+    # with new fields parses cleanly on a v1.1-pinned importer.
+    return SnapshotManifestImport.model_validate(data)
 
 
-def _check_version(manifest: SnapshotManifest) -> None:
+def _check_version(manifest: SnapshotManifestImport) -> None:
     parsed = SnapshotVersion.parse(manifest.snapshot_version)
     if parsed.major != PINNED_SNAPSHOT_MAJOR:
         raise SnapshotImportRefused(
@@ -141,7 +143,7 @@ def _check_version(manifest: SnapshotManifest) -> None:
         )
 
 
-async def _check_alembic_head(session: AsyncSession, manifest: SnapshotManifest) -> None:
+async def _check_alembic_head(session: AsyncSession, manifest: SnapshotManifestImport) -> None:
     """Compare manifest's alembic head to the actual DB head.
 
     Uses the live row in ``alembic_version`` — NOT the script-dir head — so
@@ -160,7 +162,9 @@ async def _check_alembic_head(session: AsyncSession, manifest: SnapshotManifest)
         )
 
 
-def _check_embedding_model(manifest: SnapshotManifest, server_backend: EmbeddingBackend) -> None:
+def _check_embedding_model(
+    manifest: SnapshotManifestImport, server_backend: EmbeddingBackend
+) -> None:
     """Refuse on any embedding-model identity divergence.
 
     Refuses LiteLLM at import time (Decision 5): re-embedding via a remote
@@ -197,7 +201,7 @@ def _check_embedding_model(manifest: SnapshotManifest, server_backend: Embedding
         )
 
 
-def _check_observation_schema(manifest: SnapshotManifest) -> None:
+def _check_observation_schema(manifest: SnapshotManifestImport) -> None:
     if manifest.observation_schema_version != OBSERVATION_SCHEMA_VERSION:
         raise SnapshotImportRefused(
             f'observation_schema_version mismatch: '
@@ -224,14 +228,20 @@ def _read_jsonl_lines(path: Path, allowlist_root: Path) -> Iterable[dict[str, An
     if not path.exists():
         return
     raw = read_validated_text(path, expected_root=allowlist_root)
-    for line in raw.splitlines():
+    for idx, line in enumerate(raw.splitlines()):
         line = line.strip()
         if not line:
             continue
         try:
-            yield json.loads(line)
+            obj = json.loads(line)
         except json.JSONDecodeError as e:
-            raise SnapshotImportError(f'Invalid JSON in {path.name}: {e}') from e
+            raise SnapshotImportError(f'Invalid JSON in {path.name} line {idx + 1}: {e}') from e
+        # Decision 14: NaN/Inf forbidden in any field. Walk the parsed dict
+        # so nested JSONB blobs (unit_metadata, link_metadata, observation
+        # evidence) are also checked, not just the top-level pydantic
+        # fields explicitly hand-rolled below.
+        _check_no_nan_floats(obj, where=f'{path.name}[{idx + 1}]')
+        yield obj
 
 
 def _check_no_nan_floats(value: Any, *, where: str) -> None:
@@ -251,26 +261,35 @@ def _check_no_nan_floats(value: Any, *, where: str) -> None:
 # Eval import state helpers
 
 
-async def _ensure_no_existing_import(session: AsyncSession, target_vault_id: UUID) -> None:
-    """Single-snapshot-per-DB defense (Decision 20).
+async def _lookup_existing_import(
+    session: AsyncSession, source_snapshot_path: Path
+) -> tuple[UUID, UUID, str] | None:
+    """Look up an existing import row keyed by ``source_snapshot_path``.
 
-    Same target_vault_id is unreachable from a fresh allocation by design;
-    this guards against test/retry seams where the same UUID is reused.
+    Returns ``(target_vault_id, import_id, state)`` if a row exists for
+    this source path, else None. Caller decides whether to refuse
+    (state='complete') or resume (any other state) — see Decision 10.
     """
     result = await session.execute(
         text(
-            'SELECT state, source_snapshot_path FROM eval_import_state WHERE target_vault_id = :vid'
+            'SELECT target_vault_id, import_id, state FROM eval_import_state '
+            'WHERE source_snapshot_path = :path'
         ),
-        {'vid': str(target_vault_id)},
+        {'path': str(source_snapshot_path)},
     )
     row = result.first()
-    if row is not None and row[0] == 'complete':
-        raise SnapshotImportRefused(
-            f'Cannot import: vault {target_vault_id} already imported '
-            f'(state=complete, source={row[1]}). Each DB holds at most one '
-            f'snapshot per vault. To re-import, delete the vault first: '
-            f'`memex vault delete {target_vault_id}`.'
-        )
+    if row is None:
+        return None
+    return (UUID(str(row[0])), UUID(str(row[1])), str(row[2]))
+
+
+def _refuse_completed_import(target_vault_id: UUID, source: Path) -> None:
+    raise SnapshotImportRefused(
+        f'Cannot import: snapshot at {source} already imported into vault '
+        f'{target_vault_id} (state=complete). Each DB holds at most one '
+        f'live import per source snapshot. To re-import, delete the vault '
+        f'first: `memex vault delete {target_vault_id}`.'
+    )
 
 
 async def _record_import_state(
@@ -329,9 +348,14 @@ class SnapshotImporter:
         self._allowlist_root = allowlist_root
         self._target_vault_name = target_vault_name
 
+        # IDs are TENTATIVE at construction. ``import_snapshot()`` resolves
+        # them by looking up an existing in-progress import for the same
+        # source path (resume semantics, Decision 10) before committing.
         self._import_id: UUID = uuid4()
         self._target_vault_id: UUID = uuid4()
-        self._manifest: SnapshotManifest | None = None
+        self._resumed: bool = False
+        self._resume_state: str | None = None
+        self._manifest: SnapshotManifestImport | None = None
         self._vault: VaultImport | None = None
 
     @property
@@ -343,7 +367,12 @@ class SnapshotImporter:
         return self._target_vault_id
 
     async def import_snapshot(self) -> UUID:
-        """Run all phases. Returns ``target_vault_id`` once Phase E commits."""
+        """Run all phases. Returns ``target_vault_id`` once Phase E commits.
+
+        Resume semantics (Decision 10): if a previous import for the same
+        source path is recorded as in-progress, re-use its IDs and skip
+        already-completed phases. If recorded as ``complete``, refuse.
+        """
         self._snapshot_dir = validate_snapshot_dir(
             self._snapshot_dir, allowlist_root=self._allowlist_root
         )
@@ -358,16 +387,45 @@ class SnapshotImporter:
             )
             await self._session.commit()
 
-            await self._phase_a_stage_assets()
-            await self._phase_b_db_transaction()
-            await self._phase_c_commit_assets()
-            await self._phase_d_embeddings_and_reindex()
+            # Idempotent resume — skip phases that have already committed.
+            phases_done = self._phases_completed()
+
+            if 'A' not in phases_done:
+                await self._phase_a_stage_assets()
+            if 'B' not in phases_done:
+                await self._phase_b_db_transaction()
+            if 'C' not in phases_done:
+                await self._phase_c_commit_assets()
+            if 'D' not in phases_done:
+                await self._phase_d_embeddings_and_reindex()
             await self._phase_e_mark_complete()
             return self._target_vault_id
         except Exception:
-            # Best-effort staging cleanup.
-            await self._cleanup_staging()
+            # Best-effort staging cleanup. Skipped on resume — the original
+            # staging dir may still hold uncommitted assets we want to retry.
+            if not self._resumed:
+                await self._cleanup_staging()
             raise
+
+    def _phases_completed(self) -> set[str]:
+        """Map ``eval_import_state.state`` to the phases already past commit."""
+        state = self._resume_state
+        if state is None:
+            return set()
+        # State is set after the phase commits, so observing 'db_committed'
+        # means Phase B finished; assets_committed means Phase C; etc.
+        if state == 'db_committed':
+            # Phase A may or may not have happened — assets staged is a
+            # local FileStore op, not gated by a DB row. Re-running Phase A
+            # is idempotent (FileStore.save uses save-or-overwrite).
+            return {'A', 'B'}
+        if state == 'assets_committed':
+            return {'A', 'B', 'C'}
+        if state == 'embedded':
+            return {'A', 'B', 'C', 'D'}
+        # 'staging' or 'complete' — staging means nothing past Phase A
+        # committed; complete is rejected before we get here.
+        return set()
 
     # ------------------------------------------------------------------
     # Preflight
@@ -384,10 +442,46 @@ class SnapshotImporter:
         )
         vault = VaultImport.model_validate_json(vault_raw)
         _check_vault_not_global(vault)
-        await _ensure_no_existing_import(self._session, self._target_vault_id)
+
+        # Resume / refuse — keyed on source_snapshot_path (Decision 10/20).
+        # Fresh target_vault_id was allocated in __init__; if a prior import
+        # for this source path exists, replace tentative IDs with the
+        # recorded ones so Phase B can re-use them on resume.
+        existing = await _lookup_existing_import(self._session, self._snapshot_dir)
+        if existing is not None:
+            existing_target, existing_import, existing_state = existing
+            if existing_state == 'complete':
+                _refuse_completed_import(existing_target, self._snapshot_dir)
+            self._target_vault_id = existing_target
+            self._import_id = existing_import
+            self._resumed = True
+            self._resume_state = existing_state
+            logger.info(
+                'Resuming snapshot import for %s at state=%s (target_vault_id=%s, import_id=%s)',
+                self._snapshot_dir,
+                existing_state,
+                existing_target,
+                existing_import,
+            )
+        else:
+            # Fresh import: refuse if the proposed vault NAME already exists,
+            # since Phase B's vault insert is unconditional.
+            await self._refuse_on_existing_vault_name()
 
         self._manifest = manifest
         self._vault = vault
+
+    async def _refuse_on_existing_vault_name(self) -> None:
+        result = await self._session.execute(
+            select(Vault.id).where(Vault.name == self._target_vault_name)
+        )
+        existing_id = result.scalar_one_or_none()
+        if existing_id is not None:
+            raise SnapshotImportRefused(
+                f'Vault name {self._target_vault_name!r} already exists '
+                f'(id={existing_id}). Pass a unique target_vault_name or '
+                f'delete the existing vault first.'
+            )
 
     # ------------------------------------------------------------------
     # Phase A — FileStore staging
@@ -494,6 +588,23 @@ class SnapshotImporter:
         derived = self._snapshot_dir / 'derived'
         for raw in _read_jsonl_lines(derived / 'entities.jsonl', self._allowlist_root):
             entity = EntityImport.model_validate(raw)
+            # ``Entity.canonical_name`` carries a UNIQUE constraint
+            # (sql_models.py — idx_entities_canonical_name_unique). PG
+            # supports only one ON CONFLICT target, so we pre-check for the
+            # cross-id name collision and refuse with a clear error rather
+            # than letting Phase B blow up with a raw IntegrityError.
+            existing = (
+                await self._session.execute(
+                    select(Entity.id).where(Entity.canonical_name == entity.canonical_name)
+                )
+            ).scalar_one_or_none()
+            if existing is not None and existing != entity.id:
+                raise SnapshotImportRefused(
+                    f'Entity canonical_name {entity.canonical_name!r} already exists '
+                    f'with id={existing} on the importing DB; snapshot has id={entity.id}. '
+                    f'Eval testcontainers must start empty — drop the conflicting entity '
+                    f'or import into a fresh DB.'
+                )
             stmt = pg_insert(Entity.__table__).values(  # type: ignore[arg-type]
                 id=entity.id,
                 canonical_name=entity.canonical_name,
@@ -529,11 +640,25 @@ class SnapshotImporter:
             )
             note = NoteImport.model_validate_json(meta_raw)
             note_md = note_dir / 'note.md'
-            original_text = (
-                read_validated_text(note_md, expected_root=self._allowlist_root)
-                if note_md.exists()
-                else ''
-            )
+            if note_md.exists():
+                original_text: str | None = read_validated_text(
+                    note_md, expected_root=self._allowlist_root
+                )
+            else:
+                original_text = None
+            # Verify content_hash if present — defends against tampered/
+            # corrupted note.md. Mismatch is treated as a hard refusal so
+            # silent corruption can't propagate into eval results.
+            if note.content_hash and original_text is not None:
+                import hashlib
+
+                actual = hashlib.md5(original_text.encode('utf-8')).hexdigest()
+                if actual != note.content_hash:
+                    raise SnapshotImportError(
+                        f'note.md content_hash mismatch for note {note.id}: '
+                        f'expected={note.content_hash} actual={actual}. '
+                        f'Snapshot may be corrupted or tampered.'
+                    )
             # Rewrite asset paths on the row to point to the FINAL FileStore
             # keys (Phase C will move bytes into place before retrieval is
             # allowed; Phase E gates).
