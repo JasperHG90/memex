@@ -46,6 +46,7 @@ from memex_common.config import (
     LitellmEmbeddingBackend,
     OnnxBackend,
 )
+from memex_core.memory.formatting import format_for_embedding
 from memex_core.memory.models.embedding import get_embedding_model
 from memex_core.memory.sql_models import (
     Chunk,
@@ -102,12 +103,6 @@ logger = logging.getLogger('memex.core.services.snapshot.restore')
 RESERVED_VAULT_NAMES = {GLOBAL_VAULT_NAME.lower(), 'global', 'default'}
 
 EMBED_BATCH_SIZE = 64
-
-_MODEL_BY_TABLE: dict[str, Any] = {
-    'chunks': Chunk,
-    'memory_units': MemoryUnit,
-    'mental_models': MentalModel,
-}
 
 
 class SnapshotImportError(Exception):
@@ -1046,61 +1041,33 @@ class SnapshotImporter:
     # Phase D — Embeddings + REINDEX
 
     async def _phase_d_embeddings_and_reindex(self) -> None:
+        """Regenerate embeddings using the EXACT same text-formatting the
+        extraction pipeline uses, so retrieval over an imported vault is
+        bit-comparable to retrieval over the source.
+
+        - ``Chunk.embedding``: raw ``Chunk.text`` (extraction at
+          ``memory/extraction/engine.py:396-401`` — no ``format_for_embedding``).
+        - ``MemoryUnit.embedding``: ``format_for_embedding(text=fact_text,
+          fact_type, context)`` per ``embedding_processor.format_facts_for_embedding``.
+        - ``MentalModel.embedding``: ``format_for_embedding(text=obs_text,
+          fact_type='observation', context=mental_model.name)`` where
+          ``obs_text = ' '.join(f'{title} - {content}' for o in observations)``
+          per ``reflect/reflection.py:_phase_5_finalize`` line 346-353.
+
+        Diverging here would silently invalidate retrieval scores. Tests
+        assert that the EXACT extraction-time formatter is used.
+        """
         embedder = await get_embedding_model(self._embedding_backend)
 
-        # Chunks (no `updated_at` column).
-        await self._embed_table_text(
-            embedder,
-            select(Chunk.id, Chunk.text).where(  # type: ignore[arg-type]
-                Chunk.vault_id == self._target_vault_id,
-                Chunk.embedding.is_(None),  # type: ignore[union-attr]
-            ),
-            'chunks',
-            'embedding',
-            preserve_updated_at=False,
-        )
-        # Memory units — preserve `updated_at` verbatim (Decision 3) by
-        # re-asserting it on every UPDATE. Otherwise the column's
-        # `onupdate=func.now()` (memory/mixins.py:28) fires when Phase D
-        # writes the embedding and the snapshot timestamp is lost.
-        await self._embed_table_text(
-            embedder,
-            select(MemoryUnit.id, MemoryUnit.text, MemoryUnit.updated_at).where(  # type: ignore[arg-type]
-                MemoryUnit.vault_id == self._target_vault_id,
-                MemoryUnit.embedding.is_(None),  # type: ignore[union-attr]
-            ),
-            'memory_units',
-            'embedding',
-            preserve_updated_at=True,
-        )
-        # MentalModel embedding source is the centroid of observation
-        # embeddings — see sql_models docstring. We approximate by
-        # embedding the concatenated observation contents; if the result
-        # diverges from extraction-time semantics, leaving NULL is
-        # acceptable per Decision 10 Phase D.
-        result = await self._session.execute(
-            select(MentalModel.id, MentalModel.observations).where(
-                MentalModel.vault_id == self._target_vault_id,
-                MentalModel.embedding.is_(None),  # type: ignore[union-attr]
-            )
-        )
-        rows = list(result.all())
-        if rows:
-            ids: list[UUID] = []
-            texts: list[str] = []
-            for row_id, observations in rows:
-                if not observations:
-                    continue
-                joined = '\n'.join(
-                    str(obs.get('content', '') or '')
-                    for obs in observations
-                    if isinstance(obs, dict)
-                ).strip()
-                if not joined:
-                    continue
-                ids.append(row_id)
-                texts.append(joined)
-            await self._update_embeddings(MentalModel, 'embedding', ids, texts, embedder)
+        # Chunks: raw text (no formatter), no `updated_at` column.
+        await self._embed_chunks(embedder)
+        # Memory units: format_for_embedding(text, fact_type, context).
+        # Preserve `updated_at` verbatim (Decision 3) — the column's
+        # `onupdate=func.now()` (memory/mixins.py:28) fires on UPDATE and
+        # would otherwise trash the snapshot timestamp.
+        await self._embed_memory_units(embedder)
+        # MentalModels: ' '.join(title - content) → format_for_embedding(.., 'observation', name).
+        await self._embed_mental_models(embedder)
 
         await self._reindex_hnsw()
         await _record_import_state(
@@ -1112,63 +1079,101 @@ class SnapshotImporter:
         )
         await self._session.commit()
 
-    async def _embed_table_text(
-        self,
-        embedder: Any,
-        stmt: Any,
-        table_name: str,
-        embedding_col: str,
-        *,
-        preserve_updated_at: bool = False,
-    ) -> None:
-        # Resolve the SQLAlchemy model + column from the table name so that
-        # `update().values(embedding=vec)` routes through the typed Vector
-        # column (raw text() bypasses type-side serialization, breaking
-        # pgvector's list[float] -> '[...]'::vector conversion).
-        model = _MODEL_BY_TABLE[table_name]
-        col_attr = getattr(model, embedding_col)
-
-        result = await self._session.execute(stmt)
+    async def _embed_chunks(self, embedder: Any) -> None:
+        result = await self._session.execute(
+            select(Chunk.id, Chunk.text).where(
+                Chunk.vault_id == self._target_vault_id,
+                Chunk.embedding.is_(None),  # type: ignore[union-attr]
+            )
+        )
         rows = list(result.all())
         if not rows:
             return
-        ids = [r[0] for r in rows]
-        texts = [r[1] or '' for r in rows]
-        # When preserving updated_at, the SELECT MUST include it as the third
-        # column. Re-assert it on every UPDATE so SQLAlchemy's
-        # `onupdate=func.now()` does not override the snapshot value.
-        updated_ats: list[Any] = [r[2] for r in rows] if preserve_updated_at else [None] * len(rows)
-
         for start in range(0, len(rows), EMBED_BATCH_SIZE):
-            chunk_ids = ids[start : start + EMBED_BATCH_SIZE]
-            chunk_texts = texts[start : start + EMBED_BATCH_SIZE]
-            chunk_uat = updated_ats[start : start + EMBED_BATCH_SIZE]
-            vectors = embedder.encode(chunk_texts)
-            for row_id, vec, uat in zip(chunk_ids, vectors, chunk_uat, strict=True):
-                values = {col_attr: list(map(float, vec))}
-                if preserve_updated_at and uat is not None:
-                    values[model.updated_at] = uat
-                await self._session.execute(update(model).where(model.id == row_id).values(values))
+            batch = rows[start : start + EMBED_BATCH_SIZE]
+            texts = [(r[1] or '') for r in batch]
+            vectors = embedder.encode(texts)
+            for (row_id, _text), vec in zip(batch, vectors, strict=True):
+                await self._session.execute(
+                    update(Chunk)
+                    .where(Chunk.id == row_id)
+                    .values({Chunk.embedding: list(map(float, vec))})
+                )
             await self._session.commit()
 
-    async def _update_embeddings(
-        self,
-        model: Any,
-        col: str,
-        ids: list[UUID],
-        texts: list[str],
-        embedder: Any,
-    ) -> None:
-        if not ids:
+    async def _embed_memory_units(self, embedder: Any) -> None:
+        result = await self._session.execute(
+            select(
+                MemoryUnit.id,
+                MemoryUnit.text,
+                MemoryUnit.fact_type,
+                MemoryUnit.context,
+                MemoryUnit.updated_at,
+            ).where(
+                MemoryUnit.vault_id == self._target_vault_id,
+                MemoryUnit.embedding.is_(None),  # type: ignore[union-attr]
+            )
+        )
+        rows = list(result.all())
+        if not rows:
             return
-        col_attr = getattr(model, col)
+        for start in range(0, len(rows), EMBED_BATCH_SIZE):
+            batch = rows[start : start + EMBED_BATCH_SIZE]
+            texts = [
+                format_for_embedding(text=(r[1] or ''), fact_type=str(r[2]), context=r[3])
+                for r in batch
+            ]
+            vectors = embedder.encode(texts)
+            for (row_id, _t, _f, _c, uat), vec in zip(batch, vectors, strict=True):
+                await self._session.execute(
+                    update(MemoryUnit)
+                    .where(MemoryUnit.id == row_id)
+                    .values(
+                        {
+                            MemoryUnit.embedding: list(map(float, vec)),
+                            MemoryUnit.updated_at: uat,
+                        }
+                    )
+                )
+            await self._session.commit()
+
+    async def _embed_mental_models(self, embedder: Any) -> None:
+        result = await self._session.execute(
+            select(
+                MentalModel.id,
+                MentalModel.name,
+                MentalModel.observations,
+            ).where(
+                MentalModel.vault_id == self._target_vault_id,
+                MentalModel.embedding.is_(None),  # type: ignore[union-attr]
+            )
+        )
+        rows = list(result.all())
+        if not rows:
+            return
+        ids: list[UUID] = []
+        texts: list[str] = []
+        for row_id, name, observations in rows:
+            if not observations:
+                continue
+            obs_text = ' '.join(
+                f'{obs.get("title", "")} - {obs.get("content", "")}'
+                for obs in observations
+                if isinstance(obs, dict)
+            ).strip()
+            if not obs_text:
+                continue
+            ids.append(row_id)
+            texts.append(format_for_embedding(text=obs_text, fact_type='observation', context=name))
         for start in range(0, len(ids), EMBED_BATCH_SIZE):
             chunk_ids = ids[start : start + EMBED_BATCH_SIZE]
             chunk_texts = texts[start : start + EMBED_BATCH_SIZE]
             vectors = embedder.encode(chunk_texts)
             for rid, vec in zip(chunk_ids, vectors, strict=True):
                 await self._session.execute(
-                    update(model).where(model.id == rid).values({col_attr: list(map(float, vec))})
+                    update(MentalModel)
+                    .where(MentalModel.id == rid)
+                    .values({MentalModel.embedding: list(map(float, vec))})
                 )
             await self._session.commit()
 

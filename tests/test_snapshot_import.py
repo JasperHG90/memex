@@ -8,6 +8,7 @@ load-bearing column preservation.
 from __future__ import annotations
 
 import json
+import os
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -629,6 +630,91 @@ async def test_round_trip_uuid_preserved_for_intra_snapshot_fks(
     assert link.to_unit_id == populated_vault['unit_b_id']
 
 
+async def test_round_trip_embeddings_match_extraction_format(
+    db_session: AsyncSession,
+    populated_vault: dict[str, UUID],
+    tmp_path: Path,
+    eval_state_table: None,
+) -> None:
+    """Phase D regen uses the EXACT extraction-time text format.
+
+    For each restored MemoryUnit, encode the canonical extraction-time
+    formatted text and assert the imported embedding matches (cosine ~ 1).
+    This is the contract test that retrieval over an imported vault
+    produces results bit-comparable to retrieval over the source.
+    """
+    import numpy as np
+
+    from memex_core.memory.formatting import format_for_embedding
+    from memex_core.memory.models.embedding import get_embedding_model
+
+    src_vault = populated_vault['vault_id']
+    snapshot_dir = tmp_path / 'snapshot'
+    snapshot_dir.mkdir()
+    await _export(db_session, src_vault, snapshot_dir)
+    await _delete_source_vault(db_session, src_vault)
+
+    importer = SnapshotImporter(
+        session=db_session,
+        filestore=None,
+        embedding_backend=OnnxBackend(),
+        snapshot_dir=snapshot_dir,
+        allowlist_root=tmp_path,
+        target_vault_name='roundtrip-format',
+    )
+    target_vault_id = await importer.import_snapshot()
+
+    embedder = await get_embedding_model(OnnxBackend())
+
+    # MemoryUnit: format_for_embedding(text, fact_type, context)
+    rows = (
+        await db_session.execute(
+            select(
+                MemoryUnit.id,
+                MemoryUnit.text,
+                MemoryUnit.fact_type,
+                MemoryUnit.context,
+                MemoryUnit.embedding,
+            ).where(MemoryUnit.vault_id == target_vault_id)
+        )
+    ).all()
+    assert rows, 'expected at least one memory unit'
+    for _id, text, fact_type, context, embedding in rows:
+        expected_text = format_for_embedding(text=text, fact_type=fact_type, context=context)
+        expected_vec = np.asarray(embedder.encode([expected_text])[0], dtype=np.float32)
+        actual_vec = np.asarray(embedding, dtype=np.float32)
+        cos = float(
+            np.dot(expected_vec, actual_vec)
+            / (np.linalg.norm(expected_vec) * np.linalg.norm(actual_vec))
+        )
+        assert cos > 0.999, f'MemoryUnit cos similarity {cos:.6f} < 0.999'
+
+    # MentalModel: format_for_embedding(' '.join(title - content), 'observation', name)
+    rows = (
+        await db_session.execute(
+            select(
+                MentalModel.id, MentalModel.name, MentalModel.observations, MentalModel.embedding
+            )
+            .where(MentalModel.vault_id == target_vault_id)
+            .where(MentalModel.embedding.is_not(None))  # type: ignore[union-attr]
+        )
+    ).all()
+    for _id, name, observations, embedding in rows:
+        obs_text = ' '.join(
+            f'{o.get("title", "")} - {o.get("content", "")}'
+            for o in observations
+            if isinstance(o, dict)
+        ).strip()
+        expected_text = format_for_embedding(text=obs_text, fact_type='observation', context=name)
+        expected_vec = np.asarray(embedder.encode([expected_text])[0], dtype=np.float32)
+        actual_vec = np.asarray(embedding, dtype=np.float32)
+        cos = float(
+            np.dot(expected_vec, actual_vec)
+            / (np.linalg.norm(expected_vec) * np.linalg.norm(actual_vec))
+        )
+        assert cos > 0.999, f'MentalModel cos similarity {cos:.6f} < 0.999'
+
+
 async def test_round_trip_embeddings_are_filled(
     db_session: AsyncSession,
     populated_vault: dict[str, UUID],
@@ -1229,6 +1315,155 @@ async def test_import_refuses_entity_canonical_name_collision(
     )
     with pytest.raises(SnapshotImportRefused, match='canonical_name'):
         await importer.import_snapshot()
+
+
+async def test_eval_route_full_http_round_trip(
+    db_session: AsyncSession,
+    populated_vault: dict[str, UUID],
+    tmp_path: Path,
+    eval_state_table: None,
+) -> None:
+    """End-to-end through the HTTP route: export → call POST → assert vault.
+
+    Builds a minimal FastAPI app with the eval-snapshot router mounted
+    (matching what `eval_mode=True` does in production lifespan), wires
+    ``app.state.api`` with the test session's metastore + filestore, and
+    posts a real snapshot path. Verifies the route's request-validation,
+    success path, and response shape end-to-end.
+    """
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from memex_core.server.eval_snapshot import router as eval_router
+
+    src_vault = populated_vault['vault_id']
+    snapshot_dir = tmp_path / 'snapshot'
+    snapshot_dir.mkdir()
+    await _export(db_session, src_vault, snapshot_dir)
+    await _delete_source_vault(db_session, src_vault)
+
+    # Build a stand-in `api` with the attributes the route consumes.
+    bind = db_session.bind
+    assert bind is not None
+
+    class _Cfg:
+        class server:
+            eval_mode = True
+            embedding_model = OnnxBackend()
+
+    class _MS:
+        engine = bind
+
+        @staticmethod
+        def session():
+            from contextlib import asynccontextmanager
+
+            from sqlalchemy.ext.asyncio import async_sessionmaker
+            from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelSession
+
+            maker = async_sessionmaker(bind=bind, class_=SQLModelSession, expire_on_commit=False)
+
+            @asynccontextmanager
+            async def _ctx():
+                async with maker() as s:
+                    yield s
+
+            return _ctx()
+
+    class _Api:
+        config = _Cfg()
+        metastore = _MS()
+        filestore = None
+
+    app = FastAPI()
+    app.state.api = _Api()
+    app.include_router(eval_router)
+
+    os.environ['MEMEX_EVAL_SNAPSHOT_ROOT'] = str(tmp_path)
+    try:
+        with TestClient(app) as client_:
+            response = client_.post(
+                '/api/v1/_eval/snapshot-import',
+                json={
+                    'snapshot_path': str(snapshot_dir),
+                    'target_vault_name': 'http-roundtrip',
+                },
+            )
+            assert response.status_code == 201, response.text
+            body = response.json()
+            assert UUID(body['target_vault_id']) is not None
+            assert UUID(body['import_id']) is not None
+    finally:
+        os.environ.pop('MEMEX_EVAL_SNAPSHOT_ROOT', None)
+
+
+async def test_eval_route_returns_400_on_path_outside_allowlist(
+    db_session: AsyncSession,
+    tmp_path: Path,
+    eval_state_table: None,
+) -> None:
+    """Refuses with 400 when snapshot_path is outside the allowlist root."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from memex_core.server.eval_snapshot import router as eval_router
+
+    bind = db_session.bind
+    assert bind is not None
+
+    class _Cfg:
+        class server:
+            eval_mode = True
+            embedding_model = OnnxBackend()
+
+    class _MS:
+        engine = bind
+
+        @staticmethod
+        def session():
+            from contextlib import asynccontextmanager
+
+            from sqlalchemy.ext.asyncio import async_sessionmaker
+            from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelSession
+
+            maker = async_sessionmaker(bind=bind, class_=SQLModelSession, expire_on_commit=False)
+
+            @asynccontextmanager
+            async def _ctx():
+                async with maker() as s:
+                    yield s
+
+            return _ctx()
+
+    class _Api:
+        config = _Cfg()
+        metastore = _MS()
+        filestore = None
+
+    app = FastAPI()
+    app.state.api = _Api()
+    app.include_router(eval_router)
+
+    allowlist_root = tmp_path / 'allowlist'
+    allowlist_root.mkdir()
+    outside = tmp_path / 'outside'
+    outside.mkdir()
+
+    os.environ['MEMEX_EVAL_SNAPSHOT_ROOT'] = str(allowlist_root)
+    try:
+        with TestClient(app) as client_:
+            response = client_.post(
+                '/api/v1/_eval/snapshot-import',
+                json={
+                    'snapshot_path': str(outside),
+                    'target_vault_name': 'rejected',
+                },
+            )
+            assert response.status_code == 400
+            # Must NOT echo the absolute path verbatim into a 500.
+            assert 'Internal error' not in response.text
+    finally:
+        os.environ.pop('MEMEX_EVAL_SNAPSHOT_ROOT', None)
 
 
 def test_eval_route_absent_when_eval_mode_off(client: Any) -> None:
