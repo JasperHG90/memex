@@ -141,14 +141,30 @@ def _dump_jsonl_line(model: BaseModel) -> str:
 class SnapshotExporter:
     """Orchestrates an export of a single vault into ``output_dir``.
 
+    Callers MUST pass ``embedding_model`` constructed from the live server
+    config. The registry default is only correct if the source server is
+    using the built-in ONNX backend; if the server uses LiteLLM the
+    registry-default fallback would write a manifest that lies about which
+    embedding model produced the units in the snapshot, and V12 import
+    would silently misclassify model identity.
+
     Usage::
 
-        async with metastore.session_maker()() as session:
+        from memex_core.services.snapshot.manifest import EmbeddingModelIdentity
+        from memex_core.memory.sql_models import EMBEDDING_DIMENSION
+
+        identity = EmbeddingModelIdentity(
+            name='<repo_id-or-litellm/<model>>',
+            dim=EMBEDDING_DIMENSION,
+            hash='<revision-or-empty>',
+        )
+        async with metastore.session() as session:
             exporter = SnapshotExporter(
                 session=session,
                 filestore=filestore,
                 vault_id_or_name='my-vault',
                 output_dir=Path('/tmp/snap'),
+                embedding_model=identity,
             )
             await exporter.export()
     """
@@ -209,11 +225,19 @@ class SnapshotExporter:
             self._vault = await self._resolve_vault()
             self._refuse_global(self._vault)
 
-            # Embedding-model identity. Caller may override (useful for tests
-            # and for the CLI to forward the runtime config). Falls back to
-            # the registry default — only correct if the server is using the
-            # built-in ONNX backend.
+            # Embedding-model identity. The caller is expected to construct
+            # this from the live server config (see class docstring). When
+            # absent we fall back to the registry default, which is ONLY
+            # correct on a vanilla ONNX-backed server — log a loud warning
+            # because the consumer has no other way to detect the lie.
             if self._embedding_model is None:
+                logger.warning(
+                    'SnapshotExporter invoked without explicit embedding_model; '
+                    'falling back to MODEL_REGISTRY default. The manifest will be '
+                    'incorrect if this server uses a non-ONNX embedding backend. '
+                    'Pass embedding_model derived from your runtime config (see '
+                    'class docstring).'
+                )
                 self._embedding_model = await self._resolve_embedding_identity()
 
             alembic_head = await self._read_alembic_head()
