@@ -726,10 +726,29 @@ def suite_run(
         None,
         '--from-snapshot',
         help=(
-            'Server-local path to a V3 snapshot directory. When set, the runner '
-            'imports the snapshot into a fresh ephemeral vault and skips ingest '
-            '+ extraction. The target server must be running with '
+            "Server-local path to a V3 snapshot directory, OR 'auto' for "
+            'content-hash cache lookup. With a path: import directly. '
+            "With 'auto': cache hit → import; cache miss → ingest+extract+populate "
+            'cache for the next run. The target server must be running with '
             'MEMEX_SERVER__EVAL_MODE=1. Single-vault suites only.'
+        ),
+    ),
+    reingest: bool = typer.Option(
+        False,
+        '--reingest',
+        help=(
+            'Force the ingest+extract path even on a cache hit (only meaningful '
+            'with --from-snapshot=auto). The cache entry is overwritten on success.'
+        ),
+    ),
+    snapshot_cache_dir: str | None = typer.Option(
+        None,
+        '--snapshot-cache-dir',
+        envvar='MEMEX_EVAL_SNAPSHOT_ROOT',
+        help=(
+            'Override the snapshot cache root used by --from-snapshot=auto. '
+            'Falls back to MEMEX_EVAL_SNAPSHOT_ROOT, then '
+            "platformdirs.user_cache_dir('memex-eval', 'memex')."
         ),
     ),
     verbose: bool = typer.Option(False, '--verbose', '-v'),
@@ -818,6 +837,8 @@ def suite_run(
                     scenario_ids=scenarios or None,
                     groups=groups or None,
                     from_snapshot=from_snapshot,
+                    reingest=reingest,
+                    snapshot_cache_dir=snapshot_cache_dir,
                 )
             )
         except KeyboardInterrupt:

@@ -17,9 +17,13 @@ from uuid import UUID
 from fastapi import APIRouter, HTTPException, Request, status
 from pydantic import BaseModel, Field
 
+from memex_core.memory.sql_models import EMBEDDING_DIMENSION
+from memex_core.services.snapshot.exporter import SnapshotExporter, SnapshotExportError
+from memex_core.services.snapshot.manifest import EmbeddingModelIdentity
 from memex_core.services.snapshot.path_validation import (
     SnapshotPathError,
     get_allowlist_root,
+    validate_path_under_root,
 )
 from memex_core.services.snapshot.restore import (
     SnapshotImporter,
@@ -107,4 +111,107 @@ async def snapshot_import(request: Request, body: SnapshotImportRequest) -> Snap
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail='Internal error during import; check server logs.',
+        ) from e
+
+
+# ----------------------------------------------------------------------
+# Snapshot export — symmetric eval-mode-only endpoint used by the suite
+# runner's ``--from-snapshot auto`` cache-populate path.
+
+
+class SnapshotExportRequest(BaseModel):
+    vault_id_or_name: str = Field(
+        description='Vault UUID or name to export.',
+    )
+    output_path: str = Field(
+        description=(
+            'Server-local absolute path for the snapshot directory. Must '
+            'reside under the allowlist root. The directory is created if '
+            'absent; the route refuses to overwrite an existing snapshot '
+            '(presence of `manifest.json` triggers refusal).'
+        ),
+    )
+
+
+class SnapshotExportResponse(BaseModel):
+    snapshot_path: str
+    snapshot_version: str
+    table_counts: dict[str, int]
+
+
+@router.post(
+    '/snapshot-export',
+    response_model=SnapshotExportResponse,
+    status_code=status.HTTP_201_CREATED,
+)
+async def snapshot_export(request: Request, body: SnapshotExportRequest) -> SnapshotExportResponse:
+    api = request.app.state.api
+    config = api.config
+    if not config.server.eval_mode:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail='Snapshot-export is disabled (server.eval_mode is False).',
+        )
+
+    try:
+        allowlist_root = get_allowlist_root()
+        output_path = validate_path_under_root(body.output_path, allowlist_root=allowlist_root)
+    except SnapshotPathError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except OSError as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f'Allowlist root unavailable: {e}',
+        ) from e
+
+    # Construct embedding identity from the live server config so the
+    # manifest reflects what the server actually used.
+    from memex_core.memory.models.base import MODEL_REGISTRY
+
+    embedding_cfg = config.server.embedding_model
+    if hasattr(embedding_cfg, 'type') and embedding_cfg.type == 'litellm':
+        identity = EmbeddingModelIdentity(
+            name=str(getattr(embedding_cfg, 'model', 'litellm:unknown')),
+            dim=EMBEDDING_DIMENSION,
+            hash='',
+        )
+    else:
+        spec = MODEL_REGISTRY['embedding']
+        identity = EmbeddingModelIdentity(
+            name=str(spec.repo_id),
+            dim=EMBEDDING_DIMENSION,
+            hash=str(spec.revision),
+        )
+
+    metastore = api.metastore
+    try:
+        # Resolve UUID or pass through name.
+        try:
+            vault_selector: object = UUID(body.vault_id_or_name)
+        except ValueError:
+            vault_selector = body.vault_id_or_name
+
+        async with metastore.session() as session:
+            exporter = SnapshotExporter(
+                session=session,
+                filestore=api.filestore,
+                vault_id_or_name=vault_selector,  # type: ignore[arg-type]
+                output_dir=output_path,
+                embedding_model=identity,
+            )
+            manifest = await exporter.export()
+        return SnapshotExportResponse(
+            snapshot_path=str(output_path),
+            snapshot_version=manifest.snapshot_version,
+            table_counts=manifest.table_counts,
+        )
+    except SnapshotExportError as e:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(e)) from e
+    except SnapshotPathError as e:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e)) from e
+    except Exception as e:
+        logger.exception('Snapshot export failed unexpectedly')
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail='Internal error during export; check server logs.',
         ) from e

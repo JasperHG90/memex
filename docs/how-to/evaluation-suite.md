@@ -176,7 +176,9 @@ memex-eval suite run [<name>|--all]
 | `--notes-file` | none | Read `--notes` body from a file (mutually exclusive with `--notes`) |
 | `--no-llm-judge` | off | Skip LLMJudge / UsefulAtK scenarios; deterministic-only run (faster, free) |
 | `--judge-model` | `gemini/gemini-3-flash-preview` (or `EVAL_JUDGE_MODEL` env) | Override LLM judge model (litellm format) |
-| `--from-snapshot` | none | Server-local path to a V3 snapshot directory. When set, the runner imports the snapshot into a fresh ephemeral vault and skips ingest + extraction. Server must run with `MEMEX_SERVER__EVAL_MODE=1`. Single-vault suites only (multi-vault → `MultiVaultImportNotSupported`). See "Snapshot import" below |
+| `--from-snapshot` | none | Either a server-local path to a V3 snapshot directory OR `auto`. With a path: import directly. With `auto`: cache hit → import; cache miss → ingest+extract+populate cache for the next run. Server must run with `MEMEX_SERVER__EVAL_MODE=1`. Single-vault suites only (multi-vault → `MultiVaultImportNotSupported`). See "Snapshot import" below |
+| `--reingest` | off | Force ingest+extract even on a cache hit (only with `--from-snapshot=auto`). Cache entry is overwritten on success. Use to refresh the cache after extraction-affecting code changes |
+| `--snapshot-cache-dir` | platformdirs default | Override the cache root used by `--from-snapshot=auto`. Falls back to `MEMEX_EVAL_SNAPSHOT_ROOT` env, then `platformdirs.user_cache_dir('memex-eval', 'memex')` |
 | `--verbose` / `-v` | off | DEBUG-level logging |
 
 Exit code is non-zero if any scenario fails or errors.
@@ -250,11 +252,29 @@ Every `memex-eval suite run` re-ingests the suite's source notes and re-extracts
 
 ### Lifecycle
 
+Two modes, manual and auto-cached.
+
+**Manual** — explicit snapshot path, you own the lifecycle:
+
 ```
 1. Build vault once    : memex vault snapshot export <vault> --output <dir>
                          (or: memex-eval snapshot create <vault>)
 2. Run with snapshot N : memex-eval suite run <name> --from-snapshot <dir>
 ```
+
+**Auto** — the runner caches snapshots keyed by `(suite_name, sources_hash)`:
+
+```
+1. First run           : memex-eval suite run <name> --from-snapshot auto
+                         → cache miss → ingest + extract normally
+                         → on success, export to cache
+2. Subsequent runs     : memex-eval suite run <name> --from-snapshot auto
+                         → cache hit → import, skip ingest + extraction
+3. Force re-extraction : memex-eval suite run <name> --from-snapshot auto --reingest
+                         → clears the cache entry, re-extracts, repopulates
+```
+
+The cache root resolves in priority order: `--snapshot-cache-dir` flag → `MEMEX_EVAL_SNAPSHOT_ROOT` env → platformdirs default (`~/.cache/memex-eval/` on Linux). Cache key format: `<suite_name>-<sources_hash[:16]>`. A cache entry is valid only when both `manifest.json` and `_complete.marker` are present — partially-written entries are treated as a miss.
 
 The runner detects `--from-snapshot`, imports the snapshot into a fresh ephemeral vault, and skips ingest + extraction-wait. Subsequent retrieval/scoring phases see an indistinguishable vault state from a freshly-extracted one.
 
@@ -307,7 +327,8 @@ When `--from-snapshot` is set, three params are logged on the run:
 |---|---|
 | `snapshot.path` | The resolved snapshot directory |
 | `snapshot.import_id` | UUID of this import attempt (matches `eval_import_state.import_id`) |
-| `snapshot.cache_hit` | Always `true` when `--from-snapshot` is explicit (the `auto` cache mode is out of v1 scope) |
+| `snapshot.cache_hit` | `true` when an `auto`-mode cache hit imported the vault, `false` on miss (also `true` for explicit `--from-snapshot <path>`) |
+| `snapshot.cache_populated` | Logged on `auto` cache miss: `true` when the post-run export populated the cache, `false` if the export failed |
 
 ### Limitations (v1)
 
@@ -316,8 +337,9 @@ When `--from-snapshot` is set, three params are logged on the run:
 - Remote (LiteLLM) embedding backends are disallowed.
 - The embedding model identity must match between export and import (refused otherwise).
 - Sync-engine compatibility is not supported on imported vaults.
-- Cache-keyed `auto` mode (snapshot lazy-populate) is deferred to a follow-up.
 - External runners (`locomo-ingest`, `longmemeval-ingest`) `--from-snapshot` is deferred — only the suite framework runner is wired in v1.
+- Cache `auto` mode is suite-framework only (LoCoMo / LongMemEval have no `sources_hash` analog).
+- Sweeping a knob that affects extraction (e.g. `embedding.model_id`, chunking knobs) with `--from-snapshot auto` and no `--reingest` reuses a stale cache entry — force a fresh extraction with `--reingest`.
 
 ---
 

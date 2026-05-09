@@ -67,6 +67,51 @@ def validate_snapshot_dir(path: str | Path, *, allowlist_root: Path | None = Non
     return resolved
 
 
+def validate_path_under_root(
+    path: str | Path,
+    *,
+    allowlist_root: Path | None = None,
+    must_exist: bool = False,
+) -> Path:
+    """Validate a candidate path lives under the allowlist root.
+
+    Unlike ``validate_snapshot_dir`` this does NOT require the path to
+    already exist (``must_exist=False`` by default) — used by the export
+    route, which is going to *create* the destination dir. Resolution uses
+    ``Path.resolve(strict=False)`` so a non-existent leaf still resolves
+    its parents. The check then walks up to the closest existing ancestor
+    and verifies THAT is under the root, defending against symlink/escape
+    attacks via parent components.
+    """
+    root = allowlist_root if allowlist_root is not None else get_allowlist_root()
+    candidate = Path(path).expanduser()
+    if must_exist:
+        try:
+            resolved = candidate.resolve(strict=True)
+        except FileNotFoundError as e:
+            raise SnapshotPathError(f'Path does not exist: {path}') from e
+    else:
+        resolved = candidate.resolve(strict=False)
+
+    # Resolve the deepest existing ancestor strictly so symlinks in the
+    # path's existing prefix are followed before the containment check.
+    probe = resolved
+    while not probe.exists() and probe != probe.parent:
+        probe = probe.parent
+    if probe.exists():
+        probe_resolved = probe.resolve(strict=True)
+        # Reattach the non-existent suffix.
+        suffix = resolved.relative_to(probe) if resolved != probe else Path()
+        resolved = probe_resolved / suffix if str(suffix) != '.' else probe_resolved
+
+    if not resolved.is_relative_to(root):
+        raise SnapshotPathError(
+            f'Path {resolved} is outside the allowlist root {root}. '
+            f'Set {ALLOWLIST_ROOT_ENV} or use a path under {root}.'
+        )
+    return resolved
+
+
 def open_validated(path: Path, *, expected_root: Path) -> int:
     """Open a file with O_NOFOLLOW and verify the resolved path is still
     under ``expected_root`` after open (TOCTOU defense).

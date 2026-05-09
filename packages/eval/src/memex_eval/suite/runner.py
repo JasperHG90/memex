@@ -1380,6 +1380,8 @@ async def run_suite(
     scenario_ids: list[str] | None = None,
     groups: list[str] | None = None,
     from_snapshot: str | Path | None = None,
+    reingest: bool = False,
+    snapshot_cache_dir: str | Path | None = None,
 ) -> RunResult:
     """Run one suite end-to-end.
 
@@ -1404,15 +1406,28 @@ async def run_suite(
             skip_reason='setup_action_not_reusable'.
         manifest_dir: Directory for keep/reuse manifest files. Defaults
             to ``~/.memex/eval/keep-vault-manifests/``.
-        from_snapshot: When set, restore a V3 snapshot from this server-local
-            path into a fresh vault and skip ingest + extraction-wait. The
-            target server must be running with ``MEMEX_SERVER__EVAL_MODE=1``.
+        from_snapshot: ``'auto'`` for content-hash cache lookup, OR an
+            explicit server-local snapshot directory path. When a path is
+            given the runner imports it into a fresh ephemeral vault and
+            skips ingest + extraction-wait. ``'auto'`` looks the cache up
+            via ``platformdirs`` (override with ``snapshot_cache_dir``);
+            on cache miss the runner falls through to the normal ingest
+            path AND populates the cache afterwards so the next run hits.
             Multi-vault suites (any source note or scenario with a
             ``vault_name``) raise ``MultiVaultImportNotSupported``.
             Mutually exclusive with ``keep_vault`` / ``reuse_vault``.
+        reingest: When True with ``from_snapshot='auto'``, force the
+            ingest+extract path even on a cache hit and overwrite the
+            cache entry on success. Has no effect when ``from_snapshot``
+            is None or an explicit path.
+        snapshot_cache_dir: Override for the cache root used by
+            ``from_snapshot='auto'``. Falls back to
+            ``MEMEX_EVAL_SNAPSHOT_ROOT`` env, then platformdirs default.
 
     Logs to ``recorder`` if provided. Returns the full ``RunResult``.
     """
+    from memex_eval.suite import snapshot_cache as _snapshot_cache
+
     # Validation order matters for clear error reporting: surface
     # programming-error mutexes (keep + reuse) BEFORE filter typos, since
     # the user can't recover from the mutex without changing the call,
@@ -1531,14 +1546,38 @@ async def run_suite(
             except Exception as e:
                 logger.warning('Could not fetch /system/config: %s', e)
 
-            # Vault setup. Three paths:
+            # Vault setup. Four paths:
             #   (a) --reuse-vault: bind to vaults from a prior --keep-vault
             #       manifest, skipping ingest + extraction.
-            #   (b) --from-snapshot: import a V3 snapshot into a fresh vault,
-            #       skipping ingest + extraction. Multi-vault suites unsupported.
-            #   (c) default: create vault(s) and ingest sources as today.
+            #   (b) --from-snapshot=<path>: import a V3 snapshot into a
+            #       fresh vault. Multi-vault suites unsupported.
+            #   (c) --from-snapshot=auto: cache lookup on
+            #       (suite_name, sources_hash). Hit (and not --reingest)
+            #       → import; miss/reingest → ingest path + populate cache
+            #       after extraction completes.
+            #   (d) default: create vault(s) and ingest sources as today.
             vault_map: dict[str | None, UUID] = {}
             note_id_by_key: dict[str, str] = {}
+
+            # Resolve auto cache lookup before deciding the path.
+            cache_lookup: '_snapshot_cache.CacheLookup | None' = None
+            if from_snapshot == 'auto' and reuse_vault is None:
+                cache_root = _snapshot_cache.resolve_cache_root(snapshot_cache_dir)
+                cache_lookup = _snapshot_cache.lookup(cache_root, suite.name, sources_hash)
+                logger.info(
+                    'Snapshot cache lookup: root=%s key=%s hit=%s reingest=%s',
+                    cache_lookup.cache_root,
+                    cache_lookup.cache_path.name,
+                    cache_lookup.hit,
+                    reingest,
+                )
+
+            use_import = (
+                from_snapshot is not None
+                and from_snapshot != 'auto'
+                and reuse_vault is None
+            ) or (cache_lookup is not None and cache_lookup.hit and not reingest)
+
             if reuse_vault is not None:
                 manifest_path = manifest_dir / f'{reuse_vault}.json'
                 if not manifest_path.exists():
@@ -1575,7 +1614,7 @@ async def run_suite(
                     default_vault_id,
                     manifest_path,
                 )
-            elif from_snapshot is not None:
+            elif use_import:
                 multi_vault_sources = {n.vault_name for n in suite.sources.notes if n.vault_name}
                 multi_vault_scenarios = {s.vault_name for s in suite.scenarios if s.vault_name}
                 if multi_vault_sources or multi_vault_scenarios:
@@ -1584,16 +1623,19 @@ async def run_suite(
                         f'vault_name; --from-snapshot v1 supports only single-vault '
                         f'suites. Drop the snapshot flag or split the suite.'
                     )
+                snapshot_path: str = (
+                    str(cache_lookup.cache_path)
+                    if cache_lookup is not None and cache_lookup.hit
+                    else str(from_snapshot)
+                )
                 logger.info(
                     'Importing snapshot %s into target vault %s (skipping ingest + extraction)',
-                    from_snapshot,
+                    snapshot_path,
                     vault_name,
                 )
-                default_vault_id, _import_id = await api.import_snapshot(
-                    str(from_snapshot), vault_name
-                )
+                default_vault_id, _import_id = await api.import_snapshot(snapshot_path, vault_name)
                 vault_map[None] = default_vault_id
-                extra_params['snapshot.path'] = str(from_snapshot)
+                extra_params['snapshot.path'] = snapshot_path
                 extra_params['snapshot.import_id'] = str(_import_id)
                 extra_params['snapshot.cache_hit'] = 'true'
             else:
@@ -1609,6 +1651,10 @@ async def run_suite(
                     vault_map[name] = await _setup_vault(
                         api, f'{vault_name}-{name}', f'Eval extra vault: {name}'
                     )
+                # Note that we'll be on the ingest path; record cache state
+                # for MLflow regardless of populate success.
+                if cache_lookup is not None:
+                    extra_params['snapshot.cache_hit'] = 'false'
 
             # Per-run backend cache. Backends with non-trivial setup
             # (HermesBackend) are reused across scenarios; teardown happens
@@ -1679,12 +1725,8 @@ async def run_suite(
                             f'Give each source note a unique title, or drop '
                             f'--reuse-vault and re-ingest fresh.'
                         )
-                elif from_snapshot is not None:
-                    # Snapshot path: extraction is pre-baked. note_key_to_unit_ids
-                    # remains empty; scenarios that depend on per-note unit IDs
-                    # via the snapshot path are out of scope for v1 (the
-                    # MultiVaultImportNotSupported check above already filters
-                    # most of these). Document and move on.
+                elif use_import:
+                    # Snapshot path: extraction is pre-baked.
                     note_id_by_key = {}
                 else:
                     # Ingest source notes
@@ -1704,7 +1746,11 @@ async def run_suite(
                                 max_consecutive_errors=5,
                             )
 
-                if from_snapshot is not None:
+                if use_import:
+                    # Snapshot path: scenarios that depend on per-note unit IDs
+                    # via the snapshot path are out of scope for v1 (the
+                    # MultiVaultImportNotSupported check above already filters
+                    # most of these).
                     note_key_to_unit_ids = {}
                 else:
                     # Build per-note vault map: each note_key polls under its
@@ -1918,6 +1964,36 @@ async def run_suite(
                 # KeyboardInterrupt, no abort). Safe to write the keep-vault
                 # manifest.
                 run_completed = True
+
+                # Cache-populate after scenarios complete (Phase F lazy-
+                # populate from the V12 plan). Only fires on the ingest
+                # path with `from_snapshot='auto'` set. Failures are
+                # logged + recorded as `snapshot.cache_populated=false`
+                # but do NOT fail the run.
+                if (
+                    cache_lookup is not None
+                    and not use_import
+                    and not any(o.status == 'error' for o in outcomes)
+                ):
+                    try:
+                        if reingest:
+                            _snapshot_cache.clear_cache_entry(cache_lookup.cache_path)
+                        cache_lookup.cache_path.mkdir(parents=True, exist_ok=True)
+                        await api.export_snapshot(
+                            str(default_vault_id), str(cache_lookup.cache_path)
+                        )
+                        _snapshot_cache.mark_complete(cache_lookup.cache_path)
+                        extra_params['snapshot.cache_populated'] = 'true'
+                        extra_params['snapshot.path'] = str(cache_lookup.cache_path)
+                        logger.info('Snapshot cache populated at %s', cache_lookup.cache_path)
+                    except Exception as e:
+                        logger.warning('Snapshot cache populate failed: %s', e)
+                        extra_params['snapshot.cache_populated'] = 'false'
+                        # Best-effort: clear partial entry so the next run
+                        # cleanly misses rather than seeing a half-baked
+                        # cache without a marker.
+                        with contextlib.suppress(Exception):
+                            _snapshot_cache.clear_cache_entry(cache_lookup.cache_path)
             finally:
                 # Tear down cached backends (frees temp HERMES_HOME etc.)
                 # before deleting the vaults — the backends may try one
