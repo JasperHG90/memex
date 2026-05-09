@@ -506,7 +506,7 @@ async def snapshot_export(
     # Build the embedding-model identity from the live server config so the
     # manifest reflects what was actually used to extract embeddings in the
     # source DB — not the registry default. V12 import refuses on mismatch.
-    embedding_cfg = config.server.memory.embedding
+    embedding_cfg = config.server.embedding_model
     if isinstance(embedding_cfg, OnnxBackend) or embedding_cfg is None:
         from memex_core.memory.models.base import MODEL_REGISTRY
 
