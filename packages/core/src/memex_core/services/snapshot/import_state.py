@@ -47,8 +47,10 @@ CREATE UNIQUE INDEX IF NOT EXISTS eval_import_state_source_path_unique
     ON eval_import_state (source_snapshot_path)
 """
 
-# Back-compat: keep the old constant name as a list of statements.
-EVAL_IMPORT_STATE_DDL = (EVAL_IMPORT_STATE_DDL_TABLE, EVAL_IMPORT_STATE_DDL_INDEX)
+EVAL_IMPORT_STATE_DDL_STATEMENTS = (
+    EVAL_IMPORT_STATE_DDL_TABLE,
+    EVAL_IMPORT_STATE_DDL_INDEX,
+)
 
 
 VALID_STATES = ('staging', 'db_committed', 'assets_committed', 'embedded', 'complete')

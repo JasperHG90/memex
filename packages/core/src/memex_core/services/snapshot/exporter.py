@@ -360,8 +360,12 @@ class SnapshotExporter:
             note_dir.mkdir(exist_ok=True)
 
             # Write the body as note.md so consumers can read content
-            # without parsing the metadata JSON.
-            (note_dir / 'note.md').write_text(note.original_text or '', encoding='utf-8')
+            # without parsing the metadata JSON. Distinguish None
+            # (column was NULL — no note.md file) from '' (column was
+            # explicitly empty — note.md exists with zero bytes); V12
+            # imports preserve the distinction.
+            if note.original_text is not None:
+                (note_dir / 'note.md').write_text(note.original_text, encoding='utf-8')
 
             # Asset rewriting. We copy bytes (from the FileStore) to
             # ``./assets/<basename>`` and rewrite the metadata fields.

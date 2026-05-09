@@ -1001,6 +1001,7 @@ async def test_import_resume_does_not_clobber_state(
     populated_vault: dict[str, UUID],
     tmp_path: Path,
     eval_state_table: None,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Resume from 'embedded' must NOT first overwrite state to 'staging'.
 
@@ -1027,17 +1028,12 @@ async def test_import_resume_does_not_clobber_state(
     target_vault_id = await importer1.import_snapshot()
     await _set_state(db_session, target_vault_id, 'embedded')
 
-    # Patch _phase_e_mark_complete to crash AFTER reading current state but
-    # BEFORE the final commit, so we can observe whether _record_import_state
-    # was called pre-phases (the regression).
     import memex_core.services.snapshot.restore as restore_mod
-
-    original_phase_e = restore_mod.SnapshotImporter._phase_e_mark_complete
 
     async def boom(self):  # type: ignore[no-untyped-def]
         raise RuntimeError('simulated crash before Phase E commit')
 
-    restore_mod.SnapshotImporter._phase_e_mark_complete = boom  # type: ignore[method-assign]
+    monkeypatch.setattr(restore_mod.SnapshotImporter, '_phase_e_mark_complete', boom)
     importer2 = SnapshotImporter(
         session=db_session,
         filestore=None,
@@ -1046,11 +1042,8 @@ async def test_import_resume_does_not_clobber_state(
         allowlist_root=tmp_path,
         target_vault_name='resume-noclobber',
     )
-    try:
-        with pytest.raises(RuntimeError, match='simulated crash'):
-            await importer2.import_snapshot()
-    finally:
-        restore_mod.SnapshotImporter._phase_e_mark_complete = original_phase_e  # type: ignore[method-assign]
+    with pytest.raises(RuntimeError, match='simulated crash'):
+        await importer2.import_snapshot()
 
     # State must NOT have been clobbered to 'staging'.
     state_now = (
@@ -1247,6 +1240,119 @@ def test_eval_route_absent_when_eval_mode_off(client: Any) -> None:
     )
     # 404 (route not registered) — NOT 400/403/422.
     assert response.status_code == 404
+
+
+async def test_original_text_none_preserved(
+    db_session: AsyncSession,
+    tmp_path: Path,
+    eval_state_table: None,
+) -> None:
+    """A note with original_text=None round-trips as None (not '')."""
+    vault = Vault(name='none-text-test', description='V12 None preserve')
+    db_session.add(vault)
+    await db_session.flush()
+
+    note_id = uuid4()
+    note = Note(
+        id=note_id,
+        vault_id=vault.id,
+        title='No body',
+        original_text=None,
+        status='active',
+    )
+    db_session.add(note)
+    await db_session.commit()
+    vault_id = vault.id
+
+    snapshot_dir = tmp_path / 'snapshot'
+    snapshot_dir.mkdir()
+    await _export(db_session, vault_id, snapshot_dir)
+    await _delete_source_vault(db_session, vault_id)
+
+    importer = SnapshotImporter(
+        session=db_session,
+        filestore=None,
+        embedding_backend=OnnxBackend(),
+        snapshot_dir=snapshot_dir,
+        allowlist_root=tmp_path,
+        target_vault_name='none-text-target',
+    )
+    target_vault_id = await importer.import_snapshot()
+
+    imported = (
+        await db_session.execute(
+            select(Note).where(Note.id == note_id, Note.vault_id == target_vault_id)
+        )
+    ).scalar_one()
+    assert imported.original_text is None
+
+
+async def test_round_trip_with_filestore_assets(
+    db_session: AsyncSession,
+    populated_vault: dict[str, UUID],
+    tmp_path: Path,
+    eval_state_table: None,
+) -> None:
+    """Phase A staging + Phase C commit round-trip with a LocalAsyncFileStore.
+
+    Adds an asset blob to the source note, exports with a real filestore,
+    imports through the same filestore, and asserts the asset bytes land
+    at the final per-vault key (not the staging prefix).
+    """
+    from memex_common.config import LocalFileStoreConfig
+    from memex_core.storage.filestore import LocalAsyncFileStore
+
+    src_vault = populated_vault['vault_id']
+    note_id = populated_vault['note_id']
+
+    fs_root = tmp_path / 'filestore'
+    fs_root.mkdir()
+    filestore = LocalAsyncFileStore(LocalFileStoreConfig(root=str(fs_root)))
+
+    asset_data = b'asset-bytes-roundtrip'
+    asset_key = f'vault-{src_vault}/notes/{note_id}/assets/diagram.png'
+    await filestore.save(asset_key, asset_data)
+
+    # Patch the source Note to reference the asset.
+    from sqlalchemy import update as sa_update
+
+    await db_session.execute(sa_update(Note).where(Note.id == note_id).values(assets=[asset_key]))
+    await db_session.commit()
+
+    snapshot_dir = tmp_path / 'snapshot'
+    snapshot_dir.mkdir()
+    exporter = SnapshotExporter(
+        session=db_session,
+        filestore=filestore,
+        vault_id_or_name=src_vault,
+        output_dir=snapshot_dir,
+    )
+    await exporter.export()
+    await db_session.rollback()
+    await _delete_source_vault(db_session, src_vault)
+
+    importer = SnapshotImporter(
+        session=db_session,
+        filestore=filestore,
+        embedding_backend=OnnxBackend(),
+        snapshot_dir=snapshot_dir,
+        allowlist_root=tmp_path,
+        target_vault_name='filestore-roundtrip',
+    )
+    target_vault_id = await importer.import_snapshot()
+
+    # Final key reachable; staging prefix swept.
+    final_key = f'vault-{target_vault_id}/assets/diagram.png'
+    # Walk filestore root to debug.
+    assert await filestore.exists(final_key), (
+        f'final asset missing at {final_key}; filestore root contents: '
+        f'{sorted(p.name for p in fs_root.rglob("*"))}'
+    )
+    loaded = await filestore.load(final_key)
+    assert loaded == asset_data
+
+    staging_prefix = f'_staging/{importer.import_id}'
+    assert not await filestore.exists(staging_prefix)
 
 
 async def test_import_skips_missing_optional_files(

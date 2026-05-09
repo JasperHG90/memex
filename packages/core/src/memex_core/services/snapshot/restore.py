@@ -992,8 +992,7 @@ class SnapshotImporter:
                             continue
                         src = self._staging_asset_key(asset_path.name)
                         dst = self._final_asset_key(asset_path.name)
-                        if await self._filestore.exists(src):
-                            await self._filestore.move_file(src, dst)
+                        await self._move_filestore_key(src, dst)
                 content_blob = note_dir / 'content.bin'
                 if content_blob.is_file():
                     meta_raw = read_validated_text(
@@ -1002,13 +1001,28 @@ class SnapshotImporter:
                     note_id = UUID(json.loads(meta_raw)['id'])
                     src = self._staging_filestore_key(note_id)
                     dst = self._final_filestore_key(note_id)
-                    if await self._filestore.exists(src):
-                        await self._filestore.move_file(src, dst)
+                    await self._move_filestore_key(src, dst)
         # Sweep the empty staging prefix.
         try:
             await self._filestore.delete(self._staging_prefix, recursive=True)
         except Exception as e:
             logger.warning('Phase C: failed to delete staging prefix: %s', e)
+
+    async def _move_filestore_key(self, src: str, dst: str) -> None:
+        """Copy ``src`` -> ``dst`` then delete ``src`` on the FileStore.
+
+        ``BaseAsyncFileStore.move_file`` calls ``_cp_file`` directly without
+        creating the destination's parent directory for the file (non-dir)
+        case. ``save`` does create parents. Round-trip via load+save+delete
+        sidesteps the gap and works uniformly across local / S3 / GCS
+        backends. Idempotent: missing-src is treated as already moved.
+        """
+        assert self._filestore is not None
+        if not await self._filestore.exists(src):
+            return
+        data = await self._filestore.load(src)
+        await self._filestore.save(dst, data)
+        await self._filestore.delete(src)
 
         await _record_import_state(
             self._session,

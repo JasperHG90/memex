@@ -1,6 +1,6 @@
 from memex_core.services.snapshot.exporter import SnapshotExporter
 from memex_core.services.snapshot.import_state import (
-    EVAL_IMPORT_STATE_DDL,
+    EVAL_IMPORT_STATE_DDL_STATEMENTS,
     VALID_STATES,
     ensure_eval_import_state_table,
 )
@@ -26,7 +26,7 @@ from memex_core.services.snapshot.restore import (
 __all__ = [
     'DEFAULT_ALLOWLIST_ROOT',
     'EmbeddingModelIdentity',
-    'EVAL_IMPORT_STATE_DDL',
+    'EVAL_IMPORT_STATE_DDL_STATEMENTS',
     'OBSERVATION_SCHEMA_VERSION',
     'SNAPSHOT_VERSION',
     'SnapshotExporter',
