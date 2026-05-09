@@ -86,6 +86,7 @@ from memex_core.services.snapshot.import_models import (
     VaultImport,
     VaultSummaryImport,
 )
+from memex_core.services.snapshot.enum_coerce import coerce_enum_value
 from memex_core.services.snapshot.import_state import VALID_STATES
 from memex_core.services.snapshot.manifest import (
     OBSERVATION_SCHEMA_VERSION,
@@ -103,19 +104,6 @@ logger = logging.getLogger('memex.core.services.snapshot.restore')
 RESERVED_VAULT_NAMES = {GLOBAL_VAULT_NAME.lower(), 'global', 'default'}
 
 EMBED_BATCH_SIZE = 64
-
-
-def _coerce_fact_type(value: Any) -> str:
-    """Normalize `MemoryUnit.fact_type` for `format_for_embedding`.
-
-    Returns the underlying string regardless of whether SQLModel/SA
-    hydrates the column as a plain str or an enum member. `str(enum)`
-    would return `'FactTypes.WORLD'` instead of `'world'`, so we extract
-    the value attribute when present.
-    """
-    if hasattr(value, 'value'):
-        return str(value.value)
-    return str(value)
 
 
 class SnapshotImportError(Exception):
@@ -1141,7 +1129,7 @@ class SnapshotImporter:
             texts = [
                 format_for_embedding(
                     text=(r[1] or ''),
-                    fact_type=_coerce_fact_type(r[2]),
+                    fact_type=coerce_enum_value(r[2]),
                     context=r[3],
                 )
                 for r in batch

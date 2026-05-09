@@ -330,6 +330,34 @@ class TestPathValidation:
             validate_snapshot_dir(root / 'does-not-exist', allowlist_root=root)
 
 
+class TestEnumCoerce:
+    """`coerce_enum_value` neutralizes future enum-hydration footguns."""
+
+    def test_plain_string_idempotent(self) -> None:
+        from memex_core.services.snapshot.enum_coerce import coerce_enum_value
+
+        assert coerce_enum_value('world') == 'world'
+        assert coerce_enum_value('') == ''
+
+    def test_none_returns_empty(self) -> None:
+        from memex_core.services.snapshot.enum_coerce import coerce_enum_value
+
+        assert coerce_enum_value(None) == ''
+
+    def test_enum_member_returns_value(self) -> None:
+        import enum
+
+        from memex_core.services.snapshot.enum_coerce import coerce_enum_value
+
+        class _T(enum.Enum):
+            WORLD = 'world'
+            OBSERVATION = 'observation'
+
+        # `str(_T.WORLD)` returns `'_T.WORLD'`; coerce_enum_value extracts `.value`.
+        assert coerce_enum_value(_T.WORLD) == 'world'
+        assert coerce_enum_value(_T.OBSERVATION) == 'observation'
+
+
 class TestPathValidationTOCTOU:
     """O_NOFOLLOW + post-open realpath defense (Decision 9)."""
 

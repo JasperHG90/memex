@@ -48,6 +48,7 @@ from memex_core.memory.sql_models import (
     VaultSummary,
     EMBEDDING_DIMENSION,
 )
+from memex_core.services.snapshot.enum_coerce import coerce_enum_value
 from memex_core.services.snapshot.export_models import (
     ChunkExport,
     EntityAliasExport,
@@ -338,9 +339,7 @@ class SnapshotExporter:
             id=self._vault.id,
             name=self._vault.name,
             description=self._vault.description,
-            mw_mode=str(self._vault.mw_mode.value)
-            if hasattr(self._vault.mw_mode, 'value')
-            else str(self._vault.mw_mode),
+            mw_mode=coerce_enum_value(self._vault.mw_mode),
             created_at=self._vault.created_at,
         )
         self._write_json(self._output_dir / 'vault.json', _to_jsonable(export))
@@ -691,7 +690,7 @@ class SnapshotExporter:
             note_id=row.note_id,
             text=row.text,
             content_hash=row.content_hash,
-            status=str(row.status),
+            status=coerce_enum_value(row.status),
             chunk_index=row.chunk_index,
             summary=row.summary,
             summary_formatted=row.summary_formatted,
@@ -713,7 +712,7 @@ class SnapshotExporter:
             level=row.level,
             seq=row.seq,
             token_estimate=row.token_estimate,
-            status=str(row.status),
+            status=coerce_enum_value(row.status),
             created_at=row.created_at,
         )
 
@@ -725,8 +724,8 @@ class SnapshotExporter:
             note_id=row.note_id,
             chunk_id=row.chunk_id,
             text=row.text,
-            fact_type=str(row.fact_type),
-            status=str(row.status),
+            fact_type=coerce_enum_value(row.fact_type),
+            status=coerce_enum_value(row.status),
             event_date=row.event_date,
             occurred_start=row.occurred_start,
             occurred_end=row.occurred_end,
@@ -735,8 +734,8 @@ class SnapshotExporter:
             is_deprioritized=row.is_deprioritized,
             success_co_count=row.success_co_count,
             failure_co_count=row.failure_co_count,
-            intent_class=str(row.intent_class),
-            risk_class=str(row.risk_class),
+            intent_class=coerce_enum_value(row.intent_class),
+            risk_class=coerce_enum_value(row.risk_class),
             confidence=row.confidence,
             confidence_evidence_count=row.confidence_evidence_count,
             importance=row.importance,
@@ -762,7 +761,7 @@ class SnapshotExporter:
         return MemoryLinkExport(
             from_unit_id=row.from_unit_id,
             to_unit_id=row.to_unit_id,
-            link_type=str(row.link_type),
+            link_type=coerce_enum_value(row.link_type),
             vault_id=row.vault_id,
             entity_id=row.entity_id,
             link_metadata=row.link_metadata or {},
@@ -808,14 +807,14 @@ class SnapshotExporter:
         return MaintenanceProposalExport(
             id=row.id,
             vault_id=row.vault_id,
-            lint_type=str(row.lint_type),
+            lint_type=coerce_enum_value(row.lint_type),
             target_type=row.target_type,
             target_id=row.target_id,
             rule_name=row.rule_name,
             evidence=row.evidence or {},
             suggested_action=row.suggested_action,
-            status=str(row.status),
-            source=str(row.source),
+            status=coerce_enum_value(row.status),
+            source=coerce_enum_value(row.source),
             created_at=row.created_at,
             resolved_at=row.resolved_at,
             resolved_by=row.resolved_by,
