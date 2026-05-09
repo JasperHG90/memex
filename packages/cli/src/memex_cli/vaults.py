@@ -3,7 +3,10 @@ Vault Management Commands.
 """
 
 import json
+from pathlib import Path
 from typing import Annotated
+from uuid import UUID
+
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -19,6 +22,13 @@ app = typer.Typer(
     help='Manage Memex Vaults (scopes).',
     no_args_is_help=True,
 )
+
+snapshot_app = typer.Typer(
+    name='snapshot',
+    help='Vault snapshot export (one-way; downstream consumers).',
+    no_args_is_help=True,
+)
+app.add_typer(snapshot_app, name='snapshot')
 
 
 @app.command('list')
@@ -423,3 +433,78 @@ async def vault_summary(
                 ent.get('name', ''), ent.get('type', ''), str(ent.get('mention_count', 0))
             )
         console.print(ent_table)
+
+
+@snapshot_app.command('export')
+@async_command
+async def snapshot_export(
+    ctx: typer.Context,
+    vault: Annotated[
+        str,
+        typer.Argument(help='Vault name or UUID to export.'),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option('--output', '-o', help='Directory to write the snapshot into.'),
+    ],
+) -> None:
+    """Export a vault snapshot to a local directory.
+
+    Produces a self-describing snapshot (manifest.json + per-table JSONL +
+    note bodies + assets) ready for downstream consumption (analytics,
+    eval suites, ML pipelines). The output directory is created if it
+    doesn't exist; existing files inside it may be overwritten.
+
+    Refuses the global vault and any vault named 'global' / 'default'.
+    """
+    config: MemexConfig = ctx.obj
+
+    try:
+        import memex_core  # noqa: F401
+    except ImportError:
+        console.print(
+            "[bold red]Error:[/bold red] Snapshot export requires the 'memex-cli[server]' extra "
+            '(needs memex-core).'
+        )
+        raise typer.Exit(1)
+
+    from memex_core.services.snapshot import SnapshotExporter
+    from memex_core.services.snapshot.exporter import SnapshotExportError
+    from memex_core.storage.filestore import get_filestore
+    from memex_core.storage.metastore import AsyncPostgresMetaStoreEngine
+
+    # Resolve the vault selector (UUID or name) — accept either form.
+    selector: str | UUID
+    try:
+        selector = UUID(vault)
+    except ValueError:
+        selector = vault
+
+    output_path = output.expanduser().resolve()
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    engine = AsyncPostgresMetaStoreEngine(config=config.server.meta_store)
+    await engine.connect(create_schema=False)
+    try:
+        filestore = get_filestore(config.server.file_store)
+        async with engine.session() as session:
+            exporter = SnapshotExporter(
+                session=session,
+                filestore=filestore,
+                vault_id_or_name=selector,
+                output_dir=output_path,
+            )
+            try:
+                manifest = await exporter.export()
+            except SnapshotExportError as e:
+                console.print(f'[bold red]Snapshot export failed:[/bold red] {e}')
+                raise typer.Exit(1) from e
+        console.print(
+            f'[green]Wrote snapshot[/green] (version {manifest.snapshot_version}) '
+            f'for vault [bold]{manifest.source_vault_name}[/bold] '
+            f'to [cyan]{output_path}[/cyan]'
+        )
+        for table, count in sorted(manifest.table_counts.items()):
+            console.print(f'  {table}: {count}')
+    finally:
+        await engine.close()
