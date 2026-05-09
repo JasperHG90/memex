@@ -298,6 +298,20 @@ async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI
     Leader election loop using Postgres Advisory Locks.
     If Leader: Starts AioClock.
     """
+    # Eval mode short-circuit. When True, NO periodic tasks run on this server:
+    # not reflection, not vault summary, not KV TTL cleanup, not lint, not
+    # lint_llm, not diagnostics refresh, not consolidation. Imported snapshots
+    # ship MentalModel/VaultSummary/MemoryUnit rows that must round-trip
+    # byte-identical for eval reproducibility — any background mutation would
+    # invalidate eval results.
+    if config.server.eval_mode:
+        logger.warning(
+            'Scheduler: EVAL MODE ENABLED — DO NOT RUN IN PRODUCTION. '
+            'All periodic tasks (reflection, vault summary, KV TTL cleanup, '
+            'lint, lint_llm, diagnostics refresh, consolidation) are disabled.'
+        )
+        return
+
     if not config.server.memory.reflection.background_reflection_enabled:
         logger.info('Scheduler: Background reflection DISABLED.')
         return

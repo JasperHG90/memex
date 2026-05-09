@@ -49,6 +49,8 @@ from memex_core.server.system_routes import router as system_router
 from memex_core.server.session_briefing import router as session_briefing_router
 from memex_core.server.vault_summary import router as vault_summary_router
 from memex_core.server.vaults import router as vaults_router
+from memex_core.server.eval_snapshot import router as eval_snapshot_router
+from memex_core.services.snapshot.import_state import ensure_eval_import_state_table
 from memex_core.memory.retrieval._offload import (
     configure_offload_semaphores,
     get_embedding_semaphore,
@@ -74,7 +76,12 @@ logger = logging.getLogger('memex.core.server')
 # Parse CORS config at module level (middleware must be added before app starts).
 # The full config is re-parsed in lifespan() so test fixtures can set env vars
 # before the server starts.
-_cors_config = parse_memex_config().server.cors
+_module_config = parse_memex_config()
+_cors_config = _module_config.server.cors
+# eval_mode is sampled at module load time so the route is conditionally
+# mounted before app starts. Toggling it requires a process restart — see
+# V12 plan Decision 9.
+_eval_mode_at_module_load = _module_config.server.eval_mode
 
 
 @asynccontextmanager
@@ -121,6 +128,17 @@ async def lifespan(app: FastAPI):
 
     create_schema = os.getenv('MEMEX_SKIP_SCHEMA_CHECK', 'false').lower() != 'true'
     await metastore.connect(create_schema=create_schema)
+
+    # Eval-only schema: idempotent DDL applied at startup when eval_mode is
+    # on. Lives outside the alembic chain so production servers never see
+    # the table.
+    if config.server.eval_mode:
+        async with metastore.engine.begin() as conn:
+            await ensure_eval_import_state_table(conn)
+        logger.warning(
+            'EVAL MODE ENABLED — eval_import_state table ensured. '
+            'Background scheduler will be skipped.'
+        )
 
     configure_cache_dir(config.server.cache_dir)
     embedding_model = await get_embedding_model(
@@ -375,3 +393,10 @@ app.include_router(diagnostics_router)
 app.include_router(lint_router)
 app.include_router(consolidation_router)
 app.include_router(system_router)
+if _eval_mode_at_module_load:
+    logger.warning(
+        'EVAL MODE ENABLED — DO NOT RUN IN PRODUCTION. '
+        'Mounting POST /api/v1/_eval/snapshot-import; the background '
+        'scheduler will be disabled at startup.'
+    )
+    app.include_router(eval_snapshot_router)
