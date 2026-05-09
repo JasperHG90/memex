@@ -39,6 +39,37 @@ logger = logging.getLogger('memex_eval.suite.base')
 # scenario-id and note-key conventions: must start with a letter, no hyphens.
 _REGISTRY_NAME_RE = re.compile(r'^[a-z][a-z0-9_]*$')
 
+# Word-character class for keyword-boundary detection. \w in Python 3 str
+# patterns is Unicode-aware by default (no re.UNICODE flag needed).
+_WORD_RE = re.compile(r'\w')
+
+
+def _kw_pattern(keyword: str) -> re.Pattern[str]:
+    """Word-boundary regex that handles keywords starting/ending with non-word chars.
+
+    ``\\b`` is a transition between ``\\w`` and non-``\\w``. If the keyword
+    starts with a non-word character (e.g. '$', '@'), prepending ``\\b`` would
+    require the *previous* char to be a word char — failing for "I paid $1000"
+    because the char before '$' is a space. Solution: only emit ``\\b`` when
+    the keyword's first/last char is itself a word char. Always case-insensitive.
+    """
+    escaped = re.escape(keyword)
+    prefix = r'\b' if keyword and _WORD_RE.match(keyword[0]) else ''
+    suffix = r'\b' if keyword and _WORD_RE.match(keyword[-1]) else ''
+    return re.compile(prefix + escaped + suffix, re.IGNORECASE)
+
+
+def _kw_present(keyword: str, text: str) -> bool:
+    """True if ``keyword`` appears in ``text`` as a whole word (or punctuation-bounded)."""
+    return _kw_pattern(keyword).search(text) is not None
+
+
+def _kw_first_index(keyword: str, text: str) -> int:
+    """Position of first whole-word occurrence of ``keyword`` in ``text``, or -1."""
+    m = _kw_pattern(keyword).search(text)
+    return m.start() if m else -1
+
+
 # Note-key validator (re-exported from sources for the InlineNote model).
 # Single source of truth — see sources.NOTE_KEY_RE.
 _NOTE_KEY_RE = NOTE_KEY_RE
@@ -359,7 +390,7 @@ class KeywordsPresent(ExpectedOutcomeBase):
 
     def score(self, answer: AgentAnswer, scenario, **_kw) -> dict[str, float]:
         text = _aggregate_text(answer)
-        all_present = all(kw.lower() in text for kw in self.keywords)
+        all_present = all(_kw_present(kw, text) for kw in self.keywords)
         return {'pass': 1.0 if all_present else 0.0}
 
     def metric_keys(self, top_k: int | None = None) -> list[str]:
@@ -373,7 +404,7 @@ class KeywordsAbsent(ExpectedOutcomeBase):
 
     def score(self, answer: AgentAnswer, scenario, **_kw) -> dict[str, float]:
         text = _aggregate_text(answer)
-        none_present = not any(kw.lower() in text for kw in self.keywords)
+        none_present = not any(_kw_present(kw, text) for kw in self.keywords)
         return {'pass': 1.0 if none_present else 0.0}
 
     def metric_keys(self, top_k: int | None = None) -> list[str]:
@@ -509,14 +540,14 @@ class RankingOrder(ExpectedOutcomeBase):
         if answer.answer_text:
             text = answer.answer_text
             for kw in self.expected_keyword_order:
-                idx = text.lower().find(kw.lower())
+                idx = _kw_first_index(kw, text)
                 if idx >= 0 and kw not in first_idx:
                     first_idx[kw] = idx
         else:
             for i, u in enumerate(answer.units):
-                t = (getattr(u, 'text', '') or '').lower()
+                t = getattr(u, 'text', '') or ''
                 for kw in self.expected_keyword_order:
-                    if kw.lower() in t and kw not in first_idx:
+                    if _kw_present(kw, t) and kw not in first_idx:
                         first_idx[kw] = i
         if any(kw not in first_idx for kw in self.expected_keyword_order):
             return {'pass': 0.0}
@@ -534,7 +565,7 @@ class ExcludedByDefault(ExpectedOutcomeBase):
 
     def score(self, answer: AgentAnswer, scenario, **_kw) -> dict[str, float]:
         text = _aggregate_text(answer)
-        none_present = not any(kw.lower() in text for kw in self.forbidden_keywords)
+        none_present = not any(_kw_present(kw, text) for kw in self.forbidden_keywords)
         return {'pass': 1.0 if none_present else 0.0}
 
     def metric_keys(self, top_k: int | None = None) -> list[str]:

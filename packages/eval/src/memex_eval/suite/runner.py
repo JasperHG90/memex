@@ -187,7 +187,28 @@ async def _ingest_sources(
     vault_map: dict[str | None, UUID],
     suite: Suite,
 ) -> dict[str, str]:
-    """Ingest every source note. Returns {note_key: note_id}."""
+    """Ingest every source note. Returns {note_key: note_id}.
+
+    Validates note_key uniqueness across vaults — silent collapse on
+    duplicate keys would break TemporalOrdering / NoteAttribution outcomes
+    (which rely on note_key → note_id mapping); per-vault routing means
+    distinct vaults can contain genuinely-different notes that share a key,
+    but the suite framework requires keys be globally unique within a suite.
+    """
+    # P3 + round-2 M1: detect duplicate note_keys across vaults at load time.
+    seen_vault_by_key: dict[str, str] = {}
+    for note in suite.sources.notes:
+        vault_label = note.vault_name or '__default__'
+        prior = seen_vault_by_key.get(note.note_key)
+        if prior is not None and prior != vault_label:
+            raise ValueError(
+                f'Duplicate note_key {note.note_key!r} across vaults '
+                f'({prior!r} and {vault_label!r}). note_key must be globally '
+                f'unique within a suite (TemporalOrdering / NoteAttribution '
+                f'rely on a flat note_key → note_id map).'
+            )
+        seen_vault_by_key[note.note_key] = vault_label
+
     note_id_by_key: dict[str, str] = {}
     for note in suite.sources.notes:
         target_vault_id = vault_map.get(note.vault_name, vault_id_default)
@@ -228,19 +249,26 @@ async def _ingest_sources(
 async def _wait_extraction_per_note(
     api: RemoteMemexAPI,
     note_id_by_key: dict[str, str],
-    vault_id: UUID,
+    note_key_to_vault_id: dict[str, UUID],
     per_note_timeout_s: float = 60.0,
     poll_interval_s: float = 2.0,
 ) -> dict[str, list[str]]:
     """For each ingested note, poll the new /notes/{id}/memory_units endpoint
-    until ≥1 unit appears or per-note timeout. Returns {note_key: [unit_ids]}."""
+    until ≥1 unit appears or per-note timeout. Returns {note_key: [unit_ids]}.
+
+    ``note_key_to_vault_id`` maps each note_key to its target vault — notes
+    routed to a non-default vault must be polled under that vault, otherwise
+    the API returns 0 units regardless of extraction state and the helper
+    times out spuriously.
+    """
     out: dict[str, list[str]] = {}
     for note_key, note_id in note_id_by_key.items():
+        target_vault_id = note_key_to_vault_id[note_key]
         deadline = time.monotonic() + per_note_timeout_s
         units: list[str] = []
         while time.monotonic() < deadline:
             try:
-                rows = await api.list_memory_units_by_note(note_id, vault_id)
+                rows = await api.list_memory_units_by_note(note_id, target_vault_id)
                 if rows:
                     units = [str(u.id) for u in rows]
                     break
@@ -249,10 +277,11 @@ async def _wait_extraction_per_note(
             await asyncio.sleep(poll_interval_s)
         if not units:
             logger.warning(
-                '  Extraction timed out for note_key=%r (note_id=%s); '
+                '  Extraction timed out for note_key=%r (note_id=%s, vault=%s); '
                 'scenarios referencing this key will status=error',
                 note_key,
                 note_id,
+                target_vault_id,
             )
         out[note_key] = units
     return out
@@ -360,7 +389,9 @@ async def _ingest_inline_notes(
 
     if not inline_id_by_key:
         return
-    resolved = await _wait_extraction_per_note(api, inline_id_by_key, vault_id)
+    # Inline notes always live in the scenario's per-call vault.
+    inline_vault_map = {k: vault_id for k in inline_id_by_key}
+    resolved = await _wait_extraction_per_note(api, inline_id_by_key, inline_vault_map)
     for inline_key, unit_ids in resolved.items():
         note_key_to_unit_ids[inline_key] = unit_ids
         prefixed = f'inline-{scenario.id}-{inline_key}'
@@ -745,9 +776,18 @@ async def run_suite(
                             max_consecutive_errors=5,
                         )
 
+                # Build per-note vault map: each note_key polls under its
+                # actual target vault, not blindly under default_vault_id —
+                # otherwise notes routed to a non-default vault timeout
+                # spuriously even though extraction succeeded.
+                note_key_to_vault_id: dict[str, UUID] = {
+                    n.note_key: vault_map.get(n.vault_name, default_vault_id)
+                    for n in suite.sources.notes
+                    if n.note_key in note_id_by_key
+                }
                 # Per-note unit-id resolution (also serves as per-note extraction wait)
                 note_key_to_unit_ids = await _wait_extraction_per_note(
-                    api, note_id_by_key, default_vault_id
+                    api, note_id_by_key, note_key_to_vault_id
                 )
 
                 # Run scenarios in DEFINITION ORDER. The runner is contractually

@@ -117,6 +117,66 @@ class TestExcludedByDefault:
         assert outcome.score(ans, _scenario()) == {'pass': 0.0}
 
 
+class TestKeywordWordBoundary:
+    """`Scala` (the language) must not match `scalability` (substring).
+
+    Pre-fix substring matching caused the eval suite's vault-isolation
+    scenario to false-fail because Project Gamma's text mentions
+    'scalability' — and 'Scala' is a substring of 'scalability'.
+    Word-boundary matching is the correct primitive."""
+
+    def test_keywords_absent_does_not_match_scala_in_scalability(self) -> None:
+        outcome = KeywordsAbsent(type='keywords_absent', keywords=['Scala'])
+        ans = AgentAnswer(units=[_unit('platform supports scalability via BEAM VM')])
+        # Scala-the-language is correctly absent; 'scalability' must not trip.
+        assert outcome.score(ans, _scenario()) == {'pass': 1.0}
+
+    def test_keywords_absent_still_catches_actual_word(self) -> None:
+        outcome = KeywordsAbsent(type='keywords_absent', keywords=['Scala'])
+        ans = AgentAnswer(units=[_unit('Project Delta uses Scala 3.4 with Akka')])
+        assert outcome.score(ans, _scenario()) == {'pass': 0.0}
+
+    def test_keywords_present_handles_nonword_prefix(self) -> None:
+        outcome = KeywordsPresent(type='keywords_present', keywords=['$1000'])
+        ans = AgentAnswer(units=[_unit('I paid $1000 yesterday')])
+        assert outcome.score(ans, _scenario()) == {'pass': 1.0}
+
+    def test_keywords_present_handles_apostrophe(self) -> None:
+        outcome = KeywordsPresent(type='keywords_present', keywords=["O'Connor"])
+        ans = AgentAnswer(units=[_unit("Met O'Connor today")])
+        assert outcome.score(ans, _scenario()) == {'pass': 1.0}
+
+    def test_keywords_present_multiword_token_still_matches(self) -> None:
+        outcome = KeywordsPresent(type='keywords_present', keywords=['Project Alpha'])
+        ans = AgentAnswer(units=[_unit('Project Alpha launched on March 15')])
+        assert outcome.score(ans, _scenario()) == {'pass': 1.0}
+
+    def test_ranking_order_text_mode_uses_word_boundary(self) -> None:
+        # Text-mode branch (answer_text populated, units empty) — earlier code
+        # used substring matching; verify it now uses word-boundary.
+        outcome = RankingOrder(type='ranking_order', expected_keyword_order=['Scala', 'Akka'])
+        # 'scalability' should NOT count as a Scala hit; both keywords absent → pass=0.
+        ans = AgentAnswer(answer_text='The platform supports scalability and parallelism')
+        assert outcome.score(ans, _scenario()) == {'pass': 0.0}
+
+    def test_ranking_order_units_mode_uses_word_boundary(self) -> None:
+        outcome = RankingOrder(type='ranking_order', expected_keyword_order=['Scala', 'Akka'])
+        ans = AgentAnswer(
+            units=[
+                _unit('platform supports scalability'),  # not a Scala hit
+                _unit('uses Scala 3.4'),  # real Scala hit at rank 1
+                _unit('with Akka framework'),  # real Akka hit at rank 2
+            ]
+        )
+        # Scala first hit at rank 1; Akka first hit at rank 2; ascending → pass=1.
+        assert outcome.score(ans, _scenario()) == {'pass': 1.0}
+
+    def test_excluded_by_default_word_boundary(self) -> None:
+        outcome = ExcludedByDefault(type='excluded_by_default', forbidden_keywords=['Scala'])
+        ans = AgentAnswer(units=[_unit('platform supports scalability via BEAM VM')])
+        assert outcome.score(ans, _scenario()) == {'pass': 1.0}
+
+
 class TestEntityResolves:
     def test_match(self) -> None:
         outcome = EntityResolves(type='entity_resolves', expected_names=['Elena Vasquez'])
