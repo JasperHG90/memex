@@ -105,6 +105,19 @@ RESERVED_VAULT_NAMES = {GLOBAL_VAULT_NAME.lower(), 'global', 'default'}
 EMBED_BATCH_SIZE = 64
 
 
+def _coerce_fact_type(value: Any) -> str:
+    """Normalize `MemoryUnit.fact_type` for `format_for_embedding`.
+
+    Returns the underlying string regardless of whether SQLModel/SA
+    hydrates the column as a plain str or an enum member. `str(enum)`
+    would return `'FactTypes.WORLD'` instead of `'world'`, so we extract
+    the value attribute when present.
+    """
+    if hasattr(value, 'value'):
+        return str(value.value)
+    return str(value)
+
+
 class SnapshotImportError(Exception):
     """Raised when an import fails validation or execution."""
 
@@ -1119,8 +1132,18 @@ class SnapshotImporter:
             return
         for start in range(0, len(rows), EMBED_BATCH_SIZE):
             batch = rows[start : start + EMBED_BATCH_SIZE]
+            # `fact_type` is a Postgres TEXT column hydrated as plain str by
+            # SQLModel/SA, so use it as-is. Avoid `str(...)` wrap: if a future
+            # change ever hydrates as an enum, str(EnumMember) returns
+            # `'FactTypes.WORLD'` not `'world'`, and `format_for_embedding`'s
+            # `.capitalize()` would silently emit `'Facttypes.world'` —
+            # silently corrupting the embedding format.
             texts = [
-                format_for_embedding(text=(r[1] or ''), fact_type=str(r[2]), context=r[3])
+                format_for_embedding(
+                    text=(r[1] or ''),
+                    fact_type=_coerce_fact_type(r[2]),
+                    context=r[3],
+                )
                 for r in batch
             ]
             vectors = embedder.encode(texts)
