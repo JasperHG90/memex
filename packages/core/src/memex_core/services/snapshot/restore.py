@@ -1008,22 +1008,10 @@ class SnapshotImporter:
         except Exception as e:
             logger.warning('Phase C: failed to delete staging prefix: %s', e)
 
-    async def _move_filestore_key(self, src: str, dst: str) -> None:
-        """Copy ``src`` -> ``dst`` then delete ``src`` on the FileStore.
-
-        ``BaseAsyncFileStore.move_file`` calls ``_cp_file`` directly without
-        creating the destination's parent directory for the file (non-dir)
-        case. ``save`` does create parents. Round-trip via load+save+delete
-        sidesteps the gap and works uniformly across local / S3 / GCS
-        backends. Idempotent: missing-src is treated as already moved.
-        """
-        assert self._filestore is not None
-        if not await self._filestore.exists(src):
-            return
-        data = await self._filestore.load(src)
-        await self._filestore.save(dst, data)
-        await self._filestore.delete(src)
-
+        # Record state ONCE at the end of Phase C. The previous arrangement
+        # had this block buried inside `_move_filestore_key`, which meant
+        # an empty Phase C (no assets) never recorded `assets_committed`,
+        # and a multi-asset Phase C wrote the row N times.
         await _record_import_state(
             self._session,
             self._target_vault_id,
@@ -1032,6 +1020,27 @@ class SnapshotImporter:
             'assets_committed',
         )
         await self._session.commit()
+
+    async def _move_filestore_key(self, src: str, dst: str) -> None:
+        """Copy ``src`` -> ``dst`` then delete ``src`` on the FileStore.
+
+        ``BaseAsyncFileStore.move_file`` calls ``_cp_file`` directly without
+        creating the destination's parent directory for the file (non-dir)
+        case. ``save`` does create parents. Round-trip via load+save+delete
+        sidesteps the gap and works uniformly across local / S3 / GCS
+        backends. Idempotent: missing-src is treated as already moved.
+
+        Atomicity caveat: copy-then-delete is not atomic on any backend.
+        If `delete` fails after `save` succeeds, the asset exists at both
+        keys; Phase C's recursive sweep of `self._staging_prefix` collects
+        the orphan src on the next pass.
+        """
+        assert self._filestore is not None
+        if not await self._filestore.exists(src):
+            return
+        data = await self._filestore.load(src)
+        await self._filestore.save(dst, data)
+        await self._filestore.delete(src)
 
     # ------------------------------------------------------------------
     # Phase D — Embeddings + REINDEX

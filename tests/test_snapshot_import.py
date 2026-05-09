@@ -1287,6 +1287,78 @@ async def test_original_text_none_preserved(
     assert imported.original_text is None
 
 
+async def test_phase_c_records_state_with_no_assets(
+    db_session: AsyncSession,
+    populated_vault: dict[str, UUID],
+    tmp_path: Path,
+    eval_state_table: None,
+) -> None:
+    """Phase C records `assets_committed` even when there are no assets.
+
+    Regression test: a previous fix accidentally buried the state-record
+    inside the per-asset move helper, so a vault with no assets never
+    recorded the row. Phase D's `embedded` write would then mask the
+    missing transition end-to-end, but a crash strictly between Phase C
+    and Phase D would leave state at 'db_committed' forever.
+    """
+    from memex_common.config import LocalFileStoreConfig
+    from memex_core.storage.filestore import LocalAsyncFileStore
+
+    src_vault = populated_vault['vault_id']
+    fs_root = tmp_path / 'filestore'
+    fs_root.mkdir()
+    filestore = LocalAsyncFileStore(LocalFileStoreConfig(root=str(fs_root)))
+
+    snapshot_dir = tmp_path / 'snapshot'
+    snapshot_dir.mkdir()
+    exporter = SnapshotExporter(
+        session=db_session,
+        filestore=filestore,
+        vault_id_or_name=src_vault,
+        output_dir=snapshot_dir,
+    )
+    await exporter.export()
+    await db_session.rollback()
+    await _delete_source_vault(db_session, src_vault)
+
+    # Patch Phase D + E so we can observe Phase C's state row directly.
+    import memex_core.services.snapshot.restore as restore_mod
+
+    orig_d = restore_mod.SnapshotImporter._phase_d_embeddings_and_reindex
+    orig_e = restore_mod.SnapshotImporter._phase_e_mark_complete
+
+    async def stop_after_c(self):  # type: ignore[no-untyped-def]
+        raise RuntimeError('halt after Phase C for state inspection')
+
+    restore_mod.SnapshotImporter._phase_d_embeddings_and_reindex = stop_after_c  # type: ignore[method-assign]
+    importer = SnapshotImporter(
+        session=db_session,
+        filestore=filestore,
+        embedding_backend=OnnxBackend(),
+        snapshot_dir=snapshot_dir,
+        allowlist_root=tmp_path,
+        target_vault_name='no-assets-phase-c',
+    )
+    try:
+        with pytest.raises(RuntimeError, match='halt after Phase C'):
+            await importer.import_snapshot()
+    finally:
+        restore_mod.SnapshotImporter._phase_d_embeddings_and_reindex = orig_d  # type: ignore[method-assign]
+        restore_mod.SnapshotImporter._phase_e_mark_complete = orig_e  # type: ignore[method-assign]
+
+    from sqlalchemy import text as sa_text
+
+    state = (
+        await db_session.execute(
+            sa_text('SELECT state FROM eval_import_state WHERE target_vault_id = :v'),
+            {'v': str(importer.target_vault_id)},
+        )
+    ).scalar_one()
+    assert state == 'assets_committed', (
+        f"Phase C must record 'assets_committed' even with no assets; got {state!r}"
+    )
+
+
 async def test_round_trip_with_filestore_assets(
     db_session: AsyncSession,
     populated_vault: dict[str, UUID],
