@@ -445,10 +445,29 @@ class RawFact(BaseFact):
     )
     intent_class: IntentLiteral = Field(
         default='durable',
-        description='Lifecycle durability (NOT importance). '
-        "'permanent' = never-decay (identity, preferences). "
-        "'durable' = multi-week relevance (DEFAULT). "
-        "'ephemeral' = days-to-weeks only (task context).",
+        description=(
+            'Lifecycle durability — how long the fact stays relevant '
+            '(NOT how important it feels). The deciding question is: '
+            'WILL THIS FACT STILL BE TRUE / RELEVANT IN 4+ WEEKS? '
+            'The cue words below are signals, not absolute rules; the '
+            'underlying semantic content always wins.\n'
+            "- 'permanent' (never-decay): identity, long-standing "
+            'preferences, values. Signal phrases: "I am", "I prefer", '
+            '"I always", "I never", "my favorite", "my goal", "I work as".\n'
+            "- 'durable' (DEFAULT, multi-week relevance): decisions, "
+            'ongoing project state, role assignments, relationships, '
+            'announcements that establish persistent state. Signal '
+            'phrases: "we decided", "the team owns", "we use", "the '
+            'lead is", "Project X uses", "today we announced".\n'
+            "- 'ephemeral' (days-to-weeks): short-lived tasks, deadlines, '"
+            'transient blockers, in-flight work. Signal phrases: "by '
+            'EOD", "blocked by", "right now", "this sprint" — but only '
+            'when the fact itself decays (a one-day blocker), not when '
+            'a "today" prefix is on a durable announcement.\n'
+            'When in doubt, choose durable. Never use ephemeral for '
+            'identity / preference / decision facts even if a transient '
+            'cue word appears in the surrounding text.'
+        ),
     )
     risk_class: RiskLiteral = Field(
         default='none',

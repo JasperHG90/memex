@@ -84,7 +84,8 @@ class Judge:
         if not api_key:
             raise ValueError(
                 'GOOGLE_API_KEY environment variable required for LLM judge. '
-                'Set it or use --no-llm-judge to skip.'
+                'Set it before running an eval suite that contains LLMJudge / '
+                'UsefulAtK scenarios.'
             )
         # timeout= is required by the AC-006 grep guard in
         # packages/core/tests/unit/test_dspy_lm_timeout_guard.py and prevents the

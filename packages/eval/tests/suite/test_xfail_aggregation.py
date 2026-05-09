@@ -216,6 +216,7 @@ class TestExecuteScenarioSlaBypassXfail:
                     suite=suite,
                     judge=None,
                     note_key_to_unit_ids={},
+                    note_id_by_key={},
                     replicate_index=0,
                 )
             )
@@ -286,6 +287,7 @@ class TestExecuteScenarioSlaBypassXfail:
                     suite=suite2,
                     judge=None,
                     note_key_to_unit_ids={},
+                    note_id_by_key={},
                     replicate_index=0,
                 )
             )

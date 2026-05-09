@@ -192,6 +192,145 @@ async def lint_resolve(
     return {'finding_id': str(finding_id), 'status': 'resolved'}
 
 
+@router.post('/run/{vault_id}', dependencies=[Depends(require_write)])
+async def lint_run(
+    vault_id: UUID,
+    api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+) -> dict[str, Any]:
+    """Synchronously run the V1 lint rule registry for ``vault_id``.
+
+    The eval suite framework needs deterministic on-demand triggering of
+    the lint pass — the periodic scheduler at scheduler.py:129 fires every
+    21600s (6h) by default, which is unworkable for tests. This endpoint
+    exposes the same ``api.lint.run_rules`` entrypoint the scheduler uses,
+    so behavior is identical (modulo the FSFM auto-deprioritize step
+    which the scheduler does after lint — that's a separate concern).
+
+    Idempotent at the storage layer: ``_INSERT_FINDING_SQL`` (lint.py:564)
+    uses ``ON CONFLICT (rule_name, target_type, target_id, vault_id)
+    WHERE status = 'pending' DO NOTHING``, so back-to-back calls don't
+    duplicate findings — provided no reviewer dismissed/resolved a prior
+    finding in between (in which case the partial-index filter no longer
+    matches and the row gets re-inserted).
+    """
+    await check_vault_access(auth, [vault_id], api, permission=Permission.WRITE)
+    try:
+        summary = await api.lint.run_rules(vault_id)
+    except LintSubsystemNotInitializedError as e:
+        raise HTTPException(status_code=503, detail=str(e))
+    except Exception as e:
+        raise _handle_error(e, 'lint run failed')
+    return {
+        'vault_id': str(vault_id),
+        'total_findings': summary.total_findings,
+        'rules': [
+            {
+                'name': r.rule_name,
+                'lint_type': r.lint_type.value
+                if hasattr(r.lint_type, 'value')
+                else str(r.lint_type),
+                'findings_emitted': r.findings_emitted,
+                'duration_seconds': r.duration_seconds,
+                'error': r.error,
+            }
+            for r in summary.rules
+        ],
+    }
+
+
+@router.post('/llm/run/{vault_id}', dependencies=[Depends(require_write)])
+async def lint_llm_run(
+    vault_id: UUID,
+    api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+) -> dict[str, Any]:
+    """Synchronously run the LLM-gated lint pass for ``vault_id``.
+
+    Mirrors the scheduler's ``periodic_lint_llm_task`` at scheduler.py:201
+    — same checks list, same NLI loading sequence. NLI is eager-loaded at
+    server startup (see server/__init__.py:151) when polarity.enabled is
+    True, so the call is a cache-hit; if startup-load failed, it lazy-loads
+    here and gets cached process-wide for subsequent calls.
+
+    Returns 503 when ``lint_llm.enabled=False`` or ``cost_cap_per_24h=0``
+    (the cap-zero gate that short-circuits the periodic task).
+    """
+    from memex_core.memory.lint_llm.checks import (
+        make_schema_drift_check,
+        make_semantic_contradiction_check,
+    )
+    from memex_core.memory.lint_llm.polarity import (
+        PolarityClassifier,
+        PolarityRateLimiter,
+    )
+    from memex_core.memory.models import get_nli_model
+
+    await check_vault_access(auth, [vault_id], api, permission=Permission.WRITE)
+
+    settings = api.config.server.memory.lint_llm
+    if not settings.enabled or settings.cost_cap_per_24h <= 0:
+        raise HTTPException(status_code=503, detail='lint_llm disabled by config')
+
+    polarity_classifier: PolarityClassifier | None = None
+    if settings.polarity.enabled:
+        try:
+            nli_model = await get_nli_model(settings.polarity)
+            if nli_model is not None:
+                polarity_classifier = PolarityClassifier(
+                    nli_model,
+                    polarity_threshold=settings.polarity.polarity_threshold,
+                    rate_limiter=PolarityRateLimiter(
+                        max_per_vault_per_hour=settings.polarity.rate_limit_per_vault_per_hour,
+                    ),
+                )
+        except Exception as exc:  # noqa: BLE001 — NLI absence is non-fatal
+            logger.warning('NLI load failed; falling back to cosine-only gate: %s', exc)
+
+    checks: list[tuple[str, Any]] = []
+    if settings.checks.semantic_contradiction.enabled:
+        checks.append(
+            (
+                'semantic_contradiction',
+                make_semantic_contradiction_check(api.lm, k=settings.surprise_k),
+            )
+        )
+    if settings.checks.schema_drift.enabled:
+        checks.append(('schema_drift', make_schema_drift_check(api.lm, k=settings.surprise_k)))
+
+    if not checks:
+        return {
+            'vault_id': str(vault_id),
+            'summaries': [],
+            'detail': 'no LLM lint checks enabled',
+        }
+
+    summaries: list[dict[str, Any]] = []
+    for check_name, check in checks:
+        try:
+            s = await api.lint_llm.tick(
+                vault_id,
+                run_llm_check=check,
+                polarity_classifier=(
+                    polarity_classifier if check_name == 'semantic_contradiction' else None
+                ),
+            )
+            summaries.append(
+                {
+                    'check': check_name,
+                    'evaluated': s.candidates_evaluated,
+                    'emitted': s.findings_emitted,
+                    'deferred': s.deferred,
+                    'deferred_processed': s.deferred_processed,
+                }
+            )
+        except Exception as exc:
+            logger.warning('lint_llm[%s] failed: %s', check_name, exc)
+            summaries.append({'check': check_name, 'error': str(exc)})
+
+    return {'vault_id': str(vault_id), 'summaries': summaries}
+
+
 @router.get('/flags', dependencies=[Depends(require_read)])
 async def lint_flags(
     api: Annotated[MemexAPI, Depends(get_api)],

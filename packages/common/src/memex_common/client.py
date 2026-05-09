@@ -1322,6 +1322,26 @@ class RemoteMemexAPI:
         """Flip a pending finding to ``resolved``."""
         return await self._post(f'lint/findings/{finding_id}/resolve', {})
 
+    async def run_lint_rules(self, vault_id: str | UUID) -> dict[str, Any]:
+        """Synchronously run the V1 lint rule registry for ``vault_id``.
+
+        Mirrors the periodic scheduler's lint task — same entrypoint, same
+        idempotent insert. Used by the eval-suite ``lint_run`` setup
+        action so lint findings are deterministically present before a
+        scenario asserts on them.
+        """
+        return await self._post(f'lint/run/{vault_id}', {})
+
+    async def run_lint_llm(self, vault_id: str | UUID) -> dict[str, Any]:
+        """Synchronously run the LLM-gated lint pass for ``vault_id``.
+
+        Mirrors the periodic scheduler's lint_llm task. Returns 503 when
+        ``lint_llm.enabled=False`` or ``cost_cap_per_24h=0``. NLI is eager
+        loaded at server startup when ``polarity.enabled=True``; otherwise
+        this call lazy-loads NLI on first invocation.
+        """
+        return await self._post(f'lint/llm/run/{vault_id}', {})
+
     async def lint_get_flags(
         self,
         *,

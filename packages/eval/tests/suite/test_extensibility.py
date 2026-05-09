@@ -195,6 +195,8 @@ class TestSetupActionRegistry:
             'kv_write',
             'consolidation_tick',
             'trigger_reflections',
+            'lint_run',
+            'lint_llm_run',
         ):
             assert expected in names
 
@@ -246,8 +248,8 @@ class TestSetupActionRegistry:
                 'kind': 'nonexistent_action_kind_xyz',
                 'error': (
                     "\"Unknown setup action 'nonexistent_action_kind_xyz'. Registered: ['"
-                    "consolidation_tick', 'deprioritize', 'kv_write', 'record_outcome', "
-                    "'trigger_reflections']\""
+                    "consolidation_tick', 'deprioritize', 'kv_write', 'lint_llm_run', "
+                    "'lint_run', 'record_outcome', 'trigger_reflections']\""
                 ),
             }
         ]
@@ -523,6 +525,55 @@ class TestBuiltInSetupActionDispatch:
         assert result is None
 
     @pytest.mark.asyncio
+    async def test_lint_run_dispatches_to_run_lint_rules(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+        from memex_eval.suite.setup_actions import get_setup_action
+
+        api = MagicMock()
+        api.run_lint_rules = AsyncMock(
+            return_value={
+                'vault_id': '...',
+                'total_findings': 3,
+                'rules': [
+                    {'name': 'rule-a', 'findings_emitted': 2},
+                    {'name': 'rule-b', 'findings_emitted': 1},
+                ],
+            }
+        )
+        vault_id = uuid4()
+        handler = get_setup_action('lint_run')
+        result = await handler.run(api=api, vault_id=vault_id, params={})
+        api.run_lint_rules.assert_called_once_with(vault_id)
+        assert result == {'total_findings': 3, 'rules_run': 2}
+
+    @pytest.mark.asyncio
+    async def test_lint_llm_run_dispatches_to_run_lint_llm(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+        from memex_eval.suite.setup_actions import get_setup_action
+
+        api = MagicMock()
+        api.run_lint_llm = AsyncMock(
+            return_value={
+                'vault_id': '...',
+                'summaries': [
+                    {
+                        'check': 'semantic_contradiction',
+                        'evaluated': 5,
+                        'emitted': 1,
+                        'deferred': 0,
+                    },
+                    {'check': 'schema_drift', 'evaluated': 5, 'emitted': 0, 'deferred': 0},
+                ],
+            }
+        )
+        vault_id = uuid4()
+        handler = get_setup_action('lint_llm_run')
+        result = await handler.run(api=api, vault_id=vault_id, params={})
+        api.run_lint_llm.assert_called_once_with(vault_id)
+        assert result['findings_emitted'] == 1
+        assert len(result['summaries']) == 2
+
+    @pytest.mark.asyncio
     async def test_trigger_reflections_raises_when_all_reflect_calls_fail(self) -> None:
         """If every entity's reflect() raises, the handler must surface a
         RuntimeError so a downstream scenario doesn't silently score against
@@ -578,6 +629,217 @@ class TestBuiltInSetupActionDispatch:
         assert ctx['requested_count'] == 3
         # Drain pending coroutines created by AsyncMock
         await asyncio.sleep(0)
+
+
+class TestTeardown:
+    """P4: each setup_action gets an optional teardown(); the runner
+    invokes teardown after the scenario score completes (regardless of
+    pass/fail/error) so the next scenario starts clean.
+
+    Per-handler isolation: a single failing teardown does not abort
+    later teardowns. Skip teardowns whose run() never executed.
+    """
+
+    @pytest.mark.asyncio
+    async def test_default_teardown_is_noop(self) -> None:
+        """Subclass that doesn't override teardown gets a no-op default."""
+        from memex_eval.suite.setup_actions import get_setup_action
+
+        @register_setup_action('noop_handler_teardown_default')
+        class _Noop(SetupActionHandler):
+            async def run(self, api, vault_id, params):
+                return None
+
+        handler = get_setup_action('noop_handler_teardown_default')
+        # Should not raise.
+        await handler.teardown(api=None, vault_id=uuid4(), params={}, setup_context=None)
+
+    @pytest.mark.asyncio
+    async def test_record_outcome_teardown_is_noop(self) -> None:
+        """record_outcome teardown is intentionally no-op (counters are
+        append-only at storage; the retrieval pre-filter at engine.py:154
+        fires when total counters >= 5, so a flip-and-cancel would change
+        scoring of unrelated downstream scenarios)."""
+        from unittest.mock import AsyncMock, MagicMock
+        from memex_eval.suite.setup_actions import get_setup_action
+
+        api = MagicMock()
+        api.record_outcome = AsyncMock(return_value=None)
+        handler = get_setup_action('record_outcome')
+        await handler.teardown(
+            api=api,
+            vault_id=uuid4(),
+            params={'note_key': 'k', 'success': True, 'count': 3},
+            setup_context={'record_outcome.unit_ids': ['u1', 'u2']},
+        )
+        # Zero calls — no flip.
+        api.record_outcome.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_deprioritize_teardown_calls_restore(self) -> None:
+        """deprioritize teardown restores every unit from setup context."""
+        from unittest.mock import AsyncMock, MagicMock
+        from memex_eval.suite.setup_actions import get_setup_action
+
+        api = MagicMock()
+        api.restore_memory_unit = AsyncMock(return_value=None)
+        u1, u2 = uuid4(), uuid4()
+        handler = get_setup_action('deprioritize')
+        await handler.teardown(
+            api=api,
+            vault_id=uuid4(),
+            params={'note_key': 'k'},
+            setup_context={'deprioritize.unit_ids': [str(u1), str(u2)]},
+        )
+        assert api.restore_memory_unit.call_count == 2
+        called_ids = {c.kwargs['unit_id'] for c in api.restore_memory_unit.call_args_list}
+        assert called_ids == {u1, u2}
+
+    @pytest.mark.asyncio
+    async def test_kv_write_teardown_calls_kv_delete(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+        from memex_eval.suite.setup_actions import get_setup_action
+
+        api = MagicMock()
+        api.kv_delete = AsyncMock(return_value=None)
+        handler = get_setup_action('kv_write')
+        await handler.teardown(
+            api=api,
+            vault_id=uuid4(),
+            params={'kv_key': 'project:demo:lead', 'kv_value': 'Sarah'},
+            setup_context={'kv_write.kv_key': 'project:demo:lead'},
+        )
+        api.kv_delete.assert_called_once_with(key='project:demo:lead')
+
+    @pytest.mark.asyncio
+    async def test_consolidation_tick_teardown_is_noop(self) -> None:
+        from unittest.mock import AsyncMock, MagicMock
+        from memex_eval.suite.setup_actions import get_setup_action
+
+        api = MagicMock()
+        api.consolidation_tick = AsyncMock(return_value=None)
+        handler = get_setup_action('consolidation_tick')
+        await handler.teardown(
+            api=api,
+            vault_id=uuid4(),
+            params={},
+            setup_context={},
+        )
+        api.consolidation_tick.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_run_setup_actions_tracks_executed_kinds(self) -> None:
+        """_run_setup_actions records every successfully-run kind in
+        _executed_action_kinds — used by the teardown loop to skip handlers
+        whose run() never executed."""
+        from memex_eval.suite.runner import _run_setup_actions
+
+        @register_setup_action('exec_tracker_a')
+        class _A(SetupActionHandler):
+            async def run(self, api, vault_id, params):
+                return None
+
+        @register_setup_action('exec_tracker_b')
+        class _B(SetupActionHandler):
+            async def run(self, api, vault_id, params):
+                return None
+
+        ctx = await _run_setup_actions(
+            api=None,
+            vault_id=uuid4(),
+            actions=[SetupAction(kind='exec_tracker_a'), SetupAction(kind='exec_tracker_b')],
+        )
+        assert ctx['_executed_action_kinds'] == ['exec_tracker_a', 'exec_tracker_b']
+
+    @pytest.mark.asyncio
+    async def test_run_setup_actions_does_not_track_failed_kinds(self) -> None:
+        """A handler that raises is NOT added to _executed_action_kinds."""
+        from memex_eval.suite.runner import _run_setup_actions
+
+        @register_setup_action('exec_tracker_raises')
+        class _R(SetupActionHandler):
+            async def run(self, api, vault_id, params):
+                raise RuntimeError('boom')
+
+        ctx = await _run_setup_actions(
+            api=None,
+            vault_id=uuid4(),
+            actions=[SetupAction(kind='exec_tracker_raises')],
+        )
+        assert 'exec_tracker_raises' not in ctx['_executed_action_kinds']
+
+    @pytest.mark.asyncio
+    async def test_run_setup_teardowns_skips_unexecuted(self) -> None:
+        """Teardown is NOT called for handlers whose setup never ran."""
+        from memex_eval.suite.runner import _run_setup_teardowns
+
+        teardown_calls: list[str] = []
+
+        @register_setup_action('teardown_skip_a')
+        class _A(SetupActionHandler):
+            async def run(self, api, vault_id, params):
+                return None
+
+            async def teardown(self, api, vault_id, params, setup_context):
+                teardown_calls.append('a')
+
+        @register_setup_action('teardown_skip_b')
+        class _B(SetupActionHandler):
+            async def run(self, api, vault_id, params):
+                return None
+
+            async def teardown(self, api, vault_id, params, setup_context):
+                teardown_calls.append('b')
+
+        # Only 'a' executed — 'b' should NOT have its teardown invoked.
+        await _run_setup_teardowns(
+            api=None,
+            vault_id=uuid4(),
+            actions=[SetupAction(kind='teardown_skip_a'), SetupAction(kind='teardown_skip_b')],
+            setup_context={'_executed_action_kinds': ['teardown_skip_a']},
+        )
+        assert teardown_calls == ['a']
+
+    @pytest.mark.asyncio
+    async def test_run_setup_teardowns_per_handler_isolation(self) -> None:
+        """A failing teardown does NOT abort later teardowns."""
+        from memex_eval.suite.runner import _run_setup_teardowns
+
+        teardown_calls: list[str] = []
+
+        @register_setup_action('teardown_isolation_first')
+        class _First(SetupActionHandler):
+            async def run(self, api, vault_id, params):
+                return None
+
+            async def teardown(self, api, vault_id, params, setup_context):
+                teardown_calls.append('first')
+                raise RuntimeError('first teardown explosion')
+
+        @register_setup_action('teardown_isolation_second')
+        class _Second(SetupActionHandler):
+            async def run(self, api, vault_id, params):
+                return None
+
+            async def teardown(self, api, vault_id, params, setup_context):
+                teardown_calls.append('second')
+
+        await _run_setup_teardowns(
+            api=None,
+            vault_id=uuid4(),
+            actions=[
+                SetupAction(kind='teardown_isolation_first'),
+                SetupAction(kind='teardown_isolation_second'),
+            ],
+            setup_context={
+                '_executed_action_kinds': [
+                    'teardown_isolation_first',
+                    'teardown_isolation_second',
+                ]
+            },
+        )
+        # Both teardowns ran; first raised but second still executed.
+        assert teardown_calls == ['first', 'second']
 
 
 class TestSetupActionExtraFields:

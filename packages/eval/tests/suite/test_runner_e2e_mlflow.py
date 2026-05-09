@@ -145,7 +145,6 @@ def test_run_suite_logs_to_mlflow(tmp_path: Path, monkeypatch: pytest.MonkeyPatc
             suite,
             server_url='http://fake-server/api/v1/',
             recorder=recorder,
-            use_llm_judge=False,
             seed=42,
         )
     )
@@ -262,7 +261,6 @@ def test_run_suite_uploads_notes_to_mlflow(tmp_path: Path, monkeypatch: pytest.M
             suite,
             server_url='http://fake-server/api/v1/',
             recorder=recorder,
-            use_llm_judge=False,
             seed=11,
             notes=notes_body,
         )
@@ -317,7 +315,6 @@ def test_run_suite_records_to_null_recorder_when_no_uri(
             suite,
             server_url='http://fake-server/api/v1/',
             recorder=recorder,
-            use_llm_judge=False,
             seed=7,
         )
     )

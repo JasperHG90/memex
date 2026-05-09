@@ -11,14 +11,18 @@ from memex_eval.suite import (
     EntityResolves,
     ExcludedByDefault,
     GoldUnitIds,
+    HasContradictionLink,
     KeywordsAbsent,
     KeywordsPresent,
     KvRoundtrip,
     LintFindingPresent,
     LLMJudge,
+    NewestUnitContains,
+    NoteAttribution,
     RankingOrder,
     Scenario,
     SummaryNonempty,
+    TemporalOrdering,
     ToolCallContains,
     UnitMetadataMatches,
 )
@@ -479,3 +483,392 @@ class TestUnitMetadataMatches:
         outcome = UnitMetadataMatches(type='unit_metadata_matches', expected_metadata={'k': 'v'})
         ans = AgentAnswer()
         assert outcome.score(ans, _scenario()) == {'pass': 0.0}
+
+
+# ---------------------------------------------------------------------------
+# P5: new outcome classes
+# ---------------------------------------------------------------------------
+
+import datetime as _dt
+
+
+def _u_with_note(
+    text: str, uid: str, note_id: str, ts: _dt.datetime | None = None
+) -> SimpleNamespace:
+    return SimpleNamespace(text=text, id=uid, note_id=note_id, mentioned_at=ts, occurred_start=None)
+
+
+class TestTemporalOrdering:
+    """P5 #1 — datetime-level ordering replaces brittle keyword-position
+    check. Validates that the temporal retrieval strategy actually returns
+    the newer note's units before the older note's."""
+
+    def _ctx(self, mapping: dict[str, str]) -> dict:
+        return {'_note_id_by_key': mapping}
+
+    def test_descending_order_passes(self) -> None:
+        outcome = TemporalOrdering(
+            type='temporal_ordering',
+            expected_note_keys_newest_first=['q2', 'q1'],
+        )
+        q1_ts = _dt.datetime(2025, 3, 15, tzinfo=_dt.timezone.utc)
+        q2_ts = _dt.datetime(2025, 6, 20, tzinfo=_dt.timezone.utc)
+        ans = AgentAnswer(
+            units=[
+                _u_with_note('q2 highlights', 'u1', 'note-q2', q2_ts),
+                _u_with_note('q1 highlights', 'u2', 'note-q1', q1_ts),
+            ]
+        )
+        ctx = self._ctx({'q2': 'note-q2', 'q1': 'note-q1'})
+        result = outcome.score(ans, _scenario(), context=ctx)
+        assert result['pass'] == 1.0
+        assert result['notes_retrieved'] == 1.0
+        assert result['pairs_compared'] == 1.0
+
+    def test_ascending_order_fails(self) -> None:
+        outcome = TemporalOrdering(
+            type='temporal_ordering',
+            expected_note_keys_newest_first=['q2', 'q1'],
+        )
+        q1_ts = _dt.datetime(2025, 3, 15, tzinfo=_dt.timezone.utc)
+        q2_ts = _dt.datetime(2025, 6, 20, tzinfo=_dt.timezone.utc)
+        ans = AgentAnswer(
+            units=[
+                _u_with_note('q1 actually newer somehow', 'u1', 'note-q1', q2_ts),
+                _u_with_note('q2 actually older somehow', 'u2', 'note-q2', q1_ts),
+            ]
+        )
+        ctx = self._ctx({'q2': 'note-q2', 'q1': 'note-q1'})
+        result = outcome.score(ans, _scenario(), context=ctx)
+        assert result['pass'] == 0.0
+        # Both notes present but ordered wrong → pairs_compared=1.
+        assert result['notes_retrieved'] == 1.0
+        assert result['pairs_compared'] == 1.0
+
+    def test_missing_note_key_fails(self) -> None:
+        outcome = TemporalOrdering(
+            type='temporal_ordering',
+            expected_note_keys_newest_first=['q2', 'q1'],
+        )
+        ans = AgentAnswer(units=[])
+        ctx = self._ctx({'q2': 'note-q2'})  # q1 absent
+        result = outcome.score(ans, _scenario(), context=ctx)
+        assert result['pass'] == 0.0
+        # Surface "Q1 not even retrieved" via notes_retrieved < 1.0.
+        assert result['notes_retrieved'] == 0.0
+
+    def test_no_units_with_timestamp_fails(self) -> None:
+        outcome = TemporalOrdering(
+            type='temporal_ordering',
+            expected_note_keys_newest_first=['q2', 'q1'],
+        )
+        # Units exist but mentioned_at is None.
+        ans = AgentAnswer(
+            units=[
+                _u_with_note('text', 'u1', 'note-q2', None),
+                _u_with_note('text', 'u2', 'note-q1', None),
+            ]
+        )
+        ctx = self._ctx({'q2': 'note-q2', 'q1': 'note-q1'})
+        result = outcome.score(ans, _scenario(), context=ctx)
+        assert result['pass'] == 0.0
+        assert result['notes_retrieved'] == 0.0  # no usable timestamps
+
+    def test_uses_occurred_start_when_mentioned_at_missing(self) -> None:
+        outcome = TemporalOrdering(
+            type='temporal_ordering',
+            expected_note_keys_newest_first=['q2', 'q1'],
+        )
+        q1_ts = _dt.datetime(2025, 3, 15, tzinfo=_dt.timezone.utc)
+        q2_ts = _dt.datetime(2025, 6, 20, tzinfo=_dt.timezone.utc)
+        u_q2 = SimpleNamespace(
+            text='q2', id='u1', note_id='note-q2', mentioned_at=None, occurred_start=q2_ts
+        )
+        u_q1 = SimpleNamespace(
+            text='q1', id='u2', note_id='note-q1', mentioned_at=None, occurred_start=q1_ts
+        )
+        ans = AgentAnswer(units=[u_q2, u_q1])
+        ctx = self._ctx({'q2': 'note-q2', 'q1': 'note-q1'})
+        assert outcome.score(ans, _scenario(), context=ctx)['pass'] == 1.0
+
+
+class TestHasContradictionLink:
+    """P5 #2 — assert the contradiction edge exists between newer/older
+    units. Uses superseded_by populated on the search-engine path."""
+
+    def _u(self, text: str, superseded_by_data=None) -> SimpleNamespace:
+        from memex_common.schemas import SupersessionInfo
+
+        ss = None
+        if superseded_by_data:
+            ss = [SupersessionInfo(**d) for d in superseded_by_data]
+        return SimpleNamespace(text=text, id='u-1', superseded_by=ss)
+
+    def test_has_link_passes(self) -> None:
+        outcome = HasContradictionLink(
+            type='has_contradiction_link',
+            newer_keyword='Ruby Martinez',
+            older_keyword='Alex Chen',
+        )
+        from uuid import uuid4
+
+        ans = AgentAnswer(
+            units=[
+                self._u(
+                    'Ruby Martinez leads Engineering',
+                    superseded_by_data=[
+                        {
+                            'unit_id': str(uuid4()),
+                            'unit_text': 'Alex Chen led Engineering',
+                            'note_title': 'old',
+                            'relation': 'contradicts',
+                        },
+                    ],
+                ),
+            ]
+        )
+        assert outcome.score(ans, _scenario()) == {'pass': 1.0}
+
+    def test_no_superseded_by_fails(self) -> None:
+        outcome = HasContradictionLink(
+            type='has_contradiction_link',
+            newer_keyword='Ruby Martinez',
+            older_keyword='Alex Chen',
+        )
+        ans = AgentAnswer(units=[self._u('Ruby Martinez leads', superseded_by_data=None)])
+        assert outcome.score(ans, _scenario()) == {'pass': 0.0}
+
+    def test_relation_filter(self) -> None:
+        from uuid import uuid4
+
+        outcome = HasContradictionLink(
+            type='has_contradiction_link',
+            newer_keyword='Ruby Martinez',
+            older_keyword='Alex Chen',
+            relation='contradicts',
+        )
+        # Has a 'weakens' link but expected 'contradicts' — fails.
+        ans = AgentAnswer(
+            units=[
+                self._u(
+                    'Ruby Martinez leads',
+                    superseded_by_data=[
+                        {
+                            'unit_id': str(uuid4()),
+                            'unit_text': 'Alex Chen led',
+                            'note_title': 'old',
+                            'relation': 'weakens',
+                        },
+                    ],
+                ),
+            ]
+        )
+        assert outcome.score(ans, _scenario()) == {'pass': 0.0}
+
+    def test_relation_any_matches_anything(self) -> None:
+        from uuid import uuid4
+
+        outcome = HasContradictionLink(
+            type='has_contradiction_link',
+            newer_keyword='Ruby Martinez',
+            older_keyword='Alex Chen',
+            relation='any',
+        )
+        ans = AgentAnswer(
+            units=[
+                self._u(
+                    'Ruby Martinez leads',
+                    superseded_by_data=[
+                        {
+                            'unit_id': str(uuid4()),
+                            'unit_text': 'Alex Chen led',
+                            'note_title': 'old',
+                            'relation': 'weakens',
+                        },
+                    ],
+                ),
+            ]
+        )
+        assert outcome.score(ans, _scenario()) == {'pass': 1.0}
+
+
+class TestNewestUnitContains:
+    """P5 #2 — assert the newest unit's text contains the expected keywords."""
+
+    def test_newest_contains_passes(self) -> None:
+        outcome = NewestUnitContains(
+            type='newest_unit_contains',
+            keywords=['Ruby Martinez'],
+        )
+        old_ts = _dt.datetime(2024, 1, 1, tzinfo=_dt.timezone.utc)
+        new_ts = _dt.datetime(2025, 6, 1, tzinfo=_dt.timezone.utc)
+        ans = AgentAnswer(
+            units=[
+                _u_with_note('Alex Chen led', 'u1', 'n1', old_ts),
+                _u_with_note('Ruby Martinez leads now', 'u2', 'n2', new_ts),
+            ]
+        )
+        assert outcome.score(ans, _scenario())['pass'] == 1.0
+
+    def test_newest_lacks_keyword_fails(self) -> None:
+        outcome = NewestUnitContains(
+            type='newest_unit_contains',
+            keywords=['Ruby Martinez'],
+        )
+        old_ts = _dt.datetime(2024, 1, 1, tzinfo=_dt.timezone.utc)
+        new_ts = _dt.datetime(2025, 6, 1, tzinfo=_dt.timezone.utc)
+        ans = AgentAnswer(
+            units=[
+                _u_with_note('Ruby Martinez was hired', 'u1', 'n1', old_ts),
+                _u_with_note('Alex Chen is here today', 'u2', 'n2', new_ts),
+            ]
+        )
+        assert outcome.score(ans, _scenario())['pass'] == 0.0
+
+    def test_no_timestamps_fails(self) -> None:
+        outcome = NewestUnitContains(
+            type='newest_unit_contains',
+            keywords=['Ruby Martinez'],
+        )
+        ans = AgentAnswer(units=[_u_with_note('Ruby Martinez', 'u1', 'n1', None)])
+        assert outcome.score(ans, _scenario())['pass'] == 0.0
+
+    def test_subject_filter_picks_subject_relevant_newest(self) -> None:
+        """F3 fix: subject_filter restricts the "newest" search to units
+        matching at least one subject keyword. Without the filter, the
+        latest-ingested unrelated unit wins; with it, the newest unit
+        ABOUT the subject wins."""
+        outcome = NewestUnitContains(
+            type='newest_unit_contains',
+            keywords=['Ruby Martinez'],
+            subject_filter=['Engineering'],
+        )
+        old_ts = _dt.datetime(2024, 1, 1, tzinfo=_dt.timezone.utc)
+        mid_ts = _dt.datetime(2025, 6, 1, tzinfo=_dt.timezone.utc)
+        new_ts = _dt.datetime(2026, 6, 1, tzinfo=_dt.timezone.utc)
+        ans = AgentAnswer(
+            units=[
+                _u_with_note('Alex Chen led Engineering', 'u1', 'n1', old_ts),
+                _u_with_note('Ruby Martinez leads Engineering', 'u2', 'n2', mid_ts),
+                _u_with_note(
+                    'Yuki Tanaka leads Security', 'u3', 'n3', new_ts
+                ),  # newest but off-topic
+            ]
+        )
+        # Without subject_filter the newest unit is the Security one → fail.
+        # With subject_filter=['Engineering'] only the first two are eligible
+        # and the newest of those is Ruby's → pass.
+        result = outcome.score(ans, _scenario())
+        assert result['pass'] == 1.0
+        assert result['subject_units'] == 2.0
+
+    def test_empty_units_fails(self) -> None:
+        outcome = NewestUnitContains(
+            type='newest_unit_contains',
+            keywords=['Ruby Martinez'],
+        )
+        assert outcome.score(AgentAnswer(), _scenario()) == {'pass': 0.0}
+
+
+class TestNoteAttribution:
+    """P5 #3 — assert all units from top_note_key rank above all from
+    lower_note_key. Robust to extraction paraphrasing — uses note_id, not
+    text substrings."""
+
+    def _ctx(self, mapping: dict[str, str]) -> dict:
+        return {'_note_id_by_key': mapping}
+
+    def test_top_above_lower_passes(self) -> None:
+        outcome = NoteAttribution(
+            type='note_attribution',
+            top_note_key='ach',
+            lower_note_key='inc',
+        )
+        ans = AgentAnswer(
+            units=[
+                _u_with_note('ach1', 'u1', 'note-ach', None),
+                _u_with_note('ach2', 'u2', 'note-ach', None),
+                _u_with_note('inc1', 'u3', 'note-inc', None),
+                _u_with_note('inc2', 'u4', 'note-inc', None),
+            ]
+        )
+        ctx = self._ctx({'ach': 'note-ach', 'inc': 'note-inc'})
+        result = outcome.score(ans, _scenario(), context=ctx)
+        assert result['pass'] == 1.0
+        # Mean ranks: top {0,1} → 0.5; low {2,3} → 2.5. top dominates.
+        assert result['top_mean_rank'] == 0.5
+        assert result['low_mean_rank'] == 2.5
+        assert result['top_count'] == 2.0
+        assert result['low_count'] == 2.0
+
+    def test_interleaved_passes_when_top_mean_dominates(self) -> None:
+        """Round-9 fix: mean-rank dominance instead of strict partition.
+        One interleaved low unit no longer fails the test."""
+        outcome = NoteAttribution(
+            type='note_attribution',
+            top_note_key='ach',
+            lower_note_key='inc',
+        )
+        ans = AgentAnswer(
+            units=[
+                _u_with_note('ach1', 'u1', 'note-ach', None),
+                _u_with_note('inc1', 'u2', 'note-inc', None),  # interleaved
+                _u_with_note('ach2', 'u3', 'note-ach', None),
+                _u_with_note('inc2', 'u4', 'note-inc', None),
+            ]
+        )
+        ctx = self._ctx({'ach': 'note-ach', 'inc': 'note-inc'})
+        result = outcome.score(ans, _scenario(), context=ctx)
+        # top mean = (0+2)/2 = 1.0; low mean = (1+3)/2 = 2.0. top < low → pass.
+        assert result['pass'] == 1.0
+        assert result['top_mean_rank'] == 1.0
+        assert result['low_mean_rank'] == 2.0
+
+    def test_top_below_lower_fails(self) -> None:
+        outcome = NoteAttribution(
+            type='note_attribution',
+            top_note_key='ach',
+            lower_note_key='inc',
+        )
+        ans = AgentAnswer(
+            units=[
+                _u_with_note('inc1', 'u1', 'note-inc', None),
+                _u_with_note('inc2', 'u2', 'note-inc', None),
+                _u_with_note('ach1', 'u3', 'note-ach', None),
+            ]
+        )
+        ctx = self._ctx({'ach': 'note-ach', 'inc': 'note-inc'})
+        result = outcome.score(ans, _scenario(), context=ctx)
+        assert result['pass'] == 0.0  # top mean=2.0 vs low mean=0.5
+
+    def test_missing_note_id_fails(self) -> None:
+        outcome = NoteAttribution(
+            type='note_attribution',
+            top_note_key='ach',
+            lower_note_key='inc',
+        )
+        ans = AgentAnswer(units=[])
+        ctx = self._ctx({})  # neither resolved
+        assert outcome.score(ans, _scenario(), context=ctx)['pass'] == 0.0
+
+    def test_uuid_note_id_normalises_via_str(self) -> None:
+        from uuid import uuid4 as _uuid
+
+        outcome = NoteAttribution(
+            type='note_attribution',
+            top_note_key='ach',
+            lower_note_key='inc',
+        )
+        # Mix UUID-typed note_id (DTO shape) and str (map shape) — both must
+        # match via str() coercion.
+        ach_uuid = _uuid()
+        inc_uuid = _uuid()
+        u1 = SimpleNamespace(
+            text='ach', id='u1', note_id=ach_uuid, mentioned_at=None, occurred_start=None
+        )
+        u2 = SimpleNamespace(
+            text='inc', id='u2', note_id=inc_uuid, mentioned_at=None, occurred_start=None
+        )
+        ans = AgentAnswer(units=[u1, u2])
+        ctx = self._ctx({'ach': str(ach_uuid), 'inc': str(inc_uuid)})
+        assert outcome.score(ans, _scenario(), context=ctx)['pass'] == 1.0

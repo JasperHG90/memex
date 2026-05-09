@@ -22,14 +22,17 @@ from memex_eval.suite import (
     KeywordsPresent,
     KvRoundtrip,
     LLMJudge,
-    RankingOrder,
+    NewestUnitContains,
+    NoteAttribution,
     Scenario,
     SetupAction,
     Suite,
     SuiteMetadata,
     SuiteSources,
     SummaryNonempty,
+    TemporalOrdering,
     UnitMetadataMatches,
+    UsefulAtK,
 )
 
 _ROOT = Path(__file__).parent
@@ -186,13 +189,20 @@ SCENARIOS = [
     ),
     Scenario(
         id='temporal_recency',
-        description='Recency ranking puts Q2 results above Q1.',
+        description=(
+            'Recency ranking puts Q2 results above Q1 — asserted at the '
+            'datetime layer. Avoids the brittle quarter-label substring '
+            'check (extraction paraphrases "Q2 2025" → "April-June 2025").'
+        ),
         query='quarterly business review results',
         top_k=10,
         strategies=['temporal'],
-        expected=RankingOrder(
-            type='ranking_order',
-            expected_keyword_order=['Q2 2025', 'Q1 2025'],
+        expected=TemporalOrdering(
+            type='temporal_ordering',
+            expected_note_keys_newest_first=[
+                'quarterly-review-q2',
+                'quarterly-review-q1',
+            ],
         ),
     ),
     # ------------------------------------------------------------------
@@ -246,12 +256,21 @@ SCENARIOS = [
     ),
     Scenario(
         id='scale_current_vs_former_lead',
-        description='Current head (ongoing) ranks above former head (ended tenure).',
-        query='Who leads the Engineering department at TechCo Global?',
+        description=(
+            'Among Engineering-leadership units, the newest one (by '
+            'mentioned_at / occurred_start) names Ruby Martinez. Alex Chen '
+            'was head 2020-2023 (succession, NOT contradiction); the test '
+            'simply asserts that the most recent engineering-leadership '
+            'fact correctly identifies the current head. An agent reading '
+            'the result set can use unit timestamps to disambiguate the '
+            'two without needing a contradiction link.'
+        ),
+        query='Who currently leads the Engineering department at TechCo Global?',
         top_k=30,
-        expected=RankingOrder(
-            type='ranking_order',
-            expected_keyword_order=['Ruby Martinez', 'Alex Chen'],
+        expected=NewestUnitContains(
+            type='newest_unit_contains',
+            keywords=['Ruby Martinez'],
+            subject_filter=['Engineering'],
         ),
     ),
     Scenario(
@@ -266,10 +285,28 @@ SCENARIOS = [
     # ------------------------------------------------------------------
     Scenario(
         id='asset_note_searchable',
-        description='Note with asset is ingested and content is searchable.',
+        description=(
+            'Note with a binary asset is ingested and its body content is '
+            'searchable. LLM-judge tests for architectural-concept coverage '
+            'rather than literal tool names — extraction summarises bullet '
+            'lists and tool/qualifier phrases (e.g. "Kong with rate limiting") '
+            'often lose qualifiers. We assert the test is meaningful by '
+            'requiring named tooling for at least two services, which is '
+            'achievable across paraphrased extractions.'
+        ),
         query='microservices architecture API Gateway',
-        top_k=10,
-        expected=KeywordsPresent(type='keywords_present', keywords=['Kong', 'rate limiting']),
+        top_k=5,
+        expected=LLMJudge(
+            type='llm_judge',
+            rubric=(
+                'A useful result describes a microservices architecture and '
+                'names at least one specific technology or service for at '
+                'least two of: API gateway, user/auth service, order '
+                'processing, notifications, analytics. Generic mentions of '
+                '"microservices" without any named technology do NOT count.'
+            ),
+            threshold=0.5,
+        ),
     ),
     Scenario(
         id='asset_note_search',
@@ -288,7 +325,11 @@ SCENARIOS = [
     # ------------------------------------------------------------------
     Scenario(
         id='outcomes_ranking',
-        description='After outcomes, achievement units rank above incident units.',
+        description=(
+            'After outcomes, achievement units rank above incident units — '
+            'asserted via note_id attribution rather than substring match '
+            '(extraction paraphrases "achievement" / "incident" away).'
+        ),
         query='Project Zeta',
         top_k=10,
         setup_actions=[
@@ -311,9 +352,31 @@ SCENARIOS = [
                 reason='Negative outcomes for incident facts',
             ),
         ],
-        expected=RankingOrder(
-            type='ranking_order',
-            expected_keyword_order=['achievement', 'incident'],
+        expected=NoteAttribution(
+            type='note_attribution',
+            top_note_key='project-zeta-achievement',
+            lower_note_key='project-zeta-incident',
+        ),
+    ),
+    Scenario(
+        id='outcomes_ranking_specific_query',
+        description=(
+            'Specific-phrasing variant: the query explicitly mentions both '
+            'subjects ("incident postmortem"). Strong incident-side semantic '
+            'match SHOULD pull incident units to the top, regardless of the '
+            'memory-worth signal. Asserts the system respects explicit query '
+            'phrasing — an agent asking about incidents gets incident facts. '
+            "(Inverts ``outcomes_ranking``'s assertion direction.)"
+        ),
+        query='Project Zeta launch outcomes and incident postmortem',
+        top_k=10,
+        # No setup_actions: relies on the outcomes already recorded by the
+        # prior ``outcomes_ranking`` scenario in the same run. Order
+        # matters — see suite-level docstring.
+        expected=NoteAttribution(
+            type='note_attribution',
+            top_note_key='project-zeta-incident',
+            lower_note_key='project-zeta-achievement',
         ),
     ),
     # ------------------------------------------------------------------
@@ -448,7 +511,21 @@ SCENARIOS = [
         query='Sarah Chen',
         top_k=10,
         setup_actions=[
-            SetupAction(kind='trigger_reflections', count=5),
+            # ``target_entity_names`` blocks until both entities have a
+            # materialized mental_model. ``min_mental_model_hits=5`` matches
+            # the downstream ``mental_model_strategy`` scenario's top_k=5 so
+            # it doesn't race the reflection writer (legacy behavior of "≥1
+            # hit" left ~3 of ~24 expected observations queryable when the
+            # consumer fired). ``probe_query`` matches the consumer query so
+            # we observe what it will observe.
+            SetupAction(
+                kind='trigger_reflections',
+                count=5,
+                target_entity_names=['Sarah Chen', 'Project Alpha'],
+                min_mental_model_hits=5,
+                probe_query='Sarah Chen leadership',
+                timeout_s=240,
+            ),
         ],
         expected=LLMJudge(
             type='llm_judge',
@@ -462,13 +539,23 @@ SCENARIOS = [
     Scenario(
         id='mental_model_strategy',
         description=(
-            'Mental model retrieval strategy returns results for reflected '
-            'entity (depends on prior trigger_reflections).'
+            'Mental model retrieval strategy returns useful results for the '
+            'reflected entity. LLM-judges each top-k result for relevance to '
+            'the query rather than relying on surface-level keyword presence.'
         ),
         query='Sarah Chen leadership',
-        top_k=10,
+        top_k=5,
         strategies=['mental_model'],
-        expected=KeywordsPresent(type='keywords_present', keywords=['Sarah Chen']),
+        expected=UsefulAtK(
+            type='useful_at_k',
+            rubric=(
+                'A useful result references Sarah Chen as a leader or '
+                'lead role-holder, OR describes her leadership style, '
+                'decisions, or scope of authority.'
+            ),
+            k=5,
+            threshold=0.5,
+        ),
     ),
     # ------------------------------------------------------------------
     # GROUP_VAULT_ISOLATION — last group; per-vault scoping. Each

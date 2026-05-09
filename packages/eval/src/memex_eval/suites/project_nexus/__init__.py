@@ -117,19 +117,35 @@ SCENARIOS = [
     # ------------------------------------------------------------------
     Scenario(
         id='lint_findings_after_consolidation',
-        description='Consolidation tick produces a lint finding on the api-version contradiction.',
+        description=(
+            'Consolidation tick + LLM lint pass produces a contradiction '
+            'finding on the api-version corpus. We assert against the LLM '
+            'rule (``llm_semantic_contradiction``) rather than a V1 '
+            'structural rule because the corpus shape — two units making '
+            'mutually-exclusive policy claims — is exactly what the LLM '
+            'pipeline detects, not what V1_RULES targets. V1_RULES handle '
+            'structural problems (orphan mental models, cold low-MW units, '
+            'sensitive unreviewed units, dangling entity refs, composite '
+            'deprioritize candidates); the LLM ruleset (lint_llm/checks.py) '
+            'handles semantic problems (contradictions, surprise, '
+            'redundancy). They co-exist by design — V1 is cheap and runs '
+            'inline; LLM is expensive and runs on a separate quota-limited '
+            'queue.'
+        ),
         query='API versioning policy',
         top_k=10,
-        setup_actions=[SetupAction(kind='consolidation_tick')],
-        # Deviation from blueprint Risk #5: V1_RULES does not include the
-        # LLM-gated 'surprise_gate_llm' rule (it lives in lint_llm/checks.py
-        # outside V1_RULES), so Suite._validate_referential_integrity rejects
-        # it. composite_deprioritize_candidate is a real V1 rule that targets
-        # memory_units and can fire on consolidation; the rule_name itself is
-        # exercised end-to-end at runtime.
+        setup_actions=[
+            SetupAction(kind='consolidation_tick'),
+            # The LLM lint pass is what fires on this corpus. lint_run is
+            # kept too so V1 rules also get a turn; harmless if no V1 rule
+            # fires.
+            SetupAction(kind='lint_run'),
+            SetupAction(kind='lint_llm_run'),
+        ],
+        requires_nli_classifier=True,
         expected=LintFindingPresent(
             type='lint_finding_present',
-            expected_rule_name='composite_deprioritize_candidate',
+            expected_rule_name='llm_semantic_contradiction',
         ),
         expected_failure_modes=['claude-code', 'hermes'],
     ),
@@ -138,6 +154,11 @@ SCENARIOS = [
         description='LLM-gated lint flags the contradiction between API versioning policies.',
         query='API versioning contradiction',
         top_k=10,
+        # Explicitly trigger the LLM-gated lint pass so the assertion
+        # observes a deterministic post-lint state. ``requires_nli_classifier``
+        # gates the scenario when polarity is config-disabled.
+        setup_actions=[SetupAction(kind='lint_llm_run')],
+        requires_nli_classifier=True,
         expected=LLMLintFlagsUnit(
             type='llm_lint_flags_unit',
             target_keywords=['header-based versioning', 'URL-based'],

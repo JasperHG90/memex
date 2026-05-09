@@ -4,10 +4,53 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+from pathlib import Path
 from uuid import uuid4
 
 import typer
 from rich.console import Console
+
+# P8: vault-keep label sanitizer. Manifest files are written to disk under
+# `<manifest_dir>/<label>.json`. The label MUST be safe for use as a single
+# filesystem path component on every platform we care about (Linux, macOS,
+# WSL): no slashes, no backslashes, no dots-only names, no path traversal.
+# We also forbid leading dots/dashes to keep `ls` output clean. The full
+# `re_pattern + ".." check + Path.resolve().is_relative_to(...)` triple is
+# applied — belt + suspenders against creative attackers and lossy edge
+# cases (e.g. unicode normalization differing between input and stored file).
+_VAULT_LABEL_RE = re.compile(r'^[A-Za-z0-9][A-Za-z0-9._-]*$')
+_DEFAULT_MANIFEST_DIR = Path.home() / '.memex' / 'eval' / 'keep-vault-manifests'
+
+
+def _validate_vault_label(label: str) -> str:
+    """Validate a --keep-vault / --reuse-vault label.
+
+    Raises ``typer.BadParameter`` (which Typer converts to a clean exit) on
+    any of: empty, regex mismatch, contains '..', or resolves outside the
+    canonical manifest directory.
+    """
+    if not label:
+        raise typer.BadParameter('vault label must not be empty')
+    if not _VAULT_LABEL_RE.match(label):
+        raise typer.BadParameter(
+            f'vault label {label!r} must match {_VAULT_LABEL_RE.pattern}: '
+            f'alphanumeric, dot, underscore, dash; must not start with a dot or dash.'
+        )
+    if '..' in label:
+        raise typer.BadParameter(f'vault label {label!r} must not contain ".."')
+    # Defense in depth — the regex IS the security boundary; this
+    # post-resolve check is a no-op on Linux/macOS for any input that
+    # passed both gates above. Kept as a runtime tripwire in case some
+    # future platform or library mutation introduces a way to escape
+    # the manifest directory through a label that LOOKS safe to the
+    # regex. Cheap; no maintenance cost.
+    candidate = (_DEFAULT_MANIFEST_DIR / f'{label}.json').resolve()
+    base = _DEFAULT_MANIFEST_DIR.resolve()
+    if not candidate.is_relative_to(base):
+        raise typer.BadParameter(f'vault label {label!r} resolves outside {base}')
+    return label
+
 
 app = typer.Typer(
     name='memex-eval',
@@ -545,7 +588,6 @@ def suite_run(
     ),
     replicates: int = typer.Option(1, '--replicates', min=1, max=20),
     seed: int | None = typer.Option(None, '--seed'),
-    no_llm_judge: bool = typer.Option(False, '--no-llm-judge'),
     judge_model: str | None = typer.Option(None, '--judge-model', envvar='EVAL_JUDGE_MODEL'),
     output: str | None = typer.Option(None, '--output', '-o'),
     notes: str | None = typer.Option(
@@ -561,6 +603,27 @@ def suite_run(
         None,
         '--notes-file',
         help='Read the notes body from a file (mutually exclusive with --notes).',
+    ),
+    keep_vault: str | None = typer.Option(
+        None,
+        '--keep-vault',
+        help=(
+            'Persist the vault under LABEL after the run. Writes a manifest '
+            f'to {_DEFAULT_MANIFEST_DIR}/<LABEL>.json so a follow-up '
+            '--reuse-vault <LABEL> run binds to the same vault(s) without '
+            're-ingesting. Label must match [A-Za-z0-9][A-Za-z0-9._-]*.'
+        ),
+    ),
+    reuse_vault: str | None = typer.Option(
+        None,
+        '--reuse-vault',
+        help=(
+            'Reuse a vault previously kept under LABEL. Skips ingest + '
+            'extraction; setup actions still run per scenario. Scenarios '
+            'whose setup includes any non-reusable handler (declared via '
+            '``reusable_under_reuse_vault = False`` on the handler class) '
+            'are skipped with reason setup_action_not_reusable.'
+        ),
     ),
     verbose: bool = typer.Option(False, '--verbose', '-v'),
 ) -> None:
@@ -583,6 +646,25 @@ def suite_run(
         raise typer.Exit(code=2)
     if notes_file:
         notes = _read_notes_file(notes_file)
+
+    if keep_vault and reuse_vault:
+        console.print(
+            '[red]Pass either --keep-vault or --reuse-vault, not both. '
+            '(Reuse already implicitly preserves the vault for the next run.)[/red]'
+        )
+        raise typer.Exit(code=2)
+    if keep_vault is not None:
+        keep_vault = _validate_vault_label(keep_vault)
+    if reuse_vault is not None:
+        reuse_vault = _validate_vault_label(reuse_vault)
+    # Reuse multiple suites against the same label is meaningless — a
+    # manifest is tied to one suite's notes.
+    if (keep_vault or reuse_vault) and all_suites:
+        console.print(
+            '[red]--keep-vault / --reuse-vault require a single suite name '
+            '(a manifest is tied to one suite). Drop --all.[/red]'
+        )
+        raise typer.Exit(code=2)
 
     cfg_overrides, _env = _resolve_overrides_to_env(overrides)
     if cfg_overrides:
@@ -620,11 +702,12 @@ def suite_run(
                     server_url=server,
                     config_overrides=cfg_overrides,
                     judge_model=judge_model,
-                    use_llm_judge=not no_llm_judge,
                     replicates=replicates,
                     seed=seed,
                     recorder=recorder,
                     notes=notes,
+                    keep_vault=keep_vault,
+                    reuse_vault=reuse_vault,
                 )
             )
         except KeyboardInterrupt:

@@ -236,7 +236,6 @@ class TestScenarioExecutionOrder:
             suite,
             server_url='http://fake/api/v1/',
             recorder=NullRecorder(),
-            use_llm_judge=False,
             seed=1,
         )
         assert [o.scenario_id for o in result.scenario_outcomes] == scenario_ids

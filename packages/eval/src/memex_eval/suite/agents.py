@@ -291,13 +291,28 @@ class DirectApiBackend(AnswerBackend):
                 payload = await api.lint_findings(vault_id=str(vault_id))
                 # /lint/findings returns {'findings': [...], ...} — extract the list.
                 raw = payload.get('findings') if isinstance(payload, dict) else payload
+                # Enrich findings with the flagged unit's text. The lint API
+                # returns ``target_id`` (memory_unit UUID) but no ``unit_text``;
+                # ``LLMLintFlagsUnit.score`` does substring matching against
+                # the unit body, so we resolve ``target_id`` -> unit and graft
+                # ``unit_text`` onto the finding dict before wrapping.
                 findings_list: list[Any] = []
                 for item in raw or []:
-                    if isinstance(item, dict):
-                        # Wrap so getattr(f, 'rule_name', ...) works in score().
-                        findings_list.append(_DictAttrShim(item))
-                    else:
+                    if not isinstance(item, dict):
                         findings_list.append(item)
+                        continue
+                    if item.get('target_type') == 'memory_unit' and item.get('target_id'):
+                        try:
+                            mu = await api.get_memory_unit(item['target_id'])
+                            item['unit_text'] = getattr(mu, 'text', '') or ''
+                        except Exception as exc:
+                            logger.debug(
+                                'lint enrich: get_memory_unit(%s) failed: %s',
+                                item['target_id'],
+                                exc,
+                            )
+                            item.setdefault('unit_text', '')
+                    findings_list.append(_DictAttrShim(item))
                 out.lint_findings = findings_list
             else:
                 # Default: memory search (covers KeywordsPresent/Absent,

@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import datetime as dt
+import json
 import logging
 import random
 import subprocess
@@ -137,7 +138,7 @@ async def _run_setup_actions(
     so ``_resolve_unit_ids`` can do deterministic note-key-scoped
     resolution (preferred over ``search_query``).
     """
-    context: dict[str, Any] = {'_setup_failures': []}
+    context: dict[str, Any] = {'_setup_failures': [], '_executed_action_kinds': []}
     for action in actions:
         try:
             handler = get_setup_action(action.kind)
@@ -166,6 +167,9 @@ async def _run_setup_actions(
                 for k, v in result.items():
                     key = k if k.startswith(prefix) else f'{prefix}{k}'
                     context[key] = v
+            # Successful run — track the kind so teardown loop knows to
+            # invoke this handler's teardown (P4 + round-4 M4-3).
+            context['_executed_action_kinds'].append(action.kind)
         except Exception as e:
             context['_setup_failures'].append({'kind': action.kind, 'error': str(e)})
             if getattr(handler, 'required', False) or getattr(action, 'required', False):
@@ -179,6 +183,44 @@ async def _run_setup_actions(
                 break
             logger.warning('  Setup action %s failed: %s', action.kind, e)
     return context
+
+
+async def _run_setup_teardowns(
+    api: RemoteMemexAPI,
+    vault_id: UUID,
+    actions: list[SetupAction],
+    setup_context: dict[str, Any],
+) -> None:
+    """Invoke ``handler.teardown()`` for each setup action whose ``run()``
+    actually executed in this scenario (per ``_executed_action_kinds``).
+
+    Per-handler isolation: an exception inside one teardown is caught with a
+    logger warning and does NOT abort subsequent teardowns. A failed teardown
+    leaves vault state dirty for the next scenario; that's the trade-off for
+    keeping the loop going so other handlers still clean up their own state.
+
+    Skipped silently when an action's ``run()`` never executed (earlier
+    required-failure broke the loop) — there's nothing to undo and emitting
+    a warning would be misleading.
+    """
+    executed_kinds: list[str] = setup_context.get('_executed_action_kinds', [])
+    for action in actions:
+        if action.kind not in executed_kinds:
+            logger.debug('Skipping teardown of %r (setup did not execute).', action.kind)
+            continue
+        try:
+            handler = get_setup_action(action.kind)
+            params = {
+                k: v for k, v in action.model_dump().items() if k not in _RUNNER_RESERVED_PARAM_KEYS
+            }
+            await handler.teardown(api, vault_id, params, setup_context)
+        except Exception as exc:
+            logger.warning(
+                'Teardown of %r raised %s — continuing with remaining teardowns. '
+                'Vault state may be dirty for the next scenario.',
+                action.kind,
+                exc,
+            )
 
 
 async def _ingest_sources(
@@ -226,7 +268,13 @@ async def _ingest_sources(
         )
         resp = await api.ingest(dto)
         if hasattr(resp, 'note_id') and resp.note_id:
-            note_id_by_key[note.note_key] = str(resp.note_id)
+            # IngestResponse.note_id is the 32-char MD5 hex idempotency key
+            # (api.py:241 documents it as "MD5 hex digest, not a UUID").
+            # MemoryUnitDTO.note_id is parsed by Pydantic into a UUID and
+            # stringifies in canonical dashed form. Normalize through UUID()
+            # so both sides of TemporalOrdering / NoteAttribution comparisons
+            # use the same string format.
+            note_id_by_key[note.note_key] = str(UUID(resp.note_id))
         elif hasattr(resp, 'status') and resp.status == 'skipped':
             # Idempotent skip — find the existing note in THIS vault by name.
             # Suite-prefixed note_key would be more precise but the client lacks
@@ -237,7 +285,7 @@ async def _ingest_sources(
                 existing = await api.find_notes_by_title(lookup_name, vault_ids=[target_vault_id])
                 for n in existing:
                     if getattr(n, 'name', None) == lookup_name:
-                        note_id_by_key[note.note_key] = str(n.id)
+                        note_id_by_key[note.note_key] = str(UUID(str(n.id)))
                         break
             except Exception as e:
                 logger.warning(
@@ -406,6 +454,7 @@ async def _execute_scenario(
     suite: Suite,
     judge: Judge | None,
     note_key_to_unit_ids: dict[str, list[str]],
+    note_id_by_key: dict[str, str],
     replicate_index: int,
     backend_cache: dict[str, Any] | None = None,
 ) -> ScenarioOutcome:
@@ -467,15 +516,26 @@ async def _execute_scenario(
             answer_mode=answer_mode,
         )
 
+    # Initialise scenario_context BEFORE the try so the finally can always
+    # reach it (round-3 H-NEW-2: an exception during _run_setup_actions
+    # would leave the var unbound, masking the original error).
+    # Seed reserved keys the score path expects (round-1 C2 + round-2 C2):
+    #   _note_id_by_key  → TemporalOrdering / NoteAttribution lookups
+    #   _note_key_to_unit_ids → setup_action note_key resolution + GoldUnitIds
+    scenario_context: dict[str, Any] = {
+        '_note_id_by_key': note_id_by_key,
+        '_note_key_to_unit_ids': note_key_to_unit_ids,
+        '_executed_action_kinds': [],
+    }
     try:
-        scenario_context: dict[str, Any] = {}
         if scenario.setup_actions:
-            scenario_context = await _run_setup_actions(
+            setup_result = await _run_setup_actions(
                 api,
                 vault_id,
                 scenario.setup_actions,
                 note_key_to_unit_ids=note_key_to_unit_ids,
             )
+            scenario_context.update(setup_result)
             if scenario_context.get('_required_setup_failed'):
                 return ScenarioOutcome(
                     scenario_id=scenario.id,
@@ -593,6 +653,12 @@ async def _execute_scenario(
             replicate_index=replicate_index,
             answer_mode=answer_mode,
         )
+    finally:
+        # Always run teardowns regardless of pass/fail/error so the next
+        # scenario starts from a clean state. Per-handler isolation is
+        # inside _run_setup_teardowns; failures there are logged-and-swallowed.
+        if scenario.setup_actions:
+            await _run_setup_teardowns(api, vault_id, scenario.setup_actions, scenario_context)
 
 
 def _aggregate_results(
@@ -644,13 +710,15 @@ async def run_suite(
     *,
     config_overrides: dict[str, str] | None = None,
     judge_model: str | None = None,
-    use_llm_judge: bool = True,
     replicates: int = 1,
     seed: int | None = None,
     recorder: 'MLflowRecorder | NullRecorder | None' = None,
     extra_tags: dict[str, str] | None = None,
     extra_params: dict[str, str] | None = None,
     notes: str | None = None,
+    keep_vault: str | None = None,
+    reuse_vault: str | None = None,
+    manifest_dir: Path | None = None,
 ) -> RunResult:
     """Run one suite end-to-end.
 
@@ -659,9 +727,27 @@ async def run_suite(
             on ``RunResult.notes`` and uploaded to MLflow as the
             ``run_notes.md`` artifact + a truncated ``notes`` tag for
             UI-side filtering. The full text lives in the artifact.
+        keep_vault: When set, skip the vault-cleanup step at end of run and
+            persist a JSON manifest at ``<manifest_dir>/<keep_vault>.json``
+            so a follow-up ``--reuse-vault`` run can bind to the same
+            vaults. The value is the LABEL — already validated upstream
+            (CLI rejects path-traversal characters).
+        reuse_vault: When set, bind to vaults named in the manifest at
+            ``<manifest_dir>/<reuse_vault>.json`` and skip the
+            ingest+extraction phase entirely. Setup actions still run on
+            the reused vault — teardowns ensure the next scenario starts
+            clean (P4). Scenarios whose setup includes any non-reusable
+            handler (declared via ``reusable_under_reuse_vault = False``
+            on the SetupActionHandler subclass) cannot be safely re-run
+            on a reused vault and are skipped with
+            skip_reason='setup_action_not_reusable'.
+        manifest_dir: Directory for keep/reuse manifest files. Defaults
+            to ``~/.memex/eval/keep-vault-manifests/``.
 
     Logs to ``recorder`` if provided. Returns the full ``RunResult``.
     """
+    if manifest_dir is None:
+        manifest_dir = Path.home() / '.memex' / 'eval' / 'keep-vault-manifests'
     config_overrides = dict(config_overrides or {})
     extra_tags = dict(extra_tags or {})
     extra_params = dict(extra_params or {})
@@ -679,13 +765,15 @@ async def run_suite(
     run_id_short = run_id[:8]
     vault_name = f'eval-suite-{suite.name}-{run_id_short}'
 
-    # Judge setup + probe
+    # Judge setup + probe — always loaded when the suite has any
+    # judge-graded scenario. The CLI flag to skip the judge was removed
+    # because every important quality signal in the framework runs through
+    # it; running judge-graded scenarios with the judge stubbed out
+    # produces silent skips that pretend the suite passed.
     judge: Judge | None = None
     judge_model_probe: dict[str, Any] | None = None
     judge_model_value: str | None = None
-    if use_llm_judge and any(
-        isinstance(s.expected, (LLMJudge, UsefulAtK)) for s in suite.scenarios
-    ):
+    if any(isinstance(s.expected, (LLMJudge, UsefulAtK)) for s in suite.scenarios):
         try:
             judge = Judge(model=judge_model)
             judge_model_value = judge.lm.model
@@ -718,40 +806,111 @@ async def run_suite(
     git_branch = _git_capture(['rev-parse', '--abbrev-ref', 'HEAD'])
     memex_v = _memex_version()
 
+    # round-6 H3: hoist mutual-exclusion check into ``run_suite`` so library
+    # callers (test harnesses, orchestration scripts) get the same
+    # protection the CLI provides. Both flags set is a programming error;
+    # raising here surfaces it before any vault state is mutated.
+    if keep_vault is not None and reuse_vault is not None:
+        raise ValueError(
+            'keep_vault and reuse_vault are mutually exclusive. '
+            'Reuse already implicitly preserves the vault for the next run.'
+        )
+
     outcomes: list[ScenarioOutcome] = []
     note_key_to_unit_ids: dict[str, list[str]] = {}
     config_snapshot: dict[str, Any] = {}
     embedding_model = ''
     reranker_model = ''
+    # round-6 C1: only write the keep-vault manifest after the scenario loop
+    # exits cleanly. A KeyboardInterrupt mid-extraction would otherwise
+    # persist a manifest pointing at an under-populated vault, causing the
+    # next --reuse-vault run to silently false-fail when the (incomplete)
+    # extraction's missing-units check passes by coincidence.
+    run_completed = False
 
     try:
         async with httpx.AsyncClient(base_url=server_url, timeout=180.0) as client:
             api = RemoteMemexAPI(client)
 
             # Capture config snapshot (best-effort — admin auth may block)
+            config_snapshot_available = False
+            nli_available: bool | None = None  # None = config unavailable
             try:
                 config_snapshot = await api.get_system_config()
+                config_snapshot_available = True
                 # Resolve embedding/reranker model identity from snapshot
                 emb = config_snapshot.get('server', {}).get('memory', {}).get('embedding', {})
                 rer = config_snapshot.get('server', {}).get('memory', {}).get('reranker', {})
                 embedding_model = str(emb.get('model') or emb.get('type') or '')
                 reranker_model = str(rer.get('model') or rer.get('type') or '')
+                # P7: determine NLI availability for requires_nli_classifier gating.
+                pol = (
+                    config_snapshot.get('server', {})
+                    .get('memory', {})
+                    .get('lint_llm', {})
+                    .get('polarity', {})
+                )
+                lint_llm = config_snapshot.get('server', {}).get('memory', {}).get('lint_llm', {})
+                pol_enabled = bool(pol.get('enabled', True))
+                lint_llm_enabled = bool(lint_llm.get('enabled', True))
+                backend_type = (pol.get('backend') or {}).get('type', 'onnx')
+                nli_available = lint_llm_enabled and pol_enabled and backend_type != 'disabled'
             except Exception as e:
                 logger.warning('Could not fetch /system/config: %s', e)
 
-            # Vault setup
-            default_vault_id = await _setup_vault(
-                api, vault_name, f'Eval suite vault: {suite.name}'
-            )
-            vault_map: dict[str | None, UUID] = {None: default_vault_id}
-            extra_vault_names = {n.vault_name for n in suite.sources.notes if n.vault_name}
-            extra_vault_names |= {s.vault_name for s in suite.scenarios if s.vault_name}
-            for name in extra_vault_names:
-                if name is None:
-                    continue
-                vault_map[name] = await _setup_vault(
-                    api, f'{vault_name}-{name}', f'Eval extra vault: {name}'
+            # P8: Vault setup — branch on reuse_vault. ``vault_map`` is declared
+            # once with explicit Optional[str] keys so both branches narrow
+            # cleanly under mypy.
+            vault_map: dict[str | None, UUID] = {}
+            if reuse_vault is not None:
+                manifest_path = manifest_dir / f'{reuse_vault}.json'
+                if not manifest_path.exists():
+                    raise FileNotFoundError(
+                        f'Reuse manifest not found: {manifest_path}. '
+                        f'Did you pass --keep-vault on a prior run?'
+                    )
+                manifest = json.loads(manifest_path.read_text())
+                primary_name = manifest['primary_vault']['name']
+                primary_id = UUID(manifest['primary_vault']['id'])
+                # Verify the vault still exists on the server.
+                existing = await api.list_vaults()
+                existing_ids = {str(v.id) for v in existing}
+                if str(primary_id) not in existing_ids:
+                    raise FileNotFoundError(
+                        f'Manifest {manifest_path} names vault {primary_id!r} '
+                        f'which no longer exists on the server. Drop the manifest '
+                        f'and re-run without --reuse-vault.'
+                    )
+                default_vault_id = primary_id
+                vault_name = primary_name
+                vault_map[None] = default_vault_id
+                for sec_name, sec_data in (manifest.get('secondary_vaults') or {}).items():
+                    sec_id = UUID(sec_data['id'])
+                    if str(sec_id) not in existing_ids:
+                        raise FileNotFoundError(
+                            f'Manifest {manifest_path} names secondary vault '
+                            f'{sec_id!r} ({sec_name!r}) which no longer exists.'
+                        )
+                    vault_map[sec_name] = sec_id
+                logger.info(
+                    'Reusing vault %r (%s) from manifest %s',
+                    vault_name,
+                    default_vault_id,
+                    manifest_path,
                 )
+            else:
+                default_vault_id = await _setup_vault(
+                    api, vault_name, f'Eval suite vault: {suite.name}'
+                )
+                vault_map[None] = default_vault_id
+                extra_vault_names = {n.vault_name for n in suite.sources.notes if n.vault_name}
+                extra_vault_names |= {s.vault_name for s in suite.scenarios if s.vault_name}
+                for name in extra_vault_names:
+                    if name is None:
+                        continue
+                    vault_map[name] = await _setup_vault(
+                        api, f'{vault_name}-{name}', f'Eval extra vault: {name}'
+                    )
 
             # Per-run backend cache. Backends with non-trivial setup
             # (HermesBackend) are reused across scenarios; teardown happens
@@ -759,22 +918,83 @@ async def run_suite(
             backend_cache: dict[str, Any] = {}
 
             try:
-                # Ingest source notes
-                note_id_by_key = await _ingest_sources(api, default_vault_id, vault_map, suite)
-
-                # Wait for extraction (vault-wide stable signal first). Skip
-                # entirely when no notes were ingested — otherwise we burn the
-                # full retry budget on a vault that has nothing to extract.
-                if note_id_by_key:
-                    with contextlib.suppress(Exception):
-                        await wait_for_extraction(
-                            api,
-                            default_vault_id,
-                            poll_interval=2.0,
-                            poll_timeout=120.0,
-                            stable_ticks_required=2,
-                            max_consecutive_errors=5,
+                if reuse_vault is not None:
+                    # P8: skip ingest+extraction. Resolve the existing notes
+                    # back to source note_keys by matching on the per-note
+                    # display ``name`` — that's the field _ingest_sources
+                    # writes from ``note.title or note.note_key`` and the
+                    # only stable handle ``NoteListItemDTO`` exposes
+                    # (it omits the wire ``note_key``).
+                    note_id_by_key = {}
+                    # Walk every vault the suite uses. ``vault_map`` already
+                    # contains ``default_vault_id`` under key ``None`` (set
+                    # during vault setup); ``set(...)`` dedupes if a
+                    # secondary vault happens to alias the default.
+                    # round-6 H2: collect ids per name as a list so duplicate
+                    # display names raise loudly instead of silently mapping
+                    # both source notes to whichever id wins the dict update.
+                    notes_by_name_per_vault: dict[UUID, dict[str, list[str]]] = {}
+                    for vid in set(vault_map.values()):
+                        try:
+                            # Server caps limit at 500 (server/notes.py: le=500).
+                            # Suites with >500 source notes will need pagination;
+                            # current suites are well under this.
+                            rows = await api.list_notes(vault_id=vid, limit=500)
+                        except Exception as e:
+                            logger.warning('list_notes failed for vault %s: %s', vid, e)
+                            rows = []
+                        per_vault: dict[str, list[str]] = {}
+                        for n in rows:
+                            nm = getattr(n, 'name', None) or ''
+                            per_vault.setdefault(nm, []).append(str(n.id))
+                        notes_by_name_per_vault[vid] = per_vault
+                    missing: list[str] = []
+                    ambiguous: list[str] = []
+                    for src in suite.sources.notes:
+                        target_vault_id = vault_map.get(src.vault_name, default_vault_id)
+                        lookup_name = src.title or src.note_key
+                        candidates = notes_by_name_per_vault.get(target_vault_id, {}).get(
+                            lookup_name, []
                         )
+                        if not candidates:
+                            missing.append(src.note_key)
+                            continue
+                        if len(candidates) > 1:
+                            ambiguous.append(src.note_key)
+                            continue
+                        note_id_by_key[src.note_key] = candidates[0]
+                    if missing:
+                        raise ValueError(
+                            f'Reused vault is missing expected notes: {missing}. '
+                            f'Re-run without --reuse-vault to ingest fresh.'
+                        )
+                    if ambiguous:
+                        raise ValueError(
+                            f'Reused vault has multiple notes sharing a display '
+                            f'name for source note_keys {ambiguous}. The reuse '
+                            f'lookup matches by ``note.title or note.note_key`` '
+                            f'(NoteListItemDTO does not expose the wire note_key); '
+                            f'duplicate names cannot be resolved unambiguously. '
+                            f'Give each source note a unique title, or drop '
+                            f'--reuse-vault and re-ingest fresh.'
+                        )
+                else:
+                    # Ingest source notes
+                    note_id_by_key = await _ingest_sources(api, default_vault_id, vault_map, suite)
+
+                    # Wait for extraction (vault-wide stable signal first). Skip
+                    # entirely when no notes were ingested — otherwise we burn the
+                    # full retry budget on a vault that has nothing to extract.
+                    if note_id_by_key:
+                        with contextlib.suppress(Exception):
+                            await wait_for_extraction(
+                                api,
+                                default_vault_id,
+                                poll_interval=2.0,
+                                poll_timeout=120.0,
+                                stable_ticks_required=2,
+                                max_consecutive_errors=5,
+                            )
 
                 # Build per-note vault map: each note_key polls under its
                 # actual target vault, not blindly under default_vault_id —
@@ -798,20 +1018,66 @@ async def run_suite(
                 # Guarded by tests/suite/test_extensibility.py.
                 for scenario in suite.scenarios:
                     sc_vault_id = vault_map.get(scenario.vault_name, default_vault_id)
+                    # P7: NLI gate — applies suite-level OR per-scenario flag.
+                    needs_nli = (
+                        suite.metadata.requires_nli_classifier or scenario.requires_nli_classifier
+                    )
+                    # P8 + round-6 H4: scoped reuse refusal — registry-driven.
+                    # A handler declares ``reusable_under_reuse_vault =
+                    # False`` when it has unbounded write-side effects
+                    # (e.g. ``record_outcome`` appends a history entry per
+                    # call, biasing retrieval scoring). Skip scenarios whose
+                    # setup contains any non-reusable action; let the rest
+                    # of the suite run. Unknown action kinds are not
+                    # reuse-blocked here — _run_setup_actions will raise on
+                    # unknown kinds anyway.
+                    record_outcome_in_setup = False
+                    if reuse_vault is not None:
+                        for _action in scenario.setup_actions:
+                            try:
+                                _hcls = type(get_setup_action(_action.kind))
+                            except KeyError:
+                                continue
+                            if not getattr(_hcls, 'reusable_under_reuse_vault', True):
+                                record_outcome_in_setup = True
+                                break
                     for replicate in range(replicates):
-                        if (
-                            isinstance(scenario.expected, (LLMJudge, UsefulAtK))
-                            and not use_llm_judge
-                        ):
+                        if record_outcome_in_setup:
                             outcomes.append(
                                 ScenarioOutcome(
                                     scenario_id=scenario.id,
                                     status='skip',
+                                    skip_reason='setup_action_not_reusable',
                                     replicate_index=replicate,
                                     answer_mode=suite.answer_mode_for(scenario),
                                 )
                             )
                             continue
+                        if needs_nli:
+                            if not config_snapshot_available:
+                                # Cannot determine NLI availability — admin auth missing.
+                                # Run the scenario anyway: skip-on-unknown produced
+                                # silent gaps in eval coverage, and a real NLI-disabled
+                                # server will fail the scenario with a clearer signal
+                                # (no findings emitted) than a skip.
+                                logger.warning(
+                                    'Running %r without NLI gate: /system/config '
+                                    'unavailable (admin auth missing). If NLI is '
+                                    'actually disabled the scenario will fail; pass '
+                                    'an admin api-key for a proper skip.',
+                                    scenario.id,
+                                )
+                            elif nli_available is False:
+                                outcomes.append(
+                                    ScenarioOutcome(
+                                        scenario_id=scenario.id,
+                                        status='skip',
+                                        skip_reason='nli_disabled',
+                                        replicate_index=replicate,
+                                        answer_mode=suite.answer_mode_for(scenario),
+                                    )
+                                )
+                                continue
                         outcome = await _execute_scenario(
                             api,
                             server_url,
@@ -820,10 +1086,15 @@ async def run_suite(
                             suite,
                             judge,
                             note_key_to_unit_ids,
+                            note_id_by_key,
                             replicate,
                             backend_cache=backend_cache,
                         )
                         outcomes.append(outcome)
+                # round-6 C1: every scenario in the loop completed (no
+                # KeyboardInterrupt, no abort). Safe to write the keep-vault
+                # manifest.
+                run_completed = True
             finally:
                 # Tear down cached backends (frees temp HERMES_HOME etc.)
                 # before deleting the vaults — the backends may try one
@@ -833,14 +1104,82 @@ async def run_suite(
                     if callable(teardown):
                         with contextlib.suppress(Exception):
                             teardown()
-                # Best-effort cleanup: delete the temp vault(s) so we don't leak state.
-                with contextlib.suppress(Exception):
-                    await api.delete_vault(default_vault_id)
-                for name, vid in vault_map.items():
-                    if name is None:
-                        continue
+                # P8: keep the vault for follow-up reuse runs. Persist a
+                # manifest so a follow-up ``--reuse-vault <label>`` run can
+                # bind the same primary + secondary vaults by name+id.
+                # Reuse mode also implicitly keeps the vault (we don't want
+                # to delete the vault someone is actively reusing).
+                preserve_vaults = keep_vault is not None or reuse_vault is not None
+                # round-6 C1: only write the manifest if the scenario loop
+                # completed cleanly. KeyboardInterrupt / unexpected raise
+                # leaves run_completed=False; we still preserve the vault
+                # (so the user can clean it up manually) but do NOT advertise
+                # it via a manifest, because reuse against a partial vault
+                # would mask incomplete extraction as silent false-fails.
+                if keep_vault is not None and run_completed:
+                    try:
+                        manifest_dir.mkdir(parents=True, exist_ok=True)
+                        secondary = {
+                            name: {'id': str(vid), 'name': f'{vault_name}-{name}'}
+                            for name, vid in vault_map.items()
+                            if name is not None
+                        }
+                        manifest_payload = {
+                            'label': keep_vault,
+                            'suite_name': suite.name,
+                            'suite_version': suite.metadata.suite_version,
+                            'sources_hash': sources_hash,
+                            'created_at': dt.datetime.now(dt.timezone.utc).isoformat(),
+                            'primary_vault': {
+                                'id': str(default_vault_id),
+                                'name': vault_name,
+                            },
+                            'secondary_vaults': secondary,
+                        }
+                        manifest_path = manifest_dir / f'{keep_vault}.json'
+                        manifest_path.write_text(json.dumps(manifest_payload, indent=2))
+                        logger.info(
+                            'Kept vault %r — wrote manifest %s. '
+                            'Run again with --reuse-vault %s to bind to it.',
+                            vault_name,
+                            manifest_path,
+                            keep_vault,
+                        )
+                    except Exception as e:
+                        # round-6 C1: manifest write failure must NOT delete
+                        # the vault. The user explicitly asked to keep it,
+                        # and forcing cleanup-on-disk-full would destroy
+                        # work the user wanted preserved. Preserve the vault
+                        # and surface the error; the user can re-run
+                        # --keep-vault, or write the manifest by hand from
+                        # the vault id we logged.
+                        logger.error(
+                            'Failed to write keep-vault manifest %s: %s. '
+                            'Vault %s (%s) is preserved; manifest can be '
+                            'reconstructed manually.',
+                            keep_vault,
+                            e,
+                            vault_name,
+                            default_vault_id,
+                        )
+                elif keep_vault is not None and not run_completed:
+                    logger.warning(
+                        'Run did not complete cleanly; --keep-vault manifest '
+                        'NOT written to avoid pointing reuse runs at a '
+                        'partially-populated vault. Vault %s (%s) is '
+                        'preserved for manual inspection.',
+                        vault_name,
+                        default_vault_id,
+                    )
+                if not preserve_vaults:
+                    # Best-effort cleanup: delete the temp vault(s) so we don't leak state.
                     with contextlib.suppress(Exception):
-                        await api.delete_vault(vid)
+                        await api.delete_vault(default_vault_id)
+                    for name, vid in vault_map.items():
+                        if name is None:
+                            continue
+                        with contextlib.suppress(Exception):
+                            await api.delete_vault(vid)
     except KeyboardInterrupt:
         logger.warning('Run interrupted by user')
         raise

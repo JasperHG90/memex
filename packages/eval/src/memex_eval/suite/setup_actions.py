@@ -48,6 +48,20 @@ class SetupActionHandler(abc.ABC):
     # missing baseline.
     required: ClassVar[bool] = False
 
+    # round-6 H4: declare whether this handler is safe to re-run on a
+    # vault that's been preserved across runs (--reuse-vault). Default
+    # True (idempotent). Set False on handlers with unbounded write-side
+    # effects: ``record_outcome`` appends a new history entry every call
+    # so re-running biases retrieval scoring; ``deprioritize`` is reset
+    # by teardown but the next scenario inherits dirty state if reuse
+    # skips teardown for prior runs. The runner skips entire scenarios
+    # that declare any non-reusable setup action when --reuse-vault is
+    # passed, with skip_reason='setup_action_not_reusable' (round-8 M3:
+    # renamed from the original ``record_outcome_not_reusable`` once the
+    # gate became registry-driven and could fire for ANY non-reusable
+    # handler, not just ``record_outcome``).
+    reusable_under_reuse_vault: ClassVar[bool] = True
+
     @abc.abstractmethod
     async def run(
         self,
@@ -64,6 +78,32 @@ class SetupActionHandler(abc.ABC):
         between multiple registered handlers running in one scenario.
         """
 
+    async def teardown(
+        self,
+        api: 'RemoteMemexAPI',
+        vault_id: UUID,
+        params: dict[str, Any],
+        setup_context: dict[str, Any] | None,
+    ) -> None:
+        """Optional cleanup invoked after the scenario's score completes.
+
+        Called by the runner regardless of pass/fail/error so the next
+        scenario starts from a clean state. Default is a no-op.
+
+        ``setup_context`` is the dict returned by ``run()`` (auto-prefixed
+        with the handler name) so a teardown can reference IDs / keys the
+        setup acted on without re-resolving them. The runner skips
+        teardown for actions whose ``run()`` never executed (e.g. earlier
+        required handler raised and broke the loop) — this default impl
+        does not need to defend against that case.
+
+        Failures inside teardown are caught by the runner with a warning;
+        a failing teardown does NOT mark the scenario as errored. The
+        next scenario may see dirty vault state — document the risk in
+        each handler's teardown docstring.
+        """
+        return None
+
 
 _SETUP_ACTION_REGISTRY: dict[str, type[SetupActionHandler]] = {}
 
@@ -79,6 +119,16 @@ def register_setup_action(name: str):
         raise ValueError(f'Setup action name {name!r} must match {_NAME_RE.pattern!r}')
 
     def deco(cls: type[SetupActionHandler]) -> type[SetupActionHandler]:
+        # Round-7 M5: refuse classes that don't inherit from
+        # SetupActionHandler. The runner's reuse-refusal check reads
+        # ``reusable_under_reuse_vault`` via getattr with a default of
+        # True; an unrelated class without that ClassVar would silently
+        # be treated as reusable, defeating the H4 protection.
+        if not isinstance(cls, type) or not issubclass(cls, SetupActionHandler):
+            raise TypeError(
+                f'Setup action {name!r}: {cls!r} must subclass SetupActionHandler '
+                f'(needed for the reusable_under_reuse_vault ClassVar contract).'
+            )
         existing = _SETUP_ACTION_REGISTRY.get(name)
         if existing is not None and existing is not cls:
             raise ValueError(
@@ -104,6 +154,12 @@ def replace_setup_action(name: str):
         raise ValueError(f'Setup action name {name!r} must match {_NAME_RE.pattern!r}')
 
     def deco(cls: type[SetupActionHandler]) -> type[SetupActionHandler]:
+        # Round-7 M5: same subclass guard as register_setup_action.
+        if not isinstance(cls, type) or not issubclass(cls, SetupActionHandler):
+            raise TypeError(
+                f'Setup action {name!r}: {cls!r} must subclass SetupActionHandler '
+                f'(needed for the reusable_under_reuse_vault ClassVar contract).'
+            )
         if name in _SETUP_ACTION_REGISTRY:
             logger.warning(
                 'Replacing setup action %r (was %s, now %s)',
@@ -182,6 +238,12 @@ async def _resolve_unit_ids(
 
 @register_setup_action('record_outcome')
 class _RecordOutcome(SetupActionHandler):
+    # round-6 H4: not safe to re-run on a preserved vault. Each call
+    # appends a new history entry to the unit's outcome log, biasing
+    # subsequent retrieval scoring. The runner refuses to run scenarios
+    # with this setup action under --reuse-vault.
+    reusable_under_reuse_vault: ClassVar[bool] = False
+
     async def run(
         self, api: 'RemoteMemexAPI', vault_id: UUID, params: dict[str, Any]
     ) -> dict[str, Any] | None:
@@ -197,6 +259,30 @@ class _RecordOutcome(SetupActionHandler):
                 reason=params.get('reason'),
             )
         return {'unit_ids': ids}
+
+    async def teardown(
+        self,
+        api: 'RemoteMemexAPI',
+        vault_id: UUID,
+        params: dict[str, Any],
+        setup_context: dict[str, Any] | None,
+    ) -> None:
+        """No-op by design.
+
+        Memory Worth counters are append-only at the storage layer and
+        the retrieval pre-filter at engine.py:154 fires when
+        (success_co + failure_co) >= 5. A flip-and-cancel teardown would
+        push counters into that gated regime after one reuse cycle,
+        silently changing scoring of unrelated downstream scenarios in
+        the same vault. The runner therefore skips outcome scenarios on
+        --reuse-vault with skip_reason='setup_action_not_reusable';
+        outcome scenarios must be exercised on a fresh vault.
+
+        Follow-up ticket will add an admin record_outcome_reset(unit_ids)
+        endpoint that resets counters to zero — at which point this
+        teardown becomes a real reset.
+        """
+        return None
 
 
 @register_setup_action('deprioritize')
@@ -215,6 +301,29 @@ class _Deprioritize(SetupActionHandler):
                 vault_id=vault_id,
             )
         return {'unit_ids': ids}
+
+    async def teardown(
+        self,
+        api: 'RemoteMemexAPI',
+        vault_id: UUID,
+        params: dict[str, Any],
+        setup_context: dict[str, Any] | None,
+    ) -> None:
+        """Restore every unit deprioritized by run().
+
+        Reads ``deprioritize.unit_ids`` (auto-prefixed by the runner) from
+        the setup context — the unit IDs the run() side-effect operated
+        on. Idempotent on the API side (RemoteMemexAPI.restore_memory_unit
+        is no-op if not deprioritized)."""
+        ctx = setup_context or {}
+        unit_ids = ctx.get('deprioritize.unit_ids') or []
+        for uid in unit_ids:
+            try:
+                await api.restore_memory_unit(unit_id=UUID(str(uid)), vault_id=vault_id)
+            except Exception as exc:
+                logger.warning(
+                    'deprioritize teardown: restore_memory_unit(%s) failed: %s', uid, exc
+                )
 
 
 @register_setup_action('kv_write')
@@ -239,6 +348,23 @@ class _KvWrite(SetupActionHandler):
         await api.kv_put(value=value, key=key)
         return {'kv_key': key}
 
+    async def teardown(
+        self,
+        api: 'RemoteMemexAPI',
+        vault_id: UUID,
+        params: dict[str, Any],
+        setup_context: dict[str, Any] | None,
+    ) -> None:
+        """Delete the KV entry the setup wrote."""
+        ctx = setup_context or {}
+        key = ctx.get('kv_write.kv_key') or (params.get('kv_key') or '').strip()
+        if not key:
+            return
+        try:
+            await api.kv_delete(key=key)
+        except Exception as exc:
+            logger.warning('kv_write teardown: kv_delete(%r) failed: %s', key, exc)
+
 
 @register_setup_action('consolidation_tick')
 class _ConsolidationTick(SetupActionHandler):
@@ -247,6 +373,10 @@ class _ConsolidationTick(SetupActionHandler):
     ) -> dict[str, Any] | None:
         await api.consolidation_tick(vault_id=vault_id)
         return None
+
+    # teardown intentionally inherits the no-op default — consolidation
+    # produces idempotent state mutations (contradiction edges, reflections)
+    # which are cheap to keep and unsafe to revert.
 
 
 @register_setup_action('trigger_reflections')
@@ -257,14 +387,17 @@ class _TriggerReflections(SetupActionHandler):
 
     Params:
     - ``count``: how many top entities to reflect on (default 5)
-    - ``timeout_s``: seconds to wait for the first mental_model result
-      (default 120; matches legacy)
+    - ``timeout_s``: seconds to wait for mental_model results (default 120)
+    - ``target_entity_names``: list of entity names that MUST have a
+      mental_model materialized before the action returns. Without this,
+      the action polls only the most-mentioned entity, which may not be
+      the one a downstream scenario queries. With it, the action keeps
+      polling until each named entity has at least one mental_model
+      result (or the timeout fires; partial returns set
+      ``unmaterialized_targets`` in the context).
 
     The action ranks entities by mention_count via ``api.get_top_entities``
     so reflection focuses on the most-mentioned subjects in the vault.
-    Probe-search uses the top entity's name with strategies=['mental_model']
-    to confirm reflections actually landed; partial timeouts return a
-    ``timed_out: True`` marker that downstream scenarios can ignore.
     """
 
     async def run(
@@ -281,7 +414,56 @@ class _TriggerReflections(SetupActionHandler):
         limit = int(params.get('count', 5) or 5)
         timeout_s = float(params.get('timeout_s', 120) or 120)
 
-        entities = await api.get_top_entities(limit=limit, vault_id=vault_id)
+        top_entities = await api.get_top_entities(limit=limit, vault_id=vault_id)
+
+        # Resolve ``target_entity_names`` FIRST so they head the reflection
+        # queue. With multiple reflects queued, the server processes them
+        # serially; the consumer scenario polls until the targets'
+        # mental_models are visible. If we put targets at the back of the
+        # queue, polling races the queue and frequently times out before
+        # Sarah Chen / Project Alpha materialize.
+        early_targets: list[str] = list(params.get('target_entity_names') or [])
+        top_names = {getattr(e, 'name', None) or '' for e in top_entities}
+        logger.info(
+            'trigger_reflections: top-%d=%s, target_entity_names=%s',
+            limit,
+            sorted(top_names),
+            early_targets,
+        )
+        target_entities: list[Any] = []
+        for tname in early_targets:
+            # If a target is already in top-N, find it there to preserve identity.
+            top_match = next(
+                (e for e in top_entities if (getattr(e, 'name', '') or '') == tname),
+                None,
+            )
+            if top_match is not None:
+                target_entities.append(top_match)
+                continue
+            try:
+                hits = await api.search_entities(query=tname, limit=3, vault_id=vault_id)
+            except Exception as exc:
+                logger.warning('search_entities(%r) failed: %s', tname, exc)
+                continue
+            match = next((h for h in hits if (getattr(h, 'name', '') or '') == tname), None)
+            if match is None:
+                logger.warning(
+                    'target entity %r not found in vault %s (search_entities returned %d candidates: %s)',
+                    tname,
+                    vault_id,
+                    len(hits),
+                    [getattr(h, 'name', '?') for h in hits],
+                )
+                continue
+            logger.info(
+                'trigger_reflections: prioritising target entity %r (id=%s)', tname, match.id
+            )
+            target_entities.append(match)
+
+        # Targets first, then top-N (deduped by id).
+        seen_ids: set[Any] = {e.id for e in target_entities}
+        entities = list(target_entities) + [e for e in top_entities if e.id not in seen_ids]
+
         if not entities:
             return {'reflected_count': 0, 'requested_count': 0, 'failed_count': 0}
 
@@ -290,8 +472,16 @@ class _TriggerReflections(SetupActionHandler):
         for ent in entities:
             ent_name = getattr(ent, 'name', '?') or '?'
             try:
-                await api.reflect(ReflectionRequest(entity_id=ent.id, vault_id=str(vault_id)))
+                resp = await api.reflect(
+                    ReflectionRequest(entity_id=ent.id, vault_id=str(vault_id))
+                )
                 succeeded.append(ent_name)
+                logger.info(
+                    'reflect(%s) -> status=%s new_observations=%d',
+                    ent_name,
+                    getattr(resp, 'status', '?'),
+                    len(getattr(resp, 'new_observations', []) or []),
+                )
             except Exception as exc:
                 failed.append(ent_name)
                 logger.warning('reflect(%s) failed: %s', ent_name, exc)
@@ -302,32 +492,132 @@ class _TriggerReflections(SetupActionHandler):
                 f'(entities tried: {failed}). Suite cannot exercise reflection paths.'
             )
 
-        probe_name = getattr(entities[0], 'name', None) or ''
         base_ctx: dict[str, Any] = {
             'reflected_count': len(succeeded),
             'requested_count': len(entities),
             'failed_count': len(failed),
             'failed_entities': failed,
         }
-        if not probe_name:
+
+        # Build the list of entities that need to have a mental_model
+        # materialized before the action returns. Default: the
+        # most-mentioned entity (legacy behavior). With
+        # ``target_entity_names``: every named entity.
+        target_names: list[str] = list(params.get('target_entity_names') or [])
+        if not target_names:
+            top_name = getattr(entities[0], 'name', None) or ''
+            if top_name:
+                target_names = [top_name]
+        if not target_names:
             return base_ctx
 
-        deadline = time.monotonic() + timeout_s
-        while time.monotonic() < deadline:
-            await asyncio.sleep(3)
+        # ``min_mental_model_hits`` lets the consumer scenario require ≥k
+        # materialized observations per target before proceeding. Default
+        # 1 preserves legacy behavior; raise to match a downstream
+        # ``UsefulAtK(k=N)`` so ``mental_model_strategy`` doesn't race the
+        # reflection writer.
+        min_hits = max(1, int(params.get('min_mental_model_hits', 1) or 1))
+        probe_query = str(params.get('probe_query') or '')
+
+        async def _hit_count(name: str) -> int:
             try:
+                # When a probe_query is set, use it (matches the consumer
+                # scenario's actual query so race detection mirrors what the
+                # scenario will see). Otherwise probe by entity name.
+                q = probe_query or name
                 results = await api.search(
-                    query=probe_name,
-                    limit=1,
-                    strategies=['mental_model'],
-                    vault_ids=[vault_id],
+                    query=q, limit=min_hits, strategies=['mental_model'], vault_ids=[vault_id]
                 )
             except Exception as exc:
-                logger.warning('mental_model probe failed: %s', exc)
-                results = []
-            if results:
-                return {**base_ctx, 'probe_entity': probe_name}
-        return {**base_ctx, 'probe_entity': probe_name, 'timed_out': True}
+                logger.warning('mental_model probe %r failed: %s', name, exc)
+                return 0
+            return len(results)
+
+        pending = set(target_names)
+        deadline = time.monotonic() + timeout_s
+        last_log = 0.0
+        while pending and time.monotonic() < deadline:
+            await asyncio.sleep(3)
+            counts = {n: await _hit_count(n) for n in pending}
+            ready = {n for n, c in counts.items() if c >= min_hits}
+            now = time.monotonic()
+            if now - last_log > 15:
+                logger.info(
+                    'trigger_reflections: polling counts=%s pending=%s elapsed=%.1fs',
+                    counts,
+                    sorted(pending - ready),
+                    timeout_s - (deadline - now),
+                )
+                last_log = now
+            pending -= ready
+        ctx = {**base_ctx, 'probe_entities': target_names, 'min_mental_model_hits': min_hits}
+        if pending:
+            logger.warning(
+                'trigger_reflections: timed out waiting for targets %s (min_hits=%d, timeout=%.0fs)',
+                sorted(pending),
+                min_hits,
+                timeout_s,
+            )
+            ctx['unmaterialized_targets'] = sorted(pending)
+            ctx['timed_out'] = True
+        else:
+            logger.info('trigger_reflections: all targets materialized within %.0fs', timeout_s)
+        return ctx
+
+
+@register_setup_action('lint_run')
+class _LintRun(SetupActionHandler):
+    """Trigger the V1 lint rule registry on the scenario's vault.
+
+    Wires the eval-suite to the new ``POST /api/v1/lint/run/{vault_id}``
+    endpoint added in P6. ``required=True`` because a scenario asserting
+    on lint findings needs lint to actually have run; silent failure
+    would produce a false-fail.
+    """
+
+    required: ClassVar[bool] = True
+
+    async def run(
+        self, api: 'RemoteMemexAPI', vault_id: UUID, params: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        result = await api.run_lint_rules(vault_id)
+        return {
+            'total_findings': int(result.get('total_findings', 0) or 0),
+            'rules_run': len(result.get('rules', []) or []),
+        }
+
+    # teardown intentionally inherits the no-op default — lint findings
+    # are idempotent on (rule_name, target, vault_id) at the SQL layer
+    # so back-to-back runs don't accumulate. See server/lint.py:lint_run.
+
+
+@register_setup_action('lint_llm_run')
+class _LintLLMRun(SetupActionHandler):
+    """Trigger the LLM-gated lint pass on the scenario's vault.
+
+    Wires the eval-suite to the new ``POST /api/v1/lint/llm/run/{vault_id}``
+    endpoint added in P6. Returns 503 from the server when lint_llm is
+    config-disabled — the suite framework's ``requires_nli_classifier``
+    metadata (P7) is the right gate to skip these scenarios in advance.
+    """
+
+    required: ClassVar[bool] = True
+
+    async def run(
+        self, api: 'RemoteMemexAPI', vault_id: UUID, params: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        result = await api.run_lint_llm(vault_id)
+        summaries = result.get('summaries', []) or []
+        emitted = 0
+        for s in summaries:
+            try:
+                emitted += int(s.get('emitted', 0) or 0)
+            except (TypeError, ValueError):
+                continue
+        return {
+            'findings_emitted': emitted,
+            'summaries': summaries,
+        }
 
 
 __all__ = [
