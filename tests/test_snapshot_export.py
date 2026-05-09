@@ -477,3 +477,184 @@ async def test_entity_reference_set_is_union(
     # different paths in the union).
     assert str(populated_vault['entity_a_id']) in exported_entity_ids
     assert str(populated_vault['entity_b_id']) in exported_entity_ids
+
+
+async def test_datetime_uses_explicit_offset_not_zulu(
+    db_session: AsyncSession,
+    populated_vault: dict[str, UUID],
+    tmp_path: Path,
+) -> None:
+    """Per the V12 plan JSONL canonical encoding contract: UTC datetimes
+    must serialise as ``...+00:00``, not ``...Z``. Pydantic v2's
+    ``mode='json'`` emits ``Z`` by default, so the exporter post-processes
+    the payload to honour the contract.
+    """
+    out = tmp_path / 'snap-datetime'
+    exporter = SnapshotExporter(
+        session=db_session,
+        filestore=None,
+        vault_id_or_name=populated_vault['vault_name'],
+        output_dir=out,
+        embedding_model=EmbeddingModelIdentity(name='t', dim=384),
+    )
+    await exporter.export()
+
+    manifest_text = (out / 'manifest.json').read_text()
+    assert '+00:00' in manifest_text
+    assert 'T' in manifest_text  # Sanity — there is at least one ISO datetime.
+    assert 'Z"' not in manifest_text  # The trailing-Z form is forbidden.
+
+    units_text = (out / 'derived' / 'memory_units.jsonl').read_text()
+    assert '+00:00' in units_text
+    for line in units_text.splitlines():
+        if not line.strip():
+            continue
+        record = json.loads(line)
+        for key, value in record.items():
+            if not isinstance(value, str):
+                continue
+            if 'T' in value and value.endswith('Z'):
+                pytest.fail(f'memory_units.jsonl key={key} ends with Z: {value}')
+
+
+async def test_export_refuses_overwriting_existing_manifest(
+    db_session: AsyncSession,
+    populated_vault: dict[str, UUID],
+    tmp_path: Path,
+) -> None:
+    """An existing manifest.json in the output dir indicates a prior
+    snapshot. Refuse rather than silently overwrite (which would mix
+    fresh JSONL with stale orphan files)."""
+    out = tmp_path / 'snap-existing'
+    out.mkdir()
+    (out / 'manifest.json').write_text('{"snapshot_version": "0.0.0"}')
+
+    exporter = SnapshotExporter(
+        session=db_session,
+        filestore=None,
+        vault_id_or_name=populated_vault['vault_name'],
+        output_dir=out,
+        embedding_model=EmbeddingModelIdentity(name='t', dim=384),
+    )
+    with pytest.raises(SnapshotExportError, match='manifest.json already present'):
+        await exporter.export()
+
+
+async def test_export_writes_and_clears_in_progress_marker(
+    db_session: AsyncSession,
+    populated_vault: dict[str, UUID],
+    tmp_path: Path,
+) -> None:
+    """The ``.exporting`` marker is cleared on successful export and a
+    completed snapshot dir contains no marker."""
+    out = tmp_path / 'snap-marker'
+    exporter = SnapshotExporter(
+        session=db_session,
+        filestore=None,
+        vault_id_or_name=populated_vault['vault_name'],
+        output_dir=out,
+        embedding_model=EmbeddingModelIdentity(name='t', dim=384),
+    )
+    await exporter.export()
+    assert not (out / '.exporting').exists()
+    assert (out / 'manifest.json').exists()
+
+
+async def test_asset_basename_collision_is_disambiguated(tmp_path: Path) -> None:
+    """When two source assets share a basename (``a/diagram.png`` vs
+    ``b/diagram.png``), the second is renamed rather than silently
+    overwriting the first.
+    """
+    used: set[str] = set()
+    first = SnapshotExporter._unique_basename('diagram.png', used)
+    used.add(first)
+    second = SnapshotExporter._unique_basename('diagram.png', used)
+    used.add(second)
+    third = SnapshotExporter._unique_basename('diagram.png', used)
+    assert first == 'diagram.png'
+    assert second == 'diagram-1.png'
+    assert third == 'diagram-2.png'
+
+    # Also handles dotless filenames cleanly.
+    used2: set[str] = set()
+    a = SnapshotExporter._unique_basename('Makefile', used2)
+    used2.add(a)
+    b = SnapshotExporter._unique_basename('Makefile', used2)
+    assert a == 'Makefile'
+    assert b == 'Makefile-1'
+
+
+async def test_note_appends_filtered_by_vault_transitively(
+    db_session: AsyncSession,
+    populated_vault: dict[str, UUID],
+    tmp_path: Path,
+) -> None:
+    """NoteAppend has no vault_id; the export filters via note_id. A
+    NoteAppend pointing at a different vault's note must NOT leak.
+    """
+    other_vault = Vault(name='note-append-leak-canary')
+    db_session.add(other_vault)
+    await db_session.flush()
+    other_note = Note(
+        id=uuid4(),
+        vault_id=other_vault.id,
+        title='Other vault note',
+        original_text='other',
+        content_hash='other-hash',
+        status='active',
+    )
+    db_session.add(other_note)
+    await db_session.flush()
+    db_session.add(
+        NoteAppend(
+            append_id=uuid4(),
+            note_id=other_note.id,
+            delta_sha256='canary',
+            delta_bytes=4,
+            joiner='\n',
+            resulting_content_hash='canary',
+        )
+    )
+    await db_session.commit()
+
+    out = tmp_path / 'snap-noteappend'
+    exporter = SnapshotExporter(
+        session=db_session,
+        filestore=None,
+        vault_id_or_name=populated_vault['vault_name'],
+        output_dir=out,
+        embedding_model=EmbeddingModelIdentity(name='t', dim=384),
+    )
+    manifest = await exporter.export()
+
+    # The fixture seeded ONE NoteAppend on the populated_vault. The other
+    # vault's NoteAppend must not cross over.
+    assert manifest.table_counts['note_appends'] == 1
+    appends = (out / 'derived' / 'note_appends.jsonl').read_text().splitlines()
+    appends = [a for a in appends if a.strip()]
+    assert len(appends) == 1
+    record = json.loads(appends[0])
+    assert UUID(record['note_id']) == populated_vault['note_id']
+
+
+async def test_export_models_reject_extra_fields() -> None:
+    """The Pydantic ``extra='forbid'`` invariant: an unknown field in
+    the export payload must raise. This protects the snapshot SemVer
+    contract — adding a column to a SQLModel can't silently leak.
+    """
+    from datetime import datetime, timezone
+
+    from memex_core.services.snapshot.export_models import VaultExport
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        VaultExport.model_validate(
+            {
+                'id': uuid4(),
+                'name': 'foo',
+                'description': None,
+                'mw_mode': 'stationary',
+                'created_at': datetime.now(timezone.utc),
+                'unexpected_new_column': 'should fail',
+            }
+        )

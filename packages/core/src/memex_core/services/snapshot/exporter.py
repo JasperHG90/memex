@@ -16,6 +16,7 @@ SemVer, or document as excluded).
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import re
@@ -100,6 +101,26 @@ def _sanitize_for_dirname(value: str) -> str:
     return cleaned[:80]
 
 
+def _normalize_zulu(value: Any) -> Any:
+    """Recursively rewrite ``...Z`` ISO-8601 datetime strings to ``...+00:00``.
+
+    Pydantic v2 ``mode='json'`` emits UTC datetimes with the trailing ``Z``
+    short form; the snapshot contract (per V12 plan, JSONL canonical
+    encoding) requires the explicit ``+00:00`` offset. We post-process the
+    serialised payload rather than register a custom field serialiser on
+    every export model to keep the contract enforced in one place.
+    """
+    if isinstance(value, str):
+        if len(value) >= 20 and value.endswith('Z') and value[10] == 'T':
+            return value[:-1] + '+00:00'
+        return value
+    if isinstance(value, dict):
+        return {k: _normalize_zulu(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_normalize_zulu(v) for v in value]
+    return value
+
+
 def _to_jsonable(model: BaseModel) -> dict[str, Any]:
     """Pydantic ``model_dump`` with deterministic JSON-friendly output:
 
@@ -110,7 +131,7 @@ def _to_jsonable(model: BaseModel) -> dict[str, Any]:
       emit JSON-incompatible tokens.
     """
     payload = model.model_dump(mode='json')
-    return payload
+    return _normalize_zulu(payload)
 
 
 def _dump_jsonl_line(model: BaseModel) -> str:
@@ -155,36 +176,77 @@ class SnapshotExporter:
 
     async def export(self) -> SnapshotManifest:
         self._output_dir.mkdir(parents=True, exist_ok=True)
-        self._vault = await self._resolve_vault()
-        self._refuse_global(self._vault)
 
-        # Embedding-model identity. Caller may override (useful for tests).
-        if self._embedding_model is None:
-            self._embedding_model = await self._resolve_embedding_identity()
+        # Refuse if the directory looks like a previously-completed snapshot
+        # — overwriting silently would corrupt JSONL counts vs. orphan files
+        # on disk. Caller is expected to use a fresh dir or remove
+        # manifest.json explicitly.
+        if (self._output_dir / 'manifest.json').exists():
+            raise SnapshotExportError(
+                f'Refusing to overwrite existing snapshot at {self._output_dir}: '
+                'manifest.json already present. Remove it (and its siblings) first.'
+            )
 
-        alembic_head = await self._read_alembic_head()
-        exported_at = datetime.now(timezone.utc)
-
-        # Order matters: write source-of-truth tables first, then derived,
-        # then governance, then manifest LAST so a partial export is
-        # detectable (no manifest.json = not complete).
-        await self._write_vault_json()
-        await self._write_notes_tree()
-        await self._write_derived()
-        await self._write_governance()
-
-        manifest = SnapshotManifest(
-            snapshot_version=SNAPSHOT_VERSION,
-            source_vault_id=self._vault.id,
-            source_vault_name=self._vault.name,
-            exported_at=exported_at,
-            alembic_head=alembic_head,
-            embedding_model=self._embedding_model,
-            observation_schema_version=OBSERVATION_SCHEMA_VERSION,
-            table_counts=dict(self._table_counts),
+        # In-progress marker. Importers (V12) refuse a snapshot dir that
+        # carries this file; manifest-last-write is the success signal,
+        # marker-removed-on-success is its sibling.
+        marker = self._output_dir / '.exporting'
+        marker.write_text(
+            f'started_at={datetime.now(timezone.utc).isoformat()}\n', encoding='utf-8'
         )
-        self._write_json(self._output_dir / 'manifest.json', _to_jsonable(manifest))
-        self._write_readme()
+
+        try:
+            # Pin a snapshot of the DB at one isolation boundary so the
+            # multi-query export observes a consistent point-in-time —
+            # otherwise concurrent inserts/deletes between queries can
+            # produce a torn export (e.g. a Note row but no chunks for it).
+            # ``REPEATABLE READ`` is sufficient: within the transaction
+            # all SELECTs see the snapshot taken at the first read.
+            await self._session.execute(
+                text('SET TRANSACTION ISOLATION LEVEL REPEATABLE READ READ ONLY')
+            )
+
+            self._vault = await self._resolve_vault()
+            self._refuse_global(self._vault)
+
+            # Embedding-model identity. Caller may override (useful for tests
+            # and for the CLI to forward the runtime config). Falls back to
+            # the registry default — only correct if the server is using the
+            # built-in ONNX backend.
+            if self._embedding_model is None:
+                self._embedding_model = await self._resolve_embedding_identity()
+
+            alembic_head = await self._read_alembic_head()
+            exported_at = datetime.now(timezone.utc)
+
+            # Order matters: write source-of-truth tables first, then derived,
+            # then governance, then manifest LAST so a partial export is
+            # detectable (no manifest.json = not complete).
+            await self._write_vault_json()
+            await self._write_notes_tree()
+            await self._write_derived()
+            await self._write_governance()
+
+            manifest = SnapshotManifest(
+                snapshot_version=SNAPSHOT_VERSION,
+                source_vault_id=self._vault.id,
+                source_vault_name=self._vault.name,
+                exported_at=exported_at,
+                alembic_head=alembic_head,
+                embedding_model=self._embedding_model,
+                observation_schema_version=OBSERVATION_SCHEMA_VERSION,
+                table_counts=dict(self._table_counts),
+            )
+            self._write_json(self._output_dir / 'manifest.json', _to_jsonable(manifest))
+            self._write_readme(manifest)
+        finally:
+            # Remove the marker on either success or failure. A crash
+            # between marker-creation and this finally block leaves the
+            # marker; that's the desired signal (a process death is
+            # indistinguishable from a partial write, both are unsafe to
+            # consume).
+            with contextlib.suppress(FileNotFoundError):
+                marker.unlink()
         return manifest
 
     # ------------------------------------------------------------------
@@ -279,11 +341,16 @@ class SnapshotExporter:
 
             # Asset rewriting. We copy bytes (from the FileStore) to
             # ``./assets/<basename>`` and rewrite the metadata fields.
+            # Two assets with the same basename in different source dirs
+            # would collide on the same target path, silently overwriting
+            # each other; track basenames-in-use and disambiguate by
+            # appending ``-<n>`` before the extension.
             rewritten_assets: list[str] = []
             assets_dir = note_dir / 'assets'
+            used_basenames: set[str] = set()
 
             for asset_key in note.assets or []:
-                rewritten = await self._copy_asset(asset_key, assets_dir)
+                rewritten = await self._copy_asset(asset_key, assets_dir, used_basenames)
                 if rewritten is not None:
                     rewritten_assets.append(rewritten)
 
@@ -314,13 +381,23 @@ class SnapshotExporter:
             )
             self._write_json(note_dir / 'metadata.json', _to_jsonable(export))
 
-    async def _copy_asset(self, asset_key: str, assets_dir: Path) -> str | None:
+    async def _copy_asset(
+        self,
+        asset_key: str,
+        assets_dir: Path,
+        used_basenames: set[str],
+    ) -> str | None:
         """Copy one asset from the FileStore into ``assets_dir``.
 
         Returns the relative-to-snapshot path (``./assets/<basename>``).
         On failure (missing file, FileStore unavailable) logs a warning
         and returns None — the snapshot remains usable; the consumer
         will see a missing asset.
+
+        Disambiguates basename collisions: if two source assets resolve
+        to the same basename (e.g. ``a/diagram.png`` and ``b/diagram.png``)
+        the second is renamed ``diagram-1.png``, the third
+        ``diagram-2.png``, etc., so no asset is ever silently overwritten.
         """
         if self._filestore is None:
             logger.warning('No FileStore configured; skipping asset %s', asset_key)
@@ -333,9 +410,26 @@ class SnapshotExporter:
         assets_dir.mkdir(exist_ok=True)
         # Use the basename to avoid leaking source-side directory layout.
         basename = Path(asset_key).name or asset_key
-        target = assets_dir / basename
+        unique = self._unique_basename(basename, used_basenames)
+        used_basenames.add(unique)
+        target = assets_dir / unique
         target.write_bytes(data)
-        return f'./assets/{basename}'
+        return f'./assets/{unique}'
+
+    @staticmethod
+    def _unique_basename(basename: str, used: set[str]) -> str:
+        if basename not in used:
+            return basename
+        stem, dot, suffix = basename.rpartition('.')
+        # Treat dotless names as a single stem.
+        if not stem:
+            stem, dot, suffix = basename, '', ''
+        n = 1
+        while True:
+            candidate = f'{stem}-{n}{dot}{suffix}'
+            if candidate not in used:
+                return candidate
+            n += 1
 
     async def _copy_filestore_blob(self, key: str, note_dir: Path) -> str | None:
         if self._filestore is None:
@@ -739,11 +833,11 @@ class SnapshotExporter:
             encoding='utf-8',
         )
 
-    def _write_readme(self) -> None:
+    def _write_readme(self, manifest: SnapshotManifest) -> None:
         content = (
             '# Memex vault snapshot\n\n'
-            f'Snapshot version: {SNAPSHOT_VERSION}\n'
-            f'Exported at: {datetime.now(timezone.utc).isoformat()}\n\n'
+            f'Snapshot version: {manifest.snapshot_version}\n'
+            f'Exported at: {manifest.exported_at.isoformat()}\n\n'
             'See ``manifest.json`` for the machine-readable header. JSONL '
             'files under ``derived/`` are line-delimited JSON; one record '
             'per line. ``notes/<dir>/note.md`` holds the original note '
