@@ -395,31 +395,49 @@ class SnapshotImporter:
         source path is recorded as in-progress, re-use its IDs and skip
         already-completed phases. If recorded as ``complete``, refuse.
 
-        Concurrency: a Postgres session-scoped advisory lock keyed on
-        ``source_snapshot_path`` serializes the entire import. Two
-        processes targeting the same source path queue rather than
-        racing into Phase B with the same ``target_vault_id`` after the
-        eval_import_state UNIQUE INDEX forces them to converge.
+        Concurrency: a Postgres advisory lock keyed on
+        ``source_snapshot_path`` is held on a DEDICATED engine
+        connection (separate from ``self._session``) for the duration
+        of the import. The session cycles its pooled connection across
+        per-phase commits — pinning the lock to its own connection
+        keeps it held end-to-end regardless of how the session's
+        connection comes and goes.
         """
         self._snapshot_dir = _resolve_snapshot_dir(self._snapshot_dir)
         # Compute a 64-bit advisory-lock key from the snapshot path.
-        # MD5 → first 8 bytes → signed bigint. Collisions are
-        # negligible at the scale of an eval workflow; the worst-case
-        # outcome of a collision is two unrelated imports serializing.
+        # blake2b (8-byte digest) → signed bigint. Non-cryptographic
+        # use; collisions are negligible at the scale of an eval
+        # workflow, and a collision's worst case is two unrelated
+        # imports serializing.
         lock_key = int.from_bytes(
-            hashlib.md5(str(self._snapshot_dir).encode('utf-8')).digest()[:8],
+            hashlib.blake2b(str(self._snapshot_dir).encode('utf-8'), digest_size=8).digest(),
             byteorder='big',
             signed=True,
         )
-        await self._session.execute(text('SELECT pg_advisory_lock(:k)'), {'k': lock_key})
-        await self._session.commit()  # release the implicit txn the SELECT opened
-        try:
-            await self._validate_preflight()
-        except BaseException:
-            with contextlib.suppress(Exception):
-                await self._session.execute(text('SELECT pg_advisory_unlock(:k)'), {'k': lock_key})
-                await self._session.commit()
-            raise
+        # AsyncSession.bind is the AsyncEngine; get_bind() returns the
+        # sync proxy and would break under the async greenlet trampoline.
+        engine = self._session.bind
+        if engine is None:
+            raise RuntimeError('SnapshotImporter session has no bound engine')
+        async with engine.connect() as lock_conn:
+            # `pg_advisory_lock` is session-scoped on the BACKEND
+            # connection — held for as long as ``lock_conn`` is open,
+            # irrespective of the session's commit/checkout cycle
+            # below. Commit so the lock_conn isn't holding an
+            # idle-in-tx state for the whole import.
+            await lock_conn.execute(text('SELECT pg_advisory_lock(:k)'), {'k': lock_key})
+            await lock_conn.commit()
+            try:
+                return await self._run_import_phases()
+            finally:
+                with contextlib.suppress(Exception):
+                    await lock_conn.execute(text('SELECT pg_advisory_unlock(:k)'), {'k': lock_key})
+                    await lock_conn.commit()
+
+    async def _run_import_phases(self) -> UUID:
+        """Phased import body. ``import_snapshot`` wraps this in the
+        advisory-lock context."""
+        await self._validate_preflight()
         try:
             # Idempotent resume — skip phases that have already committed.
             # Note: do NOT unconditionally write state='staging' here; on
@@ -488,16 +506,6 @@ class SnapshotImporter:
             if not self._resumed:
                 await self._cleanup_staging()
             raise
-        finally:
-            # Always release the advisory lock — peers serialized on
-            # this path block until we do. Session-scoped close would
-            # release it anyway, but the explicit unlock keeps the lock
-            # window tight when the importer's session outlives this
-            # call (the eval runner reuses one session for both the
-            # import and a follow-up populate).
-            with contextlib.suppress(Exception):
-                await self._session.execute(text('SELECT pg_advisory_unlock(:k)'), {'k': lock_key})
-                await self._session.commit()
 
     def _phases_completed(self) -> set[str]:
         """Map ``eval_import_state.state`` to the phases already past commit."""
