@@ -1356,8 +1356,21 @@ def _aggregate_results(
 
 
 # Logical directory name for the primary vault in sharded cache layout.
-# Underscore prefix avoids clashing with user-declared vault_name values.
+# Underscore prefix avoids clashing with user-declared vault_name values
+# (enforced by ``_validate_vault_name`` in ``sources.py``).
 _DEFAULT_VAULT_LOGICAL = '_default'
+
+
+def _suite_is_multi_vault(suite: Suite) -> bool:
+    """True if any source note or scenario declares a ``vault_name``.
+
+    Single source of truth used by both the legacy-flat-cache recovery
+    path and the explicit-path refusal predicate so the two cannot
+    drift.
+    """
+    return any(n.vault_name for n in suite.sources.notes) or any(
+        s.vault_name for s in suite.scenarios
+    )
 
 
 class MultiVaultImportNotSupported(RuntimeError):
@@ -1380,9 +1393,7 @@ def _refuse_if_multi_vault_for_snapshot(suite: Suite) -> None:
     Only used on the explicit-path branch — auto-cache populates and
     imports a sharded layout with one subdir per vault.
     """
-    multi_vault_sources = {n.vault_name for n in suite.sources.notes if n.vault_name}
-    multi_vault_scenarios = {s.vault_name for s in suite.scenarios if s.vault_name}
-    if multi_vault_sources or multi_vault_scenarios:
+    if _suite_is_multi_vault(suite):
         raise MultiVaultImportNotSupported(
             f'Suite {suite.name!r} declares per-note/per-scenario '
             f'vault_name; explicit --from-snapshot <path> handles a single '
@@ -1639,10 +1650,7 @@ async def run_suite(
                 and not reingest
                 and not (cache_lookup.cache_path / 'vaults').is_dir()
             ):
-                _is_multi = any(n.vault_name for n in suite.sources.notes) or any(
-                    s.vault_name for s in suite.scenarios
-                )
-                if _is_multi:
+                if _suite_is_multi_vault(suite):
                     logger.warning(
                         'Snapshot cache slot %s is legacy-flat single-vault but suite '
                         '%r is now multi-vault; clearing cache and falling through to '

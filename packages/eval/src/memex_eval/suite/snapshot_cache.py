@@ -198,8 +198,14 @@ def _slot_lock(cache_root: Path, slot_name: str):
 
     The lock file lives at ``<cache_root>/.lock-<slot_name>`` and is
     NEVER deleted — flock semantics on Linux require the file to remain
-    on disk for fairness. Held only for the duration of the publish
-    rename, never around the (slow) export, so the lock window is tiny.
+    on disk for fairness. Held during:
+
+    - ``publish()`` rename pair — tiny, microseconds.
+    - ``lookup()`` partial-slot cleanup re-check + ``rmtree`` — bounded
+      by the cleanup target's size.
+    - ``clear_cache_entry()`` re-check + ``rmtree`` — same.
+
+    Never held around the (slow) export itself.
     """
     cache_root.mkdir(parents=True, exist_ok=True)
     lock_path = cache_root / f'{_LOCK_PREFIX}{slot_name}'
@@ -288,10 +294,14 @@ def discard_staged(staged: Path) -> None:
 
 
 def clear_cache_entry(cache_path: Path) -> None:
-    """Remove a (potentially partial) cache entry. Used by the sweep CLI
-    to force-clean a cache slot.
+    """Remove a cache entry. Used by the sweep CLI and the runner's
+    legacy-flat-vs-multi-vault recovery path.
 
-    Idempotent: missing path is treated as already-cleared.
+    Acquires ``_slot_lock`` so a concurrent ``publish()`` can't slip a
+    freshly-renamed entry under our rmtree. Idempotent: missing path
+    is treated as already-cleared; concurrent removal between
+    ``exists()`` and ``rmtree`` is silently ignored.
     """
-    if cache_path.exists():
-        shutil.rmtree(cache_path, ignore_errors=False)
+    with _slot_lock(cache_path.parent, cache_path.name):
+        if cache_path.exists():
+            shutil.rmtree(cache_path, ignore_errors=True)
