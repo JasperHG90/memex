@@ -1,11 +1,10 @@
 """V12 — eval-only snapshot import orchestrator.
 
-Reverses ``SnapshotExporter`` (V3) for a single fresh, ephemeral vault on
-the target DB. **In-process only**: there is no server route, no
-``eval_mode`` flag, no path allowlist. The eval runner builds an
-``AsyncSession`` from ``MemexConfig.load()`` and calls
-``SnapshotImporter(...).import_snapshot()`` directly. The server runs
-identically whether eval is running or not.
+In-process importer that reverses ``SnapshotExporter`` (V3) into a fresh
+ephemeral vault on the target DB. Called from the eval suite runner via
+``memex_eval.snapshot.runtime.snapshot_runtime``, which yields the DB
+session, FileStore, and embedding-backend handles built from
+``parse_memex_config()``.
 
 Five (six with cache-populate) phases — see ``BACKLOG.md`` plan Decision 10:
 
@@ -40,6 +39,7 @@ from uuid import UUID, uuid4
 from sqlalchemy import insert as sa_insert
 from sqlalchemy import select, text, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlalchemy.exc import IntegrityError
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from memex_common.config import (
@@ -406,15 +406,47 @@ class SnapshotImporter:
             phases_done = self._phases_completed()
             if not self._resumed:
                 # Fresh import: record initial 'staging' so a partial
-                # Phase A leaves a discoverable row.
-                await _record_import_state(
-                    self._session,
-                    self._target_vault_id,
-                    self._import_id,
-                    self._snapshot_dir,
-                    'staging',
-                )
-                await self._session.commit()
+                # Phase A leaves a discoverable row. Concurrency: two
+                # processes can both observe a missing row in
+                # _validate_preflight and race the INSERT. The UNIQUE
+                # INDEX on source_snapshot_path makes one of them raise
+                # IntegrityError. Treat that as "the other process won
+                # the race" — re-look up its row and either resume
+                # against it or refuse if it's already complete.
+                try:
+                    await _record_import_state(
+                        self._session,
+                        self._target_vault_id,
+                        self._import_id,
+                        self._snapshot_dir,
+                        'staging',
+                    )
+                    await self._session.commit()
+                except IntegrityError:
+                    await self._session.rollback()
+                    existing = await _lookup_existing_import(self._session, self._snapshot_dir)
+                    if existing is None:
+                        # Shouldn't happen — UNIQUE INDEX raised but the
+                        # row isn't visible. Re-raise so the caller
+                        # observes the underlying error instead of a
+                        # silent infinite loop.
+                        raise
+                    existing_target, existing_import, existing_state = existing
+                    if existing_state == 'complete':
+                        _refuse_completed_import(existing_target, self._snapshot_dir)
+                    self._target_vault_id = existing_target
+                    self._import_id = existing_import
+                    self._resumed = True
+                    self._resume_state = existing_state
+                    phases_done = self._phases_completed()
+                    logger.info(
+                        'Concurrent import detected for %s; resuming peer at state=%s '
+                        '(target_vault_id=%s, import_id=%s)',
+                        self._snapshot_dir,
+                        existing_state,
+                        existing_target,
+                        existing_import,
+                    )
 
             if 'A' not in phases_done:
                 await self._phase_a_stage_assets()

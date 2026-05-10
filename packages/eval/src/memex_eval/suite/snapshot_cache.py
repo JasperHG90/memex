@@ -11,14 +11,13 @@ cache entry keyed by ``(suite_name, sources_hash)`` and:
 The cache root resolution order is:
 
 1. Explicit ``--snapshot-cache-dir`` flag (CLI)
-2. ``MEMEX_EVAL_SNAPSHOT_ROOT`` environment variable (shared with the
-   server's allowlist root, see
-   ``memex_core.services.snapshot.path_validation``)
+2. ``MEMEX_EVAL_SNAPSHOT_ROOT`` environment variable
 3. ``platformdirs.user_cache_dir('memex-eval', 'memex')`` default
 
-The default INTENTIONALLY matches the server's allowlist default so the
-populate path (which posts the cache directory to the export route)
-passes the server's path-allowlist check without any env config.
+platformdirs gives a stable per-user cache location across platforms
+(``~/.cache/memex-eval/`` on Linux, ``~/Library/Caches/memex-eval/`` on
+macOS). The cache is entirely client-side — there is no server-side
+allowlist because import/export runs in-process in the eval runner.
 
 A cache entry is considered valid only when both ``manifest.json`` and
 ``_complete.marker`` exist — the marker is written last so a partial /
@@ -60,9 +59,8 @@ _LOCK_PREFIX = '.lock-'
 def default_cache_root() -> Path:
     """Resolve the default cache root via platformdirs.
 
-    Matches the server's allowlist default
-    (``memex_core.services.snapshot.path_validation``) so the populate
-    path lands under the server's allowlist by default.
+    Gives a stable per-user cache location across platforms — the cache
+    is purely client-side; no server agreement is needed.
     """
     return Path(platformdirs.user_cache_dir('memex-eval', 'memex'))
 

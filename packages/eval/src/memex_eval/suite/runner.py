@@ -1362,6 +1362,23 @@ class MultiVaultImportNotSupported(RuntimeError):
     """
 
 
+def _refuse_if_multi_vault_for_snapshot(suite: Suite) -> None:
+    """Raise ``MultiVaultImportNotSupported`` if the suite declares any
+    secondary vault on a source note or scenario.
+
+    Extracted from the runner so unit tests can pin the predicate
+    without spinning up a full suite run.
+    """
+    multi_vault_sources = {n.vault_name for n in suite.sources.notes if n.vault_name}
+    multi_vault_scenarios = {s.vault_name for s in suite.scenarios if s.vault_name}
+    if multi_vault_sources or multi_vault_scenarios:
+        raise MultiVaultImportNotSupported(
+            f'Suite {suite.name!r} declares per-note/per-scenario '
+            f'vault_name; --from-snapshot v1 supports only single-vault '
+            f'suites. Drop the snapshot flag or split the suite.'
+        )
+
+
 async def run_suite(
     suite: Suite,
     server_url: str,
@@ -1615,14 +1632,7 @@ async def run_suite(
                     manifest_path,
                 )
             elif use_import:
-                multi_vault_sources = {n.vault_name for n in suite.sources.notes if n.vault_name}
-                multi_vault_scenarios = {s.vault_name for s in suite.scenarios if s.vault_name}
-                if multi_vault_sources or multi_vault_scenarios:
-                    raise MultiVaultImportNotSupported(
-                        f'Suite {suite.name!r} declares per-note/per-scenario '
-                        f'vault_name; --from-snapshot v1 supports only single-vault '
-                        f'suites. Drop the snapshot flag or split the suite.'
-                    )
+                _refuse_if_multi_vault_for_snapshot(suite)
                 snapshot_path: str = (
                     str(cache_lookup.cache_path)
                     if cache_lookup is not None and cache_lookup.hit
@@ -1634,7 +1644,15 @@ async def run_suite(
                     vault_name,
                 )
                 from memex_eval.snapshot import SnapshotImporter
-                from memex_eval.snapshot.runtime import snapshot_runtime
+                from memex_eval.snapshot.runtime import (
+                    check_runtime_matches_server,
+                    snapshot_runtime,
+                )
+
+                # Refuse early if eval-side env doesn't match the
+                # running server (non-localhost target, or embedding-
+                # model divergence).
+                check_runtime_matches_server(server_url, config_snapshot)
 
                 async with snapshot_runtime() as rt:
                     importer = SnapshotImporter(
@@ -1799,9 +1817,11 @@ async def run_suite(
                             )
                             from memex_eval.snapshot.runtime import (
                                 build_embedding_identity,
+                                check_runtime_matches_server,
                                 snapshot_runtime,
                             )
 
+                            check_runtime_matches_server(server_url, config_snapshot)
                             async with snapshot_runtime() as rt:
                                 identity = build_embedding_identity(rt.config)
                                 exporter = SnapshotExporter(

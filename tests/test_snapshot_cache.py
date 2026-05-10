@@ -1,8 +1,10 @@
-"""Tests for the eval suite snapshot cache + the V3 server export route.
+"""Tests for the eval suite snapshot cache module + in-process round trip.
 
-These exercise the cache resolution + lookup helpers (unit-scope) AND the
-``POST /api/v1/_eval/snapshot-export`` route end-to-end via TestClient
-against a fresh FastAPI app.
+Unit-scope coverage of resolution, lookup, mark_complete, stage_path,
+publish, and discard helpers. The end-to-end round-trip test exercises
+the same code path the runner takes (SnapshotExporter → mark_complete →
+publish → SnapshotImporter) against the testcontainer session — no
+HTTP, no server route, no eval-mode flag.
 """
 
 from __future__ import annotations
