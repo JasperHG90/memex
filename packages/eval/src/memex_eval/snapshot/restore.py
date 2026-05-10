@@ -21,7 +21,7 @@ Five (six with cache-populate) phases — see ``BACKLOG.md`` plan Decision 10:
   text columns, fill the NULL embedding columns in batches, REINDEX HNSW
   indexes. No transaction — idempotent retry of NULL rows.
 * Phase E — Mark complete: ``state='complete'`` in ``eval_import_state``.
-  The route returns success only after this row is observed.
+  ``import_snapshot()`` returns success only after this row is written.
 
 Out of scope: merge mode, per-vault rebinding, multi-snapshot composition,
 sync-engine compatibility. Those concerns are why V12 is eval-only.
@@ -29,6 +29,7 @@ sync-engine compatibility. Those concerns are why V12 is eval-only.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import logging
@@ -393,9 +394,32 @@ class SnapshotImporter:
         Resume semantics (Decision 10): if a previous import for the same
         source path is recorded as in-progress, re-use its IDs and skip
         already-completed phases. If recorded as ``complete``, refuse.
+
+        Concurrency: a Postgres session-scoped advisory lock keyed on
+        ``source_snapshot_path`` serializes the entire import. Two
+        processes targeting the same source path queue rather than
+        racing into Phase B with the same ``target_vault_id`` after the
+        eval_import_state UNIQUE INDEX forces them to converge.
         """
         self._snapshot_dir = _resolve_snapshot_dir(self._snapshot_dir)
-        await self._validate_preflight()
+        # Compute a 64-bit advisory-lock key from the snapshot path.
+        # MD5 → first 8 bytes → signed bigint. Collisions are
+        # negligible at the scale of an eval workflow; the worst-case
+        # outcome of a collision is two unrelated imports serializing.
+        lock_key = int.from_bytes(
+            hashlib.md5(str(self._snapshot_dir).encode('utf-8')).digest()[:8],
+            byteorder='big',
+            signed=True,
+        )
+        await self._session.execute(text('SELECT pg_advisory_lock(:k)'), {'k': lock_key})
+        await self._session.commit()  # release the implicit txn the SELECT opened
+        try:
+            await self._validate_preflight()
+        except BaseException:
+            with contextlib.suppress(Exception):
+                await self._session.execute(text('SELECT pg_advisory_unlock(:k)'), {'k': lock_key})
+                await self._session.commit()
+            raise
         try:
             # Idempotent resume — skip phases that have already committed.
             # Note: do NOT unconditionally write state='staging' here; on
@@ -464,6 +488,16 @@ class SnapshotImporter:
             if not self._resumed:
                 await self._cleanup_staging()
             raise
+        finally:
+            # Always release the advisory lock — peers serialized on
+            # this path block until we do. Session-scoped close would
+            # release it anyway, but the explicit unlock keeps the lock
+            # window tight when the importer's session outlives this
+            # call (the eval runner reuses one session for both the
+            # import and a follow-up populate).
+            with contextlib.suppress(Exception):
+                await self._session.execute(text('SELECT pg_advisory_unlock(:k)'), {'k': lock_key})
+                await self._session.commit()
 
     def _phases_completed(self) -> set[str]:
         """Map ``eval_import_state.state`` to the phases already past commit."""

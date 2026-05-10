@@ -78,10 +78,24 @@ def check_runtime_matches_server(server_url: str, server_config_snapshot: dict[s
     Raises ``SnapshotRuntimeMismatch`` with an actionable message on
     either check.
     """
+    import ipaddress
     from urllib.parse import urlparse
 
-    host = (urlparse(server_url).hostname or '').lower()
-    if host not in {'localhost', '127.0.0.1', '::1', ''}:
+    parsed = urlparse(server_url)
+    if not parsed.scheme or not parsed.hostname:
+        raise SnapshotRuntimeMismatch(
+            f'--from-snapshot requires --server to include a scheme and '
+            f'host (got {server_url!r}). Use e.g. '
+            f'http://localhost:8000/api/v1/.'
+        )
+    host = parsed.hostname.lower()
+    is_loopback = host == 'localhost'
+    if not is_loopback:
+        try:
+            is_loopback = ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            is_loopback = False
+    if not is_loopback:
         raise SnapshotRuntimeMismatch(
             f'--from-snapshot requires --server to point at a loopback '
             f'host (got {host!r}). The eval runner writes snapshots '

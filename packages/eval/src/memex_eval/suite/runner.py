@@ -1543,9 +1543,12 @@ async def run_suite(
             try:
                 config_snapshot = await api.get_system_config()
                 config_snapshot_available = True
-                # Resolve embedding/reranker model identity from snapshot
-                emb = config_snapshot.get('server', {}).get('memory', {}).get('embedding', {})
-                rer = config_snapshot.get('server', {}).get('memory', {}).get('reranker', {})
+                # Resolve embedding/reranker model identity from snapshot.
+                # Real config paths are server.embedding_model and
+                # server.reranker_model (NOT server.memory.embedding,
+                # which has never existed in the schema).
+                emb = config_snapshot.get('server', {}).get('embedding_model') or {}
+                rer = config_snapshot.get('server', {}).get('reranker_model') or {}
                 embedding_model = str(emb.get('model') or emb.get('type') or '')
                 reranker_model = str(rer.get('model') or rer.get('type') or '')
                 # P7: determine NLI availability for requires_nli_classifier gating.

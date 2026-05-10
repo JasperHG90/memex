@@ -28,6 +28,23 @@ def test_check_refuses_non_localhost_server() -> None:
         )
 
 
+def test_check_refuses_url_missing_scheme() -> None:
+    """A scheme-less URL must NOT slip through as the empty hostname."""
+    with pytest.raises(SnapshotRuntimeMismatch, match='scheme'):
+        check_runtime_matches_server(
+            'memex.internal:8000',
+            {'server': {'embedding_model': {'type': 'onnx'}}},
+        )
+
+
+def test_check_accepts_ipv4_loopback_aliases() -> None:
+    """127.0.0.2 is also loopback per RFC 3330."""
+    check_runtime_matches_server(
+        'http://127.0.0.2:8000/api/v1/',
+        {'server': {'embedding_model': {'type': 'onnx'}}},
+    )
+
+
 def test_check_accepts_localhost_with_matching_embedding(monkeypatch: pytest.MonkeyPatch) -> None:
     # The fixture's testcontainer config sets ONNX, which matches the
     # MODEL_REGISTRY's ONNX entry by default.
@@ -56,15 +73,14 @@ def test_check_skips_when_snapshot_lacks_embedding_info() -> None:
 
 
 async def test_snapshot_runtime_yields_session_and_ddl_applied(
-    postgres_url: str, monkeypatch: pytest.MonkeyPatch
+    postgres_url: str,
 ) -> None:
     """End-to-end: snapshot_runtime() builds a usable session and the
-    eval_import_state table is present after entry.
+    eval_import_state table is present after entry. Uses the autouse
+    ``ensure_db_env_vars`` fixture which already sets HOST/PORT/etc.
+    pointing at the testcontainer.
     """
     from sqlalchemy import text
-
-    # Point the eval config at the testcontainer DB.
-    monkeypatch.setenv('MEMEX_SERVER__META_STORE__INSTANCE__CONNECTION_STRING', postgres_url)
 
     async with snapshot_runtime() as rt:
         assert rt.session is not None
@@ -81,6 +97,23 @@ async def test_snapshot_runtime_yields_session_and_ddl_applied(
     # disposed). We don't strictly assert that — `snapshot_runtime`'s
     # contract is that callers don't outlive the context.
     assert rt.config is not None  # SnapshotRuntime is a NamedTuple
+
+
+async def test_snapshot_runtime_refuses_stale_alembic_head(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`snapshot_runtime` validates the live alembic head before
+    yielding so a populate against a stale schema fails fast.
+
+    Monkeypatches the script-dir head (NOT the DB row) so the test
+    leaves the shared testcontainer's ``alembic_version`` untouched.
+    """
+    # Patch get_expected_head everywhere it's looked up.
+    monkeypatch.setattr('memex_eval.snapshot.runtime.get_expected_head', lambda: 'deadbeefcafe')
+
+    with pytest.raises(SnapshotRuntimeMismatch, match='Alembic head mismatch'):
+        async with snapshot_runtime():
+            pass
 
 
 # ----------------------------------------------------------------------
