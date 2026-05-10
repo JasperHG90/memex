@@ -10,6 +10,11 @@ This module is the primitive; ``suite/sweep.py`` is the orchestrator.
 Both are local-only — sweeping against a remote/staging server is a
 nonsense operation because env-var overrides only take effect at process
 startup, not on a long-running deployment.
+
+Hardening: ``MEMEX_*`` env vars are stripped from the spawned server's
+environment before knob overrides are layered, so a developer's exported
+``MEMEX_SERVER__HOST`` / ``MEMEX_API_KEY`` / etc. cannot silently
+contaminate sweep results. The caller must be explicit about every knob.
 """
 
 from __future__ import annotations
@@ -21,8 +26,9 @@ import signal
 import socket
 import subprocess
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import httpx
 
@@ -36,6 +42,13 @@ _DEFAULT_PORT_MIN = 18000
 _DEFAULT_PORT_MAX = 19000
 _DEFAULT_HEALTH_TIMEOUT_SECONDS = 60.0
 _DEFAULT_SHUTDOWN_GRACE_SECONDS = 30.0
+_DEFAULT_SPAWN_MAX_RETRIES = 3
+
+# Env vars that must NEVER be inherited from the harness's own
+# environment into the spawned server. The orchestrator explicitly opts
+# every knob in via ``env_overrides``; anything else is a leak from the
+# developer's shell.
+_MEMEX_ENV_PREFIX = 'MEMEX_'
 
 
 @dataclass
@@ -52,7 +65,15 @@ class ServerHandle:
     url: str  # http://localhost:<port>/api/v1/
     log_path: Path
     env_overrides: dict[str, str]
-    shutdown_method: str = 'unset'  # 'sigterm' | 'sigkill' | 'unset'
+    # Process-group id captured at spawn time so SIGTERM/SIGKILL escalation
+    # cannot accidentally signal a recycled-PID's group later (the classic
+    # POSIX kill-after-exit hazard, real on PID-constrained containers).
+    pgid: int = -1
+    # Log filehandle held by the parent so granian can keep writing to it.
+    # Closed by ``shutdown_server`` after the child exits; do not access
+    # from outside this module.
+    _log_file: Any = field(default=None, repr=False)
+    shutdown_method: str = 'unset'  # 'sigterm' | 'sigkill' | 'already_exited' | 'unset'
 
     @property
     def pid(self) -> int:
@@ -65,7 +86,7 @@ def find_free_port(*, port_min: int = _DEFAULT_PORT_MIN, port_max: int = _DEFAUL
     Random allocation with retry. A port can race-bind between the bind()
     here and the granian spawn — caller is expected to retry the entire
     spawn on bind failure rather than re-using an aged-out port from this
-    call.
+    call (``spawn_server`` does this automatically).
     """
     import random
 
@@ -96,30 +117,19 @@ def env_var_for_dotted_path(path: str) -> str:
     return 'MEMEX_' + '__'.join(p.upper() for p in parts)
 
 
-def _wait_for_health(url: str, *, timeout: float = _DEFAULT_HEALTH_TIMEOUT_SECONDS) -> bool:
-    """Poll ``<url>health`` until 200 or timeout. Returns True on ready,
-    False on timeout. Uses a tight 250ms poll interval — server startup
-    typically completes in 2-5s on a warm machine."""
+def _build_clean_env(env_overrides: dict[str, str]) -> dict[str, str]:
+    """Build the spawned server's environment.
 
-    deadline = time.monotonic() + timeout
-    health_url = url.rstrip('/') + '/health'
-    last_error: str | None = None
-    while time.monotonic() < deadline:
-        try:
-            resp = httpx.get(health_url, timeout=2.0)
-            if resp.status_code == 200:
-                return True
-            last_error = f'HTTP {resp.status_code}'
-        except httpx.HTTPError as exc:
-            last_error = str(exc)
-        time.sleep(0.25)
-    logger.warning(
-        'health-check timeout for %s after %.1fs (last_error=%s)',
-        health_url,
-        timeout,
-        last_error,
-    )
-    return False
+    Strips every ``MEMEX_*`` env var the harness inherited from the user's
+    shell so a stray ``MEMEX_SERVER__HOST`` or ``MEMEX_API_KEY`` cannot
+    silently contaminate the spawned server. Every knob the sweep wants
+    set must come through ``env_overrides`` explicitly. Non-MEMEX env
+    (PATH, HOME, PG*, AWS_*, GOOGLE_API_KEY, etc.) is preserved so the
+    server can still reach Postgres / LLM APIs.
+    """
+    env = {k: v for k, v in os.environ.items() if not k.startswith(_MEMEX_ENV_PREFIX)}
+    env.update(env_overrides)
+    return env
 
 
 def spawn_server(
@@ -129,32 +139,83 @@ def spawn_server(
     workers: int = 1,
     health_timeout: float = _DEFAULT_HEALTH_TIMEOUT_SECONDS,
     log_dir: Path | None = None,
+    max_retries: int = _DEFAULT_SPAWN_MAX_RETRIES,
 ) -> ServerHandle:
     """Spawn a memex-core server subprocess with the given env overrides.
 
     Uses ``granian --interface asgi memex_core.server:app`` (matches the
     ``memex server run`` command exactly so behavior under sweep is the
-    same as in production). Inherits the parent's environment, then
-    layers ``env_overrides`` on top.
+    same as in production). Builds a clean env (every ``MEMEX_*`` from the
+    parent is stripped; see ``_build_clean_env``), then layers
+    ``env_overrides`` on top.
 
-    Returns a ``ServerHandle`` once ``/api/v1/health`` is 200. Raises
-    ``RuntimeError`` on health-timeout or process exit before ready —
-    caller retries with a fresh port (the previous one may have raced).
-    The subprocess's stdout+stderr are tee'd to a log file under
-    ``log_dir`` so a failed sweep point's diagnostics survive the sweep
-    drain.
+    Returns a ``ServerHandle`` once ``/api/v1/health`` is 200.
+
+    Retry semantics depend on whether ``port`` was specified explicitly:
+
+    - ``port`` is None (default): retries up to ``max_retries`` times on
+      bind / startup failure, allocating a fresh free port each retry —
+      port collisions on busy machines are real and should not lose data
+      points to a single failure.
+    - ``port`` is explicit: a single attempt only. Retrying on a different
+      port would violate the caller's intent (e.g. tests pinning to a
+      known port, or a user wiring an external client). The original
+      ``RuntimeError`` is re-raised verbatim.
+
+    Raises ``RuntimeError`` if every retry fails.
     """
-    if port is None:
-        port = find_free_port()
     if log_dir is None:
         log_dir = Path('/tmp/memex-eval-sweep')
     log_dir.mkdir(parents=True, exist_ok=True)
-    log_path = log_dir / f'server-{port}-{int(time.time())}.log'
 
-    env = os.environ.copy()
-    env.update(env_overrides)
-    # Single-worker is the right default for a sweep point — multi-worker
-    # only matters under load and adds startup time we don't recoup.
+    if port is not None:
+        # Explicit port: do NOT retry on a different port — that would
+        # silently betray the caller's intent. One shot, surfaces failure.
+        return _spawn_once(
+            env_overrides=env_overrides,
+            port=port,
+            workers=workers,
+            health_timeout=health_timeout,
+            log_dir=log_dir,
+        )
+
+    last_error: Exception | None = None
+    for attempt in range(max_retries):
+        try:
+            return _spawn_once(
+                env_overrides=env_overrides,
+                port=None,  # re-pick a free port each attempt
+                workers=workers,
+                health_timeout=health_timeout,
+                log_dir=log_dir,
+            )
+        except RuntimeError as exc:
+            last_error = exc
+            logger.warning(
+                'sweep-spawn: attempt %d/%d failed: %s',
+                attempt + 1,
+                max_retries,
+                exc,
+            )
+    assert last_error is not None  # we returned on success above
+    raise RuntimeError(
+        f'spawn_server failed after {max_retries} attempts; last error: {last_error}'
+    ) from last_error
+
+
+def _spawn_once(
+    *,
+    env_overrides: dict[str, str],
+    port: int | None,
+    workers: int,
+    health_timeout: float,
+    log_dir: Path,
+) -> ServerHandle:
+    """Single-shot spawn; called by ``spawn_server`` inside its retry loop."""
+    if port is None:
+        port = find_free_port()
+    log_path = log_dir / f'server-{port}-{int(time.time())}.log'
+    env = _build_clean_env(env_overrides)
     cmd = [
         'granian',
         '--interface',
@@ -169,67 +230,116 @@ def spawn_server(
         'warn',
         'memex_core.server:app',
     ]
+
+    # Open the log file. We close it on EVERY error path before raising so
+    # the parent process does not leak fds across many sweep points. On the
+    # success path the fd is held open in the ServerHandle (granian writes
+    # to it for the rest of the process's life) and closed by
+    # ``shutdown_server`` after ``process.wait()`` returns.
     log_file = log_path.open('wb')
+    proc: subprocess.Popen[bytes] | None = None
+    cleanup_owned_by_branch = False  # set True iff an inner branch already
+    # called shutdown_server on the handle (and thus closed log_file). The
+    # outer ``except BaseException`` reads this flag to skip the redundant
+    # cleanup pass — single source of truth.
     try:
-        proc = subprocess.Popen(
-            cmd,
-            env=env,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-        )
-    except FileNotFoundError as exc:
-        log_file.close()
-        raise RuntimeError(
-            'granian binary not found on PATH; install with '
-            '``uv add granian --package memex-core``.'
-        ) from exc
-    url = f'http://127.0.0.1:{port}/api/v1/'
-    handle = ServerHandle(
-        process=proc,
-        port=port,
-        url=url,
-        log_path=log_path,
-        env_overrides=dict(env_overrides),
-    )
-
-    # Race window: the subprocess may exit before health turns on.
-    # Poll both signals — process status AND health endpoint — so an
-    # immediate crash surfaces as RuntimeError rather than a 60s wait.
-    deadline = time.monotonic() + health_timeout
-    while time.monotonic() < deadline:
-        rc = proc.poll()
-        if rc is not None:
-            log_file.flush()
-            log_file.close()
-            log_tail = _tail_log(log_path, lines=40)
-            raise RuntimeError(
-                f'memex-core server (pid={proc.pid}, port={port}) exited '
-                f'rc={rc} during startup. Last 40 log lines:\n{log_tail}'
-            )
         try:
-            resp = httpx.get(url + 'health', timeout=2.0)
-            if resp.status_code == 200:
-                logger.info(
-                    'sweep-spawn: server ready on port=%d pid=%d after %.1fs',
-                    port,
-                    proc.pid,
-                    health_timeout - (deadline - time.monotonic()),
-                )
-                return handle
-        except httpx.HTTPError:
-            pass
-        time.sleep(0.25)
+            proc = subprocess.Popen(
+                cmd,
+                env=env,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+            )
+        except FileNotFoundError as exc:
+            raise RuntimeError(
+                'granian binary not found on PATH; install with '
+                '``uv add granian --package memex-core``.'
+            ) from exc
+        except OSError as exc:
+            raise RuntimeError(f'subprocess.Popen failed for granian: {exc}') from exc
 
-    # Timeout — kill and raise.
-    log_file.flush()
-    log_file.close()
-    shutdown_server(handle)
-    log_tail = _tail_log(log_path, lines=40)
-    raise RuntimeError(
-        f'memex-core server on port={port} did not become healthy within '
-        f'{health_timeout:.0f}s. Last 40 log lines:\n{log_tail}'
-    )
+        # Capture pgid once at spawn time. Cached value avoids the
+        # ``os.getpgid(pid)``-after-exit race on PID-recycle-prone systems.
+        try:
+            pgid = os.getpgid(proc.pid)
+        except ProcessLookupError:
+            # Child exited between Popen and getpgid — treat as failed spawn.
+            raise RuntimeError(
+                f'memex-core server (pid={proc.pid}) exited immediately after '
+                f'spawn before pgid could be captured.'
+            ) from None
+
+        url = f'http://127.0.0.1:{port}/api/v1/'
+        handle = ServerHandle(
+            process=proc,
+            port=port,
+            url=url,
+            log_path=log_path,
+            env_overrides=dict(env_overrides),
+            pgid=pgid,
+            _log_file=log_file,
+        )
+
+        # Race window: the subprocess may exit before health turns on.
+        # Poll both signals — process status AND health endpoint — so an
+        # immediate crash surfaces as RuntimeError rather than a 60s wait.
+        deadline = time.monotonic() + health_timeout
+        spawn_started = time.monotonic()
+        while time.monotonic() < deadline:
+            rc = proc.poll()
+            if rc is not None:
+                log_tail = _tail_log(log_path, lines=40)
+                # Process exited during startup: filehandle gets closed
+                # by the outer except handler, after which we re-raise.
+                raise RuntimeError(
+                    f'memex-core server (pid={proc.pid}, port={port}) exited '
+                    f'rc={rc} during startup. Last 40 log lines:\n{log_tail}'
+                )
+            try:
+                resp = httpx.get(url + 'health', timeout=2.0)
+                if resp.status_code == 200:
+                    logger.info(
+                        'sweep-spawn: server ready on port=%d pid=%d after %.1fs',
+                        port,
+                        proc.pid,
+                        time.monotonic() - spawn_started,
+                    )
+                    # Hand off the log_file to the handle; do NOT close it
+                    # here — granian still writes to it.
+                    return handle
+            except httpx.HTTPError:
+                pass
+            time.sleep(0.25)
+
+        # Health-timeout: kill the child cleanly via ``shutdown_server``
+        # (which closes the log fd as part of its contract), then raise.
+        # Set ``cleanup_owned_by_branch`` so the outer ``except`` skips
+        # its redundant cleanup pass.
+        log_tail = _tail_log(log_path, lines=40)
+        with contextlib.suppress(Exception):
+            shutdown_server(handle)
+        cleanup_owned_by_branch = True
+        raise RuntimeError(
+            f'memex-core server on port={port} did not become healthy within '
+            f'{health_timeout:.0f}s. Last 40 log lines:\n{log_tail}'
+        )
+    except BaseException:
+        # Any exception (RuntimeError on early-exit / KeyboardInterrupt /
+        # MemoryError, ...) before the health-poll branch left us
+        # responsible for the log filehandle and any spawned subprocess.
+        # The health-timeout branch sets ``cleanup_owned_by_branch=True``
+        # and we skip; otherwise we own the fd + child cleanup here.
+        if not cleanup_owned_by_branch:
+            try:
+                if proc is not None and proc.poll() is None:
+                    with contextlib.suppress(Exception):
+                        proc.terminate()
+                        proc.wait(timeout=5.0)
+            finally:
+                with contextlib.suppress(Exception):
+                    log_file.close()
+        raise
 
 
 def shutdown_server(
@@ -239,41 +349,85 @@ def shutdown_server(
     seconds; SIGKILL on timeout. Idempotent — safe to call twice on the
     same handle. Annotates ``handle.shutdown_method`` so the caller can
     tag the MLflow run.
+
+    Robust against KeyboardInterrupt during the grace wait: a second
+    Ctrl-C immediately escalates to SIGKILL on the cached pgid before
+    re-raising, so the spawned process group is never orphaned.
     """
+    log_file = handle._log_file  # noqa: SLF001 — same module
     if handle.process.poll() is not None:
-        # Already dead — nothing to do.
         if handle.shutdown_method == 'unset':
             handle.shutdown_method = 'already_exited'
+        _close_log_file(log_file)
         return
-    pid = handle.process.pid
+
+    # SIGTERM the entire group so granian's worker (started via
+    # ``start_new_session=True``) gets the signal too. The cached pgid
+    # avoids the ``os.getpgid(pid)``-after-exit hazard.
     try:
-        # Signal the whole process group so granian's worker (started via
-        # ``start_new_session=True``) gets the signal too.
-        os.killpg(os.getpgid(pid), signal.SIGTERM)
+        if handle.pgid > 0:
+            os.killpg(handle.pgid, signal.SIGTERM)
+        else:
+            handle.process.terminate()
     except ProcessLookupError:
         handle.shutdown_method = 'already_exited'
+        _close_log_file(log_file)
         return
+
     try:
         handle.process.wait(timeout=grace)
         handle.shutdown_method = 'sigterm'
+        _close_log_file(log_file)
         return
     except subprocess.TimeoutExpired:
         pass
+    except BaseException:
+        # KeyboardInterrupt / any other BaseException during the wait:
+        # immediately escalate to SIGKILL on the cached pgid before
+        # re-raising. The caller may see an orphaned shutdown sequence,
+        # but never an orphaned process group.
+        with contextlib.suppress(Exception):
+            if handle.pgid > 0:
+                os.killpg(handle.pgid, signal.SIGKILL)
+            else:
+                handle.process.kill()
+        with contextlib.suppress(Exception):
+            handle.process.wait(timeout=5.0)
+        handle.shutdown_method = 'sigkill'
+        _close_log_file(log_file)
+        raise
+
     # Grace expired — escalate to SIGKILL. The user gets a tag on the
     # MLflow run so they can spot points where the server didn't shut
     # down cleanly (likely scheduler / DB-connection-pool drain bugs).
     logger.warning(
         'sweep-shutdown: server pid=%d port=%d did not exit on SIGTERM '
         'after %.0fs; escalating to SIGKILL',
-        pid,
+        handle.pid,
         handle.port,
         grace,
     )
-    with contextlib.suppress(ProcessLookupError):
-        os.killpg(os.getpgid(pid), signal.SIGKILL)
-    with contextlib.suppress(subprocess.TimeoutExpired):
+    # Suppress broadly here: a permission error / OS quirk killing the pgid
+    # must NOT skip ``_close_log_file`` below — leaking a fd per sweep
+    # point chews through the process's fd budget on long sweeps.
+    with contextlib.suppress(Exception):
+        if handle.pgid > 0:
+            os.killpg(handle.pgid, signal.SIGKILL)
+        else:
+            handle.process.kill()
+    with contextlib.suppress(Exception):
         handle.process.wait(timeout=5.0)
     handle.shutdown_method = 'sigkill'
+    _close_log_file(log_file)
+
+
+def _close_log_file(log_file: Any) -> None:
+    """Close a log filehandle if it's still open. Best-effort; never raises."""
+    if log_file is None:
+        return
+    with contextlib.suppress(Exception):
+        if not log_file.closed:
+            log_file.close()
 
 
 def _tail_log(path: Path, *, lines: int = 40) -> str:

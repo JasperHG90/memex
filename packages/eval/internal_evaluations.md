@@ -176,7 +176,7 @@ memex-eval suite run [<name>|--all]
 | Flag | Default | Description |
 |---|---|---|
 | `--all` | — | Run every discoverable suite serially (mutually exclusive with `<name>`) |
-| `--server` | `http://localhost:8000/api/v1/` (or `MEMEX_EVAL_DEFAULT_SERVER`) | Target Memex API URL |
+| `--server` | `http://localhost:8001/api/v1/` (or `MEMEX_EVAL_DEFAULT_SERVER`) | Target Memex API URL |
 | `--mlflow-uri` | `MLFLOW_TRACKING_URI` env, else `file://./mlruns` | MLflow tracking server / file URI |
 | `--mlflow-experiment` | `memex-suite-<name>-v<schema_version>` | Experiment name override |
 | `--mlflow-run-name` | auto | Human-readable run name (e.g. `mw0.5-decay0.1`) |
@@ -216,9 +216,10 @@ memex-eval suite sweep <name>
 | Flag | Default | Description |
 |---|---|---|
 | `--param` | required | Repeatable. `KEY=V1,V2,V3`. `KEY` is a dotted `MemexConfig` path (validated against `model_fields` at parse time; `SecretStr` paths are rejected). Multiple `--param` flags cross-product into a grid (e.g. `--param a=1,2 --param b=x,y` → 4 points). |
-| `--server` | `http://localhost:8000/api/v1/` | Local-only. Sweep is hard-rejected against non-`localhost`/`127.0.0.1`/`::1` hosts because env-var overrides only apply at server startup. |
+| `--server` | `http://localhost:8001/api/v1/` | Local-only. Sweep is hard-rejected against non-`localhost`/`127.0.0.1`/`::1` hosts because env-var overrides only apply at server startup. |
 | `--sweep-label` | `sweep-<id>` | Sets the parent MLflow run name. Children get `<label>-point-NN`. |
-| `--mlflow-experiment` | `memex-sweep-<suite>-<knob_token>-<YYYYMM>` | Override the auto-generated parent experiment. |
+| `--mlflow-experiment` | `memex-sweep-<suite>-<knob_token>-<YYYYMM>` | Override the auto-generated experiment (parent **and** children land in the same one — required for the MLflow Compare view to group them). |
+| `--max-points` | `50` | Safety cap on Cartesian grid size; sweeps exceeding it are rejected before any spawn. Bump explicitly when intentional. The harness also strips inherited `MEMEX_*` env vars from each spawned server, so a developer's shell can't silently contaminate sweep results. |
 | `--output` | none | Write `SweepResult` JSON (sweep id, parent run id, per-point summaries with override values + status + duration + shutdown method) to a path. |
 | `--log-dir` | `/tmp/memex-eval-sweep` | Per-point spawned-server stdout+stderr is tee'd here; surfaced when a point fails. |
 

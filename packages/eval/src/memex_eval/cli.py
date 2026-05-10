@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import logging
 import re
 from pathlib import Path
@@ -927,6 +926,17 @@ def suite_sweep(
         '--log-dir',
         help='Directory for spawned-server stdout+stderr logs. Default /tmp/memex-eval-sweep.',
     ),
+    max_points: int = typer.Option(
+        50,
+        '--max-points',
+        min=1,
+        help=(
+            'Safety cap on Cartesian grid size. Sweeps that exceed it are rejected '
+            'before any server spawn so an accidental --param explosion '
+            "(``a=1,2,3,4 b=1,2,3,4 c=1,2,3,4 d=1,2,3,4`` = 256 points) doesn't "
+            'silently start a multi-day run. Bump explicitly when intentional.'
+        ),
+    ),
     verbose: bool = typer.Option(False, '--verbose', '-v'),
 ) -> None:
     """Run a suite N times across a knob grid; spawn a server per point.
@@ -938,10 +948,10 @@ def suite_sweep(
     """
     _setup_logging(verbose)
     import asyncio
-    import json as _json
 
     from memex_eval.suite import load_suite, SuiteNotFound
     from memex_eval.suite.sweep import (
+        SweepInterrupted,
         SweepNotSupportedRemote,
         SweepValidationError,
         parse_param_specs,
@@ -972,6 +982,7 @@ def suite_sweep(
         'groups': groups or None,
     }
 
+    interrupted = False
     try:
         result = asyncio.run(
             run_sweep(
@@ -983,6 +994,7 @@ def suite_sweep(
                 sweep_label=sweep_label,
                 suite_run_kwargs=suite_run_kwargs,
                 log_dir=Path(log_dir) if log_dir else None,
+                max_points=max_points,
             )
         )
     except SweepValidationError as exc:
@@ -991,6 +1003,17 @@ def suite_sweep(
     except SweepNotSupportedRemote as exc:
         console.print(f'[red]{exc}[/red]')
         raise typer.Exit(code=2) from None
+    except SweepInterrupted as interrupt_exc:
+        # KeyboardInterrupt mid-sweep. The orchestrator already shut the
+        # spawned server down and built the partial SweepResult. Surface
+        # what we have, write --output if the user asked, then exit 130.
+        result = interrupt_exc.partial_result
+        interrupted = True
+        console.print(
+            f'[yellow]Sweep interrupted; '
+            f'completed={result.children_total - result.children_failed} / '
+            f'{result.children_total} points.[/yellow]'
+        )
 
     # Summary table
     console.print()
@@ -1016,22 +1039,34 @@ def suite_sweep(
 
     if output:
         out_path = Path(output)
-        out_path.parent.mkdir(parents=True, exist_ok=True)
+        # ``SweepResult`` is a Pydantic model — model_dump_json handles
+        # datetime / Path / nested Pydantic ``RunResult`` cleanly without
+        # the dataclasses-asdict + custom-encoder hazard.
+        payload = result.model_dump_json(indent=2)
+        try:
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(payload)
+            console.print(f'  → wrote {out_path}')
+        except OSError as exc:
+            # Don't lose the SweepResult on a readonly --output dir, full
+            # disk, or permission error — preserving partial-run state is
+            # the whole point of the SweepInterrupted contract above. Fall
+            # back to a temp file and tell the user where it landed.
+            import os as _os
+            import tempfile
 
-        # SweepResult contains datetimes + RunResult Pydantic models — flatten via
-        # dataclasses.asdict + custom encoder.
-        def _default(obj: Any) -> Any:
-            from datetime import datetime as _dt
+            fd, tmp_name = tempfile.mkstemp(prefix='memex-sweep-', suffix='.json')
+            with _os.fdopen(fd, 'w') as fh:
+                fh.write(payload)
+            console.print(
+                f'[yellow]  → could not write {out_path} ({exc}); '
+                f'wrote sweep result to {tmp_name} instead.[/yellow]'
+            )
 
-            if isinstance(obj, _dt):
-                return obj.isoformat()
-            if hasattr(obj, 'model_dump'):
-                return obj.model_dump(mode='json')
-            raise TypeError(f'Unhandled type: {type(obj)}')
-
-        out_path.write_text(_json.dumps(dataclasses.asdict(result), default=_default, indent=2))
-        console.print(f'  → wrote {out_path}')
-
+    if interrupted:
+        # SIGINT exit code; ``raise typer.Exit`` so the partial-result
+        # block above still ran.
+        raise typer.Exit(code=130)
     if result.children_failed:
         raise typer.Exit(code=1)
 
