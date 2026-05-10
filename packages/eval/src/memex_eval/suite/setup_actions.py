@@ -107,6 +107,25 @@ class SetupActionHandler(abc.ABC):
 
 _SETUP_ACTION_REGISTRY: dict[str, type[SetupActionHandler]] = {}
 
+# Names the runner seeds into ``scenario_context`` before any setup action
+# runs (see ``runner.py:_run_setup_actions`` + the run_one_scenario
+# context init). A handler whose ``kind`` matches one of these would
+# either shadow seeded keys via the auto-prefix or be silently ignored.
+# Reject at registration time so the failure surface is at import.
+_RESERVED_CONTEXT_KEYS: frozenset[str] = frozenset(
+    {
+        '_note_id_by_key',
+        '_note_key_to_unit_ids',
+        '_executed_action_kinds',
+        '_executed_action_indices',
+        '_required_setup_failed',
+        '_inline_note_ids',
+        '_note_assets_by_key',
+        '_per_action_results',
+        '_setup_failures',
+    }
+)
+
 
 def register_setup_action(name: str):
     """Register a ``SetupActionHandler`` subclass under ``name``.
@@ -117,6 +136,11 @@ def register_setup_action(name: str):
 
     if not _NAME_RE.match(name):
         raise ValueError(f'Setup action name {name!r} must match {_NAME_RE.pattern!r}')
+    if name in _RESERVED_CONTEXT_KEYS:
+        raise ValueError(
+            f'Setup action name {name!r} collides with a runner-reserved '
+            f'scenario_context key. Reserved: {sorted(_RESERVED_CONTEXT_KEYS)}'
+        )
 
     def deco(cls: type[SetupActionHandler]) -> type[SetupActionHandler]:
         # Round-7 M5: refuse classes that don't inherit from
@@ -152,6 +176,11 @@ def replace_setup_action(name: str):
 
     if not _NAME_RE.match(name):
         raise ValueError(f'Setup action name {name!r} must match {_NAME_RE.pattern!r}')
+    if name in _RESERVED_CONTEXT_KEYS:
+        raise ValueError(
+            f'Setup action name {name!r} collides with a runner-reserved '
+            f'scenario_context key. Reserved: {sorted(_RESERVED_CONTEXT_KEYS)}'
+        )
 
     def deco(cls: type[SetupActionHandler]) -> type[SetupActionHandler]:
         # Round-7 M5: same subclass guard as register_setup_action.
@@ -251,14 +280,114 @@ class _RecordOutcome(SetupActionHandler):
         if not ids:
             logger.warning('  Setup record_outcome: no units')
             return None
-        for _ in range(params.get('count', 1) or 1):
-            await api.record_outcome(
-                unit_ids=ids,
-                success=params.get('success', True),
-                vault_id=str(vault_id),
-                reason=params.get('reason'),
+        success = bool(params.get('success', True))
+        count = int(params.get('count', 1) or 1)
+
+        # Capture pre-state via direct DB access so teardown can restore
+        # exact counter values + ``last_outcome_at``. Without these the
+        # teardown can only zero the differential, leaving total evidence
+        # inflated (which trips the >=5 gate in engine.py:154 and changes
+        # the retrieval regime for future scenarios touching the same units).
+        #
+        # ``audit_ts_low`` is captured from Postgres (``SELECT now()``), NOT
+        # the eval-process wall-clock (review round-1 HIGH #4). The audit
+        # rows ``api.record_outcome`` writes use the SERVER's
+        # ``transaction_timestamp()``; comparing them against a Python
+        # ``datetime.now()`` would silently drop rows on any clock skew
+        # between the eval host and the Postgres host (containerized CI,
+        # NTP step, virt clock drift). Using PG's own clock makes the
+        # comparison monotonic by construction.
+        #
+        # ``dsn_validated``: we also verify our DSN actually points at a
+        # DB that contains the unit_ids we're about to revert. If
+        # ``MEMEX_EVAL_DATABASE_URL`` is misconfigured, the SELECT returns
+        # zero rows → we abort the DB-direct path and force the API-level
+        # flip-cancel fallback so the teardown can't issue UPDATE/DELETE
+        # against unrelated data (review round-1 HIGH #6).
+        from memex_eval.suite.db_teardown import eval_db_session
+
+        audit_ts_low_iso: str | None = None
+        prev_state: dict[str, dict[str, Any]] = {}
+        dsn_validated = False
+        try:
+            async with eval_db_session() as conn:
+                # PG-side timestamp BEFORE we initiate the writes. Any audit
+                # row inserted by record_outcome will have timestamp >= this.
+                ts = await conn.fetchval('SELECT now()')
+                audit_ts_low_iso = ts.isoformat() if ts is not None else None
+                rows = await conn.fetch(
+                    'SELECT id::text AS id, success_co_count, failure_co_count, '
+                    'last_outcome_at FROM memory_units WHERE id = ANY($1::uuid[])',
+                    ids,
+                )
+                for r in rows:
+                    prev_state[r['id']] = {
+                        'success_co_count': r['success_co_count'],
+                        'failure_co_count': r['failure_co_count'],
+                        'last_outcome_at': r['last_outcome_at'],
+                    }
+                # DSN sanity check: every unit_id we plan to stamp MUST
+                # exist in the connected DB. A zero-rows result means the
+                # configured DSN points at the wrong Postgres instance,
+                # OR the units don't exist (which itself is a setup bug).
+                if len(rows) == len(ids):
+                    dsn_validated = True
+                else:
+                    logger.warning(
+                        'record_outcome run: DSN sanity check failed — '
+                        'expected %d memory_units, found %d. '
+                        'Either MEMEX_EVAL_DATABASE_URL points at the wrong '
+                        'database, or the units were never ingested. '
+                        'Teardown will use API-level flip-cancel; '
+                        'no DB-direct UPDATE/DELETE will run.',
+                        len(ids),
+                        len(rows),
+                    )
+        except Exception as exc:
+            logger.warning(
+                'record_outcome run: pre-state capture failed (%s: %s); '
+                'teardown will fall back to flip_cancel semantics for these units.',
+                type(exc).__name__,
+                exc,
             )
-        return {'unit_ids': ids}
+
+        # Per-call try/except so a partial failure doesn't leak counter
+        # increments without a teardown contract (review round-1 MEDIUM #8).
+        # ``actual_success`` / ``actual_failure`` track how many calls
+        # actually landed; teardown reverts exactly that many — never the
+        # requested ``count`` (which would over-revert on partial failure).
+        actual_success = 0
+        actual_failure = 0
+        for _ in range(count):
+            try:
+                await api.record_outcome(
+                    unit_ids=ids,
+                    success=success,
+                    vault_id=str(vault_id),
+                    reason=params.get('reason'),
+                )
+            except Exception as exc:
+                logger.warning(
+                    'record_outcome run: api.record_outcome call failed (%s: %s) '
+                    'after %d/%d calls; teardown will revert what landed.',
+                    type(exc).__name__,
+                    exc,
+                    actual_success + actual_failure,
+                    count,
+                )
+                break
+            if success:
+                actual_success += 1
+            else:
+                actual_failure += 1
+        return {
+            'unit_ids': ids,
+            'stamped_success': actual_success,
+            'stamped_failure': actual_failure,
+            'audit_ts_low': audit_ts_low_iso,
+            'prev_state': prev_state,
+            'dsn_validated': dsn_validated,
+        }
 
     async def teardown(
         self,
@@ -267,21 +396,208 @@ class _RecordOutcome(SetupActionHandler):
         params: dict[str, Any],
         setup_context: dict[str, Any] | None,
     ) -> None:
-        """No-op by design.
+        """Restore pristine MW state via direct DB access.
 
-        Memory Worth counters are append-only at the storage layer and
-        the retrieval pre-filter at engine.py:154 fires when
-        (success_co + failure_co) >= 5. A flip-and-cancel teardown would
-        push counters into that gated regime after one reuse cycle,
-        silently changing scoring of unrelated downstream scenarios in
-        the same vault. The runner therefore skips outcome scenarios on
-        --reuse-vault with skip_reason='setup_action_not_reusable';
-        outcome scenarios must be exercised on a fresh vault.
+        Steps (atomic in one transaction, run as the local Postgres user):
+          1. UPDATE memory_units rows back to their captured pre-state
+             (success_co_count, failure_co_count, last_outcome_at).
+          2. Decrement the same counters on linked unit_entities by the
+             stamped amount — propagation mirrors what record_outcome
+             did at run time (services/outcomes.py:230-260).
+          3. Decrement the same counters on linked mental_models.
+          4. DELETE the audit_logs rows my run() created (filtered by
+             action='outcome.record', resource_id ∈ unit_ids, timestamp
+             ≥ run-time entry).
 
-        Follow-up ticket will add an admin record_outcome_reset(unit_ids)
-        endpoint that resets counters to zero — at which point this
-        teardown becomes a real reset.
+        Why DB-direct rather than a public reset endpoint: the public
+        ``record_outcome`` API only does atomic ``+1`` increments by
+        design. A reset endpoint would be test-only surface in core.
+        Eval has access to the same Postgres instance the server uses;
+        running the inverse SQL keeps memex-core clean.
+
+        ``teardown_strategy='noop'`` opts out (e.g. for tests that want
+        to inspect the outcome log post-run). The default is full reset.
+
+        Failure mode: if pre-state capture failed at run-time
+        (``prev_state`` empty for some unit_ids), the teardown falls
+        back to plain decrement-by-stamped-amount on those rows —
+        ``last_outcome_at`` may end up stale. Logged at WARNING.
         """
+        strategy = (params.get('teardown_strategy') or 'reset').lower()
+        if strategy == 'noop':
+            return None
+        if strategy not in ('reset',):
+            logger.warning(
+                'record_outcome teardown: unknown teardown_strategy=%r '
+                '(expected "reset" | "noop"); falling back to reset.',
+                strategy,
+            )
+
+        ctx = setup_context or {}
+        # Prefer per-action keys (no prefix). The legacy prefixed keys are
+        # accepted only as a back-compat fallback for external callers that
+        # pass the merged context.
+        unit_ids = ctx.get('unit_ids') or ctx.get('record_outcome.unit_ids') or []
+        stamped_success = int(
+            ctx.get('stamped_success', ctx.get('record_outcome.stamped_success')) or 0
+        )
+        stamped_failure = int(
+            ctx.get('stamped_failure', ctx.get('record_outcome.stamped_failure')) or 0
+        )
+        prev_state = ctx.get('prev_state') or ctx.get('record_outcome.prev_state') or {}
+        audit_ts_low_iso = ctx.get('audit_ts_low') or ctx.get('record_outcome.audit_ts_low')
+        dsn_validated = bool(
+            ctx.get('dsn_validated', ctx.get('record_outcome.dsn_validated', False))
+        )
+
+        if not unit_ids:
+            return None
+
+        # Refuse the DB-direct path if any safety precondition is missing
+        # (review round-1 HIGH #6, MEDIUM #10, MEDIUM #12).
+        # - ``dsn_validated``: the run() proved every unit_id exists in the
+        #   connected DB. False → DSN may point at a different Postgres,
+        #   or pre-state capture failed. Fall back to flip-cancel.
+        # - ``prev_state`` covers EVERY unit_id: required so we can both
+        #   restore the per-unit counters AND propagate to unit_entities /
+        #   mental_models without double-decrement risk on retry.
+        # - ``audit_ts_low_iso``: required so the audit DELETE has a
+        #   guaranteed-correct timestamp lower bound.
+        full_prev_state = all(uid in prev_state for uid in unit_ids)
+        db_path_safe = dsn_validated and full_prev_state and bool(audit_ts_low_iso)
+
+        from datetime import datetime, timezone
+        from memex_eval.suite.db_teardown import eval_db_session
+
+        if db_path_safe:
+            try:
+                async with eval_db_session() as conn:
+                    async with conn.transaction():
+                        # 1. Restore each memory_unit row to its captured
+                        # pre-state (counters + last_outcome_at). Scoped by
+                        # ``vault_id`` for defense-in-depth — consistent with
+                        # the propagation queries below and the audit DELETE
+                        # below (review round-2 MEDIUM #4). UUID PK uniqueness
+                        # already guarantees one match, but the explicit
+                        # vault filter prevents accidental cross-vault writes
+                        # if a future change weakens the invariant.
+                        for uid in unit_ids:
+                            snap = prev_state[uid]
+                            await conn.execute(
+                                'UPDATE memory_units SET success_co_count = $1, '
+                                'failure_co_count = $2, last_outcome_at = $3 '
+                                'WHERE id = $4::uuid AND vault_id = $5::uuid',
+                                snap['success_co_count'],
+                                snap['failure_co_count'],
+                                snap['last_outcome_at'],
+                                uid,
+                                str(vault_id),
+                            )
+
+                        # 2 + 3. Propagate the decrement to unit_entities and
+                        # mental_models — mirroring services/outcomes.py:230-260.
+                        if stamped_success or stamped_failure:
+                            await conn.execute(
+                                'UPDATE unit_entities SET '
+                                'success_co_count = GREATEST(success_co_count - $1, 0), '
+                                'failure_co_count = GREATEST(failure_co_count - $2, 0) '
+                                'WHERE unit_id = ANY($3::uuid[]) AND vault_id = $4::uuid',
+                                stamped_success,
+                                stamped_failure,
+                                unit_ids,
+                                str(vault_id),
+                            )
+                            await conn.execute(
+                                'UPDATE mental_models SET '
+                                'success_co_count = GREATEST(success_co_count - $1, 0), '
+                                'failure_co_count = GREATEST(failure_co_count - $2, 0) '
+                                'WHERE entity_id IN ('
+                                '  SELECT entity_id FROM unit_entities '
+                                '  WHERE unit_id = ANY($3::uuid[]) AND vault_id = $4::uuid'
+                                ') AND vault_id = $4::uuid',
+                                stamped_success,
+                                stamped_failure,
+                                unit_ids,
+                                str(vault_id),
+                            )
+
+                        # 4. DELETE only the audit_log rows our run() created.
+                        # ``audit_ts_low_iso`` is captured from PG's clock
+                        # (review round-1 HIGH #4) so the >= comparison is
+                        # monotonic regardless of host clock skew.
+                        # ``vault_id`` predicate scopes the delete to this
+                        # action's vault only — multi-vault eval setups
+                        # cannot accidentally clobber audit history that
+                        # happens to share a unit_id (review round-1
+                        # MEDIUM #9). vault_id lives inside ``details``
+                        # JSONB at insert site (services/outcomes.py:267-275).
+                        audit_ts_low = datetime.fromisoformat(audit_ts_low_iso)  # type: ignore[arg-type]
+                        # Defensive: external callers might pass a naive
+                        # datetime ISO string. asyncpg's TIMESTAMPTZ codec
+                        # requires tz-aware (review round-2 MEDIUM #3).
+                        if audit_ts_low.tzinfo is None:
+                            audit_ts_low = audit_ts_low.replace(tzinfo=timezone.utc)
+                        await conn.execute(
+                            "DELETE FROM audit_logs WHERE action = 'outcome.record' "
+                            "AND resource_type = 'memory_unit' "
+                            'AND resource_id = ANY($1::text[]) '
+                            'AND timestamp >= $2 '
+                            "AND details->>'vault_id' = $3",
+                            unit_ids,
+                            audit_ts_low,
+                            str(vault_id),
+                        )
+                return None
+            except Exception as exc:
+                logger.warning(
+                    'record_outcome teardown SQL failed (%s: %s); '
+                    'MW state may be polluted. Falling back to API-level flip-cancel.',
+                    type(exc).__name__,
+                    exc,
+                )
+        else:
+            # Skip the DB-direct path entirely — preconditions failed.
+            # Log loudly so the operator knows MW state is being recovered
+            # via the lossy flip-cancel path rather than precise reset.
+            reasons = []
+            if not dsn_validated:
+                reasons.append('dsn_validated=False (DSN may be misconfigured)')
+            if not full_prev_state:
+                reasons.append('prev_state missing for some unit_ids')
+            if not audit_ts_low_iso:
+                reasons.append('audit_ts_low not captured')
+            logger.warning(
+                'record_outcome teardown: skipping DB-direct path — %s. '
+                'Falling back to API-level flip-cancel; MW counters will be '
+                'balanced (success+failure pair) but NOT zeroed.',
+                '; '.join(reasons),
+            )
+
+        # Fallback: flip-and-cancel via the public API. Records inverse
+        # outcomes so the differential nets to zero. Note this leaves
+        # absolute counters at (stamped_success, stamped_failure) — the
+        # >=5 evidence gate (services/outcomes.py engine.py:154) may still
+        # fire. Better than leaving the unbalanced increment in place.
+        for _ in range(stamped_success):
+            try:
+                await api.record_outcome(
+                    unit_ids=unit_ids,
+                    success=False,
+                    vault_id=str(vault_id),
+                    reason='eval-teardown fallback: cancel stamped success',
+                )
+            except Exception as inner:
+                logger.warning('flip-cancel fallback (success): %s', inner)
+        for _ in range(stamped_failure):
+            try:
+                await api.record_outcome(
+                    unit_ids=unit_ids,
+                    success=True,
+                    vault_id=str(vault_id),
+                    reason='eval-teardown fallback: cancel stamped failure',
+                )
+            except Exception as inner:
+                logger.warning('flip-cancel fallback (failure): %s', inner)
         return None
 
 
@@ -316,7 +632,7 @@ class _Deprioritize(SetupActionHandler):
         on. Idempotent on the API side (RemoteMemexAPI.restore_memory_unit
         is no-op if not deprioritized)."""
         ctx = setup_context or {}
-        unit_ids = ctx.get('deprioritize.unit_ids') or []
+        unit_ids = ctx.get('unit_ids') or ctx.get('deprioritize.unit_ids') or []
         for uid in unit_ids:
             try:
                 await api.restore_memory_unit(unit_id=UUID(str(uid)), vault_id=vault_id)
@@ -357,7 +673,9 @@ class _KvWrite(SetupActionHandler):
     ) -> None:
         """Delete the KV entry the setup wrote."""
         ctx = setup_context or {}
-        key = ctx.get('kv_write.kv_key') or (params.get('kv_key') or '').strip()
+        key = (
+            ctx.get('kv_key') or ctx.get('kv_write.kv_key') or (params.get('kv_key') or '').strip()
+        )
         if not key:
             return
         try:
@@ -382,19 +700,33 @@ class _ConsolidationTick(SetupActionHandler):
 @register_setup_action('trigger_reflections')
 class _TriggerReflections(SetupActionHandler):
     """Trigger reflection on the top-N entities in the vault and wait for
-    at least one mental_model search hit (matches legacy
+    a mental_model search to be visible (matches legacy
     ``internal/runner.py:_trigger_reflections``).
 
     Params:
     - ``count``: how many top entities to reflect on (default 5)
-    - ``timeout_s``: seconds to wait for mental_model results (default 120)
-    - ``target_entity_names``: list of entity names that MUST have a
-      mental_model materialized before the action returns. Without this,
-      the action polls only the most-mentioned entity, which may not be
-      the one a downstream scenario queries. With it, the action keeps
-      polling until each named entity has at least one mental_model
-      result (or the timeout fires; partial returns set
-      ``unmaterialized_targets`` in the context).
+    - ``timeout_s``: seconds to wait for mental_model results
+      (default ``max(60, min_mental_model_hits * 30)``)
+    - ``target_entity_names``: entity names that the handler resolves and
+      **prepends to the reflection queue**, so they get reflected even
+      when they don't crack the top-N by mention_count. Whether a target
+      is independently verified before the handler returns depends on
+      the polling mode — see ``probe_query`` below.
+    - ``min_mental_model_hits``: how many hits the gate requires before
+      declaring ready (default 1). Raise to match a downstream
+      ``UsefulAtK(k=N)`` so the consumer scenario doesn't race the
+      reflection writer.
+    - ``probe_query``: when set, switches polling to **shared-probe**
+      mode — one search per loop iteration using this query, gating ALL
+      targets together. Use this when the consumer scenario asserts on
+      the same query (the gate then mirrors what the consumer will see).
+      When unset, polling runs in **per-target** mode: one search per
+      target name, each gated independently. Per-target is the only
+      mode that genuinely verifies each target's mental_model exists;
+      shared-probe is faster but cannot distinguish "all targets
+      materialized" from "the probe query happens to match enough hits
+      from one target." Returned context's ``probe_mode`` reflects which
+      one ran. Partial misses populate ``unmaterialized_targets``.
 
     The action ranks entities by mention_count via ``api.get_top_entities``
     so reflection focuses on the most-mentioned subjects in the vault.
@@ -422,50 +754,73 @@ class _TriggerReflections(SetupActionHandler):
         # mental_models are visible. If we put targets at the back of the
         # queue, polling races the queue and frequently times out before
         # Sarah Chen / Project Alpha materialize.
-        early_targets: list[str] = list(params.get('target_entity_names') or [])
-        top_names = {getattr(e, 'name', None) or '' for e in top_entities}
+        target_entity_names: list[str] = list(params.get('target_entity_names') or [])
+        top_names = [getattr(e, 'name', '') or '' for e in top_entities]
         logger.info(
             'trigger_reflections: top-%d=%s, target_entity_names=%s',
             limit,
-            sorted(top_names),
-            early_targets,
+            top_names,
+            target_entity_names,
         )
+
+        # Use the shared canonicalisation helper so this matches the
+        # ingest + reuse-vault paths (round-3 MEDIUM 1).
+        from memex_eval.suite.sources import canonicalize_name
+
+        def _name_match(a: str, b: str) -> bool:
+            return canonicalize_name(a) == canonicalize_name(b)
+
         target_entities: list[Any] = []
-        for tname in early_targets:
-            # If a target is already in top-N, find it there to preserve identity.
+        dropped_targets: list[str] = []
+        for tname in target_entity_names:
             top_match = next(
-                (e for e in top_entities if (getattr(e, 'name', '') or '') == tname),
+                (e for e in top_entities if _name_match(getattr(e, 'name', '') or '', tname)),
                 None,
             )
             if top_match is not None:
                 target_entities.append(top_match)
                 continue
             try:
-                hits = await api.search_entities(query=tname, limit=3, vault_id=vault_id)
+                hits = await api.search_entities(query=tname, limit=5, vault_id=vault_id)
             except Exception as exc:
                 logger.warning('search_entities(%r) failed: %s', tname, exc)
+                dropped_targets.append(tname)
                 continue
-            match = next((h for h in hits if (getattr(h, 'name', '') or '') == tname), None)
+            match = next(
+                (h for h in hits if _name_match(getattr(h, 'name', '') or '', tname)), None
+            )
             if match is None:
                 logger.warning(
-                    'target entity %r not found in vault %s (search_entities returned %d candidates: %s)',
+                    'target entity %r not found in vault %s (candidates: %s)',
                     tname,
                     vault_id,
-                    len(hits),
                     [getattr(h, 'name', '?') for h in hits],
                 )
+                dropped_targets.append(tname)
                 continue
+            actual_name = getattr(match, 'name', '?') or '?'
+            if actual_name != tname:
+                logger.info(
+                    'trigger_reflections: target %r resolved via case-insensitive match to %r',
+                    tname,
+                    actual_name,
+                )
             logger.info(
                 'trigger_reflections: prioritising target entity %r (id=%s)', tname, match.id
             )
             target_entities.append(match)
 
         # Targets first, then top-N (deduped by id).
-        seen_ids: set[Any] = {e.id for e in target_entities}
+        seen_ids: set[UUID] = {e.id for e in target_entities}
         entities = list(target_entities) + [e for e in top_entities if e.id not in seen_ids]
 
         if not entities:
-            return {'reflected_count': 0, 'requested_count': 0, 'failed_count': 0}
+            return {
+                'reflected_count': 0,
+                'requested_count': 0,
+                'failed_count': 0,
+                'dropped_targets': dropped_targets,
+            }
 
         failed: list[str] = []
         succeeded: list[str] = []
@@ -497,39 +852,75 @@ class _TriggerReflections(SetupActionHandler):
             'requested_count': len(entities),
             'failed_count': len(failed),
             'failed_entities': failed,
+            'dropped_targets': dropped_targets,
         }
 
-        # Build the list of entities that need to have a mental_model
-        # materialized before the action returns. Default: the
-        # most-mentioned entity (legacy behavior). With
-        # ``target_entity_names``: every named entity.
-        target_names: list[str] = list(params.get('target_entity_names') or [])
-        if not target_names:
-            top_name = getattr(entities[0], 'name', None) or ''
-            if top_name:
-                target_names = [top_name]
+        # Polling defaults. ``min_mental_model_hits`` raises the bar from
+        # "≥1 hit per target" (legacy) to "≥k hits" so a downstream
+        # ``UsefulAtK(k=N)`` doesn't race the reflection writer.
+        min_hits = max(1, int(params.get('min_mental_model_hits', 1) or 1))
+        # Default budget: 30s per required hit, floor at 60s. Overrideable
+        # by the suite when an unusual server posture demands it.
+        timeout_default = max(60.0, min_hits * 30.0)
+        timeout_s = float(params.get('timeout_s', timeout_default) or timeout_default)
+        probe_query = str(params.get('probe_query') or '')
+
+        # Probe semantics:
+        #
+        # - **per-target probe** (``probe_query`` empty): each target name
+        #   is searched independently; ``ready`` requires the per-target
+        #   count to reach ``min_hits``. This is the legacy contract:
+        #   "every named entity has a mental_model materialised."
+        #
+        # - **shared probe** (``probe_query`` set): the suite is asserting
+        #   "this exact query produces ≥k hits before the consumer
+        #   scenario runs." We run the probe ONCE per loop iteration and
+        #   gate every target on the same count. This matches what the
+        #   consumer will see, but it does NOT guarantee per-target
+        #   materialisation — e.g. if Sarah Chen has 10 mental models and
+        #   Project Alpha has 0, the shared probe may declare both ready.
+        #   Kept distinct from per-target so we can document the trade.
+        target_names: list[str] = (
+            list(target_entity_names)
+            if target_entity_names
+            else (
+                [getattr(entities[0], 'name', None) or '']
+                if entities and getattr(entities[0], 'name', None)
+                else []
+            )
+        )
         if not target_names:
             return base_ctx
 
-        # ``min_mental_model_hits`` lets the consumer scenario require ≥k
-        # materialized observations per target before proceeding. Default
-        # 1 preserves legacy behavior; raise to match a downstream
-        # ``UsefulAtK(k=N)`` so ``mental_model_strategy`` doesn't race the
-        # reflection writer.
-        min_hits = max(1, int(params.get('min_mental_model_hits', 1) or 1))
-        probe_query = str(params.get('probe_query') or '')
+        # Search ``limit`` is min_hits + 1 so the polling predicate
+        # ``count >= min_hits`` distinguishes "exactly k" from "more
+        # than k" — keeps the comparison meaningful if a future change
+        # tightens to ``> min_hits``.
+        probe_limit = min_hits + 1
 
-        async def _hit_count(name: str) -> int:
+        async def _per_target_count(name: str) -> int:
             try:
-                # When a probe_query is set, use it (matches the consumer
-                # scenario's actual query so race detection mirrors what the
-                # scenario will see). Otherwise probe by entity name.
-                q = probe_query or name
                 results = await api.search(
-                    query=q, limit=min_hits, strategies=['mental_model'], vault_ids=[vault_id]
+                    query=name,
+                    limit=probe_limit,
+                    strategies=['mental_model'],
+                    vault_ids=[vault_id],
                 )
             except Exception as exc:
                 logger.warning('mental_model probe %r failed: %s', name, exc)
+                return 0
+            return len(results)
+
+        async def _shared_probe_count() -> int:
+            try:
+                results = await api.search(
+                    query=probe_query,
+                    limit=probe_limit,
+                    strategies=['mental_model'],
+                    vault_ids=[vault_id],
+                )
+            except Exception as exc:
+                logger.warning('shared mental_model probe failed: %s', exc)
                 return 0
             return len(results)
 
@@ -538,23 +929,40 @@ class _TriggerReflections(SetupActionHandler):
         last_log = 0.0
         while pending and time.monotonic() < deadline:
             await asyncio.sleep(3)
-            counts = {n: await _hit_count(n) for n in pending}
-            ready = {n for n, c in counts.items() if c >= min_hits}
+            if probe_query:
+                shared_count = await _shared_probe_count()
+                ready = set(pending) if shared_count >= min_hits else set()
+                counts: dict[str, int] = {n: shared_count for n in pending}
+            else:
+                # Per-target probe runs N concurrent searches per loop
+                # iteration — sequential awaits would scale wall-clock by
+                # O(targets × latency) for no algorithmic gain.
+                pending_list = list(pending)
+                target_counts = await asyncio.gather(*(_per_target_count(n) for n in pending_list))
+                counts = dict(zip(pending_list, target_counts, strict=True))
+                ready = {n for n, c in counts.items() if c >= min_hits}
             now = time.monotonic()
             if now - last_log > 15:
                 logger.info(
-                    'trigger_reflections: polling counts=%s pending=%s elapsed=%.1fs',
+                    'trigger_reflections: polling mode=%s counts=%s pending=%s elapsed=%.1fs',
+                    'shared' if probe_query else 'per-target',
                     counts,
                     sorted(pending - ready),
                     timeout_s - (deadline - now),
                 )
                 last_log = now
             pending -= ready
-        ctx = {**base_ctx, 'probe_entities': target_names, 'min_mental_model_hits': min_hits}
+        ctx = {
+            **base_ctx,
+            'probe_entities': target_names,
+            'min_mental_model_hits': min_hits,
+            'probe_mode': 'shared' if probe_query else 'per-target',
+        }
         if pending:
             logger.warning(
-                'trigger_reflections: timed out waiting for targets %s (min_hits=%d, timeout=%.0fs)',
+                'trigger_reflections: timed out waiting for targets %s (mode=%s, min_hits=%d, timeout=%.0fs)',
                 sorted(pending),
+                ctx['probe_mode'],
                 min_hits,
                 timeout_s,
             )

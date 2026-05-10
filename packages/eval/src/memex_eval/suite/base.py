@@ -226,6 +226,17 @@ class ExpectedOutcomeBase(BaseModel):
     def referenced_note_keys(self) -> set[str]:
         return set()
 
+    def note_keys_requiring_assets(self) -> set[str]:
+        """Note keys whose ``NoteDTO.assets`` list must be in
+        ``context['_note_assets_by_key']`` before this outcome scores.
+
+        Default empty. Overridden by ``NoteAssetsContain`` and walked
+        through ``CompositeOutcome`` so the runner can pre-fetch the
+        asset list for the right notes only — no per-scenario
+        ``GET /notes/{id}`` round-trip when the outcome doesn't need it.
+        """
+        return set()
+
 
 # ---------------------------------------------------------------------------
 # Outcome registry — open-ended set, lookup by ``type`` discriminator.
@@ -767,6 +778,43 @@ class NewestUnitContains(ExpectedOutcomeBase):
         return ['pass', 'subject_units']
 
 
+@register_outcome('note_assets_contain')
+class NoteAssetsContain(ExpectedOutcomeBase):
+    """Assert that the Note identified by ``note_key`` carries every
+    filename in ``expected_filenames`` after ingest.
+
+    Verifies the asset round-trips through the FileStore — independent
+    of search ranking. The fetcher reads ``NoteDTO.assets`` (the
+    server-side list of attached filenames) for the resolved note id;
+    the score asserts every expected filename is present.
+
+    Use this when ``search_type='note'`` retrieval has surfaced the
+    right note but the test needs to prove the bound asset(s) survived
+    ingestion — keyword-on-body checks alone don't.
+    """
+
+    type: Literal['note_assets_contain']
+    note_key: str
+    expected_filenames: list[str]
+
+    def score(self, answer: AgentAnswer, scenario, *, context=None, **_kw) -> dict[str, float]:
+        assets = (context or {}).get('_note_assets_by_key', {}).get(self.note_key) or []
+        present = {a for a in self.expected_filenames if a in set(assets)}
+        return {
+            'pass': 1.0 if len(present) == len(self.expected_filenames) else 0.0,
+            'assets_found': float(len(present)),
+        }
+
+    def metric_keys(self, top_k: int | None = None) -> list[str]:
+        return ['pass', 'assets_found']
+
+    def referenced_note_keys(self) -> set[str]:
+        return {self.note_key}
+
+    def note_keys_requiring_assets(self) -> set[str]:
+        return {self.note_key}
+
+
 @register_outcome('note_attribution')
 class NoteAttribution(ExpectedOutcomeBase):
     """Assert every unit sourced from ``top_note_key`` ranks higher than
@@ -1208,6 +1256,12 @@ class CompositeOutcome(ExpectedOutcomeBase):
             out.update(child.referenced_note_keys())
         return out
 
+    def note_keys_requiring_assets(self) -> set[str]:
+        out: set[str] = set()
+        for child in self.children:
+            out.update(child.note_keys_requiring_assets())
+        return out
+
 
 CompositeOutcome.model_rebuild()
 
@@ -1260,6 +1314,15 @@ class Scenario(BaseModel):
     # SuiteMetadata.requires_nli_classifier propagates the same effect
     # to every scenario in the suite.
     requires_nli_classifier: bool = False
+
+    # Scenarios whose assertion observes side effects of an earlier
+    # scenario in the same run (e.g. ``outcomes_ranking_specific_query``
+    # asserts the ranking after ``outcomes_ranking`` stamped its outcomes).
+    # Listed scenario ids must precede this one in the suite. Under
+    # ``--reuse-vault`` the runner skips this scenario whenever any of
+    # its declared prerequisites would themselves be skipped — preventing
+    # silent scoring against an unprepared vault.
+    depends_on_prior_scenarios: list[str] = Field(default_factory=list)
 
     @model_validator(mode='after')
     def _validate_id(self) -> Scenario:
@@ -1366,6 +1429,23 @@ class Suite(BaseModel):
         for sc in self.scenarios:
             if sc.id in scenario_ids:
                 raise ValueError(f'Duplicate scenario_id {sc.id!r} in suite {self.metadata.name}')
+            # ``depends_on_prior_scenarios`` must point at scenarios
+            # earlier in the list (the runner iterates in declaration
+            # order). Forward-reference would be a logic error: at the
+            # time this scenario runs, the dep would not yet have stamped
+            # its state.
+            for dep in sc.depends_on_prior_scenarios:
+                if dep == sc.id:
+                    raise ValueError(
+                        f'Scenario {sc.id!r} cannot depend on itself in suite '
+                        f'{self.metadata.name!r}.'
+                    )
+                if dep not in scenario_ids:
+                    raise ValueError(
+                        f'Scenario {sc.id!r} declares depends_on_prior_scenarios={dep!r} '
+                        f'but {dep!r} does not appear earlier in the suite. Either '
+                        f'reorder, fix the typo, or drop the dependency.'
+                    )
             scenario_ids.add(sc.id)
             referenced = sc.expected.referenced_note_keys()
             # An outcome may reference either a suite-level source note_key or

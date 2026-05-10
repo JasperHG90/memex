@@ -34,6 +34,7 @@ from memex_eval.suite.base import (
 )
 from memex_eval.suite.metrics import aggregate_metric_keys, percentile
 from memex_eval.suite.setup_actions import get_setup_action
+from memex_eval.suite.sources import canonicalize_name
 
 if TYPE_CHECKING:
     from memex_eval.recorders.mlflow_recorder import MLflowRecorder, NullRecorder
@@ -138,12 +139,38 @@ async def _run_setup_actions(
     so ``_resolve_unit_ids`` can do deterministic note-key-scoped
     resolution (preferred over ``search_query``).
     """
-    context: dict[str, Any] = {'_setup_failures': [], '_executed_action_kinds': []}
-    for action in actions:
+    # ``_per_action_results``: positional list of each action's run() return
+    # (or None if the action didn't return a dict / raised). The teardown loop
+    # passes ``_per_action_results[i]`` to ``actions[i]``'s handler.teardown(),
+    # so two ``record_outcome`` calls in one scenario each get their OWN
+    # context — vs. the merged ``record_outcome.unit_ids`` key (which the
+    # second action would overwrite, leaking the first's stamp into the
+    # next scenario).
+    #
+    # ``_executed_action_indices``: parallel list of position-indices whose
+    # run() actually completed (no raise, no missing-handler). Replaces the
+    # earlier ``_executed_action_kinds`` membership check, which was wrong
+    # for duplicate-kind actions: with two ``record_outcome`` actions where
+    # one succeeded and one raised, list-membership of the kind would still
+    # invoke the failed action's teardown — and it would then read the
+    # successful action's data via the merged-context fallback (review
+    # round-1 CRITICAL #1). Indices are exact.
+    #
+    # ``_executed_action_kinds`` is preserved as an aggregate-of-kinds
+    # because some external tests/tools read it. It now reflects only the
+    # set of kinds that succeeded, deduped.
+    context: dict[str, Any] = {
+        '_setup_failures': [],
+        '_executed_action_kinds': [],
+        '_executed_action_indices': [],
+        '_per_action_results': [],
+    }
+    for i, action in enumerate(actions):
         try:
             handler = get_setup_action(action.kind)
         except KeyError as e:
             context['_setup_failures'].append({'kind': action.kind, 'error': str(e)})
+            context['_per_action_results'].append(None)
             logger.warning('  Setup: %s', e)
             # If the missing handler was declared required at the action
             # level, treat as a required-failure so the scenario short-circuits.
@@ -160,18 +187,25 @@ async def _run_setup_actions(
                 # it via _resolve_unit_ids; custom handlers ignore it freely.
                 params['_note_key_to_unit_ids'] = note_key_to_unit_ids
             result = await handler.run(api, vault_id, params)
+            # Persist the un-prefixed dict for the per-action teardown path.
+            context['_per_action_results'].append(result if isinstance(result, dict) else None)
             if isinstance(result, dict):
-                # Look up the registered name from the registry so we never
-                # depend on cls.name (which can be mutated by replace_*).
+                # Merged context for outcome.score() reads (kept for back-compat).
+                # Note that if two actions of the same kind run, the LAST one
+                # wins for these keys — that's why teardowns now read from
+                # ``_per_action_results`` instead.
                 prefix = action.kind + '.'
                 for k, v in result.items():
                     key = k if k.startswith(prefix) else f'{prefix}{k}'
                     context[key] = v
-            # Successful run — track the kind so teardown loop knows to
-            # invoke this handler's teardown (P4 + round-4 M4-3).
-            context['_executed_action_kinds'].append(action.kind)
+            # Successful run — track BOTH the index (authoritative) and the
+            # kind (de-duped, kept for back-compat readers).
+            context['_executed_action_indices'].append(i)
+            if action.kind not in context['_executed_action_kinds']:
+                context['_executed_action_kinds'].append(action.kind)
         except Exception as e:
             context['_setup_failures'].append({'kind': action.kind, 'error': str(e)})
+            context['_per_action_results'].append(None)
             if getattr(handler, 'required', False) or getattr(action, 'required', False):
                 context['_required_setup_failed'] = True
                 # Stop running further actions so we don't mutate vault state
@@ -203,22 +237,96 @@ async def _run_setup_teardowns(
     required-failure broke the loop) — there's nothing to undo and emitting
     a warning would be misleading.
     """
-    executed_kinds: list[str] = setup_context.get('_executed_action_kinds', [])
-    for action in actions:
-        if action.kind not in executed_kinds:
-            logger.debug('Skipping teardown of %r (setup did not execute).', action.kind)
-            continue
+    # ``_per_action_results`` is positionally aligned with ``actions``: index i
+    # holds the run() return for action i. ``_executed_action_indices`` lists
+    # the indices whose run() actually completed.
+    #
+    # Each teardown gets ITS OWN per-action run() return as ``setup_context``
+    # — never the merged dict. Pre-fix: when index i ran but returned None,
+    # the merged-context fallback would silently substitute a SIBLING action's
+    # data (review round-1 CRITICAL #2), causing double-revert / wrong-target
+    # SQL. Post-fix: if per_action_results[i] is None, the teardown still
+    # runs (some handlers carry no run-state — e.g. consolidation_tick) but
+    # is fed ``{}`` rather than the merged dict.
+    #
+    # Back-compat: external callers may pass setup_context without these
+    # keys. Falls through to legacy behavior — pass the whole context AND
+    # honor the legacy ``_executed_action_kinds`` membership check.
+    per_action_results: list[dict[str, Any] | None] = setup_context.get('_per_action_results') or []
+    executed_indices_raw = setup_context.get('_executed_action_indices')
+    legacy_executed_kinds: list[str] = setup_context.get('_executed_action_kinds', [])
+    if executed_indices_raw is not None:
+        executed_indices: set[int] = set(executed_indices_raw)
+        use_positional = True
+    else:
+        executed_indices = set()
+        use_positional = False
+    for i, action in enumerate(actions):
+        if use_positional:
+            if i not in executed_indices:
+                logger.debug(
+                    'Skipping teardown of %r at index %d (setup did not execute).',
+                    action.kind,
+                    i,
+                )
+                continue
+        else:
+            # Legacy path: external callers without per-action tracking.
+            if action.kind not in legacy_executed_kinds:
+                logger.debug('Skipping teardown of %r (setup did not execute).', action.kind)
+                continue
         try:
             handler = get_setup_action(action.kind)
             params = {
                 k: v for k, v in action.model_dump().items() if k not in _RUNNER_RESERVED_PARAM_KEYS
             }
-            await handler.teardown(api, vault_id, params, setup_context)
+            # Per-action context. Use the action's OWN run() return; never
+            # the merged context (would substitute sibling action's data).
+            # ``{}`` for actions that returned None / had nothing to publish.
+            per_ctx: dict[str, Any]
+            if use_positional:
+                slot = per_action_results[i] if i < len(per_action_results) else None
+                per_ctx = slot if slot is not None else {}
+            else:
+                # Legacy callers: use merged context (pre-fix behavior).
+                per_ctx = setup_context
+            await handler.teardown(api, vault_id, params, per_ctx)
         except Exception as exc:
             logger.warning(
                 'Teardown of %r raised %s — continuing with remaining teardowns. '
                 'Vault state may be dirty for the next scenario.',
                 action.kind,
+                exc,
+            )
+
+
+async def _run_inline_note_teardowns(
+    api: RemoteMemexAPI,
+    setup_context: dict[str, Any],
+) -> None:
+    """DELETE every inline note this scenario ingested.
+
+    Cascade deletes the note's memory units, unit_entities edges, and
+    audit-log breadcrumbs at the SQL level (FK ON DELETE CASCADE in the
+    schema), so no DB-direct cleanup is needed beyond the public DELETE.
+
+    Idempotent: ``RemoteMemexAPI.delete_note`` returns False on 404, so
+    re-running a teardown (e.g. when a deferred consumer also tries to
+    delete the same note) is harmless. Per-note try/except keeps one
+    failure from blocking the rest of the teardowns.
+    """
+    inline_ids: dict[str, str] = setup_context.get('_inline_note_ids') or {}
+    if not inline_ids:
+        return
+    for note_key, note_id in inline_ids.items():
+        try:
+            await api.delete_note(UUID(str(note_id)))
+        except Exception as exc:
+            logger.warning(
+                'inline-note teardown: delete_note(%s, key=%r) failed: %s. '
+                'Vault may carry the inline note into the next scenario.',
+                note_id,
+                note_key,
                 exc,
             )
 
@@ -260,7 +368,10 @@ async def _ingest_sources(
         dto = NoteCreateDTO(
             name=note.title or note.note_key,
             description=note.description or f'Eval suite source: {note.note_key}',
-            content=base64.b64encode(note.content.encode('utf-8')),
+            # ``wire_content()`` re-emits frontmatter so the server's
+            # parser sees ``publish_date`` etc. (the loader strips the
+            # YAML block from ``post.content`` for SourceNote internals).
+            content=base64.b64encode(note.wire_content().encode('utf-8')),
             files=files_b64,
             tags=note.tags,
             vault_id=str(target_vault_id),
@@ -268,13 +379,15 @@ async def _ingest_sources(
         )
         resp = await api.ingest(dto)
         if hasattr(resp, 'note_id') and resp.note_id:
-            # IngestResponse.note_id is the 32-char MD5 hex idempotency key
-            # (api.py:241 documents it as "MD5 hex digest, not a UUID").
-            # MemoryUnitDTO.note_id is parsed by Pydantic into a UUID and
-            # stringifies in canonical dashed form. Normalize through UUID()
-            # so both sides of TemporalOrdering / NoteAttribution comparisons
-            # use the same string format.
-            note_id_by_key[note.note_key] = str(UUID(resp.note_id))
+            # ``IngestResponse.note_id`` is currently a 32-char MD5 hex
+            # idempotency key (`note.py:241` calls it "MD5 hex digest, not
+            # a UUID"); ``MemoryUnitDTO.note_id`` is parsed as ``UUID`` and
+            # stringifies dashed. Round-trip through ``UUID()`` so
+            # ``TemporalOrdering`` / ``NoteAttribution`` see one canonical
+            # form on both sides. If the wire format ever drifts to
+            # something that isn't a valid UUID literal, fall back to the
+            # raw string + warn — better stale-comparison than crash.
+            note_id_by_key[note.note_key] = _canonical_uuid(resp.note_id, note.note_key)
         elif hasattr(resp, 'status') and resp.status == 'skipped':
             # Idempotent skip — find the existing note in THIS vault by name.
             # Suite-prefixed note_key would be more precise but the client lacks
@@ -283,15 +396,117 @@ async def _ingest_sources(
             lookup_name = note.title or note.note_key
             try:
                 existing = await api.find_notes_by_title(lookup_name, vault_ids=[target_vault_id])
-                for n in existing:
-                    if getattr(n, 'name', None) == lookup_name:
-                        note_id_by_key[note.note_key] = str(UUID(str(n.id)))
-                        break
             except Exception as e:
                 logger.warning(
                     'idempotent-skip lookup failed for note_key=%r: %s', note.note_key, e
                 )
+                continue
+            # ``FindNoteResult.title`` + ``.note_id`` are the wire fields
+            # (schemas.py:1394-1395) — NOT ``.name`` / ``.id``. Reading
+            # the wrong field returns the empty fallback for every row,
+            # silently dropping every match and rendering the
+            # duplicate-title RuntimeError unreachable in production
+            # (round-4 CRITICAL). Casefold + whitespace-collapse via the
+            # shared helper so ingest, reuse-vault, and trigger_reflections
+            # all canonicalise the same way (round-3 MEDIUM 1).
+            target_canon = canonicalize_name(lookup_name)
+            matches = [
+                n
+                for n in existing
+                if canonicalize_name(getattr(n, 'title', '') or '') == target_canon
+            ]
+            # Refuse to silently pick a winner when titles collide — caught
+            # OUTSIDE the lookup try/except so the RuntimeError propagates
+            # (a swallowed raise would degrade to the same silent
+            # mis-attribute the round-1 fix was meant to remove).
+            if len(matches) > 1:
+                raise RuntimeError(
+                    f'idempotent-skip lookup for note_key={note.note_key!r} '
+                    f'found {len(matches)} notes named {lookup_name!r} in vault '
+                    f'{target_vault_id}; refuse to silently pick one. Make titles '
+                    f'unique inside a suite.'
+                )
+            if matches:
+                note_id_by_key[note.note_key] = str(matches[0].note_id)
     return note_id_by_key
+
+
+_canonical_uuid_warned: set[str] = set()
+
+
+def _compute_own_skip_reason(
+    sc: Scenario,
+    *,
+    suite: Suite,
+    reuse_vault: str | None,
+    config_snapshot_available: bool,
+    nli_available: bool | None,
+) -> str | None:
+    """Skip reason a scenario would receive based on its OWN config (not
+    inherited from deps). Module-level so tests can exercise the
+    decision in isolation; the runner's per-scenario loop wraps this in
+    a closure for ergonomics.
+
+    Currently produces: ``'setup_action_not_reusable'`` (under
+    ``--reuse-vault`` when any setup_action declares
+    ``reusable_under_reuse_vault = False``) or ``'nli_disabled'`` (when
+    NLI is required but the live config has it off). Returns ``None``
+    when the scenario is runnable.
+    """
+    if reuse_vault is not None:
+        for action in sc.setup_actions:
+            try:
+                hcls = type(get_setup_action(action.kind))
+            except KeyError:
+                continue
+            if not getattr(hcls, 'reusable_under_reuse_vault', True):
+                return 'setup_action_not_reusable'
+    sc_needs_nli = suite.metadata.requires_nli_classifier or sc.requires_nli_classifier
+    if sc_needs_nli and config_snapshot_available and nli_available is False:
+        return 'nli_disabled'
+    return None
+
+
+def _canonical_uuid(value: str, note_key: str) -> str:
+    """Return ``str(UUID(value))`` — canonical dashed form — falling back
+    to the raw value with a warning if ``value`` is not a UUID literal.
+
+    The eval framework compares this against ``MemoryUnitDTO.note_id``
+    which is always canonical; a non-UUID value will fail the comparison
+    one way or another, but we'd rather log + degrade than crash.
+
+    Caller MUST pass a non-empty string. ``None`` / empty are upstream
+    bugs and would be silently coerced to ``'None'`` / ``''`` which
+    cannot match any UUID — that mode caused the original silent
+    mis-attribute. Raise so the caller's existing ``if hasattr(resp,
+    'note_id') and resp.note_id`` guard is the single point of truth.
+    """
+    if not value:
+        raise ValueError(
+            f'_canonical_uuid called with empty value for note_key={note_key!r}; '
+            f"caller's truthy-guard should have rejected this."
+        )
+    try:
+        return str(UUID(value))
+    except (ValueError, AttributeError, TypeError) as exc:
+        # Dedupe identical values within a process — if the wire format
+        # ever drifts to a single opaque token type re-used across notes,
+        # the suite would otherwise log N× the same warning. Distinct
+        # opaque tokens (e.g. UUIDv7 per note) STILL log per-token; this
+        # is memoisation, not a true rate limit. Acceptable: the actionable
+        # signal ("the wire format changed") is recoverable from the
+        # first warning of any value.
+        if value not in _canonical_uuid_warned:
+            _canonical_uuid_warned.add(value)
+            logger.warning(
+                'note_id %r is not a UUID literal (note_key=%r): %s. '
+                'Storing raw — TemporalOrdering / NoteAttribution may mis-attribute. '
+                '(Identical-value warnings suppressed; distinct values still emit.)',
+                value,
+                note_key,
+                exc,
+            )
+        return str(value)
 
 
 async def _wait_extraction_per_note(
@@ -341,7 +556,7 @@ async def _ingest_inline_notes(
     suite: Suite,
     scenario: Scenario,
     note_key_to_unit_ids: dict[str, list[str]],
-) -> None:
+) -> dict[str, str]:
     """Ingest a scenario's inline notes into the suite vault and resolve
     their note_key → unit_ids in-place on ``note_key_to_unit_ids``.
 
@@ -350,13 +565,19 @@ async def _ingest_inline_notes(
     The map is populated under both the prefixed AND short keys so
     GoldUnitIds outcomes can reference either form.
 
+    Returns a ``{short_note_key: note_id}`` map of every inline note this
+    call ingested (or recovered via idempotency lookup), so the caller can
+    register them for teardown. On a no-op replicate where every inline
+    note was already resolved, returns an empty dict — teardown should
+    only fire on the scenario instance that actually owns the ingest.
+
     No-op if the scenario has no inline notes OR if all inline notes have
     already been resolved (e.g. on a 2nd replicate of the same scenario).
     """
     import base64
 
     if not scenario.inline_notes:
-        return
+        return {}
     # Idempotence guard for replicates 2..N: gate on the per-scenario prefixed
     # key, never the short form. Two scenarios may legitimately declare inline
     # notes under the same short note_key; the prefixed form is the unique id.
@@ -367,7 +588,7 @@ async def _ingest_inline_notes(
             note_key_to_unit_ids[n.note_key] = note_key_to_unit_ids[
                 f'inline-{scenario.id}-{n.note_key}'
             ]
-        return
+        return {}
 
     inline_id_by_key: dict[str, str] = {}
     for inline in scenario.inline_notes:
@@ -401,9 +622,16 @@ async def _ingest_inline_notes(
             # a breadcrumb the user can act on.
             try:
                 existing = await api.find_notes_by_title(lookup_name, vault_ids=[vault_id])
-                matches = [n for n in existing if getattr(n, 'name', None) == lookup_name]
+                # ``FindNoteResult.title`` + ``.note_id`` (schemas.py:1394).
+                # See round-4 CRITICAL on the symmetric fresh-ingest path.
+                target_canon = canonicalize_name(lookup_name)
+                matches = [
+                    n
+                    for n in existing
+                    if canonicalize_name(getattr(n, 'title', '') or '') == target_canon
+                ]
                 if len(matches) == 1:
-                    inline_id_by_key[inline.note_key] = str(matches[0].id)
+                    inline_id_by_key[inline.note_key] = str(matches[0].note_id)
                 elif not matches:
                     logger.warning(
                         'Inline-note idempotent-skip: no existing note with '
@@ -436,7 +664,7 @@ async def _ingest_inline_notes(
             )
 
     if not inline_id_by_key:
-        return
+        return {}
     # Inline notes always live in the scenario's per-call vault.
     inline_vault_map = {k: vault_id for k in inline_id_by_key}
     resolved = await _wait_extraction_per_note(api, inline_id_by_key, inline_vault_map)
@@ -444,6 +672,7 @@ async def _ingest_inline_notes(
         note_key_to_unit_ids[inline_key] = unit_ids
         prefixed = f'inline-{scenario.id}-{inline_key}'
         note_key_to_unit_ids[prefixed] = unit_ids
+    return inline_id_by_key
 
 
 async def _execute_scenario(
@@ -457,15 +686,24 @@ async def _execute_scenario(
     note_id_by_key: dict[str, str],
     replicate_index: int,
     backend_cache: dict[str, Any] | None = None,
+    defer_teardown: bool = False,
+    deferred_teardown_sink: list[tuple[Scenario, UUID, dict[str, Any]]] | None = None,
 ) -> ScenarioOutcome:
     started = time.monotonic()
     answer_mode = suite.answer_mode_for(scenario)
+
+    # Track inline note IDs ingested by THIS scenario invocation so the
+    # teardown path (per-scenario or deferred) can DELETE them. Idempotent
+    # replicates return an empty dict — they don't own the ingest.
+    inline_note_ids: dict[str, str] = {}
 
     # Inline notes — ingest into the suite vault before validating gold
     # note_keys, so the validation can see the inline-note unit IDs.
     if scenario.inline_notes:
         try:
-            await _ingest_inline_notes(api, vault_id, suite, scenario, note_key_to_unit_ids)
+            inline_note_ids = await _ingest_inline_notes(
+                api, vault_id, suite, scenario, note_key_to_unit_ids
+            )
         except Exception as e:
             return ScenarioOutcome(
                 scenario_id=scenario.id,
@@ -526,6 +764,10 @@ async def _execute_scenario(
         '_note_id_by_key': note_id_by_key,
         '_note_key_to_unit_ids': note_key_to_unit_ids,
         '_executed_action_kinds': [],
+        # Inline notes this scenario ingested. Populated by the inline-note
+        # ingest path above; consumed by the inline-note delete teardown
+        # in the finally block (or its deferred variant).
+        '_inline_note_ids': dict(inline_note_ids),
     }
     try:
         if scenario.setup_actions:
@@ -547,6 +789,44 @@ async def _execute_scenario(
                     replicate_index=replicate_index,
                     answer_mode=answer_mode,
                 )
+
+        # Pre-fetch the asset list for any note_key the outcome explicitly
+        # requires (NoteAssetsContain — and CompositeOutcome that wraps
+        # one). Direct ``GET /notes/{id}`` returns ``NoteDTO.assets``,
+        # which is the server's source-of-truth list of attached files.
+        # We only do this when the outcome asks for it, so vanilla
+        # scenarios pay nothing extra.
+        asset_note_keys = scenario.expected.note_keys_requiring_assets()
+        if asset_note_keys:
+            assets_by_key: dict[str, list[str]] = {}
+            for nk in asset_note_keys:
+                nid = note_id_by_key.get(nk)
+                if not nid:
+                    # Already filtered by the unresolved-note_keys check
+                    # above for outcomes that use referenced_note_keys.
+                    # Asset-only references (e.g. NoteAssetsContain whose
+                    # note_key is NOT in referenced_note_keys for some
+                    # custom outcome) get a clear empty-list breadcrumb.
+                    logger.warning(
+                        '  asset prefetch: note_key=%r has no resolved note_id; '
+                        'NoteAssetsContain will see assets_found=0',
+                        nk,
+                    )
+                    assets_by_key[nk] = []
+                    continue
+                try:
+                    note_dto = await api.get_note(UUID(str(nid)))
+                    assets_by_key[nk] = list(note_dto.assets or [])
+                except Exception as exc:
+                    logger.warning(
+                        '  asset prefetch: get_note(%s, key=%r) failed: %s; '
+                        'NoteAssetsContain will see assets_found=0',
+                        nid,
+                        nk,
+                        exc,
+                    )
+                    assets_by_key[nk] = []
+            scenario_context['_note_assets_by_key'] = assets_by_key
 
         # Backend produces an AgentAnswer; outcomes score against it uniformly.
         answer: AgentAnswer = await backend.answer(
@@ -628,6 +908,8 @@ async def _execute_scenario(
                 'unit_count': len(answer.units),
                 'entity_count': len(answer.entities),
                 'lint_findings_count': len(answer.lint_findings),
+                'lint_enrichment_failures': answer.lint_enrichment_failures,
+                'lint_enrichment_attempted': answer.lint_enrichment_attempted,
                 'tool_call_count': len(answer.tool_calls),
                 'retrieved_unit_id_count': len(answer.retrieved_unit_ids),
                 'backend_error': answer.error,
@@ -654,11 +936,26 @@ async def _execute_scenario(
             answer_mode=answer_mode,
         )
     finally:
-        # Always run teardowns regardless of pass/fail/error so the next
-        # scenario starts from a clean state. Per-handler isolation is
-        # inside _run_setup_teardowns; failures there are logged-and-swallowed.
-        if scenario.setup_actions:
-            await _run_setup_teardowns(api, vault_id, scenario.setup_actions, scenario_context)
+        # Run teardowns immediately UNLESS this scenario is named in
+        # another's ``depends_on_prior_scenarios`` — in that case the
+        # caller passes ``defer_teardown=True`` and we hand the
+        # context off to ``deferred_teardown_sink`` so the runner can
+        # invoke teardown after the last consumer scenario has run.
+        # Otherwise side-effects from this scenario would be reverted
+        # before the dependent scored against them. The same defer
+        # rule applies to inline-note deletes — a dependent scenario
+        # may reference its parent's inline-note unit IDs.
+        has_inline_notes = bool(scenario_context.get('_inline_note_ids'))
+        if scenario.setup_actions or has_inline_notes:
+            if defer_teardown and deferred_teardown_sink is not None:
+                deferred_teardown_sink.append((scenario, vault_id, scenario_context))
+            else:
+                if scenario.setup_actions:
+                    await _run_setup_teardowns(
+                        api, vault_id, scenario.setup_actions, scenario_context
+                    )
+                if has_inline_notes:
+                    await _run_inline_note_teardowns(api, scenario_context)
 
 
 def _aggregate_results(
@@ -719,6 +1016,7 @@ async def run_suite(
     keep_vault: str | None = None,
     reuse_vault: str | None = None,
     manifest_dir: Path | None = None,
+    scenario_ids: list[str] | None = None,
 ) -> RunResult:
     """Run one suite end-to-end.
 
@@ -945,14 +1243,17 @@ async def run_suite(
                             rows = []
                         per_vault: dict[str, list[str]] = {}
                         for n in rows:
-                            nm = getattr(n, 'name', None) or ''
+                            # Canonicalise so reuse-mode lookup matches the
+                            # fresh-ingest path's case/whitespace handling
+                            # (round-3 MEDIUM 1).
+                            nm = canonicalize_name(getattr(n, 'name', None) or '')
                             per_vault.setdefault(nm, []).append(str(n.id))
                         notes_by_name_per_vault[vid] = per_vault
                     missing: list[str] = []
                     ambiguous: list[str] = []
                     for src in suite.sources.notes:
                         target_vault_id = vault_map.get(src.vault_name, default_vault_id)
-                        lookup_name = src.title or src.note_key
+                        lookup_name = canonicalize_name(src.title or src.note_key)
                         candidates = notes_by_name_per_vault.get(target_vault_id, {}).get(
                             lookup_name, []
                         )
@@ -1016,33 +1317,107 @@ async def run_suite(
                 # state mutations from earlier scenarios (recorded outcomes,
                 # deprioritization, KV writes, inline-note contradictions).
                 # Guarded by tests/suite/test_extensibility.py.
+                scenarios_by_id = {s.id: s for s in suite.scenarios}
+
+                def _own_skip_reason(sc: Scenario) -> str | None:
+                    return _compute_own_skip_reason(
+                        sc,
+                        suite=suite,
+                        reuse_vault=reuse_vault,
+                        config_snapshot_available=config_snapshot_available,
+                        nli_available=nli_available,
+                    )
+
+                # Scenarios named in another's ``depends_on_prior_scenarios``
+                # have their teardown deferred until after the last consumer
+                # runs — the consumer's assertion observes side effects the
+                # dep stamped, so reverting them at the dep's own teardown
+                # phase would defeat the dependency contract.
+                deps_referenced: set[str] = {
+                    dep for s in suite.scenarios for dep in s.depends_on_prior_scenarios
+                }
+                deferred_teardowns: list[tuple[Scenario, UUID, dict[str, Any]]] = []
+
+                # ``scenario_ids`` filter: when set, only run the named
+                # scenarios + their ``depends_on_prior_scenarios`` predecessors
+                # (transitively). Predecessors must run because the
+                # consumer's assertion observes their side effects (e.g.
+                # ``outcomes_ranking_specific_query`` reads stamps from
+                # ``outcomes_ranking``). Unknown ids raise rather than
+                # being silently filtered out.
+                included_ids: set[str] | None = None
+                if scenario_ids:
+                    requested = set(scenario_ids)
+                    unknown = requested - {s.id for s in suite.scenarios}
+                    if unknown:
+                        raise ValueError(
+                            f'Unknown scenario id(s) {sorted(unknown)} for suite '
+                            f'{suite.name!r}. Available: '
+                            f'{sorted(s.id for s in suite.scenarios)}'
+                        )
+                    included_ids = set(requested)
+                    # Walk dep chain. Suite._validate_referential_integrity
+                    # already rejects forward refs and cycles, so a simple
+                    # depth-bounded loop is sufficient.
+                    while True:
+                        new = {
+                            d
+                            for s in suite.scenarios
+                            if s.id in included_ids
+                            for d in s.depends_on_prior_scenarios
+                        }
+                        if new <= included_ids:
+                            break
+                        included_ids |= new
+                    logger.info(
+                        'scenario filter: requested=%s, running (with deps)=%s',
+                        sorted(requested),
+                        sorted(included_ids),
+                    )
+
                 for scenario in suite.scenarios:
+                    if included_ids is not None and scenario.id not in included_ids:
+                        outcomes.append(
+                            ScenarioOutcome(
+                                scenario_id=scenario.id,
+                                status='skip',
+                                skip_reason='filtered_out',
+                                replicate_index=0,
+                                answer_mode=suite.answer_mode_for(scenario),
+                            )
+                        )
+                        continue
                     sc_vault_id = vault_map.get(scenario.vault_name, default_vault_id)
                     # P7: NLI gate — applies suite-level OR per-scenario flag.
                     needs_nli = (
                         suite.metadata.requires_nli_classifier or scenario.requires_nli_classifier
                     )
-                    # P8 + round-6 H4: scoped reuse refusal — registry-driven.
-                    # A handler declares ``reusable_under_reuse_vault =
-                    # False`` when it has unbounded write-side effects
-                    # (e.g. ``record_outcome`` appends a history entry per
-                    # call, biasing retrieval scoring). Skip scenarios whose
-                    # setup contains any non-reusable action; let the rest
-                    # of the suite run. Unknown action kinds are not
-                    # reuse-blocked here — _run_setup_actions will raise on
-                    # unknown kinds anyway.
-                    record_outcome_in_setup = False
-                    if reuse_vault is not None:
-                        for _action in scenario.setup_actions:
-                            try:
-                                _hcls = type(get_setup_action(_action.kind))
-                            except KeyError:
+                    # Own skip reasons. P8 + round-6 H4: a handler declares
+                    # ``reusable_under_reuse_vault = False`` when it has
+                    # unbounded write-side effects (e.g. ``record_outcome``
+                    # appends a history entry per call, biasing retrieval
+                    # scoring). Skip scenarios whose setup contains any such
+                    # action; let the rest of the suite run.
+                    own_skip = _own_skip_reason(scenario)
+                    # Transitive: a scenario observing state stamped by a
+                    # prior scenario inherits that prior's skip reason.
+                    # Generalised across all skip kinds (reuse, NLI,
+                    # future budget gates) — the round-2 review found that
+                    # a reuse-only check left NLI-disabled deps unprotected.
+                    transitive_skip_dep: str | None = None
+                    transitive_skip_reason: str | None = None
+                    if scenario.depends_on_prior_scenarios:
+                        for dep_id in scenario.depends_on_prior_scenarios:
+                            dep = scenarios_by_id.get(dep_id)
+                            if dep is None:
                                 continue
-                            if not getattr(_hcls, 'reusable_under_reuse_vault', True):
-                                record_outcome_in_setup = True
+                            dep_skip = _own_skip_reason(dep)
+                            if dep_skip is not None:
+                                transitive_skip_dep = dep_id
+                                transitive_skip_reason = dep_skip
                                 break
                     for replicate in range(replicates):
-                        if record_outcome_in_setup:
+                        if own_skip == 'setup_action_not_reusable':
                             outcomes.append(
                                 ScenarioOutcome(
                                     scenario_id=scenario.id,
@@ -1053,31 +1428,44 @@ async def run_suite(
                                 )
                             )
                             continue
-                        if needs_nli:
-                            if not config_snapshot_available:
-                                # Cannot determine NLI availability — admin auth missing.
-                                # Run the scenario anyway: skip-on-unknown produced
-                                # silent gaps in eval coverage, and a real NLI-disabled
-                                # server will fail the scenario with a clearer signal
-                                # (no findings emitted) than a skip.
-                                logger.warning(
-                                    'Running %r without NLI gate: /system/config '
-                                    'unavailable (admin auth missing). If NLI is '
-                                    'actually disabled the scenario will fail; pass '
-                                    'an admin api-key for a proper skip.',
-                                    scenario.id,
+                        if transitive_skip_dep is not None:
+                            outcomes.append(
+                                ScenarioOutcome(
+                                    scenario_id=scenario.id,
+                                    status='skip',
+                                    skip_reason=(
+                                        f'depends_on_prior_scenario_skipped:'
+                                        f'{transitive_skip_dep}:{transitive_skip_reason}'
+                                    ),
+                                    replicate_index=replicate,
+                                    answer_mode=suite.answer_mode_for(scenario),
                                 )
-                            elif nli_available is False:
-                                outcomes.append(
-                                    ScenarioOutcome(
-                                        scenario_id=scenario.id,
-                                        status='skip',
-                                        skip_reason='nli_disabled',
-                                        replicate_index=replicate,
-                                        answer_mode=suite.answer_mode_for(scenario),
-                                    )
+                            )
+                            continue
+                        if own_skip == 'nli_disabled':
+                            outcomes.append(
+                                ScenarioOutcome(
+                                    scenario_id=scenario.id,
+                                    status='skip',
+                                    skip_reason='nli_disabled',
+                                    replicate_index=replicate,
+                                    answer_mode=suite.answer_mode_for(scenario),
                                 )
-                                continue
+                            )
+                            continue
+                        if needs_nli and not config_snapshot_available:
+                            # Cannot determine NLI availability — admin auth missing.
+                            # Run the scenario anyway: skip-on-unknown produced
+                            # silent gaps in eval coverage, and a real NLI-disabled
+                            # server will fail the scenario with a clearer signal
+                            # (no findings emitted) than a skip.
+                            logger.warning(
+                                'Running %r without NLI gate: /system/config '
+                                'unavailable (admin auth missing). If NLI is '
+                                'actually disabled the scenario will fail; pass '
+                                'an admin api-key for a proper skip.',
+                                scenario.id,
+                            )
                         outcome = await _execute_scenario(
                             api,
                             server_url,
@@ -1089,8 +1477,30 @@ async def run_suite(
                             note_id_by_key,
                             replicate,
                             backend_cache=backend_cache,
+                            defer_teardown=scenario.id in deps_referenced,
+                            deferred_teardown_sink=deferred_teardowns,
                         )
                         outcomes.append(outcome)
+                # All scenarios complete — fire any deferred teardowns
+                # whose execution we postponed because their side effects
+                # were observed by a later ``depends_on_prior_scenarios``
+                # consumer. Running these in reverse declaration order so
+                # earlier-stamped state is undone last.
+                for dep_sc, dep_vault, dep_ctx in reversed(deferred_teardowns):
+                    try:
+                        if dep_sc.setup_actions:
+                            await _run_setup_teardowns(
+                                api, dep_vault, dep_sc.setup_actions, dep_ctx
+                            )
+                        if dep_ctx.get('_inline_note_ids'):
+                            await _run_inline_note_teardowns(api, dep_ctx)
+                    except Exception as exc:
+                        logger.warning(
+                            'Deferred teardown for scenario %r raised %s — '
+                            'continuing. Vault may carry stale state.',
+                            dep_sc.id,
+                            exc,
+                        )
                 # round-6 C1: every scenario in the loop completed (no
                 # KeyboardInterrupt, no abort). Safe to write the keep-vault
                 # manifest.

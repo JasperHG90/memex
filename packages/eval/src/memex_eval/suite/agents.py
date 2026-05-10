@@ -22,6 +22,7 @@ subclass of ``AnswerBackend``. Suites pick a backend per scenario via
 from __future__ import annotations
 
 import abc
+import asyncio
 import contextlib
 import json
 import logging
@@ -72,6 +73,14 @@ class AgentAnswer(BaseModel):
     cooccurrences: list[Any] = Field(default_factory=list)
     entity_mentions: list[Any] = Field(default_factory=list)
     lint_findings: list[Any] = Field(default_factory=list)
+    # Round-2 H3: number of memory_unit-targeted lint findings whose
+    # ``unit_text`` enrichment failed. Surfaced on AgentAnswer (and by
+    # the runner into ``actual_summary.lint_enrichment_failures``) so a
+    # downstream "this scenario silently scored against empty strings"
+    # case is visible in run artifacts (MLflow, JSON output) — not just
+    # the live log.
+    lint_enrichment_failures: int = 0
+    lint_enrichment_attempted: int = 0
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
     retrieved_unit_ids: list[str] = Field(default_factory=list)
     kv_value: str | None = None
@@ -288,32 +297,107 @@ class DirectApiBackend(AnswerBackend):
                     except Exception as exc:
                         out.error = f'summarize_node failed: {type(exc).__name__}: {exc}'
             elif isinstance(outcome, (LintFindingPresent, LLMLintFlagsUnit)):
-                payload = await api.lint_findings(vault_id=str(vault_id))
+                # Pull every pending finding (server cap is 500). The
+                # default ``limit=50`` would silently truncate any vault
+                # with a noisier lint pass.
+                payload = await api.lint_findings(
+                    vault_id=str(vault_id), status='pending', limit=500
+                )
                 # /lint/findings returns {'findings': [...], ...} — extract the list.
                 raw = payload.get('findings') if isinstance(payload, dict) else payload
-                # Enrich findings with the flagged unit's text. The lint API
-                # returns ``target_id`` (memory_unit UUID) but no ``unit_text``;
-                # ``LLMLintFlagsUnit.score`` does substring matching against
-                # the unit body, so we resolve ``target_id`` -> unit and graft
-                # ``unit_text`` onto the finding dict before wrapping.
-                findings_list: list[Any] = []
+                if isinstance(payload, dict) and len(raw or []) >= 500:
+                    logger.warning(
+                        'lint_findings: returned %d rows at the 500-row cap for vault %s; '
+                        'paging not implemented — assertions on later findings will be incomplete.',
+                        len(raw or []),
+                        vault_id,
+                    )
+                # Enrich each memory_unit-targeted finding with its unit
+                # text; ``LLMLintFlagsUnit.score`` does substring matching
+                # against the unit body but the lint API returns only
+                # ``target_id``. Issue the resolutions concurrently to
+                # avoid an N+1 wall-clock cost.
+                items: list[dict[str, Any]] = []
+                resolvable_ids_set: set[str] = set()
                 for item in raw or []:
+                    if not isinstance(item, dict):
+                        items.append(item)  # type: ignore[arg-type]
+                        continue
+                    # Shallow copy: only top-level fields are mutated below
+                    # (we set ``unit_text``). Nested dicts (``evidence``) still
+                    # alias the source — fine because nothing here writes to them.
+                    items.append(dict(item))
+                    if (
+                        items[-1].get('target_type') == 'memory_unit'
+                        and items[-1].get('target_id')
+                        and 'unit_text' not in items[-1]
+                    ):
+                        resolvable_ids_set.add(items[-1]['target_id'])
+
+                async def _resolve_one(uid: str) -> tuple[str, str | None]:
+                    try:
+                        mu = await api.get_memory_unit(uid)
+                        return uid, (getattr(mu, 'text', '') or '')
+                    except Exception as exc:
+                        logger.warning(
+                            'lint enrich: get_memory_unit(%s) failed (%s: %s)',
+                            uid,
+                            type(exc).__name__,
+                            exc,
+                        )
+                        return uid, None
+
+                resolvable_ids = sorted(resolvable_ids_set)
+                resolutions: dict[str, str | None] = {}
+                if resolvable_ids:
+                    pairs = await asyncio.gather(*(_resolve_one(u) for u in resolvable_ids))
+                    resolutions = dict(pairs)
+
+                # Count attempts BEFORE the resolution loop sets
+                # ``item['unit_text']`` on every eligible finding. Both
+                # ``failures`` and ``attempted`` walk the same predicate
+                # (memory_unit-targeted, target_id set, unit_text not
+                # already on the wire); counting after the loop would
+                # always read 0 because every eligible finding gets
+                # ``unit_text`` set during enrichment.
+                lint_attempted = sum(
+                    1
+                    for item in items
+                    if isinstance(item, dict)
+                    and item.get('target_type') == 'memory_unit'
+                    and item.get('target_id')
+                    and 'unit_text' not in item
+                )
+                enrichment_failures = 0
+                findings_list: list[Any] = []
+                for item in items:
                     if not isinstance(item, dict):
                         findings_list.append(item)
                         continue
-                    if item.get('target_type') == 'memory_unit' and item.get('target_id'):
-                        try:
-                            mu = await api.get_memory_unit(item['target_id'])
-                            item['unit_text'] = getattr(mu, 'text', '') or ''
-                        except Exception as exc:
-                            logger.debug(
-                                'lint enrich: get_memory_unit(%s) failed: %s',
-                                item['target_id'],
-                                exc,
-                            )
-                            item.setdefault('unit_text', '')
+                    if (
+                        item.get('target_type') == 'memory_unit'
+                        and item.get('target_id')
+                        and 'unit_text' not in item
+                    ):
+                        text = resolutions.get(item['target_id'])
+                        if text is None:
+                            enrichment_failures += 1
+                            item['unit_text'] = ''
+                        else:
+                            item['unit_text'] = text
                     findings_list.append(_DictAttrShim(item))
+                if enrichment_failures:
+                    logger.warning(
+                        'lint enrich: %d/%d memory-unit findings could not resolve '
+                        'their unit text and were scored against empty strings — '
+                        'keyword assertions on those findings will register no '
+                        'matches.',
+                        enrichment_failures,
+                        lint_attempted,
+                    )
                 out.lint_findings = findings_list
+                out.lint_enrichment_failures = enrichment_failures
+                out.lint_enrichment_attempted = lint_attempted
             else:
                 # Default: memory search (covers KeywordsPresent/Absent,
                 # GoldUnitIds, RankingOrder, ExcludedByDefault, LLMJudge,

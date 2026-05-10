@@ -589,6 +589,16 @@ def suite_run(
     replicates: int = typer.Option(1, '--replicates', min=1, max=20),
     seed: int | None = typer.Option(None, '--seed'),
     judge_model: str | None = typer.Option(None, '--judge-model', envvar='EVAL_JUDGE_MODEL'),
+    scenarios: list[str] = typer.Option(
+        [],
+        '--scenario',
+        help=(
+            'Repeatable. Run only scenarios whose id matches. Validated '
+            'against the loaded suite at startup; an unknown id raises. '
+            'Note: filtered runs still execute prerequisite scenarios '
+            'declared via ``depends_on_prior_scenarios``.'
+        ),
+    ),
     output: str | None = typer.Option(None, '--output', '-o'),
     notes: str | None = typer.Option(
         None,
@@ -708,6 +718,7 @@ def suite_run(
                     notes=notes,
                     keep_vault=keep_vault,
                     reuse_vault=reuse_vault,
+                    scenario_ids=scenarios or None,
                 )
             )
         except KeyboardInterrupt:

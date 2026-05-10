@@ -2,6 +2,7 @@
 title: Engineering Department Overview
 description: Overview of the Engineering department at TechCo Global.
 tags: [department, engineering, techco]
+publish_date: 2026-05-09
 ---
 
 # Engineering Department — TechCo Global

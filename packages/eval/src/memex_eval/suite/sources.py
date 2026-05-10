@@ -24,6 +24,14 @@ logger = logging.getLogger('memex_eval.suite.sources')
 # ``2023-historical.md``) — many real-world suites date-prefix sources.
 NOTE_KEY_RE = re.compile(r'^[a-z0-9][a-z0-9_-]*$')
 
+# Narrow allow-list of frontmatter keys ``SourceNote.wire_content()``
+# re-emits onto the wire. Keep this short — values are f-string
+# interpolated raw, which is YAML-safe for ``datetime.date`` /
+# scalar-string forms only. Adding a key with multi-line text or a
+# list value here would produce malformed YAML; pull in pyyaml's
+# safe_dump first if that ever changes.
+_WIRE_FORWARD_KEYS: tuple[str, ...] = ('publish_date',)
+
 
 class SourceNote(BaseModel):
     """A markdown note (loaded from sources/<name>.md)."""
@@ -38,11 +46,49 @@ class SourceNote(BaseModel):
     tags: list[str] = Field(default_factory=list)
     assets: dict[str, Path] = Field(default_factory=dict)
     vault_name: str | None = None
+    # Frontmatter keys that the eval framework forwards to the server via
+    # re-emitted YAML in ``wire_content()``. The DTO has no
+    # ``publish_date`` field of its own — the server's own frontmatter
+    # parser is the only path; without re-emission the value is dead.
+    # Keep the dict narrow so the loader doesn't accidentally leak
+    # internal metadata onto the wire.
+    extra_metadata: dict[str, Any] = Field(default_factory=dict)
 
     def asset_bytes_b64(self) -> dict[str, bytes]:
         """Read every asset from disk and base64-encode for the wire format
         expected by ``NoteCreateDTO.files``."""
         return {name: base64.b64encode(p.read_bytes()) for name, p in self.assets.items()}
+
+    def wire_content(self) -> str:
+        """Return ``content`` with a YAML frontmatter block re-emitted from
+        ``extra_metadata`` (currently only ``publish_date``).
+
+        ``frontmatter.load()`` strips the YAML block from ``post.content``,
+        so the server-side frontmatter parser sees a body with no header
+        and ``Note.publish_date`` falls back to ingest time. Re-emit the
+        small set of fields the eval framework cares about so the server's
+        existing parser picks them up.
+
+        Restricted to ``_WIRE_FORWARD_KEYS`` so a future loader that
+        accidentally adds an unsafe key (multi-line description, a list
+        of tags) does not produce malformed YAML on the wire — the
+        manual emitter f-strings the value in raw, which is fine for
+        ``datetime.date`` / simple scalars but breaks on YAML special
+        chars / structures.
+        """
+        if not self.extra_metadata:
+            return self.content
+        lines: list[str] = ['---']
+        for key in _WIRE_FORWARD_KEYS:
+            value = self.extra_metadata.get(key)
+            if value is None:
+                continue
+            lines.append(f'{key}: {value}')
+        if len(lines) == 1:  # nothing forwarded
+            return self.content
+        lines.append('---')
+        lines.append('')
+        return '\n'.join(lines) + '\n' + self.content
 
 
 class SuiteSources(BaseModel):
@@ -130,6 +176,17 @@ class SuiteSources(BaseModel):
 
             raw_tags = metadata.get('tags') or []
             tags = [str(t) for t in raw_tags]
+            # Forward only the small set of frontmatter keys the server
+            # consumes via its own parser (``_WIRE_FORWARD_KEYS`` —
+            # single source of truth shared with ``SourceNote.wire_content``).
+            # ``publish_date`` is the important one today — without it,
+            # ``Note.publish_date`` falls back to ingest time and
+            # ``mentioned_at`` defaults make temporal-ordering scenarios
+            # flaky.
+            extra_metadata: dict[str, Any] = {}
+            for key in _WIRE_FORWARD_KEYS:
+                if metadata.get(key) is not None:
+                    extra_metadata[key] = metadata[key]
             notes.append(
                 SourceNote(
                     path=md_path.resolve(),
@@ -140,6 +197,7 @@ class SuiteSources(BaseModel):
                     tags=tags,
                     assets=resolved_assets,
                     vault_name=metadata.get('vault_name'),
+                    extra_metadata=extra_metadata,
                 )
             )
 
@@ -189,4 +247,30 @@ class SuiteSources(BaseModel):
         return {n.note_key for n in self.notes}
 
 
-__all__ = ['SourceNote', 'SuiteSources']
+def canonicalize_name(s: str) -> str:
+    """Normalize an entity / note name for case- and whitespace-insensitive
+    matching. Used by:
+    - ``runner._ingest_sources`` idempotent-skip post-filter
+    - ``runner`` reuse-vault per-vault title lookup
+    - ``setup_actions._TriggerReflections._name_match`` target-entity match
+
+    All three places need the same canonicalisation; defining it once
+    here is the only way to keep them in sync.
+
+    Pipeline: ``NFC`` normalize (so combining-mark variants of the same
+    grapheme compare equal) → ``casefold()`` (Unicode-correct case
+    insensitivity, beats ``.lower()`` for non-ASCII) → ``split()/join()``
+    (collapses any Unicode whitespace including NBSP, tabs, internal
+    runs, trailing newlines DSPy occasionally emits).
+
+    Intentionally does NOT strip zero-width characters (U+200B/200D);
+    those are rare in extracted entity names today and stripping them
+    here would couple this helper to a regex maintenance burden. Add
+    a separate sanitiser if a real corpus surfaces them.
+    """
+    import unicodedata
+
+    return ' '.join(unicodedata.normalize('NFC', s or '').casefold().split())
+
+
+__all__ = ['SourceNote', 'SuiteSources', 'canonicalize_name']
