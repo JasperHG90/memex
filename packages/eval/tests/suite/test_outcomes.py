@@ -18,6 +18,7 @@ from memex_eval.suite import (
     LintFindingPresent,
     LLMJudge,
     NewestUnitContains,
+    NoteAssetsContain,
     NoteAttribution,
     RankingOrder,
     Scenario,
@@ -872,3 +873,64 @@ class TestNoteAttribution:
         ans = AgentAnswer(units=[u1, u2])
         ctx = self._ctx({'ach': str(ach_uuid), 'inc': str(inc_uuid)})
         assert outcome.score(ans, _scenario(), context=ctx)['pass'] == 1.0
+
+
+class TestNoteAssetsContain:
+    """``NoteDTO.assets`` returns FileStore-relative paths
+    ``assets/<vault>/<note-id>/<filename>``, NOT bare filenames. The
+    score must compare basenames so the scenario contract
+    (``expected_filenames=['system-diagram.png']``) works regardless
+    of where the server places the bytes."""
+
+    def _ctx(self, by_key: dict[str, list[str]]) -> dict[str, dict[str, list[str]]]:
+        return {'_note_assets_by_key': by_key}
+
+    def test_basename_match_when_server_returns_full_paths(self) -> None:
+        outcome = NoteAssetsContain(
+            type='note_assets_contain',
+            note_key='architecture-overview',
+            expected_filenames=['system-diagram.png'],
+        )
+        ctx = self._ctx(
+            {
+                'architecture-overview': [
+                    'assets/eval-suite-acme_corp-da7cd973/'
+                    'fb2f7398b6fe1fc848dc38fdd1b5ebb7/system-diagram.png',
+                ]
+            }
+        )
+        result = outcome.score(AgentAnswer(units=[]), _scenario(), context=ctx)
+        assert result == {'pass': 1.0, 'assets_found': 1.0}
+
+    def test_basename_match_when_server_returns_bare_filenames(self) -> None:
+        # Belt-and-braces: the score should also handle the legacy /
+        # alternate shape where ``NoteDTO.assets`` returns bare filenames.
+        outcome = NoteAssetsContain(
+            type='note_assets_contain',
+            note_key='nk',
+            expected_filenames=['diagram.png'],
+        )
+        ctx = self._ctx({'nk': ['diagram.png']})
+        result = outcome.score(AgentAnswer(units=[]), _scenario(), context=ctx)
+        assert result == {'pass': 1.0, 'assets_found': 1.0}
+
+    def test_missing_asset_fails(self) -> None:
+        outcome = NoteAssetsContain(
+            type='note_assets_contain',
+            note_key='nk',
+            expected_filenames=['missing.png'],
+        )
+        ctx = self._ctx({'nk': ['assets/v/n/other.png']})
+        result = outcome.score(AgentAnswer(units=[]), _scenario(), context=ctx)
+        assert result == {'pass': 0.0, 'assets_found': 0.0}
+
+    def test_partial_match_fails_overall(self) -> None:
+        outcome = NoteAssetsContain(
+            type='note_assets_contain',
+            note_key='nk',
+            expected_filenames=['a.png', 'b.png'],
+        )
+        ctx = self._ctx({'nk': ['assets/v/n/a.png']})
+        result = outcome.score(AgentAnswer(units=[]), _scenario(), context=ctx)
+        # 1 of 2 found → fails the all-or-nothing pass, but assets_found tracks the partial.
+        assert result == {'pass': 0.0, 'assets_found': 1.0}

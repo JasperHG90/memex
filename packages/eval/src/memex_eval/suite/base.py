@@ -799,7 +799,16 @@ class NoteAssetsContain(ExpectedOutcomeBase):
 
     def score(self, answer: AgentAnswer, scenario, *, context=None, **_kw) -> dict[str, float]:
         assets = (context or {}).get('_note_assets_by_key', {}).get(self.note_key) or []
-        present = {a for a in self.expected_filenames if a in set(assets)}
+        # ``NoteDTO.assets`` returns FileStore-relative paths shaped
+        # ``assets/<vault>/<note-id>/<filename>``, not bare filenames.
+        # Match basenames so ``expected_filenames=['system-diagram.png']``
+        # works regardless of where the server places the bytes. The
+        # scenario field name (``expected_filenames``) is the contract
+        # — match the leaf name only.
+        from pathlib import PurePosixPath
+
+        asset_basenames = {PurePosixPath(a).name for a in assets}
+        present = {a for a in self.expected_filenames if a in asset_basenames}
         return {
             'pass': 1.0 if len(present) == len(self.expected_filenames) else 0.0,
             'assets_found': float(len(present)),
