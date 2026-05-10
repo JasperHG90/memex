@@ -73,7 +73,19 @@ memex-eval suite run basic_extraction \
   --override server.memory.retrieval.reranking_mw_alpha=0.5
 ```
 
-> **Knob sweeps are out-of-scope.** If you want to test multiple knob values, run the suite N times with different server configs (CI matrix, shell loop, etc.) and tag each run via `--notes` + `--mlflow-run-name`.
+### Sweep a knob across N values
+
+Sweep one (or more) `MemexConfig` knob and record an MLflow parent run with one nested child per value:
+
+```bash
+memex-eval suite sweep acme_corp \
+  --param server.memory.retrieval.reranking_mw_alpha=0.0,0.1,0.3,0.5 \
+  --mlflow-uri file://./mlruns
+```
+
+Each point spawns its own `granian memex_core.server:app` subprocess with the override env var, polls `/api/v1/health`, runs the suite, and SIGTERMs the server. Local-only (env-var overrides only apply at server startup; remote `--server` is hard-rejected).
+
+See `### memex-eval suite sweep <name>` below for the full flag list.
 
 ### Open MLflow to inspect
 
@@ -179,6 +191,71 @@ memex-eval suite run [<name>|--all]
 | `--verbose` / `-v` | off | DEBUG-level logging |
 
 Exit code is non-zero if any scenario fails or errors.
+
+### `memex-eval suite sweep <name>`
+
+Run a suite N times across a knob grid; spawn a fresh `granian memex_core.server:app` subprocess per point with the override env vars injected. The MLflow parent run holds sweep-level metadata (`sweep.id`, `sweep.knobs`, `sweep.points_planned`) and N child runs nest under it.
+
+```
+memex-eval suite sweep <name>
+  --param KEY=V1,V2,V3                 (repeatable; cross-products into a Cartesian grid)
+  [--server URL]                       (host portion is checked; port is overridden per point)
+  [--mlflow-uri URL]
+  [--mlflow-experiment NAME]
+  [--sweep-label NAME]                 (parent run name; default sweep-<id>)
+  [--judge-model MODEL]
+  [--replicates N]
+  [--seed INT]
+  [--scenario ID]                      (repeatable; forwarded to per-point run_suite)
+  [--group NAME]                       (repeatable; forwarded to per-point run_suite)
+  [--output PATH]                      (write SweepResult JSON aggregate)
+  [--log-dir PATH]                     (server stdout/stderr capture; default /tmp/memex-eval-sweep)
+  [--verbose]
+```
+
+| Flag | Default | Description |
+|---|---|---|
+| `--param` | required | Repeatable. `KEY=V1,V2,V3`. `KEY` is a dotted `MemexConfig` path (validated against `model_fields` at parse time; `SecretStr` paths are rejected). Multiple `--param` flags cross-product into a grid (e.g. `--param a=1,2 --param b=x,y` → 4 points). |
+| `--server` | `http://localhost:8000/api/v1/` | Local-only. Sweep is hard-rejected against non-`localhost`/`127.0.0.1`/`::1` hosts because env-var overrides only apply at server startup. |
+| `--sweep-label` | `sweep-<id>` | Sets the parent MLflow run name. Children get `<label>-point-NN`. |
+| `--mlflow-experiment` | `memex-sweep-<suite>-<knob_token>-<YYYYMM>` | Override the auto-generated parent experiment. |
+| `--output` | none | Write `SweepResult` JSON (sweep id, parent run id, per-point summaries with override values + status + duration + shutdown method) to a path. |
+| `--log-dir` | `/tmp/memex-eval-sweep` | Per-point spawned-server stdout+stderr is tee'd here; surfaced when a point fails. |
+
+**Lifecycle per sweep point:**
+
+1. Allocate a free port in `[18000, 19000)` (random + retry; falls back to OS-assigned ephemeral on bind contention).
+2. Spawn `granian --interface asgi --host 127.0.0.1 --port <port> memex_core.server:app` with the parent's environment + `MEMEX_*` overrides layered on top. `start_new_session=True` so signals reach the worker.
+3. Poll `/api/v1/health` every 250ms with a 60s timeout. Process exit during startup raises `RuntimeError` with the last 40 log lines.
+4. Open an MLflow child run nested under the sweep parent (`mlflow.parentRunId` tag + `nested=True`).
+5. Drive `run_suite(server_url=<spawn url>, config_overrides=<point>, ...)`.
+6. Send `SIGTERM` to the spawned process group; wait up to 30s for graceful shutdown (the server's lifespan task cancels the scheduler and releases `pg_try_advisory_lock`); escalate to `SIGKILL` if the grace expires. The shutdown method is recorded on the child run.
+
+**MLflow parent / child structure:**
+
+```
+memex-sweep-acme_corp-server_memory_retrieval_reranking_mw_alpha-202605
+└── sweep-<sweep_id>                     (parent run)
+    │  tags: sweep.id / sweep.suite / sweep.knobs / sweep.points_planned
+    │        sweep.children_failed / sweep.children_total
+    │        sweep.partial_failure (set when any child errored)
+    ├── sweep-<sweep_id>-point-00        (child; mlflow.parentRunId=<parent>)
+    │   params: override.server.memory.retrieval.reranking_mw_alpha=0.0
+    │   metrics: suite.pass_rate / metric.recall_at_10.mean / latency_ms.p95 / ...
+    ├── sweep-<sweep_id>-point-01        (override.<...>=0.1)
+    └── sweep-<sweep_id>-point-02        (override.<...>=0.3)
+```
+
+In the MLflow Compare view: select all children, plot any metric (e.g. `metric.recall_at_10.mean`) on Y vs. `params.override.server.memory.retrieval.reranking_mw_alpha` on X — the curve tells you whether the knob actually moves the metric.
+
+**Constraints:**
+
+- **Local-only.** Env-var overrides only take effect at server startup, so re-knobbing a long-running remote server mid-flight is impossible. The validator hard-rejects non-localhost `--server`.
+- **Serial within one sweep.** Two parallel sweep harnesses against the same Postgres would contend on `pg_try_advisory_lock` (the leader-election lock). Run sweeps one at a time; for genuinely independent sweeps, use separate Postgres instances.
+- **Knob allowlist.** `--param` paths must traverse `MemexConfig.model_fields`. Typos fail before any spawn (clean error pointing at the offending segment). `SecretStr` fields are rejected — sweeping a secret would exfiltrate it via env + MLflow params.
+- **Numeric leaves only.** Sweep values pass through env vars; the leaf field type must be `int` / `float` / `bool` / `str`. Pydantic-model leaves (the inner config sub-trees) are not sweepable.
+
+**Exit code** is non-zero iff any child run failed.
 
 ### `memex-eval suite history <name>`
 

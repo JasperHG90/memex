@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import logging
 import re
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import typer
@@ -760,6 +762,169 @@ def suite_run(
             any_failure = True
 
     if any_failure:
+        raise typer.Exit(code=1)
+
+
+@suite_app.command('sweep')
+def suite_sweep(
+    name: str = typer.Argument(..., help='Suite name.'),
+    server: str = typer.Option(
+        DEFAULT_SERVER,
+        '--server',
+        '-s',
+        envvar='MEMEX_EVAL_DEFAULT_SERVER',
+        help='Local server URL shape (host portion is checked; the port is overridden per sweep point). Sweep is hard-rejected against non-local hosts.',
+    ),
+    params: list[str] = typer.Option(
+        [],
+        '--param',
+        help=(
+            'Repeatable. Sweep one knob: KEY=V1,V2,V3 where KEY is a dotted '
+            '``MemexConfig`` path (e.g. ``server.memory.retrieval.reranking_mw_alpha``). '
+            'Path is validated against ``MemexConfig.model_fields`` at parse '
+            'time; ``SecretStr`` paths are rejected. Multiple --param flags '
+            'cross-product into a Cartesian grid.'
+        ),
+    ),
+    mlflow_uri: str | None = typer.Option(None, '--mlflow-uri', envvar='MLFLOW_TRACKING_URI'),
+    mlflow_experiment: str | None = typer.Option(
+        None,
+        '--mlflow-experiment',
+        envvar='MEMEX_EVAL_MLFLOW_EXPERIMENT',
+        help=(
+            "Override the parent run's MLflow experiment. Default: "
+            'memex-sweep-<suite>-<knob_token>-<YYYYMM>.'
+        ),
+    ),
+    sweep_label: str | None = typer.Option(
+        None, '--sweep-label', help='Label for the parent MLflow run; default sweep-<id>.'
+    ),
+    judge_model: str | None = typer.Option(None, '--judge-model', envvar='EVAL_JUDGE_MODEL'),
+    replicates: int = typer.Option(1, '--replicates', min=1, max=20),
+    seed: int | None = typer.Option(None, '--seed'),
+    scenarios: list[str] = typer.Option(
+        [], '--scenario', help='Forwarded to the per-point ``run_suite``.'
+    ),
+    groups: list[str] = typer.Option(
+        [], '--group', help='Forwarded to the per-point ``run_suite``.'
+    ),
+    output: str | None = typer.Option(
+        None,
+        '--output',
+        '-o',
+        help='Write the SweepResult JSON aggregate (sweep id + per-point summaries) here.',
+    ),
+    log_dir: str | None = typer.Option(
+        None,
+        '--log-dir',
+        help='Directory for spawned-server stdout+stderr logs. Default /tmp/memex-eval-sweep.',
+    ),
+    verbose: bool = typer.Option(False, '--verbose', '-v'),
+) -> None:
+    """Run a suite N times across a knob grid; spawn a server per point.
+
+    Local-only: each point spawns a fresh ``granian memex_core.server:app``
+    with ``MEMEX_*`` env-var overrides, polls ``/api/v1/health``, runs
+    the suite, then SIGTERMs the server. MLflow gets a parent run with
+    N nested children — open the Compare view to plot metric vs. knob.
+    """
+    _setup_logging(verbose)
+    import asyncio
+    import json as _json
+
+    from memex_eval.suite import load_suite, SuiteNotFound
+    from memex_eval.suite.sweep import (
+        SweepNotSupportedRemote,
+        SweepValidationError,
+        parse_param_specs,
+        run_sweep,
+    )
+
+    if not params:
+        console.print('[red]sweep requires at least one --param KEY=V1,V2,V3 flag.[/red]')
+        raise typer.Exit(code=2)
+
+    try:
+        param_grid = parse_param_specs(params)
+    except SweepValidationError as exc:
+        console.print(f'[red]{exc}[/red]')
+        raise typer.Exit(code=2) from None
+
+    try:
+        suite = load_suite(name)
+    except SuiteNotFound as exc:
+        console.print(f'[red]{exc}[/red]')
+        raise typer.Exit(code=1) from None
+
+    suite_run_kwargs: dict[str, Any] = {
+        'judge_model': judge_model,
+        'replicates': replicates,
+        'seed': seed,
+        'scenario_ids': scenarios or None,
+        'groups': groups or None,
+    }
+
+    try:
+        result = asyncio.run(
+            run_sweep(
+                suite,
+                param_grid=param_grid,
+                server_url=server,
+                mlflow_uri=mlflow_uri,
+                mlflow_experiment=mlflow_experiment,
+                sweep_label=sweep_label,
+                suite_run_kwargs=suite_run_kwargs,
+                log_dir=Path(log_dir) if log_dir else None,
+            )
+        )
+    except SweepValidationError as exc:
+        console.print(f'[red]{exc}[/red]')
+        raise typer.Exit(code=2) from None
+    except SweepNotSupportedRemote as exc:
+        console.print(f'[red]{exc}[/red]')
+        raise typer.Exit(code=2) from None
+
+    # Summary table
+    console.print()
+    console.print(
+        f'sweep [bold]{result.sweep_id}[/bold] over [bold]{name}[/bold] — '
+        f'{result.children_total} points, '
+        f'{result.children_failed} failed'
+    )
+    if result.parent_run_id:
+        console.print(f'  parent run: {result.parent_run_id}')
+    for p in result.points:
+        verdict = 'fail' if p.error else 'ok'
+        knobs_str = ', '.join(f'{k}={v}' for k, v in p.overrides.items())
+        pass_rate = ''
+        if p.run_result is not None:
+            pr = p.run_result.suite_metrics.get('suite.pass_rate')
+            if pr is not None:
+                pass_rate = f' pass_rate={pr:.3f}'
+        console.print(
+            f'  [{verdict}] point {p.point_index:02d}: {knobs_str}'
+            f'{pass_rate} ({p.shutdown_method}, {p.duration_seconds:.1f}s)'
+        )
+
+    if output:
+        out_path = Path(output)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+        # SweepResult contains datetimes + RunResult Pydantic models — flatten via
+        # dataclasses.asdict + custom encoder.
+        def _default(obj: Any) -> Any:
+            from datetime import datetime as _dt
+
+            if isinstance(obj, _dt):
+                return obj.isoformat()
+            if hasattr(obj, 'model_dump'):
+                return obj.model_dump(mode='json')
+            raise TypeError(f'Unhandled type: {type(obj)}')
+
+        out_path.write_text(_json.dumps(dataclasses.asdict(result), default=_default, indent=2))
+        console.print(f'  → wrote {out_path}')
+
+    if result.children_failed:
         raise typer.Exit(code=1)
 
 
