@@ -1,8 +1,11 @@
 """V12 — eval-only snapshot import orchestrator.
 
 Reverses ``SnapshotExporter`` (V3) for a single fresh, ephemeral vault on
-the importing server. The contract is **eval-only**: the route that calls
-this is registered iff ``server.eval_mode=True``.
+the target DB. **In-process only**: there is no server route, no
+``eval_mode`` flag, no path allowlist. The eval runner builds an
+``AsyncSession`` from ``MemexConfig.load()`` and calls
+``SnapshotImporter(...).import_snapshot()`` directly. The server runs
+identically whether eval is running or not.
 
 Five (six with cache-populate) phases — see ``BACKLOG.md`` plan Decision 10:
 
@@ -65,7 +68,7 @@ from memex_core.memory.sql_models import (
     Vault,
     VaultSummary,
 )
-from memex_core.services.snapshot.import_models import (
+from memex_eval.snapshot.import_models import (
     PINNED_SNAPSHOT_MAJOR,
     PINNED_SNAPSHOT_MINOR,
     ChunkImport,
@@ -87,19 +90,14 @@ from memex_core.services.snapshot.import_models import (
     VaultSummaryImport,
 )
 from memex_core.services.snapshot.enum_coerce import coerce_enum_value
-from memex_core.services.snapshot.import_state import VALID_STATES
+from memex_eval.snapshot.import_state import VALID_STATES
 from memex_core.services.snapshot.manifest import (
     OBSERVATION_SCHEMA_VERSION,
     SnapshotVersion,
 )
-from memex_core.services.snapshot.path_validation import (
-    read_validated_bytes,
-    read_validated_text,
-    validate_snapshot_dir,
-)
 from memex_core.storage.filestore import BaseAsyncFileStore
 
-logger = logging.getLogger('memex.core.services.snapshot.restore')
+logger = logging.getLogger('memex_eval.snapshot.restore')
 
 RESERVED_VAULT_NAMES = {GLOBAL_VAULT_NAME.lower(), 'global', 'default'}
 
@@ -118,8 +116,24 @@ class SnapshotImportRefused(SnapshotImportError):
 # Manifest + version validation
 
 
-async def _read_manifest(snapshot_dir: Path, allowlist_root: Path) -> SnapshotManifestImport:
-    raw = read_validated_text(snapshot_dir / 'manifest.json', expected_root=allowlist_root)
+def _resolve_snapshot_dir(snapshot_dir: str | Path) -> Path:
+    """Resolve and sanity-check the snapshot directory.
+
+    In-process eval: there is no untrusted caller — the user supplies the
+    path via CLI. We only need to confirm it exists and is a directory.
+    """
+    candidate = Path(snapshot_dir).expanduser()
+    try:
+        resolved = candidate.resolve(strict=True)
+    except FileNotFoundError as e:
+        raise SnapshotImportError(f'Snapshot directory not found: {snapshot_dir}') from e
+    if not resolved.is_dir():
+        raise SnapshotImportError(f'Snapshot path is not a directory: {resolved}')
+    return resolved
+
+
+async def _read_manifest(snapshot_dir: Path) -> SnapshotManifestImport:
+    raw = (snapshot_dir / 'manifest.json').read_text(encoding='utf-8')
     data = json.loads(raw)
     # SnapshotManifestImport allows ``extra='ignore'`` so a v1.2+ manifest
     # with new fields parses cleanly on a v1.1-pinned importer.
@@ -221,10 +235,10 @@ def _check_vault_not_global(vault: VaultImport) -> None:
 # JSONL helpers
 
 
-def _read_jsonl_lines(path: Path, allowlist_root: Path) -> Iterable[dict[str, Any]]:
+def _read_jsonl_lines(path: Path) -> Iterable[dict[str, Any]]:
     if not path.exists():
         return
-    raw = read_validated_text(path, expected_root=allowlist_root)
+    raw = path.read_text(encoding='utf-8')
     for idx, line in enumerate(raw.splitlines()):
         line = line.strip()
         if not line:
@@ -347,14 +361,12 @@ class SnapshotImporter:
         filestore: BaseAsyncFileStore | None,
         embedding_backend: EmbeddingBackend,
         snapshot_dir: Path,
-        allowlist_root: Path,
         target_vault_name: str,
     ) -> None:
         self._session = session
         self._filestore = filestore
         self._embedding_backend = embedding_backend
         self._snapshot_dir = snapshot_dir
-        self._allowlist_root = allowlist_root
         self._target_vault_name = target_vault_name
 
         # IDs are TENTATIVE at construction. ``import_snapshot()`` resolves
@@ -382,9 +394,7 @@ class SnapshotImporter:
         source path is recorded as in-progress, re-use its IDs and skip
         already-completed phases. If recorded as ``complete``, refuse.
         """
-        self._snapshot_dir = validate_snapshot_dir(
-            self._snapshot_dir, allowlist_root=self._allowlist_root
-        )
+        self._snapshot_dir = _resolve_snapshot_dir(self._snapshot_dir)
         await self._validate_preflight()
         try:
             # Idempotent resume — skip phases that have already committed.
@@ -447,15 +457,13 @@ class SnapshotImporter:
     # Preflight
 
     async def _validate_preflight(self) -> None:
-        manifest = await _read_manifest(self._snapshot_dir, self._allowlist_root)
+        manifest = await _read_manifest(self._snapshot_dir)
         _check_version(manifest)
         _check_observation_schema(manifest)
         _check_embedding_model(manifest, self._embedding_backend)
         await _check_alembic_head(self._session, manifest)
 
-        vault_raw = read_validated_text(
-            self._snapshot_dir / 'vault.json', expected_root=self._allowlist_root
-        )
+        vault_raw = (self._snapshot_dir / 'vault.json').read_text(encoding='utf-8')
         vault = VaultImport.model_validate_json(vault_raw)
         _check_vault_not_global(vault)
 
@@ -537,17 +545,15 @@ class SnapshotImporter:
                 for asset_path in sorted(assets_dir.iterdir()):
                     if not asset_path.is_file():
                         continue
-                    data = read_validated_bytes(asset_path, expected_root=self._allowlist_root)
+                    data = asset_path.read_bytes()
                     await self._filestore.save(self._staging_asset_key(asset_path.name), data)
             content_blob = note_dir / 'content.bin'
             if content_blob.is_file():
                 # We need the note's UUID to build the staging key. The
                 # metadata lives next to it.
-                meta_raw = read_validated_text(
-                    note_dir / 'metadata.json', expected_root=self._allowlist_root
-                )
+                meta_raw = (note_dir / 'metadata.json').read_text(encoding='utf-8')
                 note_id = UUID(json.loads(meta_raw)['id'])
-                data = read_validated_bytes(content_blob, expected_root=self._allowlist_root)
+                data = content_blob.read_bytes()
                 await self._filestore.save(self._staging_filestore_key(note_id), data)
         logger.info('Phase A complete: staged assets under %s', self._staging_prefix)
 
@@ -614,7 +620,7 @@ class SnapshotImporter:
         # IntegrityError.
         entities: list[EntityImport] = [
             EntityImport.model_validate(raw)
-            for raw in _read_jsonl_lines(derived / 'entities.jsonl', self._allowlist_root)
+            for raw in _read_jsonl_lines(derived / 'entities.jsonl')
         ]
         if entities:
             names = {e.canonical_name: e.id for e in entities}
@@ -645,7 +651,7 @@ class SnapshotImporter:
                 last_retrieved_at=entity.last_retrieved_at,
             )
             await self._session.execute(stmt.on_conflict_do_nothing(index_elements=['id']))
-        for raw in _read_jsonl_lines(derived / 'entity_aliases.jsonl', self._allowlist_root):
+        for raw in _read_jsonl_lines(derived / 'entity_aliases.jsonl'):
             alias = EntityAliasImport.model_validate(raw)
             stmt = pg_insert(EntityAlias.__table__).values(  # type: ignore[arg-type]
                 id=alias.id,
@@ -663,15 +669,11 @@ class SnapshotImporter:
         for note_dir in sorted(notes_dir.iterdir()):
             if not note_dir.is_dir():
                 continue
-            meta_raw = read_validated_text(
-                note_dir / 'metadata.json', expected_root=self._allowlist_root
-            )
+            meta_raw = (note_dir / 'metadata.json').read_text(encoding='utf-8')
             note = NoteImport.model_validate_json(meta_raw)
             note_md = note_dir / 'note.md'
             if note_md.exists():
-                original_text: str | None = read_validated_text(
-                    note_md, expected_root=self._allowlist_root
-                )
+                original_text: str | None = note_md.read_text(encoding='utf-8')
             else:
                 original_text = None
             # Verify content_hash if present — defends against tampered/
@@ -726,7 +728,7 @@ class SnapshotImporter:
     async def _insert_note_appends(self, note_ids: list[UUID]) -> None:
         path = self._snapshot_dir / 'derived' / 'note_appends.jsonl'
         valid_ids = set(note_ids)
-        for raw in _read_jsonl_lines(path, self._allowlist_root):
+        for raw in _read_jsonl_lines(path):
             ap = NoteAppendImport.model_validate(raw)
             if ap.note_id not in valid_ids:
                 raise SnapshotImportError(
@@ -747,7 +749,7 @@ class SnapshotImporter:
 
     async def _insert_chunks(self) -> None:
         path = self._snapshot_dir / 'derived' / 'chunks.jsonl'
-        for raw in _read_jsonl_lines(path, self._allowlist_root):
+        for raw in _read_jsonl_lines(path):
             ch = ChunkImport.model_validate(raw)
             await self._session.execute(
                 sa_insert(Chunk.__table__).values(  # type: ignore[arg-type]
@@ -767,7 +769,7 @@ class SnapshotImporter:
 
     async def _insert_nodes(self) -> None:
         path = self._snapshot_dir / 'derived' / 'nodes.jsonl'
-        for raw in _read_jsonl_lines(path, self._allowlist_root):
+        for raw in _read_jsonl_lines(path):
             n = NodeImport.model_validate(raw)
             await self._session.execute(
                 sa_insert(Node.__table__).values(  # type: ignore[arg-type]
@@ -790,7 +792,7 @@ class SnapshotImporter:
 
     async def _insert_memory_units(self) -> None:
         path = self._snapshot_dir / 'derived' / 'memory_units.jsonl'
-        for raw in _read_jsonl_lines(path, self._allowlist_root):
+        for raw in _read_jsonl_lines(path):
             _check_no_nan_floats(raw.get('confidence'), where='memory_units.confidence')
             _check_no_nan_floats(raw.get('importance'), where='memory_units.importance')
             _check_no_nan_floats(raw.get('stability'), where='memory_units.stability')
@@ -829,7 +831,7 @@ class SnapshotImporter:
 
     async def _insert_unit_entities(self) -> None:
         path = self._snapshot_dir / 'derived' / 'unit_entities.jsonl'
-        for raw in _read_jsonl_lines(path, self._allowlist_root):
+        for raw in _read_jsonl_lines(path):
             ue = UnitEntityImport.model_validate(raw)
             await self._session.execute(
                 sa_insert(UnitEntity.__table__).values(  # type: ignore[arg-type]
@@ -843,7 +845,7 @@ class SnapshotImporter:
 
     async def _insert_entity_cooccurrences(self) -> None:
         path = self._snapshot_dir / 'derived' / 'entity_cooccurrences.jsonl'
-        for raw in _read_jsonl_lines(path, self._allowlist_root):
+        for raw in _read_jsonl_lines(path):
             co = EntityCooccurrenceImport.model_validate(raw)
             await self._session.execute(
                 sa_insert(EntityCooccurrence.__table__).values(  # type: ignore[arg-type]
@@ -859,7 +861,7 @@ class SnapshotImporter:
 
     async def _insert_mental_models(self) -> None:
         path = self._snapshot_dir / 'derived' / 'mental_models.jsonl'
-        for raw in _read_jsonl_lines(path, self._allowlist_root):
+        for raw in _read_jsonl_lines(path):
             mm = MentalModelImport.model_validate(raw)
             # Sanity-check observations against the frozen v1 schema.
             for obs in mm.observations:
@@ -887,7 +889,7 @@ class SnapshotImporter:
 
     async def _insert_memory_links(self) -> None:
         path = self._snapshot_dir / 'derived' / 'memory_links.jsonl'
-        for raw in _read_jsonl_lines(path, self._allowlist_root):
+        for raw in _read_jsonl_lines(path):
             ml = MemoryLinkImport.model_validate(raw)
             await self._session.execute(
                 sa_insert(MemoryLink.__table__).values(  # type: ignore[arg-type]
@@ -906,7 +908,7 @@ class SnapshotImporter:
         path = self._snapshot_dir / 'derived' / 'vault_summary.json'
         if not path.exists():
             return
-        raw = read_validated_text(path, expected_root=self._allowlist_root)
+        raw = path.read_text(encoding='utf-8')
         vs = VaultSummaryImport.model_validate_json(raw)
         await self._session.execute(
             sa_insert(VaultSummary.__table__).values(  # type: ignore[arg-type]
@@ -927,7 +929,7 @@ class SnapshotImporter:
 
     async def _insert_governance(self) -> None:
         gov = self._snapshot_dir / 'governance'
-        for raw in _read_jsonl_lines(gov / 'maintenance_proposals.jsonl', self._allowlist_root):
+        for raw in _read_jsonl_lines(gov / 'maintenance_proposals.jsonl'):
             mp = MaintenanceProposalImport.model_validate(raw)
             await self._session.execute(
                 sa_insert(MaintenanceProposal.__table__).values(  # type: ignore[arg-type]
@@ -946,7 +948,7 @@ class SnapshotImporter:
                     resolved_by=mp.resolved_by,
                 )
             )
-        for raw in _read_jsonl_lines(gov / 'procedure_outcomes.jsonl', self._allowlist_root):
+        for raw in _read_jsonl_lines(gov / 'procedure_outcomes.jsonl'):
             po = ProcedureOutcomeImport.model_validate(raw)
             await self._session.execute(
                 sa_insert(ProcedureOutcome.__table__).values(  # type: ignore[arg-type]
@@ -991,9 +993,7 @@ class SnapshotImporter:
                         await self._move_filestore_key(src, dst)
                 content_blob = note_dir / 'content.bin'
                 if content_blob.is_file():
-                    meta_raw = read_validated_text(
-                        note_dir / 'metadata.json', expected_root=self._allowlist_root
-                    )
+                    meta_raw = (note_dir / 'metadata.json').read_text(encoding='utf-8')
                     note_id = UUID(json.loads(meta_raw)['id'])
                     src = self._staging_filestore_key(note_id)
                     dst = self._final_filestore_key(note_id)

@@ -1575,9 +1575,7 @@ async def run_suite(
                 )
 
             use_import = (
-                from_snapshot is not None
-                and from_snapshot != 'auto'
-                and reuse_vault is None
+                from_snapshot is not None and from_snapshot != 'auto' and reuse_vault is None
             ) or (cache_lookup is not None and cache_lookup.hit and not reingest)
 
             if reuse_vault is not None:
@@ -1635,7 +1633,19 @@ async def run_suite(
                     snapshot_path,
                     vault_name,
                 )
-                default_vault_id, _import_id = await api.import_snapshot(snapshot_path, vault_name)
+                from memex_eval.snapshot import SnapshotImporter
+                from memex_eval.snapshot.runtime import snapshot_runtime
+
+                async with snapshot_runtime() as rt:
+                    importer = SnapshotImporter(
+                        session=rt.session,
+                        filestore=rt.filestore,
+                        embedding_backend=rt.config.server.embedding_model,
+                        snapshot_dir=Path(snapshot_path),
+                        target_vault_name=vault_name,
+                    )
+                    default_vault_id = await importer.import_snapshot()
+                    _import_id = importer.import_id
                 vault_map[None] = default_vault_id
                 extra_params['snapshot.path'] = snapshot_path
                 extra_params['snapshot.import_id'] = str(_import_id)
@@ -1776,13 +1786,32 @@ async def run_suite(
                     # extraction baseline, not post-scenario state.
                     # Atomic publish via tmp-dir + rename so a partial
                     # populate never replaces a known-good entry.
+                    # Export runs in-process via SnapshotExporter against
+                    # the same DB the server uses (no HTTP round-trip).
                     if cache_lookup is not None:
                         staged = _snapshot_cache.stage_path(
                             cache_lookup.cache_root,
                             cache_lookup.cache_path.name,
                         )
                         try:
-                            await api.export_snapshot(str(default_vault_id), str(staged))
+                            from memex_core.services.snapshot import (
+                                SnapshotExporter,
+                            )
+                            from memex_eval.snapshot.runtime import (
+                                build_embedding_identity,
+                                snapshot_runtime,
+                            )
+
+                            async with snapshot_runtime() as rt:
+                                identity = build_embedding_identity(rt.config)
+                                exporter = SnapshotExporter(
+                                    session=rt.session,
+                                    filestore=rt.filestore,
+                                    vault_id_or_name=default_vault_id,
+                                    output_dir=staged,
+                                    embedding_model=identity,
+                                )
+                                await exporter.export()
                             _snapshot_cache.mark_complete(staged)
                             _snapshot_cache.publish(staged, cache_lookup.cache_path)
                             extra_params['snapshot.cache_populated'] = 'true'

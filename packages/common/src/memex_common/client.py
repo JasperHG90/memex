@@ -173,34 +173,6 @@ class RemoteMemexAPI:
                 return False
             raise
 
-    async def export_snapshot(self, vault_id_or_name: str, output_path: str) -> dict[str, Any]:
-        """Export a vault to a server-local snapshot directory.
-
-        Only available when the server is started with
-        ``MEMEX_SERVER__EVAL_MODE=1``. The output path must reside under
-        the eval allowlist root. Returns the manifest summary (path,
-        snapshot_version, table_counts).
-        """
-        return await self._post(
-            '_eval/snapshot-export',
-            {'vault_id_or_name': vault_id_or_name, 'output_path': output_path},
-        )
-
-    async def import_snapshot(
-        self, snapshot_path: str, target_vault_name: str
-    ) -> tuple[UUID, UUID]:
-        """Import a V3 snapshot into a fresh vault on the server.
-
-        Only available when the server is started with
-        ``MEMEX_SERVER__EVAL_MODE=1``. Returns ``(target_vault_id, import_id)``;
-        the call blocks until the import has reached state ``complete``.
-        """
-        result = await self._post(
-            '_eval/snapshot-import',
-            {'snapshot_path': snapshot_path, 'target_vault_name': target_vault_name},
-        )
-        return UUID(result['target_vault_id']), UUID(result['import_id'])
-
     async def truncate_vault(self, vault_id: UUID) -> dict[str, int]:
         """Remove all content from a vault without deleting the vault itself."""
         result = await self._post(f'vaults/{vault_id}/truncate', data={})

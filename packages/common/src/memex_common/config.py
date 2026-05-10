@@ -1793,21 +1793,6 @@ class ServerConfig(BaseModel):
         ),
     )
 
-    eval_mode: bool = Field(
-        default=False,
-        description=(
-            'Eval-only mode. When True, the server enables the snapshot-import '
-            'route (`POST /api/v1/_eval/snapshot-import`) used by the eval suite '
-            'to skip LLM extraction by importing pre-extracted vault snapshots, '
-            'AND the background scheduler is short-circuited at startup so '
-            'imported MentalModel/VaultSummary/etc. rows stay exactly as the '
-            'snapshot shipped them (no re-reflection, no vault-summary refresh, '
-            'no lint passes, no KV TTL cleanup). DO NOT enable on production '
-            'servers. Set via MEMEX_SERVER__EVAL_MODE=1 or in the YAML config '
-            'under `server.eval_mode`.'
-        ),
-    )
-
     default_model: ModelConfig = Field(
         default_factory=lambda: ModelConfig(model='gemini/gemini-3-flash-preview'),
         description='System-wide default model. Sub-configs with model=None inherit this value.',

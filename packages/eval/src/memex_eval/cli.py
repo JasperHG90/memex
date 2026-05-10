@@ -726,11 +726,11 @@ def suite_run(
         None,
         '--from-snapshot',
         help=(
-            "Server-local path to a V3 snapshot directory, OR 'auto' for "
-            'content-hash cache lookup. With a path: import directly. '
-            "With 'auto': cache hit → import; cache miss → ingest+extract+populate "
-            'cache for the next run. The target server must be running with '
-            'MEMEX_SERVER__EVAL_MODE=1. Single-vault suites only.'
+            "Path to a V3 snapshot directory, OR 'auto' for content-hash cache "
+            'lookup. Import/export runs in-process against the same DB the '
+            "server uses. With a path: import directly. With 'auto': cache hit "
+            '→ import; cache miss → ingest+extract+populate cache. Single-vault '
+            'suites only.'
         ),
     ),
     reingest: bool = typer.Option(

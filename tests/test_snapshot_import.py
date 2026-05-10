@@ -8,10 +8,8 @@ load-bearing column preservation.
 from __future__ import annotations
 
 import json
-import os
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
 from uuid import UUID, uuid4
 
 import pytest
@@ -40,12 +38,13 @@ from memex_core.services.snapshot import (
     OBSERVATION_SCHEMA_VERSION,
     SNAPSHOT_VERSION,
     SnapshotExporter,
+)
+from memex_eval.snapshot import (
     SnapshotImporter,
     SnapshotImportRefused,
     ensure_eval_import_state_table,
-    validate_snapshot_dir,
 )
-from memex_core.services.snapshot.import_models import (
+from memex_eval.snapshot.import_models import (
     ObservationV1,
 )
 from memex_core.services.snapshot.manifest import (
@@ -53,7 +52,6 @@ from memex_core.services.snapshot.manifest import (
     SnapshotManifest,
     SnapshotVersion,
 )
-from memex_core.services.snapshot.path_validation import SnapshotPathError
 
 
 pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
@@ -271,7 +269,7 @@ async def eval_state_table(db_session: AsyncSession) -> None:
 
 class TestVersionGate:
     def test_pinned_major_minor_constants(self) -> None:
-        from memex_core.services.snapshot.import_models import (
+        from memex_eval.snapshot.import_models import (
             PINNED_SNAPSHOT_MAJOR,
             PINNED_SNAPSHOT_MINOR,
         )
@@ -290,7 +288,7 @@ class TestVersionGate:
 
     def test_higher_minor_accepted_via_extra_ignore(self) -> None:
         # Forward-compat: import models must ignore extra fields.
-        from memex_core.services.snapshot.import_models import VaultImport
+        from memex_eval.snapshot.import_models import VaultImport
 
         raw = {
             'id': str(uuid4()),
@@ -304,30 +302,6 @@ class TestVersionGate:
         v = VaultImport.model_validate(raw)
         assert v.name == 'test'
         assert not hasattr(v, 'future_field')
-
-
-class TestPathValidation:
-    def test_rejects_path_outside_root(self, tmp_path: Path) -> None:
-        root = tmp_path / 'allowlist'
-        root.mkdir()
-        outside = tmp_path / 'evil-snapshot'
-        outside.mkdir()
-        with pytest.raises(SnapshotPathError):
-            validate_snapshot_dir(outside, allowlist_root=root)
-
-    def test_accepts_path_inside_root(self, tmp_path: Path) -> None:
-        root = tmp_path / 'allowlist'
-        root.mkdir()
-        inside = root / 'snap'
-        inside.mkdir()
-        resolved = validate_snapshot_dir(inside, allowlist_root=root)
-        assert resolved == inside.resolve()
-
-    def test_rejects_nonexistent_path(self, tmp_path: Path) -> None:
-        root = tmp_path / 'allowlist'
-        root.mkdir()
-        with pytest.raises(SnapshotPathError):
-            validate_snapshot_dir(root / 'does-not-exist', allowlist_root=root)
 
 
 class TestEnumCoerce:
@@ -356,56 +330,6 @@ class TestEnumCoerce:
         # `str(_T.WORLD)` returns `'_T.WORLD'`; coerce_enum_value extracts `.value`.
         assert coerce_enum_value(_T.WORLD) == 'world'
         assert coerce_enum_value(_T.OBSERVATION) == 'observation'
-
-
-class TestPathValidationTOCTOU:
-    """O_NOFOLLOW + post-open realpath defense (Decision 9)."""
-
-    def test_open_validated_rejects_path_outside_root(self, tmp_path: Path) -> None:
-        """O_NOFOLLOW + /proc/self/fd realpath catches a file outside the root."""
-        from memex_core.services.snapshot.path_validation import open_validated
-
-        root = tmp_path / 'allowlist'
-        root.mkdir()
-        outside = tmp_path / 'outside.txt'
-        outside.write_text('secret', encoding='utf-8')
-        # Caller passes the absolute path of `outside`. Even if a clever
-        # attacker tricked validate_snapshot_dir, open_validated's
-        # post-open realpath check refuses.
-        with pytest.raises(SnapshotPathError, match='escaped allowlist'):
-            open_validated(outside.resolve(), expected_root=root)
-
-    def test_open_validated_refuses_symlink_at_leaf(self, tmp_path: Path) -> None:
-        """O_NOFOLLOW on the leaf path makes os.open raise ELOOP."""
-        from memex_core.services.snapshot.path_validation import open_validated
-
-        root = tmp_path / 'allowlist'
-        root.mkdir()
-        target = root / 'real.txt'
-        target.write_text('hi', encoding='utf-8')
-        link = root / 'leaf-link.txt'
-        link.symlink_to(target)
-        with pytest.raises(OSError):
-            # O_NOFOLLOW refuses to follow a leaf symlink → ELOOP.
-            open_validated(link, expected_root=root)
-
-    def test_open_validated_accepts_real_file(self, tmp_path: Path) -> None:
-        from memex_core.services.snapshot.path_validation import (
-            open_validated,
-            read_validated_text,
-        )
-
-        root = tmp_path / 'allowlist'
-        root.mkdir()
-        f = root / 'real.txt'
-        f.write_text('hello', encoding='utf-8')
-        fd = open_validated(f.resolve(), expected_root=root)
-        # open_validated returns a fd; close it.
-        import os as _os
-
-        _os.close(fd)
-        # read_validated_text round-trip
-        assert read_validated_text(f.resolve(), expected_root=root) == 'hello'
 
 
 class TestObservationV1:
@@ -545,7 +469,6 @@ async def test_round_trip_row_counts(
         filestore=None,
         embedding_backend=OnnxBackend(),
         snapshot_dir=snapshot_dir,
-        allowlist_root=tmp_path,
         target_vault_name='roundtrip-target',
     )
     target_vault_id = await importer.import_snapshot()
@@ -593,7 +516,6 @@ async def test_round_trip_preserves_mw_counters_and_timestamps(
         filestore=None,
         embedding_backend=OnnxBackend(),
         snapshot_dir=snapshot_dir,
-        allowlist_root=tmp_path,
         target_vault_name='roundtrip-mw',
     )
     target_vault_id = await importer.import_snapshot()
@@ -635,7 +557,6 @@ async def test_round_trip_uuid_preserved_for_intra_snapshot_fks(
         filestore=None,
         embedding_backend=OnnxBackend(),
         snapshot_dir=snapshot_dir,
-        allowlist_root=tmp_path,
         target_vault_name='roundtrip-fk',
     )
     target_vault_id = await importer.import_snapshot()
@@ -687,7 +608,6 @@ async def test_round_trip_embeddings_match_extraction_format(
         filestore=None,
         embedding_backend=OnnxBackend(),
         snapshot_dir=snapshot_dir,
-        allowlist_root=tmp_path,
         target_vault_name='roundtrip-format',
     )
     target_vault_id = await importer.import_snapshot()
@@ -761,7 +681,6 @@ async def test_round_trip_embeddings_are_filled(
         filestore=None,
         embedding_backend=OnnxBackend(),
         snapshot_dir=snapshot_dir,
-        allowlist_root=tmp_path,
         target_vault_name='roundtrip-embed',
     )
     target_vault_id = await importer.import_snapshot()
@@ -819,7 +738,6 @@ async def test_import_refuses_global_vault(
         filestore=None,
         embedding_backend=OnnxBackend(),
         snapshot_dir=snapshot_dir,
-        allowlist_root=tmp_path,
         target_vault_name='global-refuse',
     )
     with pytest.raises(SnapshotImportRefused, match='global vault'):
@@ -853,7 +771,6 @@ async def test_import_refuses_alembic_head_mismatch(
         filestore=None,
         embedding_backend=OnnxBackend(),
         snapshot_dir=snapshot_dir,
-        allowlist_root=tmp_path,
         target_vault_name='alembic-refuse',
     )
     with pytest.raises(SnapshotImportRefused, match='Alembic head mismatch'):
@@ -903,7 +820,6 @@ async def test_import_refuses_major_version_mismatch(
         filestore=None,
         embedding_backend=OnnxBackend(),
         snapshot_dir=snapshot_dir,
-        allowlist_root=tmp_path,
         target_vault_name='major-refuse',
     )
     with pytest.raises(SnapshotImportRefused, match='Snapshot MAJOR'):
@@ -929,7 +845,6 @@ async def test_import_refuses_remote_embedding_backend(
         filestore=None,
         embedding_backend=LitellmEmbeddingBackend(model='openai/text-embedding-3-small'),
         snapshot_dir=snapshot_dir,
-        allowlist_root=tmp_path,
         target_vault_name='remote-refuse',
     )
     with pytest.raises(SnapshotImportRefused, match='Remote'):
@@ -955,7 +870,6 @@ async def test_import_records_state_complete(
         filestore=None,
         embedding_backend=OnnxBackend(),
         snapshot_dir=snapshot_dir,
-        allowlist_root=tmp_path,
         target_vault_name='state-complete',
     )
     target_vault_id = await importer.import_snapshot()
@@ -989,7 +903,6 @@ async def test_import_second_attempt_refused(
         filestore=None,
         embedding_backend=OnnxBackend(),
         snapshot_dir=snapshot_dir,
-        allowlist_root=tmp_path,
         target_vault_name='dup-1',
     )
     target_id = await importer1.import_snapshot()
@@ -999,7 +912,6 @@ async def test_import_second_attempt_refused(
         filestore=None,
         embedding_backend=OnnxBackend(),
         snapshot_dir=snapshot_dir,
-        allowlist_root=tmp_path,
         target_vault_name='dup-2',
     )
     importer2._target_vault_id = target_id  # force collision
@@ -1033,7 +945,6 @@ async def test_higher_minor_manifest_accepted(
         filestore=None,
         embedding_backend=OnnxBackend(),
         snapshot_dir=snapshot_dir,
-        allowlist_root=tmp_path,
         target_vault_name='minor-bump',
     )
     target_vault_id = await importer.import_snapshot()
@@ -1082,7 +993,6 @@ async def test_import_resume_per_state(
         filestore=None,
         embedding_backend=OnnxBackend(),
         snapshot_dir=snapshot_dir,
-        allowlist_root=tmp_path,
         target_vault_name=f'resume-{forced_state}',
     )
     target_vault_id = await importer1.import_snapshot()
@@ -1095,7 +1005,6 @@ async def test_import_resume_per_state(
         filestore=None,
         embedding_backend=OnnxBackend(),
         snapshot_dir=snapshot_dir,
-        allowlist_root=tmp_path,
         target_vault_name=f'resume-{forced_state}',
     )
     target_vault_id_2 = await importer2.import_snapshot()
@@ -1136,13 +1045,12 @@ async def test_import_resume_does_not_clobber_state(
         filestore=None,
         embedding_backend=OnnxBackend(),
         snapshot_dir=snapshot_dir,
-        allowlist_root=tmp_path,
         target_vault_name='resume-noclobber',
     )
     target_vault_id = await importer1.import_snapshot()
     await _set_state(db_session, target_vault_id, 'embedded')
 
-    import memex_core.services.snapshot.restore as restore_mod
+    import memex_eval.snapshot.restore as restore_mod
 
     async def boom(self):  # type: ignore[no-untyped-def]
         raise RuntimeError('simulated crash before Phase E commit')
@@ -1153,7 +1061,6 @@ async def test_import_resume_does_not_clobber_state(
         filestore=None,
         embedding_backend=OnnxBackend(),
         snapshot_dir=snapshot_dir,
-        allowlist_root=tmp_path,
         target_vault_name='resume-noclobber',
     )
     with pytest.raises(RuntimeError, match='simulated crash'):
@@ -1192,7 +1099,6 @@ async def test_import_resumes_partial(
         filestore=None,
         embedding_backend=OnnxBackend(),
         snapshot_dir=snapshot_dir,
-        allowlist_root=tmp_path,
         target_vault_name='resume-target',
     )
     target_vault_id_1 = await importer1.import_snapshot()
@@ -1212,7 +1118,6 @@ async def test_import_resumes_partial(
         filestore=None,
         embedding_backend=OnnxBackend(),
         snapshot_dir=snapshot_dir,
-        allowlist_root=tmp_path,
         target_vault_name='resume-target',
     )
     target_vault_id_2 = await importer2.import_snapshot()
@@ -1245,7 +1150,6 @@ async def test_import_refuses_completed_resubmit(
         filestore=None,
         embedding_backend=OnnxBackend(),
         snapshot_dir=snapshot_dir,
-        allowlist_root=tmp_path,
         target_vault_name='complete-1',
     )
     await importer1.import_snapshot()
@@ -1255,7 +1159,6 @@ async def test_import_refuses_completed_resubmit(
         filestore=None,
         embedding_backend=OnnxBackend(),
         snapshot_dir=snapshot_dir,
-        allowlist_root=tmp_path,
         target_vault_name='complete-2',
     )
     with pytest.raises(SnapshotImportRefused, match='already imported'):
@@ -1280,7 +1183,6 @@ async def test_import_refuses_existing_vault_name(
         filestore=None,
         embedding_backend=OnnxBackend(),
         snapshot_dir=snapshot_dir,
-        allowlist_root=tmp_path,
         target_vault_name='import-test',  # collides
     )
     with pytest.raises(SnapshotImportRefused, match='already exists'):
@@ -1338,171 +1240,10 @@ async def test_import_refuses_entity_canonical_name_collision(
         filestore=None,
         embedding_backend=OnnxBackend(),
         snapshot_dir=snapshot_dir,
-        allowlist_root=tmp_path,
         target_vault_name='entity-collision',
     )
     with pytest.raises(SnapshotImportRefused, match='canonical_name'):
         await importer.import_snapshot()
-
-
-async def test_eval_route_full_http_round_trip(
-    db_session: AsyncSession,
-    populated_vault: dict[str, UUID],
-    tmp_path: Path,
-    eval_state_table: None,
-) -> None:
-    """End-to-end through the HTTP route: export → call POST → assert vault.
-
-    Builds a minimal FastAPI app with the eval-snapshot router mounted
-    (matching what `eval_mode=True` does in production lifespan), wires
-    ``app.state.api`` with the test session's metastore + filestore, and
-    posts a real snapshot path. Verifies the route's request-validation,
-    success path, and response shape end-to-end.
-    """
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-
-    from memex_core.server.eval_snapshot import router as eval_router
-
-    src_vault = populated_vault['vault_id']
-    snapshot_dir = tmp_path / 'snapshot'
-    snapshot_dir.mkdir()
-    await _export(db_session, src_vault, snapshot_dir)
-    await _delete_source_vault(db_session, src_vault)
-
-    # Build a stand-in `api` with the attributes the route consumes.
-    bind = db_session.bind
-    assert bind is not None
-
-    class _Cfg:
-        class server:
-            eval_mode = True
-            embedding_model = OnnxBackend()
-
-    class _MS:
-        engine = bind
-
-        @staticmethod
-        def session():
-            from contextlib import asynccontextmanager
-
-            from sqlalchemy.ext.asyncio import async_sessionmaker
-            from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelSession
-
-            maker = async_sessionmaker(bind=bind, class_=SQLModelSession, expire_on_commit=False)
-
-            @asynccontextmanager
-            async def _ctx():
-                async with maker() as s:
-                    yield s
-
-            return _ctx()
-
-    class _Api:
-        config = _Cfg()
-        metastore = _MS()
-        filestore = None
-
-    app = FastAPI()
-    app.state.api = _Api()
-    app.include_router(eval_router)
-
-    os.environ['MEMEX_EVAL_SNAPSHOT_ROOT'] = str(tmp_path)
-    try:
-        with TestClient(app) as client_:
-            response = client_.post(
-                '/api/v1/_eval/snapshot-import',
-                json={
-                    'snapshot_path': str(snapshot_dir),
-                    'target_vault_name': 'http-roundtrip',
-                },
-            )
-            assert response.status_code == 201, response.text
-            body = response.json()
-            assert UUID(body['target_vault_id']) is not None
-            assert UUID(body['import_id']) is not None
-    finally:
-        os.environ.pop('MEMEX_EVAL_SNAPSHOT_ROOT', None)
-
-
-async def test_eval_route_returns_400_on_path_outside_allowlist(
-    db_session: AsyncSession,
-    tmp_path: Path,
-    eval_state_table: None,
-) -> None:
-    """Refuses with 400 when snapshot_path is outside the allowlist root."""
-    from fastapi import FastAPI
-    from fastapi.testclient import TestClient
-
-    from memex_core.server.eval_snapshot import router as eval_router
-
-    bind = db_session.bind
-    assert bind is not None
-
-    class _Cfg:
-        class server:
-            eval_mode = True
-            embedding_model = OnnxBackend()
-
-    class _MS:
-        engine = bind
-
-        @staticmethod
-        def session():
-            from contextlib import asynccontextmanager
-
-            from sqlalchemy.ext.asyncio import async_sessionmaker
-            from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelSession
-
-            maker = async_sessionmaker(bind=bind, class_=SQLModelSession, expire_on_commit=False)
-
-            @asynccontextmanager
-            async def _ctx():
-                async with maker() as s:
-                    yield s
-
-            return _ctx()
-
-    class _Api:
-        config = _Cfg()
-        metastore = _MS()
-        filestore = None
-
-    app = FastAPI()
-    app.state.api = _Api()
-    app.include_router(eval_router)
-
-    allowlist_root = tmp_path / 'allowlist'
-    allowlist_root.mkdir()
-    outside = tmp_path / 'outside'
-    outside.mkdir()
-
-    os.environ['MEMEX_EVAL_SNAPSHOT_ROOT'] = str(allowlist_root)
-    try:
-        with TestClient(app) as client_:
-            response = client_.post(
-                '/api/v1/_eval/snapshot-import',
-                json={
-                    'snapshot_path': str(outside),
-                    'target_vault_name': 'rejected',
-                },
-            )
-            assert response.status_code == 400
-            # Must NOT echo the absolute path verbatim into a 500.
-            assert 'Internal error' not in response.text
-    finally:
-        os.environ.pop('MEMEX_EVAL_SNAPSHOT_ROOT', None)
-
-
-def test_eval_route_absent_when_eval_mode_off(client: Any) -> None:
-    """The eval-mode test fixture starts the server WITHOUT eval_mode set,
-    so the snapshot-import route must not be reachable."""
-    response = client.post(
-        '/api/v1/_eval/snapshot-import',
-        json={'snapshot_path': '/tmp/whatever', 'target_vault_name': 'x'},
-    )
-    # 404 (route not registered) — NOT 400/403/422.
-    assert response.status_code == 404
 
 
 async def test_original_text_none_preserved(
@@ -1537,7 +1278,6 @@ async def test_original_text_none_preserved(
         filestore=None,
         embedding_backend=OnnxBackend(),
         snapshot_dir=snapshot_dir,
-        allowlist_root=tmp_path,
         target_vault_name='none-text-target',
     )
     target_vault_id = await importer.import_snapshot()
@@ -1585,7 +1325,7 @@ async def test_phase_c_records_state_with_no_assets(
     await _delete_source_vault(db_session, src_vault)
 
     # Patch Phase D + E so we can observe Phase C's state row directly.
-    import memex_core.services.snapshot.restore as restore_mod
+    import memex_eval.snapshot.restore as restore_mod
 
     orig_d = restore_mod.SnapshotImporter._phase_d_embeddings_and_reindex
     orig_e = restore_mod.SnapshotImporter._phase_e_mark_complete
@@ -1599,7 +1339,6 @@ async def test_phase_c_records_state_with_no_assets(
         filestore=filestore,
         embedding_backend=OnnxBackend(),
         snapshot_dir=snapshot_dir,
-        allowlist_root=tmp_path,
         target_vault_name='no-assets-phase-c',
     )
     try:
@@ -1671,7 +1410,6 @@ async def test_round_trip_with_filestore_assets(
         filestore=filestore,
         embedding_backend=OnnxBackend(),
         snapshot_dir=snapshot_dir,
-        allowlist_root=tmp_path,
         target_vault_name='filestore-roundtrip',
     )
     target_vault_id = await importer.import_snapshot()
@@ -1713,7 +1451,6 @@ async def test_import_skips_missing_optional_files(
         filestore=None,
         embedding_backend=OnnxBackend(),
         snapshot_dir=snapshot_dir,
-        allowlist_root=tmp_path,
         target_vault_name='missing-optional',
     )
     target_vault_id = await importer.import_snapshot()

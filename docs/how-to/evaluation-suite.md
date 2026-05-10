@@ -176,7 +176,7 @@ memex-eval suite run [<name>|--all]
 | `--notes-file` | none | Read `--notes` body from a file (mutually exclusive with `--notes`) |
 | `--no-llm-judge` | off | Skip LLMJudge / UsefulAtK scenarios; deterministic-only run (faster, free) |
 | `--judge-model` | `gemini/gemini-3-flash-preview` (or `EVAL_JUDGE_MODEL` env) | Override LLM judge model (litellm format) |
-| `--from-snapshot` | none | Either a server-local path to a V3 snapshot directory OR `auto`. With a path: import directly. With `auto`: cache hit → import; cache miss → ingest+extract+populate cache for the next run. Server must run with `MEMEX_SERVER__EVAL_MODE=1`. Single-vault suites only (multi-vault → `MultiVaultImportNotSupported`). See "Snapshot import" below |
+| `--from-snapshot` | none | Either a path to a V3 snapshot directory OR `auto`. With a path: import directly. With `auto`: cache hit → import; cache miss → ingest+extract+populate cache for the next run. Import/export run in-process against the same DB the server uses (no `eval_mode` flag, no server route). Single-vault suites only (multi-vault → `MultiVaultImportNotSupported`). See "Snapshot import" below |
 | `--reingest` | off | Force ingest+extract even on a cache hit (only with `--from-snapshot=auto`). Cache entry is overwritten on success. Use to refresh the cache after extraction-affecting code changes |
 | `--snapshot-cache-dir` | platformdirs default | Override the cache root used by `--from-snapshot=auto`. Falls back to `MEMEX_EVAL_SNAPSHOT_ROOT` env, then `platformdirs.user_cache_dir('memex-eval', 'memex')` |
 | `--verbose` / `-v` | off | DEBUG-level logging |
@@ -274,37 +274,24 @@ Two modes, manual and auto-cached.
                          → clears the cache entry, re-extracts, repopulates
 ```
 
-The cache root resolves in priority order: `--snapshot-cache-dir` flag → `MEMEX_EVAL_SNAPSHOT_ROOT` env → platformdirs default (`~/.cache/memex-eval/` on Linux). The server's import/export-route allowlist root resolves through the SAME env + the SAME platformdirs default — they MUST agree (the populate path posts the cache directory to the export route, which validates it against the allowlist). Cache key format: `<suite_name>-<sources_hash[:16]>`. A cache entry is valid only when both `manifest.json` and `_complete.marker` are present; partially-written entries are cleaned up by the next lookup. Populate is atomic — the runner stages into a tmp directory and renames into the final slot only after the marker is written, so a partial export never replaces an existing valid cache entry.
+The cache root resolves in priority order: `--snapshot-cache-dir` flag → `MEMEX_EVAL_SNAPSHOT_ROOT` env → platformdirs default (`~/.cache/memex-eval/` on Linux). Cache key format: `<suite_name>-<sources_hash[:16]>`. A cache entry is valid only when both `manifest.json` and `_complete.marker` are present; partially-written entries are cleaned up by the next lookup. Populate is atomic — the runner stages into a tmp directory and renames into the final slot only after the marker is written, so a partial export never replaces an existing valid cache entry.
 
 The runner detects `--from-snapshot`, imports the snapshot into a fresh ephemeral vault, and skips ingest + extraction-wait. Subsequent retrieval/scoring phases see an indistinguishable vault state from a freshly-extracted one.
 
-### Server-side prerequisite — `MEMEX_SERVER__EVAL_MODE=1`
+### Architecture: in-process, not behind a route
 
-The import route is **disabled by default**. Production servers never see it. To enable:
+`memex_eval` owns the snapshot lifecycle end-to-end. Import and export run in-process against the same Postgres + FileStore the server is configured with (resolved from the standard `MEMEX_*` env vars via `MemexConfig`). There is **no eval-mode flag**, **no server route**, **no path allowlist** — the eval runner reads/writes the DB directly. The server runs identically whether eval is running or not; the background scheduler (reflection, vault summary, etc.) is **not** disabled — reflection scenarios remain testable.
 
-```bash
-MEMEX_SERVER__EVAL_MODE=1 memex server start
-```
-
-When eval mode is on, the server logs a loud `EVAL MODE ENABLED — DO NOT RUN IN PRODUCTION` banner and short-circuits the entire background scheduler — no reflection, no vault-summary refresh, no KV-TTL cleanup, no lint, no consolidation. This keeps imported MentalModel/VaultSummary rows byte-identical to the snapshot, so eval results are reproducible.
+Practically: start `memex serve` normally, then run `memex-eval suite run --from-snapshot=auto` in the same env (so `MemexConfig.load()` resolves to the same DB). The runner opens its own session, applies the idempotent `eval_import_state` DDL, and drives the importer/exporter through the snapshot phases.
 
 ### Snapshot CLI surface
 
 ```
 memex-eval snapshot create <vault> [--output DIR]   # thin wrapper around `memex vault snapshot export`
-memex-eval snapshot list                            # enumerate snapshots under the allowlist root
+memex-eval snapshot list                            # enumerate snapshots under the cache root
 ```
 
-`--output` defaults to `$MEMEX_EVAL_SNAPSHOT_ROOT/<vault>-<timestamp>/` (env fallback: platformdirs user cache, e.g. `~/.cache/memex-eval/` on Linux). The allowlist root is the only path the eval-import/export route will accept; the cache root for `--from-snapshot=auto` resolves through the same env + default so manual snapshots and cached snapshots coexist in the same root.
-
-### Path validation (security)
-
-The route validates the path strictly:
-- Resolves symlinks, requires the path to exist
-- Refuses paths outside the allowlist root
-- Opens every file with `O_NOFOLLOW` and re-checks the resolved path post-open (TOCTOU defense)
-
-Set `MEMEX_EVAL_SNAPSHOT_ROOT` to override the default allowlist root.
+`--output` defaults to `$MEMEX_EVAL_SNAPSHOT_ROOT/<vault>-<timestamp>/` (env fallback: platformdirs user cache, e.g. `~/.cache/memex-eval/` on Linux). Manual snapshots and the auto-mode cache coexist in the same root.
 
 ### Refusal cases
 

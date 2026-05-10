@@ -88,7 +88,7 @@ memex-eval suite run basic_extraction --from-snapshot=auto
 memex-eval suite run basic_extraction --from-snapshot=auto --reingest
 ```
 
-Server-side requirement: start the server with `MEMEX_SERVER__EVAL_MODE=1` so the eval-only import/export routes mount and the background scheduler short-circuits. Cache root defaults to `platformdirs.user_cache_dir('memex-eval', 'memex')` (e.g. `~/.cache/memex-eval/` on Linux); override with `--snapshot-cache-dir` or `MEMEX_EVAL_SNAPSHOT_ROOT`. The same env var controls the server's path-allowlist root, so client and server agree by default. Limitations: single-vault suites only; remote (LiteLLM) embedding backends rejected; one snapshot per DB.
+Snapshot import/export runs **in-process** in the eval runner against the same Postgres + FileStore the server is configured with — there is no `eval_mode` flag, no server route, no allowlist. Reflection and the rest of the background scheduler keep running normally so reflection scenarios remain testable. Cache root defaults to `platformdirs.user_cache_dir('memex-eval', 'memex')` (e.g. `~/.cache/memex-eval/` on Linux); override with `--snapshot-cache-dir` or `MEMEX_EVAL_SNAPSHOT_ROOT`. Limitations: single-vault suites only; remote (LiteLLM) embedding backends rejected; one snapshot per DB.
 
 ### External benchmarks (LoCoMo)
 

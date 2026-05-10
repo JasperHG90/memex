@@ -262,60 +262,20 @@ class TestAtomicPublish:
 
 
 # ----------------------------------------------------------------------
-# Server route tests — POST /api/v1/_eval/snapshot-export
-
-
-def _build_app_with_eval_routes(db_session: AsyncSession):
-    """Construct a stand-in FastAPI app that mounts the eval-snapshot
-    router and exposes a fake ``app.state.api`` whose metastore points
-    at the test session's bound engine."""
-    from contextlib import asynccontextmanager
-
-    from fastapi import FastAPI
-    from sqlalchemy.ext.asyncio import async_sessionmaker
-    from sqlmodel.ext.asyncio.session import AsyncSession as SQLModelSession
-
-    from memex_core.server.eval_snapshot import router as eval_router
-
-    bind = db_session.bind
-    assert bind is not None
-    maker = async_sessionmaker(bind=bind, class_=SQLModelSession, expire_on_commit=False)
-
-    class _Cfg:
-        class server:
-            eval_mode = True
-            embedding_model = OnnxBackend()
-
-    class _MS:
-        engine = bind
-
-        @staticmethod
-        def session():
-            @asynccontextmanager
-            async def _ctx():
-                async with maker() as s:
-                    yield s
-
-            return _ctx()
-
-    class _Api:
-        config = _Cfg()
-        metastore = _MS()
-        filestore = None
-
-    app = FastAPI()
-    app.state.api = _Api()
-    app.include_router(eval_router)
-    return app
+# In-process integration: end-to-end cache lifecycle using the exporter +
+# importer directly. No HTTP route, no eval-mode flag. The cache module
+# is the only thing under test here — the importer/exporter have their
+# own coverage in test_snapshot_import.py.
 
 
 @pytest_asyncio.fixture
 async def small_vault(db_session: AsyncSession) -> dict[str, UUID]:
-    """Minimal vault used by export-route tests."""
+    """Minimal vault used by the cache lifecycle test."""
+    import hashlib
+
     vault = Vault(name='cache-export-test', description='cache test')
     db_session.add(vault)
     await db_session.flush()
-    import hashlib
 
     body = 'cache body'
     note = Note(
@@ -331,203 +291,79 @@ async def small_vault(db_session: AsyncSession) -> dict[str, UUID]:
     return {'vault_id': vault.id, 'note_id': note.id}
 
 
-async def test_eval_export_route_writes_snapshot(
-    db_session: AsyncSession,
-    small_vault: dict[str, UUID],
-    tmp_path: Path,
-) -> None:
-    """POST /snapshot-export → writes a complete snapshot dir under the
-    allowlist root."""
-    from fastapi.testclient import TestClient
-
-    allowlist = tmp_path / 'cache'
-    allowlist.mkdir()
-    output_dir = allowlist / 'snap-1'
-
-    os.environ['MEMEX_EVAL_SNAPSHOT_ROOT'] = str(allowlist)
-    try:
-        app = _build_app_with_eval_routes(db_session)
-        with TestClient(app) as client:
-            response = client.post(
-                '/api/v1/_eval/snapshot-export',
-                json={
-                    'vault_id_or_name': str(small_vault['vault_id']),
-                    'output_path': str(output_dir),
-                },
-            )
-            assert response.status_code == 201, response.text
-            body = response.json()
-            assert body['snapshot_path'] == str(output_dir.resolve())
-            assert body['snapshot_version'].startswith('1.')
-            assert body['table_counts']['notes'] == 1
-
-        assert (output_dir / 'manifest.json').is_file()
-        assert (output_dir / 'vault.json').is_file()
-        manifest = json.loads((output_dir / 'manifest.json').read_text())
-        assert manifest['source_vault_name'] == 'cache-export-test'
-    finally:
-        os.environ.pop('MEMEX_EVAL_SNAPSHOT_ROOT', None)
-
-
-async def test_eval_export_route_refuses_path_outside_allowlist(
-    db_session: AsyncSession,
-    small_vault: dict[str, UUID],
-    tmp_path: Path,
-) -> None:
-    from fastapi.testclient import TestClient
-
-    allowlist = tmp_path / 'cache'
-    allowlist.mkdir()
-    outside = tmp_path / 'outside'
-
-    os.environ['MEMEX_EVAL_SNAPSHOT_ROOT'] = str(allowlist)
-    try:
-        app = _build_app_with_eval_routes(db_session)
-        with TestClient(app) as client:
-            response = client.post(
-                '/api/v1/_eval/snapshot-export',
-                json={
-                    'vault_id_or_name': str(small_vault['vault_id']),
-                    'output_path': str(outside),
-                },
-            )
-            assert response.status_code == 400
-            assert 'Internal error' not in response.text
-    finally:
-        os.environ.pop('MEMEX_EVAL_SNAPSHOT_ROOT', None)
-
-
-async def test_eval_export_route_refuses_overwrite_existing_snapshot(
-    db_session: AsyncSession,
-    small_vault: dict[str, UUID],
-    tmp_path: Path,
-) -> None:
-    """Re-exporting into a dir that already has manifest.json refuses
-    (the V3 contract; cache-populate must clear first)."""
-    from fastapi.testclient import TestClient
-
-    allowlist = tmp_path / 'cache'
-    allowlist.mkdir()
-    output_dir = allowlist / 'snap-existing'
-    output_dir.mkdir()
-    (output_dir / 'manifest.json').write_text('{}', encoding='utf-8')
-
-    os.environ['MEMEX_EVAL_SNAPSHOT_ROOT'] = str(allowlist)
-    try:
-        app = _build_app_with_eval_routes(db_session)
-        with TestClient(app) as client:
-            response = client.post(
-                '/api/v1/_eval/snapshot-export',
-                json={
-                    'vault_id_or_name': str(small_vault['vault_id']),
-                    'output_path': str(output_dir),
-                },
-            )
-            # SnapshotExportError → 409
-            assert response.status_code == 409
-    finally:
-        os.environ.pop('MEMEX_EVAL_SNAPSHOT_ROOT', None)
-
-
 async def test_cache_round_trip_export_then_import(
     db_session: AsyncSession,
     small_vault: dict[str, UUID],
     tmp_path: Path,
 ) -> None:
-    """Export → mark complete → lookup hits → import succeeds.
-
-    Exercises the full cache lifecycle the auto-mode runner relies on.
+    """Export via SnapshotExporter -> mark_complete -> lookup hits ->
+    import via SnapshotImporter. Mirrors the runner's auto-mode flow
+    (populate after extraction; subsequent run imports). No route, no
+    HTTP — direct in-process invocation against the testcontainer DB.
     """
-    from fastapi.testclient import TestClient
-
-    from memex_core.services.snapshot import (
+    from memex_eval.snapshot import (
         SnapshotImporter,
         ensure_eval_import_state_table,
     )
+    from memex_core.memory.models.base import MODEL_REGISTRY
+    from memex_core.memory.sql_models import EMBEDDING_DIMENSION
+    from memex_core.services.snapshot import (
+        EmbeddingModelIdentity,
+        SnapshotExporter,
+    )
 
-    # Apply the eval_import_state DDL once for the import side.
+    # Ensure the eval_import_state table exists (idempotent DDL the
+    # eval runner applies before its first import).
     conn = await db_session.connection()
     await ensure_eval_import_state_table(conn)
     await db_session.commit()
 
-    allowlist = tmp_path / 'cache'
-    allowlist.mkdir()
-    cache_root = _cache.resolve_cache_root(allowlist)
-    cache_path = cache_root / _cache.cache_key('demo-suite', 'a' * 64)
+    cache_root = _cache.resolve_cache_root(tmp_path / 'cache')
+    cache_key = _cache.cache_key('demo-suite', 'a' * 64)
+    staged = _cache.stage_path(cache_root, cache_key)
 
-    os.environ['MEMEX_EVAL_SNAPSHOT_ROOT'] = str(allowlist)
-    try:
-        app = _build_app_with_eval_routes(db_session)
-        with TestClient(app) as client:
-            response = client.post(
-                '/api/v1/_eval/snapshot-export',
-                json={
-                    'vault_id_or_name': str(small_vault['vault_id']),
-                    'output_path': str(cache_path),
-                },
-            )
-            assert response.status_code == 201, response.text
-        # Mark complete + verify lookup hits.
-        _cache.mark_complete(cache_path)
-        result = _cache.lookup(cache_root, 'demo-suite', 'a' * 64)
-        assert result.hit
-        assert result.cache_path == cache_path
-
-        # Now drop the source vault and re-import via V12.
-        from sqlalchemy import delete
-
-        await db_session.execute(delete(Note).where(Note.vault_id == small_vault['vault_id']))
-        await db_session.execute(delete(Vault).where(Vault.id == small_vault['vault_id']))
-        await db_session.commit()
-
-        importer = SnapshotImporter(
-            session=db_session,
-            filestore=None,
-            embedding_backend=OnnxBackend(),
-            snapshot_dir=cache_path,
-            allowlist_root=allowlist,
-            target_vault_name='cache-import-target',
-        )
-        target = await importer.import_snapshot()
-        assert target is not None
-    finally:
-        os.environ.pop('MEMEX_EVAL_SNAPSHOT_ROOT', None)
-
-
-async def test_eval_export_route_absent_when_eval_mode_off(client) -> None:
-    """The shared `client` fixture starts the app with eval_mode=False
-    (per conftest); the export route must not be reachable."""
-    response = client.post(
-        '/api/v1/_eval/snapshot-export',
-        json={'vault_id_or_name': 'whatever', 'output_path': '/tmp/x'},
+    # Export (the cache-populate step in the runner).
+    exporter = SnapshotExporter(
+        session=db_session,
+        filestore=None,
+        vault_id_or_name=small_vault['vault_id'],
+        output_dir=staged,
+        embedding_model=EmbeddingModelIdentity(
+            name=str(MODEL_REGISTRY['embedding'].repo_id),
+            dim=EMBEDDING_DIMENSION,
+            hash=str(MODEL_REGISTRY['embedding'].revision),
+        ),
     )
-    assert response.status_code == 404
+    await exporter.export()
+    # The exporter sets the transaction READ ONLY for its duration;
+    # release it before the rest of the test issues writes.
+    await db_session.rollback()
+    _cache.mark_complete(staged)
 
+    final_path = cache_root / cache_key
+    _cache.publish(staged, final_path)
 
-async def test_export_route_resolves_vault_name(
-    db_session: AsyncSession,
-    small_vault: dict[str, UUID],
-    tmp_path: Path,
-) -> None:
-    """Vault selector accepts a name string in addition to UUID."""
-    from fastapi.testclient import TestClient
+    # Lookup must now hit.
+    result = _cache.lookup(cache_root, 'demo-suite', 'a' * 64)
+    assert result.hit
+    assert result.cache_path == final_path
+    manifest = json.loads((final_path / 'manifest.json').read_text())
+    assert manifest['source_vault_name'] == 'cache-export-test'
 
-    allowlist = tmp_path / 'cache'
-    allowlist.mkdir()
-    output_dir = allowlist / 'by-name'
+    # Drop the source vault to prove the import path actually
+    # reconstructs the data (no relying on leftover rows).
+    from sqlalchemy import delete
 
-    os.environ['MEMEX_EVAL_SNAPSHOT_ROOT'] = str(allowlist)
-    try:
-        app = _build_app_with_eval_routes(db_session)
-        with TestClient(app) as client:
-            response = client.post(
-                '/api/v1/_eval/snapshot-export',
-                json={
-                    'vault_id_or_name': 'cache-export-test',
-                    'output_path': str(output_dir),
-                },
-            )
-            assert response.status_code == 201, response.text
-        assert (output_dir / 'manifest.json').is_file()
-    finally:
-        os.environ.pop('MEMEX_EVAL_SNAPSHOT_ROOT', None)
+    await db_session.execute(delete(Note).where(Note.vault_id == small_vault['vault_id']))
+    await db_session.execute(delete(Vault).where(Vault.id == small_vault['vault_id']))
+    await db_session.commit()
+
+    importer = SnapshotImporter(
+        session=db_session,
+        filestore=None,
+        embedding_backend=OnnxBackend(),
+        snapshot_dir=final_path,
+        target_vault_name='cache-import-target',
+    )
+    target = await importer.import_snapshot()
+    assert target is not None

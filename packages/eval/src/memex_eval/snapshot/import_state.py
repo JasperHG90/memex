@@ -1,9 +1,10 @@
-"""eval_import_state table — eval-only tracking for V12 imports.
+"""eval_import_state table — tracks V12 snapshot imports.
 
-Lives outside the alembic chain on purpose: this table only exists on
-servers running with ``server.eval_mode=True``. Production servers never
-see it. Idempotent ``CREATE TABLE IF NOT EXISTS`` runs at server startup
-when eval-mode is on.
+Owned by ``memex_eval``. Lives outside the alembic chain because it is
+eval-only state — production servers don't need it on disk. The eval
+runner calls ``ensure_eval_import_state_table`` against its DB
+connection before invoking ``SnapshotImporter``; the DDL is idempotent
+so concurrent eval processes don't race.
 
 Columns:
 
@@ -20,8 +21,8 @@ State machine:
 
     staging -> db_committed -> assets_committed -> embedded -> complete
 
-Import is only "done" once ``state='complete'``. Sweep deletes rows in any
-non-complete state older than a configurable threshold.
+Import is only "done" once ``state='complete'``. A sweep helper deletes
+rows in any non-complete state older than a configurable threshold.
 """
 
 from __future__ import annotations
@@ -59,7 +60,8 @@ VALID_STATES = ('staging', 'db_committed', 'assets_committed', 'embedded', 'comp
 async def ensure_eval_import_state_table(conn: AsyncConnection) -> None:
     """Idempotently create the eval_import_state table + unique index.
 
-    Called from the server lifespan startup hook when ``eval_mode=True``.
+    Called by the eval runner before its first ``SnapshotImporter`` run
+    against a given DB.
     """
     await conn.execute(text(EVAL_IMPORT_STATE_DDL_TABLE))
     await conn.execute(text(EVAL_IMPORT_STATE_DDL_INDEX))
