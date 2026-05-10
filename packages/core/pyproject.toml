@@ -51,6 +51,7 @@ dependencies = [
     "slowapi>=0.1.9",
     "structlog>=25.5.0",
     "alembic>=1.15.0",
+    "platformdirs>=4",
     "dateparser>=1.2.2",
     "pymupdf-layout>=1.27.2",
     "python-multipart>=0.0.22",

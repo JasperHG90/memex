@@ -74,7 +74,8 @@ logger = logging.getLogger('memex.core.server')
 # Parse CORS config at module level (middleware must be added before app starts).
 # The full config is re-parsed in lifespan() so test fixtures can set env vars
 # before the server starts.
-_cors_config = parse_memex_config().server.cors
+_module_config = parse_memex_config()
+_cors_config = _module_config.server.cors
 
 
 @asynccontextmanager
