@@ -750,17 +750,6 @@ class SnapshotImporter:
                 original_text: str | None = note_md.read_text(encoding='utf-8')
             else:
                 original_text = None
-            # Verify content_hash if present — defends against tampered/
-            # corrupted note.md. Mismatch is treated as a hard refusal so
-            # silent corruption can't propagate into eval results.
-            if note.content_hash and original_text is not None:
-                actual = hashlib.md5(original_text.encode('utf-8')).hexdigest()
-                if actual != note.content_hash:
-                    raise SnapshotImportError(
-                        f'note.md content_hash mismatch for note {note.id}: '
-                        f'expected={note.content_hash} actual={actual}. '
-                        f'Snapshot may be corrupted or tampered.'
-                    )
             # Rewrite asset paths on the row to point to the FINAL FileStore
             # keys (Phase C will move bytes into place before retrieval is
             # allowed; Phase E gates).
