@@ -121,16 +121,29 @@ def lookup(cache_root: Path, suite_name: str, sources_hash: str) -> CacheLookup:
     if has_manifest and has_marker:
         return CacheLookup(cache_root=cache_root, cache_path=cache_path, hit=True)
 
-    logger.warning(
-        'Snapshot cache at %s is partial (manifest=%s, marker=%s); cleaning up',
-        cache_path,
-        has_manifest,
-        has_marker,
-    )
-    try:
-        shutil.rmtree(cache_path)
-    except OSError as e:
-        logger.warning('Failed to clean partial cache at %s: %s', cache_path, e)
+    # Partial / corrupt slot — clean up so the next populate starts
+    # fresh. Hold the per-slot lock across the re-check + rmtree so a
+    # concurrent ``publish()`` can't slip in a freshly-published slot
+    # between our `is_file()` checks and the deletion. We re-check
+    # under the lock for the same reason.
+    with _slot_lock(cache_root, cache_path.name):
+        re_marker = (cache_path / CACHE_COMPLETE_MARKER).is_file()
+        re_sharded = (cache_path / 'vaults' / '_default' / 'manifest.json').is_file()
+        re_flat = (cache_path / 'manifest.json').is_file()
+        if re_marker and (re_sharded or re_flat):
+            # A concurrent publish completed while we were waiting for
+            # the lock — this slot is valid now, treat as a hit.
+            return CacheLookup(cache_root=cache_root, cache_path=cache_path, hit=True)
+        logger.warning(
+            'Snapshot cache at %s is partial (manifest=%s, marker=%s); cleaning up',
+            cache_path,
+            has_manifest,
+            has_marker,
+        )
+        try:
+            shutil.rmtree(cache_path)
+        except OSError as e:
+            logger.warning('Failed to clean partial cache at %s: %s', cache_path, e)
     return CacheLookup(cache_root=cache_root, cache_path=cache_path, hit=False)
 
 

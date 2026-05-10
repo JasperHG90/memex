@@ -442,6 +442,82 @@ async def two_vaults(db_session: AsyncSession) -> dict[str, UUID]:
     }
 
 
+async def test_multi_vault_populate_via_snapshot_runtime(
+    db_session: AsyncSession,
+    two_vaults: dict[str, UUID],
+    tmp_path: Path,
+) -> None:
+    """Regression guard for C1: running N SnapshotExporter calls in
+    sequence using fresh ``snapshot_runtime()`` per export works
+    end-to-end. Earlier code shared one session and tripped SQLSTATE
+    25001 (`SET TRANSACTION` after first query) on vault 2. This test
+    drives the same loop the runner now uses.
+    """
+    from sqlalchemy import delete, select
+
+    from memex_core.memory.models.base import MODEL_REGISTRY
+    from memex_core.memory.sql_models import EMBEDDING_DIMENSION
+    from memex_core.services.snapshot import (
+        EmbeddingModelIdentity,
+        SnapshotExporter,
+    )
+    from memex_eval.snapshot.runtime import snapshot_runtime
+    from memex_eval.snapshot import ensure_eval_import_state_table
+
+    conn = await db_session.connection()
+    await ensure_eval_import_state_table(conn)
+    await db_session.commit()
+
+    identity = EmbeddingModelIdentity(
+        name=str(MODEL_REGISTRY['embedding'].repo_id),
+        dim=EMBEDDING_DIMENSION,
+        hash=str(MODEL_REGISTRY['embedding'].revision),
+    )
+    out_root = tmp_path / 'staged' / 'vaults'
+    out_root.mkdir(parents=True)
+
+    # Mirror runner.py populate loop: fresh snapshot_runtime per export.
+    for logical, vid in (
+        ('_default', two_vaults['primary_id']),
+        ('bench-vault-a', two_vaults['secondary_id']),
+    ):
+        sub = out_root / logical
+        sub.mkdir()
+        async with snapshot_runtime() as rt:
+            exporter = SnapshotExporter(
+                session=rt.session,
+                filestore=rt.filestore,
+                vault_id_or_name=vid,
+                output_dir=sub,
+                embedding_model=identity,
+            )
+            await exporter.export()
+
+    # Both exports completed; both manifests exist.
+    assert (out_root / '_default' / 'manifest.json').is_file()
+    assert (out_root / 'bench-vault-a' / 'manifest.json').is_file()
+
+    # Free the read-only tx from the last exporter so the cleanup below
+    # can issue writes against this session.
+    await db_session.rollback()
+    await db_session.execute(
+        delete(Note).where(
+            Note.vault_id.in_([two_vaults['primary_id'], two_vaults['secondary_id']])
+        )
+    )
+    await db_session.execute(
+        delete(Vault).where(Vault.id.in_([two_vaults['primary_id'], two_vaults['secondary_id']]))
+    )
+    await db_session.commit()
+    # Sanity: source vaults gone.
+    remaining = (
+        await db_session.execute(
+            select(Vault.id).where(Vault.name.in_(['mv-primary', 'mv-secondary']))
+        )
+    ).all()
+    assert remaining == []
+
+
 async def test_cache_round_trip_multi_vault_sharded_layout(
     db_session: AsyncSession,
     two_vaults: dict[str, UUID],

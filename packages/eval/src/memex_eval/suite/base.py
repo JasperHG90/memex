@@ -25,12 +25,18 @@ from pydantic import (
     ConfigDict,
     Field,
     SerializeAsAny,
+    field_validator,
     model_validator,
 )
 
 from memex_eval.suite.agents import AgentAnswer
 from memex_eval.suite.metrics import mrr, ndcg_at_k, recall_at_k
-from memex_eval.suite.sources import NOTE_KEY_RE, SourceNote, SuiteSources
+from memex_eval.suite.sources import (
+    NOTE_KEY_RE,
+    SourceNote,
+    SuiteSources,
+    _validate_vault_name,
+)
 
 logger = logging.getLogger('memex_eval.suite.base')
 
@@ -1304,6 +1310,12 @@ class Scenario(BaseModel):
     setup_actions: list[SetupAction] = Field(default_factory=list)
     inline_notes: list[InlineNote] = Field(default_factory=list)
     vault_name: str | None = None
+
+    @field_validator('vault_name', mode='before')
+    @classmethod
+    def _check_vault_name(cls, v: str | None) -> str | None:
+        return _validate_vault_name(v)
+
     max_duration_ms: float | None = None
     search_type: Literal['memory', 'note'] = 'memory'
 

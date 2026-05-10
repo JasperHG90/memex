@@ -15,7 +15,7 @@ from pathlib import Path
 from typing import Any
 
 import frontmatter
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 logger = logging.getLogger('memex_eval.suite.sources')
 
@@ -23,6 +23,39 @@ logger = logging.getLogger('memex_eval.suite.sources')
 # and InlineNote.note_key. Allows digit-leading stems (e.g.
 # ``2023-historical.md``) — many real-world suites date-prefix sources.
 NOTE_KEY_RE = re.compile(r'^[a-z0-9][a-z0-9_-]*$')
+
+# Used by ``SourceNote.vault_name`` and ``Scenario.vault_name`` (mirrored
+# in ``base.py``). The value becomes a directory name under the cache
+# slot's ``vaults/`` subdir, so it must be filesystem-safe AND not
+# collide with the ``_default`` logical name reserved for the primary
+# vault. ``_default`` is rejected case-insensitively; other underscore-
+# leading names are allowed for forward-compat.
+VAULT_NAME_RE = re.compile(r'^[a-z0-9][a-z0-9_-]*$')
+_RESERVED_VAULT_NAMES = {'_default'}
+
+
+def _validate_vault_name(v: str | None) -> str | None:
+    """Reject path-traversal / reserved names on per-note/per-scenario
+    ``vault_name`` so the value can be safely interpolated into the
+    sharded cache layout (``<slot>/vaults/<vault_name>/``).
+    """
+    if v is None or v == '':
+        return None
+    if v.lower() in _RESERVED_VAULT_NAMES:
+        raise ValueError(
+            f'vault_name={v!r} is reserved; pick a different name. '
+            f'``_default`` is the logical name of the primary vault in '
+            f'the snapshot cache.'
+        )
+    if not VAULT_NAME_RE.match(v):
+        raise ValueError(
+            f'vault_name={v!r} must match {VAULT_NAME_RE.pattern!r} '
+            f'(lowercase alnum + ``-``/``_``, starting with alnum). '
+            f'Path components like ``..`` or ``/`` are rejected so the '
+            f'value is safe to use as a directory name.'
+        )
+    return v
+
 
 # Narrow allow-list of frontmatter keys ``SourceNote.wire_content()``
 # re-emits onto the wire. Keep this short — values are f-string
@@ -46,6 +79,12 @@ class SourceNote(BaseModel):
     tags: list[str] = Field(default_factory=list)
     assets: dict[str, Path] = Field(default_factory=dict)
     vault_name: str | None = None
+
+    @field_validator('vault_name', mode='before')
+    @classmethod
+    def _check_vault_name(cls, v: str | None) -> str | None:
+        return _validate_vault_name(v)
+
     # Frontmatter keys that the eval framework forwards to the server via
     # re-emitted YAML in ``wire_content()``. The DTO has no
     # ``publish_date`` field of its own — the server's own frontmatter
@@ -226,11 +265,18 @@ class SuiteSources(BaseModel):
         return cls(notes=notes)
 
     def content_hash(self) -> str:
-        """sha256 over sorted [(note_key, sha256(content))] + sorted [(asset_name, sha256(bytes))]."""
+        """sha256 over sorted [(note_key, vault_name, sha256(content))] + sorted [(asset_name, sha256(bytes))].
+
+        ``vault_name`` is part of the key so a suite that adds/changes
+        per-note vault routing without touching content invalidates the
+        snapshot cache — otherwise the next ``--from-snapshot auto`` run
+        would silently reuse a stale slot that doesn't know about the
+        new vault.
+        """
         h = hashlib.sha256()
         for note in sorted(self.notes, key=lambda n: n.note_key):
             content_hash = hashlib.sha256(note.content.encode('utf-8')).hexdigest()
-            h.update(f'{note.note_key}:{content_hash}\n'.encode())
+            h.update(f'{note.note_key}:{note.vault_name or ""}:{content_hash}\n'.encode())
             for asset_name in sorted(note.assets):
                 asset_hash = hashlib.sha256(note.assets[asset_name].read_bytes()).hexdigest()
                 h.update(f'  {asset_name}:{asset_hash}\n'.encode())

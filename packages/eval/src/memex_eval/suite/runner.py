@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import datetime as dt
+import hashlib
 import inspect
 import json
 import logging
@@ -1360,9 +1361,15 @@ _DEFAULT_VAULT_LOGICAL = '_default'
 
 
 class MultiVaultImportNotSupported(RuntimeError):
-    """Raised when an explicit ``--from-snapshot <path>`` targets a
-    multi-vault suite. Auto-cache supports multi-vault; explicit V3
-    dumps are single-vault by V3's contract.
+    """Raised when an explicit ``--from-snapshot <path>`` points at a
+    flat single-vault V3 dump but the suite declares per-note or
+    per-scenario ``vault_name`` (i.e. is multi-vault).
+
+    Explicit paths may also point at a sharded cache slot (one with a
+    ``vaults/`` subdir) — in that case the refusal does NOT fire, since
+    a sharded layout can satisfy a multi-vault suite. Auto-cache always
+    produces sharded layouts, so ``--from-snapshot auto`` never triggers
+    this exception.
     """
 
 
@@ -1436,7 +1443,12 @@ async def run_suite(
             on cache miss the runner falls through to the normal ingest
             path AND populates the cache afterwards so the next run hits.
             Multi-vault suites (any source note or scenario with a
-            ``vault_name``) raise ``MultiVaultImportNotSupported``.
+            ``vault_name``) are supported in auto mode — the cache slot
+            is populated with one subdir per vault under ``vaults/`` and
+            re-imported into matching vault map entries. Explicit paths
+            pointing at a flat single-vault V3 dump still raise
+            ``MultiVaultImportNotSupported`` for multi-vault suites; an
+            explicit path pointing at a sharded cache slot is accepted.
             Mutually exclusive with ``keep_vault`` / ``reuse_vault``.
         reingest: When True with ``from_snapshot='auto'``, force the
             ingest+extract path even on a cache hit and overwrite the
@@ -1521,7 +1533,16 @@ async def run_suite(
 
         recorder = NullRecorder()
 
+    # Fold scenario vault routing into the cache key so a suite that
+    # adds a per-scenario vault_name without touching source content
+    # doesn't silently hit a stale single-vault cache slot.
     sources_hash = suite.sources.content_hash()
+    _scenario_routing = hashlib.sha256()
+    for sc in sorted(suite.scenarios, key=lambda s: s.id):
+        _scenario_routing.update(f'{sc.id}:{sc.vault_name or ""}\n'.encode())
+    sources_hash = hashlib.sha256(
+        f'{sources_hash}:{_scenario_routing.hexdigest()}'.encode()
+    ).hexdigest()
     git_sha = _git_capture(['rev-parse', 'HEAD'])
     git_branch = _git_capture(['rev-parse', '--abbrev-ref', 'HEAD'])
     memex_v = _memex_version()
@@ -1607,6 +1628,36 @@ async def run_suite(
                 from_snapshot is not None and from_snapshot != 'auto' and reuse_vault is None
             ) or (cache_lookup is not None and cache_lookup.hit and not reingest)
 
+            # Auto cache hit on a legacy-flat slot for a suite that has
+            # since become multi-vault → clear the stale slot and fall
+            # through to the ingest path so the cache repopulates in the
+            # new sharded layout. Avoids a permanent failure loop where
+            # every subsequent run refuses on the same stale cache entry.
+            if (
+                cache_lookup is not None
+                and cache_lookup.hit
+                and not reingest
+                and not (cache_lookup.cache_path / 'vaults').is_dir()
+            ):
+                _is_multi = any(n.vault_name for n in suite.sources.notes) or any(
+                    s.vault_name for s in suite.scenarios
+                )
+                if _is_multi:
+                    logger.warning(
+                        'Snapshot cache slot %s is legacy-flat single-vault but suite '
+                        '%r is now multi-vault; clearing cache and falling through to '
+                        'ingest+extract (cache will repopulate in sharded layout).',
+                        cache_lookup.cache_path,
+                        suite.name,
+                    )
+                    _snapshot_cache.clear_cache_entry(cache_lookup.cache_path)
+                    cache_lookup = _snapshot_cache.CacheLookup(
+                        cache_root=cache_lookup.cache_root,
+                        cache_path=cache_lookup.cache_path,
+                        hit=False,
+                    )
+                    use_import = False
+
             if reuse_vault is not None:
                 manifest_path = manifest_dir / f'{reuse_vault}.json'
                 if not manifest_path.exists():
@@ -1651,7 +1702,9 @@ async def run_suite(
                 )
                 # Multi-vault aware: cache slots ship per-vault subdirs under
                 # ``vaults/``. Explicit V3 paths are flat single-vault dumps —
-                # in that mode the suite must be single-vault.
+                # in that mode the suite must be single-vault. (Legacy-flat
+                # cache hits for multi-vault suites are cleared upstream
+                # before reaching this branch; see H1 in adversarial review.)
                 vaults_root = Path(snapshot_path) / 'vaults'
                 is_sharded = vaults_root.is_dir()
                 if not is_sharded:
@@ -1721,7 +1774,17 @@ async def run_suite(
                         _import_ids.append(str(importer.import_id))
                     vault_map[None] = default_vault_id
                 extra_params['snapshot.path'] = snapshot_path
-                extra_params['snapshot.import_id'] = ','.join(_import_ids)
+                # MLflow caps param values at 250 chars; one UUID per
+                # vault (~37 bytes incl. comma) → safe up to ~6 vaults.
+                # Beyond that, record the first id + the count to stay
+                # under the limit while keeping the value parseable.
+                if len(_import_ids) <= 6:
+                    extra_params['snapshot.import_id'] = ','.join(_import_ids)
+                else:
+                    extra_params['snapshot.import_id'] = (
+                        f'{_import_ids[0]},+{len(_import_ids) - 1}-more'
+                    )
+                extra_params['snapshot.import_count'] = str(len(_import_ids))
                 extra_params['snapshot.cache_hit'] = 'true'
             else:
                 default_vault_id = await _setup_vault(
@@ -1880,17 +1943,33 @@ async def run_suite(
                             # Sharded layout: one subdir per vault under
                             # vaults/. _default holds the primary vault;
                             # named vaults use their declared vault_name.
+                            #
+                            # Each export gets its OWN snapshot_runtime():
+                            # SnapshotExporter issues SET TRANSACTION
+                            # ISOLATION LEVEL REPEATABLE READ READ ONLY,
+                            # which Postgres only accepts as the first
+                            # statement of a transaction. Sharing one
+                            # session across exports trips SQLSTATE 25001
+                            # on the second vault — verified in adversarial
+                            # review C1. Per-export runtime sidesteps it
+                            # cleanly and isolates each subdir's writes.
+                            assert None in vault_map, (
+                                'populate invariant: primary (None-keyed) vault must be present in '
+                                f'vault_map; got keys {list(vault_map.keys())!r}'
+                            )
                             vaults_dir = staged / 'vaults'
                             vaults_dir.mkdir(parents=True, exist_ok=True)
-                            async with snapshot_runtime() as rt:
-                                identity = build_embedding_identity(rt.config)
-                                for vault_logical, vid in vault_map.items():
-                                    sub = vaults_dir / (
-                                        _DEFAULT_VAULT_LOGICAL
-                                        if vault_logical is None
-                                        else vault_logical
-                                    )
-                                    sub.mkdir(parents=True, exist_ok=True)
+                            for vault_logical, vid in sorted(
+                                vault_map.items(), key=lambda kv: '' if kv[0] is None else kv[0]
+                            ):
+                                sub = vaults_dir / (
+                                    _DEFAULT_VAULT_LOGICAL
+                                    if vault_logical is None
+                                    else vault_logical
+                                )
+                                sub.mkdir(parents=True, exist_ok=True)
+                                async with snapshot_runtime() as rt:
+                                    identity = build_embedding_identity(rt.config)
                                     exporter = SnapshotExporter(
                                         session=rt.session,
                                         filestore=rt.filestore,
