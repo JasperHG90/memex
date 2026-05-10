@@ -1354,11 +1354,15 @@ def _aggregate_results(
     return aggregated
 
 
-class MultiVaultImportNotSupported(RuntimeError):
-    """Raised when ``--from-snapshot`` targets a multi-vault suite.
+# Logical directory name for the primary vault in sharded cache layout.
+# Underscore prefix avoids clashing with user-declared vault_name values.
+_DEFAULT_VAULT_LOGICAL = '_default'
 
-    V12 v1 ships single-snapshot per import. A future revision could ship
-    one snapshot per named vault.
+
+class MultiVaultImportNotSupported(RuntimeError):
+    """Raised when an explicit ``--from-snapshot <path>`` targets a
+    multi-vault suite. Auto-cache supports multi-vault; explicit V3
+    dumps are single-vault by V3's contract.
     """
 
 
@@ -1366,16 +1370,17 @@ def _refuse_if_multi_vault_for_snapshot(suite: Suite) -> None:
     """Raise ``MultiVaultImportNotSupported`` if the suite declares any
     secondary vault on a source note or scenario.
 
-    Extracted from the runner so unit tests can pin the predicate
-    without spinning up a full suite run.
+    Only used on the explicit-path branch — auto-cache populates and
+    imports a sharded layout with one subdir per vault.
     """
     multi_vault_sources = {n.vault_name for n in suite.sources.notes if n.vault_name}
     multi_vault_scenarios = {s.vault_name for s in suite.scenarios if s.vault_name}
     if multi_vault_sources or multi_vault_scenarios:
         raise MultiVaultImportNotSupported(
             f'Suite {suite.name!r} declares per-note/per-scenario '
-            f'vault_name; --from-snapshot v1 supports only single-vault '
-            f'suites. Drop the snapshot flag or split the suite.'
+            f'vault_name; explicit --from-snapshot <path> handles a single '
+            f'V3 dump only. Use --from-snapshot auto (which populates a '
+            f'per-vault cache layout) or split the suite.'
         )
 
 
@@ -1639,12 +1644,18 @@ async def run_suite(
                     manifest_path,
                 )
             elif use_import:
-                _refuse_if_multi_vault_for_snapshot(suite)
                 snapshot_path: str = (
                     str(cache_lookup.cache_path)
                     if cache_lookup is not None and cache_lookup.hit
                     else str(from_snapshot)
                 )
+                # Multi-vault aware: cache slots ship per-vault subdirs under
+                # ``vaults/``. Explicit V3 paths are flat single-vault dumps —
+                # in that mode the suite must be single-vault.
+                vaults_root = Path(snapshot_path) / 'vaults'
+                is_sharded = vaults_root.is_dir()
+                if not is_sharded:
+                    _refuse_if_multi_vault_for_snapshot(suite)
                 logger.info(
                     'Importing snapshot %s into target vault %s (skipping ingest + extraction)',
                     snapshot_path,
@@ -1661,19 +1672,56 @@ async def run_suite(
                 # model divergence).
                 check_runtime_matches_server(server_url, config_snapshot)
 
-                async with snapshot_runtime() as rt:
-                    importer = SnapshotImporter(
-                        session=rt.session,
-                        filestore=rt.filestore,
-                        embedding_backend=rt.config.server.embedding_model,
-                        snapshot_dir=Path(snapshot_path),
-                        target_vault_name=vault_name,
-                    )
-                    default_vault_id = await importer.import_snapshot()
-                    _import_id = importer.import_id
-                vault_map[None] = default_vault_id
+                _import_ids: list[str] = []
+                if is_sharded:
+                    # vaults/_default/ + vaults/<name>/ ... import each in
+                    # its own snapshot_runtime() so each gets its own DB
+                    # session + advisory-lock pair.
+                    default_dir = vaults_root / _DEFAULT_VAULT_LOGICAL
+                    if not default_dir.is_dir():
+                        raise FileNotFoundError(
+                            f'Sharded snapshot at {snapshot_path} is missing the '
+                            f'required {_DEFAULT_VAULT_LOGICAL!r} vault subdir.'
+                        )
+                    async with snapshot_runtime() as rt:
+                        importer = SnapshotImporter(
+                            session=rt.session,
+                            filestore=rt.filestore,
+                            embedding_backend=rt.config.server.embedding_model,
+                            snapshot_dir=default_dir,
+                            target_vault_name=vault_name,
+                        )
+                        default_vault_id = await importer.import_snapshot()
+                        _import_ids.append(str(importer.import_id))
+                    vault_map[None] = default_vault_id
+                    for sub in sorted(vaults_root.iterdir()):
+                        if not sub.is_dir() or sub.name == _DEFAULT_VAULT_LOGICAL:
+                            continue
+                        logical = sub.name
+                        async with snapshot_runtime() as rt:
+                            importer = SnapshotImporter(
+                                session=rt.session,
+                                filestore=rt.filestore,
+                                embedding_backend=rt.config.server.embedding_model,
+                                snapshot_dir=sub,
+                                target_vault_name=f'{vault_name}-{logical}',
+                            )
+                            vault_map[logical] = await importer.import_snapshot()
+                            _import_ids.append(str(importer.import_id))
+                else:
+                    async with snapshot_runtime() as rt:
+                        importer = SnapshotImporter(
+                            session=rt.session,
+                            filestore=rt.filestore,
+                            embedding_backend=rt.config.server.embedding_model,
+                            snapshot_dir=Path(snapshot_path),
+                            target_vault_name=vault_name,
+                        )
+                        default_vault_id = await importer.import_snapshot()
+                        _import_ids.append(str(importer.import_id))
+                    vault_map[None] = default_vault_id
                 extra_params['snapshot.path'] = snapshot_path
-                extra_params['snapshot.import_id'] = str(_import_id)
+                extra_params['snapshot.import_id'] = ','.join(_import_ids)
                 extra_params['snapshot.cache_hit'] = 'true'
             else:
                 default_vault_id = await _setup_vault(
@@ -1829,23 +1877,36 @@ async def run_suite(
                             )
 
                             check_runtime_matches_server(server_url, config_snapshot)
+                            # Sharded layout: one subdir per vault under
+                            # vaults/. _default holds the primary vault;
+                            # named vaults use their declared vault_name.
+                            vaults_dir = staged / 'vaults'
+                            vaults_dir.mkdir(parents=True, exist_ok=True)
                             async with snapshot_runtime() as rt:
                                 identity = build_embedding_identity(rt.config)
-                                exporter = SnapshotExporter(
-                                    session=rt.session,
-                                    filestore=rt.filestore,
-                                    vault_id_or_name=default_vault_id,
-                                    output_dir=staged,
-                                    embedding_model=identity,
-                                )
-                                await exporter.export()
+                                for vault_logical, vid in vault_map.items():
+                                    sub = vaults_dir / (
+                                        _DEFAULT_VAULT_LOGICAL
+                                        if vault_logical is None
+                                        else vault_logical
+                                    )
+                                    sub.mkdir(parents=True, exist_ok=True)
+                                    exporter = SnapshotExporter(
+                                        session=rt.session,
+                                        filestore=rt.filestore,
+                                        vault_id_or_name=vid,
+                                        output_dir=sub,
+                                        embedding_model=identity,
+                                    )
+                                    await exporter.export()
                             _snapshot_cache.mark_complete(staged)
                             _snapshot_cache.publish(staged, cache_lookup.cache_path)
                             extra_params['snapshot.cache_populated'] = 'true'
                             extra_params['snapshot.path'] = str(cache_lookup.cache_path)
                             logger.info(
-                                'Snapshot cache populated at %s',
+                                'Snapshot cache populated at %s (%d vault(s))',
                                 cache_lookup.cache_path,
+                                len(vault_map),
                             )
                         except Exception as e:
                             logger.warning('Snapshot cache populate failed: %s', e)

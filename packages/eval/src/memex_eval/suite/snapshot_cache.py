@@ -99,18 +99,25 @@ class CacheLookup:
 def lookup(cache_root: Path, suite_name: str, sources_hash: str) -> CacheLookup:
     """Probe the cache.
 
-    A cache hit requires both ``manifest.json`` and ``_complete.marker``
-    to be present. A directory missing either is a partially-populated
-    leftover from a crashed run; this function deletes it so the next
-    populate starts from a clean slot (otherwise a fresh export
-    commingles with stale files and corrupts the cache).
+    Valid layouts:
+
+    - **Sharded** (current): ``vaults/_default/manifest.json`` +
+      ``_complete.marker``. Per-vault subdirs under ``vaults/``.
+    - **Flat legacy** (V12.0 single-vault): ``manifest.json`` +
+      ``_complete.marker`` at the cache slot root.
+
+    A directory missing the marker or any required manifest is a
+    partially-populated leftover from a crashed run; this function
+    deletes it so the next populate starts from a clean slot.
     """
     cache_path = cache_root / cache_key(suite_name, sources_hash)
     if not cache_path.is_dir():
         return CacheLookup(cache_root=cache_root, cache_path=cache_path, hit=False)
 
-    has_manifest = (cache_path / 'manifest.json').is_file()
     has_marker = (cache_path / CACHE_COMPLETE_MARKER).is_file()
+    sharded_manifest = (cache_path / 'vaults' / '_default' / 'manifest.json').is_file()
+    flat_manifest = (cache_path / 'manifest.json').is_file()
+    has_manifest = sharded_manifest or flat_manifest
     if has_manifest and has_marker:
         return CacheLookup(cache_root=cache_root, cache_path=cache_path, hit=True)
 

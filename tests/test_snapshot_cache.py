@@ -102,6 +102,32 @@ class TestCacheLookup:
         _cache.clear_cache_entry(path)
         assert not path.exists()
 
+    def test_hit_on_sharded_layout(self, tmp_path: Path) -> None:
+        """Sharded multi-vault layout: vaults/_default/manifest.json +
+        marker at slot root. No manifest at the slot root itself."""
+        full_hash = 'sha' + 'x' * 13
+        path = tmp_path / f'suite_a-{full_hash}'
+        (path / 'vaults' / '_default').mkdir(parents=True)
+        (path / 'vaults' / '_default' / 'manifest.json').write_text('{}', encoding='utf-8')
+        _cache.mark_complete(path)
+        # No flat-layout manifest.json at the root.
+        assert not (path / 'manifest.json').exists()
+        result = _cache.lookup(tmp_path, 'suite_a', full_hash)
+        assert result.hit
+        assert result.cache_path == path
+
+    def test_miss_when_sharded_default_missing(self, tmp_path: Path) -> None:
+        """A slot with vaults/ but no _default subdir is still partial —
+        cleanup fires (we can't reconstruct without the primary)."""
+        full_hash = 'shb' + 'x' * 13
+        path = tmp_path / f'suite_a-{full_hash}'
+        (path / 'vaults' / 'bench-vault-a').mkdir(parents=True)
+        (path / 'vaults' / 'bench-vault-a' / 'manifest.json').write_text('{}', encoding='utf-8')
+        _cache.mark_complete(path)
+        result = _cache.lookup(tmp_path, 'suite_a', full_hash)
+        assert not result.hit
+        assert not path.exists()
+
 
 class TestAtomicPublish:
     def test_stage_path_creates_unique_tmp_dirs(self, tmp_path: Path) -> None:
@@ -369,3 +395,163 @@ async def test_cache_round_trip_export_then_import(
     )
     target = await importer.import_snapshot()
     assert target is not None
+
+
+# ----------------------------------------------------------------------
+# Multi-vault auto cache: sharded layout (vaults/<logical>/...)
+
+
+@pytest_asyncio.fixture
+async def two_vaults(db_session: AsyncSession) -> dict[str, UUID]:
+    """Two distinct vaults with one note each — exercises the sharded
+    multi-vault cache layout end-to-end."""
+    import hashlib
+
+    primary = Vault(name='mv-primary', description='primary')
+    secondary = Vault(name='mv-secondary', description='bench-vault-a')
+    db_session.add(primary)
+    db_session.add(secondary)
+    await db_session.flush()
+
+    body_a = 'primary body'
+    body_b = 'secondary body'
+    note_a = Note(
+        id=uuid4(),
+        vault_id=primary.id,
+        title='primary note',
+        original_text=body_a,
+        content_hash=hashlib.md5(body_a.encode('utf-8')).hexdigest(),
+        status='active',
+    )
+    note_b = Note(
+        id=uuid4(),
+        vault_id=secondary.id,
+        title='secondary note',
+        original_text=body_b,
+        content_hash=hashlib.md5(body_b.encode('utf-8')).hexdigest(),
+        status='active',
+    )
+    db_session.add(note_a)
+    db_session.add(note_b)
+    await db_session.commit()
+    return {
+        'primary_id': primary.id,
+        'secondary_id': secondary.id,
+        'note_a_id': note_a.id,
+        'note_b_id': note_b.id,
+    }
+
+
+async def test_cache_round_trip_multi_vault_sharded_layout(
+    db_session: AsyncSession,
+    two_vaults: dict[str, UUID],
+    tmp_path: Path,
+) -> None:
+    """Sharded auto-cache: export each vault to vaults/<logical>/,
+    publish, lookup hits, import both subdirs into fresh UUIDs, verify
+    each restored vault holds its own note. Mirrors the runner's
+    multi-vault populate + import branches.
+    """
+    from sqlalchemy import delete, select
+
+    from memex_core.memory.models.base import MODEL_REGISTRY
+    from memex_core.memory.sql_models import EMBEDDING_DIMENSION
+    from memex_core.services.snapshot import (
+        EmbeddingModelIdentity,
+        SnapshotExporter,
+    )
+    from memex_eval.snapshot import (
+        SnapshotImporter,
+        ensure_eval_import_state_table,
+    )
+
+    conn = await db_session.connection()
+    await ensure_eval_import_state_table(conn)
+    await db_session.commit()
+
+    cache_root = _cache.resolve_cache_root(tmp_path / 'cache')
+    cache_key = _cache.cache_key('multi-suite', 'b' * 64)
+    staged = _cache.stage_path(cache_root, cache_key)
+
+    # Export each vault into its own subdir under vaults/.
+    identity = EmbeddingModelIdentity(
+        name=str(MODEL_REGISTRY['embedding'].repo_id),
+        dim=EMBEDDING_DIMENSION,
+        hash=str(MODEL_REGISTRY['embedding'].revision),
+    )
+    vaults_dir = staged / 'vaults'
+    vaults_dir.mkdir(parents=True, exist_ok=True)
+    for logical, vid in (
+        ('_default', two_vaults['primary_id']),
+        ('bench-vault-a', two_vaults['secondary_id']),
+    ):
+        sub = vaults_dir / logical
+        sub.mkdir(parents=True, exist_ok=True)
+        exporter = SnapshotExporter(
+            session=db_session,
+            filestore=None,
+            vault_id_or_name=vid,
+            output_dir=sub,
+            embedding_model=identity,
+        )
+        await exporter.export()
+        # Exporter sets READ ONLY for the transaction; release between
+        # exports so subsequent ones get a fresh write-capable tx.
+        await db_session.rollback()
+
+    _cache.mark_complete(staged)
+    final_path = cache_root / cache_key
+    _cache.publish(staged, final_path)
+
+    # Lookup hits on the sharded layout (no manifest.json at root).
+    assert not (final_path / 'manifest.json').is_file()
+    result = _cache.lookup(cache_root, 'multi-suite', 'b' * 64)
+    assert result.hit
+
+    # Drop both source vaults so the import path actually rebuilds.
+    await db_session.execute(
+        delete(Note).where(
+            Note.vault_id.in_([two_vaults['primary_id'], two_vaults['secondary_id']])
+        )
+    )
+    await db_session.execute(
+        delete(Vault).where(Vault.id.in_([two_vaults['primary_id'], two_vaults['secondary_id']]))
+    )
+    await db_session.commit()
+
+    # Import each subdir into a fresh vault.
+    default_dir = final_path / 'vaults' / '_default'
+    secondary_dir = final_path / 'vaults' / 'bench-vault-a'
+    assert default_dir.is_dir() and secondary_dir.is_dir()
+
+    importer_a = SnapshotImporter(
+        session=db_session,
+        filestore=None,
+        embedding_backend=OnnxBackend(),
+        snapshot_dir=default_dir,
+        target_vault_name='mv-import-default',
+    )
+    target_default = await importer_a.import_snapshot()
+
+    importer_b = SnapshotImporter(
+        session=db_session,
+        filestore=None,
+        embedding_backend=OnnxBackend(),
+        snapshot_dir=secondary_dir,
+        target_vault_name='mv-import-bench-a',
+    )
+    target_secondary = await importer_b.import_snapshot()
+
+    assert target_default != target_secondary
+    assert target_default not in (two_vaults['primary_id'], two_vaults['secondary_id'])
+    assert target_secondary not in (two_vaults['primary_id'], two_vaults['secondary_id'])
+
+    # Each restored vault holds exactly its own note (titles separate the two).
+    rows_default = (
+        await db_session.execute(select(Note.title).where(Note.vault_id == target_default))
+    ).all()
+    rows_secondary = (
+        await db_session.execute(select(Note.title).where(Note.vault_id == target_secondary))
+    ).all()
+    assert {r[0] for r in rows_default} == {'primary note'}
+    assert {r[0] for r in rows_secondary} == {'secondary note'}
