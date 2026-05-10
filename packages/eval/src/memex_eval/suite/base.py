@@ -1283,6 +1283,11 @@ class Scenario(BaseModel):
     description: str
     query: str
     expected: ExpectedOutcomeUnion
+    # Optional grouping label. ``memex-eval suite run --group <name>``
+    # filters to scenarios whose ``group`` matches; useful for slicing a
+    # large suite into themed subsets (e.g. 'extraction', 'reflection',
+    # 'outcomes_mw') that can be exercised independently.
+    group: str | None = None
     top_k: int = 10
     strategies: list[str] | None = None
     include_superseded: bool | None = None

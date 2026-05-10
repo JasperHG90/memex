@@ -599,6 +599,17 @@ def suite_run(
             'declared via ``depends_on_prior_scenarios``.'
         ),
     ),
+    groups: list[str] = typer.Option(
+        [],
+        '--group',
+        help=(
+            'Repeatable. Run only scenarios whose ``group`` field matches. '
+            'Validated against the suite at startup; an unknown group '
+            'raises. Combines with --scenario via intersection. '
+            'Prerequisite scenarios (via depends_on_prior_scenarios) of '
+            'group members still run regardless of their own group.'
+        ),
+    ),
     output: str | None = typer.Option(None, '--output', '-o'),
     notes: str | None = typer.Option(
         None,
@@ -719,6 +730,7 @@ def suite_run(
                     keep_vault=keep_vault,
                     reuse_vault=reuse_vault,
                     scenario_ids=scenarios or None,
+                    groups=groups or None,
                 )
             )
         except KeyboardInterrupt:

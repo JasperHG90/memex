@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import datetime as dt
+import inspect
 import json
 import logging
 import random
@@ -675,6 +676,148 @@ async def _ingest_inline_notes(
     return inline_id_by_key
 
 
+def _compute_filter_inclusion(
+    scenarios: list[Scenario],
+    scenario_ids: list[str] | None,
+    groups: list[str] | None,
+) -> set[str] | None:
+    """Compute the included-scenario-id set under ``--scenario`` / ``--group``
+    filters. Returns ``None`` when neither filter is set (run everything).
+
+    Both filters expand by walking ``depends_on_prior_scenarios`` so a
+    consumer's prerequisites still execute. When BOTH are set, the result
+    is the intersection of (scenario-id closure) and (group closure).
+    Unknown ids or groups raise ValueError.
+    """
+    if not scenario_ids and not groups:
+        return None
+    all_ids = {s.id for s in scenarios}
+
+    def _close_under_deps(seed: set[str]) -> set[str]:
+        out = set(seed)
+        while True:
+            new = {d for s in scenarios if s.id in out for d in s.depends_on_prior_scenarios}
+            if new <= out:
+                return out
+            out |= new
+
+    id_closure: set[str] | None = None
+    if scenario_ids:
+        requested_ids = set(scenario_ids)
+        unknown = requested_ids - all_ids
+        if unknown:
+            raise ValueError(
+                f'Unknown scenario id(s) {sorted(unknown)}. Available: {sorted(all_ids)}'
+            )
+        id_closure = _close_under_deps(requested_ids)
+
+    group_closure: set[str] | None = None
+    if groups:
+        requested_groups = set(groups)
+        available_groups = {s.group for s in scenarios if s.group is not None}
+        if not available_groups:
+            raise ValueError(
+                'No scenarios in this suite declare a ``group`` field; '
+                f'cannot apply --group {sorted(requested_groups)}. Drop '
+                f'--group, or annotate scenarios with ``group="<name>"``.'
+            )
+        unknown_groups = requested_groups - available_groups
+        if unknown_groups:
+            raise ValueError(
+                f'Unknown group(s) {sorted(unknown_groups)}. Available: {sorted(available_groups)}'
+            )
+        group_seed = {s.id for s in scenarios if s.group in requested_groups}
+        group_closure = _close_under_deps(group_seed)
+
+    if id_closure is not None and group_closure is not None:
+        return id_closure & group_closure
+    return id_closure if id_closure is not None else group_closure
+
+
+# Numeric metric coercion lives in ``decorator`` (single source of
+# truth); we re-export under the runner-side name to keep call-site
+# semantics readable in this module.
+from memex_eval.suite.decorator import _coerce_numeric as _coerce_numeric_metrics  # noqa: E402
+
+
+def _custom_eval_has_async_fn(expected: Any) -> bool:
+    """True iff ``expected`` is a ``CustomEvaluate`` whose ``fn`` is an
+    async callable. The runner uses this to bypass the sync ``score()``
+    path (which would raise inside a running event loop) and dispatch
+    the function directly via ``await``.
+
+    Detects:
+    - ``async def`` functions (``inspect.iscoroutinefunction``).
+    - Callable instances whose ``__call__`` is ``async def`` (e.g. an
+      evaluator class that holds judge config in ``__init__``).
+    - ``functools.partial`` wrapping any of the above (handled
+      automatically by ``iscoroutinefunction`` since 3.8).
+    """
+    fn = getattr(expected, 'fn', None)
+    if fn is None:
+        return False
+    if inspect.iscoroutinefunction(fn):
+        return True
+    # Callable-instance case: check __call__.
+    call_attr = getattr(fn, '__call__', None)
+    return call_attr is not None and inspect.iscoroutinefunction(call_attr)
+
+
+async def _invoke_custom_evaluate_async(
+    expected: Any,
+    answer: Any,
+    scenario: Scenario,
+    *,
+    note_key_to_unit_ids: dict[str, list[str]],
+    judge: Any | None,
+    context: dict[str, Any] | None,
+) -> dict[str, float]:
+    """Async dispatch path for ``CustomEvaluate`` wrapping an ``async def``
+    evaluator. Mirrors the sync ``CustomEvaluate.score`` body — same
+    AssertionError-as-fail mapping, same fail-closed default for empty
+    metrics — but awaits the user function natively from the runner's
+    own event loop. ``context=None`` is tolerated (defensive parity with
+    the sync path)."""
+    from memex_eval.suite.decorator import ScenarioContext as _SCtx
+
+    ctx_dict = context or {}
+    ctx = _SCtx(
+        query=scenario.query,
+        scenario=scenario,
+        api=ctx_dict.get('_api'),
+        vault_id=ctx_dict.get('_vault_id'),
+        server_url=ctx_dict.get('_server_url', ''),
+        judge=judge,
+        answer=answer,
+        note_key_to_unit_ids=dict(note_key_to_unit_ids or {}),
+        note_id_by_key=dict(ctx_dict.get('_note_id_by_key') or {}),
+        setup_context=dict(ctx_dict),
+    )
+    try:
+        await expected.fn(ctx)
+    except AssertionError as exc:
+        # Preserve any metrics populated BEFORE the assertion fired
+        # (e.g. ``ctx.metrics['recall'] = 0.6; assert recall >= 0.8``).
+        # Stash on the exception via an attribute so the outer
+        # ``_execute_scenario`` AssertionError handler can recover them
+        # when building the ScenarioOutcome. Non-numeric values get
+        # dropped with a warning rather than crashing the Pydantic
+        # validator on outcome construction.
+        partial = _coerce_numeric_metrics(ctx.metrics)
+        partial['pass'] = 0.0
+        exc.partial_metrics = partial  # type: ignore[attr-defined]
+        logger.info('CustomEvaluate async fn raised AssertionError: %s', exc)
+        raise
+    if not ctx.metrics:
+        logger.warning(
+            'CustomEvaluate async fn for scenario %r returned without '
+            'populating ctx.metrics; recording pass=0.0 (fail-closed).',
+            scenario.id,
+        )
+        ctx.metrics['pass'] = 0.0
+    return _coerce_numeric_metrics(ctx.metrics)
+
+
 async def _execute_scenario(
     api: RemoteMemexAPI,
     server_url: str,
@@ -687,7 +830,12 @@ async def _execute_scenario(
     replicate_index: int,
     backend_cache: dict[str, Any] | None = None,
     defer_teardown: bool = False,
-    deferred_teardown_sink: list[tuple[Scenario, UUID, dict[str, Any]]] | None = None,
+    # Each entry: (scenario, vault_id, scenario_context, base_scenario_or_none,
+    # base_ctx_or_none). The two trailing slots carry the BaseScenario
+    # instance and its ScenarioContext when the scenario was authored via
+    # ``@suite.register_class`` AND its setup ran — drained by the suite
+    # loop after the last consumer scenario completes.
+    deferred_teardown_sink: 'list[Any] | None' = None,
 ) -> ScenarioOutcome:
     started = time.monotonic()
     answer_mode = suite.answer_mode_for(scenario)
@@ -768,7 +916,47 @@ async def _execute_scenario(
         # ingest path above; consumed by the inline-note delete teardown
         # in the finally block (or its deferred variant).
         '_inline_note_ids': dict(inline_note_ids),
+        # Plumbing for CustomEvaluate (decorator-API outcomes) to reach
+        # api / vault_id / server_url from a sync ``score()`` call.
+        '_api': api,
+        '_vault_id': vault_id,
+        '_server_url': server_url,
     }
+    # BaseScenario instance dispatch — set when the scenario was authored
+    # via @suite.register_class. The runner calls instance.setup/act/
+    # evaluate/teardown at the right points; super() inside those methods
+    # reaches the existing machinery (setup_actions, backend, expected.score,
+    # per-action teardowns + inline-note delete are already handled by the
+    # runner around the dispatch points, so the lifecycle methods are
+    # additive — see decorator.py:BaseScenario for semantics table).
+    #
+    # Two recovery paths:
+    #  1. The instance stashed by ``to_scenario_model`` via
+    #     ``object.__setattr__(sc, '_base_scenario_instance', self)``.
+    #  2. A sidecar map on the legacy Suite, populated by
+    #     ``decorator.Suite.build()``. This survives Pydantic
+    #     re-validation / model_copy paths that drop the stashed attr.
+    base_scenario = getattr(scenario, '_base_scenario_instance', None)
+    if base_scenario is None:
+        sidecar = getattr(suite, '_base_scenarios_by_id', None)
+        if sidecar is not None:
+            base_scenario = sidecar.get(scenario.id)
+    base_ctx: Any = None
+    base_setup_ran = False
+    if base_scenario is not None:
+        from memex_eval.suite.decorator import ScenarioContext as _SCtx
+
+        base_ctx = _SCtx(
+            query=scenario.query,
+            scenario=scenario,
+            api=api,
+            vault_id=vault_id,
+            server_url=server_url,
+            judge=judge,
+            note_key_to_unit_ids=note_key_to_unit_ids,
+            note_id_by_key=note_id_by_key,
+            setup_context=scenario_context,
+        )
     try:
         if scenario.setup_actions:
             setup_result = await _run_setup_actions(
@@ -789,6 +977,16 @@ async def _execute_scenario(
                     replicate_index=replicate_index,
                     answer_mode=answer_mode,
                 )
+
+        # BaseScenario.setup hook — runs AFTER setup_actions / inline notes
+        # so subclasses can layer extra side-effects on the validated baseline.
+        # Exceptions propagate to the outer try/except which converts to
+        # status='error' (preserves the existing fail-loud invariant). The
+        # ``base_setup_ran`` flag gates ``teardown`` so a setup that never
+        # ran cannot leave teardown observing un-initialized state.
+        if base_scenario is not None and base_ctx is not None:
+            await base_scenario.setup(base_ctx)
+            base_setup_ran = True
 
         # Pre-fetch the asset list for any note_key the outcome explicitly
         # requires (NoteAssetsContain — and CompositeOutcome that wraps
@@ -845,13 +1043,122 @@ async def _execute_scenario(
                 replicate_index=replicate_index,
                 answer_mode=answer_mode,
             )
-        metrics = scenario.expected.score(
-            answer,
-            scenario,
-            note_key_to_unit_ids=note_key_to_unit_ids,
-            judge=judge,
-            context=scenario_context,
-        )
+
+        # BaseScenario.act hook — receives the backend's AgentAnswer.
+        # Subclasses can mutate or replace ``ctx.answer`` (e.g. multi-step
+        # retrieval) before evaluation. Default is no-op (keeps backend's
+        # answer unchanged). Named ``act`` to avoid colliding with the
+        # ``query: str`` data field on Scenario / BaseScenario.
+        if base_scenario is not None and base_ctx is not None:
+            base_ctx.answer = answer
+            await base_scenario.act(base_ctx)
+            # Honor any answer mutation/replacement the user did.
+            if base_ctx.answer is not None:
+                answer = base_ctx.answer
+
+        # Score: BaseScenario.evaluate REPLACES the direct expected.score
+        # call (the default impl runs expected.score itself, so subclasses
+        # that don't override or that call super() get identical behavior).
+        #
+        # AssertionError contract: an assertion raised inside the user
+        # evaluator (BaseScenario.evaluate, @suite.scenario function body,
+        # or expected.score) is the natural signal for status='fail'. The
+        # narrow ``except AssertionError`` below catches ONLY user-evaluator
+        # asserts; an assertion raised in setup_actions, BaseScenario.setup
+        # /.act, or backend.answer falls through to the broad outer handler
+        # and records status='error' — those are infrastructure phases, not
+        # eval verdicts.
+        no_metrics_breadcrumb: str | None = None
+        try:
+            if base_scenario is not None and base_ctx is not None:
+                base_ctx.metrics.clear()
+                await base_scenario.evaluate(base_ctx)
+                # Coerce non-numeric breadcrumbs the user may have stuck
+                # into ctx.metrics so they don't crash the ScenarioOutcome
+                # Pydantic validator on success.
+                metrics = _coerce_numeric_metrics(base_ctx.metrics)
+                if not metrics:
+                    # User forgot to override evaluate, OR set expected, OR
+                    # populate ctx.metrics. Fail-closed with a clear breadcrumb.
+                    metrics = {'pass': 0.0}
+                    no_metrics_breadcrumb = (
+                        f'BaseScenario.evaluate for {scenario.id!r} produced no '
+                        f'metrics — did you forget to set ``self.expected`` or '
+                        f'override ``evaluate`` to populate ``ctx.metrics``?'
+                    )
+            elif _custom_eval_has_async_fn(scenario.expected):
+                # CustomEvaluate wrapping an ``async def`` evaluator —
+                # bypass ``score()`` and await the function directly.
+                # score() would otherwise raise RuntimeError (running event
+                # loop). The decorator-API @suite.scenario async-fn path
+                # lands here.
+                metrics = await _invoke_custom_evaluate_async(
+                    scenario.expected,
+                    answer,
+                    scenario,
+                    note_key_to_unit_ids=note_key_to_unit_ids,
+                    judge=judge,
+                    context=scenario_context,
+                )
+            else:
+                # Legacy / built-in outcome path. Coerce to numeric so a
+                # third-party ``register_outcome`` subclass that returns
+                # non-floats can't crash ``ScenarioOutcome`` Pydantic
+                # validation downstream and erase the verdict — matches
+                # the BaseScenario / CustomEvaluate paths above.
+                metrics = _coerce_numeric_metrics(
+                    scenario.expected.score(
+                        answer,
+                        scenario,
+                        note_key_to_unit_ids=note_key_to_unit_ids,
+                        judge=judge,
+                        context=scenario_context,
+                    )
+                )
+        except AssertionError as exc:
+            # User-evaluator AssertionError → status='fail' (real eval
+            # verdict, not a runner crash). Setup/act/backend asserts
+            # bypass this narrow catch and reach the outer ``except
+            # Exception`` below as status='error'.
+            #
+            # Preserve any metrics the evaluator populated BEFORE the
+            # assertion fired (e.g. ``ctx.metrics['recall'] = 0.6;
+            # assert recall >= 0.8``). Dropping them would erase the
+            # gradient signal that makes evaluation runs useful for
+            # tracking progress over time. ``pass=0.0`` is overlaid on
+            # top so the status logic agrees with the verdict.
+            #
+            # Three sources, tried in order:
+            #  1. ``exc.partial_metrics`` — set by
+            #     ``_invoke_custom_evaluate_async`` for async @suite.scenario
+            #     paths (the user ScenarioContext is local to that helper
+            #     and not visible here).
+            #  2. ``base_ctx.metrics`` — for class-based BaseScenario
+            #     evaluators where the runner owns the ScenarioContext.
+            #  3. Empty fallback — sync ``CustomEvaluate.score`` already
+            #     handles its own preservation internally.
+            preserved: dict[str, float] = {}
+            partial_from_exc = getattr(exc, 'partial_metrics', None)
+            if isinstance(partial_from_exc, dict):
+                # ``_invoke_custom_evaluate_async`` already coerced; this
+                # is a defense-in-depth pass.
+                preserved.update(_coerce_numeric_metrics(partial_from_exc))
+            elif base_ctx is not None:
+                # Class-based evaluator path — base_ctx.metrics is the
+                # raw dict the user mutated; coerce non-numeric breadcrumbs
+                # before they crash the ScenarioOutcome validator.
+                preserved.update(_coerce_numeric_metrics(base_ctx.metrics))
+            preserved['pass'] = 0.0
+            return ScenarioOutcome(
+                scenario_id=scenario.id,
+                status='fail',
+                metrics=preserved,
+                actual_summary={'assertion_failed': str(exc)},
+                duration_ms=(time.monotonic() - started) * 1000,
+                error=f'AssertionError: {exc}',
+                replicate_index=replicate_index,
+                answer_mode=answer_mode,
+            )
         duration_ms = (time.monotonic() - started) * 1000
 
         # Determine pass/fail status from the metrics dict
@@ -898,7 +1205,7 @@ async def _execute_scenario(
             )
         else:
             status = 'pass' if passed else 'fail'
-            error_note = None
+            error_note = no_metrics_breadcrumb
 
         return ScenarioOutcome(
             scenario_id=scenario.id,
@@ -925,6 +1232,11 @@ async def _execute_scenario(
             tool_calls=answer.tool_calls,
         )
     except Exception as e:
+        # Outer catch: setup/act/backend phase crashes (including
+        # AssertionError raised in those infrastructure phases) become
+        # status='error'. The narrow inner ``except AssertionError`` above
+        # covers user-evaluator asserts and short-circuits before reaching
+        # here.
         return ScenarioOutcome(
             scenario_id=scenario.id,
             status='error',
@@ -936,6 +1248,33 @@ async def _execute_scenario(
             answer_mode=answer_mode,
         )
     finally:
+        # BaseScenario.teardown — runs only if the matching ``setup`` ran
+        # (asymmetric setup/teardown is a classic Python lifecycle bug).
+        # ALSO: when this scenario is a producer for another's
+        # ``depends_on_prior_scenarios``, defer the teardown to the same
+        # sink as the runner-level teardowns. Otherwise a class-based
+        # dep producer (e.g. flips a feature flag in setup, restores in
+        # teardown) would revert its state before the consumer scenario
+        # observed it. Per-handler isolation: a raise here is logged but
+        # does NOT block the runner's own teardowns from firing.
+        should_defer = defer_teardown and deferred_teardown_sink is not None
+        run_base_teardown_now = (
+            base_scenario is not None
+            and base_ctx is not None
+            and base_setup_ran
+            and not should_defer
+        )
+        if run_base_teardown_now:
+            try:
+                await base_scenario.teardown(base_ctx)
+            except Exception as exc:
+                logger.warning(
+                    'BaseScenario.teardown for %r raised %s — continuing with '
+                    'runner-level teardowns.',
+                    scenario.id,
+                    exc,
+                )
+
         # Run teardowns immediately UNLESS this scenario is named in
         # another's ``depends_on_prior_scenarios`` — in that case the
         # caller passes ``defer_teardown=True`` and we hand the
@@ -946,9 +1285,23 @@ async def _execute_scenario(
         # rule applies to inline-note deletes — a dependent scenario
         # may reference its parent's inline-note unit IDs.
         has_inline_notes = bool(scenario_context.get('_inline_note_ids'))
-        if scenario.setup_actions or has_inline_notes:
-            if defer_teardown and deferred_teardown_sink is not None:
-                deferred_teardown_sink.append((scenario, vault_id, scenario_context))
+        # The deferred-teardown sink also carries the BaseScenario instance
+        # (or None) so the deferred drain can call its teardown after
+        # the last consumer ran — preserving setup→teardown symmetry
+        # across the dependency boundary.
+        deferred_payload = (
+            scenario,
+            vault_id,
+            scenario_context,
+            base_scenario if (base_setup_ran and base_scenario is not None) else None,
+            base_ctx if (base_setup_ran and base_ctx is not None) else None,
+        )
+        if scenario.setup_actions or has_inline_notes or (should_defer and base_setup_ran):
+            if should_defer:
+                # Sink list is variant-typed: entries may carry the
+                # optional BaseScenario teardown pair appended above.
+                if deferred_teardown_sink is not None:
+                    deferred_teardown_sink.append(deferred_payload)
             else:
                 if scenario.setup_actions:
                     await _run_setup_teardowns(
@@ -1017,6 +1370,7 @@ async def run_suite(
     reuse_vault: str | None = None,
     manifest_dir: Path | None = None,
     scenario_ids: list[str] | None = None,
+    groups: list[str] | None = None,
 ) -> RunResult:
     """Run one suite end-to-end.
 
@@ -1044,6 +1398,22 @@ async def run_suite(
 
     Logs to ``recorder`` if provided. Returns the full ``RunResult``.
     """
+    # Validation order matters for clear error reporting: surface
+    # programming-error mutexes (keep + reuse) BEFORE filter typos, since
+    # the user can't recover from the mutex without changing the call,
+    # whereas a typoed --scenario is a near-miss they can correct.
+    if keep_vault is not None and reuse_vault is not None:
+        raise ValueError(
+            'keep_vault and reuse_vault are mutually exclusive. '
+            'Reuse already implicitly preserves the vault for the next run.'
+        )
+    # Validate filter inputs BEFORE any network IO / vault setup so a
+    # typoed --scenario / --group fails fast instead of after a vault
+    # has been created and torn down. The helper itself is pure and
+    # side-effect-free; the result is recomputed below to keep the
+    # ordering with ingest validation but the validate-fail path here
+    # short-circuits the expensive setup.
+    _compute_filter_inclusion(suite.scenarios, scenario_ids, groups)
     if manifest_dir is None:
         manifest_dir = Path.home() / '.memex' / 'eval' / 'keep-vault-manifests'
     config_overrides = dict(config_overrides or {})
@@ -1103,16 +1473,6 @@ async def run_suite(
     git_sha = _git_capture(['rev-parse', 'HEAD'])
     git_branch = _git_capture(['rev-parse', '--abbrev-ref', 'HEAD'])
     memex_v = _memex_version()
-
-    # round-6 H3: hoist mutual-exclusion check into ``run_suite`` so library
-    # callers (test harnesses, orchestration scripts) get the same
-    # protection the CLI provides. Both flags set is a programming error;
-    # raising here surfaces it before any vault state is mutated.
-    if keep_vault is not None and reuse_vault is not None:
-        raise ValueError(
-            'keep_vault and reuse_vault are mutually exclusive. '
-            'Reuse already implicitly preserves the vault for the next run.'
-        )
 
     outcomes: list[ScenarioOutcome] = []
     note_key_to_unit_ids: dict[str, list[str]] = {}
@@ -1336,42 +1696,24 @@ async def run_suite(
                 deps_referenced: set[str] = {
                     dep for s in suite.scenarios for dep in s.depends_on_prior_scenarios
                 }
-                deferred_teardowns: list[tuple[Scenario, UUID, dict[str, Any]]] = []
+                # Each tuple: (scenario, vault_id, scenario_context,
+                # base_scenario_or_none, base_ctx_or_none). Variant-typed
+                # because the BaseScenario slots are populated only for
+                # decorator-API class-based scenarios whose setup ran.
+                deferred_teardowns: list[Any] = []
 
-                # ``scenario_ids`` filter: when set, only run the named
-                # scenarios + their ``depends_on_prior_scenarios`` predecessors
-                # (transitively). Predecessors must run because the
-                # consumer's assertion observes their side effects (e.g.
-                # ``outcomes_ranking_specific_query`` reads stamps from
-                # ``outcomes_ranking``). Unknown ids raise rather than
-                # being silently filtered out.
-                included_ids: set[str] | None = None
-                if scenario_ids:
-                    requested = set(scenario_ids)
-                    unknown = requested - {s.id for s in suite.scenarios}
-                    if unknown:
-                        raise ValueError(
-                            f'Unknown scenario id(s) {sorted(unknown)} for suite '
-                            f'{suite.name!r}. Available: '
-                            f'{sorted(s.id for s in suite.scenarios)}'
-                        )
-                    included_ids = set(requested)
-                    # Walk dep chain. Suite._validate_referential_integrity
-                    # already rejects forward refs and cycles, so a simple
-                    # depth-bounded loop is sufficient.
-                    while True:
-                        new = {
-                            d
-                            for s in suite.scenarios
-                            if s.id in included_ids
-                            for d in s.depends_on_prior_scenarios
-                        }
-                        if new <= included_ids:
-                            break
-                        included_ids |= new
+                # ``scenario_ids`` / ``groups`` filtering. Both filters
+                # walk ``depends_on_prior_scenarios`` so a consumer's
+                # prerequisites still execute. When both are set the
+                # result is the intersection. Validation (unknown ids /
+                # unknown groups) happens here; the helper raises before
+                # any further side effects.
+                included_ids = _compute_filter_inclusion(suite.scenarios, scenario_ids, groups)
+                if included_ids is not None:
                     logger.info(
-                        'scenario filter: requested=%s, running (with deps)=%s',
-                        sorted(requested),
+                        'filter: scenario_ids=%s, groups=%s → running=%s',
+                        sorted(scenario_ids or []),
+                        sorted(groups or []),
                         sorted(included_ids),
                     )
 
@@ -1485,9 +1827,30 @@ async def run_suite(
                 # whose execution we postponed because their side effects
                 # were observed by a later ``depends_on_prior_scenarios``
                 # consumer. Running these in reverse declaration order so
-                # earlier-stamped state is undone last.
-                for dep_sc, dep_vault, dep_ctx in reversed(deferred_teardowns):
+                # earlier-stamped state is undone last. Each entry carries
+                # an optional BaseScenario teardown to drain too — that
+                # also had to be deferred so dep producers' class-level
+                # cleanup (e.g. flag-flip restore) runs after consumers.
+                for entry in reversed(deferred_teardowns):
+                    dep_sc = entry[0]
+                    dep_vault = entry[1]
+                    dep_ctx = entry[2]
+                    dep_base_scenario = entry[3] if len(entry) > 3 else None
+                    dep_base_ctx = entry[4] if len(entry) > 4 else None
                     try:
+                        # BaseScenario.teardown first — symmetric to its
+                        # immediate-path counterpart which runs BEFORE the
+                        # runner-level teardowns.
+                        if dep_base_scenario is not None and dep_base_ctx is not None:
+                            try:
+                                await dep_base_scenario.teardown(dep_base_ctx)
+                            except Exception as exc:
+                                logger.warning(
+                                    'Deferred BaseScenario.teardown for '
+                                    'scenario %r raised %s — continuing.',
+                                    dep_sc.id,
+                                    exc,
+                                )
                         if dep_sc.setup_actions:
                             await _run_setup_teardowns(
                                 api, dep_vault, dep_sc.setup_actions, dep_ctx

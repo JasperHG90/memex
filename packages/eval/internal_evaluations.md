@@ -243,6 +243,136 @@ Validation runs at parse time so typos fail before any server is spawned.
 
 ---
 
+## Authoring surface — three ways to write scenarios
+
+Suites can be authored two ways. Both produce identical runtime behavior;
+pick whichever ergonomics you prefer.
+
+### Surface A — declarative `Scenario(...)` lists (legacy, still supported)
+
+`SUITE = Suite(metadata=METADATA, scenarios=[Scenario(...), ...])`. Every
+existing suite (`acme_corp`, `project_nexus`, `ai_research_lab`) uses
+this. Best when scenarios are uniformly declarative — you pick a typed
+`ExpectedOutcome` per scenario and the framework runs the rest.
+
+### Surface B — decorator API (`memex_eval.suite.decorator.Suite`)
+
+```python
+from memex_eval.suite.decorator import Suite, BaseScenario, ScenarioContext
+from memex_eval.suite import KeywordsPresent, SuiteMetadata, SuiteSources
+
+suite = Suite(metadata=METADATA, sources=SUITE_SOURCES)
+
+# 1) Method call: pure declarative — no decorator, no body.
+suite.register(
+    id='alpha_lookup',
+    query='Who leads Project Alpha?',
+    expected=KeywordsPresent(type='keywords_present', keywords=['Sarah Chen']),
+    group='retrieval',
+)
+
+# 2) Decorator: function body REPLACES `expected`.
+@suite.scenario(id='alpha_custom', query='Who leads Project Alpha?', group='retrieval')
+def evaluate(ctx: ScenarioContext) -> None:
+    """Body is the evaluator. Mutate ctx.metrics in place. AssertionError → fail."""
+    assert 'Sarah Chen' in ctx.answer.answer_text
+    ctx.metrics['pass'] = 1.0
+
+# 3) Class-based: full lifecycle override.
+@suite.register_class
+class AlphaWithSetup(BaseScenario):
+    id = 'alpha_with_setup'
+    query = 'Who leads Project Alpha?'
+    expected = KeywordsPresent(type='keywords_present', keywords=['Sarah Chen'])
+    group = 'retrieval'
+
+    async def setup(self, ctx):
+        # Runs AFTER declared setup_actions / inline_notes.
+        # Use for extra side-effects (e.g. flip a feature flag).
+        ...
+
+    async def act(self, ctx):
+        # Runs AFTER backend.answer; ctx.answer is the backend's AgentAnswer.
+        # Override to mutate or replace ctx.answer (e.g. multi-step retrieval).
+        ...
+
+    async def evaluate(self, ctx):
+        # Default: runs self.expected.score() into ctx.metrics.
+        # Three patterns:
+        #   - skip super → fully imperative (declarative `expected` ignored)
+        #   - call super, then add → declarative + extra metrics
+        #   - just declarative → don't override at all
+        await super().evaluate(ctx)
+        ctx.metrics['extra_invariant'] = 1.0 if ... else 0.0
+
+    async def teardown(self, ctx):
+        # Runs BEFORE the runner's setup_action teardowns + inline-note delete.
+        # Use for extra cleanup that must run regardless of pass/fail.
+        ...
+
+SUITE = suite  # the loader detects either form and calls .build() if needed
+```
+
+> **Lifecycle method semantics.** ``setup`` and ``teardown`` run *around*
+> the runner's existing teardown machinery — they're additive, not
+> replacements. Default impls are no-ops. ``act`` runs after the backend
+> produced ``ctx.answer``; default is no-op (keep the answer unchanged).
+> ``evaluate`` is the only one with a non-trivial default — it scores
+> ``self.expected`` into ``ctx.metrics`` — and it's the only one where
+> calling vs skipping ``super()`` matters semantically.
+
+> **Decorator + `expected=` are mutually exclusive.** ``@suite.scenario(...)``
+> takes no ``expected=`` kwarg — the function body IS the expected. If
+> you need typed declarative scoring + extra checks, use the class-based
+> form with ``await super().evaluate(ctx)`` first then your additions.
+
+> **`ScenarioContext` is intentionally narrow.** Hold complex per-test
+> state on ``self`` of the BaseScenario subclass, not on ``ctx``. The
+> ``ctx`` dict is for the request/response boundary (query, answer,
+> metrics, plumbing the runner already builds).
+
+### Group filter — `--group <name>`
+
+Scenarios can declare `group='retrieval' | 'extraction' | …` (free-form
+string). Run a subset:
+
+```bash
+memex-eval suite run my_suite --group retrieval
+memex-eval suite run my_suite --group retrieval --group extraction
+```
+
+`--group` is repeatable. Combines with `--scenario` via **intersection**:
+the run executes only scenarios that pass *both* filters. Prerequisite
+scenarios (`depends_on_prior_scenarios`) of any included scenario still
+execute regardless of their own group — correctness wins.
+
+Closure semantics: dependency closure is computed on each filter axis
+*independently before intersection*.
+- `--scenario alpha`: includes `{alpha} ∪ closure_of_deps({alpha})`.
+- `--group retrieval`: includes `{every scenario in 'retrieval'} ∪ closure_of_deps(...)`.
+- Both flags: intersection of the two closures.
+
+Worked example: `--scenario alpha_top5_recall --group retrieval`.
+- If `alpha_top5_recall` is in group `'retrieval'`, the result is
+  `{alpha_top5_recall}` plus its prerequisite deps, intersected with
+  the retrieval-group closure (which already contains them).
+- If `alpha_top5_recall` is in a *different* group (e.g. `'extraction'`)
+  and its deps are also outside `'retrieval'`, the intersection is
+  empty — the scenario is silently skipped.
+- If `alpha_top5_recall` is in a different group BUT one of its deps
+  (say `setup_x`) IS in `'retrieval'`, the intersection contains *only*
+  the dep (`{setup_x}`). The dep runs **without its consumer**, which
+  is partial coverage with no useful verdict — the user almost
+  certainly didn't want this. Use one filter or the other, not both,
+  whenever the requested scenario isn't in the requested group.
+
+If you actually want union ("scenario foo plus everything in group
+bar"), pass `--scenario foo --scenario other1 --scenario other2 …`
+with explicit IDs, or pre-tag every scenario you want with the same
+group label.
+
+---
+
 ## 1. Adding a scenario to an existing suite
 
 ### When to do this

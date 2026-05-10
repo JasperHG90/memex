@@ -106,9 +106,23 @@ def load_suite(name_or_path: str | Path) -> Suite:
                 ) from e
 
     suite = getattr(mod, 'SUITE', None)
+    # Decorator-API ``Suite`` exports a ``.build()`` returning the legacy
+    # ``Suite`` Pydantic model. Detect either form so suites authored with
+    # the decorator API land in the same loader path.
+    if suite is None:
+        raise SuiteNotFound(
+            f'{getattr(mod, "__name__", name_or_path)} does not export a `SUITE` constant'
+        )
+    # Lazy import: the decorator module imports from this loader's siblings,
+    # creating a soft cycle if imported at module top.
+    from memex_eval.suite.decorator import Suite as DecoratorSuite
+
+    if isinstance(suite, DecoratorSuite):
+        suite = suite.build()
     if not isinstance(suite, Suite):
         raise SuiteNotFound(
-            f'{getattr(mod, "__name__", name_or_path)} does not export a `SUITE: Suite` constant'
+            f'{getattr(mod, "__name__", name_or_path)} `SUITE` is {type(suite).__name__}; '
+            f'expected memex_eval.suite.base.Suite or memex_eval.suite.decorator.Suite'
         )
     return suite
 
