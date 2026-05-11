@@ -457,6 +457,11 @@ class OutcomeService:
 
         resolved: list[UnitOutcome] = []
         if units is not None:
+            if len(units) == 0:
+                raise ValueError(
+                    "memory_unit mode requires at least one entry in 'units' "
+                    "(or pass legacy 'unit_ids' + 'success')."
+                )
             for item in units:
                 if isinstance(item, UnitOutcome):
                     resolved.append(item)
@@ -466,13 +471,21 @@ class OutcomeService:
                     raise ValueError(f'units entries must be UnitOutcome or dict, got {type(item)}')
             return resolved
 
-        if unit_ids is None and success is None:
-            return []
+        if (unit_ids is None or len(unit_ids) == 0) and success is None:
+            raise ValueError(
+                "memory_unit mode requires either 'units=[UnitOutcome(...)]' (preferred) "
+                "or legacy 'unit_ids' + 'success'; received neither."
+            )
 
         if success is None:
             raise ValueError(
                 "Legacy shape requires 'success' alongside 'unit_ids'. "
                 "Prefer passing 'units=[UnitOutcome(...)]' instead."
+            )
+        if unit_ids is None or len(unit_ids) == 0:
+            raise ValueError(
+                "memory_unit mode requires 'unit_ids' alongside 'success' "
+                "(or pass 'units=[UnitOutcome(...)]' instead)."
             )
         warnings.warn(
             'record_outcome called with the legacy (unit_ids, success) shape. '

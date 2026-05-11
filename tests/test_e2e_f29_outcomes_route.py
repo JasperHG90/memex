@@ -232,11 +232,16 @@ def test_kv_key_mode_with_unit_ids_returns_400(client: TestClient, postgres_url:
 
 @pytest.mark.integration
 def test_missing_success_returns_422(client: TestClient, postgres_url: str):
-    """ADD-2 invariant: success has no default; omitting it is a validation error.
+    """ADD-2 invariant: success has no default; omitting it is a caller error.
 
     Mirrors the F14 contract test — a kwargless / minimal call site cannot
-    silently record a FAILURE outcome. The HTTP layer must enforce this same
-    invariant via Pydantic body validation (Field(...) with no default).
+    silently record a FAILURE outcome. Under the new per-unit verb shape
+    ``success`` is optional on the wire (Pydantic accepts None), so the
+    service layer enforces the invariant and returns 400 when the legacy
+    ``unit_ids`` half of the pair is supplied without ``success``. 400 is
+    semantically more accurate than 422 here — the caller specified one
+    half of a legacy pair without the other (a contract violation), not a
+    schema violation.
     """
     _, vault_id = _seed_unit(postgres_url)
     resp = client.post(
@@ -246,7 +251,7 @@ def test_missing_success_returns_422(client: TestClient, postgres_url: str):
             'vault_id': str(vault_id),
         },
     )
-    assert resp.status_code == 422, resp.text
+    assert resp.status_code == 400, resp.text
 
 
 # ---------------------------------------------------------------------------
