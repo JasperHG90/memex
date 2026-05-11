@@ -11,10 +11,10 @@ import structlog
 from pydantic import BaseModel, Field
 
 from memex_common.client import RemoteMemexAPI
-from memex_common.schemas import BatchJobStatus, NoteCreateDTO
+from memex_common.schemas import BatchJobStatus, NoteCreateDTO, VaultDTO
 
 from .config import SyncConfig
-from .scanner import VaultNote, scan_vault
+from .scanner import VaultNote, parse_frontmatter, scan_vault
 from .state import SyncStateDB, diff
 
 logger = structlog.get_logger()
@@ -41,6 +41,11 @@ class SyncResult(BaseModel):
         default=0,
         description='Number of previously archived notes reactivated in Memex.',
     )
+    migrated: int = Field(
+        default=0,
+        description='Number of notes migrated to a different vault via frontmatter override. '
+        'Each migrated note is archived in its prior vault and re-ingested in the target.',
+    )
     errors: list[str] = Field(default_factory=list, description='Error messages for failed notes.')
     deleted_detected: list[str] = Field(
         default_factory=list,
@@ -60,10 +65,24 @@ def _build_note_dto(
     vault_id: str | None,
     note_key_prefix: str = 'obsidian',
     tags: list[str] | None = None,
+    override_vault: VaultDTO | None = None,
 ) -> NoteCreateDTO:
-    """Build a NoteCreateDTO from a VaultNote."""
+    """Build a NoteCreateDTO from a VaultNote.
+
+    WHY: note_key embeds vault_name (mutable) rather than vault_id (stable).
+    Renaming a vault folder mid-sync would re-key all of its notes — a known
+    latent limitation. V2 mitigates re-keying for the *frontmatter-override*
+    case via explicit migration in sync_vault; a deeper fix would store
+    vault_id in the key. Filed in BACKLOG.
+    """
     content_bytes = note.path.read_bytes()
-    note_key = f'{note_key_prefix}:{vault_name}:{note.relative_path}'
+    if override_vault is not None:
+        effective_vault_name = override_vault.name
+        effective_vault_id: str | None = str(override_vault.id)
+    else:
+        effective_vault_name = vault_name
+        effective_vault_id = vault_id
+    note_key = f'{note_key_prefix}:{effective_vault_name}:{note.relative_path}'
     name = note.path.stem
 
     files_dict: dict[str, bytes] = {}
@@ -83,9 +102,109 @@ def _build_note_dto(
         files=files_dict,
         tags=tags or [],
         note_key=note_key,
-        vault_id=vault_id,
+        vault_id=effective_vault_id,
         filename=filename,
     )
+
+
+def _post_sync_state(
+    notes: list[VaultNote],
+    overrides: dict[str, VaultDTO],
+    vault_name: str,
+    vault_id: str | None,
+    note_key_prefix: str,
+) -> tuple[dict[str, str], dict[str, str]]:
+    """Compute (note_keys, per_file_vault_ids) maps for state.mark_synced.
+
+    For notes with a resolved frontmatter override, the per-file vault_id is
+    the override's UUID and the note_key embeds the override's vault name.
+    For notes without override, we record the active sync vault_id (when set)
+    and the active vault_name; on a no-op resync this preserves invariants
+    and lets a later override be detected as a migration.
+    """
+    note_keys: dict[str, str] = {}
+    per_file_vault_ids: dict[str, str] = {}
+    for note in notes:
+        ov = overrides.get(note.relative_path)
+        if ov is not None:
+            note_keys[note.relative_path] = f'{note_key_prefix}:{ov.name}:{note.relative_path}'
+            per_file_vault_ids[note.relative_path] = str(ov.id)
+        else:
+            note_keys[note.relative_path] = f'{note_key_prefix}:{vault_name}:{note.relative_path}'
+            if vault_id is not None:
+                per_file_vault_ids[note.relative_path] = vault_id
+    return note_keys, per_file_vault_ids
+
+
+def _read_frontmatter_vault(note: VaultNote, vault_key: str) -> str | None:
+    """Return the raw frontmatter value of ``vault_key`` for ``note``, or None.
+
+    Markdown-only — binary file types in include_extensions have no frontmatter.
+    """
+    if note.path.suffix.lower() != '.md':
+        return None
+    try:
+        content = note.path.read_text(encoding='utf-8', errors='replace')
+    except OSError:
+        return None
+    raw = parse_frontmatter(content).get(vault_key, '').strip()
+    return raw or None
+
+
+async def _resolve_frontmatter_vaults(
+    api: RemoteMemexAPI,
+    notes: list[VaultNote],
+    vault_key: str,
+) -> dict[str, VaultDTO]:
+    """Resolve frontmatter ``vault:`` overrides for the given notes.
+
+    Returns a mapping of ``relative_path → VaultDTO`` for every note whose
+    frontmatter cites a vault that resolves to an existing memex vault.
+    Notes whose frontmatter value does not resolve are skipped here; the
+    caller is expected to surface a warning and fall back to the default
+    vault for those.
+
+    Memoizes via a single ``list_vaults()`` lookup so each unique override
+    name costs zero additional HTTP round-trips after the first call.
+    """
+    requested: dict[str, str] = {}
+    for note in notes:
+        raw = _read_frontmatter_vault(note, vault_key)
+        if raw is not None:
+            requested[note.relative_path] = raw
+
+    if not requested:
+        return {}
+
+    try:
+        all_vaults = await api.list_vaults()
+    except Exception as e:
+        logger.warning(
+            'Failed to list vaults for frontmatter override resolution; '
+            'falling back to default vault for all overrides.',
+            error=str(e),
+        )
+        return {}
+
+    by_name: dict[str, VaultDTO] = {v.name: v for v in all_vaults}
+    by_id: dict[str, VaultDTO] = {str(v.id): v for v in all_vaults}
+
+    resolved: dict[str, VaultDTO] = {}
+    warned: set[str] = set()
+    for rel_path, raw in requested.items():
+        vault = by_name.get(raw) or by_id.get(raw)
+        if vault is not None:
+            resolved[rel_path] = vault
+        elif raw not in warned:
+            logger.warning(
+                'Frontmatter vault override does not match any known vault; '
+                'falling back to default vault.',
+                path=rel_path,
+                requested_vault=raw,
+            )
+            warned.add(raw)
+
+    return resolved
 
 
 async def _poll_job(
@@ -300,6 +419,56 @@ async def sync_vault(
         if dry_run:
             return result
 
+        # Resolve frontmatter vault overrides for changed + returning notes.
+        # Returned mapping covers only the paths whose override resolved to a
+        # known vault; unknown vault names fall back to the default (warned).
+        override_candidates = list(changed) + list(returning)
+        overrides = await _resolve_frontmatter_vaults(
+            api,
+            override_candidates,
+            sync_config.exclude.frontmatter_vault_key,
+        )
+
+        # Detect migrations: a note already tracked in SyncedFile whose
+        # resolved frontmatter override differs from its previously-recorded
+        # vault_id. We archive the old note (by note_id, which is globally
+        # unique) before re-ingesting it into the target vault. This prevents
+        # orphan-create when vault_name is embedded in note_key.
+        migrations: list[tuple[str, str, VaultDTO]] = []  # (rel_path, old_note_id, target)
+        for note in changed:
+            target = overrides.get(note.relative_path)
+            if target is None:
+                continue
+            existing = state.get_file(note.relative_path)
+            if existing is None or existing.note_id is None or existing.vault_id == str(target.id):
+                continue
+            migrations.append((note.relative_path, existing.note_id, target))
+
+        if migrations:
+            if on_progress:
+                on_progress('migrating', 0, len(migrations), 'Migrating notes to new vault...')
+            for i, (rel_path, old_note_id, target) in enumerate(migrations):
+                try:
+                    await api.set_note_status(UUID(old_note_id), 'archived')
+                    result.migrated += 1
+                    logger.info(
+                        'Archived note in prior vault for frontmatter override migration',
+                        path=rel_path,
+                        old_note_id=old_note_id,
+                        target_vault=target.name,
+                        target_vault_id=str(target.id),
+                    )
+                except Exception as e:
+                    result.errors.append(f'{rel_path}: migrate archive failed: {e}')
+                    logger.error(
+                        'Failed to archive prior version during vault migration',
+                        path=rel_path,
+                        old_note_id=old_note_id,
+                        error=str(e),
+                    )
+                if on_progress:
+                    on_progress('migrating', i + 1, len(migrations), rel_path)
+
         # 3. Build DTOs and ingest
         # 3a. Ingest changed notes
         if changed:
@@ -314,6 +483,7 @@ async def sync_vault(
                         vault_id,
                         note_key_prefix=sync_config.note_key_prefix,
                         tags=list(sync_config.default_tags),
+                        override_vault=overrides.get(note.relative_path),
                     )
                     dtos.append(dto)
                 except Exception as e:
@@ -349,10 +519,14 @@ async def sync_vault(
                         result.failed = 1
                         result.errors.append(str(e))
                 else:
+                    # When any DTO carries a frontmatter override, suppress the
+                    # batch-level vault_id so per-note vault_id is respected;
+                    # otherwise server-side batch override would clobber it.
+                    batch_vault_id = None if overrides else vault_id
                     try:
                         job_status = await api.ingest_batch(
                             dtos,
-                            vault_id=vault_id,
+                            vault_id=batch_vault_id,
                             batch_size=sync_config.batch_size,
                         )
 
@@ -408,7 +582,20 @@ async def sync_vault(
 
                 # Update state with note_ids
                 if result.ingested > 0 or result.skipped > 0:
-                    state.mark_synced(changed, vault_id, note_ids=note_ids)
+                    note_keys, per_file_vault_ids = _post_sync_state(
+                        changed,
+                        overrides,
+                        vault_name,
+                        vault_id,
+                        sync_config.note_key_prefix,
+                    )
+                    state.mark_synced(
+                        changed,
+                        vault_id,
+                        note_ids=note_ids,
+                        note_keys=note_keys,
+                        per_file_vault_ids=per_file_vault_ids,
+                    )
 
         # 3b. Handle deleted files
         if deleted and handle_deletes:
@@ -441,17 +628,36 @@ async def sync_vault(
                             vault_id,
                             note_key_prefix=sync_config.note_key_prefix,
                             tags=list(sync_config.default_tags),
+                            override_vault=overrides.get(note.relative_path),
                         )
                         resp = await api.ingest(dto, background=False)
+                        nks, pvids = _post_sync_state(
+                            [note],
+                            overrides,
+                            vault_name,
+                            vault_id,
+                            sync_config.note_key_prefix,
+                        )
                         if resp.status == 'success':
                             result.ingested += 1
                             nids = {}
                             if resp.note_id:
                                 nids[note.relative_path] = resp.note_id
-                            state.mark_synced([note], note_ids=nids)
+                            state.mark_synced(
+                                [note],
+                                vault_id,
+                                note_ids=nids,
+                                note_keys=nks,
+                                per_file_vault_ids=pvids,
+                            )
                         elif resp.status == 'skipped':
                             result.skipped += 1
-                            state.mark_synced([note])
+                            state.mark_synced(
+                                [note],
+                                vault_id,
+                                note_keys=nks,
+                                per_file_vault_ids=pvids,
+                            )
                     except Exception as e:
                         result.errors.append(f'{note.relative_path}: ingest failed: {e}')
                     continue
@@ -473,12 +679,26 @@ async def sync_vault(
                         vault_id,
                         note_key_prefix=sync_config.note_key_prefix,
                         tags=list(sync_config.default_tags),
+                        override_vault=overrides.get(note.relative_path),
                     )
                     resp = await api.ingest(dto, background=False)
                     if resp.status == 'success':
                         result.ingested += 1
                     elif resp.status == 'skipped':
                         result.skipped += 1
+                    nks, pvids = _post_sync_state(
+                        [note],
+                        overrides,
+                        vault_name,
+                        vault_id,
+                        sync_config.note_key_prefix,
+                    )
+                    state.mark_synced(
+                        [note],
+                        vault_id,
+                        note_keys=nks,
+                        per_file_vault_ids=pvids,
+                    )
                 except Exception as e:
                     result.errors.append(f'{note.relative_path}: unarchive failed: {e}')
                     logger.error(

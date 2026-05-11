@@ -161,6 +161,59 @@ class TestSyncStateDB:
         assert f.note_id == 'id-a-new'
 
 
+class TestNoteKeyAndVaultIdMigration:
+    """V2: SyncedFile gained note_key and vault_id columns for migration detection."""
+
+    def test_mark_synced_stores_note_key_and_vault_id(self, db: SyncStateDB) -> None:
+        db.mark_synced(
+            [_make_note('a.md', 1000.0)],
+            vault_id='active-vault',
+            note_keys={'a.md': 'obsidian:vault-A:a.md'},
+            per_file_vault_ids={'a.md': 'vault-A-uuid'},
+        )
+        f = db.get_file('a.md')
+        assert f is not None
+        assert f.note_key == 'obsidian:vault-A:a.md'
+        assert f.vault_id == 'vault-A-uuid'
+
+    def test_migration_existing_row_updates_note_key_and_vault_id(self, db: SyncStateDB) -> None:
+        """A subsequent sync recording a different vault_id/note_key for the
+        same relative_path must overwrite — not insert a duplicate."""
+        db.mark_synced(
+            [_make_note('a.md', 1000.0)],
+            note_ids={'a.md': 'note-id'},
+            note_keys={'a.md': 'obsidian:vault-A:a.md'},
+            per_file_vault_ids={'a.md': 'vault-A-uuid'},
+        )
+        db.mark_synced(
+            [_make_note('a.md', 2000.0)],
+            note_ids={'a.md': 'note-id-new'},
+            note_keys={'a.md': 'obsidian:vault-B:a.md'},
+            per_file_vault_ids={'a.md': 'vault-B-uuid'},
+        )
+
+        f = db.get_file('a.md')
+        assert f is not None
+        assert f.note_key == 'obsidian:vault-B:a.md'
+        assert f.vault_id == 'vault-B-uuid'
+        assert f.note_id == 'note-id-new'
+
+    def test_migration_idempotent_when_columns_exist(self, tmp_path: Path) -> None:
+        """Re-opening a state DB twice must not fail on the additive ALTER
+        TABLE — the try/except: pass idiom handles SQLite's lack of
+        IF NOT EXISTS on ADD COLUMN."""
+        db_path = tmp_path / 'state.db'
+
+        state1 = SyncStateDB(db_path)
+        state1.mark_synced([_make_note('a.md', 1000.0)])
+        state1.close()
+
+        # Re-opening triggers the migrations again — must be a no-op.
+        state2 = SyncStateDB(db_path)
+        assert state2.file_count() == 1
+        state2.close()
+
+
 class TestArchiveFiles:
     def test_archive_files(self, db: SyncStateDB) -> None:
         db.mark_synced(

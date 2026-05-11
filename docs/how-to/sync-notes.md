@@ -121,6 +121,19 @@ This note will not be synced to Memex.
 
 The frontmatter key and value are configurable in `note-sync.toml` (see below).
 
+## Routing Notes to a Different Vault via Frontmatter
+
+A single note can target a different vault than the active sync vault by adding a `vault:` key to its frontmatter:
+
+```markdown
+---
+title: Project Alpha notes
+vault: alpha
+---
+```
+
+On re-sync, Memex archives the prior version of the note (if any) in its original vault and re-ingests into `alpha`. The sync result includes a `migrated` counter alongside the usual `ingested` / `skipped` counts. See [Override the Target Vault via Frontmatter](override-vault-with-frontmatter.md) for the full workflow, including handling of unknown vault names.
+
 ## Configuration
 
 Edit `note-sync.toml` in your vault folder to customize sync behavior. The full default config:
@@ -144,6 +157,7 @@ extends_exclude = []
 ignore_folders = []
 frontmatter_skip_key = "agents"
 frontmatter_skip_value = "skip"
+frontmatter_vault_key = "vault"
 
 [sync.assets]
 enabled = true

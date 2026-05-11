@@ -129,6 +129,30 @@ class TestBuildNoteDto:
         dto = _build_note_dto(note, 'my-vault', 'test-vault')
         assert dto.filename is None
 
+    def test_honors_vault_override(self, vault: Path) -> None:
+        """When override_vault is supplied, note_key embeds the target vault
+        name and vault_id is the target UUID — not the active sync vault."""
+        from memex_common.schemas import VaultDTO
+
+        from memex_cli.sync.scanner import VaultNote
+
+        override = VaultDTO(id=uuid4(), name='B-vault')
+        note = VaultNote(
+            path=vault / 'hello.md',
+            relative_path='hello.md',
+            mtime=1000.0,
+            size=13,
+            assets=[],
+        )
+        dto = _build_note_dto(
+            note,
+            'A-vault',
+            'A-vault-id',
+            override_vault=override,
+        )
+        assert dto.note_key == 'obsidian:B-vault:hello.md'
+        assert dto.vault_id == str(override.id)
+
 
 class TestSyncVault:
     def test_dry_run_does_not_ingest(
@@ -248,6 +272,132 @@ class TestSyncVault:
         ids = state.get_note_ids_for_paths(['only.md'])
         assert ids.get('only.md') == note_id
         state.close()
+
+
+class TestFrontmatterVaultOverride:
+    def test_warns_and_falls_back_when_vault_unknown(
+        self, tmp_path: Path, mock_api: AsyncMock, sync_config: SyncConfig
+    ) -> None:
+        """Frontmatter cites a vault the server does not know.
+
+        Expected behavior: list_vaults returns no match → warning logged,
+        note falls back to the active vault (note_key uses vault_name, no
+        per-file vault_id stored beyond the active default).
+        """
+        from memex_common.schemas import VaultDTO
+
+        (tmp_path / 'note.md').write_text('---\nvault: nonexistent\n---\n\nbody')
+
+        mock_api.list_vaults.return_value = [
+            VaultDTO(id=uuid4(), name='A-vault'),
+        ]
+        mock_api.ingest.return_value = IngestResponse(
+            status='success',
+            note_id=str(uuid4()),
+            unit_ids=[],
+            reason=None,
+            overlapping_notes=[],
+        )
+
+        result = asyncio.run(sync_vault(tmp_path, mock_api, sync_config, vault_id='A-vault-id'))
+
+        assert result.ingested == 1
+        assert result.migrated == 0
+        called_dto = mock_api.ingest.call_args.args[0]
+        # No override resolved → note_key uses active vault folder name
+        assert called_dto.note_key == f'obsidian:{tmp_path.name}:note.md'
+
+    def test_routes_to_override_vault(
+        self, tmp_path: Path, mock_api: AsyncMock, sync_config: SyncConfig
+    ) -> None:
+        """Frontmatter cites a known vault → note_key embeds override name
+        and DTO.vault_id is the override UUID."""
+        from memex_common.schemas import VaultDTO
+
+        (tmp_path / 'note.md').write_text('---\nvault: B-vault\n---\n\nbody')
+
+        b_id = uuid4()
+        mock_api.list_vaults.return_value = [
+            VaultDTO(id=uuid4(), name='A-vault'),
+            VaultDTO(id=b_id, name='B-vault'),
+        ]
+        mock_api.ingest.return_value = IngestResponse(
+            status='success',
+            note_id=str(uuid4()),
+            unit_ids=[],
+            reason=None,
+            overlapping_notes=[],
+        )
+
+        result = asyncio.run(sync_vault(tmp_path, mock_api, sync_config, vault_id='A-vault-id'))
+
+        assert result.ingested == 1
+        called_dto = mock_api.ingest.call_args.args[0]
+        assert called_dto.note_key == 'obsidian:B-vault:note.md'
+        assert called_dto.vault_id == str(b_id)
+
+    def test_migration_archives_prior_and_increments_counter(
+        self, tmp_path: Path, mock_api: AsyncMock, sync_config: SyncConfig
+    ) -> None:
+        """Note already synced into A; user adds vault: B; re-sync archives
+        the prior note in A, re-ingests into B, and migrated counter is 1."""
+        from memex_common.schemas import VaultDTO
+
+        from memex_cli.sync.scanner import VaultNote
+
+        note_path = tmp_path / 'note.md'
+        # First, "previously ingested in A" state — record vault_id explicitly.
+        old_note_id = str(uuid4())
+        state = SyncStateDB(tmp_path / sync_config.state_file)
+        # Write file content matching a state mtime in the past.
+        note_path.write_text('---\nvault: B-vault\n---\n\nbody')
+        stat = note_path.stat()
+        state.mark_synced(
+            [
+                VaultNote(
+                    path=note_path,
+                    relative_path='note.md',
+                    mtime=stat.st_mtime - 100,  # older than the now-written file
+                    size=stat.st_size,
+                    assets=[],
+                )
+            ],
+            vault_id='A-vault-id',
+            note_ids={'note.md': old_note_id},
+            note_keys={'note.md': 'obsidian:A-vault:note.md'},
+            per_file_vault_ids={'note.md': 'A-vault-id'},
+        )
+        state.close()
+
+        b_id = uuid4()
+        mock_api.list_vaults.return_value = [
+            VaultDTO(id=b_id, name='B-vault'),
+        ]
+        mock_api.set_note_status.return_value = None
+        mock_api.ingest.return_value = IngestResponse(
+            status='success',
+            note_id=str(uuid4()),
+            unit_ids=[],
+            reason=None,
+            overlapping_notes=[],
+        )
+
+        result = asyncio.run(sync_vault(tmp_path, mock_api, sync_config, vault_id='A-vault-id'))
+
+        assert result.migrated == 1
+        assert result.ingested == 1
+        mock_api.set_note_status.assert_called_once()
+        args, _ = mock_api.set_note_status.call_args
+        assert str(args[0]) == old_note_id
+        assert args[1] == 'archived'
+
+        # State now reflects target vault.
+        state2 = SyncStateDB(tmp_path / sync_config.state_file)
+        row = state2.get_file('note.md')
+        assert row is not None
+        assert row.vault_id == str(b_id)
+        assert row.note_key == 'obsidian:B-vault:note.md'
+        state2.close()
 
 
 class TestDeleteHandling:

@@ -10,6 +10,7 @@ from memex_cli.sync.scanner import (
     _allowed_asset_extensions,
     _is_excluded,
     _should_skip_frontmatter,
+    parse_frontmatter,
     resolve_assets,
     scan_vault,
 )
@@ -251,6 +252,36 @@ class TestShouldSkipFrontmatter:
 
     def test_empty_file(self) -> None:
         assert _should_skip_frontmatter('', ExcludeConfig()) is False
+
+
+class TestParseFrontmatter:
+    def test_returns_empty_for_no_frontmatter(self) -> None:
+        assert parse_frontmatter('# Heading\nbody') == {}
+
+    def test_parses_scalar_keys(self) -> None:
+        fm = parse_frontmatter('---\ntitle: Test\nvault: personal\n---\n\nbody')
+        assert fm == {'title': 'Test', 'vault': 'personal'}
+
+    def test_strips_quotes_from_values(self) -> None:
+        fm = parse_frontmatter('---\nvault: "personal"\nother: \'work\'\n---\n')
+        assert fm['vault'] == 'personal'
+        assert fm['other'] == 'work'
+
+    def test_handles_malformed_yaml(self) -> None:
+        # Lines without ':' are silently dropped; nested YAML left to its own
+        # devices. The helper must not raise on garbage.
+        fm = parse_frontmatter(
+            '---\nvalid: yes\nthis-has-no-colon\n  nested:\n    skipped: true\n---'
+        )
+        assert fm['valid'] == 'yes'
+        assert 'this-has-no-colon' not in fm
+
+    def test_preserves_value_case(self) -> None:
+        fm = parse_frontmatter('---\nvault: PersonalVault\n---\n')
+        assert fm['vault'] == 'PersonalVault'
+
+    def test_empty_input(self) -> None:
+        assert parse_frontmatter('') == {}
 
 
 class TestIgnoreFolders:

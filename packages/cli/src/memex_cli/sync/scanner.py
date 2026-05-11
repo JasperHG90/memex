@@ -68,6 +68,33 @@ def _is_excluded(path: Path, vault_path: Path, exclude: ExcludeConfig) -> bool:
     return False
 
 
+def parse_frontmatter(content: str) -> dict[str, str]:
+    """Parse a note's YAML frontmatter into a flat string-keyed mapping.
+
+    Returns an empty dict when the file has no leading ``---``-delimited
+    block. Only top-level scalar ``key: value`` lines are surfaced; nested
+    YAML is silently dropped. Values have surrounding quotes stripped but
+    case is preserved — callers needing case-insensitive comparison must
+    lower the value themselves.
+
+    Lightweight by design: skip-marker checks and the vault-override path
+    both need string-keyed scalars only; a full YAML parser would inflate
+    the CLI dependency surface for no benefit.
+    """
+    m = _FRONTMATTER_RE.match(content)
+    if not m:
+        return {}
+
+    fm: dict[str, str] = {}
+    for line in m.group(1).splitlines():
+        line = line.strip()
+        if ':' not in line:
+            continue
+        k, _, v = line.partition(':')
+        fm[k.strip()] = v.strip().strip('"\'')
+    return fm
+
+
 def _should_skip_frontmatter(content: str, exclude: ExcludeConfig) -> bool:
     """Check if a note's frontmatter contains the skip marker.
 
@@ -80,23 +107,9 @@ def _should_skip_frontmatter(content: str, exclude: ExcludeConfig) -> bool:
 
     The check is case-insensitive on the value.
     """
-    m = _FRONTMATTER_RE.match(content)
-    if not m:
-        return False
-
-    fm_block = m.group(1)
-    key = exclude.frontmatter_skip_key
+    fm = parse_frontmatter(content)
     skip_val = exclude.frontmatter_skip_value.lower()
-
-    for line in fm_block.splitlines():
-        line = line.strip()
-        if ':' not in line:
-            continue
-        k, _, v = line.partition(':')
-        if k.strip() == key and v.strip().strip('"\'').lower() == skip_val:
-            return True
-
-    return False
+    return fm.get(exclude.frontmatter_skip_key, '').lower() == skip_val
 
 
 def _allowed_asset_extensions(asset_config: AssetConfig) -> set[str]:
