@@ -13,7 +13,13 @@
 # so this hook produces side-effects only. Configured `async: true` in
 # hooks.json so the agent's exit isn't blocked.
 set -uo pipefail
-trap 'exit 0' ERR
+# SessionEnd has no decision-control output and Claude Code discards stdout
+# from async hooks, so emitting `{}` is purely cosmetic here — but matching
+# the rest of the plugin's `trap 'echo "{}"; exit 0' ERR` pattern removes a
+# maintenance-time trap: future refactors that flip this hook to sync
+# (or copy the trap to a sync hook) won't suddenly start panicking on a
+# malformed response.
+trap 'echo "{}"; exit 0' ERR
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
@@ -89,22 +95,8 @@ fi
 
 # Slice from offset; if the note was never created (no compactions), include
 # everything from the start.
-_lines_md=$(tail -n +"$((_prev_offset + 1))" "$_transcript_path" 2>/dev/null | jq -nRr '
-    def extract:
-        fromjson?
-        | (.role // .message.role) as $r
-        | (.content // .message.content) as $c
-        | if ($r == "user" or $r == "assistant") then
-            ( if $c == null then ""
-              elif ($c | type) == "string" then $c
-              elif ($c | type) == "array" then
-                  [ $c[] | select(.type == "text") | .text ] | join("\n")
-              else "" end ) as $text
-            | { role: $r, text: ($text // "") }
-          else empty end;
-    inputs | extract | select(.text != "")
-    | "### \(.role)\n\n\(.text)\n"
-' 2>/dev/null || true)
+_lines_md=$(tail -n +"$((_prev_offset + 1))" "$_transcript_path" 2>/dev/null \
+    | jq -nRr -f "$SCRIPT_DIR/_transcript_to_md.jq" 2>/dev/null || true)
 
 if [ -z "$_lines_md" ]; then
     exit 0

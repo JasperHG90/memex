@@ -54,11 +54,20 @@ case "$_tool_name" in
         ;;
 esac
 
-# Source the resolver only if we'll actually need it (vault default).
-# Sourcing pulls in uvx-availability checks that are noisy on cold paths.
-source "$SCRIPT_DIR/resolve_config.sh"
-
 STATE_DIR="${CLAUDE_PLUGIN_DATA:-${HOME}/.claude/.state}/memex"
+
+# `resolve_config.sh` is only sourced when this hook actually needs to call
+# `memex_resolve_project_id` (cache miss on `$STATE_DIR/project_id`).
+# Sourcing it triggers a `uvx` availability check that's noisy in cold paths
+# and pays off only when the cache misses, which is rare after SessionStart.
+_resolver_loaded=0
+_load_resolver_if_needed() {
+    if [ "$_resolver_loaded" -eq 0 ]; then
+        # shellcheck source=resolve_config.sh
+        source "$SCRIPT_DIR/resolve_config.sh"
+        _resolver_loaded=1
+    fi
+}
 
 # ---------------------------------------------------------------------------
 # Build the auto-tag list (one tag per line, then jq-converts to a JSON array).
@@ -74,12 +83,13 @@ fi
 [ -n "$_session_note_key" ] && _auto_tags+=("$_session_note_key")
 
 # Project tag — prefer the cached value (avoids re-shelling git), fall back
-# to live resolution.
+# to live resolution (and only then pay the resolver's source cost).
 _project_id=""
 if [ -f "$STATE_DIR/project_id" ]; then
     _project_id=$(cat "$STATE_DIR/project_id" 2>/dev/null || true)
 fi
 if [ -z "$_project_id" ]; then
+    _load_resolver_if_needed
     _project_id=$(memex_resolve_project_id)
 fi
 [ -n "$_project_id" ] && _auto_tags+=("project:$_project_id")

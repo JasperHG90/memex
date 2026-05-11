@@ -88,22 +88,8 @@ else
     if [ "$_total_lines" -le "$_prev_offset" ]; then
         _capture_reason="no new turns since last compaction"
     else
-        _new_lines_md=$(tail -n +"$((_prev_offset + 1))" "$_transcript_path" 2>/dev/null | jq -nRr '
-            def extract:
-                fromjson?
-                | (.role // .message.role) as $r
-                | (.content // .message.content) as $c
-                | if ($r == "user" or $r == "assistant") then
-                    ( if $c == null then ""
-                      elif ($c | type) == "string" then $c
-                      elif ($c | type) == "array" then
-                          [ $c[] | select(.type == "text") | .text ] | join("\n")
-                      else "" end ) as $text
-                    | { role: $r, text: ($text // "") }
-                  else empty end;
-            inputs | extract | select(.text != "")
-            | "### \(.role)\n\n\(.text)\n"
-        ' 2>/dev/null || true)
+        _new_lines_md=$(tail -n +"$((_prev_offset + 1))" "$_transcript_path" 2>/dev/null \
+            | jq -nRr -f "$SCRIPT_DIR/_transcript_to_md.jq" 2>/dev/null || true)
 
         if [ -z "$_new_lines_md" ]; then
             _capture_reason="no extractable text in new turns"
