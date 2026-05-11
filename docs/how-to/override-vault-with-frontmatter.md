@@ -67,7 +67,11 @@ If `vault:` cites a name (or UUID) that the server does not recognize, sync logs
 
 ### Removing an override
 
-Removing the `vault:` key from frontmatter is **not** automatically reverted. The note remains in its current target vault. To move it back, set `vault:` to the original vault explicitly, then re-sync.
+Removing the `vault:` key from frontmatter is **not** automatically reverted. The note remains in its current target vault, and subsequent edits continue to flow into the same vault — sync remembers the previous routing via per-file state (`SyncedFile.vault_id`). To move it back, set `vault:` to the original vault explicitly, then re-sync.
+
+### Ingest failure during migration
+
+The migration archives the prior version **only after** the new ingest succeeds. If the new ingest fails (network error, validation error, etc.), the original note remains active in its source vault and no `migrated` increment is reported. Retry the sync once the issue is resolved.
 
 ### Vault name vs. UUID
 

@@ -400,6 +400,166 @@ class TestFrontmatterVaultOverride:
         state2.close()
 
 
+class TestFrontmatterVaultOverrideSafety:
+    """Adversarial-review regressions: archive-after-success, failed-ingest
+    state isolation, override-removed preserves stored routing."""
+
+    def test_archive_skipped_when_new_ingest_fails(
+        self, tmp_path: Path, mock_api: AsyncMock, sync_config: SyncConfig
+    ) -> None:
+        """If the new ingest fails after migration was detected, the old
+        note must NOT be archived. Losing the user's only copy of the note
+        would be catastrophic."""
+        from memex_common.schemas import VaultDTO
+
+        from memex_cli.sync.scanner import VaultNote
+
+        note_path = tmp_path / 'note.md'
+        old_note_id = str(uuid4())
+        state = SyncStateDB(tmp_path / sync_config.state_file)
+        note_path.write_text('---\nvault: B-vault\n---\n\nbody')
+        stat = note_path.stat()
+        state.mark_synced(
+            [
+                VaultNote(
+                    path=note_path,
+                    relative_path='note.md',
+                    mtime=stat.st_mtime - 100,
+                    size=stat.st_size,
+                    assets=[],
+                )
+            ],
+            vault_id='A-vault-id',
+            note_ids={'note.md': old_note_id},
+            note_keys={'note.md': 'obsidian:A-vault:note.md'},
+            per_file_vault_ids={'note.md': 'A-vault-id'},
+        )
+        state.close()
+
+        b_id = uuid4()
+        mock_api.list_vaults.return_value = [VaultDTO(id=b_id, name='B-vault')]
+        mock_api.ingest.return_value = IngestResponse(
+            status='failed',
+            note_id=None,
+            unit_ids=[],
+            reason='simulated failure',
+            overlapping_notes=[],
+        )
+
+        result = asyncio.run(sync_vault(tmp_path, mock_api, sync_config, vault_id='A-vault-id'))
+
+        assert result.failed == 1
+        assert result.migrated == 0
+        mock_api.set_note_status.assert_not_called()
+
+    def test_state_unchanged_when_ingest_fails(
+        self, tmp_path: Path, mock_api: AsyncMock, sync_config: SyncConfig
+    ) -> None:
+        """A failed ingest must not clobber an existing SyncedFile's
+        vault_id/note_key — preserving alignment with the server."""
+        from memex_common.schemas import VaultDTO
+
+        from memex_cli.sync.scanner import VaultNote
+
+        note_path = tmp_path / 'note.md'
+        old_note_id = str(uuid4())
+        state = SyncStateDB(tmp_path / sync_config.state_file)
+        note_path.write_text('---\nvault: B-vault\n---\n\nbody')
+        stat = note_path.stat()
+        state.mark_synced(
+            [
+                VaultNote(
+                    path=note_path,
+                    relative_path='note.md',
+                    mtime=stat.st_mtime - 100,
+                    size=stat.st_size,
+                    assets=[],
+                )
+            ],
+            vault_id='A-vault-id',
+            note_ids={'note.md': old_note_id},
+            note_keys={'note.md': 'obsidian:A-vault:note.md'},
+            per_file_vault_ids={'note.md': 'A-vault-id'},
+        )
+        state.close()
+
+        b_id = uuid4()
+        mock_api.list_vaults.return_value = [VaultDTO(id=b_id, name='B-vault')]
+        mock_api.ingest.return_value = IngestResponse(
+            status='failed',
+            note_id=None,
+            unit_ids=[],
+            reason='simulated failure',
+            overlapping_notes=[],
+        )
+
+        asyncio.run(sync_vault(tmp_path, mock_api, sync_config, vault_id='A-vault-id'))
+
+        state2 = SyncStateDB(tmp_path / sync_config.state_file)
+        row = state2.get_file('note.md')
+        assert row is not None
+        # Pre-existing routing preserved exactly.
+        assert row.vault_id == 'A-vault-id'
+        assert row.note_key == 'obsidian:A-vault:note.md'
+        assert row.note_id == old_note_id
+        state2.close()
+
+    def test_override_removed_preserves_prior_routing(
+        self, tmp_path: Path, mock_api: AsyncMock, sync_config: SyncConfig
+    ) -> None:
+        """User adds vault: B → syncs. Then removes the frontmatter key →
+        re-syncs. Code should keep ingesting into B (implicit target) using
+        the same note_key — not silently overwrite to the active vault."""
+        from memex_common.schemas import VaultDTO
+
+        from memex_cli.sync.scanner import VaultNote
+
+        note_path = tmp_path / 'note.md'
+        b_id = uuid4()
+        prior_note_id = str(uuid4())
+        state = SyncStateDB(tmp_path / sync_config.state_file)
+        note_path.write_text('# updated body without frontmatter\n')
+        stat = note_path.stat()
+        state.mark_synced(
+            [
+                VaultNote(
+                    path=note_path,
+                    relative_path='note.md',
+                    mtime=stat.st_mtime - 100,
+                    size=stat.st_size,
+                    assets=[],
+                )
+            ],
+            vault_id='A-vault-id',
+            note_ids={'note.md': prior_note_id},
+            note_keys={'note.md': 'obsidian:B-vault:note.md'},
+            per_file_vault_ids={'note.md': str(b_id)},
+        )
+        state.close()
+
+        # User has previously routed via override; vaults_by_id MUST be
+        # consulted even when no current note has a frontmatter override.
+        mock_api.list_vaults.return_value = [VaultDTO(id=b_id, name='B-vault')]
+        mock_api.ingest.return_value = IngestResponse(
+            status='success',
+            note_id=prior_note_id,
+            unit_ids=[],
+            reason=None,
+            overlapping_notes=[],
+        )
+
+        result = asyncio.run(sync_vault(tmp_path, mock_api, sync_config, vault_id='A-vault-id'))
+
+        assert result.ingested == 1
+        assert result.migrated == 0
+        # DTO sent to server uses the implicit B-vault target — not the
+        # active sync vault — so the existing server-side note is updated
+        # idempotently rather than duplicated.
+        called_dto = mock_api.ingest.call_args.args[0]
+        assert called_dto.note_key == 'obsidian:B-vault:note.md'
+        assert called_dto.vault_id == str(b_id)
+
+
 class TestDeleteHandling:
     def test_archive_on_delete_default(
         self, vault: Path, mock_api: AsyncMock, sync_config: SyncConfig
