@@ -1,6 +1,7 @@
 ---
 tags: [revenue, finance, q2-2025]
 description: Q2 2025 quarterly revenue figures.
+publish_date: 2025-07-11
 ---
 
 # Q2 2025 Quarterly Revenue

@@ -1,6 +1,7 @@
 ---
 tags: [project, kickoff, alpha]
 description: Project Alpha kickoff — lead, tech stack, Phase 1 target.
+publish_date: 2025-03-15
 ---
 
 # Project Alpha — Kickoff

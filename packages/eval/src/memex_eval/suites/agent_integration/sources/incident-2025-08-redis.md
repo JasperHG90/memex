@@ -1,6 +1,7 @@
 ---
 tags: [incident, redis, alpha]
 description: August 2025 incident — Redis cache cascading outage.
+publish_date: 2025-08-14
 ---
 
 # Incident — Redis cache cascading outage

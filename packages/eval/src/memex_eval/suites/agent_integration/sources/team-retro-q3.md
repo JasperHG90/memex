@@ -1,6 +1,7 @@
 ---
 tags: [retro, alpha, team]
 description: Q3 retrospective — Redis lessons, switching to in-process cache.
+publish_date: 2025-10-08
 ---
 
 # Q3 2025 Team Retrospective

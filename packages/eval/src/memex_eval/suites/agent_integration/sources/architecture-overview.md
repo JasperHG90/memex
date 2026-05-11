@@ -1,6 +1,7 @@
 ---
 tags: [architecture, overview, alpha]
 description: Project Alpha architecture overview — service map, data flow.
+publish_date: 2025-11-15
 ---
 
 # Project Alpha — Architecture Overview

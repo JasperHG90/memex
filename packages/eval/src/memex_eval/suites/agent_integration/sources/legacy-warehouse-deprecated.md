@@ -1,6 +1,7 @@
 ---
 tags: [legacy, deprecated, warehouse]
 description: Legacy Redshift warehouse — DEPRECATED, replaced by PostgreSQL.
+publish_date: 2025-06-15
 ---
 
 # Legacy Data Warehouse (DEPRECATED)

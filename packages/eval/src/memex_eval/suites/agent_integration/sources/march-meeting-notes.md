@@ -1,6 +1,7 @@
 ---
 tags: [meeting, planning]
 description: March 2025 planning meeting notes — extension point for appends.
+publish_date: 2025-03-25
 ---
 
 # March 2025 Planning Meeting

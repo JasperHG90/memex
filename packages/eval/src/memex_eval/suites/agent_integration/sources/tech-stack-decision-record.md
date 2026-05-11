@@ -1,6 +1,7 @@
 ---
 tags: [project, adr, alpha]
 description: Decision record — why PostgreSQL was chosen for Project Alpha.
+publish_date: 2025-02-28
 ---
 
 # Tech Stack Decision Record — PostgreSQL choice for Project Alpha

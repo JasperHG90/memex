@@ -1,6 +1,7 @@
 ---
 tags: [project, status, alpha]
 description: Project Alpha Q3 2025 status — Phase 1 shipped, Redis added.
+publish_date: 2025-09-30
 ---
 
 # Project Alpha — Q3 2025 Update

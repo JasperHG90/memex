@@ -60,7 +60,7 @@ def _tool_call_outcomes():
 
 class TestSuiteStructure:
     def test_scenarios_count(self) -> None:
-        assert len(SUITE.scenarios) == 27
+        assert len(SUITE.scenarios) == 28
 
     def test_scenario_ids_unique(self) -> None:
         ids = [s.id for s in SUITE.scenarios]

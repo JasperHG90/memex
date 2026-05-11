@@ -1,6 +1,7 @@
 ---
 tags: [profile, person]
 description: Sarah Chen — profile and role at Acme Corp.
+publish_date: 2025-09-01
 ---
 
 # Sarah Chen — Profile

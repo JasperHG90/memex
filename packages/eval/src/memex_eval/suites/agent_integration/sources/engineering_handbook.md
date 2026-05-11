@@ -1,6 +1,7 @@
 ---
 tags: [handbook, engineering, conventions]
 description: Engineering handbook — testing, deployment, style, security.
+publish_date: 2025-01-15
 ---
 
 # Engineering Handbook

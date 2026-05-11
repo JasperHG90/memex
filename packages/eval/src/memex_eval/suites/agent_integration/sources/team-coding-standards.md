@@ -1,6 +1,7 @@
 ---
 tags: [conventions, standards, engineering]
 description: Team coding standards — conventions and their proposers.
+publish_date: 2025-11-01
 ---
 
 # Team Coding Standards

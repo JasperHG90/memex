@@ -41,7 +41,6 @@ from pathlib import Path
 from memex_eval.suite import (
     AnyOfOutcomes,
     CompositeOutcome,
-    InlineNote,
     KeywordsPresent,
     LLMJudge,
     SuiteMetadata,
@@ -518,27 +517,71 @@ suite.register(
 # --- Feedback / MW ---
 
 suite.register(
-    id='feedback_records_success',
+    id='feedback_surfaces_candidate_notes',
     group='feedback',
+    description=(
+        'User describes a vague topic ("a bug a while back around caching") '
+        'without naming a specific note. The agent should call a note-level '
+        'search (note_search / find_note / list_notes / recent_notes) and '
+        'present candidate notes by title + date so the user can recognize '
+        'and pick. It should NOT dive straight to memory units or pick a '
+        'single note silently.'
+    ),
     query=(
-        'Looking at the prior debug-session note '
-        '(inline-feedback_records_success-prior-debug-session-redis-cache): '
-        'the in-process cache fix worked. Please record this as a success '
-        "against the relevant memory units so we don't suggest Redis again."
+        'We had some bug a while back related to our caching layer — can '
+        'you remind me what notes we have on that?'
     ),
     max_duration_ms=_DUR_MS,
-    inline_notes=[
-        InlineNote(
-            note_key='prior-debug-session-redis-cache',
-            title='Prior debug session — Redis cache fix',
-            content=(
-                'In session abc123 the agent retrieved Redis-incident memories '
-                'and suggested switching to in-process cache. The user reports '
-                'the fix worked and the cascading-outage symptoms have stopped '
-                'recurring.'
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=[
+                    'memex_note_search',
+                    'memex_find_note',
+                    'memex_list_notes',
+                    'memex_recent_notes',
+                ],
+                min_count=1,
+                match_mode='any',
             ),
-        ),
-    ],
+            LLMJudge(
+                type='llm_judge',
+                rubric=(
+                    'The answer surfaces two or more candidate notes (e.g. '
+                    'the Redis incident note, the Q3 retro, the Project '
+                    'Alpha Q3 update). Each candidate is identified by its '
+                    'title or a clear descriptor AND a date or time '
+                    'reference so the user can recognize which one they '
+                    'mean. The answer presents the candidates for the user '
+                    'to pick from rather than silently selecting one and '
+                    'narrating its contents.'
+                ),
+                threshold=0.5,
+            ),
+        ],
+    ),
+)
+
+suite.register(
+    id='feedback_records_success',
+    group='feedback',
+    description=(
+        'Discoverability check: given a clear user signal of success on a '
+        'specific recent fix, the agent should call memex_record_outcome '
+        'with success=True. Loose check on the boolean only — verifying '
+        'that the agent attached the outcome to the *right* memory units '
+        'is a multi-turn property the single-turn framework cannot fairly '
+        'judge; that lives in feedback_clarifies_under_ambiguity (testing '
+        'restraint) and is the gap a future multi-turn rebuild would close.'
+    ),
+    query=(
+        'Hey, that Redis cache fix we landed last week — switching to '
+        "in-process caching — it's been holding. Record that as a "
+        'successful resolution so we lock the lesson in.'
+    ),
+    max_duration_ms=_DUR_MS,
     expected=ToolCallArgMatches(
         type='tool_call_arg_matches',
         tool='memex_record_outcome',

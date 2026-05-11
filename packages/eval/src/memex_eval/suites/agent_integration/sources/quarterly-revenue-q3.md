@@ -1,6 +1,7 @@
 ---
 tags: [revenue, finance, q3-2025]
 description: Q3 2025 quarterly revenue figures.
+publish_date: 2025-10-10
 ---
 
 # Q3 2025 Quarterly Revenue
