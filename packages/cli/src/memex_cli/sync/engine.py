@@ -221,6 +221,27 @@ async def _fetch_vaults_by_id(api: RemoteMemexAPI) -> dict[str, VaultDTO]:
     return {str(v.id): v for v in all_vaults}
 
 
+def _resolve_active_vault_id(
+    vault_id: str | None,
+    vaults_by_id: dict[str, VaultDTO],
+) -> str | None:
+    """Return the string UUID of the active sync vault, or None if unknown.
+
+    ``vault_id`` may be a UUID string or a vault name; this resolves either
+    form against the cached vault directory. Used to decide whether a legacy
+    SyncedFile row (vault_id=None) is already in the same vault that a new
+    frontmatter override resolves to — in which case no migration is needed.
+    """
+    if vault_id is None:
+        return None
+    if vault_id in vaults_by_id:
+        return vault_id
+    for vid, vault in vaults_by_id.items():
+        if vault.name == vault_id:
+            return vid
+    return None
+
+
 def _compute_effective_targets(
     notes: list[VaultNote],
     overrides: dict[str, VaultDTO],
@@ -517,13 +538,23 @@ async def sync_vault(
         # relative_path; the post-ingest pass archives the old note ONLY for
         # paths whose new ingest succeeded. Archiving up front would lose the
         # user's note if the new ingest fails.
+        active_vault_uuid = _resolve_active_vault_id(vault_id, vaults_by_id)
         pending_migrations: dict[str, tuple[str, VaultDTO]] = {}
         for note in changed:
             target = overrides.get(note.relative_path)
             if target is None:
                 continue
             existing = state.get_file(note.relative_path)
-            if existing is None or existing.note_id is None or existing.vault_id == str(target.id):
+            if (
+                existing is None
+                or existing.note_id is None
+                or existing.vault_id == str(target.id)
+                or (
+                    existing.vault_id is None
+                    and active_vault_uuid is not None
+                    and active_vault_uuid == str(target.id)
+                )
+            ):
                 continue
             pending_migrations[note.relative_path] = (existing.note_id, target)
 
@@ -819,8 +850,17 @@ async def sync_vault(
                     is_migration_return = (
                         target is not None
                         and existing_row is not None
-                        and existing_row.vault_id is not None
-                        and existing_row.vault_id != str(target.id)
+                        and (
+                            (
+                                existing_row.vault_id is not None
+                                and existing_row.vault_id != str(target.id)
+                            )
+                            or (
+                                existing_row.vault_id is None
+                                and active_vault_uuid is not None
+                                and active_vault_uuid != str(target.id)
+                            )
+                        )
                     )
                     if not is_migration_return:
                         await api.set_note_status(note_uuid, 'active')

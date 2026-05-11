@@ -399,6 +399,56 @@ class TestFrontmatterVaultOverride:
         assert row.note_key == 'obsidian:B-vault:note.md'
         state2.close()
 
+    def test_legacy_row_with_override_to_active_vault_no_migration(
+        self, tmp_path: Path, mock_api: AsyncMock, sync_config: SyncConfig
+    ) -> None:
+        """Legacy SyncedFile (vault_id=None, pre-override schema) re-synced
+        with a frontmatter override that resolves to the *active* sync vault
+        must NOT trigger a migration — the note is already in that vault."""
+        from memex_common.schemas import VaultDTO
+
+        from memex_cli.sync.scanner import VaultNote
+
+        note_path = tmp_path / 'note.md'
+        old_note_id = str(uuid4())
+        active_vault_id = uuid4()
+        note_path.write_text('---\nvault: Active-vault\n---\n\nbody')
+        stat = note_path.stat()
+
+        state = SyncStateDB(tmp_path / sync_config.state_file)
+        state.mark_synced(
+            [
+                VaultNote(
+                    path=note_path,
+                    relative_path='note.md',
+                    mtime=stat.st_mtime - 100,
+                    size=stat.st_size,
+                    assets=[],
+                )
+            ],
+            vault_id=str(active_vault_id),
+            note_ids={'note.md': old_note_id},
+        )
+        state.close()
+
+        mock_api.list_vaults.return_value = [
+            VaultDTO(id=active_vault_id, name='Active-vault'),
+        ]
+        mock_api.ingest.return_value = IngestResponse(
+            status='success',
+            note_id=str(uuid4()),
+            unit_ids=[],
+            reason=None,
+            overlapping_notes=[],
+        )
+
+        result = asyncio.run(
+            sync_vault(tmp_path, mock_api, sync_config, vault_id=str(active_vault_id))
+        )
+
+        assert result.migrated == 0
+        mock_api.set_note_status.assert_not_called()
+
 
 class TestFrontmatterVaultOverrideSafety:
     """Adversarial-review regressions: archive-after-success, failed-ingest
