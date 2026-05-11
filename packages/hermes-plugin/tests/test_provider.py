@@ -1058,7 +1058,9 @@ def test_on_memory_write_mirrors_to_kv(provider_with_stubbed_api):
     assert prefix in VALID_NAMESPACES, (
         f'KV key {kwargs["key"]!r} prefix {prefix!r} not in VALID_NAMESPACES={VALID_NAMESPACES}'
     )
-    assert kwargs['key'].startswith('app:hermes:user:')
+    # target='user' must land in the user: namespace (semantic intent
+    # preserved so the mirror agrees with explicit memex_kv_write calls).
+    assert kwargs['key'].startswith('user:hermes:')
 
 
 def test_on_memory_write_remove_is_noop(provider_with_stubbed_api):
@@ -1066,6 +1068,16 @@ def test_on_memory_write_remove_is_noop(provider_with_stubbed_api):
     api.kv_put.reset_mock()
     provider.on_memory_write('remove', 'user', 'Prefers Rust')
     api.kv_put.assert_not_called()
+
+
+def test_on_memory_write_memory_target_maps_to_app_namespace(provider_with_stubbed_api):
+    """target='memory' is the agent's general scratchpad; it stays in app:hermes:memory:*."""
+    provider, api, _ = provider_with_stubbed_api
+    api.kv_put.reset_mock()
+    provider.on_memory_write('add', 'memory', 'Build uses uv, not pip')
+    api.kv_put.assert_awaited()
+    kwargs = api.kv_put.call_args.kwargs
+    assert kwargs['key'].startswith('app:hermes:memory:')
 
 
 def test_shutdown_is_safe_to_call_twice(provider_with_stubbed_api):

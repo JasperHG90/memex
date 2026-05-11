@@ -170,7 +170,7 @@ def test_on_memory_write_kv_roundtrip(initialized_provider, memex_server_url: st
     initialized_provider.on_memory_write('add', 'user', 'Prefers Rust for systems code')
 
     digest = hashlib.sha256(b'Prefers Rust for systems code').hexdigest()[:12]
-    expected_key = f'app:hermes:user:{digest}'
+    expected_key = f'user:hermes:{digest}'
     with httpx.Client(base_url=f'{memex_server_url}/api/v1/', timeout=10.0) as client:
         response = client.get('kv/get', params={'key': expected_key})
     assert response.status_code == 200, f'KV lookup failed: {response.status_code} {response.text}'

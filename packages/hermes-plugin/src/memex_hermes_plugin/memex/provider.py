@@ -480,17 +480,21 @@ class MemexMemoryProvider(MemoryProvider):
     def on_memory_write(self, action: str, target: str, content: str) -> None:  # type: ignore[override]
         """Mirror built-in MEMORY.md/USER.md writes to the Memex KV store.
 
-        Keys are namespaced per Memex's ``VALID_NAMESPACES`` contract:
-        ``app:hermes:<target>:<hash>``. The ``app:`` prefix is Memex's
-        app-scoped namespace; ``hermes`` scopes within it; ``<target>`` is
-        'memory' or 'user' (from Hermes' built-in memory); hash dedupes.
+        Target → namespace mapping preserves semantic intent so the mirror
+        lands in the same namespace as an explicit ``memex_kv_write`` would:
+
+        - ``target='user'`` → ``user:hermes:<digest>`` (user-scoped facts)
+        - ``target='memory'`` → ``app:hermes:memory:<digest>`` (agent scratchpad)
         """
         if self._api is None or action == 'remove' or not content:
             return
         import hashlib
 
         digest = hashlib.sha256(content.encode('utf-8')).hexdigest()[:12]
-        key = f'app:hermes:{target}:{digest}'
+        if target == 'user':
+            key = f'user:hermes:{digest}'
+        else:
+            key = f'app:hermes:{target}:{digest}'
         try:
             run_sync(self._api.kv_put(value=content, key=key), timeout=10.0)
         except Exception as e:
