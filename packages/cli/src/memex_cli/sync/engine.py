@@ -240,6 +240,7 @@ def _compute_effective_targets(
     3. None — caller falls back to the active sync vault.
     """
     targets: dict[str, VaultDTO] = {}
+    warned_orphans: set[str] = set()
     for note in notes:
         explicit = overrides.get(note.relative_path)
         if explicit is not None:
@@ -251,6 +252,18 @@ def _compute_effective_targets(
         implicit = vaults_by_id.get(existing.vault_id)
         if implicit is not None:
             targets[note.relative_path] = implicit
+        elif existing.vault_id not in warned_orphans:
+            # Stored vault_id no longer resolves — the vault was deleted
+            # or renamed-out-from-under us. Caller will silently re-route
+            # to the active sync vault; surface a warning so the user can
+            # decide whether to recreate the original vault.
+            logger.warning(
+                'Stored target vault for note is no longer known to the server; '
+                'falling back to active sync vault.',
+                path=note.relative_path,
+                stored_vault_id=existing.vault_id,
+            )
+            warned_orphans.add(existing.vault_id)
     return targets
 
 
@@ -772,7 +785,7 @@ async def sync_vault(
                         )
                         if resp.status == 'success':
                             result.ingested += 1
-                            nids = {}
+                            nids: dict[str, str] = {}
                             if resp.note_id:
                                 nids[note.relative_path] = resp.note_id
                             state.mark_synced(
@@ -795,40 +808,79 @@ async def sync_vault(
                     continue
                 try:
                     note_uuid = UUID(note_id_str)
-                    await api.set_note_status(note_uuid, 'active')
-                    state.unarchive_file(note.relative_path, note.mtime)
-                    result.unarchived += 1
-                    logger.info(
-                        'Unarchived note',
-                        path=note.relative_path,
-                        note_id=note_id_str,
+                    target = effective_targets.get(note.relative_path)
+                    existing_row = state.get_file(note.relative_path)
+                    # Migration return: the note was archived in vault A, now
+                    # returns with frontmatter routing it to vault B. Do NOT
+                    # unarchive the old note (it should stay archived in A);
+                    # instead build a fresh DTO for the target vault. The
+                    # old SyncedFile row is taken out of "archived" state by
+                    # the upcoming mark_synced (it clears `archived=False`).
+                    is_migration_return = (
+                        target is not None
+                        and existing_row is not None
+                        and existing_row.vault_id is not None
+                        and existing_row.vault_id != str(target.id)
                     )
+                    if not is_migration_return:
+                        await api.set_note_status(note_uuid, 'active')
+                        state.unarchive_file(note.relative_path, note.mtime)
+                        result.unarchived += 1
+                        logger.info(
+                            'Unarchived note',
+                            path=note.relative_path,
+                            note_id=note_id_str,
+                        )
 
                     # Re-ingest to pick up any content changes while skipped
+                    # (or to create a fresh record in the target vault for a
+                    # migration return).
                     dto = _build_note_dto(
                         note,
                         vault_name,
                         vault_id,
                         note_key_prefix=sync_config.note_key_prefix,
                         tags=list(sync_config.default_tags),
-                        override_vault=effective_targets.get(note.relative_path),
+                        override_vault=target,
                     )
                     resp = await api.ingest(dto, background=False)
-                    if resp.status == 'success':
-                        result.ingested += 1
-                    elif resp.status == 'skipped':
-                        result.skipped += 1
                     nks, pvids = _post_sync_state(
                         [note],
                         effective_targets,
                         sync_config.note_key_prefix,
                     )
-                    state.mark_synced(
-                        [note],
-                        vault_id,
-                        note_keys=nks,
-                        per_file_vault_ids=pvids,
-                    )
+                    if resp.status == 'success':
+                        result.ingested += 1
+                        nids = {}
+                        if resp.note_id:
+                            nids[note.relative_path] = resp.note_id
+                        state.mark_synced(
+                            [note],
+                            vault_id,
+                            note_ids=nids,
+                            note_keys=nks,
+                            per_file_vault_ids=pvids,
+                        )
+                    elif resp.status == 'skipped':
+                        result.skipped += 1
+                        state.mark_synced(
+                            [note],
+                            vault_id,
+                            note_keys=nks,
+                            per_file_vault_ids=pvids,
+                        )
+                    if is_migration_return and resp.status in ('success', 'skipped'):
+                        # The old note in vault A was already archived (it
+                        # came in via `returning`) — count it as a migration
+                        # for the user-visible counter. No additional
+                        # set_note_status call needed.
+                        result.migrated += 1
+                        logger.info(
+                            'Returned-archived note routed to new vault via override',
+                            path=note.relative_path,
+                            old_note_id=note_id_str,
+                            target_vault=target.name if target else None,
+                        )
                 except Exception as e:
                     result.errors.append(f'{note.relative_path}: unarchive failed: {e}')
                     logger.error(
