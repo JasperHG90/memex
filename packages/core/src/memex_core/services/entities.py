@@ -611,6 +611,11 @@ class EntityService(BaseService):
                             await session.delete(m)
                         mental_models_merged += 1 + len(loser_mms)
 
+                # Materialize ORM-pending mental-model deletes before the raw
+                # SQL DELETE on entities — without this, the entity hard-delete
+                # could fire while stale MentalModel rows still hold FK references.
+                await session.flush()
+
                 # 6) Entity: hard-delete losers — LAST step before commit.
                 # Use raw SQL to bypass ORM cascade replay on already-cleaned tables.
                 await session.exec(

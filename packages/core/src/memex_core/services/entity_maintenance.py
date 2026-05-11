@@ -153,6 +153,12 @@ async def scan_collapse_clusters(
         cluster_min_threshold if cluster_min_threshold is not None else cfg.cluster_min_threshold
     )
 
+    if cluster_min_threshold > pair_threshold:
+        raise ValueError(
+            f'cluster_min_threshold ({cluster_min_threshold}) cannot exceed '
+            f'pair_threshold ({pair_threshold})'
+        )
+
     span_cm = (
         _tracer.start_as_current_span(
             'memex.entity_maintenance.scan',

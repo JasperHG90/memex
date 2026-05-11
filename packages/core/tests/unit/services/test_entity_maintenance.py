@@ -15,11 +15,14 @@ from datetime import datetime, timezone
 
 import pytest
 
+from unittest.mock import MagicMock
+
 from memex_core.services.entity_maintenance import (
     _composition_hash,
     _connected_components,
     _min_pairwise_similarity,
     _suggested_winner,
+    scan_collapse_clusters,
 )
 
 
@@ -133,3 +136,29 @@ def test_suggested_winner_handles_none_first_seen():
         },
     ]
     assert _suggested_winner(members) == 'oldest'
+
+
+@pytest.mark.asyncio
+async def test_scan_collapse_rejects_inverted_thresholds():
+    """Runtime overrides bypass EntityMaintenanceConfig's model_validator, so the
+    scan must independently reject cluster_min_threshold > pair_threshold (which
+    would otherwise reject every cluster as below-cohesion)."""
+    from memex_common.config import EntityMaintenanceConfig, MemexConfig
+
+    config = MemexConfig()
+    config.server.memory.entity_maintenance = EntityMaintenanceConfig(
+        scan_enabled=True,
+        top_n=100,
+        scan_cooldown_days=0,
+        pair_threshold=0.85,
+        cluster_min_threshold=0.7,
+    )
+    api = MagicMock()
+    api.config = config
+
+    with pytest.raises(ValueError, match='cluster_min_threshold'):
+        await scan_collapse_clusters(
+            api,
+            cluster_min_threshold=0.95,
+            pair_threshold=0.7,
+        )

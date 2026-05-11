@@ -360,6 +360,87 @@ async def test_collapse_cluster_merges_mental_models_with_version_bump(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_collapse_cluster_flushes_before_entity_delete(
+    session: AsyncSession,
+    metastore,
+    filestore,
+    monkeypatch,
+):
+    """Step 5 deletes MentalModel rows via the ORM (deferred until flush);
+    Step 6 then issues a raw SQL DELETE on entities. An explicit flush between
+    them makes the ordering invariant — without it, the entity hard-delete
+    could fire while stale MentalModel rows still hold FK references.
+    """
+    e_winner = await _make_entity(session, f'FW-{uuid4().hex[:6]}')
+    e_loser = await _make_entity(session, f'FL-{uuid4().hex[:6]}')
+
+    session.add(
+        MentalModel(
+            vault_id=GLOBAL_VAULT_ID,
+            entity_id=e_winner.id,
+            name='FW',
+            observations=[{'fact': 'w'}],
+            version=1,
+        )
+    )
+    session.add(
+        MentalModel(
+            vault_id=GLOBAL_VAULT_ID,
+            entity_id=e_loser.id,
+            name='FL',
+            observations=[{'fact': 'x'}],
+            version=1,
+        )
+    )
+    await session.commit()
+
+    from sqlmodel.ext.asyncio.session import AsyncSession as _AS
+    from memex_common.config import MemexConfig
+
+    call_log: list[str] = []
+
+    original_delete = _AS.delete
+    original_flush = _AS.flush
+    original_exec = _AS.exec
+
+    async def _track_delete(self, instance):
+        call_log.append(f'delete:{type(instance).__name__}')
+        return await original_delete(self, instance)
+
+    async def _track_flush(self, *args, **kwargs):
+        call_log.append('flush')
+        return await original_flush(self, *args, **kwargs)
+
+    async def _track_exec(self, stmt, *args, **kwargs):
+        raw = str(stmt)
+        if 'DELETE FROM entities' in raw:
+            call_log.append('exec:DELETE_ENTITIES')
+        return await original_exec(self, stmt, *args, **kwargs)
+
+    monkeypatch.setattr(_AS, 'delete', _track_delete)
+    monkeypatch.setattr(_AS, 'flush', _track_flush)
+    monkeypatch.setattr(_AS, 'exec', _track_exec)
+
+    svc = EntityService(metastore=metastore, filestore=filestore, config=MemexConfig())
+    await svc.collapse_cluster(winner_id=e_winner.id, loser_ids=[e_loser.id], actor='test')
+
+    mm_deletes = [i for i, e in enumerate(call_log) if e == 'delete:MentalModel']
+    flushes = [i for i, e in enumerate(call_log) if e == 'flush']
+    entity_deletes = [i for i, e in enumerate(call_log) if e == 'exec:DELETE_ENTITIES']
+
+    assert mm_deletes, 'expected at least one MentalModel ORM delete'
+    assert entity_deletes, 'expected the raw SQL DELETE on entities'
+    last_mm_delete = mm_deletes[-1]
+    first_entity_delete = entity_deletes[0]
+    interposed_flush = [f for f in flushes if last_mm_delete < f < first_entity_delete]
+    assert interposed_flush, (
+        f'expected an explicit session.flush() between MentalModel delete and '
+        f'entity DELETE, got call_log={call_log}'
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_collapse_cluster_writes_audit_log_with_details_column(
     session: AsyncSession,
     metastore,

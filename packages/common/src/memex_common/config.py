@@ -1404,11 +1404,12 @@ class EntityMaintenanceConfig(BaseModel):
     )
     top_n: int = Field(
         default=100,
-        ge=1,
+        ge=2,
         description=(
             'Maximum entities considered per scan, selected by activity '
-            '(mention_count). Empirically covers >95% of cooccurrence-weighted '
-            'activity in typical vaults.'
+            '(mention_count). Clusters require at least two members, so '
+            'top_n must be >= 2. Empirically covers >95% of '
+            'cooccurrence-weighted activity in typical vaults.'
         ),
     )
     scan_cooldown_days: int = Field(

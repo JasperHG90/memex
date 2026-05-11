@@ -178,3 +178,12 @@ class TestEntityMaintenanceConfig:
 
         cfg = EntityMaintenanceConfig(pair_threshold=0.75, cluster_min_threshold=0.75)
         assert cfg.cluster_min_threshold == cfg.pair_threshold
+
+    def test_top_n_below_two_rejected_by_config(self):
+        import pytest
+        from pydantic import ValidationError
+
+        from memex_common.config import EntityMaintenanceConfig
+
+        with pytest.raises(ValidationError):
+            EntityMaintenanceConfig(top_n=1)
