@@ -185,24 +185,18 @@ async def lint_resolve(
 
     Rule-keyed dispatcher: for ``entity_collapse_cluster`` findings, the
     request body MUST include ``{"winner_id": "<uuid>"}`` (or
-    ``"winner_canonical_name"``). The destructive collapse runs in the
-    same transaction as the status flip. Cross-vault auth is enforced on
-    every vault listed in ``evidence.vaults_affected`` before mutating.
+    ``"winner_canonical_name"``). The destructive collapse runs alongside
+    the status flip. Cross-vault auth is enforced on every vault listed in
+    ``evidence.vaults_affected`` before mutating.
     """
-    finding = await _load_finding_or_404(finding_id, api)
-    finding_vault = finding['vault_id']
-    rule_name = finding['rule_name']
+    if params:
+        finding = await _load_finding_or_404(finding_id, api)
+        if finding['rule_name'] == 'entity_collapse_cluster':
+            return await _resolve_entity_collapse_cluster(
+                finding=finding, api=api, auth=auth, params=params
+            )
 
-    if rule_name == 'entity_collapse_cluster':
-        return await _resolve_entity_collapse_cluster(
-            finding=finding,
-            api=api,
-            auth=auth,
-            params=params or {},
-        )
-
-    if finding_vault is not None:
-        await check_vault_access(auth, [finding_vault], api, permission=Permission.WRITE)
+    finding_vault = await _gate_finding_for_write(finding_id, api, auth)
     try:
         ok = await api.lint.set_status(finding_id, 'resolved', vault_id=finding_vault)
     except Exception as e:
