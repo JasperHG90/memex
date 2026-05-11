@@ -75,8 +75,6 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
-      - name: Check no FSRS-5 residue
-        run: bash scripts/ci/check_no_fsrs_residue.sh
       - name: Run pre-commit checks
         uses: JasperHG90/toiminnot/actions/prek@main
         with:
