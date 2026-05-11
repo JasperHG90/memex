@@ -88,9 +88,11 @@ case "$_subcommand $_subsubcommand" in
             esac
         done
         if [ -f "$_kv_file" ]; then
-            # Remove any existing line for this key, then append new
+            # Remove any existing line for this key (fixed-string equality
+            # via awk so regex metacharacters in keys never match siblings —
+            # mirrors the `kv get` fix above), then append the new value.
             _tmp=$(mktemp)
-            grep -v "^${_key}=" "$_kv_file" > "$_tmp" 2>/dev/null || true
+            awk -F= -v k="$_key" '$1 != k' "$_kv_file" > "$_tmp" 2>/dev/null || true
             printf '%s=%s\n' "$_key" "$_val" >> "$_tmp"
             mv "$_tmp" "$_kv_file"
         fi

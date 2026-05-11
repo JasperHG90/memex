@@ -274,8 +274,11 @@ memex_persist_session_delta() {
     local _flag_file="${_state_dir}/session_note_created_${_safe_session_id}"
 
     if [ ! -f "$_flag_file" ]; then
-        # First call: create the note.
-        local _add_args=(note add "$_delta" --key "$_note_key" --background)
+        # First call: create the note. Flags first, then `--`, then the
+        # positional `_delta` — transcript content can plausibly start with
+        # `-` (e.g. a bash log line) and would otherwise be parsed as a CLI
+        # flag.
+        local _add_args=(note add --key "$_note_key" --background)
         [ -n "$_vault"       ] && _add_args+=(--vault "$_vault")
         [ -n "$_title"       ] && _add_args+=(--title "$_title")
         [ -n "$_description" ] && _add_args+=(--description "$_description")
@@ -283,8 +286,24 @@ memex_persist_session_delta() {
         for _tag in "$@"; do
             [ -n "$_tag" ] && _add_args+=(--tag "$_tag")
         done
+        _add_args+=(-- "$_delta")
 
         if memex "${_add_args[@]}" >/dev/null 2>&1; then
+            # Atomic flag write: create a sibling temp file, then rename.
+            # `mv` is atomic on the same filesystem so a crash leaves either
+            # the temp file (cleaned up at next SessionStart) or the final
+            # flag (correctly marking the note as created). The old
+            # `: > "$_flag_file"` could leave an empty partial file on a
+            # crash that suppressed future appends.
+            local _flag_tmp
+            if _flag_tmp=$(mktemp "${_flag_file}.XXXXXX" 2>/dev/null); then
+                if mv -f "$_flag_tmp" "$_flag_file" 2>/dev/null; then
+                    return 0
+                fi
+                rm -f "$_flag_tmp"
+            fi
+            # Fall back to non-atomic write if mktemp/mv unavailable —
+            # better than failing the whole persist.
             : > "$_flag_file"
             return 0
         fi

@@ -247,13 +247,52 @@ def test_null_content_jsonl_does_not_crash(
         cwd=temp_git_repo,
     )
     assert result.returncode == 0, result.stderr
-    # The non-null user turns must reach the captured note.
+    # The non-null user turns must reach the captured note. Content is the
+    # last positional argument after the `--` separator (introduced so
+    # transcript lines starting with `-` aren't parsed as CLI flags).
     add_calls = mock_memex.calls_matching('note', 'add')
     assert len(add_calls) == 1
-    # The content arg is index 2 (after 'note', 'add')
-    note_content = add_calls[0]['argv'][2]
+    argv = add_calls[0]['argv']
+    assert '--' in argv, f'expected -- separator in argv, got {argv!r}'
+    note_content = argv[argv.index('--') + 1]
     assert 'real content' in note_content
     assert 'after null' in note_content
+
+
+def test_dash_prefixed_content_is_not_parsed_as_flag(
+    mock_memex: MockMemex, tmp_path: Path, temp_git_repo: Path
+) -> None:
+    """Transcript turns starting with `-` (e.g. a bash log line) must not be
+    misinterpreted as CLI flags by the underlying `memex note add` call. The
+    `--` separator in `memex_persist_session_delta` is the load-bearing
+    defense; assert it survives a dash-prefixed first turn.
+    """
+    transcript = tmp_path / 'transcript.jsonl'
+    lines = [
+        # First user turn starts with `--debug` — would shadow a real CLI
+        # flag if injected directly.
+        {'role': 'user', 'content': '--debug please diagnose the timeout'},
+        {'role': 'assistant', 'content': 'Sure, here is what I see.'},
+    ]
+    transcript.write_text('\n'.join(json.dumps(line) for line in lines) + '\n')
+    _seed_session_start_state(mock_memex)
+    result = run_script(
+        'on_pre_compact.sh',
+        stdin=_precompact_payload(str(transcript)),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+    )
+    assert result.returncode == 0, result.stderr
+    add_calls = mock_memex.calls_matching('note', 'add')
+    assert len(add_calls) == 1, f'expected 1 note add call, got {add_calls!r}'
+    argv = add_calls[0]['argv']
+    # The `--` separator must come BEFORE any string carrying the dash-
+    # prefixed turn; otherwise the CLI would have parsed `--debug` as a flag.
+    assert '--' in argv
+    sep_idx = argv.index('--')
+    content = argv[sep_idx + 1]
+    assert content.startswith('## Pre-compaction snapshot'), content
+    assert '--debug please diagnose' in content
 
 
 def test_session_stats_included_in_context(mock_memex: MockMemex, transcript_jsonl: Path) -> None:
