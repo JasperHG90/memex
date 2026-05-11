@@ -586,6 +586,23 @@ class ClaudeCodeBackend(AnswerBackend):
         return out
 
 
+def _strip_mcp_prefix(name: str) -> str:
+    """Strip the ``mcp__<server>__`` prefix Claude Code adds to MCP tool names.
+
+    Claude Code's stream-json emits memex MCP tools as
+    ``mcp__memex__memex_memory_search``; suite outcomes
+    (``ToolCallContains`` etc.) compare against bare names like
+    ``memex_memory_search`` so the same scenarios work under both
+    ``hermes`` and ``claude-code`` backends. Non-prefixed names pass
+    through unchanged so this is safe to call on any source.
+    """
+    if name.startswith('mcp__'):
+        parts = name.split('__', 2)
+        if len(parts) == 3:
+            return parts[2]
+    return name
+
+
 def _absorb_claude_message(msg: dict[str, Any], out: AgentAnswer) -> None:
     """Pull answer text, tool calls, and retrieved unit IDs from a stream-json message."""
     msg_type = msg.get('type')
@@ -604,7 +621,7 @@ def _absorb_claude_message(msg: dict[str, Any], out: AgentAnswer) -> None:
             if not isinstance(block, dict):
                 continue
             if block.get('type') == 'tool_use':
-                tool_name = block.get('name', '')
+                tool_name = _strip_mcp_prefix(block.get('name', ''))
                 tool_input = block.get('input', {})
                 out.tool_calls.append({'tool': tool_name, 'input': tool_input})
                 # Memex MCP search tools return unit lists in the result.

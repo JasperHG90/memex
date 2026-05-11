@@ -34,7 +34,11 @@ from memex_eval.suite.base import (
     Suite,
     UsefulAtK,
 )
-from memex_eval.suite.metrics import aggregate_metric_keys, percentile
+from memex_eval.suite.metrics import (
+    aggregate_metric_keys,
+    aggregate_per_scenario,
+    percentile,
+)
 from memex_eval.suite.setup_actions import get_setup_action
 from memex_eval.suite.sources import canonicalize_name
 
@@ -456,6 +460,8 @@ def _compute_own_skip_reason(
     when the scenario is runnable.
     """
     if reuse_vault is not None:
+        if sc.mutating_scenario:
+            return 'mutating_under_reuse_vault'
         for action in sc.setup_actions:
             try:
                 hcls = type(get_setup_action(action.kind))
@@ -1314,6 +1320,8 @@ async def _execute_scenario(
 
 def _aggregate_results(
     outcomes: list[ScenarioOutcome],
+    *,
+    run_replicates: int = 1,
 ) -> dict[str, float]:
     """Build the suite_metrics dict logged to MLflow."""
     runnable_outcomes = [o for o in outcomes if o.status != 'skip']
@@ -1352,6 +1360,8 @@ def _aggregate_results(
     aggregated['count.skipped'] = float(skip_count)
     aggregated['count.xfailed'] = float(xfail_count)
     aggregated['count.xpassed'] = float(xpass_count)
+
+    aggregated.update(aggregate_per_scenario(outcomes, run_replicates=run_replicates))
     return aggregated
 
 
@@ -2125,13 +2135,25 @@ async def run_suite(
                                 transitive_skip_dep = dep_id
                                 transitive_skip_reason = dep_skip
                                 break
-                    for replicate in range(replicates):
+                    n_replicates = scenario.replicates_override or replicates
+                    for replicate in range(n_replicates):
                         if own_skip == 'setup_action_not_reusable':
                             outcomes.append(
                                 ScenarioOutcome(
                                     scenario_id=scenario.id,
                                     status='skip',
                                     skip_reason='setup_action_not_reusable',
+                                    replicate_index=replicate,
+                                    answer_mode=suite.answer_mode_for(scenario),
+                                )
+                            )
+                            continue
+                        if own_skip == 'mutating_under_reuse_vault':
+                            outcomes.append(
+                                ScenarioOutcome(
+                                    scenario_id=scenario.id,
+                                    status='skip',
+                                    skip_reason='mutating_under_reuse_vault',
                                     replicate_index=replicate,
                                     answer_mode=suite.answer_mode_for(scenario),
                                 )
@@ -2376,7 +2398,7 @@ async def run_suite(
         raise
 
     finished_at = dt.datetime.now(dt.timezone.utc)
-    suite_metrics = _aggregate_results(outcomes)
+    suite_metrics = _aggregate_results(outcomes, run_replicates=replicates)
     answer_modes_used = sorted({o.answer_mode for o in outcomes if o.answer_mode})
     # Aggregate cost/tokens for agent-mode runs (zero for direct API).
     suite_metrics['cost.total_usd'] = sum(o.cost_usd for o in outcomes)

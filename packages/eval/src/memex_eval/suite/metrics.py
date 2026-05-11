@@ -7,11 +7,27 @@ Golden-value tests in test_metrics.py make drift visible.
 
 from __future__ import annotations
 
+import re
+from collections import defaultdict
 from collections.abc import Iterable
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    pass
+    from memex_eval.suite.base import ScenarioOutcome
+
+
+_MLFLOW_KEY_SAFE_RE = re.compile(r'[^A-Za-z0-9_./\- ]')
+
+
+def _sanitize_mlflow_key(key: str) -> str:
+    """Collapse any character outside MLflow's allowed set to ``_``.
+
+    MLflow allows alphanumerics, underscore, dash, period, slash, space.
+    Scenario ids already match ``^[a-z0-9_]+$`` so this is a no-op in
+    practice; the helper exists as defense against future id-format
+    relaxations and to make the contract explicit.
+    """
+    return _MLFLOW_KEY_SAFE_RE.sub('_', key)
 
 
 def _dedup_preserve_order(items: Iterable[str]) -> list[str]:
@@ -110,10 +126,72 @@ def aggregate_metric_keys(per_scenario: list[dict[str, float]]) -> dict[str, flo
     return out
 
 
+def aggregate_per_scenario(
+    outcomes: list[ScenarioOutcome],
+    *,
+    run_replicates: int = 1,
+) -> dict[str, float]:
+    """Bin ScenarioOutcomes by scenario_id and emit per-scenario pass-rate metrics.
+
+    Returns keys of the form:
+
+    - ``scenario.<id>.pass_rate`` — pass count / non-skipped non-errored count
+    - ``scenario.<id>.pass_count``
+    - ``scenario.<id>.total`` — actual non-skipped non-errored count
+
+    Plus two suite-level rollups:
+
+    - ``suite.pass_rate_all`` — every scenario (mutating + non-mutating)
+    - ``suite.pass_rate_non_mutating`` — scenarios where the actual replicate
+      count equals ``run_replicates``; scenarios with ``replicates_override``
+      run fewer times and produce zero-variance signal so they're excluded
+      from the headline rate. **At ``run_replicates=1`` (CLI default for
+      smoke runs) this collapses to ``suite.pass_rate_all`` because every
+      scenario trivially reaches N >= 1**; use ``--replicates 5`` or higher
+      to see the two metrics diverge.
+
+    Outcomes with ``status in ('skip', 'error')`` are excluded from the
+    rate (they don't contribute to pass/fail). ``xfail`` counts as pass,
+    ``xpass`` counts as fail (matches the framework's existing pass-rate
+    convention).
+    """
+    by_scenario: dict[str, list[ScenarioOutcome]] = defaultdict(list)
+    for o in outcomes:
+        if o.status in ('skip', 'error'):
+            continue
+        by_scenario[o.scenario_id].append(o)
+
+    result: dict[str, float] = {}
+    suite_pass_all = 0
+    suite_total_all = 0
+    suite_pass_nonmut = 0
+    suite_total_nonmut = 0
+
+    for sid, group in by_scenario.items():
+        safe = _sanitize_mlflow_key(sid)
+        n = len(group)
+        passes = sum(1 for o in group if o.status in ('pass', 'xfail'))
+        result[f'scenario.{safe}.pass_rate'] = passes / n if n else 0.0
+        result[f'scenario.{safe}.pass_count'] = float(passes)
+        result[f'scenario.{safe}.total'] = float(n)
+        suite_pass_all += passes
+        suite_total_all += n
+        if n >= run_replicates:
+            suite_pass_nonmut += passes
+            suite_total_nonmut += n
+
+    if suite_total_all:
+        result['suite.pass_rate_all'] = suite_pass_all / suite_total_all
+    if suite_total_nonmut:
+        result['suite.pass_rate_non_mutating'] = suite_pass_nonmut / suite_total_nonmut
+    return result
+
+
 __all__ = [
     'recall_at_k',
     'mrr',
     'ndcg_at_k',
     'percentile',
     'aggregate_metric_keys',
+    'aggregate_per_scenario',
 ]

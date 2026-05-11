@@ -14,6 +14,7 @@ assertions like ``memory_worth_delta`` — without editing this file.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import logging
 import re
 from pathlib import Path
@@ -1281,6 +1282,159 @@ class CompositeOutcome(ExpectedOutcomeBase):
 CompositeOutcome.model_rebuild()
 
 
+@register_outcome('any_of')
+class AnyOfOutcomes(ExpectedOutcomeBase):
+    """OR-composition: pass iff at least one child passes.
+
+    Mirrors ``CompositeOutcome`` (AND) but short-circuits on the first
+    passing child. Only the top-level ``pass`` key is reported — child
+    metrics are dropped to keep MLflow's flat namespace tractable when
+    this outcome is used inside ``CompositeOutcome``.
+    """
+
+    type: Literal['any_of']
+    children: list['ExpectedOutcomeUnion']
+
+    def score(self, answer: AgentAnswer, scenario, **kw) -> dict[str, float]:
+        for child in self.children:
+            child_metrics = child.score(answer, scenario, **kw)
+            if 'pass' in child_metrics:
+                if child_metrics['pass'] >= 1.0:
+                    return {'pass': 1.0}
+            elif any(v > 0 for v in child_metrics.values()):
+                return {'pass': 1.0}
+        return {'pass': 0.0}
+
+    def metric_keys(self, top_k: int | None = None) -> list[str]:
+        return ['pass']
+
+    def referenced_note_keys(self) -> set[str]:
+        out: set[str] = set()
+        for child in self.children:
+            out.update(child.referenced_note_keys())
+        return out
+
+    def note_keys_requiring_assets(self) -> set[str]:
+        out: set[str] = set()
+        for child in self.children:
+            out.update(child.note_keys_requiring_assets())
+        return out
+
+
+AnyOfOutcomes.model_rebuild()
+
+
+_TOOL_ARG_MISSING: Any = object()
+
+
+def _coerce_tool_arg_value(value: Any) -> str | None:
+    """Coerce a tool-call argument value to a string for regex matching.
+
+    Returns ``None`` when no match should ever succeed against this value
+    (key absent or explicitly null), to prevent spurious matches against
+    ``r'.*'``-style patterns.
+    """
+    if value is _TOOL_ARG_MISSING or value is None:
+        return None
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, (list, dict)):
+        return json.dumps(value, sort_keys=True, default=str)
+    return str(value)
+
+
+@register_outcome('tool_call_arg_matches')
+class ToolCallArgMatches(ExpectedOutcomeBase):
+    """Agent-mode outcome: assert a tool was called with a specific arg matching a regex.
+
+    Reads ``answer.tool_calls`` (each entry has ``{'tool': name, 'input': dict}``).
+    For each call matching ``tool``, extracts ``input[arg_name]``, coerces
+    to a string via the rules in ``_coerce_tool_arg_value``, and runs
+    ``re.search(regex, str_value)``. Counts how many calls match; pass
+    when ``count >= min_count``. When ``expect_absent=True``, pass iff
+    no calls match (use for negative assertions like "agent did NOT
+    bulk-read note X").
+
+    The ``regex`` may contain Python ``str.format`` placeholders for
+    runner-supplied substitutions: ``{<note_key>_id}`` resolves to
+    ``str(Note.id)``. The runner threads ``note_id_by_key`` into
+    ``context['_note_id_by_key']`` (same convention as
+    ``TemporalOrdering`` / ``NoteAttribution``). Missing placeholders
+    leave the regex unchanged so static patterns work without setup.
+    """
+
+    type: Literal['tool_call_arg_matches']
+    tool: str
+    arg_name: str
+    regex: str
+    min_count: int = 1
+    expect_absent: bool = False
+
+    def score(
+        self,
+        answer: AgentAnswer,
+        scenario,
+        *,
+        context: dict[str, Any] | None = None,
+        **_kw,
+    ) -> dict[str, float]:
+        note_key_to_id: dict[str, str] = {}
+        if context is not None:
+            note_key_to_id = context.get('_note_id_by_key') or {}
+        pattern_src = self.regex
+        if note_key_to_id:
+            try:
+                pattern_src = pattern_src.format(
+                    **{f'{k}_id': v for k, v in note_key_to_id.items()},
+                )
+            except (KeyError, IndexError):
+                pass
+        pattern = re.compile(pattern_src)
+        matches = 0
+        for call in answer.tool_calls:
+            if call.get('tool') != self.tool:
+                continue
+            raw = call.get('input', {}) or {}
+            value = raw.get(self.arg_name, _TOOL_ARG_MISSING)
+            coerced = _coerce_tool_arg_value(value)
+            if coerced is None:
+                continue
+            if pattern.search(coerced):
+                matches += 1
+        if self.expect_absent:
+            return {'pass': 1.0 if matches == 0 else 0.0}
+        return {'pass': 1.0 if matches >= self.min_count else 0.0}
+
+    def metric_keys(self, top_k: int | None = None) -> list[str]:
+        return ['pass']
+
+
+@register_outcome('tool_call_count_across')
+class ToolCallCountAcross(ExpectedOutcomeBase):
+    """Agent-mode outcome: assert N or more total calls across a set of tools.
+
+    Useful when several tools satisfy the same conceptual need and the
+    test is "the agent called search-flavor tools at least 3 times total,"
+    not "this exact tool was called N times." Differs from
+    ``ToolCallContains(min_count=3, match_mode='any')`` which would pass
+    if a SINGLE tool reaches 3 calls.
+    """
+
+    type: Literal['tool_call_count_across']
+    expected_tools: list[str]
+    min_total: int
+
+    def score(self, answer: AgentAnswer, scenario, **_kw) -> dict[str, float]:
+        wanted = set(self.expected_tools)
+        total = sum(1 for c in answer.tool_calls if c.get('tool') in wanted)
+        return {'pass': 1.0 if total >= self.min_total else 0.0}
+
+    def metric_keys(self, top_k: int | None = None) -> list[str]:
+        return ['pass']
+
+
 # ---------------------------------------------------------------------------
 # Scenario / Suite
 # ---------------------------------------------------------------------------
@@ -1349,6 +1503,19 @@ class Scenario(BaseModel):
     # its declared prerequisites would themselves be skipped — preventing
     # silent scoring against an unprepared vault.
     depends_on_prior_scenarios: list[str] = Field(default_factory=list)
+
+    # Per-scenario replicate count. When set, this scenario runs exactly
+    # ``replicates_override`` times regardless of the run-level
+    # ``replicates`` parameter. Use for scenarios where the agent issues
+    # a write (kv_write, append_note, deprioritize, record_outcome) and
+    # subsequent replicates would see the post-write state — collapsing
+    # the signal to N=1 keeps the assertion meaningful.
+    replicates_override: int | None = Field(default=None, ge=1)
+
+    # When True under ``--reuse-vault``, this scenario is skipped with
+    # ``skip_reason='mutating_under_reuse_vault'``. Use for agent-driven
+    # writes that would poison the kept vault for the next run.
+    mutating_scenario: bool = False
 
     @model_validator(mode='after')
     def _validate_id(self) -> Scenario:

@@ -547,6 +547,8 @@ class Suite:
         expected_failure_modes: Sequence[str] | None = None,
         requires_nli_classifier: bool = False,
         depends_on_prior_scenarios: Sequence[str] | None = None,
+        replicates_override: int | None = None,
+        mutating_scenario: bool = False,
     ) -> Scenario:
         """Register a fully-declarative scenario.
 
@@ -571,6 +573,8 @@ class Suite:
             expected_failure_modes=list(expected_failure_modes or []),
             requires_nli_classifier=requires_nli_classifier,
             depends_on_prior_scenarios=list(depends_on_prior_scenarios or []),
+            replicates_override=replicates_override,
+            mutating_scenario=mutating_scenario,
         )
         self._append(sc)
         return sc

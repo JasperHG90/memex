@@ -60,6 +60,7 @@ from memex_eval.suite.agents import (
     unregister_backend,
 )
 from memex_eval.suite.base import (
+    AnyOfOutcomes,
     CompositeOutcome,
     EntityCooccurs,
     EntityMentionContains,
@@ -90,7 +91,9 @@ from memex_eval.suite.base import (
     SuiteSources,
     SummaryNonempty,
     TemporalOrdering,
+    ToolCallArgMatches,
     ToolCallContains,
+    ToolCallCountAcross,
     UnitMetadataMatches,
     UsefulAtK,
     get_outcome_class,
@@ -178,7 +181,10 @@ __all__ = [
     'SummaryNonempty',
     'UnitMetadataMatches',
     'ToolCallContains',
+    'ToolCallArgMatches',
+    'ToolCallCountAcross',
     'CompositeOutcome',
+    'AnyOfOutcomes',
     'ExpectedOutcomeUnion',
     'ScenarioOutcome',
     'RunResult',
