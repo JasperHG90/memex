@@ -43,6 +43,14 @@ logger = logging.getLogger('memex.core.services.entity_maintenance')
 
 _RULE_NAME = 'entity_collapse_cluster'
 _TARGET_TYPE = 'entity'
+# Distinct 64-bit advisory-lock key for the cross-batch entity-cluster
+# collapse scan. Held at transaction scope so two concurrent callers
+# (scheduler tick + on-demand HTTP/CLI) cannot race on the
+# composition_hash lookup and emit duplicate findings — the partial
+# unique index on maintenance_proposals does not cover vault_id IS NULL
+# rows, so concurrency control has to live here. Picked to not collide
+# with MEMEX_LEADER_LOCK_ID in scheduler.py.
+_MEMEX_ENTITY_MAINTENANCE_LOCK_ID = 0xE1141E5C
 _SUGGESTED_ACTION = (
     'Cluster of near-duplicate entities detected across batches. '
     'Review the members in evidence.cluster_members and approve via '
@@ -168,6 +176,17 @@ async def scan_collapse_clusters(
     try:
         cutoff = datetime.now(timezone.utc) - timedelta(days=scan_cooldown_days)
         async with api.metastore.session() as session:
+            lock_acquired = (
+                await session.execute(
+                    text('SELECT pg_try_advisory_xact_lock(:lock_id)'),
+                    {'lock_id': _MEMEX_ENTITY_MAINTENANCE_LOCK_ID},
+                )
+            ).scalar()
+            if not lock_acquired:
+                metrics.ENTITY_COLLAPSE_SCAN_EMITTED_TOTAL.labels(result='concurrent_skipped').inc()
+                logger.info('entity_collapse_scan: concurrent scan in progress, skipping')
+                return summary
+
             cand_rows = (
                 (
                     await session.execute(

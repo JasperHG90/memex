@@ -435,3 +435,83 @@ class TestCollapseClusterEmptyBody:
         assert 'vaults_affected' in resp.text
         mock_api.entities.collapse_cluster.assert_not_called()
         mock_api.lint.set_status.assert_not_called()
+
+
+class TestCollapseClusterWinnerCanonicalNameAmbiguity:
+    """If multiple cluster members share the same canonical_name, the
+    --winner=<name> lookup MUST refuse to silently pick one — the operator
+    sees one name in the CLI and must explicitly disambiguate with a UUID.
+    """
+
+    def _stub_finding_and_ambiguous_winner(
+        self,
+        mock_api,
+        *,
+        cluster_members: list[str],
+        vaults_affected: list[str],
+        winner_name: str,
+        matching_ids: list[str],
+    ) -> None:
+        mock_api.metastore = AsyncMock()
+        session_cm = AsyncMock()
+
+        calls = {'n': 0}
+
+        async def _execute(stmt, params=None):
+            calls['n'] += 1
+            result = AsyncMock()
+            mappings = AsyncMock()
+            stmt_text = str(stmt).lower()
+            if 'maintenance_proposals' in stmt_text:
+                mappings.first = lambda: {
+                    'id': str(FINDING_ID),
+                    'vault_id': None,
+                    'rule_name': 'entity_collapse_cluster',
+                    'target_id': cluster_members[0],
+                    'evidence': {
+                        'cluster_members': cluster_members,
+                        'suggested_winner_id': cluster_members[0],
+                        'vaults_affected': vaults_affected,
+                    },
+                    'status': 'pending',
+                }
+                result.mappings = lambda: mappings
+                return result
+            if 'from entities' in stmt_text and 'canonical_name' in stmt_text:
+                mappings.all = lambda: [{'id': mid} for mid in matching_ids]
+                mappings.first = lambda: ({'id': matching_ids[0]} if matching_ids else None)
+                result.mappings = lambda: mappings
+                return result
+            mappings.first = lambda: None
+            mappings.all = lambda: []
+            result.mappings = lambda: mappings
+            result.scalar = lambda: 0
+            return result
+
+        session_cm.execute = AsyncMock(side_effect=_execute)
+        session_cm.__aenter__ = AsyncMock(return_value=session_cm)
+        session_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_api.metastore.session = lambda: session_cm
+
+    def test_winner_canonical_name_ambiguity_rejected(self, mock_api):
+        winner_a = str(uuid4())
+        winner_b = str(uuid4())
+        third = str(uuid4())
+        self._stub_finding_and_ambiguous_winner(
+            mock_api,
+            cluster_members=[winner_a, winner_b, third],
+            vaults_affected=[str(ALLOWED_VAULT)],
+            winner_name='AcmeCorp',
+            matching_ids=[winner_a, winner_b],
+        )
+        mock_api.entities = AsyncMock()
+        mock_api.entities.collapse_cluster = AsyncMock()
+        client = _make_client(mock_api, _scoped_writer())
+        resp = client.post(
+            f'/api/v1/lint/findings/{FINDING_ID}/resolve',
+            json={'winner_canonical_name': 'AcmeCorp'},
+        )
+        assert resp.status_code == 400, resp.text
+        assert 'ambiguous' in resp.text.lower()
+        mock_api.entities.collapse_cluster.assert_not_called()
+        mock_api.lint.set_status.assert_not_called()

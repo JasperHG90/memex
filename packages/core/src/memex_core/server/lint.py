@@ -329,7 +329,7 @@ async def _resolve_winner_id(winner_param: str, cluster_members: list[str], api:
 
     member_uuids = [PyUUID(m) for m in cluster_members]
     async with api.metastore.session() as session:
-        row = (
+        rows = (
             (
                 await session.execute(
                     text(
@@ -341,9 +341,9 @@ async def _resolve_winner_id(winner_param: str, cluster_members: list[str], api:
                 )
             )
             .mappings()
-            .first()
+            .all()
         )
-    if row is None:
+    if not rows:
         raise HTTPException(
             status_code=400,
             detail=(
@@ -351,7 +351,15 @@ async def _resolve_winner_id(winner_param: str, cluster_members: list[str], api:
                 '(case-sensitive canonical_name match required).'
             ),
         )
-    return row['id']
+    if len(rows) > 1:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f'winner "{winner_param}" is ambiguous: multiple cluster members '
+                'share that canonical_name. Provide the winner UUID to disambiguate.'
+            ),
+        )
+    return rows[0]['id']
 
 
 @router.post('/run/{vault_id}', dependencies=[Depends(require_write)])

@@ -870,3 +870,68 @@ async def test_cooccurrence_merge_preserves_open_ended_intervals(
         'NULL valid_to on either side means "still valid"; merge must NOT '
         f'narrow to a dated value (got {valid_to!r})'
     )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_concurrent_scan_skips_when_lock_held(
+    session: AsyncSession,
+    metastore,
+):
+    """Two concurrent callers must not double-emit findings. The second
+    invocation acquires no lock and returns early without scanning."""
+    from memex_core.services.entity_maintenance import (
+        _MEMEX_ENTITY_MAINTENANCE_LOCK_ID,
+        scan_collapse_clusters,
+    )
+
+    suffix = uuid4().hex[:6]
+    await _make_entity(
+        session,
+        f'LOCKA-{suffix}',
+        mention_count=10,
+        first_seen=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    await _make_entity(
+        session,
+        f'locka-{suffix}',
+        mention_count=5,
+        first_seen=datetime(2026, 2, 1, tzinfo=timezone.utc),
+    )
+
+    api_stub = _make_api_stub(metastore)
+
+    async with metastore.session() as holder:
+        acquired = (
+            await holder.execute(
+                text('SELECT pg_try_advisory_xact_lock(:lock_id)'),
+                {'lock_id': _MEMEX_ENTITY_MAINTENANCE_LOCK_ID},
+            )
+        ).scalar()
+        assert acquired is True, 'holder must acquire the maintenance lock first'
+
+        summary = await scan_collapse_clusters(
+            api_stub, pair_threshold=0.55, cluster_min_threshold=0.4
+        )
+        await holder.rollback()
+
+    assert summary == {
+        'clusters_emitted': 0,
+        'clusters_rejected_cohesion': 0,
+        'rescan_updated': 0,
+        'scanned': 0,
+    }
+
+    async with metastore.session() as s:
+        rows = (
+            await s.execute(
+                text(
+                    'SELECT count(*) FROM maintenance_proposals '
+                    "WHERE rule_name = 'entity_collapse_cluster' "
+                    "AND status = 'pending' "
+                    "AND (evidence -> 'member_canonical_names')::text LIKE :pat"
+                ),
+                {'pat': f'%{suffix}%'},
+            )
+        ).scalar()
+    assert rows == 0, 'no findings should have been emitted under contention'

@@ -316,7 +316,7 @@ LINT_RUN_DURATION_SECONDS = Histogram(
 # Convention-only label aliases. prometheus_client's ``.labels(**kwargs)``
 # accepts arbitrary strings — mypy does not narrow against these.
 EntityCollapseScanResultLabel = Literal[
-    'proposed', 'rejected_cohesion', 'rescan_updated', 'no_candidates'
+    'proposed', 'rejected_cohesion', 'rescan_updated', 'no_candidates', 'concurrent_skipped'
 ]
 EntityCollapseApplyOutcomeLabel = Literal['success', 'failed']
 
