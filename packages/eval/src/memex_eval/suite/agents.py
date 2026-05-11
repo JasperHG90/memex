@@ -775,12 +775,20 @@ class HermesBackend(AnswerBackend):
         plugins_dir = hermes_home / 'plugins'
         plugins_dir.mkdir(parents=True)
         (plugins_dir / 'memex').symlink_to(PLUGIN_DIR.resolve(), target_is_directory=True)
-        # Memory + plugins config. Mirrors the user-facing Hermes config
-        # shape so memex memory features (incl. user profile, char
-        # budgets) match production. Char limits are conservative
-        # defaults — Hermes-side defaults differ and would silently
-        # change retrieval shape between eval and production.
+        # Model + memory + plugins config. Mirrors the user-facing
+        # Hermes config shape so memex memory features and model
+        # routing match production. Without an explicit ``model:``
+        # block, Hermes falls back to its built-in OpenRouter
+        # default — which 401s if OPENROUTER_API_KEY isn't set even
+        # when the user intended a different provider.
+        model_provider = os.environ.get('HERMES_MODEL_PROVIDER', 'ollama-cloud')
+        model_default = os.environ.get('HERMES_MODEL', 'glm-5.1:cloud')
+        model_ctx_len = os.environ.get('HERMES_MODEL_CONTEXT_LENGTH', '128000')
         (hermes_home / 'config.yaml').write_text(
+            'model:\n'
+            f'  provider: "{model_provider}"\n'
+            f'  default: "{model_default}"\n'
+            f'  context_length: {model_ctx_len}\n'
             'plugins:\n'
             '  enabled:\n'
             '    - memex\n'
