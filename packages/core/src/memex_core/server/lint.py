@@ -17,6 +17,7 @@ opaque cursor pagination, mirrored by ``memex_get_lint_flags`` MCP.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -37,6 +38,33 @@ from memex_core.server.common import _handle_error, get_api
 from memex_core.services.lint import LintSubsystemNotInitializedError
 
 logger = logging.getLogger('memex.core.server.lint')
+
+_UNATTENDED_OPT_IN_ENV = 'MEMEX_LINT_ALLOW_UNATTENDED_APPLY'
+
+
+def _require_attended_mode(api: MemexAPI) -> None:
+    """Block destructive lint mutations when auth is disabled.
+
+    The apply / reverse endpoints mutate memory units, notes, and link
+    typing — the audit row identifies the call path but does not gate the
+    write. When ``server.auth.enabled=False`` no human principal is on the
+    request, so an unattended LLM driver could end-to-end drive both calls
+    without review. Refuse unless the operator explicitly opts in via
+    ``MEMEX_LINT_ALLOW_UNATTENDED_APPLY=1`` (or ``true`` / ``yes``).
+    """
+    if api.config.server.auth.enabled:
+        return
+    opt_in = os.environ.get(_UNATTENDED_OPT_IN_ENV, '').strip().lower()
+    if opt_in in ('1', 'true', 'yes'):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            'Destructive lint mutations require auth enabled. '
+            f'Set {_UNATTENDED_OPT_IN_ENV}=1 to override (e.g. for trusted CI).'
+        ),
+    )
+
 
 router = APIRouter(prefix='/api/v1/lint')
 
@@ -236,6 +264,7 @@ async def lint_apply(
         apply_winner_proposal,
     )
 
+    _require_attended_mode(api)
     finding_vault = await _gate_finding_for_write(finding_id, api, auth)
     actor = _audit_actor()
     try:
@@ -264,6 +293,7 @@ async def lint_reverse(
         reverse_winner_proposal,
     )
 
+    _require_attended_mode(api)
     finding_vault = await _gate_finding_for_write(finding_id, api, auth)
     actor = _audit_actor()
     try:

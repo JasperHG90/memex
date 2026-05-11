@@ -119,6 +119,9 @@ _UPDATE_LINK_TYPE_SQL = text("""
 """)
 
 
+_RESOLUTION_SCHEMA_VERSION = 1
+
+
 class ContradictionResolutionError(RuntimeError):
     """Raised when apply/reverse cannot be performed safely."""
 
@@ -207,10 +210,15 @@ async def apply_winner_proposal(
                 {'unit_id': str(loser_unit_id), 'status': 'stale'},
             )
             if not result.rowcount:
-                raise ContradictionResolutionError(
-                    f'apply failed — loser unit {loser_unit_id} no longer exists '
-                    '(concurrent delete)'
+                logger.warning(
+                    'contradiction_resolution.apply.rowcount_zero',
+                    extra={
+                        'finding_id': str(finding_id),
+                        'effective_action': effective_action,
+                        'loser_unit_id': str(loser_unit_id),
+                    },
                 )
+                raise ContradictionResolutionError('Concurrent modification — retry the request.')
             applied['loser_unit_status'] = 'stale'
             applied_state['loser_unit_status'] = 'stale'
 
@@ -234,10 +242,15 @@ async def apply_winner_proposal(
                 },
             )
             if not result.rowcount:
-                raise ContradictionResolutionError(
-                    f'apply failed — loser note {loser_row.note_id} no longer exists '
-                    '(concurrent delete)'
+                logger.warning(
+                    'contradiction_resolution.apply.rowcount_zero',
+                    extra={
+                        'finding_id': str(finding_id),
+                        'effective_action': effective_action,
+                        'loser_note_id': str(loser_row.note_id),
+                    },
                 )
+                raise ContradictionResolutionError('Concurrent modification — retry the request.')
             applied['loser_note_superseded_by'] = winner_row.note_id
             applied_state['loser_note_id'] = loser_row.note_id
             applied_state['loser_note_superseded_by'] = winner_row.note_id
@@ -257,9 +270,15 @@ async def apply_winner_proposal(
                 {'link_id': str(link_id), 'link_type': 'refines'},
             )
             if not result.rowcount:
-                raise ContradictionResolutionError(
-                    f'apply failed — link {link_id} no longer exists (concurrent delete)'
+                logger.warning(
+                    'contradiction_resolution.apply.rowcount_zero',
+                    extra={
+                        'finding_id': str(finding_id),
+                        'effective_action': effective_action,
+                        'link_id': str(link_id),
+                    },
                 )
+                raise ContradictionResolutionError('Concurrent modification — retry the request.')
             applied['link_type'] = 'refines'
             applied_state['link_id'] = link_row.id
             applied_state['link_type'] = 'refines'
@@ -271,6 +290,7 @@ async def apply_winner_proposal(
             raise ContradictionResolutionError(f'unknown action: {action!r}')
 
         resolution = {
+            'schema_version': _RESOLUTION_SCHEMA_VERSION,
             'action': action,
             'effective_action': effective_action,
             'actor': actor,
@@ -292,9 +312,14 @@ async def apply_winner_proposal(
         )
         if not result.rowcount:
             await session.rollback()
-            raise ContradictionResolutionError(
-                f'finding {finding_id} could not be flipped to resolved'
+            logger.warning(
+                'contradiction_resolution.apply.flip_to_resolved_rowcount_zero',
+                extra={
+                    'finding_id': str(finding_id),
+                    'effective_action': effective_action,
+                },
             )
+            raise ContradictionResolutionError('Concurrent modification — retry the request.')
 
         await session.commit()
 
@@ -365,6 +390,16 @@ async def reverse_winner_proposal(
         resolution = evidence.get('resolution') or {}
         if resolution.get('reversed_at') is not None:
             raise ContradictionResolutionError(f'finding {finding_id} has already been reversed')
+        schema_version = resolution.get('schema_version')
+        try:
+            schema_version_int = int(schema_version) if schema_version is not None else 0
+        except (TypeError, ValueError):
+            schema_version_int = 0
+        if schema_version_int < _RESOLUTION_SCHEMA_VERSION:
+            raise ContradictionResolutionError(
+                'Cannot reverse — proposal applied before CAS guard existed. '
+                'Manual reconciliation required.'
+            )
         effective_action = str(resolution.get('effective_action') or '')
         prior_state = resolution.get('prior_state') or {}
         applied_state = resolution.get('applied_state') or {}
@@ -373,8 +408,7 @@ async def reverse_winner_proposal(
             loser_unit_id = evidence.get('loser_unit_id') or proposal.target_id
             prev_status = prior_state.get('loser_unit_status', 'active')
             # CAS: refuse to reverse if the row has diverged from what apply wrote.
-            # ``applied_state`` may be missing on findings applied before this
-            # guard existed — skip the check in that case for backward-compat.
+            # schema_version >= 1 guarantees applied_state is present.
             current_unit = (
                 await session.execute(_LOAD_UNIT_SQL, {'unit_id': str(loser_unit_id)})
             ).first()
@@ -393,9 +427,15 @@ async def reverse_winner_proposal(
                 {'unit_id': str(loser_unit_id), 'status': prev_status},
             )
             if not result.rowcount:
-                raise ContradictionResolutionError(
-                    f'cannot reverse — loser unit {loser_unit_id} no longer exists'
+                logger.warning(
+                    'contradiction_resolution.reverse.rowcount_zero',
+                    extra={
+                        'finding_id': str(finding_id),
+                        'effective_action': effective_action,
+                        'loser_unit_id': str(loser_unit_id),
+                    },
                 )
+                raise ContradictionResolutionError('Concurrent modification — retry the request.')
 
         elif effective_action == 'supersede_loser_note':
             note_id = prior_state.get('loser_note_id')
@@ -434,9 +474,15 @@ async def reverse_winner_proposal(
                     },
                 )
             if not result.rowcount:
-                raise ContradictionResolutionError(
-                    f'cannot reverse — loser note {note_id} no longer exists'
+                logger.warning(
+                    'contradiction_resolution.reverse.rowcount_zero',
+                    extra={
+                        'finding_id': str(finding_id),
+                        'effective_action': effective_action,
+                        'loser_note_id': str(note_id),
+                    },
                 )
+                raise ContradictionResolutionError('Concurrent modification — retry the request.')
 
         elif effective_action == 'refine_not_contradict':
             link_id = prior_state.get('link_id')
@@ -463,9 +509,15 @@ async def reverse_winner_proposal(
                 {'link_id': str(link_id), 'link_type': prev_link_type},
             )
             if not result.rowcount:
-                raise ContradictionResolutionError(
-                    f'cannot reverse — link {link_id} no longer exists'
+                logger.warning(
+                    'contradiction_resolution.reverse.rowcount_zero',
+                    extra={
+                        'finding_id': str(finding_id),
+                        'effective_action': effective_action,
+                        'link_id': str(link_id),
+                    },
                 )
+                raise ContradictionResolutionError('Concurrent modification — retry the request.')
 
         elif effective_action == 'inconclusive':
             pass

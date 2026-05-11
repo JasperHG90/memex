@@ -430,6 +430,7 @@ def _resolved_proposal(
                 'loser_unit_id': loser_unit_id,
                 'link_id': link_id,
                 'resolution': {
+                    'schema_version': 1,
                     'action': effective_action,
                     'effective_action': effective_action,
                     'actor': 'unit-test',
@@ -630,7 +631,7 @@ async def test_apply_mark_loser_stale_refuses_when_unit_deleted_mid_txn():
     session, cm = _make_session_with_rowcounts(rows_and_rowcounts)
     api = _api_with_session(cm)
 
-    with pytest.raises(ContradictionResolutionError, match='apply failed'):
+    with pytest.raises(ContradictionResolutionError, match='Concurrent modification'):
         await apply_winner_proposal(
             api,
             uuid4(),
@@ -662,7 +663,7 @@ async def test_apply_supersede_loser_note_refuses_when_note_deleted_mid_txn():
     session, cm = _make_session_with_rowcounts(rows_and_rowcounts)
     api = _api_with_session(cm)
 
-    with pytest.raises(ContradictionResolutionError, match='apply failed'):
+    with pytest.raises(ContradictionResolutionError, match='Concurrent modification'):
         await apply_winner_proposal(
             api,
             uuid4(),
@@ -703,7 +704,7 @@ async def test_apply_refine_not_contradict_refuses_when_link_deleted_mid_txn():
     session, cm = _make_session_with_rowcounts(rows_and_rowcounts)
     api = _api_with_session(cm)
 
-    with pytest.raises(ContradictionResolutionError, match='apply failed'):
+    with pytest.raises(ContradictionResolutionError, match='Concurrent modification'):
         await apply_winner_proposal(
             api,
             uuid4(),
@@ -711,3 +712,122 @@ async def test_apply_refine_not_contradict_refuses_when_link_deleted_mid_txn():
             actor='unit-test',
         )
     assert not session.commit.await_count, 'apply must not commit when rowcount=0'
+
+
+# ---------------------------------------------------------------------------
+# Reverse-path schema-version guard: refuses when applied state predates the
+# CAS guard (resolution.schema_version missing or < 1). Apply stamps the
+# marker, so any post-V5 proposal carries it; the guard exists to refuse
+# hand-written or future-bugged proposals that would otherwise sneak past
+# the CAS check by omitting applied_state.
+# ---------------------------------------------------------------------------
+
+
+def _resolved_proposal_without_schema_version(loser_unit_id: str) -> SimpleNamespace:
+    return _row(
+        id=str(uuid4()),
+        vault_id='11111111-1111-1111-1111-111111111111',
+        rule_name='propose_contradiction_winner',
+        target_type='memory_unit',
+        target_id=loser_unit_id,
+        evidence=json.dumps(
+            {
+                'action': 'mark_loser_stale',
+                'loser_unit_id': loser_unit_id,
+                'resolution': {
+                    'action': 'mark_loser_stale',
+                    'effective_action': 'mark_loser_stale',
+                    'actor': 'unit-test',
+                    'prior_state': {'loser_unit_status': 'active'},
+                    'applied_state': {'loser_unit_status': 'stale'},
+                    'applied': {'action': 'mark_loser_stale'},
+                },
+            }
+        ),
+        status='resolved',
+    )
+
+
+@pytest.mark.asyncio
+async def test_reverse_refuses_when_schema_version_missing():
+    from memex_core.services.contradiction_resolution import reverse_winner_proposal
+
+    loser_id = str(uuid4())
+    proposal = _resolved_proposal_without_schema_version(loser_id)
+    session, cm = _make_session_with_rowcounts([proposal])
+    api = _api_with_session(cm)
+
+    with pytest.raises(ContradictionResolutionError, match='CAS guard'):
+        await reverse_winner_proposal(
+            api,
+            uuid4(),
+            vault_id=UUID('11111111-1111-1111-1111-111111111111'),
+            actor='unit-test',
+        )
+
+
+@pytest.mark.asyncio
+async def test_reverse_refuses_when_schema_version_too_low():
+    from memex_core.services.contradiction_resolution import reverse_winner_proposal
+
+    loser_id = str(uuid4())
+    proposal = _row(
+        id=str(uuid4()),
+        vault_id='11111111-1111-1111-1111-111111111111',
+        rule_name='propose_contradiction_winner',
+        target_type='memory_unit',
+        target_id=loser_id,
+        evidence=json.dumps(
+            {
+                'action': 'mark_loser_stale',
+                'loser_unit_id': loser_id,
+                'resolution': {
+                    'schema_version': 0,
+                    'action': 'mark_loser_stale',
+                    'effective_action': 'mark_loser_stale',
+                    'actor': 'unit-test',
+                    'prior_state': {'loser_unit_status': 'active'},
+                    'applied_state': {'loser_unit_status': 'stale'},
+                    'applied': {'action': 'mark_loser_stale'},
+                },
+            }
+        ),
+        status='resolved',
+    )
+    session, cm = _make_session_with_rowcounts([proposal])
+    api = _api_with_session(cm)
+
+    with pytest.raises(ContradictionResolutionError, match='CAS guard'):
+        await reverse_winner_proposal(
+            api,
+            uuid4(),
+            vault_id=UUID('11111111-1111-1111-1111-111111111111'),
+            actor='unit-test',
+        )
+
+
+@pytest.mark.asyncio
+async def test_apply_records_schema_version_in_resolution():
+    loser_id = str(uuid4())
+    winner_id = str(uuid4())
+    proposal = _proposal('mark_loser_stale', loser_unit_id=loser_id, winner_unit_id=winner_id)
+    loser_row = _row(id=loser_id, status='active', note_id=str(uuid4()))
+    winner_row = _row(id=winner_id, status='active', note_id=str(uuid4()))
+    session, cm = _make_session([proposal, loser_row, winner_row])
+    api = _api_with_session(cm)
+
+    await apply_winner_proposal(
+        api,
+        uuid4(),
+        vault_id=UUID('11111111-1111-1111-1111-111111111111'),
+        actor='unit-test',
+    )
+
+    evidence_writes = [
+        params
+        for sql, params in session._captured
+        if isinstance(params, dict) and 'evidence' in params and isinstance(params['evidence'], str)
+    ]
+    assert evidence_writes, 'expected at least one evidence UPDATE'
+    written = json.loads(evidence_writes[-1]['evidence'])
+    assert written['resolution']['schema_version'] == 1
