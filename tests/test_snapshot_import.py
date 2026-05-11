@@ -919,6 +919,70 @@ async def test_import_second_attempt_refused(
         await importer2.import_snapshot()
 
 
+async def test_stale_completed_row_recovered_when_vault_gone(
+    db_session: AsyncSession,
+    populated_vault: dict[str, UUID],
+    tmp_path: Path,
+    eval_state_table: None,
+) -> None:
+    """When the recorded target vault has been deleted out-of-band but
+    eval_import_state still says state=complete, the next import should
+    clear the stale row and proceed instead of refusing forever.
+
+    Mirrors the production scenario where the eval runner deletes its
+    target vault at end-of-run but the cleanup of eval_import_state
+    fails (e.g., HTTP 401 on api.delete_vault swallowed silently).
+    """
+    from sqlalchemy import delete as sa_delete
+    from sqlalchemy import text
+
+    src_vault = populated_vault['vault_id']
+    snapshot_dir = tmp_path / 'snapshot'
+    snapshot_dir.mkdir()
+    await _export(db_session, src_vault, snapshot_dir)
+    await _delete_source_vault(db_session, src_vault)
+
+    # First import — succeeds, vault created, state=complete.
+    importer1 = SnapshotImporter(
+        session=db_session,
+        filestore=None,
+        embedding_backend=OnnxBackend(),
+        snapshot_dir=snapshot_dir,
+        target_vault_name='stale-recovery-1',
+    )
+    target_v1 = await importer1.import_snapshot()
+
+    # Out-of-band: delete the imported vault but LEAVE the
+    # eval_import_state row, simulating the silent-cleanup-failure case.
+    await db_session.execute(sa_delete(Vault).where(Vault.id == target_v1))
+    await db_session.commit()
+    # Confirm the row is still present and points at the now-gone vault.
+    leftover = (
+        await db_session.execute(
+            text(
+                'SELECT target_vault_id, state FROM eval_import_state '
+                'WHERE source_snapshot_path = :p'
+            ),
+            {'p': str(snapshot_dir)},
+        )
+    ).first()
+    assert leftover is not None
+    assert UUID(str(leftover[0])) == target_v1
+    assert str(leftover[1]) == 'complete'
+
+    # Second import — must NOT refuse; should clear stale row and proceed.
+    importer2 = SnapshotImporter(
+        session=db_session,
+        filestore=None,
+        embedding_backend=OnnxBackend(),
+        snapshot_dir=snapshot_dir,
+        target_vault_name='stale-recovery-2',
+    )
+    target_v2 = await importer2.import_snapshot()
+    assert target_v2 is not None
+    assert target_v2 != target_v1
+
+
 async def test_higher_minor_manifest_accepted(
     db_session: AsyncSession,
     populated_vault: dict[str, UUID],

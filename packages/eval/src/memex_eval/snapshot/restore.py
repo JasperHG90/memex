@@ -549,7 +549,34 @@ class SnapshotImporter:
         if existing is not None:
             existing_target, existing_import, existing_state = existing
             if existing_state == 'complete':
-                _refuse_completed_import(existing_target, self._snapshot_dir)
+                # Stale-row recovery: the eval runner deletes its vault
+                # at end-of-run but may fail to clean up
+                # eval_import_state (e.g., auth failure on the same
+                # call). If the recorded target vault no longer exists
+                # in the DB, the row is stale — clear it and proceed
+                # with a fresh import. The vault-existence probe is
+                # authoritative; eval_import_state is the cache.
+                vault_still_exists = (
+                    await self._session.execute(select(Vault.id).where(Vault.id == existing_target))
+                ).scalar_one_or_none()
+                if vault_still_exists is None:
+                    logger.warning(
+                        'Stale eval_import_state row for %s: recorded target '
+                        'vault %s no longer exists. Clearing and re-importing.',
+                        self._snapshot_dir,
+                        existing_target,
+                    )
+                    await self._session.execute(
+                        text('DELETE FROM eval_import_state WHERE target_vault_id = :vid'),
+                        {'vid': str(existing_target)},
+                    )
+                    await self._session.commit()
+                    # Fall through to fresh-import path (existing is now stale).
+                    existing = None
+                else:
+                    _refuse_completed_import(existing_target, self._snapshot_dir)
+        if existing is not None:
+            existing_target, existing_import, existing_state = existing
             self._target_vault_id = existing_target
             self._import_id = existing_import
             self._resumed = True
