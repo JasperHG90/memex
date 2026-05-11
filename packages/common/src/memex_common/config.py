@@ -1014,9 +1014,10 @@ class ContradictionConfig(BaseModel):
         default=5,
         ge=1,
         description=(
-            'Lint threshold for the ``claim_too_aggressive`` rule: when an '
-            'explicit-claim unit produces more contradicts/weakens links than '
-            'this in one pass, a maintenance finding is emitted.'
+            'Lint threshold for the ``claim_too_aggressive`` rule: when the '
+            'total ``contradicts``/``weakens`` links accumulated on an '
+            'explicit-claim unit exceed this threshold, a maintenance finding '
+            'is emitted.'
         ),
     )
     superseded_threshold: float = Field(
