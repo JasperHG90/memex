@@ -99,6 +99,13 @@ _UPDATE_UNIT_STATUS_SQL = text("""
 """)
 
 
+_UPDATE_UNIT_STATUS_CAS_SQL = text("""
+    UPDATE memory_units SET status = :status
+    WHERE id = :unit_id
+      AND status = :expected_status
+""")
+
+
 _LOAD_NOTE_SQL = text("""
     SELECT id::text AS id, superseded_by::text AS superseded_by
     FROM notes WHERE id = :note_id
@@ -107,6 +114,13 @@ _LOAD_NOTE_SQL = text("""
 
 _UPDATE_NOTE_SUPERSEDED_BY_SQL = text("""
     UPDATE notes SET superseded_by = :superseded_by WHERE id = :note_id
+""")
+
+
+_UPDATE_NOTE_SUPERSEDED_BY_CAS_SQL = text("""
+    UPDATE notes SET superseded_by = :superseded_by
+    WHERE id = :note_id
+      AND superseded_by IS NOT DISTINCT FROM :expected_superseded_by
 """)
 
 
@@ -124,6 +138,13 @@ _LOAD_LINK_SQL = text("""
 
 _UPDATE_LINK_TYPE_SQL = text("""
     UPDATE memory_links SET link_type = :link_type WHERE id = :link_id
+""")
+
+
+_UPDATE_LINK_TYPE_CAS_SQL = text("""
+    UPDATE memory_links SET link_type = :link_type
+    WHERE id = :link_id
+      AND link_type = :expected_link_type
 """)
 
 
@@ -214,8 +235,12 @@ async def apply_winner_proposal(
         if effective_action == 'mark_loser_stale':
             prior_state['loser_unit_status'] = loser_row.status
             result = await session.execute(
-                _UPDATE_UNIT_STATUS_SQL,
-                {'unit_id': str(loser_unit_id), 'status': 'stale'},
+                _UPDATE_UNIT_STATUS_CAS_SQL,
+                {
+                    'unit_id': str(loser_unit_id),
+                    'status': 'stale',
+                    'expected_status': loser_row.status,
+                },
             )
             if not result.rowcount:
                 logger.warning(
@@ -243,10 +268,13 @@ async def apply_winner_proposal(
                 note_row.superseded_by if note_row is not None else None
             )
             result = await session.execute(
-                _UPDATE_NOTE_SUPERSEDED_BY_SQL,
+                _UPDATE_NOTE_SUPERSEDED_BY_CAS_SQL,
                 {
                     'note_id': loser_row.note_id,
                     'superseded_by': winner_row.note_id,
+                    'expected_superseded_by': (
+                        note_row.superseded_by if note_row is not None else None
+                    ),
                 },
             )
             if not result.rowcount:
@@ -274,8 +302,12 @@ async def apply_winner_proposal(
             prior_state['link_id'] = link_row.id
             prior_state['link_type'] = link_row.link_type
             result = await session.execute(
-                _UPDATE_LINK_TYPE_SQL,
-                {'link_id': str(link_id), 'link_type': 'refines'},
+                _UPDATE_LINK_TYPE_CAS_SQL,
+                {
+                    'link_id': str(link_id),
+                    'link_type': 'refines',
+                    'expected_link_type': link_row.link_type,
+                },
             )
             if not result.rowcount:
                 logger.warning(

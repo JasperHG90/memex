@@ -715,6 +715,145 @@ async def test_apply_refine_not_contradict_refuses_when_link_deleted_mid_txn():
 
 
 # ---------------------------------------------------------------------------
+# Apply-path CAS guards — refuse the UPDATE when another writer has mutated
+# the target row's value between the row loader (SELECT) and the mutating
+# UPDATE inside the same transaction. The WHERE clause matches the captured
+# pre-mutation value; a concurrent flip away from that value yields
+# rowcount=0 and the existing rowcount-zero check raises.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_apply_mark_loser_stale_refuses_when_status_changed_mid_txn():
+    loser_id = str(uuid4())
+    winner_id = str(uuid4())
+    proposal = _proposal('mark_loser_stale', loser_unit_id=loser_id, winner_unit_id=winner_id)
+    loser_row = _row(id=loser_id, status='active', note_id=str(uuid4()))
+    winner_row = _row(id=winner_id, status='active', note_id=str(uuid4()))
+    rows_and_rowcounts: list = [
+        proposal,
+        loser_row,
+        winner_row,
+        (None, 0),
+    ]
+    session, cm = _make_session_with_rowcounts(rows_and_rowcounts)
+    api = _api_with_session(cm)
+
+    with pytest.raises(ContradictionResolutionError, match='Concurrent modification'):
+        await apply_winner_proposal(
+            api,
+            uuid4(),
+            vault_id=UUID('11111111-1111-1111-1111-111111111111'),
+            actor='unit-test',
+        )
+
+    update_calls = [
+        params
+        for sql, params in session._captured
+        if isinstance(params, dict) and params.get('status') == 'stale'
+    ]
+    assert update_calls, 'expected the stale UPDATE to be attempted'
+    assert update_calls[0].get('expected_status') == 'active', (
+        'CAS guard must carry the captured pre-mutation status'
+    )
+    assert not session.commit.await_count, 'apply must not commit when CAS fails'
+
+
+@pytest.mark.asyncio
+async def test_apply_supersede_loser_note_refuses_when_already_superseded():
+    loser_id = str(uuid4())
+    winner_id = str(uuid4())
+    loser_note = str(uuid4())
+    winner_note = str(uuid4())
+    other_note = str(uuid4())
+    proposal = _proposal('supersede_loser_note', loser_unit_id=loser_id, winner_unit_id=winner_id)
+    loser_row = _row(id=loser_id, status='active', note_id=loser_note)
+    winner_row = _row(id=winner_id, status='active', note_id=winner_note)
+    note_row = _row(id=loser_note, superseded_by=None)
+    rows_and_rowcounts: list = [
+        proposal,
+        loser_row,
+        winner_row,
+        note_row,
+        (None, 0),
+    ]
+    session, cm = _make_session_with_rowcounts(rows_and_rowcounts)
+    api = _api_with_session(cm)
+
+    with pytest.raises(ContradictionResolutionError, match='Concurrent modification'):
+        await apply_winner_proposal(
+            api,
+            uuid4(),
+            vault_id=UUID('11111111-1111-1111-1111-111111111111'),
+            actor='unit-test',
+        )
+
+    update_calls = [
+        params
+        for sql, params in session._captured
+        if isinstance(params, dict) and params.get('superseded_by') == winner_note
+    ]
+    assert update_calls, 'expected the superseded_by UPDATE to be attempted'
+    assert 'expected_superseded_by' in update_calls[0], (
+        'CAS guard must carry the captured pre-mutation superseded_by'
+    )
+    assert update_calls[0].get('expected_superseded_by') is None
+    # Sanity: the value the test pretends collided with is distinct from the
+    # captured prior_state, which is what makes the CAS UPDATE match zero rows.
+    assert other_note != winner_note
+    assert not session.commit.await_count, 'apply must not commit when CAS fails'
+
+
+@pytest.mark.asyncio
+async def test_apply_refine_not_contradict_refuses_when_link_type_changed():
+    loser_id = str(uuid4())
+    winner_id = str(uuid4())
+    link_id = str(uuid4())
+    proposal = _proposal(
+        'refine_not_contradict',
+        loser_unit_id=loser_id,
+        winner_unit_id=winner_id,
+        link_id=link_id,
+    )
+    loser_row = _row(id=loser_id, status='active', note_id=str(uuid4()))
+    winner_row = _row(id=winner_id, status='active', note_id=str(uuid4()))
+    link_row = _row(
+        id=link_id,
+        link_type='contradicts',
+        from_unit_id=winner_id,
+        to_unit_id=loser_id,
+    )
+    rows_and_rowcounts: list = [
+        proposal,
+        loser_row,
+        winner_row,
+        link_row,
+        (None, 0),
+    ]
+    session, cm = _make_session_with_rowcounts(rows_and_rowcounts)
+    api = _api_with_session(cm)
+
+    with pytest.raises(ContradictionResolutionError, match='Concurrent modification'):
+        await apply_winner_proposal(
+            api,
+            uuid4(),
+            vault_id=UUID('11111111-1111-1111-1111-111111111111'),
+            actor='unit-test',
+        )
+
+    update_calls = [
+        params
+        for sql, params in session._captured
+        if isinstance(params, dict) and params.get('link_type') == 'refines'
+    ]
+    assert update_calls, 'expected the link_type=refines UPDATE to be attempted'
+    assert update_calls[0].get('expected_link_type') == 'contradicts', (
+        'CAS guard must carry the captured pre-mutation link_type'
+    )
+    assert not session.commit.await_count, 'apply must not commit when CAS fails'
+
+
+# ---------------------------------------------------------------------------
 # Reverse-path schema-version guard: refuses when applied state predates the
 # CAS guard (resolution.schema_version missing or < 1). Apply stamps the
 # marker, so any post-V5 proposal carries it; the guard exists to refuse
