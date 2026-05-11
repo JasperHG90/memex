@@ -84,9 +84,18 @@ _memex_validate_ref() {
 
 if [ "$_memex_ref" != "latest" ]; then
     if ! _memex_validate_ref "$_memex_ref"; then
-        _memex_emit_systemMessage <<EOF
-{"systemMessage": "❌ MEMEX_PLUGIN_VERSION='${_memex_ref}' does not exist as a tag or branch on github.com/JasperHG90/memex.\n\nAvailable tags: https://github.com/JasperHG90/memex/tags\n\nUnset the variable to use the default (latest)."}
-EOF
+        # Build the diagnostic JSON via `printf` + `jq --arg` rather than an
+        # unquoted heredoc. The previous `<<EOF` form would expand `$(...)`
+        # / backticks embedded in MEMEX_PLUGIN_VERSION (so a contributor
+        # mistyping `MEMEX_PLUGIN_VERSION='$(date)'` would silently see
+        # `MEMEX_PLUGIN_VERSION='<today>'`) and would corrupt JSON if the
+        # value contained `"`. `printf '%s' "$var"` substitutes the value
+        # as opaque text, and `jq --arg` JSON-escapes it.
+        if [ "${MEMEX_RESOLVE_VERBOSE:-0}" = "1" ] && command -v jq >/dev/null 2>&1; then
+            _diag_msg=$(printf "❌ MEMEX_PLUGIN_VERSION='%s' does not exist as a tag or branch on github.com/JasperHG90/memex.\n\nAvailable tags: https://github.com/JasperHG90/memex/tags\n\nUnset the variable to use the default (latest)." "$_memex_ref")
+            jq -n --arg msg "$_diag_msg" '{systemMessage: $msg}'
+            unset _diag_msg
+        fi
         memex() { return 1; }
         return 0 2>/dev/null || exit 0
     fi

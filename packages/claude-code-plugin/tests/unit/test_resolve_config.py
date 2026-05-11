@@ -153,6 +153,43 @@ def test_active_vault_falls_back_to_agent(mock_memex: MockMemex, temp_git_repo: 
     assert result.stdout.strip() == 'agent-vault'
 
 
+def test_invalid_plugin_version_does_not_expand_dollar_in_diagnostic(
+    mock_memex: MockMemex, tmp_path: Path
+) -> None:
+    """A bad MEMEX_PLUGIN_VERSION must NOT be subject to shell `$(...)`
+    expansion when the diagnostic message is built. The old `<<EOF` heredoc
+    form would have evaluated `$(echo …)` embedded in the env var.
+
+    Disambiguating sentinel: ``$(echo XYZ)`` becomes literal ``XYZ`` under
+    expansion but stays as the full ``$(echo XYZ)`` token if untouched. We
+    assert that the *opening token* ``$(echo `` appears in the output —
+    bash never emits it after a successful command substitution, so its
+    presence is proof the heredoc did not run the substitution.
+    """
+    bad = '$(echo SHOULDNOTRUN)'
+    env = {
+        **mock_memex.env,
+        'MEMEX_PLUGIN_VERSION': bad,
+        'MEMEX_RESOLVE_VERBOSE': '1',
+    }
+    # Block the network: pre-write the ref-cache `bad` verdict so the
+    # validation short-circuits without an outbound github.com call.
+    state_dir = mock_memex.plugin_data / 'memex' / 'refcache'
+    state_dir.mkdir(parents=True, exist_ok=True)
+    safe = ''.join(c if c.isalnum() or c in '._-' else '_' for c in bad)
+    (state_dir / safe).write_text('bad')
+    result = subprocess.run(
+        ['bash', '-c', f'source "{PLUGIN_ROOT}/scripts/resolve_config.sh" 2>&1'],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15.0,
+    )
+    # Literal `$(echo ` substring is the proof: bash strips this opener
+    # when it runs the substitution; if we see it, no expansion happened.
+    assert '$(echo' in result.stdout, f'`$(echo …)` was shell-expanded! stdout={result.stdout!r}'
+
+
 def test_active_vault_falls_back_to_env_var(mock_memex: MockMemex, temp_git_repo: Path) -> None:
     env = {**mock_memex.env, 'MEMEX_VAULT': 'env-vault'}
     result = _run_resolver(
