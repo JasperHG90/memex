@@ -30,8 +30,42 @@ fi
 _memex_ref="${MEMEX_PLUGIN_VERSION:-latest}"
 _memex_pkg="memex-cli @ git+https://github.com/JasperHG90/memex.git@${_memex_ref}#subdirectory=packages/cli"
 
+# Validate a non-`latest` ref against the remote, with a day-grained on-disk
+# cache so we don't hit `git ls-remote` on every hook invocation. The remote
+# tag/branch list does not change minute-to-minute from a hook's perspective;
+# a 24-hour cache TTL is fine. The previous unconditional `git ls-remote`
+# made a network call on EVERY PreToolUse / PreCompact / SessionEnd when the
+# user pinned MEMEX_PLUGIN_VERSION to a specific tag.
+_memex_validate_ref() {
+    local _ref="$1"
+    local _state_dir="${CLAUDE_PLUGIN_DATA:-${HOME}/.claude/.state}/memex"
+    local _cache_dir="${_state_dir}/refcache"
+    local _safe_ref
+    _safe_ref=$(printf '%s' "$_ref" | tr -c 'A-Za-z0-9._-' '_')
+    local _cache_file="${_cache_dir}/${_safe_ref}"
+
+    if [ -f "$_cache_file" ]; then
+        # Fresh = < 24h old. `find -mmin +1440` matches files OLDER than 24h;
+        # if it matches nothing, the cache is fresh.
+        if ! find "$_cache_file" -mmin +1440 2>/dev/null | grep -q .; then
+            case "$(cat "$_cache_file" 2>/dev/null)" in
+                ok) return 0 ;;
+                bad) return 1 ;;
+            esac
+        fi
+    fi
+
+    mkdir -p "$_cache_dir" 2>/dev/null || true
+    if git ls-remote --tags --heads https://github.com/JasperHG90/memex.git "$_ref" 2>/dev/null | grep -q .; then
+        echo ok > "$_cache_file" 2>/dev/null || true
+        return 0
+    fi
+    echo bad > "$_cache_file" 2>/dev/null || true
+    return 1
+}
+
 if [ "$_memex_ref" != "latest" ]; then
-    if ! git ls-remote --tags --heads https://github.com/JasperHG90/memex.git "$_memex_ref" 2>/dev/null | grep -q .; then
+    if ! _memex_validate_ref "$_memex_ref"; then
         _memex_emit_systemMessage <<EOF
 {"systemMessage": "❌ MEMEX_PLUGIN_VERSION='${_memex_ref}' does not exist as a tag or branch on github.com/JasperHG90/memex.\n\nAvailable tags: https://github.com/JasperHG90/memex/tags\n\nUnset the variable to use the default (latest)."}
 EOF
@@ -58,8 +92,14 @@ memex() {
     [ "$_timeout" -lt 1 ]    && _timeout=8
     [ "$_timeout" -gt 600 ]  && _timeout=600
 
+    # macOS doesn't ship GNU coreutils — `timeout(1)` is absent there but
+    # `gtimeout(1)` is the homebrew/coreutils name. Probe both before
+    # falling back to an unbounded call so a hung server can't quietly
+    # stall hooks on Apple machines.
     if command -v timeout >/dev/null 2>&1; then
         timeout "$_timeout" uvx --from "$_memex_pkg" memex "$@"
+    elif command -v gtimeout >/dev/null 2>&1; then
+        gtimeout "$_timeout" uvx --from "$_memex_pkg" memex "$@"
     else
         uvx --from "$_memex_pkg" memex "$@"
     fi
@@ -83,7 +123,12 @@ memex() {
 #   1. strip trailing `.git`
 #   2. strip HTTPS basic-auth (`user:password@`)
 #   3. strip `<scheme>://`
-#   4. collapse `user@host[:/]path` → `host/path` (handles both the SCP-style
+#   4. strip an explicit `:NNNN/` port from the host segment so SSH URLs
+#      like `ssh://git@github.com:22/acme/myapp` don't leak the port into
+#      the project ID. This MUST run before step 5 — otherwise step 5
+#      would treat the port-colon as the SCP user@host: separator and
+#      drag the port digits into the path.
+#   5. collapse `user@host[:/]path` → `host/path` (handles both the SCP-style
 #      colon separator and the post-scheme-strip slash)
 # ---------------------------------------------------------------------------
 memex_normalize_git_remote_url() {
@@ -91,6 +136,7 @@ memex_normalize_git_remote_url() {
         s/\.git$//
         s|https://[^@]*@|https://|
         s|^[a-zA-Z][a-zA-Z0-9+.-]*://||
+        s|@\([^:/]*\):[0-9][0-9]*/|@\1/|
         s|^[^@]*@\([^:/]*\)[:/]|\1/|
     '
 }

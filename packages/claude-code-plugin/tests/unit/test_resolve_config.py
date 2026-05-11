@@ -80,6 +80,10 @@ def test_project_id_normalizes_url_formats(
         ('git@github.com:acme/myapp.git', 'github.com/acme/myapp'),
         ('https://gitlab.com/org/subgroup/repo.git', 'gitlab.com/org/subgroup/repo'),
         ('git@gitlab.com:org/subgroup/repo.git', 'gitlab.com/org/subgroup/repo'),
+        # SSH with explicit port — the `:22` must not leak into the project ID,
+        # otherwise the same repo cloned over ports 22 vs 2222 splits across
+        # different KV keys.
+        ('ssh://git@github.com:22/acme/myapp.git', 'github.com/acme/myapp'),
     ],
 )
 def test_normalize_git_remote_url_preserves_nested_subgroups(
