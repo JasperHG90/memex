@@ -831,12 +831,19 @@ class _TriggerReflections(SetupActionHandler):
                     ReflectionRequest(entity_id=ent.id, vault_id=str(vault_id))
                 )
                 succeeded.append(ent_name)
-                logger.info(
-                    'reflect(%s) -> status=%s new_observations=%d',
-                    ent_name,
-                    getattr(resp, 'status', '?'),
-                    len(getattr(resp, 'new_observations', []) or []),
-                )
+                status = getattr(resp, 'status', '?')
+                if status == 'queued':
+                    # Async path: observations materialise after the
+                    # background worker picks up the job. The polling
+                    # block below reports the real count.
+                    logger.info('reflect(%s) -> status=queued', ent_name)
+                else:
+                    logger.info(
+                        'reflect(%s) -> status=%s new_observations=%d',
+                        ent_name,
+                        status,
+                        len(getattr(resp, 'new_observations', []) or []),
+                    )
             except Exception as exc:
                 failed.append(ent_name)
                 logger.warning('reflect(%s) failed: %s', ent_name, exc)
