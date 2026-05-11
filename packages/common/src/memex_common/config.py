@@ -1386,6 +1386,70 @@ class LintConfig(BaseModel):
     )
 
 
+class EntityMaintenanceConfig(BaseModel):
+    """Configuration for the cross-batch entity-cluster collapse loop.
+
+    Detects highly-similar entity rows that escaped the intra-batch
+    resolver (e.g. "ACME Corp" / "acme corp" / "Acme Corp") and emits a
+    cluster-aware MaintenanceProposal that a human can approve to merge
+    them into one canonical entity. Off by default — operators opt in.
+    """
+
+    scan_enabled: bool = Field(
+        default=False,
+        description=(
+            'Master switch for the periodic entity-cluster collapse scan. '
+            'Off by default — operators opt in once thresholds are tuned.'
+        ),
+    )
+    top_n: int = Field(
+        default=100,
+        ge=1,
+        description=(
+            'Maximum entities considered per scan, selected by activity '
+            '(mention_count). Empirically covers >95% of cooccurrence-weighted '
+            'activity in typical vaults.'
+        ),
+    )
+    scan_cooldown_days: int = Field(
+        default=7,
+        ge=0,
+        description=(
+            'Per-entity cooldown in days. An entity already scanned within '
+            'this window is skipped on subsequent scans.'
+        ),
+    )
+    pair_threshold: float = Field(
+        default=0.85,
+        ge=0.0,
+        le=1.0,
+        description=(
+            'Minimum pairwise similarity to connect two entities in the '
+            'candidate-cluster graph. Placeholder — empirical tuning pending.'
+        ),
+    )
+    cluster_min_threshold: float = Field(
+        default=0.70,
+        ge=0.0,
+        le=1.0,
+        description=(
+            'Cohesion guard: minimum pairwise similarity across every pair '
+            'in a candidate cluster. Clusters whose min-pair falls below this '
+            'are rejected (rope-drift protection). Must be <= pair_threshold.'
+        ),
+    )
+
+    @model_validator(mode='after')
+    def _validate_thresholds(self) -> 'EntityMaintenanceConfig':
+        if self.cluster_min_threshold > self.pair_threshold:
+            raise ValueError(
+                'cluster_min_threshold must be <= pair_threshold '
+                f'(got cluster_min_threshold={self.cluster_min_threshold}, '
+                f'pair_threshold={self.pair_threshold})'
+            )
+        return self
+
+
 class LintLLMCheckConfig(BaseModel):
     """Per-check feature flag for a DSPy lint signature."""
 
@@ -1678,6 +1742,14 @@ class MemoryConfig(BaseModel):
     lint_llm: LintLLMConfig = Field(
         default_factory=LintLLMConfig,
         description='Configuration for surprise-gated LLM-assisted lint.',
+    )
+
+    entity_maintenance: EntityMaintenanceConfig = Field(
+        default_factory=EntityMaintenanceConfig,
+        description=(
+            'Configuration for the cross-batch entity-cluster collapse loop. '
+            'Off by default; operators opt in via scan_enabled.'
+        ),
     )
 
     deprioritize_score: DeprioritizeScoreConfig = Field(

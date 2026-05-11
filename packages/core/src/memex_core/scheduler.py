@@ -176,6 +176,31 @@ async def periodic_lint_task(api: 'MemexAPI'):
             logger.error(f'Scheduler: Lint task failed: {e}', exc_info=True)
 
 
+async def periodic_entity_maintenance_task(api: 'MemexAPI'):
+    """Daily cross-batch entity-cluster collapse scan.
+
+    Read-only at the entity table — emits MaintenanceProposal rows when the
+    cohesion-guarded clustering finds duplicate-entity clusters. The collapse
+    itself is operator-gated via ``memex lint resolve --winner ...``.
+    """
+    from memex_core.services.entity_maintenance import scan_collapse_clusters
+
+    async with background_session('bg-sched-entity-maintenance'):
+        try:
+            summary = await scan_collapse_clusters(api)
+            if summary.get('clusters_emitted') or summary.get('rescan_updated'):
+                logger.info(
+                    'Scheduler: entity-maintenance scan emitted=%d rescan_updated=%d '
+                    'rejected_cohesion=%d scanned=%d',
+                    summary.get('clusters_emitted', 0),
+                    summary.get('rescan_updated', 0),
+                    summary.get('clusters_rejected_cohesion', 0),
+                    summary.get('scanned', 0),
+                )
+        except (OSError, RuntimeError, ValueError) as e:
+            logger.error(f'Scheduler: entity-maintenance task failed: {e}', exc_info=True)
+
+
 async def periodic_consolidation_task(api: 'MemexAPI', units_per_tick: int):
     """Per-vault consolidation tick under the single leader lock.
 
@@ -364,6 +389,16 @@ async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI
     @clock.task(trigger=Every(seconds=7 * 86400))
     async def run_diagnostics_refresh():
         await periodic_diagnostics_refresh_task(api)
+
+    # --- Entity maintenance (cross-batch cluster collapse) ---
+    if config.server.memory.entity_maintenance.scan_enabled:
+        logger.info('Scheduler: Entity-maintenance scan ENABLED (every 24h).')
+
+        @clock.task(trigger=Every(seconds=86400))
+        async def run_entity_maintenance_job():
+            await periodic_entity_maintenance_task(api)
+    else:
+        logger.info('Scheduler: Entity-maintenance scan DISABLED (scan_enabled=False).')
 
     # --- Consolidation ---
     consolidation_cfg = config.server.memory.consolidation

@@ -865,6 +865,14 @@ class Entity(SQLModel, table=True):  # type: ignore
         sa_column=Column(TIMESTAMP(timezone=True)),
         description='Timestamp when the entity was most recently returned in a retrieval result.',
     )
+    last_merge_scan_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
+        description=(
+            'Timestamp of the most recent inclusion in a cross-batch entity-merge scan. '
+            'NULL = never scanned (eligible on the first pass).'
+        ),
+    )
 
     unit_entities: list['UnitEntity'] = Relationship(
         back_populates='entity', sa_relationship_kwargs={'cascade': 'all, delete-orphan'}
@@ -896,6 +904,11 @@ class Entity(SQLModel, table=True):  # type: ignore
             'idx_entities_canonical_name_trgm',
             sql_text('lower(canonical_name) gin_trgm_ops'),
             postgresql_using='gin',
+        ),
+        Index(
+            'idx_entities_last_merge_scan_at',
+            'last_merge_scan_at',
+            postgresql_where=sql_text('last_merge_scan_at IS NOT NULL'),
         ),
     )
 

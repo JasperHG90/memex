@@ -284,6 +284,36 @@ async def delete_entity(entity_id: UUID, api: Annotated[MemexAPI, Depends(get_ap
         raise _handle_error(e, 'Entity deletion failed')
 
 
+@router.post('/entities/scan-merges', dependencies=[Depends(require_read)])
+async def scan_entity_merges(
+    api: Annotated[MemexAPI, Depends(get_api)],
+    top_n: Annotated[int | None, Query(ge=2, le=10_000)] = None,
+    scan_cooldown_days: Annotated[int | None, Query(ge=0)] = None,
+    pair_threshold: Annotated[float | None, Query(ge=0.0, le=1.0)] = None,
+    cluster_min_threshold: Annotated[float | None, Query(ge=0.0, le=1.0)] = None,
+):
+    """Run a one-shot cross-batch entity-cluster collapse scan.
+
+    Complements the scheduler. Emits one MaintenanceProposal per surviving
+    cluster (after the cohesion guard); rescan-collisions UPDATE existing
+    findings in place. The merge itself is NOT applied — operators approve
+    via ``memex lint resolve --winner ...``.
+    """
+    from memex_core.services.entity_maintenance import scan_collapse_clusters
+
+    try:
+        summary = await scan_collapse_clusters(
+            api,
+            top_n=top_n,
+            scan_cooldown_days=scan_cooldown_days,
+            pair_threshold=pair_threshold,
+            cluster_min_threshold=cluster_min_threshold,
+        )
+        return summary
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Entity merge scan failed')
+
+
 @router.delete('/entities/{entity_id}/mental-model', dependencies=[Depends(require_delete)])
 async def delete_mental_model(
     entity_id: UUID,

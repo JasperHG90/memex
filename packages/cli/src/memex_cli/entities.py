@@ -388,3 +388,74 @@ async def list_related(
         table.add_row(name, str(count), str(other_id))
 
     console.print(table)
+
+
+@app.command('scan-merges')
+@async_command
+async def scan_merges_cmd(
+    ctx: typer.Context,
+    top_n: Annotated[
+        int | None,
+        typer.Option(
+            '--top-n',
+            min=2,
+            max=10_000,
+            help='Override the config default for how many entities to scan.',
+        ),
+    ] = None,
+    scan_cooldown_days: Annotated[
+        int | None,
+        typer.Option(
+            '--cooldown-days',
+            min=0,
+            help='Override per-entity cooldown in days.',
+        ),
+    ] = None,
+    pair_threshold: Annotated[
+        float | None,
+        typer.Option(
+            '--pair-threshold',
+            min=0.0,
+            max=1.0,
+            help='Override minimum pairwise similarity to graph-link two entities.',
+        ),
+    ] = None,
+    cluster_min_threshold: Annotated[
+        float | None,
+        typer.Option(
+            '--cluster-min',
+            min=0.0,
+            max=1.0,
+            help=(
+                'Override min-pairwise cohesion threshold (must be '
+                '<= --pair-threshold; rope-drift guard).'
+            ),
+        ),
+    ] = None,
+):
+    """Run an on-demand cross-batch entity-cluster collapse scan.
+
+    Emits one MaintenanceProposal per surviving cluster. The merge itself is
+    NOT applied — review the proposals with ``memex lint findings`` and
+    approve via ``memex lint resolve <id> --winner <member>``. The collapse
+    affects every vault listed in ``evidence.vaults_affected``.
+    """
+    config: MemexConfig = ctx.obj
+    async with get_api_context(config) as api:
+        try:
+            summary = await api.scan_entity_merges(
+                top_n=top_n,
+                scan_cooldown_days=scan_cooldown_days,
+                pair_threshold=pair_threshold,
+                cluster_min_threshold=cluster_min_threshold,
+            )
+        except Exception as e:
+            handle_api_error(e)
+            return
+
+    console.print(
+        f'[green]scan complete[/green]: scanned={summary.get("scanned", 0)}, '
+        f'emitted={summary.get("clusters_emitted", 0)}, '
+        f'rejected_cohesion={summary.get("clusters_rejected_cohesion", 0)}, '
+        f'rescan_updated={summary.get("rescan_updated", 0)}'
+    )

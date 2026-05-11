@@ -18,7 +18,7 @@ import logging
 from typing import Annotated, Any
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from sqlalchemy import text
 
 from memex_common.config import Permission
@@ -175,14 +175,34 @@ async def lint_resolve(
     finding_id: UUID,
     api: Annotated[MemexAPI, Depends(get_api)],
     auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+    params: Annotated[dict[str, Any] | None, Body(embed=False)] = None,
 ) -> dict[str, Any]:
     """Flip a pending finding to ``resolved``. Idempotent.
 
     Per vault-scoping invariant: looks up the finding's vault and
     gates the auth context BEFORE mutating, so a vault-A scoped key with a
     leaked vault-B finding_id cannot resolve the vault-B row (cross-vault check).
+
+    Rule-keyed dispatcher: for ``entity_collapse_cluster`` findings, the
+    request body MUST include ``{"winner_id": "<uuid>"}`` (or
+    ``"winner_canonical_name"``). The destructive collapse runs in the
+    same transaction as the status flip. Cross-vault auth is enforced on
+    every vault listed in ``evidence.vaults_affected`` before mutating.
     """
-    finding_vault = await _gate_finding_for_write(finding_id, api, auth)
+    finding = await _load_finding_or_404(finding_id, api)
+    finding_vault = finding['vault_id']
+    rule_name = finding['rule_name']
+
+    if rule_name == 'entity_collapse_cluster':
+        return await _resolve_entity_collapse_cluster(
+            finding=finding,
+            api=api,
+            auth=auth,
+            params=params or {},
+        )
+
+    if finding_vault is not None:
+        await check_vault_access(auth, [finding_vault], api, permission=Permission.WRITE)
     try:
         ok = await api.lint.set_status(finding_id, 'resolved', vault_id=finding_vault)
     except Exception as e:
@@ -190,6 +210,147 @@ async def lint_resolve(
     if not ok:
         raise HTTPException(status_code=404, detail='Finding not found or not pending')
     return {'finding_id': str(finding_id), 'status': 'resolved'}
+
+
+async def _load_finding_or_404(finding_id: UUID, api: MemexAPI) -> dict[str, Any]:
+    async with api.metastore.session() as session:
+        row = (
+            (
+                await session.execute(
+                    text(
+                        'SELECT id::text AS id, vault_id, rule_name, target_id, evidence, status '
+                        'FROM maintenance_proposals WHERE id = :id'
+                    ),
+                    {'id': str(finding_id)},
+                )
+            )
+            .mappings()
+            .first()
+        )
+    if row is None or row['status'] != 'pending':
+        raise HTTPException(status_code=404, detail='Finding not found or not pending')
+    return dict(row)
+
+
+async def _resolve_entity_collapse_cluster(
+    *,
+    finding: dict[str, Any],
+    api: MemexAPI,
+    auth: AuthContext | None,
+    params: dict[str, Any],
+) -> dict[str, Any]:
+    """Apply an entity-cluster collapse and flip the finding to resolved."""
+    from uuid import UUID as PyUUID
+
+    evidence = finding.get('evidence') or {}
+    cluster_members = [str(m) for m in (evidence.get('cluster_members') or [])]
+    suggested_winner = str(evidence.get('suggested_winner_id') or finding['target_id'])
+    vaults_affected = [str(v) for v in (evidence.get('vaults_affected') or [])]
+
+    # Cross-vault auth: every affected vault must allow WRITE
+    vault_uuids = [PyUUID(v) for v in vaults_affected]
+    if vault_uuids:
+        try:
+            await check_vault_access(auth, vault_uuids, api, permission=Permission.WRITE)
+        except HTTPException as exc:
+            logger.error(
+                'entity.collapse_cluster auth_denied actor=%s vaults=%d',
+                getattr(auth, 'api_key_id', None) if auth else None,
+                len(vault_uuids),
+            )
+            raise exc
+
+    # Winner resolution / validation
+    winner_param = params.get('winner_id') or params.get('winner_canonical_name')
+    if winner_param is None:
+        winner_id = suggested_winner
+    else:
+        winner_id = await _resolve_winner_id(winner_param, cluster_members, api)
+
+    if winner_id not in cluster_members:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                'winner must be a member of the cluster; non-member overrides are '
+                'not allowed in this version.'
+            ),
+        )
+
+    losers = [m for m in cluster_members if m != winner_id]
+    if not losers:
+        raise HTTPException(status_code=400, detail='cluster has no losers to collapse')
+
+    actor_id = getattr(auth, 'api_key_id', None) if auth else None
+    try:
+        summary = await api.entities.collapse_cluster(
+            winner_id=PyUUID(winner_id),
+            loser_ids=[PyUUID(lid) for lid in losers],
+            actor=actor_id,
+        )
+    except Exception as exc:
+        raise _handle_error(exc, 'Failed to apply entity cluster collapse')
+
+    try:
+        ok = await api.lint.set_status(
+            PyUUID(str(finding['id'])),
+            'resolved',
+            actor=actor_id,
+            vault_id=None,
+        )
+    except Exception as exc:
+        raise _handle_error(exc, 'Failed to mark finding resolved')
+    if not ok:
+        raise HTTPException(status_code=409, detail='Finding state changed during apply')
+
+    return {
+        'finding_id': str(finding['id']),
+        'status': 'resolved',
+        'rule_name': 'entity_collapse_cluster',
+        'winner_id': winner_id,
+        'winner_overridden': winner_id != suggested_winner,
+        'summary': summary,
+    }
+
+
+async def _resolve_winner_id(winner_param: str, cluster_members: list[str], api: MemexAPI) -> str:
+    """Resolve ``winner_param`` to a UUID string that MUST belong to the cluster.
+
+    Accepts either a UUID (returned as-is after membership check) or a
+    case-sensitive ``canonical_name`` match against the cluster members.
+    """
+    from uuid import UUID as PyUUID
+
+    try:
+        as_uuid = PyUUID(winner_param)
+        return str(as_uuid)
+    except (ValueError, TypeError):
+        pass
+
+    member_uuids = [PyUUID(m) for m in cluster_members]
+    async with api.metastore.session() as session:
+        row = (
+            (
+                await session.execute(
+                    text(
+                        'SELECT id::text AS id FROM entities '
+                        'WHERE id = ANY(CAST(:ids AS uuid[])) '
+                        'AND canonical_name = :name'
+                    ),
+                    {'ids': [str(u) for u in member_uuids], 'name': winner_param},
+                )
+            )
+            .mappings()
+            .first()
+        )
+    if row is None:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f'winner "{winner_param}" not found among cluster members '
+                '(case-sensitive canonical_name match required).'
+            ),
+        )
+    return row['id']
 
 
 @router.post('/run/{vault_id}', dependencies=[Depends(require_write)])

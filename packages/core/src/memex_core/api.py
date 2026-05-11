@@ -636,6 +636,10 @@ class MemexAPI:
         return self._lint
 
     @property
+    def entities(self) -> EntityService:
+        return self._entities
+
+    @property
     def consolidation(self) -> ConsolidationService:
         return self._consolidation
 

@@ -308,6 +308,28 @@ LINT_RUN_DURATION_SECONDS = Histogram(
 )
 
 # ---------------------------------------------------------------------------
+# Entity-cluster collapse maintenance
+# ---------------------------------------------------------------------------
+
+ENTITY_COLLAPSE_SCAN_EMITTED_TOTAL = Counter(
+    'memex_entity_collapse_scan_emitted_total',
+    'Cluster proposals produced by the entity-cluster collapse scan.',
+    ['result'],  # proposed | rejected_cohesion | rescan_updated
+)
+
+ENTITY_COLLAPSE_APPLY_TOTAL = Counter(
+    'memex_entity_collapse_apply_total',
+    'Cluster collapses applied via EntityService.collapse_cluster.',
+    ['outcome'],  # success | failed
+)
+
+ENTITY_COLLAPSE_APPLY_DURATION_SECONDS = Histogram(
+    'memex_entity_collapse_apply_duration_seconds',
+    'Wall-clock duration of EntityService.collapse_cluster (seconds).',
+    buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0),
+)
+
+# ---------------------------------------------------------------------------
 # Per-entity advisory lock + reconsolidate / consolidate metrics
 # ---------------------------------------------------------------------------
 
