@@ -4068,6 +4068,62 @@ async def memex_get_lint_flags(
         raise ToolError(f'memex_get_lint_flags failed: {e}')
 
 
+from memex_mcp._lint_resolution_descriptions import (
+    MEMEX_LINT_APPLY_WINNER_DESCRIPTION,
+    MEMEX_LINT_REVERSE_WINNER_DESCRIPTION,
+)
+
+
+@mcp.tool(
+    name='memex_lint_apply_winner',
+    description=MEMEX_LINT_APPLY_WINNER_DESCRIPTION,
+    tags={'write', 'storage', 'diagnostics'},
+    annotations={'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True},
+    timeout=30.0,
+)
+async def memex_lint_apply_winner(
+    ctx: Context,
+    finding_id: Annotated[
+        str,
+        Field(description='UUID of the pending winner-proposal finding to apply.'),
+    ],
+) -> dict[str, Any]:
+    """Write surface: apply the recommended action on a winner-proposal finding."""
+    try:
+        api = get_api(ctx)
+        return await api.lint_apply_winner(finding_id)
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'memex_lint_apply_winner failed: {e}', exc_info=True)
+        raise ToolError(f'memex_lint_apply_winner failed: {e}')
+
+
+@mcp.tool(
+    name='memex_lint_reverse_winner',
+    description=MEMEX_LINT_REVERSE_WINNER_DESCRIPTION,
+    tags={'write', 'storage', 'diagnostics'},
+    annotations={'readOnlyHint': False, 'destructiveHint': False, 'idempotentHint': True},
+    timeout=30.0,
+)
+async def memex_lint_reverse_winner(
+    ctx: Context,
+    finding_id: Annotated[
+        str,
+        Field(description='UUID of the previously applied winner-proposal finding to reverse.'),
+    ],
+) -> dict[str, Any]:
+    """Write surface: reverse a previously applied winner-proposal."""
+    try:
+        api = get_api(ctx)
+        return await api.lint_reverse_winner(finding_id)
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'memex_lint_reverse_winner failed: {e}', exc_info=True)
+        raise ToolError(f'memex_lint_reverse_winner failed: {e}')
+
+
 # --- Consolidation ---
 
 from memex_mcp._reconsolidate_descriptions import (

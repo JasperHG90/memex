@@ -153,6 +153,7 @@ def format_briefing_block(
     diagnostics_summary: dict[str, Any] | None = None,
     procedural_observations: list[dict[str, Any]] | None = None,
     lint_pending_count: int | None = None,
+    lint_pending_winner_proposals: int | None = None,
 ) -> str:
     """Compose the Memex system-prompt block."""
     lines = ['## Memex Memory']
@@ -184,7 +185,13 @@ def format_briefing_block(
         lines.append('\n' + _render_procedural_block(procedural_observations))
 
     if lint_pending_count is not None and lint_pending_count > 0:
-        lines.append('\n' + _render_lint_block(lint_pending_count))
+        lines.append(
+            '\n'
+            + _render_lint_block(
+                lint_pending_count,
+                pending_winner_proposals=lint_pending_winner_proposals,
+            )
+        )
 
     if diagnostics_summary:
         lines.append('\n' + _render_diagnostics_block(diagnostics_summary))
@@ -204,11 +211,21 @@ __all__ = ['BriefingCache', 'format_briefing_block']
 # ============================================================
 
 
-def _render_lint_block(pending_count: int) -> str:
-    return (
-        f'### Maintenance findings\n'
-        f'- {pending_count} pending lint findings. Inspect with `memex lint findings`.'
-    )
+def _render_lint_block(
+    pending_count: int,
+    *,
+    pending_winner_proposals: int | None = None,
+) -> str:
+    lines = [
+        '### Maintenance findings',
+        f'- {pending_count} pending lint findings. Inspect with `memex lint findings`.',
+    ]
+    if pending_winner_proposals is not None and pending_winner_proposals > 0:
+        lines.append(
+            f'- {pending_winner_proposals} have proposed winners. '
+            'Apply with `memex_lint_apply_winner` after surfacing to the user.'
+        )
+    return '\n'.join(lines)
 
 
 def _render_procedural_block(observations: list[dict[str, Any]]) -> str:

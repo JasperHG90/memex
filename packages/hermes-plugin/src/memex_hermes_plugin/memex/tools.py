@@ -139,6 +139,10 @@ class MemexAPIProtocol(Protocol):
     # F8 — Lint flags (read-only agent surface)
     async def lint_get_flags(self, *args: Any, **kwargs: Any) -> Any: ...
 
+    # Lint resolution (winner-proposal apply / reverse)
+    async def lint_apply_winner(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def lint_reverse_winner(self, *args: Any, **kwargs: Any) -> Any: ...
+
     # F9 — Per-entity advisory lock + vault-wide consolidate
     async def reconsolidate_entity(self, *args: Any, **kwargs: Any) -> Any: ...
     async def consolidate_vault(self, *args: Any, **kwargs: Any) -> Any: ...
@@ -3940,6 +3944,94 @@ def handle_get_lint_flags(
 
 HANDLERS['memex_get_lint_flags'] = handle_get_lint_flags
 ALL_SCHEMAS.append(GET_LINT_FLAGS_SCHEMA)
+
+
+LINT_APPLY_WINNER_SCHEMA: dict[str, Any] = {
+    'name': 'memex_lint_apply_winner',
+    'description': (
+        'Apply the recommended action on a winner-proposal lint finding '
+        "(rule_name=propose_contradiction_winner). The finding's "
+        'evidence.action drives the mutation: mark a unit stale, mark a '
+        'note superseded, rewrite a contradicts link as refines, or a '
+        'no-op write when inconclusive. Captures prior_state so the change '
+        'is reversible via memex_lint_reverse_winner.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'finding_id': {
+                'type': 'string',
+                'description': 'UUID of the pending winner-proposal finding.',
+            },
+        },
+        'required': ['finding_id'],
+    },
+}
+
+
+LINT_REVERSE_WINNER_SCHEMA: dict[str, Any] = {
+    'name': 'memex_lint_reverse_winner',
+    'description': (
+        'Reverse a previously applied winner-proposal lint finding. Restores '
+        'the row(s) recorded under evidence.resolution.prior_state and '
+        'writes a paired audit row. The original finding stays resolved.'
+    ),
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'finding_id': {
+                'type': 'string',
+                'description': (
+                    'UUID of the previously applied (status=resolved) '
+                    'winner-proposal finding to reverse.'
+                ),
+            },
+        },
+        'required': ['finding_id'],
+    },
+}
+
+
+def handle_lint_apply_winner(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    """Sync wrapper around RemoteMemexAPI.lint_apply_winner."""
+    finding_id = args.get('finding_id')
+    if not finding_id:
+        return tool_error('memex_lint_apply_winner requires finding_id')
+    try:
+        result = run_sync(api.lint_apply_winner(str(finding_id)), timeout=30.0)
+    except Exception as e:
+        logger.warning('memex_lint_apply_winner failed: %s', e)
+        return tool_error(f'Lint apply failed: {e}')
+    return json.dumps(result, default=str)
+
+
+def handle_lint_reverse_winner(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    """Sync wrapper around RemoteMemexAPI.lint_reverse_winner."""
+    finding_id = args.get('finding_id')
+    if not finding_id:
+        return tool_error('memex_lint_reverse_winner requires finding_id')
+    try:
+        result = run_sync(api.lint_reverse_winner(str(finding_id)), timeout=30.0)
+    except Exception as e:
+        logger.warning('memex_lint_reverse_winner failed: %s', e)
+        return tool_error(f'Lint reverse failed: {e}')
+    return json.dumps(result, default=str)
+
+
+HANDLERS['memex_lint_apply_winner'] = handle_lint_apply_winner
+HANDLERS['memex_lint_reverse_winner'] = handle_lint_reverse_winner
+ALL_SCHEMAS.append(LINT_APPLY_WINNER_SCHEMA)
+ALL_SCHEMAS.append(LINT_REVERSE_WINNER_SCHEMA)
 
 
 # --- F9 ---  (filled by WS-locks)
