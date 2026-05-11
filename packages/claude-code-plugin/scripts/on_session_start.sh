@@ -5,7 +5,13 @@
 # 3. Resolves active vault from the hierarchical resolver (project → user → agent → env → default).
 #
 # Dependencies: uvx (uv), jq, git (optional)
-set -euo pipefail
+set -uo pipefail
+# Match every other hook: any unguarded failure emits `{}` so Claude Code
+# always sees valid hookSpecificOutput JSON for SessionStart (rather than
+# `set -e` quietly killing the script mid-write with no payload). The
+# EXIT trap registered later for `tmp_briefing` cleanup composes cleanly
+# with this one because bash invokes both.
+trap 'echo "{}"; exit 0' ERR
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
@@ -60,11 +66,17 @@ if [ -n "$_project_root" ]; then
 fi
 
 # --- Clear stale session state ---
+# Per-session files written by other hooks (PreCompact, SessionEnd, PreToolUse
+# trackers) carry the previous session's id in their suffix. Wipe them at
+# SessionStart so they can't leak into the new session — otherwise we keep
+# growing files in $STATE_DIR for the lifetime of the plugin install.
 STATE_DIR="${CLAUDE_PLUGIN_DATA:-${HOME}/.claude/.state}/memex"
 mkdir -p "$STATE_DIR"
 rm -f "$STATE_DIR/write_count"
 rm -rf "$STATE_DIR/file_edits"
 rm -f "$STATE_DIR"/capture_count_*
+rm -f "$STATE_DIR"/session_note_offset_*
+rm -f "$STATE_DIR"/session_note_created_*
 
 # --- Generate session note key ---
 SESSION_NOTE_KEY="session:$(date -u +%Y-%m-%dT%H:%M:%S.%3N 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%S)"

@@ -84,13 +84,21 @@ def test_legacy_kv_key_forward_migrates(mock_memex: MockMemex, temp_git_repo: Pa
 
 
 def test_clears_stale_state_on_new_session(mock_memex: MockMemex, temp_git_repo: Path) -> None:
-    """write_count, file_edits, capture_count_* must all be wiped fresh."""
+    """All per-session state files must be wiped fresh.
+
+    Includes the PreCompact/SessionEnd `session_note_offset_*` /
+    `session_note_created_*` family — otherwise they accumulate over
+    hundreds of sessions and the offsets from previous sessions could
+    nominally collide on the next session_id reuse.
+    """
     state_dir = mock_memex.plugin_data / 'memex'
     state_dir.mkdir(parents=True, exist_ok=True)
     (state_dir / 'write_count').write_text('99')
     (state_dir / 'file_edits').mkdir(exist_ok=True)
     (state_dir / 'file_edits' / 'stale').write_text('5 stalefile')
     (state_dir / 'capture_count_oldsession').write_text('a\nb\n')
+    (state_dir / 'session_note_offset_oldsession').write_text('42')
+    (state_dir / 'session_note_created_oldsession').write_text('')
 
     run_script(
         'on_session_start.sh',
@@ -102,6 +110,8 @@ def test_clears_stale_state_on_new_session(mock_memex: MockMemex, temp_git_repo:
     assert not (state_dir / 'write_count').exists()
     assert not (state_dir / 'file_edits').exists()
     assert not (state_dir / 'capture_count_oldsession').exists()
+    assert not (state_dir / 'session_note_offset_oldsession').exists()
+    assert not (state_dir / 'session_note_created_oldsession').exists()
 
 
 def test_emits_additional_context_with_briefing(mock_memex: MockMemex, temp_git_repo: Path) -> None:
