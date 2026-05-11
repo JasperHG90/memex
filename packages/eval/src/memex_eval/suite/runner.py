@@ -1373,6 +1373,76 @@ def _suite_is_multi_vault(suite: Suite) -> bool:
     )
 
 
+async def _resolve_note_keys_against_vaults(
+    api: RemoteMemexAPI,
+    suite: Suite,
+    vault_map: dict[str | None, UUID],
+    default_vault_id: UUID,
+    *,
+    error_label: str,
+) -> dict[str, str]:
+    """Walk every vault in ``vault_map``, list its notes, and match each
+    ``SourceNote`` back to its imported ``note_id`` by canonicalised
+    title.
+
+    Shared by the ``reuse_vault`` and ``--from-snapshot`` paths: in both
+    cases the eval runner did NOT freshly ingest, so the standard
+    ingest-time mapping (``_ingest_sources``) wasn't populated.
+    Reconstructing the mapping here keeps setup actions that resolve by
+    ``note_key`` (record_outcome, deprioritize, etc.) functional.
+
+    Uses display name (``Note.title or note_key``) — the only stable
+    handle ``NoteListItemDTO`` exposes (wire ``note_key`` lives on
+    ``SyncedFile`` and is omitted from the list response).
+
+    ``error_label`` is interpolated into the missing/ambiguous error
+    messages so the user knows which code path raised.
+    """
+    notes_by_name_per_vault: dict[UUID, dict[str, list[str]]] = {}
+    for vid in set(vault_map.values()):
+        try:
+            rows = await api.list_notes(vault_id=vid, limit=500)
+        except Exception as e:
+            logger.warning('list_notes failed for vault %s: %s', vid, e)
+            rows = []
+        per_vault: dict[str, list[str]] = {}
+        for n in rows:
+            nm = canonicalize_name(getattr(n, 'name', None) or '')
+            per_vault.setdefault(nm, []).append(str(n.id))
+        notes_by_name_per_vault[vid] = per_vault
+
+    note_id_by_key: dict[str, str] = {}
+    missing: list[str] = []
+    ambiguous: list[str] = []
+    for src in suite.sources.notes:
+        target_vault_id = vault_map.get(src.vault_name, default_vault_id)
+        lookup_name = canonicalize_name(src.title or src.note_key)
+        candidates = notes_by_name_per_vault.get(target_vault_id, {}).get(lookup_name, [])
+        if not candidates:
+            missing.append(src.note_key)
+            continue
+        if len(candidates) > 1:
+            ambiguous.append(src.note_key)
+            continue
+        note_id_by_key[src.note_key] = candidates[0]
+
+    if missing:
+        raise ValueError(
+            f'{error_label}: missing expected notes (note_keys={missing!r}). '
+            f'The suite declares these notes but the imported/reused vault(s) '
+            f'do not contain notes whose title matches. Check that the suite '
+            f'sources match what was snapshotted.'
+        )
+    if ambiguous:
+        raise ValueError(
+            f'{error_label}: multiple notes share a display name for source '
+            f'note_keys {ambiguous!r}. The lookup matches by '
+            f'``note.title or note.note_key``; duplicate names cannot be '
+            f'resolved unambiguously. Give each source note a unique title.'
+        )
+    return note_id_by_key
+
+
 class MultiVaultImportNotSupported(RuntimeError):
     """Raised when an explicit ``--from-snapshot <path>`` points at a
     flat single-vault V3 dump but the suite declares per-note or
@@ -1819,71 +1889,29 @@ async def run_suite(
 
             try:
                 if reuse_vault is not None:
-                    # P8: skip ingest+extraction. Resolve the existing notes
-                    # back to source note_keys by matching on the per-note
-                    # display ``name`` — that's the field _ingest_sources
-                    # writes from ``note.title or note.note_key`` and the
-                    # only stable handle ``NoteListItemDTO`` exposes
-                    # (it omits the wire ``note_key``).
-                    note_id_by_key = {}
-                    # Walk every vault the suite uses. ``vault_map`` already
-                    # contains ``default_vault_id`` under key ``None`` (set
-                    # during vault setup); ``set(...)`` dedupes if a
-                    # secondary vault happens to alias the default.
-                    # round-6 H2: collect ids per name as a list so duplicate
-                    # display names raise loudly instead of silently mapping
-                    # both source notes to whichever id wins the dict update.
-                    notes_by_name_per_vault: dict[UUID, dict[str, list[str]]] = {}
-                    for vid in set(vault_map.values()):
-                        try:
-                            # Server caps limit at 500 (server/notes.py: le=500).
-                            # Suites with >500 source notes will need pagination;
-                            # current suites are well under this.
-                            rows = await api.list_notes(vault_id=vid, limit=500)
-                        except Exception as e:
-                            logger.warning('list_notes failed for vault %s: %s', vid, e)
-                            rows = []
-                        per_vault: dict[str, list[str]] = {}
-                        for n in rows:
-                            # Canonicalise so reuse-mode lookup matches the
-                            # fresh-ingest path's case/whitespace handling
-                            # (round-3 MEDIUM 1).
-                            nm = canonicalize_name(getattr(n, 'name', None) or '')
-                            per_vault.setdefault(nm, []).append(str(n.id))
-                        notes_by_name_per_vault[vid] = per_vault
-                    missing: list[str] = []
-                    ambiguous: list[str] = []
-                    for src in suite.sources.notes:
-                        target_vault_id = vault_map.get(src.vault_name, default_vault_id)
-                        lookup_name = canonicalize_name(src.title or src.note_key)
-                        candidates = notes_by_name_per_vault.get(target_vault_id, {}).get(
-                            lookup_name, []
-                        )
-                        if not candidates:
-                            missing.append(src.note_key)
-                            continue
-                        if len(candidates) > 1:
-                            ambiguous.append(src.note_key)
-                            continue
-                        note_id_by_key[src.note_key] = candidates[0]
-                    if missing:
-                        raise ValueError(
-                            f'Reused vault is missing expected notes: {missing}. '
-                            f'Re-run without --reuse-vault to ingest fresh.'
-                        )
-                    if ambiguous:
-                        raise ValueError(
-                            f'Reused vault has multiple notes sharing a display '
-                            f'name for source note_keys {ambiguous}. The reuse '
-                            f'lookup matches by ``note.title or note.note_key`` '
-                            f'(NoteListItemDTO does not expose the wire note_key); '
-                            f'duplicate names cannot be resolved unambiguously. '
-                            f'Give each source note a unique title, or drop '
-                            f'--reuse-vault and re-ingest fresh.'
-                        )
+                    # P8: skip ingest+extraction. Resolve via the shared
+                    # name-based lookup helper (also used by the snapshot
+                    # import path).
+                    note_id_by_key = await _resolve_note_keys_against_vaults(
+                        api,
+                        suite,
+                        vault_map,
+                        default_vault_id,
+                        error_label=f'Reused vault {reuse_vault!r}',
+                    )
                 elif use_import:
-                    # Snapshot path: extraction is pre-baked.
-                    note_id_by_key = {}
+                    # Snapshot path: extraction is pre-baked, but setup
+                    # actions resolve units by ``note_key`` and need the
+                    # mapping populated against the imported vault(s).
+                    # Match on canonicalised display name, same idiom as
+                    # the reuse_vault branch.
+                    note_id_by_key = await _resolve_note_keys_against_vaults(
+                        api,
+                        suite,
+                        vault_map,
+                        default_vault_id,
+                        error_label=f'Snapshot import of suite {suite.name!r}',
+                    )
                 else:
                     # Ingest source notes
                     note_id_by_key = await _ingest_sources(api, default_vault_id, vault_map, suite)
@@ -1903,11 +1931,21 @@ async def run_suite(
                             )
 
                 if use_import:
-                    # Snapshot path: scenarios that depend on per-note unit IDs
-                    # via the snapshot path are out of scope for v1 (the
-                    # MultiVaultImportNotSupported check above already filters
-                    # most of these).
-                    note_key_to_unit_ids = {}
+                    # Snapshot path: extraction is pre-baked but the
+                    # per-note unit-id map still needs to be populated
+                    # so setup actions (record_outcome, deprioritize,
+                    # set_intent_risk, etc.) that resolve by note_key
+                    # can find the imported units. Same poll helper as
+                    # the fresh-ingest path; pre-baked units return on
+                    # the first poll so this is fast.
+                    note_key_to_vault_id_imp: dict[str, UUID] = {
+                        n.note_key: vault_map.get(n.vault_name, default_vault_id)
+                        for n in suite.sources.notes
+                        if n.note_key in note_id_by_key
+                    }
+                    note_key_to_unit_ids = await _wait_extraction_per_note(
+                        api, note_id_by_key, note_key_to_vault_id_imp
+                    )
                 else:
                     # Build per-note vault map: each note_key polls under its
                     # actual target vault, not blindly under default_vault_id —

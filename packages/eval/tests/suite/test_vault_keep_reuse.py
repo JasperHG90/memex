@@ -385,7 +385,7 @@ class TestReuseVault:
                 }
             )
         )
-        with pytest.raises(ValueError, match='multiple notes sharing a display name'):
+        with pytest.raises(ValueError, match='multiple notes share a display name'):
             await run_suite(
                 suite,
                 server_url='http://x/api/v1/',
