@@ -109,6 +109,10 @@ VALID_RISK_CLASSES: frozenset[str] = frozenset(c.value for c in RiskClass)
 # reference these names instead of re-typing the value tuple.
 IntentLiteral = Literal['permanent', 'durable', 'ephemeral']
 RiskLiteral = Literal['none', 'sensitive', 'private', 'safety']
+ClaimTypeLiteral = Literal['resolution', 'contradiction']
+
+
+VALID_CLAIM_TYPES: frozenset[str] = frozenset({'resolution', 'contradiction'})
 
 
 # Shared default-on-fail coercion. Both ``RawFact`` (LLM output) and
@@ -133,6 +137,20 @@ def coerce_risk_class(v: object) -> str:
     if isinstance(v, str) and v in {c.value for c in RiskClass}:
         return v
     return RiskClass.NONE.value
+
+
+def coerce_claim_type(v: object) -> str | None:
+    """Coerce ``v`` to a valid ``ClaimTypeLiteral`` string, or ``None``.
+
+    Unlike ``coerce_intent_class`` / ``coerce_risk_class``, the default for
+    invalid / absent input is ``None`` — most facts do not carry an explicit
+    resolution / contradiction claim, and silently downgrading garbage to
+    ``None`` is correct (the contradiction engine falls through to the
+    generic path).
+    """
+    if isinstance(v, str) and v in VALID_CLAIM_TYPES:
+        return v
+    return None
 
 
 class LineageDirection(str, Enum):

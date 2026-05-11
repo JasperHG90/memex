@@ -27,6 +27,30 @@ from memex_core.memory.sql_models import MemoryLink, MemoryUnit, Note
 logger = logging.getLogger('memex.core.memory.contradiction')
 
 
+def _extract_target_entity_ids(unit: MemoryUnit) -> list[UUID]:
+    """Pull ``target_entity_ids`` from ``unit.unit_metadata['claim_target']``.
+
+    Returns an empty list when the unit has no claim_target or stores
+    invalid UUID strings. Tolerant of malformed JSONB; downstream callers
+    treat an empty list as "no narrowing — use the generic candidate pool".
+    """
+    if not unit.unit_metadata:
+        return []
+    claim_target = unit.unit_metadata.get('claim_target')
+    if not isinstance(claim_target, dict):
+        return []
+    raw_ids = claim_target.get('target_entity_ids') or []
+    if not isinstance(raw_ids, list):
+        return []
+    result: list[UUID] = []
+    for rid in raw_ids:
+        try:
+            result.append(UUID(str(rid)))
+        except (ValueError, TypeError):
+            continue
+    return result
+
+
 class ContradictionEngine:
     """Detects and records contradictions between memory units."""
 
@@ -68,7 +92,7 @@ class ContradictionEngine:
                 'contradiction.vault_id': str(vault_id),
                 'contradiction.unit_count': str(len(unit_ids)),
             },
-        ):
+        ) as span:
             new_units = await self._load_units(session, unit_ids)
             if not new_units:
                 logger.info('No units found for IDs %s — already deleted?', unit_ids)
@@ -85,6 +109,14 @@ class ContradictionEngine:
                 len(flagged_units),
                 len(new_units),
             )
+            explicit_claim_count = sum(1 for u in flagged_units if u.claim_type is not None)
+            if span is not None:
+                try:
+                    span.set_attribute(
+                        'contradiction.explicit_claim_count', str(explicit_claim_count)
+                    )
+                except Exception:
+                    pass
 
             all_links: list[MemoryLink] = []
             # Accumulate signed alpha-step deltas per target; apply via
@@ -195,20 +227,44 @@ class ContradictionEngine:
 
         Returns (links, confidence_deltas, evidence_bumps). Deltas are signed
         alpha-steps so the caller can sum per-unit without overwrite races.
+
+        When the unit carries an explicit ``claim_type`` (resolution or
+        contradiction), the candidate retrieval is narrowed by the claim's
+        target entity IDs and uses a looser similarity threshold — the
+        linguistic evidence on the claim itself substitutes for tight
+        semantic matching.
         """
+        target_entity_ids = _extract_target_entity_ids(unit)
+        if unit.claim_type is not None:
+            threshold = self.config.similarity_threshold_explicit_claim
+        else:
+            threshold = self.config.similarity_threshold
+
+        logger.info(
+            'process_flagged_unit unit_id=%s vault_id=%s claim_type=%s '
+            'target_entity_count=%d threshold=%.2f',
+            unit.id,
+            vault_id,
+            unit.claim_type,
+            len(target_entity_ids),
+            threshold,
+        )
+
         candidates = await get_candidates(
             session,
             unit,
             vault_id,
             k=self.config.max_candidates_per_unit,
-            threshold=self.config.similarity_threshold,
+            threshold=threshold,
+            target_entity_ids=target_entity_ids or None,
         )
 
         if not candidates:
             logger.info(
-                'Unit %s: no candidates found (threshold=%.2f)',
+                'Unit %s: no candidates found (threshold=%.2f, claim_type=%s)',
                 unit.id,
-                self.config.similarity_threshold,
+                threshold,
+                unit.claim_type,
             )
             return [], {}, {}
 
@@ -260,27 +316,50 @@ class ContradictionEngine:
             else:
                 continue
 
+            link_weight = self._weight_for_relation(relation, unit.claim_type)
+            link_metadata: dict[str, Any] = {
+                'authoritative_unit_id': str(authoritative.id),
+                'superseded_unit_id': str(superseded.id),
+                'reasoning': reasoning,
+                'temporal_basis': (
+                    'llm_override'
+                    if authoritative_hint != self._temporal_default(unit, existing_unit)
+                    else 'timestamp'
+                ),
+                'superseding_note_title': note_title,
+            }
+            if unit.claim_type is not None:
+                link_metadata['claim_type'] = unit.claim_type
+
             link = MemoryLink(
                 from_unit_id=authoritative.id,
                 to_unit_id=superseded.id,
                 link_type=link_type,
                 vault_id=vault_id,
-                weight=1.0,
-                link_metadata={
-                    'authoritative_unit_id': str(authoritative.id),
-                    'superseded_unit_id': str(superseded.id),
-                    'reasoning': reasoning,
-                    'temporal_basis': (
-                        'llm_override'
-                        if authoritative_hint != self._temporal_default(unit, existing_unit)
-                        else 'timestamp'
-                    ),
-                    'superseding_note_title': note_title,
-                },
+                weight=link_weight,
+                link_metadata=link_metadata,
             )
             links.append(link)
 
         return links, confidence_deltas, evidence_bumps
+
+    @staticmethod
+    def _weight_for_relation(relation: str, claim_type: str | None) -> float:
+        """Weight policy for newly-created MemoryLinks.
+
+        Default contradiction-engine link weight is 1.0. For explicit-claim
+        units, weight depends on the claim_type:
+          - claim_type='contradiction' + 'contradict' relation: 1.0
+            (direct negation — strongest signal).
+          - claim_type='resolution' + 'weaken' relation: 0.7
+            (resolution softens the prior but does not negate it).
+          - All other combinations: 1.0 (default).
+        """
+        if claim_type == 'resolution' and relation == 'weaken':
+            return 0.7
+        if claim_type == 'contradiction' and relation == 'contradict':
+            return 1.0
+        return 1.0
 
     async def _classify(
         self, unit: MemoryUnit, candidates: list[MemoryUnit]

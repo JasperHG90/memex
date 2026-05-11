@@ -541,3 +541,72 @@ class TestTemporalDefault:
         a = _make_unit(event_date=now)
         b = _make_unit(event_date=now)
         assert ContradictionEngine._temporal_default(a, b) == 'new'
+
+
+class TestWeightForRelation:
+    """``_weight_for_relation`` encodes the explicit-claim weight policy."""
+
+    def test_explicit_contradiction_is_one_point_zero(self) -> None:
+        assert ContradictionEngine._weight_for_relation('contradict', 'contradiction') == 1.0
+
+    def test_explicit_resolution_weakens_is_zero_point_seven(self) -> None:
+        assert ContradictionEngine._weight_for_relation('weaken', 'resolution') == 0.7
+
+    def test_no_claim_type_uses_default_one(self) -> None:
+        assert ContradictionEngine._weight_for_relation('weaken', None) == 1.0
+        assert ContradictionEngine._weight_for_relation('contradict', None) == 1.0
+        assert ContradictionEngine._weight_for_relation('reinforce', None) == 1.0
+
+
+class TestProcessFlaggedUnitClaimRouting:
+    """``_process_flagged_unit`` routes explicit-claim units through the
+    lower threshold and the entity-targets filter.
+    """
+
+    @pytest.mark.asyncio
+    async def test_explicit_claim_uses_lower_threshold_and_target_ids(self, engine, config) -> None:
+        target_eid = uuid4()
+        unit = _make_unit(text='the X problem is solved')
+        unit.claim_type = 'resolution'
+        unit.unit_metadata = {
+            'claim_target': {
+                'target_topic': 'the X problem',
+                'target_entity_ids': [str(target_eid)],
+            }
+        }
+
+        mock_session = AsyncMock()
+        captured: dict = {}
+
+        async def fake_get_candidates(*args, **kwargs):
+            captured.update(kwargs)
+            return []
+
+        with patch(
+            'memex_core.memory.contradiction.engine.get_candidates', new=fake_get_candidates
+        ):
+            await engine._process_flagged_unit(mock_session, unit, uuid4())
+
+        assert captured.get('threshold') == config.similarity_threshold_explicit_claim
+        target_ids = captured.get('target_entity_ids')
+        assert target_ids is not None
+        assert target_eid in target_ids
+
+    @pytest.mark.asyncio
+    async def test_no_claim_type_uses_default_threshold(self, engine, config) -> None:
+        unit = _make_unit(text='generic fact')
+
+        mock_session = AsyncMock()
+        captured: dict = {}
+
+        async def fake_get_candidates(*args, **kwargs):
+            captured.update(kwargs)
+            return []
+
+        with patch(
+            'memex_core.memory.contradiction.engine.get_candidates', new=fake_get_candidates
+        ):
+            await engine._process_flagged_unit(mock_session, unit, uuid4())
+
+        assert captured.get('threshold') == config.similarity_threshold
+        assert captured.get('target_entity_ids') is None

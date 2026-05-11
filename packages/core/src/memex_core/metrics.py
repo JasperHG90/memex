@@ -80,6 +80,16 @@ MEMEX_AUDIT_LOG_TOTAL = Counter(
 )
 
 # ---------------------------------------------------------------------------
+# Claim-type extraction metrics
+# ---------------------------------------------------------------------------
+
+CLAIM_TYPED_UNITS_TOTAL = Counter(
+    'memex_claim_typed_units_total',
+    'Memory units extracted with an explicit claim_type signal.',
+    ['claim_type', 'vault_id'],
+)
+
+# ---------------------------------------------------------------------------
 # Extraction-pipeline in-flight gauges (wedge diagnostics)
 # ---------------------------------------------------------------------------
 

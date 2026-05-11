@@ -2,6 +2,7 @@ import asyncio
 import logging
 import re
 from datetime import datetime, timezone
+from typing import Any
 from uuid import UUID
 
 import dspy
@@ -602,6 +603,8 @@ class ExtractionEngine:
                         vault_id=vault_id,
                         intent_class=raw_fact.intent_class,
                         risk_class=raw_fact.risk_class,
+                        claim_type=raw_fact.claim_type,
+                        claim_target=raw_fact.claim_target,
                     )
                     all_extracted_facts.append(ef)
 
@@ -639,6 +642,8 @@ class ExtractionEngine:
                             vault_id=vault_id,
                             intent_class=f.intent_class,
                             risk_class=f.risk_class,
+                            claim_type=f.claim_type,
+                            claim_target=f.claim_target,
                         )
                         all_extracted_facts.append(ef)
                 if user_notes_text:
@@ -675,6 +680,8 @@ class ExtractionEngine:
                             vault_id=vault_id,
                             intent_class=f.intent_class,
                             risk_class=f.risk_class,
+                            claim_type=f.claim_type,
+                            claim_target=f.claim_target,
                         )
                         all_extracted_facts.append(ef)
 
@@ -1004,6 +1011,8 @@ class ExtractionEngine:
                             vault_id=vault_id,
                             intent_class=f.intent_class,
                             risk_class=f.risk_class,
+                            claim_type=f.claim_type,
+                            claim_target=f.claim_target,
                         )
                         extracted_facts.append(ef)
                         global_fact_idx += 1
@@ -1245,6 +1254,8 @@ class ExtractionEngine:
                     vault_id=vault_id,
                     intent_class=f.intent_class,
                     risk_class=f.risk_class,
+                    claim_type=f.claim_type,
+                    claim_target=f.claim_target,
                 )
                 extracted_facts.append(ef)
                 global_fact_idx += 1
@@ -1282,6 +1293,8 @@ class ExtractionEngine:
                         vault_id=vault_id,
                         intent_class=f.intent_class,
                         risk_class=f.risk_class,
+                        claim_type=f.claim_type,
+                        claim_target=f.claim_target,
                     )
                     extracted_facts.append(ef)
                     global_fact_idx += 1
@@ -1317,6 +1330,8 @@ class ExtractionEngine:
                         vault_id=vault_id,
                         intent_class=f.intent_class,
                         risk_class=f.risk_class,
+                        claim_type=f.claim_type,
+                        claim_target=f.claim_target,
                     )
                     extracted_facts.append(ef)
                     global_fact_idx += 1
@@ -1543,6 +1558,8 @@ class ExtractionEngine:
                         vault_id=content.vault_id,
                         intent_class=f.intent_class,
                         risk_class=f.risk_class,
+                        claim_type=f.claim_type,
+                        claim_target=f.claim_target,
                     )
                     extracted_facts.append(ef)
                     global_fact_idx += 1
@@ -1583,6 +1600,8 @@ class ExtractionEngine:
                         vault_id=contents[0].vault_id,
                         intent_class=f.intent_class,
                         risk_class=f.risk_class,
+                        claim_type=f.claim_type,
+                        claim_target=f.claim_target,
                     )
                     extracted_facts.append(ef)
             if user_notes_text:
@@ -1617,6 +1636,8 @@ class ExtractionEngine:
                         vault_id=contents[0].vault_id,
                         intent_class=f.intent_class,
                         risk_class=f.risk_class,
+                        claim_type=f.claim_type,
+                        claim_target=f.claim_target,
                     )
                     extracted_facts.append(ef)
                 global_fact_idx += 1
@@ -1728,7 +1749,65 @@ class ExtractionEngine:
                 return set()
             raise
 
+        await self._backfill_claim_target_entity_ids(session, unit_ids, facts, unit_entity_pairs)
+
         return {UUID(rid) for rid in resolved_ids}
+
+    async def _backfill_claim_target_entity_ids(
+        self,
+        session: AsyncSession,
+        unit_ids: list[str],
+        facts: list[ProcessedFact],
+        unit_entity_pairs: list[tuple[Any, str]],
+    ) -> None:
+        """Populate ``claim_target.target_entity_ids`` for explicit-claim units.
+
+        First-pass strategy: use the union of all entities resolved on the
+        unit. Coarse but correct — the contradiction-engine filter narrows
+        candidates that share ANY of these entity IDs. Refine later if eval
+        shows precision loss.
+        """
+        from sqlalchemy import bindparam
+        from sqlalchemy.dialects.postgresql import JSONB
+        from sqlalchemy import text as sa_text
+
+        per_unit_entities: dict[str, list[str]] = {}
+        for unit_id_str, entity_id_str in unit_entity_pairs:
+            per_unit_entities.setdefault(str(unit_id_str), []).append(str(entity_id_str))
+
+        updates: list[dict[str, Any]] = []
+        for i, fact in enumerate(facts):
+            if fact.claim_type is None or fact.claim_target is None:
+                continue
+            uid = unit_ids[i]
+            eids = per_unit_entities.get(str(uid), [])
+            updates.append(
+                {
+                    'unit_id': uid,
+                    'target_entity_ids': eids,
+                }
+            )
+
+        if not updates:
+            return
+
+        # Merge ``target_entity_ids`` into ``metadata->claim_target`` JSONB.
+        # ``claim_type``-bearing rows already carry a ``claim_target`` dict
+        # written by storage.insert_facts_batch; jsonb_set respects existing
+        # keys (target_topic).
+        stmt = sa_text(
+            'UPDATE memory_units '
+            'SET metadata = jsonb_set('
+            "    coalesce(metadata, '{}'::jsonb),"
+            "    '{claim_target,target_entity_ids}',"
+            '    :target_entity_ids,'
+            '    true'
+            ') '
+            'WHERE id = :unit_id'
+        ).bindparams(bindparam('target_entity_ids', type_=JSONB))
+
+        for upd in updates:
+            await session.execute(stmt, upd)
 
     async def prepare_user_notes(
         self,
@@ -1779,6 +1858,8 @@ class ExtractionEngine:
                 vault_id=vault_id,
                 intent_class=f.intent_class,
                 risk_class=f.risk_class,
+                claim_type=f.claim_type,
+                claim_target=f.claim_target,
             )
             for f in un_facts
         ]

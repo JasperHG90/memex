@@ -995,9 +995,29 @@ class ContradictionConfig(BaseModel):
         default=0.5,
         description='Min cosine similarity for candidate retrieval.',
     )
+    similarity_threshold_explicit_claim: float = Field(
+        default=0.35,
+        ge=0.0,
+        le=1.0,
+        description=(
+            'Min cosine similarity for candidate retrieval when the new unit '
+            'carries an explicit resolution/contradiction claim. Lower than '
+            '``similarity_threshold`` because explicit claims have linguistic '
+            'evidence beyond cosine.'
+        ),
+    )
     max_candidates_per_unit: int = Field(
         default=15,
         description='Max candidates per flagged unit.',
+    )
+    claim_too_aggressive_max_links: int = Field(
+        default=5,
+        ge=1,
+        description=(
+            'Lint threshold for the ``claim_too_aggressive`` rule: when an '
+            'explicit-claim unit produces more contradicts/weakens links than '
+            'this in one pass, a maintenance finding is emitted.'
+        ),
     )
     superseded_threshold: float = Field(
         default=0.3,
@@ -1007,6 +1027,17 @@ class ContradictionConfig(BaseModel):
         default=None,
         description='LLM model for classification. None = use extraction model.',
     )
+
+    @model_validator(mode='after')
+    def _validate_explicit_claim_threshold(self) -> 'ContradictionConfig':
+        if self.similarity_threshold_explicit_claim > self.similarity_threshold:
+            raise ValueError(
+                'similarity_threshold_explicit_claim '
+                f'({self.similarity_threshold_explicit_claim}) must be <= '
+                f'similarity_threshold ({self.similarity_threshold}); explicit-claim '
+                'matching is meant to be a looser filter, not tighter.'
+            )
+        return self
 
 
 class ConsolidationConfig(BaseModel):
