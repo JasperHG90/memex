@@ -108,11 +108,15 @@ if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/n
 
     _remote=$(git remote get-url origin 2>/dev/null || true)
     if [ -n "$_remote" ]; then
-        # Normalize: strip basic-auth, scheme, trailing .git → owner/name
-        _repo=$(printf '%s' "$_remote" | sed 's/\.git$//; s|https://[^@]*@|https://|; s|[a-zA-Z][a-zA-Z0-9+.-]*://||; s|^[^:]*:||')
-        # Try to extract owner/name from the tail of the path
-        _repo_short=$(printf '%s' "$_repo" | awk -F/ 'NF>=2 {print $(NF-1) "/" $NF}')
-        if [ -n "$_repo_short" ]; then
+        # Normalize via the shared resolver helper so the tag and the KV-key
+        # project ID always agree on URL handling. Strip the leading host
+        # segment to leave `owner/repo` (or `org/subgroup/repo` for nested
+        # forges like GitLab — the naive last-two-segments approach mis-tagged
+        # those as `subgroup/repo`).
+        _load_resolver_if_needed
+        _repo=$(memex_normalize_git_remote_url "$_remote")
+        _repo_short="${_repo#*/}"
+        if [ -n "$_repo_short" ] && [ "$_repo_short" != "$_repo" ]; then
             _auto_tags+=("git:repo=$_repo_short")
         fi
     fi

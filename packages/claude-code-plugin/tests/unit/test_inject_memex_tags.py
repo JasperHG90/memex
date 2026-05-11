@@ -123,6 +123,41 @@ def test_injects_git_tags_inside_repo(mock_memex: MockMemex, temp_git_repo: Path
     assert 'git:dirty' not in tags
 
 
+def test_git_repo_tag_preserves_nested_subgroup_paths(
+    mock_memex: MockMemex, tmp_path: Path
+) -> None:
+    """Hosted forges (GitLab) nest repos under multiple groups; the old
+    last-two-segments awk lost everything above the immediate parent.
+    The tag must now keep `org/subgroup/repo`."""
+    import subprocess
+
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    subprocess.run(['git', 'init', '-q'], cwd=repo, check=True)
+    subprocess.run(['git', 'config', 'user.email', 't@e.com'], cwd=repo, check=True)
+    subprocess.run(['git', 'config', 'user.name', 'T'], cwd=repo, check=True)
+    subprocess.run(['git', 'config', 'commit.gpgsign', 'false'], cwd=repo, check=True)
+    (repo / 'README.md').write_text('x\n')
+    subprocess.run(['git', 'add', '.'], cwd=repo, check=True)
+    subprocess.run(['git', 'commit', '-q', '-m', 'init'], cwd=repo, check=True)
+    subprocess.run(
+        ['git', 'remote', 'add', 'origin', 'https://gitlab.com/org/subgroup/repo.git'],
+        cwd=repo,
+        check=True,
+    )
+    _seed_state(mock_memex)
+    result = run_script(
+        'inject_memex_tags.sh',
+        stdin=_pretooluse_payload(),
+        env=mock_memex.env,
+        cwd=repo,
+    )
+    assert result.returncode == 0, result.stderr
+    tags = _parse_output(result.stdout)['hookSpecificOutput']['updatedInput']['tags']
+    repos = [t for t in tags if t.startswith('git:repo=')]
+    assert repos == ['git:repo=org/subgroup/repo']
+
+
 def test_dirty_git_tag_emitted_when_uncommitted(mock_memex: MockMemex, temp_git_repo: Path) -> None:
     _seed_state(mock_memex)
     (temp_git_repo / 'unstaged.txt').write_text('change\n')

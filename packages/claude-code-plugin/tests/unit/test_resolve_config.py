@@ -73,6 +73,31 @@ def test_project_id_normalizes_url_formats(
     assert result.stdout.strip() == 'github.com/acme/myapp'
 
 
+@pytest.mark.parametrize(
+    'remote_url,expected',
+    [
+        ('https://github.com/acme/myapp.git', 'github.com/acme/myapp'),
+        ('git@github.com:acme/myapp.git', 'github.com/acme/myapp'),
+        ('https://gitlab.com/org/subgroup/repo.git', 'gitlab.com/org/subgroup/repo'),
+        ('git@gitlab.com:org/subgroup/repo.git', 'gitlab.com/org/subgroup/repo'),
+    ],
+)
+def test_normalize_git_remote_url_preserves_nested_subgroups(
+    mock_memex: MockMemex, remote_url: str, expected: str
+) -> None:
+    """`memex_normalize_git_remote_url` must keep every path segment.
+
+    Nested forges (GitLab, self-hosted Gitea, …) expose repos under multiple
+    path components; collapsing to the last two segments mis-identifies them.
+    """
+    result = _run_resolver(
+        f'memex_normalize_git_remote_url "{remote_url}"',
+        env=mock_memex.env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == expected
+
+
 def test_project_id_falls_back_to_path_outside_repo(mock_memex: MockMemex, tmp_path: Path) -> None:
     workdir = tmp_path / 'plain'
     workdir.mkdir()

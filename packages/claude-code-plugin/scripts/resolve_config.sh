@@ -66,10 +66,41 @@ memex() {
 }
 
 # ---------------------------------------------------------------------------
+# Git remote URL normalisation
+#
+# Shared by `memex_resolve_project_id` (KV key) and `inject_memex_tags.sh`
+# (git:repo tag). Both want the same `host/owner/repo` shape regardless of
+# whether the remote is HTTPS, basic-auth HTTPS, SCP-style SSH, or `ssh://`.
+# Worked examples:
+#
+#   https://github.com/acme/myapp.git           → github.com/acme/myapp
+#   https://oauth2:t0k@github.com/acme/myapp    → github.com/acme/myapp
+#   git@github.com:acme/myapp.git               → github.com/acme/myapp
+#   ssh://git@github.com/acme/myapp.git         → github.com/acme/myapp
+#   https://gitlab.com/org/subgroup/repo.git    → gitlab.com/org/subgroup/repo
+#
+# Pipeline:
+#   1. strip trailing `.git`
+#   2. strip HTTPS basic-auth (`user:password@`)
+#   3. strip `<scheme>://`
+#   4. collapse `user@host[:/]path` → `host/path` (handles both the SCP-style
+#      colon separator and the post-scheme-strip slash)
+# ---------------------------------------------------------------------------
+memex_normalize_git_remote_url() {
+    printf '%s' "$1" | sed '
+        s/\.git$//
+        s|https://[^@]*@|https://|
+        s|^[a-zA-Z][a-zA-Z0-9+.-]*://||
+        s|^[^@]*@\([^:/]*\)[:/]|\1/|
+    '
+}
+
+# ---------------------------------------------------------------------------
 # Project identifier
 #
-# Stable across machines: prefer the git remote (normalized: strip basic auth,
-# scheme, and `.git`), fall back to a path relative to $HOME, then $PWD.
+# Stable across machines: prefer the git remote (normalized via
+# `memex_normalize_git_remote_url`), fall back to a path relative to $HOME,
+# then $PWD.
 # ---------------------------------------------------------------------------
 memex_resolve_project_id() {
     local _id=""
@@ -77,28 +108,7 @@ memex_resolve_project_id() {
         local _remote
         _remote=$(git remote get-url origin 2>/dev/null) || true
         if [ -n "$_remote" ]; then
-            # Normalize HTTPS, SSH, and SCP-style remotes to the same
-            # `host/owner/repo` shape so contributors who cloned via different
-            # URL formats share a project ID (and therefore the same
-            # `app:claude-code:project:<id>:vault` KV key). Worked examples:
-            #
-            #   https://github.com/acme/myapp.git           → github.com/acme/myapp
-            #   https://oauth2:t0k@github.com/acme/myapp    → github.com/acme/myapp
-            #   git@github.com:acme/myapp.git               → github.com/acme/myapp
-            #   ssh://git@github.com/acme/myapp.git         → github.com/acme/myapp
-            #
-            # Pipeline:
-            #   1. strip trailing `.git`
-            #   2. strip HTTPS basic-auth (`user:password@`)
-            #   3. strip `<scheme>://`
-            #   4. collapse `user@host[:/]path` → `host/path` (handles both the
-            #      SCP-style colon separator and the post-scheme-strip slash)
-            _id=$(printf '%s' "$_remote" | sed '
-                s/\.git$//
-                s|https://[^@]*@|https://|
-                s|^[a-zA-Z][a-zA-Z0-9+.-]*://||
-                s|^[^@]*@\([^:/]*\)[:/]|\1/|
-            ')
+            _id=$(memex_normalize_git_remote_url "$_remote")
         fi
     fi
     if [ -z "$_id" ]; then
