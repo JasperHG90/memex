@@ -202,10 +202,15 @@ async def apply_winner_proposal(
 
         if effective_action == 'mark_loser_stale':
             prior_state['loser_unit_status'] = loser_row.status
-            await session.execute(
+            result = await session.execute(
                 _UPDATE_UNIT_STATUS_SQL,
                 {'unit_id': str(loser_unit_id), 'status': 'stale'},
             )
+            if not result.rowcount:
+                raise ContradictionResolutionError(
+                    f'apply failed — loser unit {loser_unit_id} no longer exists '
+                    '(concurrent delete)'
+                )
             applied['loser_unit_status'] = 'stale'
             applied_state['loser_unit_status'] = 'stale'
 
@@ -221,13 +226,18 @@ async def apply_winner_proposal(
             prior_state['loser_note_superseded_by'] = (
                 note_row.superseded_by if note_row is not None else None
             )
-            await session.execute(
+            result = await session.execute(
                 _UPDATE_NOTE_SUPERSEDED_BY_SQL,
                 {
                     'note_id': loser_row.note_id,
                     'superseded_by': winner_row.note_id,
                 },
             )
+            if not result.rowcount:
+                raise ContradictionResolutionError(
+                    f'apply failed — loser note {loser_row.note_id} no longer exists '
+                    '(concurrent delete)'
+                )
             applied['loser_note_superseded_by'] = winner_row.note_id
             applied_state['loser_note_id'] = loser_row.note_id
             applied_state['loser_note_superseded_by'] = winner_row.note_id
@@ -242,10 +252,14 @@ async def apply_winner_proposal(
                 raise ContradictionResolutionError(f'link {link_id} no longer exists')
             prior_state['link_id'] = link_row.id
             prior_state['link_type'] = link_row.link_type
-            await session.execute(
+            result = await session.execute(
                 _UPDATE_LINK_TYPE_SQL,
                 {'link_id': str(link_id), 'link_type': 'refines'},
             )
+            if not result.rowcount:
+                raise ContradictionResolutionError(
+                    f'apply failed — link {link_id} no longer exists (concurrent delete)'
+                )
             applied['link_type'] = 'refines'
             applied_state['link_id'] = link_row.id
             applied_state['link_type'] = 'refines'

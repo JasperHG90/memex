@@ -599,3 +599,115 @@ async def test_reverse_refine_not_contradict_refuses_when_link_deleted():
             vault_id=UUID('11111111-1111-1111-1111-111111111111'),
             actor='unit-test',
         )
+
+
+# ---------------------------------------------------------------------------
+# Apply-path rowcount guards — symmetric with the reverse-path guards above.
+# Simulate a concurrent DELETE between the row loader (SELECT) and the
+# mutating UPDATE inside the same transaction. The UPDATE matches zero rows;
+# without the rowcount guard, the apply path would record applied_state and
+# flip the finding to resolved as if the mutation succeeded, leaving the
+# audit trail lying. With the guard, the apply path raises and the
+# transaction rolls back via the existing async context manager.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_apply_mark_loser_stale_refuses_when_unit_deleted_mid_txn():
+    loser_id = str(uuid4())
+    winner_id = str(uuid4())
+    proposal = _proposal('mark_loser_stale', loser_unit_id=loser_id, winner_unit_id=winner_id)
+    loser_row = _row(id=loser_id, status='active', note_id=str(uuid4()))
+    winner_row = _row(id=winner_id, status='active', note_id=str(uuid4()))
+    # SELECT proposal -> SELECT loser unit -> SELECT winner unit ->
+    # UPDATE unit status (rowcount=0, concurrent delete after the SELECT).
+    rows_and_rowcounts: list = [
+        proposal,
+        loser_row,
+        winner_row,
+        (None, 0),
+    ]
+    session, cm = _make_session_with_rowcounts(rows_and_rowcounts)
+    api = _api_with_session(cm)
+
+    with pytest.raises(ContradictionResolutionError, match='apply failed'):
+        await apply_winner_proposal(
+            api,
+            uuid4(),
+            vault_id=UUID('11111111-1111-1111-1111-111111111111'),
+            actor='unit-test',
+        )
+    assert not session.commit.await_count, 'apply must not commit when rowcount=0'
+
+
+@pytest.mark.asyncio
+async def test_apply_supersede_loser_note_refuses_when_note_deleted_mid_txn():
+    loser_id = str(uuid4())
+    winner_id = str(uuid4())
+    loser_note = str(uuid4())
+    winner_note = str(uuid4())
+    proposal = _proposal('supersede_loser_note', loser_unit_id=loser_id, winner_unit_id=winner_id)
+    loser_row = _row(id=loser_id, status='active', note_id=loser_note)
+    winner_row = _row(id=winner_id, status='active', note_id=winner_note)
+    note_row = _row(id=loser_note, superseded_by=None)
+    # SELECT proposal -> SELECT loser unit -> SELECT winner unit ->
+    # SELECT note -> UPDATE note.superseded_by (rowcount=0, concurrent delete).
+    rows_and_rowcounts: list = [
+        proposal,
+        loser_row,
+        winner_row,
+        note_row,
+        (None, 0),
+    ]
+    session, cm = _make_session_with_rowcounts(rows_and_rowcounts)
+    api = _api_with_session(cm)
+
+    with pytest.raises(ContradictionResolutionError, match='apply failed'):
+        await apply_winner_proposal(
+            api,
+            uuid4(),
+            vault_id=UUID('11111111-1111-1111-1111-111111111111'),
+            actor='unit-test',
+        )
+    assert not session.commit.await_count, 'apply must not commit when rowcount=0'
+
+
+@pytest.mark.asyncio
+async def test_apply_refine_not_contradict_refuses_when_link_deleted_mid_txn():
+    loser_id = str(uuid4())
+    winner_id = str(uuid4())
+    link_id = str(uuid4())
+    proposal = _proposal(
+        'refine_not_contradict',
+        loser_unit_id=loser_id,
+        winner_unit_id=winner_id,
+        link_id=link_id,
+    )
+    loser_row = _row(id=loser_id, status='active', note_id=str(uuid4()))
+    winner_row = _row(id=winner_id, status='active', note_id=str(uuid4()))
+    link_row = _row(
+        id=link_id,
+        link_type='contradicts',
+        from_unit_id=winner_id,
+        to_unit_id=loser_id,
+    )
+    # SELECT proposal -> SELECT loser unit -> SELECT winner unit ->
+    # SELECT link -> UPDATE link.link_type (rowcount=0, concurrent delete).
+    rows_and_rowcounts: list = [
+        proposal,
+        loser_row,
+        winner_row,
+        link_row,
+        (None, 0),
+    ]
+    session, cm = _make_session_with_rowcounts(rows_and_rowcounts)
+    api = _api_with_session(cm)
+
+    with pytest.raises(ContradictionResolutionError, match='apply failed'):
+        await apply_winner_proposal(
+            api,
+            uuid4(),
+            vault_id=UUID('11111111-1111-1111-1111-111111111111'),
+            actor='unit-test',
+        )
+    assert not session.commit.await_count, 'apply must not commit when rowcount=0'

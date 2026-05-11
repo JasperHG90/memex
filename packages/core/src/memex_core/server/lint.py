@@ -133,13 +133,15 @@ def _audit_actor() -> str:
     Reads from :func:`memex_core.context.get_actor`, which is set by
     ``auth_middleware`` for authenticated requests (shape:
     ``f'{key_name} ({key_prefix})'``). When auth is disabled, the
-    contextvar default is ``'anonymous'``; we promote that to ``'system'``
-    so the apply / reverse endpoints stay reachable in dev/test/CI and
-    the audit row still identifies the call path.
+    contextvar default is ``'anonymous'``; we promote that to
+    ``'system:auth-disabled'`` so the apply / reverse endpoints stay
+    reachable in dev/test/CI, the audit row still identifies the call
+    path, and the value cannot be confused with a real principal whose
+    key is literally named "system".
     """
     actor = get_actor()
     if not actor or actor == 'anonymous':
-        return 'system'
+        return 'system:auth-disabled'
     return actor
 
 
