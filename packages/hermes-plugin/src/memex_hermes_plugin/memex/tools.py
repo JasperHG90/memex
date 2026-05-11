@@ -3703,22 +3703,25 @@ ALL_SCHEMAS.append(MEMORY_SUMMARIZE_NODE_SCHEMA)
 RECORD_OUTCOME_SCHEMA: dict[str, Any] = {
     'name': 'memex_record_outcome',
     'description': (
-        'Record whether previously retrieved memories or a stored procedure '
-        'contributed to a successful outcome. Default mode increments MW '
-        "counters on memory units (target_type='memory_unit', "
-        "unit_ids=[...]); set target_type='kv_key' with kv_key="
-        "'procedure:<verb>:<context-tag>' to score a stored procedure. Call "
-        'after you actually used the retrieved memory or the procedure.\n\n'
+        'Record how previously retrieved memories or a stored procedure '
+        'contributed to the outcome. Default mode increments MW counters on '
+        "memory units (target_type='memory_unit', units=[{unit_id, verb, "
+        'reason}]) where verb is "helpful", "not_helpful", or "not_used" — '
+        'reason is required for helpful and not_helpful. Set '
+        "target_type='kv_key' with kv_key='procedure:<verb>:<context-tag>' "
+        'to score a stored procedure. Call after you actually used the '
+        'retrieved memory or the procedure.\n\n'
         'Call generously. Silence provides no learning signal.\n\n'
         'When the user reports an issue resolved, follow the §3.5 5-step flow '
         '(see briefing): disambiguate first, route by info quality (Options '
         'A/B/C; Option B requires top_k>=30), mandatory LLM judgment over '
-        'candidates, then PAIRED writes — memex_record_outcome(success=false) '
-        'AND memex_memory_deprioritize against the LLM-judged-relevant subset '
-        'only. The two verbs are orthogonal axes (MW gradient vs binary surface '
-        'state); user-confirmed-fix is BOTH signals at once. Imperfect '
-        'cross-note recall is by design — exploration is the safety net. '
-        'For HOW-THINGS-CHANGED audit queries, route to '
+        'candidates, then PAIRED writes — memex_record_outcome with '
+        "units=[{verb: 'not_helpful', ...}] AND memex_memory_deprioritize "
+        'against the LLM-judged-relevant subset only. The two verbs are '
+        'orthogonal axes (MW gradient vs binary surface state); user-'
+        'confirmed-fix is BOTH signals at once. Imperfect cross-note recall '
+        'is by design — exploration is the safety net. For HOW-THINGS-'
+        'CHANGED audit queries, route to '
         'memex_memory_search(apply_pre_filter=False) instead.'
     ),
     'parameters': {
@@ -3727,18 +3730,35 @@ RECORD_OUTCOME_SCHEMA: dict[str, Any] = {
             'success': {
                 'type': 'boolean',
                 'description': (
-                    'True if the task succeeded using these memories, '
-                    'false if they were misleading.'
+                    'kv_key mode only or legacy memory_unit shape '
+                    '(FutureWarning). True/false. Prefer the per-unit `units` '
+                    'parameter for memory_unit mode.'
+                ),
+            },
+            'units': {
+                'type': 'array',
+                'items': {
+                    'type': 'object',
+                    'properties': {
+                        'unit_id': {'type': 'string'},
+                        'verb': {
+                            'type': 'string',
+                            'enum': ['helpful', 'not_helpful', 'not_used'],
+                        },
+                        'reason': {'type': ['string', 'null']},
+                    },
+                    'required': ['unit_id', 'verb'],
+                },
+                'description': (
+                    'memory_unit mode. Per-unit verb classifications. `reason` '
+                    'is required for helpful and not_helpful, optional for '
+                    'not_used.'
                 ),
             },
             'unit_ids': {
                 'type': 'array',
                 'items': {'type': 'string'},
-                'description': (
-                    'memory_unit mode only. UUIDs of memory units you actually '
-                    'used — not all retrieved units, only the ones that were '
-                    "load-bearing in your reasoning. Required when target_type='memory_unit'."
-                ),
+                'description': ('Legacy memory_unit shape (FutureWarning). Prefer `units`.'),
             },
             'vault_id': {
                 'type': 'string',
@@ -3759,7 +3779,7 @@ RECORD_OUTCOME_SCHEMA: dict[str, Any] = {
                 'enum': ['memory_unit', 'kv_key'],
                 'description': (
                     "What the outcome scores. 'memory_unit' (default) increments "
-                    "MW counters on memory units in unit_ids. 'kv_key' "
+                    "MW counters on memory units in units/unit_ids. 'kv_key' "
                     'increments counters on the procedure_outcomes row for kv_key.'
                 ),
             },
@@ -3770,8 +3790,15 @@ RECORD_OUTCOME_SCHEMA: dict[str, Any] = {
                     "(procedure:<verb>:<context-tag>). Required when target_type='kv_key'."
                 ),
             },
+            'retrieved_set_size': {
+                'type': 'integer',
+                'minimum': 0,
+                'description': (
+                    'Size of the retrieved set the caller was asked to classify. '
+                    'Drives coverage_ratio on the audit log.'
+                ),
+            },
         },
-        'required': ['success'],
     },
 }
 
@@ -3784,24 +3811,38 @@ def handle_record_outcome(
 ) -> str:
     """Dual-mode dispatcher (memory_unit / kv_key).
 
-    Preserves the ADD-2 invariant by passing ``unit_ids`` and ``success``
-    positionally and ``target_type`` / ``kv_key`` keyword-only — same shape
-    as MemexAPI.record_outcome and RemoteMemexAPI.record_outcome.
+    Accepts the per-unit ``units`` shape (preferred) or the legacy
+    ``(unit_ids, success)`` shape (FutureWarning) for memory_unit mode.
+    kv_key mode still uses ``success``.
     """
-    try:
-        success = _require(args, 'success')
-    except ValueError as e:
-        return tool_error(str(e))
-    if not isinstance(success, bool):
-        return tool_error(f"'success' must be a boolean, got {type(success).__name__}")
-
     target_type = args.get('target_type', 'memory_unit')
     if target_type not in ('memory_unit', 'kv_key'):
         return tool_error(f"target_type must be 'memory_unit' or 'kv_key', got {target_type!r}")
 
+    units = args.get('units')
+    if units is not None and not isinstance(units, list):
+        return tool_error("'units' must be a list of {unit_id, verb, reason} objects")
+
     unit_ids = args.get('unit_ids')
     if unit_ids is not None and not isinstance(unit_ids, list):
         return tool_error("'unit_ids' must be a list of UUID strings")
+
+    success_raw = args.get('success')
+    success: bool | None
+    if success_raw is None:
+        success = None
+    elif isinstance(success_raw, bool):
+        success = success_raw
+    else:
+        return tool_error(f"'success' must be a boolean, got {type(success_raw).__name__}")
+
+    if target_type == 'memory_unit' and units is None and unit_ids is None:
+        return tool_error(
+            "memory_unit mode requires either 'units' (preferred) or "
+            "legacy ('unit_ids' + 'success')."
+        )
+    if target_type == 'kv_key' and success is None:
+        return tool_error("kv_key mode requires the 'success' boolean.")
 
     kv_key = args.get('kv_key')
     if kv_key is not None and not isinstance(kv_key, str):
@@ -3816,6 +3857,7 @@ def handle_record_outcome(
 
     outcome_confidence = args.get('outcome_confidence', 1.0)
     reason = args.get('reason')
+    retrieved_set_size = args.get('retrieved_set_size')
 
     try:
         result = run_sync(
@@ -3827,6 +3869,8 @@ def handle_record_outcome(
                 reason,
                 target_type=target_type,
                 kv_key=kv_key,
+                units=units,
+                retrieved_set_size=retrieved_set_size,
             ),
             timeout=30.0,
         )

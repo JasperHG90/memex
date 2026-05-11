@@ -605,28 +605,34 @@ class RemoteMemexAPI:
     # --- Outcomes ---
     async def record_outcome(
         self,
-        unit_ids: list[str] | None,
-        success: bool,
+        unit_ids: list[str] | None = None,
+        success: bool | None = None,
         vault_id: str | None = None,
         outcome_confidence: float = 1.0,
         reason: str | None = None,
         *,
         target_type: str = 'memory_unit',
         kv_key: str | None = None,
+        units: list[dict[str, Any]] | None = None,
+        caller_id: str | None = None,
+        turn_outcome: str | None = None,
+        retrieved_set_size: int | None = None,
+        exploration_tagged: bool = False,
     ) -> dict[str, Any]:
         """Record an outcome over HTTP.
 
-        Mirrors :meth:`memex_core.api.MemexAPI.record_outcome` exactly so
-        in-process and remote callers share one call shape. ``unit_ids``
-        and ``success`` are positional; ``target_type`` and ``kv_key`` are
-        keyword-only — preserving the invariant that a kwargless call
-        cannot silently record FAILURE.
+        Preferred shape: ``units=[{unit_id, verb, reason}, ...]``. Legacy
+        ``(unit_ids, success)`` shape still accepted (server emits
+        FutureWarning on translation).
         """
         body: dict[str, Any] = {
-            'success': success,
             'outcome_confidence': outcome_confidence,
             'target_type': target_type,
         }
+        if success is not None:
+            body['success'] = success
+        if units is not None:
+            body['units'] = units
         if unit_ids is not None:
             body['unit_ids'] = unit_ids
         if vault_id is not None:
@@ -635,6 +641,14 @@ class RemoteMemexAPI:
             body['reason'] = reason
         if kv_key is not None:
             body['kv_key'] = kv_key
+        if caller_id is not None:
+            body['caller_id'] = caller_id
+        if turn_outcome is not None:
+            body['turn_outcome'] = turn_outcome
+        if retrieved_set_size is not None:
+            body['retrieved_set_size'] = retrieved_set_size
+        if exploration_tagged:
+            body['exploration_tagged'] = True
         return await self._post('outcomes/record', body)
 
     # --- Stats & Overview ---

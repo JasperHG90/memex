@@ -104,22 +104,20 @@ async def test_optional_fields_only_sent_when_set(mock_client):
 
 
 def test_signature_matches_in_process_api():
-    """ADD-2 invariant: RemoteMemexAPI.record_outcome must mirror MemexAPI.record_outcome.
+    """RemoteMemexAPI.record_outcome must mirror MemexAPI.record_outcome.
 
-    Specifically: unit_ids + success are positional-or-keyword, target_type
-    and kv_key are keyword-only. A drift here means a Hermes call that works
-    in-process could fail (or worse, silently misbehave) over the wire.
+    Preferred shape is ``units=[UnitOutcome, ...]``; legacy
+    ``(unit_ids, success)`` shape is still accepted and emits FutureWarning
+    server-side. Keyword-only knobs (target_type, kv_key, units) must stay
+    keyword-only so positional drift cannot collide.
     """
     sig = inspect.signature(RemoteMemexAPI.record_outcome)
     params = sig.parameters
 
-    # Positional-or-keyword (ADD-2: success has no default — required).
     assert params['unit_ids'].kind == inspect.Parameter.POSITIONAL_OR_KEYWORD
     assert params['success'].kind == inspect.Parameter.POSITIONAL_OR_KEYWORD
-    assert params['success'].default is inspect.Parameter.empty, (
-        'success must have no default — kwargless calls cannot silently record FAILURE'
-    )
 
-    # Keyword-only — drift here would let a positional 7th-arg call collide.
+    # Keyword-only — drift here would let a positional call collide.
     assert params['target_type'].kind == inspect.Parameter.KEYWORD_ONLY
     assert params['kv_key'].kind == inspect.Parameter.KEYWORD_ONLY
+    assert params['units'].kind == inspect.Parameter.KEYWORD_ONLY

@@ -34,16 +34,41 @@ logger = logging.getLogger('memex.core.server.outcomes')
 router = APIRouter(prefix='/api/v1/outcomes')
 
 
-class RecordOutcomeRequest(BaseModel):
-    success: bool = Field(
+class UnitOutcomePayload(BaseModel):
+    """HTTP wire shape mirror of `UnitOutcome`."""
+
+    unit_id: str = Field(..., description='UUID of the memory unit.')
+    verb: str = Field(
         ...,
-        description='True if the task succeeded using these memories or this procedure.',
+        description="Per-unit verb: 'helpful', 'not_helpful', or 'not_used'.",
+    )
+    reason: str | None = Field(
+        default=None,
+        description='Free-text reason. Required for helpful / not_helpful.',
+    )
+
+
+class RecordOutcomeRequest(BaseModel):
+    success: bool | None = Field(
+        default=None,
+        description=(
+            'kv_key mode only or legacy memory_unit shape (FutureWarning). '
+            'True if the task succeeded using these memories or this procedure.'
+        ),
+    )
+    units: list[UnitOutcomePayload] | None = Field(
+        default=None,
+        description=(
+            'Preferred memory_unit shape. Per-unit verb classifications '
+            '(helpful / not_helpful / not_used) with a reason.'
+        ),
     )
     unit_ids: list[str] | None = Field(
         default=None,
         description=(
-            'memory_unit mode only. UUIDs of memory units that were load-bearing '
-            "in the agent's reasoning. Required when target_type='memory_unit'."
+            'Legacy memory_unit shape (FutureWarning). UUIDs of memory units '
+            'that were load-bearing in the reasoning. Required only when '
+            "target_type='memory_unit' and `units` is not supplied."
         ),
     )
     vault_id: str | None = Field(
@@ -75,6 +100,23 @@ class RecordOutcomeRequest(BaseModel):
             "Required when target_type='kv_key'."
         ),
     )
+    caller_id: str | None = Field(
+        default=None,
+        description='Caller identifier (session id or API key fingerprint) for audit log.',
+    )
+    turn_outcome: str | None = Field(
+        default=None,
+        description='Coarse turn-level outcome label (success/failure/mixed).',
+    )
+    retrieved_set_size: int | None = Field(
+        default=None,
+        ge=0,
+        description='Size of the retrieved set the caller was asked to classify.',
+    )
+    exploration_tagged: bool = Field(
+        default=False,
+        description='True iff any unit was exploration-injected on retrieval.',
+    )
 
 
 @router.post('/record', dependencies=[Depends(require_write)])
@@ -103,6 +145,10 @@ async def post_record_outcome(
             ) from exc
         await check_vault_access(auth, [resolved_vault], api, permission=Permission.WRITE)
 
+    units_payload: list[dict[str, Any]] | None = None
+    if body.units is not None:
+        units_payload = [u.model_dump() for u in body.units]
+
     try:
         return await api.record_outcome(
             body.unit_ids,
@@ -112,6 +158,11 @@ async def post_record_outcome(
             body.reason,
             target_type=body.target_type,
             kv_key=body.kv_key,
+            units=units_payload,
+            caller_id=body.caller_id,
+            turn_outcome=body.turn_outcome,
+            retrieved_set_size=body.retrieved_set_size,
+            exploration_tagged=body.exploration_tagged,
         )
     except ValueError as exc:
         # OutcomeService raises ValueError for missing unit_ids / kv_key /

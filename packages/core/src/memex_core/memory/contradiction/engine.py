@@ -30,9 +30,16 @@ logger = logging.getLogger('memex.core.memory.contradiction')
 class ContradictionEngine:
     """Detects and records contradictions between memory units."""
 
-    def __init__(self, lm: dspy.LM, config: ContradictionConfig):
+    def __init__(
+        self,
+        lm: dspy.LM,
+        config: ContradictionConfig,
+        *,
+        failure_co_count_weight: float = 0.5,
+    ):
         self.lm = lm
         self.config = config
+        self.failure_co_count_weight = failure_co_count_weight
         self.triage_predictor = dspy.Predict(TriageNewUnits)
         self.classify_predictor = dspy.Predict(ClassifyRelationships)
 
@@ -135,6 +142,11 @@ class ContradictionEngine:
                 await session.exec(upsert_stmt)  # type: ignore[arg-type]
                 all_links = list(deduped.values())
 
+            # Stored failure_co_count is an integer; the configured weight
+            # decides per-link bump via round() so 0.0 disables wiring and
+            # >=0.5 yields +1 per negative-evidence link.
+            failure_bump_per_link = round(max(0.0, self.failure_co_count_weight))
+
             # Clamp per-unit deltas via SQL LEAST/GREATEST to prevent races on
             # overlapping units (mirrors application-level max(0, min(1, ...))).
             for unit_id, delta in confidence_deltas.items():
@@ -152,6 +164,10 @@ class ContradictionEngine:
                         0,
                         MemoryUnit.confidence_evidence_count + bump,
                     )
+                    if failure_bump_per_link > 0:
+                        values['failure_co_count'] = (
+                            MemoryUnit.failure_co_count + bump * failure_bump_per_link
+                        )
                 stmt = update(MemoryUnit).where(MemoryUnit.id == unit_id).values(**values)
                 await session.execute(stmt)
 

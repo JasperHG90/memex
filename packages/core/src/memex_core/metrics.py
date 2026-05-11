@@ -133,6 +133,19 @@ OUTCOME_RECORDED_TOTAL = Counter(
     ['vault_id', 'outcome'],
 )
 
+OUTCOME_VERB_TOTAL = Counter(
+    'memex_outcome_verb_total',
+    'Per-unit verb classifications recorded by record_outcome.',
+    ['vault_id', 'verb'],
+)
+
+OUTCOME_COVERAGE_RATIO = Histogram(
+    'memex_outcome_coverage_ratio',
+    'Reported / retrieved coverage ratio per record_outcome call.',
+    ['vault_id', 'mode'],
+    buckets=(0.0, 0.1, 0.25, 0.5, 0.75, 1.0),
+)
+
 MW_SCORE_DISTRIBUTION = Histogram(
     'memex_mw_score',
     'Distribution of Memory Worth scores observed during outcome recording.',

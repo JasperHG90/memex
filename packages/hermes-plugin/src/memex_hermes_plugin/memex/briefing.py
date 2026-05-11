@@ -100,7 +100,7 @@ _RESOLUTION_FLOW_PRIMER = """### When the user reports an issue resolved (§3.5 
 3. **LLM-judge the candidates.** READ unit bodies; pick the fix-relevant subset. NEVER bulk-write.
 
 4.+5. **Paired writes** against the judged-relevant subset:
-   `memex_record_outcome(unit_ids=[...], success=false, reason="...")` AND
+   `memex_record_outcome(units=[{"unit_id":"...","verb":"not_helpful","reason":"..."}])` AND
    `memex_memory_deprioritize(unit_id=..., reason="...")`. Same subset.
 
    Orthogonal axes: `record_outcome` = MW gradient (append-only); `deprioritize` = binary surface state (reversible via `memory_restore`).
@@ -138,7 +138,7 @@ _ROUTING_GUIDE = """### How to use Memex tools
 - **KV store** — `memex_kv_write(value, key)` / `memex_kv_get(key)` / `memex_kv_search(query)` / `memex_kv_list()`. Keys MUST start with `global:`, `user:`, `project:<id>:`, `app:<id>:`, or `procedure:<verb>:<context-tag>`. The `procedure:` namespace stores learned how-tos: write via `memex_kv_write`, read active value via `memex_kv_get(key)`, inspect envelope via `memex_kv_get(key, include_history=true)`. Track outcomes via `memex_record_outcome(target_type="kv_key", kv_key=..., success=...)`. Deletion is CLI-only (`memex kv delete`).
 - **Capturing work** — `memex_add_note` for NEW/replace; `memex_append_note(note_key=..., delta=...)` to extend existing. Prefer append over re-ingesting the whole body.
 - **Templates** → `memex_list_templates` for slugs; `memex_get_template(slug)` for the scaffold; `memex_add_note(..., template=slug)` for structured captures.
-- **Curating memory** — `memex_memory_deprioritize(unit_id, reason=...)` is NON-DESTRUCTIVE (unit stays on graph, recallable via `include_deprioritized=true`; rank drops). Pair with `memex_record_outcome(success=false)` when the agent found it wrong. Reversible via `memex_memory_restore`. Archive (CLI-only) is DESTRUCTIVE — prefer deprioritize unless PII removal is required.
+- **Curating memory** — `memex_memory_deprioritize(unit_id, reason=...)` is NON-DESTRUCTIVE (unit stays on graph, recallable via `include_deprioritized=true`; rank drops). Pair with `memex_record_outcome(units=[{verb:"not_helpful", reason:"..."}])` when the agent found it wrong. Reversible via `memex_memory_restore`. Archive (CLI-only) is DESTRUCTIVE — prefer deprioritize unless PII removal is required.
 - **Synchronous consolidation** — `memex_memory_summarize_node(entity_id, scope='incremental'|'full')` when in-session facts conflict or scatter. `'incremental'` (default) consolidates new evidence only; `'full'` re-evaluates all (capped 1000 units). Rate-limited per (entity, vault); on rejection, response includes `retry_after_seconds`.
 - **Reconsolidate vs consolidate** — `memex_memory_reconsolidate(entity_id, vault_id)` is entity-scoped (contradiction detection + reflection); `memex_memory_consolidate(vault_id, dry_run)` is vault-scoped (batch deprioritizes low-MW + stale units, writes to maintenance ledger). Use `reconsolidate` on concrete contradiction signals; `consolidate` for periodic maintenance."""
 

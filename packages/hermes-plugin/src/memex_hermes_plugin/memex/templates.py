@@ -66,7 +66,7 @@ RESOLUTION_FLOW_PROMPT_FRAGMENT = (
     '       (C) single-note: memex_get_page_indices → memex_get_memory_units(chunk_ids=[...])\n'
     '  3. JUDGE — read candidate unit bodies; LLM-pick the fix-relevant subset.\n'
     '  4. RECORD — for each judged-relevant unit:\n'
-    "     memex_record_outcome(unit_ids=[...], success=False, reason='...')\n"
+    "     memex_record_outcome(units=[{'unit_id':'...','verb':'not_helpful','reason':'...'}])\n"
     '  5. DEPRIORITIZE — for the SAME subset:\n'
     "     memex_memory_deprioritize(unit_id=..., reason='...')\n"
     '\n'
