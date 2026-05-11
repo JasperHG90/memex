@@ -231,7 +231,7 @@ def test_kv_key_mode_with_unit_ids_returns_400(client: TestClient, postgres_url:
 
 
 @pytest.mark.integration
-def test_missing_success_returns_422(client: TestClient, postgres_url: str):
+def test_missing_success_returns_400(client: TestClient, postgres_url: str):
     """ADD-2 invariant: success has no default; omitting it is a caller error.
 
     Mirrors the F14 contract test — a kwargless / minimal call site cannot

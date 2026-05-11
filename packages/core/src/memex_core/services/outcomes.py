@@ -20,7 +20,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 import structlog
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, ValidationError, model_validator
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import select, update
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -466,7 +466,10 @@ class OutcomeService:
                 if isinstance(item, UnitOutcome):
                     resolved.append(item)
                 elif isinstance(item, dict):
-                    resolved.append(UnitOutcome.model_validate(item))
+                    try:
+                        resolved.append(UnitOutcome.model_validate(item))
+                    except ValidationError as exc:
+                        raise ValueError(f"Invalid 'units' entry: {exc}") from exc
                 else:
                     raise ValueError(f'units entries must be UnitOutcome or dict, got {type(item)}')
             return resolved
