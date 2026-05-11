@@ -153,3 +153,55 @@ async def test_mcp_record_outcome_default_vault(mock_api, mcp_client, mock_confi
     # Verify default write vault was used (no explicit vault_id)
     call_kwargs = mock_api.record_outcome.call_args
     assert call_kwargs.kwargs.get('vault_id') is not None
+
+
+@pytest.mark.asyncio
+async def test_mcp_record_outcome_no_retrieved_set_size_no_auto_fill(mock_api, mcp_client):
+    """Omitting retrieved_set_size leaves it as None — no session-derived fallback.
+
+    Cumulative session seen_memory_ids would conflate retrievals across calls
+    and produce misleading coverage_ratio values, so the handler must pass the
+    caller's value through unchanged (None when absent).
+    """
+    mock_api.record_outcome.return_value = {
+        'units_updated': 1,
+        'entities_updated': 0,
+        'models_updated': 0,
+    }
+
+    unit_id = str(uuid4())
+    await mcp_client.call_tool(
+        'memex_record_outcome',
+        {
+            'unit_ids': [unit_id],
+            'success': True,
+            'vault_id': str(TEST_VAULT_UUID),
+        },
+    )
+
+    call_kwargs = mock_api.record_outcome.call_args
+    assert call_kwargs.kwargs.get('retrieved_set_size') is None
+
+
+@pytest.mark.asyncio
+async def test_mcp_record_outcome_explicit_retrieved_set_size_passthrough(mock_api, mcp_client):
+    """Caller-supplied retrieved_set_size is forwarded verbatim."""
+    mock_api.record_outcome.return_value = {
+        'units_updated': 1,
+        'entities_updated': 0,
+        'models_updated': 0,
+    }
+
+    unit_id = str(uuid4())
+    await mcp_client.call_tool(
+        'memex_record_outcome',
+        {
+            'unit_ids': [unit_id],
+            'success': True,
+            'vault_id': str(TEST_VAULT_UUID),
+            'retrieved_set_size': 10,
+        },
+    )
+
+    call_kwargs = mock_api.record_outcome.call_args
+    assert call_kwargs.kwargs.get('retrieved_set_size') == 10

@@ -24,5 +24,7 @@ MEMEX_RECORD_OUTCOME_DESCRIPTION = (
     '"identified the failing module"}, {"unit_id": "...", "verb": "not_used", '
     '"reason": null}]. Bad example: stamping everything "helpful" — the audit '
     'log catches it and the engagement signal goes silent.\n\n'
+    'Pass `retrieved_set_size` explicitly to enable coverage tracking. '
+    'Omitting it leaves coverage_ratio as NULL.\n\n'
     'Call generously. Silence provides no learning signal.'
 )
