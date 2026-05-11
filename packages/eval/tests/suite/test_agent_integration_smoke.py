@@ -60,7 +60,7 @@ def _tool_call_outcomes():
 
 class TestSuiteStructure:
     def test_scenarios_count(self) -> None:
-        assert len(SUITE.scenarios) == 28
+        assert len(SUITE.scenarios) == 31
 
     def test_scenario_ids_unique(self) -> None:
         ids = [s.id for s in SUITE.scenarios]
@@ -145,7 +145,10 @@ class TestMutatingDiscipline:
         'feedback_records_success',
         'feedback_clarifies_under_ambiguity',
         'feedback_deprioritize_obsolete',
-        'kv_writes_preference',
+        'kv_writes_project_preference',
+        'kv_writes_user_preference',
+        'kv_writes_global_convention',
+        'kv_writes_app_setting',
         'lifecycle_append_meeting',
         'review_loop_drives_due',
         'review_loop_records_rating',
@@ -171,6 +174,44 @@ class TestMutatingDiscipline:
             (s.id, s.replicates_override) for s in non_override if s.replicates_override is not None
         ]
         assert not bad, f'non-override scenarios should not set override: {bad}'
+
+
+class TestKvNamespaceCoverage:
+    """Every kv_write namespace gets a dedicated scenario with a
+    precise regex — drift between them (e.g. two scenarios using the
+    same regex) would silently weaken the coverage claim."""
+
+    _NAMESPACE_BY_ID = {
+        'kv_writes_project_preference': r'^project:.+',
+        'kv_writes_user_preference': r'^user:.+',
+        'kv_writes_global_convention': r'^global:.+',
+        'kv_writes_app_setting': r'^app:.+',
+    }
+
+    def test_each_namespace_has_a_scenario(self) -> None:
+        ids = {s.id for s in SUITE.scenarios}
+        missing = set(self._NAMESPACE_BY_ID) - ids
+        assert not missing, f'kv namespace scenarios missing: {missing}'
+
+    def test_each_kv_scenario_uses_its_namespace_regex(self) -> None:
+        sc_by_id = {s.id for s in SUITE.scenarios}
+        for sc_id, expected_regex in self._NAMESPACE_BY_ID.items():
+            assert sc_id in sc_by_id
+            sc = next(s for s in SUITE.scenarios if s.id == sc_id)
+            arg_matches = [
+                outcome
+                for outcome in _walk_outcomes(sc.expected)
+                if isinstance(outcome, ToolCallArgMatches)
+                and outcome.tool == 'memex_kv_write'
+                and outcome.arg_name == 'key'
+            ]
+            assert len(arg_matches) == 1, (
+                f'{sc_id}: expected exactly one ToolCallArgMatches on '
+                f'memex_kv_write.key; got {len(arg_matches)}'
+            )
+            assert arg_matches[0].regex == expected_regex, (
+                f'{sc_id}: regex drifted to {arg_matches[0].regex!r}; expected {expected_regex!r}'
+            )
 
 
 class TestXfailDiscipline:
@@ -227,10 +268,10 @@ class TestComposition:
 
 
 class TestKvDependency:
-    def test_kv_retrieves_depends_on_kv_writes(self) -> None:
+    def test_kv_retrieves_depends_on_kv_writes_project(self) -> None:
         sc = next(s for s in SUITE.scenarios if s.id == 'kv_retrieves_convention')
-        assert 'kv_writes_preference' in sc.depends_on_prior_scenarios
+        assert 'kv_writes_project_preference' in sc.depends_on_prior_scenarios
 
-    def test_kv_writes_declared_before_kv_retrieves(self) -> None:
+    def test_kv_writes_project_declared_before_kv_retrieves(self) -> None:
         order = [s.id for s in SUITE.scenarios]
-        assert order.index('kv_writes_preference') < order.index('kv_retrieves_convention')
+        assert order.index('kv_writes_project_preference') < order.index('kv_retrieves_convention')

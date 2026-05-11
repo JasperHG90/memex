@@ -653,8 +653,13 @@ suite.register(
 # --- KV / state ---
 
 suite.register(
-    id='kv_writes_preference',
+    id='kv_writes_project_preference',
     group='kv',
+    description=(
+        'Project-scoped convention: the query references "this repo" so the '
+        'namespace must be project:. global: would over-broaden; user: '
+        'would mis-attribute as a personal preference.'
+    ),
     query='Remember this for future sessions: we use 4-space indentation in this repo.',
     max_duration_ms=_DUR_MS,
     expected=CompositeOutcome(
@@ -670,7 +675,108 @@ suite.register(
                 type='tool_call_arg_matches',
                 tool='memex_kv_write',
                 arg_name='key',
-                regex=r'^(global|project|user|app):.+',
+                regex=r'^project:.+',
+                min_count=1,
+            ),
+        ],
+    ),
+    replicates_override=1,
+    mutating_scenario=True,
+)
+
+suite.register(
+    id='kv_writes_user_preference',
+    group='kv',
+    description=(
+        'Personal preference: the query is first-person and identity-shaped '
+        'so the namespace must be user:. project: or global: would '
+        'over-attribute the preference to the team or the ecosystem.'
+    ),
+    query=("Remember about me: I prefer Neovim as my editor and I'm a senior backend engineer."),
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_kv_write'],
+                min_count=1,
+                match_mode='any',
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_kv_write',
+                arg_name='key',
+                regex=r'^user:.+',
+                min_count=1,
+            ),
+        ],
+    ),
+    replicates_override=1,
+    mutating_scenario=True,
+)
+
+suite.register(
+    id='kv_writes_global_convention',
+    group='kv',
+    description=(
+        'Cross-project ecosystem fact: the query frames the convention as '
+        'company-wide / language-wide, not tied to one repo. The namespace '
+        'must be global:.'
+    ),
+    query=(
+        'Remember this company-wide standard: across all our projects, '
+        'we standardise on Python 3.12 as the minimum runtime.'
+    ),
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_kv_write'],
+                min_count=1,
+                match_mode='any',
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_kv_write',
+                arg_name='key',
+                regex=r'^global:.+',
+                min_count=1,
+            ),
+        ],
+    ),
+    replicates_override=1,
+    mutating_scenario=True,
+)
+
+suite.register(
+    id='kv_writes_app_setting',
+    group='kv',
+    description=(
+        'App-scoped setting: the convention only applies inside one agent / '
+        'app surface (Claude Code, Hermes, etc.). Namespace must be app:.'
+    ),
+    query=(
+        'Remember this for whenever I use Claude Code: default to dark theme '
+        'and show line numbers in code blocks.'
+    ),
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_kv_write'],
+                min_count=1,
+                match_mode='any',
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_kv_write',
+                arg_name='key',
+                regex=r'^app:.+',
                 min_count=1,
             ),
         ],
@@ -697,7 +803,7 @@ suite.register(
         ],
     ),
     replicates_override=1,
-    depends_on_prior_scenarios=['kv_writes_preference'],
+    depends_on_prior_scenarios=['kv_writes_project_preference'],
 )
 
 
