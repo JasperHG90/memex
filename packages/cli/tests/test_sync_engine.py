@@ -504,6 +504,59 @@ class TestFrontmatterVaultOverrideSafety:
         assert row.note_id == old_note_id
         state2.close()
 
+    def test_batch_skip_does_not_corrupt_note_id_mapping(
+        self, tmp_path: Path, mock_api: AsyncMock, sync_config: SyncConfig
+    ) -> None:
+        """Server returns note_ids aligned to *processed* notes only —
+        skipped entries are excluded. When the batch contains skips, the
+        CLI must NOT trust positional alignment with input DTOs (which
+        previously caused state corruption: skipped note received a
+        successor's note_id)."""
+        from memex_cli.sync.scanner import VaultNote
+
+        # 3 notes — middle one will be reported as skipped by the server.
+        for name in ('a.md', 'b.md', 'c.md'):
+            (tmp_path / name).write_text(f'# {name}')
+
+        state = SyncStateDB(tmp_path / sync_config.state_file)
+        # Pre-record an existing note_id for 'b.md' that must NOT be
+        # overwritten by the corrupt positional mapping.
+        existing_b_id = str(uuid4())
+        state.mark_synced(
+            [VaultNote(path=tmp_path / 'b.md', relative_path='b.md', mtime=0.0, size=1, assets=[])],
+            note_ids={'b.md': existing_b_id},
+        )
+        state.close()
+
+        new_a_id = str(uuid4())
+        new_c_id = str(uuid4())
+        mock_batch = BatchJobStatus(
+            job_id=uuid4(),
+            status='completed',
+            progress=None,
+            result=BatchIngestResponse(
+                processed_count=2,
+                skipped_count=1,
+                failed_count=0,
+                # Server returns 2 entries — for a.md and c.md (b.md was
+                # skipped). Positional alignment with the 3-DTO input is
+                # therefore broken.
+                note_ids=[new_a_id, new_c_id],
+                errors=[],
+            ),
+        )
+        mock_api.ingest_batch.return_value = mock_batch
+        mock_api.get_job_status.return_value = mock_batch
+
+        asyncio.run(sync_vault(tmp_path, mock_api, sync_config, vault_id='active'))
+
+        state2 = SyncStateDB(tmp_path / sync_config.state_file)
+        # b.md's existing note_id must NOT be overwritten.
+        b_row = state2.get_file('b.md')
+        assert b_row is not None
+        assert b_row.note_id == existing_b_id
+        state2.close()
+
     def test_override_removed_preserves_prior_routing(
         self, tmp_path: Path, mock_api: AsyncMock, sync_config: SyncConfig
     ) -> None:

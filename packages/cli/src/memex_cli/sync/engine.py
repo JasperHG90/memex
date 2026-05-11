@@ -609,23 +609,45 @@ async def sync_vault(
                             result.failed = final.result.failed_count
                             for err in final.result.errors:
                                 result.errors.append(str(err))
-                            # Capture per-position note_ids first.
-                            id_by_pos: dict[int, str] = {}
-                            for idx, nid in enumerate(final.result.note_ids):
-                                if idx < len(dto_notes) and nid:
-                                    id_by_pos[idx] = nid
-                                    note_ids[dto_notes[idx].relative_path] = nid
-                            # Determine success:
-                            #   - failed_count == 0 ⇒ all DTOs succeeded
-                            #     (server may omit note_ids on full success)
-                            #   - failed_count > 0 ⇒ only positions whose
-                            #     note_ids entry is populated count as
-                            #     successful; the rest were rejected.
-                            if final.result.failed_count == 0:
+                            # The server's `note_ids` list is aligned with
+                            # *processed* notes only — skipped entries are
+                            # excluded (services/ingestion.py:967). So when
+                            # the batch contains skips or partial failures,
+                            # `note_ids[idx]` does NOT correspond to
+                            # `dto_notes[idx]`. Trust positional mapping
+                            # only when the alignment is unambiguous; in
+                            # all other cases preserve existing state by
+                            # leaving `note_ids` empty and (when no
+                            # failures) treat all DTOs as ingested for
+                            # state-mark purposes (server confirms the
+                            # ingest succeeded for the totals).
+                            n_returned = len(final.result.note_ids)
+                            positional_safe = (
+                                final.result.failed_count == 0
+                                and final.result.skipped_count == 0
+                                and n_returned == len(dto_notes)
+                            )
+                            if positional_safe:
+                                for idx, nid in enumerate(final.result.note_ids):
+                                    if nid:
+                                        note_ids[dto_notes[idx].relative_path] = nid
+                                successful_notes.extend(dto_notes)
+                            elif final.result.failed_count == 0:
+                                # Skips muddle positional mapping. State
+                                # update will not overwrite note_id for
+                                # the ambiguous positions — mark_synced
+                                # only writes note_id when the key is in
+                                # the note_ids dict, which we leave empty.
                                 successful_notes.extend(dto_notes)
                             else:
-                                for idx in id_by_pos:
-                                    successful_notes.append(dto_notes[idx])
+                                # Partial failure WITH unreliable
+                                # positional mapping — conservatively
+                                # treat ALL as failed for state purposes.
+                                # The user can re-sync; the server has
+                                # already processed what it could, and
+                                # idempotency on note_key prevents
+                                # duplicates on retry.
+                                pass
                         elif final is not None and final.status == 'failed':
                             result.failed = len(dtos)
                             result.errors.append(f'Batch job {job_status.job_id} failed')
@@ -677,7 +699,21 @@ async def sync_vault(
                         if rel_path not in successful_paths:
                             continue
                         try:
-                            await api.set_note_status(UUID(old_note_id), 'archived')
+                            old_uuid = UUID(old_note_id)
+                        except ValueError:
+                            result.errors.append(
+                                f'{rel_path}: migrate archive skipped — stored '
+                                f'note_id is not a valid UUID ({old_note_id!r})'
+                            )
+                            logger.warning(
+                                'Stored note_id is not a valid UUID; '
+                                'skipping migration archive for this path',
+                                path=rel_path,
+                                old_note_id=old_note_id,
+                            )
+                            continue
+                        try:
+                            await api.set_note_status(old_uuid, 'archived')
                             result.migrated += 1
                             logger.info(
                                 'Archived prior-vault note after successful migration',
