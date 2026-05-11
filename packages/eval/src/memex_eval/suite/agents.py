@@ -686,6 +686,10 @@ class HermesBackend(AnswerBackend):
     - ``anthropic/*`` → ``ANTHROPIC_API_KEY``
     - ``openai/*`` → ``OPENAI_API_KEY``
     - ``openrouter/*`` → ``OPENROUTER_API_KEY``
+    - ``ollama/*`` / ``ollama_chat/*`` → ``OLLAMA_API_KEY`` (Ollama
+      Cloud / Turbo; also set ``OLLAMA_API_BASE=https://ollama.com``
+      so litellm routes against the hosted endpoint instead of the
+      local default ``http://localhost:11434``).
     - Anything else → falls back to ``HERMES_API_KEY``, with a
       provider-key sweep in between for slash-less model strings.
 
@@ -701,6 +705,8 @@ class HermesBackend(AnswerBackend):
         'anthropic': ('ANTHROPIC_API_KEY',),
         'openai': ('OPENAI_API_KEY',),
         'openrouter': ('OPENROUTER_API_KEY',),
+        'ollama': ('OLLAMA_API_KEY',),
+        'ollama_chat': ('OLLAMA_API_KEY',),
     }
 
     def __init__(
