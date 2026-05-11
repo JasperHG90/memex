@@ -2,7 +2,12 @@
 
 Default agent: ``hermes`` (memex-hermes-plugin). Override with
 ``--answer-mode claude-code`` to run the same scenarios against the
-Claude Code MCP integration.
+Claude Code MCP integration. Under ``claude-code`` the suite backend
+mounts the memex Claude Code plugin via ``--plugin-dir`` so the agent
+gets briefing parity with Hermes (KV-namespace routing, citation
+discipline, ``/remember`` / ``/recall`` skills). The plugin is
+auto-resolved from the monorepo's ``packages/claude-code-plugin/``;
+override with ``MEMEX_CLAUDE_PLUGIN_DIR``.
 
 The suite covers two layers:
 
@@ -26,6 +31,10 @@ Required env vars:
 Optional:
 - ``EVAL_JUDGE_MODEL`` — override the judge model.
 - ``HERMES_MODEL`` — override the agent model under hermes mode.
+- ``MEMEX_EVAL_CLAUDE_MODEL`` — override the agent model under
+  ``claude-code`` mode (default ``claude-sonnet-4-6``).
+- ``MEMEX_CLAUDE_PLUGIN_DIR`` — override the Claude Code plugin
+  location (default: monorepo's ``packages/claude-code-plugin/``).
 
 Compatibility with run modes:
 - ``--from-snapshot auto``: supported. Mutations don't poison the cache;
@@ -838,6 +847,13 @@ suite.register(
 
 
 # --- Plugin-gap xfail tripwires (xfail under hermes; should xpass under claude-code) ---
+#
+# Two earlier `review_loop_*` tripwires were dropped: the MCP tools they
+# pointed at were retired alongside the FSFM-inspired deprioritization
+# redesign on the release branch. `asset_lifecycle_detach` is the only
+# remaining tripwire — it tests that the agent picks the right tool for
+# detaching an attached image, which Hermes still misses in its plugin
+# briefing but Claude Code resolves via the MCP tool surface.
 
 suite.register(
     id='asset_lifecycle_detach',
