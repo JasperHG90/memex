@@ -11,6 +11,13 @@ non-NULL rows so the cooldown filter ``WHERE last_merge_scan_at IS NULL OR
 last_merge_scan_at < now() - interval`` can range-scan the timestamped rows
 without touching the (much larger) never-scanned set.
 
+Additionally creates a partial expression index
+``idx_maintenance_proposals_collapse_composition`` over
+``evidence ->> 'composition_hash'`` for pending ``entity_collapse_cluster``
+proposals. The rescan-collision lookup keys by composition_hash (cluster
+membership fingerprint) so a winner shift between scans does not split into
+duplicate findings.
+
 Backfill: NULL on every existing entity — first scan post-deploy treats
 the entire population as eligible.
 
@@ -33,6 +40,7 @@ depends_on: str | list[str] | None = None
 
 
 _INDEX_NAME = 'idx_entities_last_merge_scan_at'
+_COMPOSITION_INDEX_NAME = 'idx_maintenance_proposals_collapse_composition'
 
 
 def _column_exists(conn, table: str, column: str) -> bool:
@@ -66,8 +74,17 @@ def upgrade() -> None:
         """
     )
 
+    op.execute(
+        f"""
+        CREATE INDEX IF NOT EXISTS {_COMPOSITION_INDEX_NAME}
+        ON maintenance_proposals ((evidence ->> 'composition_hash'))
+        WHERE status = 'pending' AND rule_name = 'entity_collapse_cluster'
+        """
+    )
+
 
 def downgrade() -> None:
+    op.execute(f'DROP INDEX IF EXISTS {_COMPOSITION_INDEX_NAME}')
     op.execute(f'DROP INDEX IF EXISTS {_INDEX_NAME}')
 
     conn = op.get_bind()

@@ -328,7 +328,7 @@ class EntityService(BaseService):
         from datetime import datetime, timezone
         from uuid import UUID as PyUUID
 
-        from sqlalchemy import text
+        from sqlalchemy import func, text
         from sqlalchemy.dialects.postgresql import insert as pg_insert
         from sqlmodel import col, select, update
 
@@ -408,31 +408,48 @@ class EntityService(BaseService):
                 for row in co_rows:
                     other = row.entity_id_2 if row.entity_id_1 in loser_uuids else row.entity_id_1
                     if other in loser_uuids or other == winner_id:
-                        # Intra-cluster edge (loser<->loser, or loser<->winner):
-                        # roll into winner self-loop is meaningless — skip and
-                        # let the loser-row delete consume it. We still count
-                        # it as merged for visibility.
-                        cooccurrences_merged += 1
+                        # Intentional drop: post-collapse, winner and loser are
+                        # the same entity, so a W<->L (or L<->L) cooccurrence
+                        # becomes a self-loop, which the table CHECK constraint
+                        # forbids. The loser-row DELETE below consumes the row.
                         continue
                     e1, e2 = sorted([winner_id, other], key=str)
-                    upsert = (
-                        pg_insert(EntityCooccurrence)
-                        .values(
-                            entity_id_1=e1,
-                            entity_id_2=e2,
-                            vault_id=row.vault_id,
-                            cooccurrence_count=row.cooccurrence_count,
-                            last_cooccurred=row.last_cooccurred,
-                            valid_from=row.valid_from,
-                        )
-                        .on_conflict_do_update(
-                            index_elements=['entity_id_1', 'entity_id_2'],
-                            set_={
-                                'cooccurrence_count': (
-                                    EntityCooccurrence.cooccurrence_count + row.cooccurrence_count
+                    upsert = pg_insert(EntityCooccurrence).values(
+                        entity_id_1=e1,
+                        entity_id_2=e2,
+                        vault_id=row.vault_id,
+                        cooccurrence_count=row.cooccurrence_count,
+                        last_cooccurred=row.last_cooccurred,
+                        valid_from=row.valid_from,
+                        valid_to=row.valid_to,
+                    )
+                    upsert = upsert.on_conflict_do_update(
+                        index_elements=['entity_id_1', 'entity_id_2'],
+                        set_={
+                            'cooccurrence_count': (
+                                EntityCooccurrence.cooccurrence_count + row.cooccurrence_count
+                            ),
+                            'last_cooccurred': func.greatest(
+                                EntityCooccurrence.last_cooccurred,
+                                upsert.excluded.last_cooccurred,
+                            ),
+                            'valid_from': func.coalesce(
+                                func.least(
+                                    EntityCooccurrence.valid_from,
+                                    upsert.excluded.valid_from,
                                 ),
-                            },
-                        )
+                                EntityCooccurrence.valid_from,
+                                upsert.excluded.valid_from,
+                            ),
+                            'valid_to': func.coalesce(
+                                func.greatest(
+                                    EntityCooccurrence.valid_to,
+                                    upsert.excluded.valid_to,
+                                ),
+                                EntityCooccurrence.valid_to,
+                                upsert.excluded.valid_to,
+                            ),
+                        },
                     )
                     await session.exec(upsert)
                     cooccurrences_merged += 1

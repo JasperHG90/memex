@@ -580,6 +580,173 @@ async def test_collapse_cluster_rejects_invalid_inputs(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_rescan_winner_shift_updates_same_proposal(
+    session: AsyncSession,
+    metastore,
+):
+    """Winner shifts between scans (mention_count reorders) but the cluster
+    membership is unchanged → same composition_hash → existing pending row is
+    UPDATEd in place. No duplicate finding."""
+    suffix = uuid4().hex[:6]
+    a = await _make_entity(
+        session,
+        f'WSHIFT-{suffix}',
+        mention_count=10,
+        first_seen=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    b = await _make_entity(
+        session,
+        f'wshift-{suffix}',
+        mention_count=2,
+        first_seen=datetime(2026, 2, 1, tzinfo=timezone.utc),
+    )
+
+    from memex_core.services.entity_maintenance import scan_collapse_clusters
+
+    api_stub = _make_api_stub(metastore)
+    await scan_collapse_clusters(api_stub, pair_threshold=0.55, cluster_min_threshold=0.4)
+
+    async with metastore.session() as s:
+        before = (
+            await s.execute(
+                text(
+                    'SELECT id::text, target_id::text FROM maintenance_proposals '
+                    "WHERE rule_name = 'entity_collapse_cluster' "
+                    "AND status = 'pending' "
+                    'AND evidence ->> :hash_key IN '
+                    '(SELECT evidence ->> :hash_key FROM maintenance_proposals '
+                    " WHERE target_id = :wid AND status = 'pending')"
+                ),
+                {'wid': str(a.id), 'hash_key': 'composition_hash'},
+            )
+        ).all()
+    assert len(before) == 1, f'expected one proposal pre-flip, got {before}'
+    initial_id = before[0][0]
+    assert before[0][1] == str(a.id)
+
+    async with metastore.session() as s:
+        await s.execute(
+            text('UPDATE entities SET mention_count = :mc WHERE id = :id'),
+            {'mc': 99, 'id': str(b.id)},
+        )
+        await s.execute(
+            text('UPDATE entities SET mention_count = :mc WHERE id = :id'),
+            {'mc': 1, 'id': str(a.id)},
+        )
+        await s.execute(text('UPDATE entities SET last_merge_scan_at = NULL'))
+        await s.commit()
+
+    summary2 = await scan_collapse_clusters(
+        api_stub, pair_threshold=0.55, cluster_min_threshold=0.4
+    )
+    assert summary2['rescan_updated'] >= 1
+
+    async with metastore.session() as s:
+        after = (
+            await s.execute(
+                text(
+                    'SELECT id::text, target_id::text FROM maintenance_proposals '
+                    "WHERE rule_name = 'entity_collapse_cluster' "
+                    "AND status = 'pending' "
+                    'AND id = CAST(:id AS uuid)'
+                ),
+                {'id': initial_id},
+            )
+        ).all()
+    assert len(after) == 1, 'row must survive the rescan (UPDATE not INSERT)'
+    assert after[0][1] == str(b.id), 'target_id must reflect the new winner'
+
+    async with metastore.session() as s:
+        dup_count = (
+            await s.execute(
+                text(
+                    'SELECT count(*) FROM maintenance_proposals '
+                    "WHERE rule_name = 'entity_collapse_cluster' "
+                    "AND status = 'pending' "
+                    'AND target_id IN (:wid_a, :wid_b)'
+                ),
+                {'wid_a': str(a.id), 'wid_b': str(b.id)},
+            )
+        ).scalar()
+    assert dup_count == 1, 'must not split into two pending findings'
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_rescan_membership_shift_creates_new_proposal(
+    session: AsyncSession,
+    metastore,
+):
+    """Cluster gains a member between scans → composition_hash changes →
+    a new row is INSERTed alongside the old one (different identity)."""
+    suffix = uuid4().hex[:6]
+    a = await _make_entity(
+        session,
+        f'MSHIFT-{suffix}',
+        mention_count=10,
+        first_seen=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    _b = await _make_entity(
+        session,
+        f'mshift-{suffix}',
+        mention_count=5,
+        first_seen=datetime(2026, 2, 1, tzinfo=timezone.utc),
+    )
+
+    from memex_core.services.entity_maintenance import scan_collapse_clusters
+
+    api_stub = _make_api_stub(metastore)
+    await scan_collapse_clusters(api_stub, pair_threshold=0.55, cluster_min_threshold=0.4)
+
+    async with metastore.session() as s:
+        first_rows = (
+            await s.execute(
+                text(
+                    "SELECT id::text, evidence ->> 'composition_hash' AS h "
+                    'FROM maintenance_proposals '
+                    "WHERE rule_name = 'entity_collapse_cluster' "
+                    "AND status = 'pending' AND target_id = :wid"
+                ),
+                {'wid': str(a.id)},
+            )
+        ).all()
+    assert len(first_rows) == 1, f'expected one proposal after first scan, got {first_rows}'
+    first_id, first_hash = first_rows[0]
+
+    await _make_entity(
+        session,
+        f'Mshift-{suffix}',
+        mention_count=3,
+        first_seen=datetime(2026, 3, 1, tzinfo=timezone.utc),
+    )
+    async with metastore.session() as s:
+        await s.execute(text('UPDATE entities SET last_merge_scan_at = NULL'))
+        await s.commit()
+
+    await scan_collapse_clusters(api_stub, pair_threshold=0.55, cluster_min_threshold=0.4)
+
+    async with metastore.session() as s:
+        second_rows = (
+            await s.execute(
+                text(
+                    "SELECT id::text, evidence ->> 'composition_hash' AS h "
+                    'FROM maintenance_proposals '
+                    "WHERE rule_name = 'entity_collapse_cluster' "
+                    "AND status = 'pending' AND target_id = :wid"
+                ),
+                {'wid': str(a.id)},
+            )
+        ).all()
+    hashes = {h for _, h in second_rows}
+    assert first_hash in hashes, 'old finding (original membership) must remain'
+    assert len(hashes) >= 2, 'membership change must introduce a new composition_hash'
+    assert any(rid == first_id for rid, _ in second_rows), 'original row must be untouched'
+    new_hashes = hashes - {first_hash}
+    assert all(h for h in new_hashes), 'new composition_hash entries must be non-empty'
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_scan_creates_proposal_with_vaults_affected(
     session: AsyncSession,
     metastore,

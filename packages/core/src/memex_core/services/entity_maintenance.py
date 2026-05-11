@@ -121,9 +121,11 @@ async def scan_collapse_clusters(
     Returns a summary dict ``{'clusters_emitted': int,
     'clusters_rejected_cohesion': int, 'rescan_updated': int, 'scanned': int}``.
 
-    Idempotent under rescan: existing pending ``entity_collapse_cluster``
-    findings with the same ``target_id`` are UPDATEd in place rather than
-    duplicated. The partial unique index ``uq_maintenance_proposals_pending``
+    Idempotent under rescan: cluster identity is the order-independent
+    ``composition_hash`` of its members, not the (possibly-shifting) suggested
+    winner. An existing pending ``entity_collapse_cluster`` finding with the
+    same composition_hash is UPDATEd in place; a membership shift writes a
+    new row. The partial unique index ``uq_maintenance_proposals_pending``
     only fires on non-NULL ``vault_id`` rows; our findings carry ``vault_id
     IS NULL`` (cross-vault by construction), so we enforce the no-duplicate
     invariant in Python before INSERT.
@@ -194,6 +196,8 @@ async def scan_collapse_clusters(
             candidates: list[dict[str, Any]] = [dict(r) for r in cand_rows]
             summary['scanned'] = len(candidates)
             if len(candidates) < 2:
+                metrics.ENTITY_COLLAPSE_SCAN_EMITTED_TOTAL.labels(result='no_candidates').inc()
+                logger.info('entity_collapse_scan: no_candidates scanned=%d', len(candidates))
                 return summary
 
             ids = [c['id'] for c in candidates]
@@ -313,9 +317,10 @@ async def scan_collapse_clusters(
                     'member_canonical_names': {m: by_id[m]['canonical_name'] for m in member_ids},
                 }
 
-                # Rescan-collision policy: a pending proposal with the same
-                # suggested winner is UPDATEd in place. NULL vault_id is
-                # outside the partial unique index, so we enforce it here.
+                # Rescan-collision policy: identity is cluster membership, not
+                # the (possibly-shifting) suggested winner. We key on
+                # composition_hash so a winner reorder between scans UPDATEs
+                # the existing row, and a membership change INSERTs a new one.
                 existing_row = (
                     (
                         await session.execute(
@@ -325,9 +330,9 @@ async def scan_collapse_clusters(
                             FROM maintenance_proposals
                             WHERE rule_name = :rule_name
                               AND target_type = :target_type
-                              AND target_id = :target_id
                               AND status = 'pending'
                               AND vault_id IS NULL
+                              AND evidence ->> 'composition_hash' = :composition_hash
                             ORDER BY created_at ASC
                             LIMIT 1
                             """
@@ -335,7 +340,7 @@ async def scan_collapse_clusters(
                             {
                                 'rule_name': _RULE_NAME,
                                 'target_type': _TARGET_TYPE,
-                                'target_id': winner_id,
+                                'composition_hash': composition_hash,
                             },
                         )
                     )
@@ -344,22 +349,19 @@ async def scan_collapse_clusters(
                 )
 
                 if existing_row is not None:
-                    existing_ev = existing_row['evidence'] or {}
-                    # Preserve composition_hash so a dismissed cluster does
-                    # not re-fire on identical membership.
-                    if existing_ev.get('composition_hash'):
-                        evidence['composition_hash'] = existing_ev['composition_hash']
                     await session.execute(
                         text(
                             """
                             UPDATE maintenance_proposals
                             SET evidence = CAST(:evidence AS jsonb),
+                                target_id = :target_id,
                                 suggested_action = :suggested_action
                             WHERE id = CAST(:id AS uuid)
                             """
                         ),
                         {
                             'evidence': json.dumps(evidence),
+                            'target_id': winner_id,
                             'suggested_action': _SUGGESTED_ACTION,
                             'id': existing_row['id'],
                         },

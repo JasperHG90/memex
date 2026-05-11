@@ -1,5 +1,7 @@
 """Custom Prometheus metrics for Memex application monitoring."""
 
+from typing import Literal
+
 from prometheus_client import Counter, Gauge, Histogram
 
 # ---------------------------------------------------------------------------
@@ -311,16 +313,21 @@ LINT_RUN_DURATION_SECONDS = Histogram(
 # Entity-cluster collapse maintenance
 # ---------------------------------------------------------------------------
 
+EntityCollapseScanResultLabel = Literal[
+    'proposed', 'rejected_cohesion', 'rescan_updated', 'no_candidates'
+]
+EntityCollapseApplyOutcomeLabel = Literal['success', 'failed']
+
 ENTITY_COLLAPSE_SCAN_EMITTED_TOTAL = Counter(
     'memex_entity_collapse_scan_emitted_total',
     'Cluster proposals produced by the entity-cluster collapse scan.',
-    ['result'],  # proposed | rejected_cohesion | rescan_updated
+    ['result'],
 )
 
 ENTITY_COLLAPSE_APPLY_TOTAL = Counter(
     'memex_entity_collapse_apply_total',
     'Cluster collapses applied via EntityService.collapse_cluster.',
-    ['outcome'],  # success | failed
+    ['outcome'],
 )
 
 ENTITY_COLLAPSE_APPLY_DURATION_SECONDS = Histogram(

@@ -241,18 +241,26 @@ async def _resolve_entity_collapse_cluster(
     suggested_winner = str(evidence.get('suggested_winner_id') or finding['target_id'])
     vaults_affected = [str(v) for v in (evidence.get('vaults_affected') or [])]
 
-    # Cross-vault auth: every affected vault must allow WRITE
+    if not vaults_affected:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                'Cluster has no vaults_affected; refusing to collapse without '
+                'scope. Re-run the scan after the cluster has unit-entity '
+                'links, or escalate manually.'
+            ),
+        )
+
     vault_uuids = [PyUUID(v) for v in vaults_affected]
-    if vault_uuids:
-        try:
-            await check_vault_access(auth, vault_uuids, api, permission=Permission.WRITE)
-        except HTTPException as exc:
-            logger.error(
-                'entity.collapse_cluster auth_denied actor=%s vaults=%d',
-                getattr(auth, 'api_key_id', None) if auth else None,
-                len(vault_uuids),
-            )
-            raise exc
+    try:
+        await check_vault_access(auth, vault_uuids, api, permission=Permission.WRITE)
+    except HTTPException as exc:
+        logger.error(
+            'entity.collapse_cluster auth_denied actor=%s vaults=%d',
+            getattr(auth, 'api_key_id', None) if auth else None,
+            len(vault_uuids),
+        )
+        raise exc
 
     # Winner resolution / validation
     winner_param = params.get('winner_id') or params.get('winner_canonical_name')

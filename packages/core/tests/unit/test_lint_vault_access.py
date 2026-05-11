@@ -252,3 +252,48 @@ class TestLintMutationGlobalFinding:
         mock_api.lint.set_status.assert_awaited_once()
         call = mock_api.lint.set_status.await_args
         assert call.kwargs['vault_id'] is None
+
+
+class TestCollapseClusterEmptyVaultsAffected:
+    """An entity_collapse_cluster finding with an empty ``vaults_affected``
+    list must be rejected (400) at the dispatcher. Cross-vault destructive
+    operations require an explicit scope; fail-open is unacceptable.
+    """
+
+    def _stub_finding(self, mock_api, vaults_affected: list[str]) -> None:
+        mock_api.metastore = AsyncMock()
+        session_cm = AsyncMock()
+
+        async def _execute(stmt, params=None):
+            result = AsyncMock()
+            mappings = AsyncMock()
+            mappings.first = lambda: {
+                'id': str(FINDING_ID),
+                'vault_id': None,
+                'rule_name': 'entity_collapse_cluster',
+                'target_id': str(uuid4()),
+                'evidence': {
+                    'cluster_members': [str(uuid4()), str(uuid4())],
+                    'suggested_winner_id': str(uuid4()),
+                    'vaults_affected': vaults_affected,
+                },
+                'status': 'pending',
+            }
+            result.mappings = lambda: mappings
+            return result
+
+        session_cm.execute = AsyncMock(side_effect=_execute)
+        session_cm.__aenter__ = AsyncMock(return_value=session_cm)
+        session_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_api.metastore.session = lambda: session_cm
+
+    def test_resolve_rejects_empty_vaults_affected(self, mock_api):
+        self._stub_finding(mock_api, vaults_affected=[])
+        client = _make_client(mock_api, _scoped_writer())
+        resp = client.post(
+            f'/api/v1/lint/findings/{FINDING_ID}/resolve',
+            json={'winner_id': str(uuid4())},
+        )
+        assert resp.status_code == 400, resp.text
+        assert 'vaults_affected' in resp.text
+        mock_api.lint.set_status.assert_not_called()
