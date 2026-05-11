@@ -126,17 +126,40 @@ async def lint_findings(
         raise _handle_error(e, 'Failed to list lint findings')
 
 
+def _resolve_actor(auth: AuthContext | None) -> str | None:
+    """Derive a stable actor label from the auth context for audit rows.
+
+    Prefers the human-readable ``key_name`` (set in ApiKeyConfig.description)
+    and falls back to ``key_prefix`` so the audit trail still identifies
+    *which* key applied the resolution even when the operator forgot to
+    label it.
+    """
+    if auth is None:
+        return None
+    key_name = getattr(auth, 'key_name', None)
+    if key_name:
+        return str(key_name)
+    key_prefix = getattr(auth, 'key_prefix', None)
+    if key_prefix:
+        return f'key:{key_prefix}'
+    return None
+
+
 async def _gate_finding_for_write(
     finding_id: UUID,
     api: MemexAPI,
     auth: AuthContext | None,
 ) -> UUID | None:
-    """Defense-in-depth helper for ``/findings/{id}/dismiss`` + ``/resolve``.
+    """Defense-in-depth vault-scope helper for finding write endpoints.
 
     Looks up the finding's vault_id, then gates the auth context against it.
     Returns the resolved vault_id (or ``None`` for global findings) so the
     caller can pass it through to ``LintService.set_status`` for SQL-level
     constraint as well (cross-vault mutation rejected: route + service layered checks).
+
+    Does NOT check the finding's status — the service layer raises a 409
+    with the correct status-transition semantics (pending vs. resolved
+    constraints differ by endpoint).
 
     Raises:
       - 404 if the finding does not exist.
@@ -144,7 +167,7 @@ async def _gate_finding_for_write(
     """
     found, finding_vault = await api.lint.get_finding_vault_id(finding_id)
     if not found:
-        raise HTTPException(status_code=404, detail='Finding not found or not pending')
+        raise HTTPException(status_code=404, detail='Finding not found')
     if finding_vault is not None:
         await check_vault_access(auth, [finding_vault], api, permission=Permission.WRITE)
     return finding_vault
@@ -214,9 +237,7 @@ async def lint_apply(
     )
 
     finding_vault = await _gate_finding_for_write(finding_id, api, auth)
-    actor = None
-    if auth is not None:
-        actor = getattr(auth, 'principal', None) or getattr(auth, 'subject', None)
+    actor = _resolve_actor(auth)
     try:
         return await apply_winner_proposal(api, finding_id, vault_id=finding_vault, actor=actor)
     except ContradictionResolutionError as exc:
@@ -243,17 +264,8 @@ async def lint_reverse(
         reverse_winner_proposal,
     )
 
-    # Re-use the same vault gate the apply path uses; however the finding
-    # is in 'resolved' state, so we look up its vault directly and check
-    # write access.
-    found, finding_vault = await api.lint.get_finding_vault_id(finding_id)
-    if not found:
-        raise HTTPException(status_code=404, detail='Finding not found')
-    if finding_vault is not None:
-        await check_vault_access(auth, [finding_vault], api, permission=Permission.WRITE)
-    actor = None
-    if auth is not None:
-        actor = getattr(auth, 'principal', None) or getattr(auth, 'subject', None)
+    finding_vault = await _gate_finding_for_write(finding_id, api, auth)
+    actor = _resolve_actor(auth)
     try:
         return await reverse_winner_proposal(api, finding_id, vault_id=finding_vault, actor=actor)
     except ContradictionResolutionError as exc:
@@ -327,6 +339,7 @@ async def lint_llm_run(
     (the cap-zero gate that short-circuits the periodic task).
     """
     from memex_core.memory.lint_llm.checks import (
+        make_propose_contradiction_winner_check,
         make_schema_drift_check,
         make_semantic_contradiction_check,
     )
@@ -368,7 +381,14 @@ async def lint_llm_run(
     if settings.checks.schema_drift.enabled:
         checks.append(('schema_drift', make_schema_drift_check(api.lm, k=settings.surprise_k)))
 
-    if not checks:
+    propose_winner_check: Any | None = None
+    if settings.checks.propose_contradiction_winner.enabled:
+        propose_winner_check = make_propose_contradiction_winner_check(
+            api.lm,
+            min_confidence=settings.propose_winner_min_confidence,
+        )
+
+    if not checks and propose_winner_check is None:
         return {
             'vault_id': str(vault_id),
             'summaries': [],
@@ -397,6 +417,25 @@ async def lint_llm_run(
         except Exception as exc:
             logger.warning('lint_llm[%s] failed: %s', check_name, exc)
             summaries.append({'check': check_name, 'error': str(exc)})
+
+    if propose_winner_check is not None:
+        try:
+            s = await api.lint_llm.tick_propose_winner(
+                vault_id,
+                run_llm_check=propose_winner_check,
+            )
+            summaries.append(
+                {
+                    'check': 'propose_contradiction_winner',
+                    'evaluated': s.candidates_evaluated,
+                    'emitted': s.findings_emitted,
+                    'deferred': s.deferred,
+                    'deferred_processed': s.deferred_processed,
+                }
+            )
+        except Exception as exc:
+            logger.warning('lint_llm[propose_contradiction_winner] failed: %s', exc)
+            summaries.append({'check': 'propose_contradiction_winner', 'error': str(exc)})
 
     return {'vault_id': str(vault_id), 'summaries': summaries}
 

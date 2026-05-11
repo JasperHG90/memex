@@ -18,6 +18,12 @@ appended. No data is modified. The downgrade drops ``refines`` from the
 literal list; if any rows currently use ``refines`` it raises a clear
 error directing the operator to re-classify them first.
 
+Both upgrade and downgrade rely on the standard migration discipline:
+migrations run with sole DB access (no concurrent writes mid-deploy).
+The drop-and-recreate is therefore safe; a concurrent INSERT between
+DROP CONSTRAINT and ADD CONSTRAINT would otherwise admit a row that
+violates the new check, but the deploy contract precludes that.
+
 Revision ID: 037_link_type_refines
 Revises: 036_fsfm_cooldown_index
 Create Date: 2026-05-11

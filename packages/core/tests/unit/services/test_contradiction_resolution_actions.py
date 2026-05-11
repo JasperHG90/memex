@@ -18,7 +18,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
@@ -110,7 +110,12 @@ async def test_mark_loser_stale_dispatches_unit_status_update():
     session, cm = _make_session([proposal, loser_row, winner_row])
     api = _api_with_session(cm)
 
-    result = await apply_winner_proposal(api, uuid4(), vault_id=None, actor='unit-test')
+    result = await apply_winner_proposal(
+        api,
+        uuid4(),
+        vault_id=UUID('11111111-1111-1111-1111-111111111111'),
+        actor='unit-test',
+    )
 
     assert result['status'] == 'resolved'
     assert result['effective_action'] == 'mark_loser_stale'
@@ -134,7 +139,12 @@ async def test_supersede_loser_note_falls_back_when_shared_parent():
     session, cm = _make_session([proposal, loser_row, winner_row])
     api = _api_with_session(cm)
 
-    result = await apply_winner_proposal(api, uuid4(), vault_id=None, actor=None)
+    result = await apply_winner_proposal(
+        api,
+        uuid4(),
+        vault_id=UUID('11111111-1111-1111-1111-111111111111'),
+        actor='unit-test',
+    )
 
     assert result['effective_action'] == 'mark_loser_stale'
     assert result['fallback_reason'] == 'shared_parent_note'
@@ -153,7 +163,12 @@ async def test_supersede_loser_note_updates_note_superseded_by():
     session, cm = _make_session([proposal, loser_row, winner_row, note_row])
     api = _api_with_session(cm)
 
-    result = await apply_winner_proposal(api, uuid4(), vault_id=None, actor=None)
+    result = await apply_winner_proposal(
+        api,
+        uuid4(),
+        vault_id=UUID('11111111-1111-1111-1111-111111111111'),
+        actor='unit-test',
+    )
 
     assert result['effective_action'] == 'supersede_loser_note'
     superseded = [
@@ -186,7 +201,12 @@ async def test_refine_not_contradict_rewrites_link_type():
     session, cm = _make_session([proposal, loser_row, winner_row, link_row])
     api = _api_with_session(cm)
 
-    result = await apply_winner_proposal(api, uuid4(), vault_id=None, actor=None)
+    result = await apply_winner_proposal(
+        api,
+        uuid4(),
+        vault_id=UUID('11111111-1111-1111-1111-111111111111'),
+        actor='unit-test',
+    )
 
     assert result['effective_action'] == 'refine_not_contradict'
     refines = [
@@ -205,7 +225,12 @@ async def test_inconclusive_is_a_noop_write():
     session, cm = _make_session([proposal, loser_row])
     api = _api_with_session(cm)
 
-    result = await apply_winner_proposal(api, uuid4(), vault_id=None, actor=None)
+    result = await apply_winner_proposal(
+        api,
+        uuid4(),
+        vault_id=UUID('11111111-1111-1111-1111-111111111111'),
+        actor='unit-test',
+    )
 
     assert result['effective_action'] == 'inconclusive'
     # No status flip, no note update, no link update.
@@ -231,7 +256,12 @@ async def test_unknown_action_raises():
     api = _api_with_session(cm)
 
     with pytest.raises(ContradictionResolutionError):
-        await apply_winner_proposal(api, uuid4(), vault_id=None, actor=None)
+        await apply_winner_proposal(
+            api,
+            uuid4(),
+            vault_id=UUID('11111111-1111-1111-1111-111111111111'),
+            actor='unit-test',
+        )
 
 
 @pytest.mark.asyncio
@@ -240,4 +270,90 @@ async def test_missing_finding_raises():
     api = _api_with_session(cm)
 
     with pytest.raises(ContradictionResolutionError):
-        await apply_winner_proposal(api, uuid4(), vault_id=None, actor=None)
+        await apply_winner_proposal(
+            api,
+            uuid4(),
+            vault_id=UUID('11111111-1111-1111-1111-111111111111'),
+            actor='unit-test',
+        )
+
+
+@pytest.mark.asyncio
+async def test_apply_requires_actor():
+    api = MagicMock()
+    with pytest.raises(ContradictionResolutionError, match='actor required'):
+        await apply_winner_proposal(
+            api,
+            uuid4(),
+            vault_id=UUID('11111111-1111-1111-1111-111111111111'),
+            actor=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_apply_requires_actor_when_empty_string():
+    api = MagicMock()
+    with pytest.raises(ContradictionResolutionError, match='actor required'):
+        await apply_winner_proposal(
+            api,
+            uuid4(),
+            vault_id=UUID('11111111-1111-1111-1111-111111111111'),
+            actor='',
+        )
+
+
+@pytest.mark.asyncio
+async def test_apply_requires_vault_id():
+    api = MagicMock()
+    with pytest.raises(ContradictionResolutionError, match='vault_id required'):
+        await apply_winner_proposal(
+            api,
+            uuid4(),
+            vault_id=None,
+            actor='unit-test',
+        )
+
+
+@pytest.mark.asyncio
+async def test_apply_rejects_vault_mismatch():
+    loser_id = str(uuid4())
+    winner_id = str(uuid4())
+    proposal = _proposal('mark_loser_stale', loser_unit_id=loser_id, winner_unit_id=winner_id)
+    session, cm = _make_session([proposal])
+    api = _api_with_session(cm)
+
+    with pytest.raises(ContradictionResolutionError, match='vault_id mismatch'):
+        await apply_winner_proposal(
+            api,
+            uuid4(),
+            vault_id=UUID('22222222-2222-2222-2222-222222222222'),
+            actor='unit-test',
+        )
+
+
+@pytest.mark.asyncio
+async def test_reverse_requires_actor():
+    from memex_core.services.contradiction_resolution import reverse_winner_proposal
+
+    api = MagicMock()
+    with pytest.raises(ContradictionResolutionError, match='actor required'):
+        await reverse_winner_proposal(
+            api,
+            uuid4(),
+            vault_id=UUID('11111111-1111-1111-1111-111111111111'),
+            actor=None,
+        )
+
+
+@pytest.mark.asyncio
+async def test_reverse_requires_vault_id():
+    from memex_core.services.contradiction_resolution import reverse_winner_proposal
+
+    api = MagicMock()
+    with pytest.raises(ContradictionResolutionError, match='vault_id required'):
+        await reverse_winner_proposal(
+            api,
+            uuid4(),
+            vault_id=None,
+            actor='unit-test',
+        )

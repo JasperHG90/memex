@@ -149,6 +149,10 @@ async def apply_winner_proposal(
     so :func:`reverse_winner_proposal` can undo the change atomically.
     Flips the finding status to ``resolved`` in the same transaction.
     """
+    if not actor:
+        raise ContradictionResolutionError('actor required to record the resolution audit trail')
+    if vault_id is None:
+        raise ContradictionResolutionError('vault_id required to apply a winner proposal')
     async with api.metastore.session() as session:
         proposal = (
             await session.execute(_LOAD_PROPOSAL_SQL, {'finding_id': str(finding_id)})
@@ -164,11 +168,7 @@ async def apply_winner_proposal(
             raise ContradictionResolutionError(
                 f'finding {finding_id} is not pending (status={proposal.status!r})'
             )
-        if (
-            vault_id is not None
-            and proposal.vault_id is not None
-            and str(vault_id) != proposal.vault_id
-        ):
+        if proposal.vault_id is not None and str(vault_id) != proposal.vault_id:
             raise ContradictionResolutionError('vault_id mismatch between caller and finding')
 
         evidence = _coerce_evidence(proposal.evidence)
@@ -280,7 +280,7 @@ async def apply_winner_proposal(
     try:
         _metrics.CONTRADICTION_RESOLUTION_APPLIED_TOTAL.labels(
             action=effective_action,
-            vault_id=str(vault_id) if vault_id is not None else 'global',
+            vault_id=proposal.vault_id if proposal.vault_id is not None else 'global',
         ).inc()
     except Exception:
         logger.debug('metrics increment failed', exc_info=True)
@@ -319,6 +319,10 @@ async def reverse_winner_proposal(
     that would violate the partial unique index on pending findings.
     Instead the original carries ``evidence.resolution.reversed_at``.
     """
+    if not actor:
+        raise ContradictionResolutionError('actor required to record the resolution audit trail')
+    if vault_id is None:
+        raise ContradictionResolutionError('vault_id required to reverse a winner proposal')
     async with api.metastore.session() as session:
         proposal = (
             await session.execute(_LOAD_PROPOSAL_SQL, {'finding_id': str(finding_id)})
@@ -333,11 +337,7 @@ async def reverse_winner_proposal(
             raise ContradictionResolutionError(
                 f'finding {finding_id} is not resolved (status={proposal.status!r})'
             )
-        if (
-            vault_id is not None
-            and proposal.vault_id is not None
-            and str(vault_id) != proposal.vault_id
-        ):
+        if proposal.vault_id is not None and str(vault_id) != proposal.vault_id:
             raise ContradictionResolutionError('vault_id mismatch between caller and finding')
 
         evidence = _coerce_evidence(proposal.evidence)
@@ -430,7 +430,7 @@ async def reverse_winner_proposal(
 
     try:
         _metrics.CONTRADICTION_RESOLUTION_REVERSED_TOTAL.labels(
-            vault_id=str(vault_id) if vault_id is not None else 'global',
+            vault_id=proposal.vault_id if proposal.vault_id is not None else 'global',
         ).inc()
     except Exception:
         logger.debug('metrics increment failed', exc_info=True)

@@ -461,8 +461,12 @@ def make_propose_contradiction_winner_check(
         loser_id_label = str(getattr(prediction, 'loser_id', 'none') or 'none')
         rationale = str(getattr(prediction, 'rationale', '') or '')
 
-        if winner_id_label == 'inconclusive' and confidence < min_confidence:
-            return None
+        # Below-threshold definitive verdicts are downgraded (not dropped) so
+        # the audit trail survives while the apply path is blocked.
+        if winner_id_label in ('unit_a', 'unit_b') and confidence < min_confidence:
+            winner_id_label = 'inconclusive'
+            loser_id_label = 'none'
+            action = 'inconclusive'
 
         if winner_id_label == 'unit_a':
             resolved_winner_unit_id = peer_row.source_unit_id
