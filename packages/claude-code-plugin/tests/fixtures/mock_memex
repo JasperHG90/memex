@@ -60,7 +60,10 @@ case "$_subcommand $_subsubcommand" in
         # `memex kv get <key> [--value-only]`
         _key="$3"
         if [ -f "$_kv_file" ]; then
-            _val=$(grep -E "^${_key}=" "$_kv_file" 2>/dev/null | head -1 | cut -d= -f2-)
+            # awk does fixed-string equality on the key field, so KV keys with
+            # regex metacharacters (e.g. `+`, `.`, `*`) can't accidentally match
+            # siblings the way `grep -E "^${_key}="` would.
+            _val=$(awk -F= -v k="$_key" '$1 == k { sub(/^[^=]*=/, ""); print; exit }' "$_kv_file" 2>/dev/null)
             if [ -n "$_val" ]; then
                 printf '%s' "$_val"
                 exit 0

@@ -133,6 +133,7 @@ def test_active_vault_falls_back_to_user(mock_memex: MockMemex, temp_git_repo: P
         env=user_env,
         cwd=temp_git_repo,
     )
+    assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == 'user-vault'
 
 
@@ -144,6 +145,7 @@ def test_active_vault_falls_back_to_agent(mock_memex: MockMemex, temp_git_repo: 
         env=env,
         cwd=temp_git_repo,
     )
+    assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == 'agent-vault'
 
 
@@ -154,6 +156,7 @@ def test_active_vault_falls_back_to_env_var(mock_memex: MockMemex, temp_git_repo
         env=env,
         cwd=temp_git_repo,
     )
+    assert result.returncode == 0, result.stderr
     assert result.stdout.strip() == 'env-vault'
 
 
