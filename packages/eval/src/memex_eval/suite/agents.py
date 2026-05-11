@@ -715,7 +715,12 @@ class HermesBackend(AnswerBackend):
         api_key: str | None = None,
         max_iterations: int = 12,
     ) -> None:
-        self.model = model or os.environ.get('HERMES_MODEL') or 'gemini/gemini-2.5-flash'
+        # Default aligned with the model.default Hermes config the eval
+        # writes — otherwise AIAgent's explicit ``model=`` arg overrides
+        # the YAML and we end up shipping the wrong model name to the
+        # configured provider endpoint (e.g. gemini/gemini-2.5-flash hits
+        # ollama.com/v1/ → 404 model not found).
+        self.model = model or os.environ.get('HERMES_MODEL') or 'glm-5.1:cloud'
         self.api_key = api_key or self._discover_api_key(self.model)
         self.max_iterations = max_iterations
         # Created lazily on first ``answer()`` call so the symlink lifetime
@@ -849,7 +854,16 @@ class HermesBackend(AnswerBackend):
 
         # Bind the plugin to the eval vault for this scenario. Strip the
         # ``/api/v1/`` suffix — the plugin expects the bare server origin.
+        # Save the prior env so post-agent ``parse_memex_config()`` calls
+        # (e.g. the runner's eval_import_state cleanup) don't trip over
+        # ``MEMEX_VAULT=<uuid>`` being parsed as the ``vault`` config
+        # block. The hermes plugin needs these only for the duration of
+        # the agent loop.
         bare_url = re.sub(r'/api/v1/?$', '', server_url.rstrip('/'))
+        _saved_env: dict[str, str | None] = {
+            'MEMEX_SERVER_URL': os.environ.get('MEMEX_SERVER_URL'),
+            'MEMEX_VAULT': os.environ.get('MEMEX_VAULT'),
+        }
         os.environ['MEMEX_SERVER_URL'] = bare_url
         os.environ['MEMEX_VAULT'] = str(vault_id)
 
@@ -891,6 +905,14 @@ class HermesBackend(AnswerBackend):
                 if callable(shutdown):
                     with contextlib.suppress(Exception):
                         shutdown()
+            # Restore the prior MEMEX_SERVER_URL / MEMEX_VAULT values so
+            # later ``parse_memex_config()`` calls aren't tripped by the
+            # plugin-binding env we just wrote.
+            for k, v in _saved_env.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
 
         # Fallback UUID extraction from the answer text is intentionally
         # gated on the agent having surfaced search-shaped tool calls — see
