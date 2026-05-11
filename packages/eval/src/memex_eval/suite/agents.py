@@ -775,8 +775,23 @@ class HermesBackend(AnswerBackend):
         plugins_dir = hermes_home / 'plugins'
         plugins_dir.mkdir(parents=True)
         (plugins_dir / 'memex').symlink_to(PLUGIN_DIR.resolve(), target_is_directory=True)
-        # Minimal config so plugin discovery finds memex as the active provider.
-        (hermes_home / 'config.yaml').write_text('memory:\n  provider: memex\n')
+        # Memory + plugins config. Mirrors the user-facing Hermes config
+        # shape so memex memory features (incl. user profile, char
+        # budgets) match production. Char limits are conservative
+        # defaults — Hermes-side defaults differ and would silently
+        # change retrieval shape between eval and production.
+        (hermes_home / 'config.yaml').write_text(
+            'plugins:\n'
+            '  enabled:\n'
+            '    - memex\n'
+            '  disabled: []\n'
+            'memory:\n'
+            '  memory_enabled: true\n'
+            '  user_profile_enabled: true\n'
+            '  memory_char_limit: 2200\n'
+            '  user_char_limit: 1375\n'
+            '  provider: memex\n'
+        )
         os.environ['HERMES_HOME'] = str(hermes_home)
         self._hermes_home = hermes_home
         logger.info('Hermes plugin set up at %s', hermes_home)
