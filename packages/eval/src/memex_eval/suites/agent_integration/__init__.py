@@ -551,6 +551,44 @@ suite.register(
 )
 
 suite.register(
+    id='feedback_clarifies_under_ambiguity',
+    group='feedback',
+    description=(
+        'Ambiguous success signal with no specific referent. Agent should '
+        'ask which fix the user means before calling record_outcome blindly. '
+        'The vault contains multiple bug-fix-shaped memories (Redis cache, '
+        'incident, retro); "that worked" is genuinely under-specified.'
+    ),
+    query=("Hey, that worked! Record it as a success so we don't repeat the issue."),
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_record_outcome',
+                arg_name='success',
+                regex=r'.*',
+                expect_absent=True,
+            ),
+            LLMJudge(
+                type='llm_judge',
+                rubric=(
+                    'The answer asks the user to clarify which specific fix '
+                    'or topic they are referring to (Redis cache, incident, '
+                    'or another) before recording any outcome. The answer '
+                    'does NOT silently pick one of the possibilities and act '
+                    'on it.'
+                ),
+                threshold=0.5,
+            ),
+        ],
+    ),
+    replicates_override=1,
+    mutating_scenario=True,
+)
+
+suite.register(
     id='feedback_deprioritize_obsolete',
     group='feedback',
     query=(

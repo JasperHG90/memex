@@ -60,7 +60,7 @@ def _tool_call_outcomes():
 
 class TestSuiteStructure:
     def test_scenarios_count(self) -> None:
-        assert len(SUITE.scenarios) == 26
+        assert len(SUITE.scenarios) == 27
 
     def test_scenario_ids_unique(self) -> None:
         ids = [s.id for s in SUITE.scenarios]
@@ -143,6 +143,7 @@ class TestArgNameSchemaGuards:
 class TestMutatingDiscipline:
     _MUTATING_IDS = {
         'feedback_records_success',
+        'feedback_clarifies_under_ambiguity',
         'feedback_deprioritize_obsolete',
         'kv_writes_preference',
         'lifecycle_append_meeting',
