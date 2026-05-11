@@ -1238,14 +1238,27 @@ ADD_ASSETS_SCHEMA: dict[str, Any] = {
 KV_WRITE_SCHEMA: dict[str, Any] = {
     'name': 'memex_kv_write',
     'description': (
-        'Write a namespaced operational pointer to the KV store — a '
-        'preference, project binding, or convention. Generates a semantic '
-        'embedding for fuzzy lookup. NOT for facts learned from content; '
-        'those become memory units when you `memex_add_note` (or '
-        '`memex_append_note`) a note. Key must start with global:, user:, '
-        'project:, or app:. Examples: "global:lang:python:version", '
-        '"user:work:employer", "project:github.com/user/repo:vault", '
-        '"app:claude-code:theme".'
+        'Write a namespaced operational fact to the KV store — the canonical '
+        'place for preferences, project conventions, and app settings. **Use '
+        'this whenever the user asks you to remember anything operational '
+        'for future sessions**: personal preferences ("remember I prefer '
+        'Neovim"), project conventions ("we use 4-space indentation in this '
+        'repo"), cross-project standards ("we standardise on Python 3.12"), '
+        'app-specific behaviour ("default to dark theme in Claude Code"), '
+        'or learned procedures. Pick the namespace by intent scope:\n'
+        '- user:<facet> — personal preference / identity '
+        '(e.g. user:editor, user:role)\n'
+        '- project:<id>:<facet> — repo/project-bound '
+        '(e.g. project:github.com/user/repo:formatter)\n'
+        '- global:<facet> — cross-project ecosystem fact '
+        '(e.g. global:lang:python:version)\n'
+        '- app:<app-id>:<facet> — agent/app-specific behaviour '
+        '(e.g. app:claude-code:theme)\n'
+        '- procedure:<verb>:<context-tag> — learned how-tos; pair with '
+        'memex_record_outcome(target_type="kv_key", kv_key=...) for MW tracking.\n'
+        'Generates a semantic embedding for fuzzy lookup. NOT for facts '
+        'learned from content; those become memory units via memex_add_note '
+        '(or memex_append_note).'
     ),
     'parameters': {
         'type': 'object',
