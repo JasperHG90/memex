@@ -6,6 +6,8 @@ Routes:
 - GET    /api/v1/lint/flags                           — cursor-paginated agent surface
 - POST   /api/v1/lint/findings/{finding_id}/dismiss   — flip status to 'dismissed'
 - POST   /api/v1/lint/findings/{finding_id}/resolve   — flip status to 'resolved'
+- POST   /api/v1/lint/findings/{finding_id}/apply     — apply a winner-proposal action
+- POST   /api/v1/lint/findings/{finding_id}/reverse   — reverse a previously applied winner-proposal
 
 The ``findings`` endpoint backs ``memex lint findings`` (CLI). The
 ``flags`` endpoint is the agent surface — shape-stable returns and
@@ -190,6 +192,74 @@ async def lint_resolve(
     if not ok:
         raise HTTPException(status_code=404, detail='Finding not found or not pending')
     return {'finding_id': str(finding_id), 'status': 'resolved'}
+
+
+@router.post('/findings/{finding_id}/apply', dependencies=[Depends(require_write)])
+async def lint_apply(
+    finding_id: UUID,
+    api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+) -> dict[str, Any]:
+    """Apply a winner-proposal finding's recorded action.
+
+    Gates by the finding's vault (same path as resolve/dismiss). The action
+    semantics — mark_loser_stale / supersede_loser_note /
+    refine_not_contradict / inconclusive — are captured under
+    ``evidence.action`` when the finding is emitted; this endpoint dispatches
+    on that literal and records ``prior_state`` so the change is reversible.
+    """
+    from memex_core.services.contradiction_resolution import (
+        ContradictionResolutionError,
+        apply_winner_proposal,
+    )
+
+    finding_vault = await _gate_finding_for_write(finding_id, api, auth)
+    actor = None
+    if auth is not None:
+        actor = getattr(auth, 'principal', None) or getattr(auth, 'subject', None)
+    try:
+        return await apply_winner_proposal(api, finding_id, vault_id=finding_vault, actor=actor)
+    except ContradictionResolutionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as e:
+        raise _handle_error(e, 'Failed to apply winner proposal')
+
+
+@router.post('/findings/{finding_id}/reverse', dependencies=[Depends(require_write)])
+async def lint_reverse(
+    finding_id: UUID,
+    api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+) -> dict[str, Any]:
+    """Reverse a previously applied winner-proposal.
+
+    Reads ``evidence.resolution.prior_state`` and atomically restores the
+    affected rows. Writes a paired ``propose_contradiction_winner_reversal``
+    audit row; the original resolved finding stays resolved so the unique
+    partial index on pending findings remains valid.
+    """
+    from memex_core.services.contradiction_resolution import (
+        ContradictionResolutionError,
+        reverse_winner_proposal,
+    )
+
+    # Re-use the same vault gate the apply path uses; however the finding
+    # is in 'resolved' state, so we look up its vault directly and check
+    # write access.
+    found, finding_vault = await api.lint.get_finding_vault_id(finding_id)
+    if not found:
+        raise HTTPException(status_code=404, detail='Finding not found')
+    if finding_vault is not None:
+        await check_vault_access(auth, [finding_vault], api, permission=Permission.WRITE)
+    actor = None
+    if auth is not None:
+        actor = getattr(auth, 'principal', None) or getattr(auth, 'subject', None)
+    try:
+        return await reverse_winner_proposal(api, finding_id, vault_id=finding_vault, actor=actor)
+    except ContradictionResolutionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as e:
+        raise _handle_error(e, 'Failed to reverse winner proposal')
 
 
 @router.post('/run/{vault_id}', dependencies=[Depends(require_write)])

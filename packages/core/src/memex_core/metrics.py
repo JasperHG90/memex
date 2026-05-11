@@ -307,6 +307,18 @@ LINT_RUN_DURATION_SECONDS = Histogram(
     buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0),
 )
 
+CONTRADICTION_RESOLUTION_APPLIED_TOTAL = Counter(
+    'memex_contradiction_resolution_applied_total',
+    'Winner-proposal applies by resolution action (bounded literals).',
+    ['action', 'vault_id'],
+)
+
+CONTRADICTION_RESOLUTION_REVERSED_TOTAL = Counter(
+    'memex_contradiction_resolution_reversed_total',
+    'Winner-proposal reversals by vault.',
+    ['vault_id'],
+)
+
 # ---------------------------------------------------------------------------
 # Per-entity advisory lock + reconsolidate / consolidate metrics
 # ---------------------------------------------------------------------------
