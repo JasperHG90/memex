@@ -800,3 +800,73 @@ async def test_scan_creates_proposal_with_vaults_affected(
     evidence = rows[0][0]
     vaults_affected = set(evidence['vaults_affected'])
     assert {str(vault_a.id), str(vault_b.id)}.issubset(vaults_affected)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_cooccurrence_merge_preserves_open_ended_intervals(
+    session: AsyncSession,
+    metastore,
+    filestore,
+):
+    """A NULL valid_from / valid_to means an open-ended interval; merging a
+    NULL side with a dated side MUST keep NULL — narrowing a dated interval
+    silently loses the "still valid" / "always was" semantics."""
+    e_winner = await _make_entity(session, f'OW-{uuid4().hex[:6]}')
+    e_loser = await _make_entity(session, f'OL-{uuid4().hex[:6]}')
+    e_peer = await _make_entity(session, f'OP-{uuid4().hex[:6]}')
+
+    dated = datetime(2024, 1, 1, tzinfo=timezone.utc)
+
+    # winner<->peer: dated valid_from, NULL valid_to (still valid).
+    e1, e2 = sorted([e_winner.id, e_peer.id], key=str)
+    session.add(
+        EntityCooccurrence(
+            entity_id_1=e1,
+            entity_id_2=e2,
+            vault_id=GLOBAL_VAULT_ID,
+            cooccurrence_count=1,
+            valid_from=dated,
+            valid_to=None,
+        )
+    )
+    # loser<->peer: NULL valid_from (always was), dated valid_to.
+    e3, e4 = sorted([e_loser.id, e_peer.id], key=str)
+    session.add(
+        EntityCooccurrence(
+            entity_id_1=e3,
+            entity_id_2=e4,
+            vault_id=GLOBAL_VAULT_ID,
+            cooccurrence_count=1,
+            valid_from=None,
+            valid_to=dated,
+        )
+    )
+    await session.commit()
+
+    from memex_common.config import MemexConfig
+
+    svc = EntityService(metastore=metastore, filestore=filestore, config=MemexConfig())
+    await svc.collapse_cluster(winner_id=e_winner.id, loser_ids=[e_loser.id], actor='test')
+
+    async with metastore.session() as s:
+        rows = (
+            await s.execute(
+                text(
+                    'SELECT valid_from, valid_to FROM entity_cooccurrences '
+                    'WHERE :pid IN (entity_id_1, entity_id_2) '
+                    'AND :wid IN (entity_id_1, entity_id_2)'
+                ),
+                {'pid': str(e_peer.id), 'wid': str(e_winner.id)},
+            )
+        ).all()
+    assert len(rows) == 1
+    valid_from, valid_to = rows[0]
+    assert valid_from is None, (
+        'NULL valid_from on either side means "open start"; merge must NOT '
+        f'narrow to a dated value (got {valid_from!r})'
+    )
+    assert valid_to is None, (
+        'NULL valid_to on either side means "still valid"; merge must NOT '
+        f'narrow to a dated value (got {valid_to!r})'
+    )

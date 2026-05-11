@@ -189,12 +189,11 @@ async def lint_resolve(
     the status flip. Cross-vault auth is enforced on every vault listed in
     ``evidence.vaults_affected`` before mutating.
     """
-    if params:
-        finding = await _load_finding_or_404(finding_id, api)
-        if finding['rule_name'] == 'entity_collapse_cluster':
-            return await _resolve_entity_collapse_cluster(
-                finding=finding, api=api, auth=auth, params=params
-            )
+    finding = await _load_finding_or_404(finding_id, api)
+    if finding['rule_name'] == 'entity_collapse_cluster':
+        return await _resolve_entity_collapse_cluster(
+            finding=finding, api=api, auth=auth, params=params or {}
+        )
 
     finding_vault = await _gate_finding_for_write(finding_id, api, auth)
     try:

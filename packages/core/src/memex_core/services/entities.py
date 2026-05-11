@@ -328,7 +328,7 @@ class EntityService(BaseService):
         from datetime import datetime, timezone
         from uuid import UUID as PyUUID
 
-        from sqlalchemy import func, text
+        from sqlalchemy import case, func, null, or_, text
         from sqlalchemy.dialects.postgresql import insert as pg_insert
         from sqlmodel import col, select, update
 
@@ -433,21 +433,31 @@ class EntityService(BaseService):
                                 EntityCooccurrence.last_cooccurred,
                                 upsert.excluded.last_cooccurred,
                             ),
-                            'valid_from': func.coalesce(
-                                func.least(
+                            'valid_from': case(
+                                (
+                                    or_(
+                                        EntityCooccurrence.valid_from.is_(None),
+                                        upsert.excluded.valid_from.is_(None),
+                                    ),
+                                    null(),
+                                ),
+                                else_=func.least(
                                     EntityCooccurrence.valid_from,
                                     upsert.excluded.valid_from,
                                 ),
-                                EntityCooccurrence.valid_from,
-                                upsert.excluded.valid_from,
                             ),
-                            'valid_to': func.coalesce(
-                                func.greatest(
+                            'valid_to': case(
+                                (
+                                    or_(
+                                        EntityCooccurrence.valid_to.is_(None),
+                                        upsert.excluded.valid_to.is_(None),
+                                    ),
+                                    null(),
+                                ),
+                                else_=func.greatest(
                                     EntityCooccurrence.valid_to,
                                     upsert.excluded.valid_to,
                                 ),
-                                EntityCooccurrence.valid_to,
-                                upsert.excluded.valid_to,
                             ),
                         },
                     )

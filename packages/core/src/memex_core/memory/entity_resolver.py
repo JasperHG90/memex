@@ -11,7 +11,7 @@ import math
 import itertools
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy import func
+from sqlalchemy import case, func, null, or_
 from sqlmodel import col, text, update, select, desc
 from sqlmodel.ext.asyncio.session import AsyncSession
 from pydantic import BaseModel
@@ -651,12 +651,18 @@ class EntityResolver:
                 'cooccurrence_count': EntityCooccurrence.cooccurrence_count
                 + stmt.excluded.cooccurrence_count,
                 'last_cooccurred': stmt.excluded.last_cooccurred,
-                # Keep the earliest valid_from. LEAST(x, NULL) returns NULL in
-                # Postgres, so wrap in COALESCE to preserve the non-NULL side.
-                'valid_from': func.coalesce(
-                    func.least(EntityCooccurrence.valid_from, stmt.excluded.valid_from),
-                    EntityCooccurrence.valid_from,
-                    stmt.excluded.valid_from,
+                # NULL valid_from means "open start" — preserve it. If either
+                # side is NULL the merged interval stays open; otherwise pick
+                # the earlier date.
+                'valid_from': case(
+                    (
+                        or_(
+                            EntityCooccurrence.valid_from.is_(None),
+                            stmt.excluded.valid_from.is_(None),
+                        ),
+                        null(),
+                    ),
+                    else_=func.least(EntityCooccurrence.valid_from, stmt.excluded.valid_from),
                 ),
             },
         )
