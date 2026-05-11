@@ -271,6 +271,10 @@ TEMPR multi-strategy search configuration.
 | `mmr_lambda` | float \| null | `0.9` | MMR (Maximal Marginal Relevance) diversity lambda for memory search. `1.0` = pure relevance, `0.0` = max diversity. `null` disables MMR. `0.9` is conservative — suppresses near-duplicates while preserving distinct results. |
 | `mmr_embedding_weight` | float | `0.6` | Weight of cosine similarity in the MMR hybrid similarity kernel. |
 | `mmr_entity_weight` | float | `0.4` | Weight of entity Jaccard similarity in the MMR hybrid similarity kernel. |
+| `exploration_mode` | `"epsilon_greedy" \| "thompson" \| "off"` | `"epsilon_greedy"` | Selector for the exploration-floor algorithm. `"epsilon_greedy"`: outer roll at `exploration_epsilon`, inject from the low-MW tail (ship default). `"thompson"`: draw `θ ~ Beta(success+1, failure+1)` per eligible candidate and inject the top-θ units — cold-start-fair by construction. `"off"`: skip injection entirely. Interaction: `exploration_epsilon` is ignored when `exploration_mode != "epsilon_greedy"`. |
+| `exploration_epsilon` | float | `0.05` | Probability of injecting exploration units per retrieval call under `exploration_mode = "epsilon_greedy"`. `0` disables. Ignored under `"thompson"` and `"off"`. |
+| `exploration_max_injections` | int | `2` | Maximum exploration units injected per retrieval call (both modes). |
+| `exploration_low_mw_threshold` | int | `5` | Under `"epsilon_greedy"`, units with `success_co_count + failure_co_count` below this are eligible. Thompson does not use a threshold; it samples the posterior directly. |
 | `reranker` | [RerankerBackend](#reranker-backend-servermemoryretrievalreranker) | `type: onnx` | Reranker model backend. Default: built-in ONNX cross-encoder. |
 
 ##### Reranker Backend (`server.memory.retrieval.reranker`)

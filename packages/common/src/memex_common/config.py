@@ -940,11 +940,23 @@ class RetrievalConfig(BaseModel):
         default=0.7,
         description='Weight for semantic seed entities (lower than NER weight of 1.0).',
     )
+    exploration_mode: Literal['epsilon_greedy', 'thompson', 'off'] = Field(
+        default='epsilon_greedy',
+        description=(
+            'Selector for the exploration-floor algorithm. '
+            "'epsilon_greedy' (ship default): inject exploration units with probability "
+            '``exploration_epsilon`` from the low-Memory-Worth tail. '
+            "'thompson': draw θ ~ Beta(success+1, failure+1) per eligible candidate and inject "
+            'the top-θ units; cold-start-fair by construction. '
+            "'off': no exploration injection regardless of other knobs."
+        ),
+    )
     exploration_epsilon: float = Field(
         default=0.05,
         description='Probability of injecting exploration units (low-Memory Worth memories) into '
         'retrieval results. 0 = disabled. 0.05 = ~1 in 20 calls. '
-        'Prevents rich-get-richer dynamics.',
+        'Prevents rich-get-richer dynamics. Ignored when ``exploration_mode != '
+        "'epsilon_greedy'``.",
     )
     exploration_max_injections: int = Field(
         default=2,
@@ -978,6 +990,28 @@ class RetrievalConfig(BaseModel):
             'independently revertible from this flag flip.'
         ),
     )
+
+    @model_validator(mode='after')
+    def _log_exploration_mode_epsilon_interaction(self) -> Self:
+        """Log (do not raise) when ``exploration_epsilon`` is set to a non-trivial value
+        under a mode that ignores it.
+
+        Operators running a mode A/B will toggle ``exploration_mode`` without
+        resetting ``exploration_epsilon``; raising would block that workflow.
+        Suppressed when ``exploration_epsilon`` is at one of its meaningful
+        "off" values (0.0 = explicit disable; 0.05 = ship default and presumed
+        unmodified) — operators who explicitly chose those values are not the
+        target audience for the warning.
+        """
+        ignored_under_non_epsilon_mode = self.exploration_mode != 'epsilon_greedy'
+        epsilon_is_explicit_nondefault = self.exploration_epsilon not in (0.0, 0.05)
+        if ignored_under_non_epsilon_mode and epsilon_is_explicit_nondefault:
+            logger.info(
+                'exploration_epsilon (%s) is ignored under exploration_mode=%r',
+                self.exploration_epsilon,
+                self.exploration_mode,
+            )
+        return self
 
 
 class ContradictionConfig(BaseModel):

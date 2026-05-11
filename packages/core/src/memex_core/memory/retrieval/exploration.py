@@ -222,7 +222,7 @@ def inject_exploration_units(
 
     for unit in exploration_units:
         metadata = _coerce_metadata_to_dict(unit.unit_metadata)
-        metadata = {**metadata, 'exploration': True}
+        metadata = {**metadata, 'exploration': True, 'exploration_mode': 'epsilon_greedy'}
         # HAZARD: in-place attribute swap on a
         # caller-owned ``MemoryUnit``. Caller-snapshot invariant: the
         # retrieval engine MUST pass list-copy snapshots (not aliased
@@ -235,9 +235,114 @@ def inject_exploration_units(
         'exploration_injection',
         count=len(exploration_units),
         unit_ids=[str(u.id) for u in exploration_units],
+        mode='epsilon_greedy',
     )
 
     return results + exploration_units
+
+
+def select_thompson_candidates(
+    results: list[MemoryUnit],
+    all_candidates: list[MemoryUnit],
+    *,
+    max_injections: int = DEFAULT_MAX_INJECTIONS,
+    rng: random.Random | None = None,
+) -> tuple[list[MemoryUnit], list[float]]:
+    """Select exploration candidates via Thompson sampling.
+
+    For each eligible candidate, draw ``θ ~ Beta(success_co_count + 1,
+    failure_co_count + 1)`` and return up to ``max_injections`` units with
+    the highest ``θ``. Cold-start (0/0) units sample from ``Beta(1, 1) =
+    Uniform(0, 1)`` — a fair shake, not the static ε floor's threshold cut.
+
+    The eligibility predicate mirrors ε-greedy's (`status == ACTIVE`, not
+    deprioritized, not already in results, not already injected) but DROPS
+    the `low_mw_threshold` clamp: Thompson is naturally cold-start-fair
+    because the prior dominates the posterior at low evidence counts.
+
+    Args:
+        results: Already-selected retrieval results (not modified).
+        all_candidates: Full pool of hydrated candidates.
+        max_injections: Maximum number of units to inject.
+        rng: Optional ``random.Random`` instance for deterministic tests.
+            Defaults to the module-scoped ``_rng``.
+
+    Returns:
+        Tuple of (selected units, per-selected-unit winning θ values).
+        Both lists empty when no eligible candidate exists. The θ values
+        are returned for observability — the caller emits them on the
+        :data:`memex_core.metrics.EXPLORATION_THOMPSON_THETA_DISTRIBUTION`
+        histogram to catch the high-posterior degeneracy mode.
+    """
+    sampler = rng if rng is not None else _rng
+
+    result_ids = {u.id for u in results}
+    eligible = [
+        u
+        for u in all_candidates
+        if u.id not in result_ids
+        and not u.is_deprioritized
+        and u.status == ContentStatus.ACTIVE
+        and not _already_injected(u)
+    ]
+
+    if not eligible:
+        return [], []
+
+    sampled = [
+        (u, sampler.betavariate(u.success_co_count + 1, u.failure_co_count + 1)) for u in eligible
+    ]
+    sampled.sort(key=lambda pair: pair[1], reverse=True)
+
+    n = min(max_injections, len(sampled))
+    top = sampled[:n]
+    return [u for u, _ in top], [theta for _, theta in top]
+
+
+def inject_thompson_exploration(
+    results: list[MemoryUnit],
+    all_candidates: list[MemoryUnit],
+    *,
+    max_injections: int = DEFAULT_MAX_INJECTIONS,
+    rng: random.Random | None = None,
+) -> tuple[list[MemoryUnit], list[float]]:
+    """Inject Thompson-sampled exploration units into retrieval results.
+
+    Pairs with :func:`inject_exploration_units` (ε-greedy). Same mutation
+    contract: each injected unit's ``unit_metadata`` is replaced with a
+    fresh dict containing ``exploration=True`` AND
+    ``exploration_mode='thompson'`` so downstream outcome-routing can
+    distinguish the two paths.
+
+    Returns:
+        Tuple of (new results list, per-injected-unit winning θ values).
+        The θ values are surfaced for the observability histogram and
+        for debug logging.
+    """
+    thompson_units, thetas = select_thompson_candidates(
+        results,
+        all_candidates,
+        max_injections=max_injections,
+        rng=rng,
+    )
+
+    if not thompson_units:
+        return list(results), []
+
+    for unit in thompson_units:
+        metadata = _coerce_metadata_to_dict(unit.unit_metadata)
+        metadata = {**metadata, 'exploration': True, 'exploration_mode': 'thompson'}
+        unit.unit_metadata = metadata
+
+    logger.debug(
+        'thompson_injection',
+        count=len(thompson_units),
+        unit_ids=[str(u.id) for u in thompson_units],
+        theta_values=thetas,
+        mode='thompson',
+    )
+
+    return results + thompson_units, thetas
 
 
 def _unit_variance(unit: MemoryUnit) -> float:

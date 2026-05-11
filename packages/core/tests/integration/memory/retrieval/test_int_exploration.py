@@ -211,3 +211,148 @@ class TestExplorationInjection:
                 pytest.fail(
                     f'high-MW unit {u.id} (success+failure >= 5) wrongly flagged as exploration'
                 )
+
+    async def test_int_thompson_end_to_end(self, session: AsyncSession, embedder, reranker):
+        """End-to-end Thompson mode: at least one result carries
+        ``exploration=True`` and ``exploration_mode='thompson'``; the metric
+        counter increments under the ``thompson`` label.
+        """
+        from memex_core.metrics import EXPLORATION_INJECTED_TOTAL
+
+        config = RetrievalConfig(
+            exploration_mode='thompson',
+            exploration_max_injections=2,
+            token_budget=0,
+        )
+        engine = RetrievalEngine(embedder=embedder, reranker=reranker, retrieval_config=config)
+        await self._seed_units(session, embedder, warm_count=1, cold_count=5, topic='Thompson')
+
+        before = EXPLORATION_INJECTED_TOTAL.labels(mode='thompson')._value.get()
+        results, _ = await engine.retrieve(
+            session,
+            RetrievalRequest(query='Thompson runtime details', limit=2, mmr_lambda=0.5),
+        )
+        after = EXPLORATION_INJECTED_TOTAL.labels(mode='thompson')._value.get()
+
+        assert len(results) > 0
+        thompson_injected = [
+            u for u in results if u.unit_metadata.get('exploration_mode') == 'thompson'
+        ]
+        assert thompson_injected, 'Thompson mode produced no annotated injections'
+        assert after == before + len(thompson_injected), (
+            f'EXPLORATION_INJECTED_TOTAL{{mode="thompson"}} delta {after - before} does not match '
+            f'injected count {len(thompson_injected)} — metric and annotation are out of sync'
+        )
+
+    async def test_int_thompson_bypass_pre_filter(self, session: AsyncSession, embedder, reranker):
+        """Thompson sees units the pre-filter would have removed — parity with ε-greedy bypass."""
+        config = RetrievalConfig(
+            exploration_mode='thompson',
+            exploration_max_injections=2,
+            fsfm_branch_enabled=True,
+            token_budget=0,
+        )
+        engine = RetrievalEngine(embedder=embedder, reranker=reranker, retrieval_config=config)
+        seeded = await self._seed_units(
+            session, embedder, warm_count=1, cold_count=5, topic='BypassThompson'
+        )
+
+        results, _ = await engine.retrieve(
+            session,
+            RetrievalRequest(
+                query='BypassThompson edge cases',
+                limit=2,
+                mmr_lambda=0.5,
+                apply_pre_filter=True,
+            ),
+        )
+
+        assert len(results) > 0
+        injected_ids = {
+            u.id for u in results if u.unit_metadata.get('exploration_mode') == 'thompson'
+        }
+        cold_set = set(seeded['cold'])
+        assert injected_ids & cold_set, (
+            'Thompson bypass-pool did not surface any cold-start unit; pre-filter parity broken'
+        )
+
+    async def test_int_off_mode_no_injection(self, session: AsyncSession, embedder, reranker):
+        """``exploration_mode='off'`` short-circuits the dispatch; neither
+        label of ``EXPLORATION_INJECTED_TOTAL`` increments and no result
+        carries an exploration annotation, even when ε is forced to 1.0.
+        """
+        from memex_core.metrics import EXPLORATION_INJECTED_TOTAL
+
+        config = RetrievalConfig(
+            exploration_mode='off',
+            exploration_epsilon=1.0,
+            exploration_max_injections=2,
+            token_budget=0,
+        )
+        engine = RetrievalEngine(embedder=embedder, reranker=reranker, retrieval_config=config)
+        await self._seed_units(session, embedder, warm_count=1, cold_count=5, topic='OffMode')
+
+        eg_before = EXPLORATION_INJECTED_TOTAL.labels(mode='epsilon_greedy')._value.get()
+        ts_before = EXPLORATION_INJECTED_TOTAL.labels(mode='thompson')._value.get()
+        results, _ = await engine.retrieve(
+            session,
+            RetrievalRequest(query='OffMode details', limit=2, mmr_lambda=0.5),
+        )
+        eg_after = EXPLORATION_INJECTED_TOTAL.labels(mode='epsilon_greedy')._value.get()
+        ts_after = EXPLORATION_INJECTED_TOTAL.labels(mode='thompson')._value.get()
+
+        assert len(results) > 0, (
+            'retrieve returned no results — off-mode assertion would be vacuous'
+        )
+        assert eg_after == eg_before, "'off' mode must not increment the ε-greedy counter"
+        assert ts_after == ts_before, "'off' mode must not increment the Thompson counter"
+        assert all(not u.unit_metadata.get('exploration') for u in results), (
+            "'off' mode must not annotate any result with exploration=True"
+        )
+
+    async def test_int_exploration_mode_label_emitted(
+        self, session: AsyncSession, embedder, reranker
+    ):
+        """Both modes increment ``EXPLORATION_INJECTED_TOTAL`` under their respective labels."""
+        from memex_core.metrics import EXPLORATION_INJECTED_TOTAL
+
+        # ε-greedy half
+        eg_config = RetrievalConfig(
+            exploration_mode='epsilon_greedy',
+            exploration_epsilon=1.0,
+            exploration_max_injections=1,
+            exploration_low_mw_threshold=5,
+            token_budget=0,
+        )
+        eg_engine = RetrievalEngine(
+            embedder=embedder, reranker=reranker, retrieval_config=eg_config
+        )
+        await self._seed_units(session, embedder, warm_count=1, cold_count=3, topic='LabelEpsilon')
+        eg_before = EXPLORATION_INJECTED_TOTAL.labels(mode='epsilon_greedy')._value.get()
+        await eg_engine.retrieve(
+            session,
+            RetrievalRequest(query='LabelEpsilon details', limit=2, mmr_lambda=0.5),
+        )
+        eg_after = EXPLORATION_INJECTED_TOTAL.labels(mode='epsilon_greedy')._value.get()
+
+        # Thompson half
+        ts_config = RetrievalConfig(
+            exploration_mode='thompson',
+            exploration_max_injections=1,
+            token_budget=0,
+        )
+        ts_engine = RetrievalEngine(
+            embedder=embedder, reranker=reranker, retrieval_config=ts_config
+        )
+        await self._seed_units(session, embedder, warm_count=1, cold_count=3, topic='LabelThompson')
+        ts_before = EXPLORATION_INJECTED_TOTAL.labels(mode='thompson')._value.get()
+        await ts_engine.retrieve(
+            session,
+            RetrievalRequest(query='LabelThompson details', limit=2, mmr_lambda=0.5),
+        )
+        ts_after = EXPLORATION_INJECTED_TOTAL.labels(mode='thompson')._value.get()
+
+        assert eg_after > eg_before, (
+            'EXPLORATION_INJECTED_TOTAL{mode="epsilon_greedy"} did not increment'
+        )
+        assert ts_after > ts_before, 'EXPLORATION_INJECTED_TOTAL{mode="thompson"} did not increment'
