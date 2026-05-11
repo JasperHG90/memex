@@ -106,11 +106,12 @@ def score_entity_pair(
 
 
 def _trigram_similarity(a: str, b: str) -> float:
-    """Pure-Python trigram similarity approximating PostgreSQL ``similarity()``.
+    """Compute trigram similarity using the Jaccard ratio.
 
-    Used in the resolver-pair scorer when no DB session is available
-    (the collapse-scan computes pair similarities for the top-N candidates
-    fully in memory). Returns the Jaccard ratio of character trigram sets.
+    Returns |trigrams(a) ∩ trigrams(b)| / |trigrams(a) ∪ trigrams(b)| over the
+    character trigram sets. PostgreSQL's pg_trgm ``similarity()`` function uses
+    Sørensen-Dice (2 × intersection / (|A| + |B|)), so thresholds are NOT directly
+    portable between this helper and pg_trgm. Both are bounded in [0, 1].
     """
     if not a and not b:
         return 1.0

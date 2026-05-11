@@ -197,8 +197,8 @@ async def periodic_entity_maintenance_task(api: 'MemexAPI'):
                     summary.get('clusters_rejected_cohesion', 0),
                     summary.get('scanned', 0),
                 )
-        except (OSError, RuntimeError, ValueError) as e:
-            logger.error(f'Scheduler: entity-maintenance task failed: {e}', exc_info=True)
+        except Exception as e:
+            logger.error('Scheduler: entity-maintenance task failed: %s', e, exc_info=True)
 
 
 async def periodic_consolidation_task(api: 'MemexAPI', units_per_tick: int):

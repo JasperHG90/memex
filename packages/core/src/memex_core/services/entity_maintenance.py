@@ -111,7 +111,10 @@ def _suggested_winner(members: list[dict[str, Any]]) -> str:
     """
     sorted_members = sorted(
         members,
-        key=lambda m: (-int(m.get('mention_count') or 0), m.get('first_seen') or datetime.max),
+        key=lambda m: (
+            -int(m.get('mention_count') or 0),
+            m.get('first_seen') or datetime.max.replace(tzinfo=timezone.utc),
+        ),
     )
     return str(sorted_members[0]['id'])
 

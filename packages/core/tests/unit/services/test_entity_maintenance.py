@@ -112,3 +112,24 @@ def test_suggested_winner_breaks_ties_by_first_seen():
         },
     ]
     assert _suggested_winner(members) == 'older'
+
+
+def test_suggested_winner_handles_none_first_seen():
+    members = [
+        {
+            'id': 'no-first-seen',
+            'mention_count': 5,
+            'first_seen': None,
+        },
+        {
+            'id': 'oldest',
+            'mention_count': 5,
+            'first_seen': datetime(2026, 1, 1, tzinfo=timezone.utc),
+        },
+        {
+            'id': 'middle',
+            'mention_count': 5,
+            'first_seen': datetime(2026, 3, 1, tzinfo=timezone.utc),
+        },
+    ]
+    assert _suggested_winner(members) == 'oldest'
