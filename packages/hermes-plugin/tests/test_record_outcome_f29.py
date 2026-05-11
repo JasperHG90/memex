@@ -66,10 +66,16 @@ def test_schema_shape():
         'kv_key',
         'target_type',
         'vault_id',
+        'caller_id',
+        'turn_outcome',
+        'exploration_tagged',
     } <= set(props)
     assert props['target_type']['enum'] == ['memory_unit', 'kv_key']
     assert props['outcome_confidence']['minimum'] == 0.0
     assert props['outcome_confidence']['maximum'] == 1.0
+    assert props['caller_id']['type'] == 'string'
+    assert props['turn_outcome']['type'] == 'string'
+    assert props['exploration_tagged']['type'] == 'boolean'
     # Per-unit shape carries verb enum.
     units_items = props['units']['items']
     assert units_items['properties']['verb']['enum'] == [
@@ -123,7 +129,10 @@ def test_dispatch_memory_unit_passthrough(config, vault_id):
         'target_type': 'memory_unit',
         'kv_key': None,
         'units': None,
+        'caller_id': None,
+        'turn_outcome': None,
         'retrieved_set_size': None,
+        'exploration_tagged': False,
     }
 
 
@@ -159,6 +168,49 @@ def test_dispatch_kv_key_mode(config, vault_id):
     assert call.args[1] is False  # success
     assert call.kwargs['target_type'] == 'kv_key'
     assert call.kwargs['kv_key'] == 'procedure:run-tests:default'
+
+
+def test_dispatch_audit_fields_passthrough(config, vault_id):
+    """caller_id, turn_outcome, and exploration_tagged must flow to api.record_outcome
+    so Hermes-driven outcomes carry the same audit context the HTTP route does."""
+    api = Mock()
+    api.record_outcome = AsyncMock(return_value={'units_updated': 1})
+    dispatch(
+        'memex_record_outcome',
+        {
+            'success': True,
+            'unit_ids': ['u1'],
+            'caller_id': 'hermes-session-abc',
+            'turn_outcome': 'success',
+            'exploration_tagged': True,
+        },
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    call = api.record_outcome.await_args
+    assert call is not None
+    assert call.kwargs['caller_id'] == 'hermes-session-abc'
+    assert call.kwargs['turn_outcome'] == 'success'
+    assert call.kwargs['exploration_tagged'] is True
+
+
+def test_dispatch_audit_fields_type_validation(config, vault_id):
+    """Invalid types for the new audit fields must error before the api call."""
+    api = Mock(spec=[])
+    for bad in (
+        {'success': True, 'unit_ids': ['u1'], 'caller_id': 123},
+        {'success': True, 'unit_ids': ['u1'], 'turn_outcome': 99},
+        {'success': True, 'unit_ids': ['u1'], 'exploration_tagged': 'yes'},
+    ):
+        out = dispatch(
+            'memex_record_outcome',
+            bad,
+            api=api,
+            config=config,
+            vault_id=vault_id,
+        )
+        assert 'error' in json.loads(out)
 
 
 def test_dispatch_explicit_vault_overrides_session(config, vault_id):

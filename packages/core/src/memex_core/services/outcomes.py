@@ -274,7 +274,6 @@ class OutcomeService:
             counter_field: str,
             *,
             bump_last_outcome_at: bool,
-            propagate_to_entity_model: bool,
         ) -> tuple[int, int, int]:
             if not ids:
                 return 0, 0, 0
@@ -287,61 +286,34 @@ class OutcomeService:
                 update(MU).where(MU.id.in_(ids), MU.vault_id == vault_uuid).values(values)
             )
             mu_count = mu_result.rowcount  # type: ignore[union-attr]
-            entity_count = 0
-            model_count = 0
-            if propagate_to_entity_model:
-                entity_result = await session.exec(
-                    update(UE)
-                    .where(UE.unit_id.in_(ids), UE.vault_id == vault_uuid)
-                    .values({counter_field: UE.__table__.c[counter_field] + 1})
+            entity_result = await session.exec(
+                update(UE)
+                .where(UE.unit_id.in_(ids), UE.vault_id == vault_uuid)
+                .values({counter_field: UE.__table__.c[counter_field] + 1})
+            )
+            entity_count = entity_result.rowcount  # type: ignore[union-attr]
+            model_result = await session.exec(
+                update(MM)
+                .where(
+                    MM.entity_id.in_(
+                        select(UE.entity_id).where(UE.unit_id.in_(ids), UE.vault_id == vault_uuid)
+                    ),
+                    MM.vault_id == vault_uuid,
                 )
-                entity_count = entity_result.rowcount  # type: ignore[union-attr]
-                model_result = await session.exec(
-                    update(MM)
-                    .where(
-                        MM.entity_id.in_(
-                            select(UE.entity_id).where(
-                                UE.unit_id.in_(ids), UE.vault_id == vault_uuid
-                            )
-                        ),
-                        MM.vault_id == vault_uuid,
-                    )
-                    .values({counter_field: MM.__table__.c[counter_field] + 1})
-                )
-                model_count = model_result.rowcount  # type: ignore[union-attr]
-            else:
-                ue_result = await session.exec(
-                    update(UE)
-                    .where(UE.unit_id.in_(ids), UE.vault_id == vault_uuid)
-                    .values({counter_field: UE.__table__.c[counter_field] + 1})
-                )
-                entity_count = ue_result.rowcount  # type: ignore[union-attr]
-                mm_result = await session.exec(
-                    update(MM)
-                    .where(
-                        MM.entity_id.in_(
-                            select(UE.entity_id).where(
-                                UE.unit_id.in_(ids), UE.vault_id == vault_uuid
-                            )
-                        ),
-                        MM.vault_id == vault_uuid,
-                    )
-                    .values({counter_field: MM.__table__.c[counter_field] + 1})
-                )
-                model_count = mm_result.rowcount  # type: ignore[union-attr]
+                .values({counter_field: MM.__table__.c[counter_field] + 1})
+            )
+            model_count = model_result.rowcount  # type: ignore[union-attr]
             return mu_count, entity_count, model_count
 
         h_units, h_entities, h_models = await _bump_counter(
             helpful_ids,
             'success_co_count',
             bump_last_outcome_at=True,
-            propagate_to_entity_model=True,
         )
         nh_units, nh_entities, nh_models = await _bump_counter(
             not_helpful_ids,
             'failure_co_count',
             bump_last_outcome_at=True,
-            propagate_to_entity_model=True,
         )
         # not_used does NOT bump last_outcome_at — engagement-only signal,
         # must not reset the Beta-Bernoulli decay clock.
@@ -349,7 +321,6 @@ class OutcomeService:
             not_used_ids,
             'unused_co_count',
             bump_last_outcome_at=False,
-            propagate_to_entity_model=True,
         )
 
         units_updated = h_units + nh_units + nu_units

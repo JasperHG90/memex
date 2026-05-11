@@ -13,7 +13,7 @@ Routes:
 from __future__ import annotations
 
 import logging
-from typing import Annotated, Any
+from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -38,7 +38,7 @@ class UnitOutcomePayload(BaseModel):
     """HTTP wire shape mirror of `UnitOutcome`."""
 
     unit_id: str = Field(..., description='UUID of the memory unit.')
-    verb: str = Field(
+    verb: Literal['helpful', 'not_helpful', 'not_used'] = Field(
         ...,
         description="Per-unit verb: 'helpful', 'not_helpful', or 'not_used'.",
     )

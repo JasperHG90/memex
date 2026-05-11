@@ -106,7 +106,7 @@ class AutoDeprioritizeSummary:
         return len(self.deprioritized)
 
 
-from memex_core.services.outcomes import OutcomeService
+from memex_core.services.outcomes import OutcomeService, UnitOutcome
 from memex_core.services.reflection import ReflectionService
 from memex_core.services.search import SearchService
 from memex_core.services.stats import StatsService
@@ -1599,7 +1599,7 @@ class MemexAPI:
         *,
         target_type: str = 'memory_unit',
         kv_key: str | None = None,
-        units: list[Any] | None = None,
+        units: list[UnitOutcome] | list[dict[str, Any]] | None = None,
         caller_id: str | None = None,
         turn_outcome: str | None = None,
         retrieved_set_size: int | None = None,
@@ -1607,8 +1607,15 @@ class MemexAPI:
     ) -> dict[str, Any]:
         """Record an outcome. Delegates to OutcomeService.
 
-        Preferred shape: ``units=[UnitOutcome, ...]``. Legacy
-        ``(unit_ids, success)`` shape still accepted with a FutureWarning.
+        Two accepted shapes for ``units``:
+
+        * ``list[UnitOutcome]`` — structured Pydantic objects (preferred for
+          in-process callers).
+        * ``list[dict[str, Any]]`` — typed dicts on the HTTP / Hermes wire
+          where each item has ``{unit_id, verb, reason}``.
+
+        Legacy ``(unit_ids, success)`` shape still accepted with a
+        FutureWarning.
 
         For ``target_type='kv_key'``, increments the vault-scoped
         success/failure counters on ``procedure_outcomes`` for ``kv_key``

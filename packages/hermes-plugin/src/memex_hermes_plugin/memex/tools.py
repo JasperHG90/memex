@@ -3798,6 +3798,20 @@ RECORD_OUTCOME_SCHEMA: dict[str, Any] = {
                     'Drives coverage_ratio on the audit log.'
                 ),
             },
+            'caller_id': {
+                'type': 'string',
+                'description': (
+                    'Caller identifier (session id or API key fingerprint) for the audit log.'
+                ),
+            },
+            'turn_outcome': {
+                'type': 'string',
+                'description': ('Coarse turn-level outcome label (e.g. success/failure/mixed).'),
+            },
+            'exploration_tagged': {
+                'type': 'boolean',
+                'description': 'True iff any unit was exploration-injected on retrieval.',
+            },
         },
     },
 }
@@ -3859,6 +3873,19 @@ def handle_record_outcome(
     reason = args.get('reason')
     retrieved_set_size = args.get('retrieved_set_size')
 
+    caller_id = args.get('caller_id')
+    if caller_id is not None and not isinstance(caller_id, str):
+        return tool_error("'caller_id' must be a string")
+
+    turn_outcome = args.get('turn_outcome')
+    if turn_outcome is not None and not isinstance(turn_outcome, str):
+        return tool_error("'turn_outcome' must be a string")
+
+    exploration_tagged_raw = args.get('exploration_tagged', False)
+    if not isinstance(exploration_tagged_raw, bool):
+        return tool_error("'exploration_tagged' must be a boolean")
+    exploration_tagged = exploration_tagged_raw
+
     try:
         result = run_sync(
             api.record_outcome(
@@ -3870,7 +3897,10 @@ def handle_record_outcome(
                 target_type=target_type,
                 kv_key=kv_key,
                 units=units,
+                caller_id=caller_id,
+                turn_outcome=turn_outcome,
                 retrieved_set_size=retrieved_set_size,
+                exploration_tagged=exploration_tagged,
             ),
             timeout=30.0,
         )
