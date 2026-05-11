@@ -377,6 +377,84 @@ memex memory lineage note 550e8400-e29b-41d4-a716-446655440000 --depth 5 --json
 
 ---
 
+## `lint`
+
+Manage the maintenance ledger (rule-based and LLM-driven hygiene findings).
+
+### `lint status`
+
+```
+memex lint status [--vault <name>|--global|--all]
+```
+
+Pending finding counts.
+
+### `lint findings`
+
+```
+memex lint findings [--vault <name>] [--type <category>] [--status <state>] [--limit <n>]
+```
+
+List maintenance findings.
+
+### `lint dismiss`
+
+```
+memex lint dismiss <finding_id>
+```
+
+Flip a pending finding to `dismissed`.
+
+### `lint resolve`
+
+```
+memex lint resolve <finding_id>
+```
+
+Flip a pending finding to `resolved`.
+
+### `lint apply`
+
+```
+memex lint apply <finding_id>
+```
+
+Apply the recommended action on a winner-proposal finding
+(`rule_name=propose_contradiction_winner`). Dispatches on the action
+literal in `evidence.action`:
+
+- `mark_loser_stale` — flip the loser `MemoryUnit.status` to `'stale'`.
+- `supersede_loser_note` — set the loser note's `superseded_by` to the
+  winner's note id (falls back to `mark_loser_stale` when both units
+  share the same parent note).
+- `refine_not_contradict` — rewrite the inbound `MemoryLink.link_type`
+  from `'contradicts'` to `'refines'`.
+- `inconclusive` — no-op write; flips the finding to resolved.
+
+Each apply captures `prior_state` under `evidence.resolution` so the
+mutation is reversible via `memex lint reverse`.
+
+### `lint reverse`
+
+```
+memex lint reverse <finding_id>
+```
+
+Reverse a previously applied winner-proposal. Atomically restores the
+row(s) recorded under `evidence.resolution.prior_state` and writes a
+paired audit row (`propose_contradiction_winner_reversal`).
+
+### `lint review`
+
+```
+memex lint review [--vault <name>|--global|--all] [--type <category>] [--apply] [--limit <n>]
+```
+
+Interactively walk pending findings (analogous to `git add -p`). Default
+is dry-run; pass `--apply` to persist verdicts.
+
+---
+
 ## `note`
 
 Manage and view source notes.

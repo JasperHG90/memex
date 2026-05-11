@@ -1,0 +1,243 @@
+"""Unit tests for contradiction_resolution action dispatch.
+
+Drives ``apply_winner_proposal`` against a mock AsyncSession capturing
+every SQL statement so each ``action`` literal's dispatch logic is
+exercised without booting Postgres. Covers:
+
+- mark_loser_stale flips unit status.
+- supersede_loser_note rewrites note.superseded_by.
+- supersede_loser_note falls back to mark_loser_stale when both units
+  share the same parent note (records evidence.resolution.fallback_reason).
+- refine_not_contradict rewrites the link's link_type.
+- inconclusive is a no-op write.
+- unknown action raises ContradictionResolutionError.
+"""
+
+from __future__ import annotations
+
+import json
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+from uuid import uuid4
+
+import pytest
+
+from memex_core.services.contradiction_resolution import (
+    ContradictionResolutionError,
+    apply_winner_proposal,
+)
+
+
+def _row(**kwargs):
+    return SimpleNamespace(**kwargs)
+
+
+def _make_session(rows_by_query: list):
+    """Build an AsyncSession mock that yields rows in call order.
+
+    Each entry in ``rows_by_query`` is the ``.first()`` result of the
+    matching ``session.execute(...)`` call (None when no row).
+    """
+    captured: list[tuple] = []
+
+    class _Result:
+        def __init__(self, row):
+            self._row = row
+            self.rowcount = 1
+
+        def first(self):
+            return self._row
+
+    async def execute(sql, params=None):
+        try:
+            sql_text = str(getattr(sql, 'text', sql))
+        except Exception:
+            sql_text = ''
+        captured.append((sql_text, params))
+        idx = len(captured) - 1
+        if idx < len(rows_by_query):
+            return _Result(rows_by_query[idx])
+        return _Result(None)
+
+    session = AsyncMock()
+    session.execute = AsyncMock(side_effect=execute)
+    session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+    session._captured = captured
+
+    cm = AsyncMock()
+    cm.__aenter__.return_value = session
+    cm.__aexit__.return_value = None
+    return session, cm
+
+
+def _api_with_session(cm):
+    api = MagicMock()
+    api.metastore.session = MagicMock(return_value=cm)
+    return api
+
+
+def _proposal(action, *, loser_unit_id=None, winner_unit_id=None, link_id=None):
+    return _row(
+        id=str(uuid4()),
+        vault_id='11111111-1111-1111-1111-111111111111',
+        rule_name='propose_contradiction_winner',
+        target_type='memory_unit',
+        target_id=loser_unit_id or str(uuid4()),
+        evidence=json.dumps(
+            {
+                'action': action,
+                'winner_unit_id': winner_unit_id,
+                'loser_unit_id': loser_unit_id,
+                'link_id': link_id,
+                'winner_id': 'unit_a',
+                'loser_id': 'unit_b',
+                'confidence': 0.8,
+                'rationale': 'mock',
+            }
+        ),
+        status='pending',
+    )
+
+
+@pytest.mark.asyncio
+async def test_mark_loser_stale_dispatches_unit_status_update():
+    loser_id = str(uuid4())
+    winner_id = str(uuid4())
+    proposal = _proposal('mark_loser_stale', loser_unit_id=loser_id, winner_unit_id=winner_id)
+    loser_row = _row(id=loser_id, status='active', note_id=str(uuid4()))
+    winner_row = _row(id=winner_id, status='active', note_id=str(uuid4()))
+    session, cm = _make_session([proposal, loser_row, winner_row])
+    api = _api_with_session(cm)
+
+    result = await apply_winner_proposal(api, uuid4(), vault_id=None, actor='unit-test')
+
+    assert result['status'] == 'resolved'
+    assert result['effective_action'] == 'mark_loser_stale'
+    assert result['fallback_reason'] is None
+    statuses = [
+        params
+        for sql, params in session._captured
+        if isinstance(params, dict) and params.get('status') == 'stale'
+    ]
+    assert statuses, 'expected a status=stale UPDATE'
+
+
+@pytest.mark.asyncio
+async def test_supersede_loser_note_falls_back_when_shared_parent():
+    loser_id = str(uuid4())
+    winner_id = str(uuid4())
+    shared_note = str(uuid4())
+    proposal = _proposal('supersede_loser_note', loser_unit_id=loser_id, winner_unit_id=winner_id)
+    loser_row = _row(id=loser_id, status='active', note_id=shared_note)
+    winner_row = _row(id=winner_id, status='active', note_id=shared_note)
+    session, cm = _make_session([proposal, loser_row, winner_row])
+    api = _api_with_session(cm)
+
+    result = await apply_winner_proposal(api, uuid4(), vault_id=None, actor=None)
+
+    assert result['effective_action'] == 'mark_loser_stale'
+    assert result['fallback_reason'] == 'shared_parent_note'
+
+
+@pytest.mark.asyncio
+async def test_supersede_loser_note_updates_note_superseded_by():
+    loser_id = str(uuid4())
+    winner_id = str(uuid4())
+    loser_note = str(uuid4())
+    winner_note = str(uuid4())
+    proposal = _proposal('supersede_loser_note', loser_unit_id=loser_id, winner_unit_id=winner_id)
+    loser_row = _row(id=loser_id, status='active', note_id=loser_note)
+    winner_row = _row(id=winner_id, status='active', note_id=winner_note)
+    note_row = _row(id=loser_note, superseded_by=None)
+    session, cm = _make_session([proposal, loser_row, winner_row, note_row])
+    api = _api_with_session(cm)
+
+    result = await apply_winner_proposal(api, uuid4(), vault_id=None, actor=None)
+
+    assert result['effective_action'] == 'supersede_loser_note'
+    superseded = [
+        params
+        for sql, params in session._captured
+        if isinstance(params, dict) and params.get('superseded_by') == winner_note
+    ]
+    assert superseded, 'expected a superseded_by UPDATE'
+
+
+@pytest.mark.asyncio
+async def test_refine_not_contradict_rewrites_link_type():
+    loser_id = str(uuid4())
+    winner_id = str(uuid4())
+    link_id = str(uuid4())
+    proposal = _proposal(
+        'refine_not_contradict',
+        loser_unit_id=loser_id,
+        winner_unit_id=winner_id,
+        link_id=link_id,
+    )
+    loser_row = _row(id=loser_id, status='active', note_id=str(uuid4()))
+    winner_row = _row(id=winner_id, status='active', note_id=str(uuid4()))
+    link_row = _row(
+        id=link_id,
+        link_type='contradicts',
+        from_unit_id=winner_id,
+        to_unit_id=loser_id,
+    )
+    session, cm = _make_session([proposal, loser_row, winner_row, link_row])
+    api = _api_with_session(cm)
+
+    result = await apply_winner_proposal(api, uuid4(), vault_id=None, actor=None)
+
+    assert result['effective_action'] == 'refine_not_contradict'
+    refines = [
+        params
+        for sql, params in session._captured
+        if isinstance(params, dict) and params.get('link_type') == 'refines'
+    ]
+    assert refines, 'expected a link_type=refines UPDATE'
+
+
+@pytest.mark.asyncio
+async def test_inconclusive_is_a_noop_write():
+    loser_id = str(uuid4())
+    proposal = _proposal('inconclusive', loser_unit_id=loser_id, winner_unit_id=None)
+    loser_row = _row(id=loser_id, status='active', note_id=str(uuid4()))
+    session, cm = _make_session([proposal, loser_row])
+    api = _api_with_session(cm)
+
+    result = await apply_winner_proposal(api, uuid4(), vault_id=None, actor=None)
+
+    assert result['effective_action'] == 'inconclusive'
+    # No status flip, no note update, no link update.
+    mutating = [
+        params
+        for sql, params in session._captured
+        if isinstance(params, dict)
+        and (
+            params.get('status') == 'stale'
+            or params.get('superseded_by') is not None
+            or params.get('link_type') == 'refines'
+        )
+    ]
+    assert not mutating, 'inconclusive must not mutate target rows'
+
+
+@pytest.mark.asyncio
+async def test_unknown_action_raises():
+    loser_id = str(uuid4())
+    proposal = _proposal('eat_the_database', loser_unit_id=loser_id, winner_unit_id=None)
+    loser_row = _row(id=loser_id, status='active', note_id=str(uuid4()))
+    session, cm = _make_session([proposal, loser_row])
+    api = _api_with_session(cm)
+
+    with pytest.raises(ContradictionResolutionError):
+        await apply_winner_proposal(api, uuid4(), vault_id=None, actor=None)
+
+
+@pytest.mark.asyncio
+async def test_missing_finding_raises():
+    session, cm = _make_session([None])
+    api = _api_with_session(cm)
+
+    with pytest.raises(ContradictionResolutionError):
+        await apply_winner_proposal(api, uuid4(), vault_id=None, actor=None)

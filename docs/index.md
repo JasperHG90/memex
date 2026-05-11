@@ -35,6 +35,7 @@ Goal-oriented recipes for specific tasks. Assumes you have a working Memex insta
 | [Note Templates](how-to/note-templates.md) | Create, register, and use note templates for consistent structure. |
 | [Sync Notes](how-to/sync-notes.md) | Sync a folder of Markdown notes to Memex with incremental updates. |
 | [Firefox Extension](how-to/firefox-extension.md) | Capture articles and PDFs from Firefox directly into Memex. |
+| [Resolve Contradictions](how-to/resolve-contradictions.md) | Review and apply LLM-proposed winners between contradicting memory units. |
 
 ---
 
