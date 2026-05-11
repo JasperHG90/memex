@@ -97,16 +97,27 @@ fi
 # Git tags — only emit when git context is actually resolvable. Each step
 # is independent: a repo without a remote still produces git:branch and
 # git:sha but not git:repo.
+#
+# Sanitize every value: collapse to the first line (defends against the
+# `branch=\nlegit` newline-injection where `jq -R . | jq -s .` would
+# split into two array elements) and drop bare control characters.
+_sanitize_tag_value() {
+    printf '%s' "$1" | tr -d '\r\n\t' | head -c 200
+}
+
 if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     _branch=$(git rev-parse --abbrev-ref HEAD 2>/dev/null || true)
+    _branch=$(_sanitize_tag_value "$_branch")
     if [ -n "$_branch" ] && [ "$_branch" != "HEAD" ]; then
         _auto_tags+=("git:branch=$_branch")
     fi
 
     _sha=$(git rev-parse --short HEAD 2>/dev/null || true)
+    _sha=$(_sanitize_tag_value "$_sha")
     [ -n "$_sha" ] && _auto_tags+=("git:sha=$_sha")
 
     _remote=$(git remote get-url origin 2>/dev/null || true)
+    _remote=$(_sanitize_tag_value "$_remote")
     if [ -n "$_remote" ]; then
         # Normalize via the shared resolver helper so the tag and the KV-key
         # project ID always agree on URL handling. Strip the leading host

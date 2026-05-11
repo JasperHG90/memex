@@ -56,11 +56,29 @@ _memex_validate_ref() {
     fi
 
     mkdir -p "$_cache_dir" 2>/dev/null || true
-    if git ls-remote --tags --heads https://github.com/JasperHG90/memex.git "$_ref" 2>/dev/null | grep -q .; then
+    # Bound the network call: SessionStart is latency-sensitive and a hung
+    # DNS / proxy could otherwise stall it indefinitely. 5s is plenty for
+    # an `ls-remote` against a single ref. Match the gtimeout-on-macOS
+    # probe used by `memex()` so this works on Apple machines too.
+    local _ls_cmd=(git ls-remote --tags --heads https://github.com/JasperHG90/memex.git "$_ref")
+    local _ls_status=0
+    if command -v timeout >/dev/null 2>&1; then
+        timeout 5 "${_ls_cmd[@]}" 2>/dev/null | grep -q . || _ls_status=$?
+    elif command -v gtimeout >/dev/null 2>&1; then
+        gtimeout 5 "${_ls_cmd[@]}" 2>/dev/null | grep -q . || _ls_status=$?
+    else
+        "${_ls_cmd[@]}" 2>/dev/null | grep -q . || _ls_status=$?
+    fi
+    if [ "$_ls_status" -eq 0 ]; then
         echo ok > "$_cache_file" 2>/dev/null || true
         return 0
     fi
-    echo bad > "$_cache_file" 2>/dev/null || true
+    # Don't cache "bad" on a timeout (exit 124) — the ref may be valid and
+    # the network just hung. Only cache deterministic "ref doesn't exist"
+    # verdicts so transient outages don't pin a false negative for 24h.
+    if [ "$_ls_status" -ne 124 ]; then
+        echo bad > "$_cache_file" 2>/dev/null || true
+    fi
     return 1
 }
 

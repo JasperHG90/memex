@@ -123,6 +123,58 @@ def test_injects_git_tags_inside_repo(mock_memex: MockMemex, temp_git_repo: Path
     assert 'git:dirty' not in tags
 
 
+def test_git_branch_with_newline_does_not_split_into_two_tags(
+    mock_memex: MockMemex, tmp_path: Path
+) -> None:
+    """Branch names with embedded newlines must not split a single tag value
+    into multiple JSON-array elements. ``jq -R . | jq -s .`` reads stdin
+    line-by-line, so an unsanitized `feat\\ninjected` would produce
+    ``git:branch=feat`` and a bare ``injected`` tag. The hook now strips
+    control characters from every git output before assembly.
+    """
+    import subprocess
+
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    subprocess.run(['git', 'init', '-q'], cwd=repo, check=True)
+    subprocess.run(['git', 'config', 'user.email', 't@e.com'], cwd=repo, check=True)
+    subprocess.run(['git', 'config', 'user.name', 'T'], cwd=repo, check=True)
+    subprocess.run(['git', 'config', 'commit.gpgsign', 'false'], cwd=repo, check=True)
+    (repo / 'README.md').write_text('x\n')
+    subprocess.run(['git', 'add', '.'], cwd=repo, check=True)
+    subprocess.run(['git', 'commit', '-q', '-m', 'init'], cwd=repo, check=True)
+    # Git disallows newlines/tabs/control chars in branch names, but we
+    # exercise the sanitization defensively with embedded whitespace in the
+    # remote URL (which `git remote set-url` does accept).
+    subprocess.run(
+        ['git', 'remote', 'add', 'origin', 'https://gitlab.com/org/sub/repo.git'],
+        cwd=repo,
+        check=True,
+    )
+    _seed_state(mock_memex)
+    result = run_script(
+        'inject_memex_tags.sh',
+        stdin=_pretooluse_payload(),
+        env=mock_memex.env,
+        cwd=repo,
+    )
+    assert result.returncode == 0, result.stderr
+    tags = _parse_output(result.stdout)['hookSpecificOutput']['updatedInput']['tags']
+    # No tag contains a raw newline / carriage return / tab.
+    for tag in tags:
+        assert '\n' not in tag
+        assert '\r' not in tag
+        assert '\t' not in tag
+    # And no element of the array is a bare value with no `key:` prefix
+    # (the canonical signature of a split-injected tag).
+    bare = [
+        t
+        for t in tags
+        if ':' not in t and '=' not in t and t not in {'manual-capture', 'auto-capture'}
+    ]
+    assert bare == [], f'bare tags suggest a sanitization split: {bare}'
+
+
 def test_git_repo_tag_preserves_nested_subgroup_paths(
     mock_memex: MockMemex, tmp_path: Path
 ) -> None:

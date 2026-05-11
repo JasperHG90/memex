@@ -4,8 +4,12 @@
 # Records that a successful capture happened during this session. The counter
 # file is read by other hooks (e.g. future safety-net heuristics).
 #
-# Counter is concurrency-safe via O_APPEND: each capture appends one line,
-# count = `wc -l`. Cheap, lock-free, robust under parallel hook invocations.
+# Line-count is concurrency-safe via O_APPEND: each capture appends one line
+# ≤ PIPE_BUF, so `wc -l` on the counter file is exact under parallel hook
+# invocations. The per-line timestamps are best-effort — `date` and `printf`
+# happen in separate syscalls, so under heavy concurrency the recorded
+# epochs may not reflect the actual append order. Only the line count is
+# load-bearing; timestamps are advisory and present for future debugging.
 #
 # Outputs an empty JSON object — this hook only has side-effects.
 set -uo pipefail
