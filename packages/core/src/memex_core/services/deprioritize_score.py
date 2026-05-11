@@ -59,6 +59,7 @@ _LINK_TYPE_WEIGHT: dict[str, float] = {
     'caused_by': -0.1,
     'enables': -0.1,
     'prevents': -0.1,
+    'refines': 0.0,
     # 'temporal' / 'semantic' / 'entity' are clustering hints, not quality
     # judgments; they do not contribute to deprioritization pressure.
 }

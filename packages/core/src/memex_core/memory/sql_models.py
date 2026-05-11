@@ -1341,7 +1341,7 @@ class MemoryLink(SQLModel, table=True):  # type: ignore
 
     __table_args__ = (
         CheckConstraint(
-            "link_type IN ('temporal', 'semantic', 'entity', 'causes', 'caused_by', 'enables', 'prevents', 'reinforces', 'weakens', 'contradicts')",
+            "link_type IN ('temporal', 'semantic', 'entity', 'causes', 'caused_by', 'enables', 'prevents', 'reinforces', 'weakens', 'contradicts', 'refines')",
             name='memory_links_link_type_check',
         ),
         CheckConstraint('weight >= 0.0 AND weight <= 1.0', name='memory_links_weight_check'),
