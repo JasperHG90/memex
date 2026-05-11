@@ -26,6 +26,7 @@ import memex_core.llm as _llm
 from memex_core.memory.lint_llm.signatures import (
     CheckSchemaDrift,
     CheckSemanticContradiction,
+    ProposeContradictionWinner,
 )
 from memex_core.memory.lint_llm.surprise import compute_unit_surprise
 from memex_core.memory.lint_llm.types import (
@@ -41,6 +42,20 @@ logger = logging.getLogger('memex.core.memory.lint_llm.checks')
 
 _RULE_LLM_SEMANTIC_CONTRADICTION = 'llm_semantic_contradiction'
 _RULE_LLM_SCHEMA_DRIFT = 'llm_schema_drift'
+_RULE_PROPOSE_CONTRADICTION_WINNER = 'propose_contradiction_winner'
+
+_QUALIFYING_FLAG_REASONS: frozenset[str] = frozenset(
+    {
+        'low_credibility_contradiction_only',
+        'components_disagree',
+    }
+)
+
+_SUGGESTED_ACTION_PROPOSE_WINNER = (
+    'Review the proposed winner and call memex_lint_apply_winner to apply '
+    'the recommended resolution, or memex_lint_reverse_winner if the '
+    'mutation has already been applied and needs to be undone.'
+)
 
 _SUGGESTED_ACTION_CONTRADICTION = (
     'Review for semantic contradiction with the cited related unit(s); '
@@ -267,6 +282,225 @@ def make_schema_drift_check(
             related_unit_ids=[],
             extra_evidence={'drift_kind': drift_kind},
             lint_type=LintType.SCHEMA,
+        )
+
+    return _check
+
+
+_LOAD_FSFM_FINDING_FOR_UNIT_SQL = text("""
+    SELECT id::text AS finding_id, evidence
+    FROM maintenance_proposals
+    WHERE rule_name = 'composite_deprioritize_candidate'
+      AND target_type = 'memory_unit'
+      AND target_id = :unit_id
+      AND status = 'pending'
+      AND (vault_id = :vault_id OR vault_id IS NULL)
+    ORDER BY created_at DESC
+    LIMIT 1
+""")
+
+
+_EXISTING_WINNER_PROPOSAL_SQL = text("""
+    SELECT 1
+    FROM maintenance_proposals
+    WHERE rule_name = 'propose_contradiction_winner'
+      AND target_type = 'memory_unit'
+      AND target_id = :unit_id
+      AND status = 'pending'
+      AND (vault_id = :vault_id OR vault_id IS NULL)
+    LIMIT 1
+""")
+
+
+_LOAD_TOP_CONTRADICTS_LINK_SQL = text("""
+    SELECT
+        ml.id::text AS link_id,
+        ml.from_unit_id::text AS source_unit_id,
+        ml.weight AS weight,
+        ml.created_at AS link_created_at,
+        src.text AS source_text,
+        src.created_at AS source_created_at,
+        src.confidence AS source_confidence,
+        ((src.success_co_count + 1.0) /
+         (src.success_co_count + src.failure_co_count + 2)) AS source_mw,
+        src.note_id::text AS source_note_id,
+        src_note.metadata AS source_note_metadata
+    FROM memory_links ml
+    JOIN memory_units src ON src.id = ml.from_unit_id
+    LEFT JOIN notes src_note ON src_note.id = src.note_id
+    WHERE ml.to_unit_id = :unit_id
+      AND ml.vault_id = :vault_id
+      AND src.vault_id = :vault_id
+      AND ml.link_type = 'contradicts'
+      AND src.status = 'active'
+    ORDER BY ml.weight DESC, ml.created_at DESC
+    LIMIT 1
+""")
+
+
+_LOAD_UNIT_WITH_NOTE_SQL = text("""
+    SELECT
+        mu.text AS unit_text,
+        mu.created_at AS unit_created_at,
+        mu.confidence AS unit_confidence,
+        ((mu.success_co_count + 1.0) /
+         (mu.success_co_count + mu.failure_co_count + 2)) AS unit_mw,
+        mu.note_id::text AS note_id,
+        n.metadata AS note_metadata
+    FROM memory_units mu
+    LEFT JOIN notes n ON n.id = mu.note_id
+    WHERE mu.id = :unit_id
+""")
+
+
+def _authority_from_metadata(metadata: Any) -> str:
+    if not isinstance(metadata, dict):
+        return ''
+    for key in ('authority', 'source_authority', 'template'):
+        v = metadata.get(key)
+        if isinstance(v, str) and v.strip():
+            return v
+    return ''
+
+
+def make_propose_contradiction_winner_check(
+    lm: dspy.LM,
+    *,
+    min_confidence: float = 0.6,
+) -> RunLLMCheck:
+    """Build a ``RunLLMCheck`` that wraps :class:`ProposeContradictionWinner`.
+
+    Operates as a follow-on to FSFM lint: only fires on units that already
+    carry a pending ``composite_deprioritize_candidate`` finding whose
+    ``flag_reason`` ∈ {``low_credibility_contradiction_only``,
+    ``components_disagree``}. Locates the highest-pressure inbound
+    ``contradicts`` link, loads both units and their source-note
+    authority labels, and asks the LLM to nominate a winner + an action.
+
+    Returns ``None`` when no qualifying FSFM finding exists, when a
+    winner-proposal is already pending for the unit, when the LLM
+    returns ``inconclusive`` below ``min_confidence``, or when the
+    contradicting peer cannot be located.
+    """
+    predictor = dspy.Predict(ProposeContradictionWinner)
+
+    async def _check(
+        unit_id: UUID,
+        vault_id: UUID,
+        session: AsyncSession,
+        context: CheckContext | None = None,
+    ) -> LLMLintFinding | None:
+        fsfm_row = (
+            await session.execute(
+                _LOAD_FSFM_FINDING_FOR_UNIT_SQL,
+                {'unit_id': str(unit_id), 'vault_id': str(vault_id)},
+            )
+        ).first()
+        if fsfm_row is None:
+            return None
+        evidence = fsfm_row.evidence or {}
+        flag_reason = str(evidence.get('flag_reason') or '')
+        if flag_reason not in _QUALIFYING_FLAG_REASONS:
+            return None
+
+        existing = (
+            await session.execute(
+                _EXISTING_WINNER_PROPOSAL_SQL,
+                {'unit_id': str(unit_id), 'vault_id': str(vault_id)},
+            )
+        ).first()
+        if existing is not None:
+            return None
+
+        peer_row = (
+            await session.execute(
+                _LOAD_TOP_CONTRADICTS_LINK_SQL,
+                {'unit_id': str(unit_id), 'vault_id': str(vault_id)},
+            )
+        ).first()
+        if peer_row is None:
+            return None
+
+        loser_row = (
+            await session.execute(
+                _LOAD_UNIT_WITH_NOTE_SQL,
+                {'unit_id': str(unit_id)},
+            )
+        ).first()
+        if loser_row is None or loser_row.unit_text is None:
+            return None
+
+        prediction = await _llm.run_dspy_operation(
+            lm=lm,
+            predictor=predictor,
+            input_kwargs={
+                'unit_a_text': str(peer_row.source_text or ''),
+                'unit_b_text': str(loser_row.unit_text),
+                'unit_a_created_at': (
+                    peer_row.source_created_at.isoformat()
+                    if peer_row.source_created_at is not None
+                    else ''
+                ),
+                'unit_b_created_at': (
+                    loser_row.unit_created_at.isoformat()
+                    if loser_row.unit_created_at is not None
+                    else ''
+                ),
+                'unit_a_source_credibility': float(peer_row.source_mw or 0.0),
+                'unit_b_source_credibility': float(loser_row.unit_mw or 0.0),
+                'unit_a_source_authority': _authority_from_metadata(peer_row.source_note_metadata),
+                'unit_b_source_authority': _authority_from_metadata(loser_row.note_metadata),
+                'fsfm_evidence': dict(evidence),
+            },
+            operation_name='lint_llm.propose_contradiction_winner',
+        )
+
+        confidence = float(getattr(prediction, 'confidence', 0.0) or 0.0)
+        action = str(getattr(prediction, 'action', 'inconclusive') or 'inconclusive')
+        winner_id_label = str(getattr(prediction, 'winner_id', 'inconclusive') or 'inconclusive')
+        loser_id_label = str(getattr(prediction, 'loser_id', 'none') or 'none')
+        rationale = str(getattr(prediction, 'rationale', '') or '')
+
+        if winner_id_label == 'inconclusive' and confidence < min_confidence:
+            return None
+
+        if winner_id_label == 'unit_a':
+            resolved_winner_unit_id = peer_row.source_unit_id
+            resolved_loser_unit_id = str(unit_id)
+        elif winner_id_label == 'unit_b':
+            resolved_winner_unit_id = str(unit_id)
+            resolved_loser_unit_id = peer_row.source_unit_id
+        else:
+            resolved_winner_unit_id = None
+            resolved_loser_unit_id = str(unit_id)
+
+        target_id = resolved_loser_unit_id or str(unit_id)
+
+        extra_evidence: dict[str, Any] = {
+            'linked_to_finding': str(fsfm_row.finding_id),
+            'flag_reason': flag_reason,
+            'winner_id': winner_id_label,
+            'loser_id': loser_id_label,
+            'winner_unit_id': resolved_winner_unit_id,
+            'loser_unit_id': resolved_loser_unit_id,
+            'peer_unit_id': peer_row.source_unit_id,
+            'link_id': peer_row.link_id,
+            'confidence': confidence,
+            'action': action,
+            'rationale': rationale,
+        }
+
+        return LLMLintFinding(
+            rule_name=_RULE_PROPOSE_CONTRADICTION_WINNER,
+            check_type='propose_contradiction_winner',
+            target_type='memory_unit',
+            target_id=target_id,
+            suggested_action=_SUGGESTED_ACTION_PROPOSE_WINNER,
+            surprise_score=0.0,
+            explanation=rationale,
+            related_unit_ids=[peer_row.source_unit_id],
+            extra_evidence=extra_evidence,
+            lint_type=LintType.QUALITY,
         )
 
     return _check

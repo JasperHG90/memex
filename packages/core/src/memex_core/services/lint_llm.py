@@ -292,6 +292,32 @@ _SELECT_TICK_CANDIDATES_SQL = text("""
 """)
 
 
+_SELECT_PROPOSE_WINNER_CANDIDATES_SQL = text("""
+    SELECT (fsfm.target_id)::uuid AS unit_id
+    FROM maintenance_proposals fsfm
+    JOIN memory_units mu ON mu.id::text = fsfm.target_id
+    WHERE fsfm.rule_name = 'composite_deprioritize_candidate'
+      AND fsfm.target_type = 'memory_unit'
+      AND fsfm.status = 'pending'
+      AND fsfm.vault_id = :vault_id
+      AND mu.vault_id = :vault_id
+      AND mu.status = 'active'
+      AND (fsfm.evidence ->> 'flag_reason') IN (
+          'low_credibility_contradiction_only', 'components_disagree'
+      )
+      AND NOT EXISTS (
+          SELECT 1 FROM maintenance_proposals p
+          WHERE p.rule_name = 'propose_contradiction_winner'
+            AND p.target_type = 'memory_unit'
+            AND p.target_id = fsfm.target_id
+            AND p.vault_id = :vault_id
+            AND p.status = 'pending'
+      )
+    ORDER BY fsfm.created_at DESC
+    LIMIT :limit
+""")
+
+
 # ---------------------------------------------------------------------------
 # Service
 # ---------------------------------------------------------------------------
@@ -853,4 +879,61 @@ class LintLLMService(BaseService):
                 summary.deferred += 1
             if outcome.finding_emitted:
                 summary.findings_emitted += 1
+        return summary
+
+    async def tick_propose_winner(
+        self,
+        vault_id: UUID,
+        *,
+        run_llm_check: RunLLMCheck,
+    ) -> LintLLMTickSummary:
+        """Dedicated tick for the contradiction-winner-proposal rule.
+
+        Picks candidate units from pending ``composite_deprioritize_candidate``
+        FSFM findings whose ``flag_reason`` qualifies (escalation-only
+        patterns: ``low_credibility_contradiction_only`` or
+        ``components_disagree``). Bypasses the surprise / polarity gates —
+        the FSFM finding's existence is the gate. Quota is still enforced.
+
+        Ordered AFTER the FSFM rule-based lint pass so the candidate pool is
+        populated before this tick runs.
+        """
+        summary = LintLLMTickSummary(vault_id=vault_id)
+        settings = self._settings
+        if not settings.enabled or settings.cost_cap_per_24h <= 0:
+            return summary
+
+        async with self.metastore.session() as session:
+            rows = await session.execute(
+                _SELECT_PROPOSE_WINNER_CANDIDATES_SQL,
+                {
+                    'vault_id': str(vault_id),
+                    'limit': settings.units_per_tick,
+                },
+            )
+            candidates: list[UUID] = [r.unit_id for r in rows]
+
+        for unit_id in candidates:
+            async with self.metastore.session() as session:
+                try:
+                    admitted = await self.check_and_increment_quota(vault_id, session=session)
+                    if not admitted:
+                        summary.deferred += 1
+                        await session.commit()
+                        continue
+                    finding = await _invoke_check(run_llm_check, unit_id, vault_id, session, None)
+                    if finding is not None:
+                        inserted = await self.write_finding(finding, vault_id, session=session)
+                        if inserted:
+                            summary.findings_emitted += 1
+                    await session.commit()
+                except Exception:
+                    await session.rollback()
+                    logger.exception(
+                        'tick_propose_winner: failed for unit %s in vault %s',
+                        unit_id,
+                        vault_id,
+                    )
+                    continue
+            summary.candidates_evaluated += 1
         return summary

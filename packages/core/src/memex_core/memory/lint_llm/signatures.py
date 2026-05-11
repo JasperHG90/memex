@@ -22,9 +22,21 @@ sign-of-meaning signal (NLI label) available.
 
 from __future__ import annotations
 
+from typing import Any, Literal
+
 import dspy
+from pydantic import field_validator
 
 from memex_core.memory.lint_llm.types import PolarityLiteral
+
+WinnerLiteral = Literal['unit_a', 'unit_b', 'inconclusive']
+LoserLiteral = Literal['unit_a', 'unit_b', 'none']
+ResolutionActionLiteral = Literal[
+    'mark_loser_stale',
+    'supersede_loser_note',
+    'refine_not_contradict',
+    'inconclusive',
+]
 
 
 class CheckSemanticContradiction(dspy.Signature):
@@ -121,3 +133,88 @@ class CheckSchemaDrift(dspy.Signature):
             'mismatch. Empty when has_drift is False.'
         )
     )
+
+
+class ProposeContradictionWinner(dspy.Signature):
+    """Given two memory units flagged by FSFM lint as in tension, propose
+    which one should win, the recommended action, and a calibrated
+    confidence.
+
+    Inputs include the two units' text plus per-side recency and source
+    metadata so the LLM can reason about authority and freshness. The
+    fsfm_evidence field carries the upstream finding's evidence payload
+    (flag_reason, component scores) so the proposal is anchored in the
+    same signals the human reviewer sees.
+
+    STRICT RULES:
+    - Only propose ``mark_loser_stale`` when one unit is clearly wrong
+      and the other clearly right. The loser must be the older / lower-
+      authority unit unless authority strongly inverts.
+    - Use ``supersede_loser_note`` when the winner's source note is a
+      genuinely newer recording of the same fact and the agent wants the
+      parent note marked superseded (not just the unit).
+    - Use ``refine_not_contradict`` when the units are compatible
+      refinements (different aspects of the same fact), NOT semantic
+      inversions.
+    - Use ``inconclusive`` when the signal is too weak to judge.
+    """
+
+    unit_a_text: str = dspy.InputField(desc='Text of the first memory unit (unit_a).')
+    unit_b_text: str = dspy.InputField(desc='Text of the second memory unit (unit_b).')
+    unit_a_created_at: str = dspy.InputField(
+        desc='ISO-8601 created_at of unit_a (string form for prompt-friendly serialisation).'
+    )
+    unit_b_created_at: str = dspy.InputField(desc='ISO-8601 created_at of unit_b.')
+    unit_a_source_credibility: float = dspy.InputField(
+        desc='Memory Worth posterior of unit_a (0..1). Higher = more credible.'
+    )
+    unit_b_source_credibility: float = dspy.InputField(
+        desc='Memory Worth posterior of unit_b (0..1). Higher = more credible.'
+    )
+    unit_a_source_authority: str = dspy.InputField(
+        desc=(
+            "Free-text authority label for unit_a's source note "
+            "(e.g. 'official-doc', 'chat-log', 'user-edit'). Empty when unknown."
+        )
+    )
+    unit_b_source_authority: str = dspy.InputField(
+        desc="Free-text authority label for unit_b's source note. Empty when unknown."
+    )
+    fsfm_evidence: dict[str, Any] = dspy.InputField(
+        desc=(
+            'Evidence payload from the upstream FSFM finding — includes '
+            'flag_reason and the component score breakdown.'
+        )
+    )
+
+    winner_id: WinnerLiteral = dspy.OutputField(
+        desc="Which unit wins: 'unit_a' | 'unit_b' | 'inconclusive'."
+    )
+    loser_id: LoserLiteral = dspy.OutputField(
+        desc=("Which unit loses: 'unit_a' | 'unit_b' | 'none'. 'none' when winner is inconclusive.")
+    )
+    rationale: str = dspy.OutputField(
+        desc='One- or two-sentence English justification anchored in the inputs.'
+    )
+    confidence: float = dspy.OutputField(
+        desc='Calibrated confidence in the proposal (clamped to [0.0, 1.0]).'
+    )
+    action: ResolutionActionLiteral = dspy.OutputField(
+        desc=(
+            "Recommended resolution action: 'mark_loser_stale' | "
+            "'supersede_loser_note' | 'refine_not_contradict' | 'inconclusive'."
+        )
+    )
+
+    @field_validator('confidence', mode='before')
+    @classmethod
+    def _clamp_confidence(cls, v: Any) -> float:
+        try:
+            f = float(v)
+        except (TypeError, ValueError):
+            return 0.0
+        if f < 0.0:
+            return 0.0
+        if f > 1.0:
+            return 1.0
+        return f
