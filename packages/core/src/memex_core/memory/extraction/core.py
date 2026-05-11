@@ -59,8 +59,22 @@ class ExtractSemanticFacts(dspy.Signature):
     """
     Extract semantic facts from text chunks. Output in ENGLISH.
     Use 'event_date_ref' for relative dates. Each fact needs intent_class
-    and risk_class:
-    intent_class: permanent (never-decay), durable (default), ephemeral (short-lived).
+    and risk_class.
+
+    intent_class — durability (not importance). Decide by asking:
+    will this fact still be true / relevant in 4+ weeks?
+      - 'permanent': identity, long-standing preferences, values.
+        Signals: "I am", "I prefer", "I always", "I never", "my goal".
+      - 'durable' (DEFAULT): decisions, ongoing project state, role
+        assignments, relationships. Signals: "we decided", "the team
+        owns", "we use", "the lead is", "today we announced".
+      - 'ephemeral': short-lived tasks, deadlines, transient blockers
+        whose CONTENT decays (a one-day blocker). Signals: "by EOD",
+        "blocked by", "right now", "this sprint".
+    Never classify identity / preference / decision facts as ephemeral
+    just because a transient prefix like "today" appears in the
+    surrounding text.
+
     risk_class: none (default), sensitive (flagged), private (excluded from retrieval), safety (blocked).
     """
 

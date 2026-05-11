@@ -10,6 +10,24 @@ Requires a running Memex server (default: `http://localhost:8000/api/v1/`).
 
 For LLM-judged checks, set `GOOGLE_API_KEY` in your environment (uses Gemini via dspy).
 
+### Hermes integration suite
+
+The `agent_integration` suite drives the Nous Hermes Agent against the
+`memex-hermes-plugin` to verify the integration end-to-end. It needs
+both `hermes-agent` (a Python library) and `memex-hermes-plugin`
+(workspace package), neither of which ships in the default sync:
+
+```bash
+uv sync --extra hermes --group hermes-integration
+```
+
+Plus an LLM API key for the Hermes agent itself. The backend routes by
+model prefix — `GOOGLE_API_KEY` for `gemini/*` (default),
+`ANTHROPIC_API_KEY` for `anthropic/*`, `OPENAI_API_KEY` for `openai/*`,
+`OPENROUTER_API_KEY` for `openrouter/*`. See
+`packages/eval/src/memex_eval/suites/agent_integration/README.md` for
+details.
+
 ## Usage
 
 ### Internal benchmark
@@ -42,6 +60,35 @@ Or via justfile:
 just benchmark-internal       # full benchmark
 just benchmark-internal-fast  # deterministic only (no LLM judge)
 ```
+
+### Suite framework
+
+The Suite framework (`memex-eval suite ...`) bundles sources, scenarios, and metadata per benchmark area (`basic_extraction`, `contradiction`, `entity_resolution`, `temporal`, `agent_integration`). Full surface: [`docs/how-to/evaluation-suite.md`](../../docs/how-to/evaluation-suite.md).
+
+```bash
+# Run one suite end-to-end
+memex-eval suite run basic_extraction
+
+# Sweep a knob across a grid
+memex-eval suite sweep basic_extraction --param server.memory.retrieval.reranking_mw_alpha=0.0,0.5,1.0
+```
+
+#### Snapshot cache — skip extraction on reruns
+
+Every suite run normally re-ingests sources and re-runs LLM extraction. With `--from-snapshot=auto` the runner caches the post-extraction vault (keyed by `(suite_name, sources_hash)`) and imports it on subsequent runs:
+
+```bash
+# First run misses the cache → ingest + extract + populate
+memex-eval suite run basic_extraction --from-snapshot=auto
+
+# Subsequent runs hit the cache → import only, no LLM extraction
+memex-eval suite run basic_extraction --from-snapshot=auto
+
+# Force re-extraction (e.g. after extraction-affecting code changes)
+memex-eval suite run basic_extraction --from-snapshot=auto --reingest
+```
+
+Snapshot import/export runs **in-process** in the eval runner against the same Postgres + FileStore the server is configured with — there is no `eval_mode` flag, no server route, no allowlist. Reflection and the rest of the background scheduler keep running normally so reflection scenarios remain testable. Cache root defaults to `platformdirs.user_cache_dir('memex-eval', 'memex')` (e.g. `~/.cache/memex-eval/` on Linux); override with `--snapshot-cache-dir` or `MEMEX_EVAL_SNAPSHOT_ROOT`. Limitations: single-vault suites only; remote (LiteLLM) embedding backends rejected; one snapshot per DB.
 
 ### External benchmarks (LoCoMo)
 

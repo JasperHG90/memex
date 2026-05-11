@@ -45,6 +45,7 @@ from memex_core.server.stats import router as stats_router
 from memex_core.server.health import router as health_router
 from memex_core.server.summary import router as summary_router
 from memex_core.server.survey import router as survey_router
+from memex_core.server.system_routes import router as system_router
 from memex_core.server.session_briefing import router as session_briefing_router
 from memex_core.server.vault_summary import router as vault_summary_router
 from memex_core.server.vaults import router as vaults_router
@@ -52,6 +53,7 @@ from memex_core.memory.retrieval._offload import (
     configure_offload_semaphores,
     get_embedding_semaphore,
     get_ner_semaphore,
+    get_nli_semaphore,
     get_reranker_semaphore,
 )
 from memex_core.scheduler import run_scheduler_with_leader_election
@@ -60,10 +62,11 @@ from memex_core.storage.metastore import get_metastore
 from memex_core.instrument import _instrument
 from memex_core.wedge_watchdog import configure_from_settings, shutdown_watchdog
 from memex_core.memory.models import (
-    get_embedding_model,
-    get_reranking_model,
-    get_ner_model,
     configure_cache_dir,
+    get_embedding_model,
+    get_ner_model,
+    get_nli_model,
+    get_reranking_model,
 )
 
 logger = logging.getLogger('memex.core.server')
@@ -71,7 +74,8 @@ logger = logging.getLogger('memex.core.server')
 # Parse CORS config at module level (middleware must be added before app starts).
 # The full config is re-parsed in lifespan() so test fixtures can set env vars
 # before the server starts.
-_cors_config = parse_memex_config().server.cors
+_module_config = parse_memex_config()
+_cors_config = _module_config.server.cors
 
 
 @asynccontextmanager
@@ -148,6 +152,27 @@ async def lifespan(app: FastAPI):
             await asyncio.to_thread(reranking_model.score, 'warmup', _warmup_text)
     async with get_ner_semaphore(), _instrument('ner'):
         await asyncio.to_thread(ner_model.predict, _warmup_text[0])
+
+    # P11.2: NLI lazy-loaded by default — fires on first lint_llm tick.
+    # Eager-load when polarity gate is enabled so the on-demand
+    # /lint/llm/run endpoint and the first scheduler tick both have NLI
+    # ready immediately. Failure is non-fatal: lazy-load remains the
+    # fallback, and get_nli_model invalidates partial cache state on
+    # construction failure (see nli.py:74-97).
+    if config.server.memory.lint_llm.polarity.enabled:
+        try:
+            nli_model = await get_nli_model(config.server.memory.lint_llm.polarity)
+            if nli_model is not None:
+                async with get_nli_semaphore(), _instrument('nli'):
+                    await nli_model.classify('warmup premise', 'warmup hypothesis')
+                logger.info('NLI model warmed.')
+            else:
+                logger.info(
+                    'NLI polarity enabled but backend returned None '
+                    '(e.g. DisabledBackend); skipping warmup.'
+                )
+        except Exception as e:  # noqa: BLE001 — warmup is best-effort
+            logger.warning('NLI warmup failed (will lazy-load on first lint_llm tick): %s', e)
     logger.info('ONNX model arenas warmed.')
 
     # Validate embedding dimensions match the database schema.
@@ -350,3 +375,4 @@ app.include_router(session_briefing_router)
 app.include_router(diagnostics_router)
 app.include_router(lint_router)
 app.include_router(consolidation_router)
+app.include_router(system_router)

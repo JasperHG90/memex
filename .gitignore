@@ -199,3 +199,8 @@ recordings/cli/.casts/
 MagicMock/
 
 .dev-team-artifacts
+
+# Local working docs (planning / scratch — not part of the repo)
+/BACKLOG.md
+/DESIGN_DOCUMENT.md
+/EVALUATION_BACKLOG.md

@@ -22,15 +22,19 @@ from memex_common.exceptions import (
     VaultNotFoundError,
 )
 from memex_common.schemas import (
+    EntityDTO,
+    IntentClass,
     MemoryUnitDTO,
     NoteDTO,
     NoteListItemDTO,
-    EntityDTO,
+    RiskClass,
     StrategyDebugInfo,
+    SupersessionInfo,
 )
 
 from memex_core.api import MemexAPI
 from memex_core.context import get_session_id
+from memex_core.metrics import DTO_ENUM_COERCION_TOTAL
 
 logger = logging.getLogger('memex.core.server')
 
@@ -187,6 +191,56 @@ def build_entity_dto(entity: Any) -> EntityDTO:
     )
 
 
+def _coerce_intent_class(value: Any) -> IntentClass:
+    """Coerce a raw intent_class string to an IntentClass enum.
+
+    SQL CHECK constraint at sql_models.py blocks invalid writes today; this
+    is defense-in-depth for future schema drift. Unrecognised values are
+    mapped to DURABLE with a warning + Prometheus counter increment.
+    """
+    if value is None:
+        return IntentClass.DURABLE
+    try:
+        return IntentClass(value)
+    except (ValueError, TypeError):
+        logger.warning('Unrecognised intent_class %r in DTO ctor → durable.', value)
+        DTO_ENUM_COERCION_TOTAL.labels(field='intent_class', reason='invalid').inc()
+        return IntentClass.DURABLE
+
+
+def _coerce_risk_class(value: Any) -> RiskClass:
+    if value is None:
+        return RiskClass.NONE
+    try:
+        return RiskClass(value)
+    except (ValueError, TypeError):
+        logger.warning('Unrecognised risk_class %r in DTO ctor → none.', value)
+        DTO_ENUM_COERCION_TOTAL.labels(field='risk_class', reason='invalid').inc()
+        return RiskClass.NONE
+
+
+def _extract_superseded_by(unit: Any) -> list[SupersessionInfo] | None:
+    """Read supersession entries from unit.unit_metadata['superseded_by'].
+
+    Populated only by the search engine (engine.py:1340-1362) which writes a
+    list of dicts ``{unit_id, unit_text, note_title, relation}``. Single-unit
+    fetch endpoints don't populate this — None is the correct default there.
+    """
+    meta = getattr(unit, 'unit_metadata', None) or {}
+    raw = meta.get('superseded_by') if isinstance(meta, dict) else None
+    if not raw:
+        return None
+    out: list[SupersessionInfo] = []
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        try:
+            out.append(SupersessionInfo(**entry))
+        except (ValueError, TypeError) as exc:
+            logger.warning('Skipping malformed supersession entry: %s', exc)
+    return out or None
+
+
 def build_memory_unit_dto(
     unit: Any,
     *,
@@ -197,6 +251,10 @@ def build_memory_unit_dto(
     Handles all field variations across retrieval, mentions, and single-unit
     endpoints.  Optional ``debug`` flag controls whether per-strategy
     attribution data is included.
+
+    Confidence-variance is intentionally NOT passed: the DTO defaults to
+    _MAX_VARIANCE, preserving the cold-start invariant (variance derived
+    from confidence + evidence_count via mean_and_variance, not stored).
     """
     doc_id = getattr(unit, 'note_id', None)
     source_docs: list[UUID] = [doc_id] if doc_id else []
@@ -231,6 +289,14 @@ def build_memory_unit_dto(
         score=getattr(unit, 'score', None),
         chunk_id=getattr(unit, 'chunk_id', None),
         confidence=getattr(unit, 'confidence', 1.0) or 1.0,
+        confidence_evidence_count=getattr(unit, 'confidence_evidence_count', 0) or 0,
+        intent_class=_coerce_intent_class(getattr(unit, 'intent_class', None)),
+        risk_class=_coerce_risk_class(getattr(unit, 'risk_class', None)),
+        last_outcome_at=getattr(unit, 'last_outcome_at', None),
+        success_co_count=getattr(unit, 'success_co_count', 0) or 0,
+        failure_co_count=getattr(unit, 'failure_co_count', 0) or 0,
+        is_deprioritized=bool(getattr(unit, 'is_deprioritized', False)),
+        superseded_by=_extract_superseded_by(unit),
         debug_info=debug_info,
     )
 

@@ -1849,6 +1849,17 @@ class ServerConfig(BaseModel):
             'docs/how-to/memory-budget.md.'
         ),
     )
+    nli_max_concurrency: int = Field(
+        default=16,
+        ge=1,
+        description=(
+            'Max concurrent NLI classify() calls. Used by the lint_llm '
+            'polarity gate (scheduler tick) and the on-demand '
+            '/api/v1/lint/llm/run/{vault_id} endpoint. Default tuned for '
+            'capable hosts. Reduce on memory-constrained hosts (sister to '
+            'reranker_max_concurrency — same compute path).'
+        ),
+    )
     reranker_call_timeout: int = Field(
         default=30,
         ge=1,

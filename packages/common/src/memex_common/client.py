@@ -312,6 +312,7 @@ class RemoteMemexAPI:
         strategies: list[str] | None = None,
         include_stale: bool = False,
         include_superseded: bool = False,
+        include_deprioritized: bool = False,
         after: dt.datetime | None = None,
         before: dt.datetime | None = None,
         tags: list[str] | None = None,
@@ -338,6 +339,7 @@ class RemoteMemexAPI:
             strategies=strategies,
             include_stale=include_stale,
             include_superseded=include_superseded,
+            include_deprioritized=include_deprioritized,
             after=after,
             before=before,
             tags=tags,
@@ -809,6 +811,32 @@ class RemoteMemexAPI:
         }
         result = await self._post('memories/by-chunks', body)
         return [MemoryUnitDTO(**r) for r in result]
+
+    async def list_memory_units_by_note(
+        self,
+        note_id: UUID | str,
+        vault_id: UUID | str,
+    ) -> list[MemoryUnitDTO]:
+        """Fetch memory units belonging to a note (vault-scoped).
+
+        Used by the eval suite to resolve note_keys to unit IDs after
+        ingestion. The server enforces vault-scoping; passing a vault_id
+        the caller's API key is not authorized for returns 403.
+        """
+        result = await self._get(
+            f'notes/{note_id}/memory_units', params={'vault_id': str(vault_id)}
+        )
+        return [MemoryUnitDTO(**r) for r in result]
+
+    async def get_system_config(self) -> dict[str, Any]:
+        """Fetch the resolved server config with secrets redacted.
+
+        Admin-only — the server requires an admin API key. The returned
+        shape mirrors ``MemexConfig.model_dump(mode='json')`` with secret
+        leaves replaced by ``'<redacted>'`` and sibling ``<key>_set``
+        booleans added.
+        """
+        return await self._get('system/config')
 
     async def delete_memory_unit(self, unit_id: UUID) -> bool:
         """Delete a memory unit and all associated data."""
@@ -1293,6 +1321,26 @@ class RemoteMemexAPI:
     async def lint_resolve(self, finding_id: str) -> dict[str, Any]:
         """Flip a pending finding to ``resolved``."""
         return await self._post(f'lint/findings/{finding_id}/resolve', {})
+
+    async def run_lint_rules(self, vault_id: str | UUID) -> dict[str, Any]:
+        """Synchronously run the V1 lint rule registry for ``vault_id``.
+
+        Mirrors the periodic scheduler's lint task — same entrypoint, same
+        idempotent insert. Used by the eval-suite ``lint_run`` setup
+        action so lint findings are deterministically present before a
+        scenario asserts on them.
+        """
+        return await self._post(f'lint/run/{vault_id}', {})
+
+    async def run_lint_llm(self, vault_id: str | UUID) -> dict[str, Any]:
+        """Synchronously run the LLM-gated lint pass for ``vault_id``.
+
+        Mirrors the periodic scheduler's lint_llm task. Returns 503 when
+        ``lint_llm.enabled=False`` or ``cost_cap_per_24h=0``. NLI is eager
+        loaded at server startup when ``polarity.enabled=True``; otherwise
+        this call lazy-loads NLI on first invocation.
+        """
+        return await self._post(f'lint/llm/run/{vault_id}', {})
 
     async def lint_get_flags(
         self,

@@ -114,6 +114,29 @@ class StatsService(BaseService):
             result = await session.exec(stmt)
             return list(result.all())
 
+    async def list_memory_units_by_note(
+        self,
+        note_id: UUID,
+        vault_id: UUID,
+    ) -> list[Any]:
+        """Return all memory units whose ``note_id`` matches, scoped to ``vault_id``.
+
+        Vault-scoping is mandatory — the same note_id could exist in another
+        vault under a different lifecycle and must not leak across.
+        Backed by ``idx_memory_units_note_id``.
+        """
+        from sqlmodel import select
+
+        from memex_core.memory.sql_models import MemoryUnit
+
+        async with self.metastore.session() as session:
+            stmt = select(MemoryUnit).where(
+                MemoryUnit.note_id == note_id,
+                MemoryUnit.vault_id == vault_id,
+            )
+            result = await session.exec(stmt)
+            return list(result.all())
+
     async def delete_memory_unit(self, unit_id: UUID) -> bool:
         """Delete a memory unit and all associated data.
 

@@ -3,7 +3,10 @@ Vault Management Commands.
 """
 
 import json
+from pathlib import Path
 from typing import Annotated
+from uuid import UUID
+
 import typer
 from rich.console import Console
 from rich.table import Table
@@ -19,6 +22,13 @@ app = typer.Typer(
     help='Manage Memex Vaults (scopes).',
     no_args_is_help=True,
 )
+
+snapshot_app = typer.Typer(
+    name='snapshot',
+    help='Vault snapshot export (one-way; downstream consumers).',
+    no_args_is_help=True,
+)
+app.add_typer(snapshot_app, name='snapshot')
 
 
 @app.command('list')
@@ -423,3 +433,120 @@ async def vault_summary(
                 ent.get('name', ''), ent.get('type', ''), str(ent.get('mention_count', 0))
             )
         console.print(ent_table)
+
+
+@snapshot_app.command('export')
+@async_command
+async def snapshot_export(
+    ctx: typer.Context,
+    vault: Annotated[
+        str,
+        typer.Argument(help='Vault name or UUID to export.'),
+    ],
+    output: Annotated[
+        Path,
+        typer.Option('--output', '-o', help='Directory to write the snapshot into.'),
+    ],
+) -> None:
+    """Export a vault snapshot to a local directory.
+
+    Produces a self-describing snapshot (manifest.json + per-table JSONL +
+    note bodies + assets) ready for downstream consumption (analytics,
+    eval suites, ML pipelines). The output directory is created if it
+    doesn't exist; existing files inside it may be overwritten.
+
+    Refuses the global vault and any vault named 'global' / 'default'.
+    """
+    config: MemexConfig = ctx.obj
+
+    try:
+        import memex_core  # noqa: F401
+    except ImportError:
+        console.print(
+            "[bold red]Error:[/bold red] Snapshot export requires the 'memex-cli[server]' extra "
+            '(needs memex-core).'
+        )
+        raise typer.Exit(1)
+
+    from memex_common.config import LitellmEmbeddingBackend, OnnxBackend
+    from memex_core.memory.sql_models import EMBEDDING_DIMENSION
+    from memex_core.services.snapshot import SnapshotExporter
+    from memex_core.services.snapshot.exporter import SnapshotExportError
+    from memex_core.services.snapshot.manifest import EmbeddingModelIdentity
+    from memex_core.storage.filestore import get_filestore
+    from memex_core.storage.metastore import AsyncPostgresMetaStoreEngine
+
+    # Resolve the vault selector (UUID or name) — accept either form.
+    selector: str | UUID
+    try:
+        selector = UUID(vault)
+    except ValueError:
+        selector = vault
+
+    # Path safety: refuse symlinks and verify the resolved path lies
+    # outside privileged system directories. The CLI runs with the user's
+    # privileges (no service-side trust), but a malicious or careless
+    # --output ../../../etc would still corrupt user-writable system
+    # files.
+    output_path = output.expanduser().resolve()
+    if output.is_symlink():
+        console.print(f'[bold red]Refusing to export into a symlinked path:[/bold red] {output}')
+        raise typer.Exit(1)
+    for forbidden in ('/etc', '/usr', '/bin', '/sbin', '/proc', '/sys', '/dev', '/boot'):
+        try:
+            if output_path.is_relative_to(Path(forbidden)):
+                console.print(
+                    f'[bold red]Refusing to export into a system directory:[/bold red] {output_path}'
+                )
+                raise typer.Exit(1)
+        except ValueError:
+            continue
+    output_path.mkdir(parents=True, exist_ok=True)
+
+    # Build the embedding-model identity from the live server config so the
+    # manifest reflects what was actually used to extract embeddings in the
+    # source DB — not the registry default. V12 import refuses on mismatch.
+    embedding_cfg = config.server.embedding_model
+    if isinstance(embedding_cfg, OnnxBackend) or embedding_cfg is None:
+        from memex_core.memory.models.base import MODEL_REGISTRY
+
+        spec = MODEL_REGISTRY['embedding']
+        embedding_identity = EmbeddingModelIdentity(
+            name=str(spec.repo_id), dim=EMBEDDING_DIMENSION, hash=str(spec.revision)
+        )
+    elif isinstance(embedding_cfg, LitellmEmbeddingBackend):
+        # The dim is unknown for LiteLLM backends ahead of a probe call;
+        # record what we know and let V12 decide whether to refuse.
+        embedding_identity = EmbeddingModelIdentity(
+            name=f'litellm/{embedding_cfg.model}', dim=EMBEDDING_DIMENSION, hash=''
+        )
+    else:
+        console.print(f'[bold red]Unknown embedding backend type:[/bold red] {type(embedding_cfg)}')
+        raise typer.Exit(1)
+
+    engine = AsyncPostgresMetaStoreEngine(config=config.server.meta_store)
+    await engine.connect(create_schema=False)
+    try:
+        filestore = get_filestore(config.server.file_store)
+        async with engine.session() as session:
+            exporter = SnapshotExporter(
+                session=session,
+                filestore=filestore,
+                vault_id_or_name=selector,
+                output_dir=output_path,
+                embedding_model=embedding_identity,
+            )
+            try:
+                manifest = await exporter.export()
+            except SnapshotExportError as e:
+                console.print(f'[bold red]Snapshot export failed:[/bold red] {e}')
+                raise typer.Exit(1) from e
+        console.print(
+            f'[green]Wrote snapshot[/green] (version {manifest.snapshot_version}) '
+            f'for vault [bold]{manifest.source_vault_name}[/bold] '
+            f'to [cyan]{output_path}[/cyan]'
+        )
+        for table, count in sorted(manifest.table_counts.items()):
+            console.print(f'  {table}: {count}')
+    finally:
+        await engine.close()

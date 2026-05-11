@@ -3144,6 +3144,7 @@ docs = [
 ]
 hermes-integration = [
     { name = "hermes-agent" },
+    { name = "memex-hermes-plugin" },
 ]
 
 [package.metadata]
@@ -3181,7 +3182,10 @@ dev = [
     { name = "types-dateparser", specifier = ">=1.3.0.20260211" },
 ]
 docs = [{ name = "zensical", specifier = ">=0.0.25" }]
-hermes-integration = [{ name = "hermes-agent", git = "https://github.com/NousResearch/hermes-agent.git?branch=main" }]
+hermes-integration = [
+    { name = "hermes-agent", git = "https://github.com/NousResearch/hermes-agent.git?branch=main" },
+    { name = "memex-hermes-plugin", editable = "packages/hermes-plugin" },
+]
 
 [[package]]
 name = "memex-cli"
@@ -3283,6 +3287,7 @@ dependencies = [
     { name = "metaphone" },
     { name = "onnxruntime" },
     { name = "pgvector" },
+    { name = "platformdirs" },
     { name = "prometheus-fastapi-instrumentator" },
     { name = "pydantic-settings" },
     { name = "pymupdf-layout" },
@@ -3364,6 +3369,7 @@ requires-dist = [
     { name = "opentelemetry-exporter-otlp-proto-http", marker = "extra == 'tracing'", specifier = ">=1.20.0" },
     { name = "opentelemetry-sdk", marker = "extra == 'tracing'", specifier = ">=1.20.0" },
     { name = "pgvector", specifier = ">=0.4.2" },
+    { name = "platformdirs", specifier = ">=4" },
     { name = "prometheus-fastapi-instrumentator", specifier = ">=7.1.0" },
     { name = "pydantic-settings", specifier = ">=2.12.0" },
     { name = "pymupdf-layout", specifier = ">=1.27.2" },
@@ -3400,6 +3406,10 @@ dependencies = [
     { name = "httpx" },
     { name = "matplotlib" },
     { name = "memex-common" },
+    { name = "memex-core" },
+    { name = "platformdirs" },
+    { name = "python-frontmatter" },
+    { name = "pyyaml" },
     { name = "rich" },
     { name = "seaborn" },
     { name = "sh" },
@@ -3408,6 +3418,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+hermes = [
+    { name = "memex-hermes-plugin" },
+]
 mlflow = [
     { name = "mlflow" },
 ]
@@ -3418,14 +3431,19 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "matplotlib", specifier = ">=3.10.8" },
     { name = "memex-common", editable = "packages/common" },
+    { name = "memex-core", editable = "packages/core" },
+    { name = "memex-hermes-plugin", marker = "extra == 'hermes'", editable = "packages/hermes-plugin" },
     { name = "mlflow", marker = "extra == 'mlflow'", specifier = ">=3.1" },
+    { name = "platformdirs", specifier = ">=4" },
+    { name = "python-frontmatter", specifier = ">=1.1" },
+    { name = "pyyaml", specifier = ">=6.0" },
     { name = "rich", specifier = ">=13" },
     { name = "seaborn", specifier = ">=0.13.2" },
     { name = "sh", specifier = ">=2.2.2" },
     { name = "tiktoken", specifier = ">=0.12.0" },
     { name = "typer", specifier = ">=0.12" },
 ]
-provides-extras = ["mlflow"]
+provides-extras = ["hermes", "mlflow"]
 
 [[package]]
 name = "memex-hermes-plugin"

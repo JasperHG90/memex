@@ -260,6 +260,13 @@ CLASSIFIER_BLOCKED_TOTAL = Counter(
     ['vault_id'],
 )
 
+DTO_ENUM_COERCION_TOTAL = Counter(
+    'memex_dto_enum_coercion_total',
+    'MemoryUnitDTO ctor coerced an unrecognised string to the enum default. '
+    'Indicates DB schema drift; incremented per offending unit.',
+    ['field', 'reason'],
+)
+
 # ---------------------------------------------------------------------------
 # Diagnostics metrics
 # ---------------------------------------------------------------------------

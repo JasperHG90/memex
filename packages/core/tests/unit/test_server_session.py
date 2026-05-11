@@ -72,6 +72,7 @@ def mock_lifespan_dependencies():
         config_mock.server.reranker_max_concurrency = 4
         config_mock.server.embedding_max_concurrency = 4
         config_mock.server.ner_max_concurrency = 4
+        config_mock.server.nli_max_concurrency = 4
         config_mock.server.reranker_call_timeout = 30
         config_mock.server.embedding_call_timeout = 30
         config_mock.server.ner_call_timeout = 30

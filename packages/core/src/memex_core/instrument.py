@@ -40,7 +40,7 @@ logger = logging.getLogger('memex.core.instrument')
 
 
 _EXTRACTION_STAGES = frozenset({'scan', 'refine', 'summarize', 'block_summarize'})
-_SYNC_OFFLOAD_STAGES = frozenset({'rerank', 'embed', 'ner'})
+_SYNC_OFFLOAD_STAGES = frozenset({'rerank', 'embed', 'ner', 'nli'})
 
 
 def _resolve_gauge(stage: str) -> Gauge:

@@ -241,6 +241,7 @@ def test_instrument_module_resolves_gauges_from_metrics() -> None:
     assert _resolve_gauge('rerank') is SYNC_OFFLOAD_INFLIGHT
     assert _resolve_gauge('embed') is SYNC_OFFLOAD_INFLIGHT
     assert _resolve_gauge('ner') is SYNC_OFFLOAD_INFLIGHT
+    assert _resolve_gauge('nli') is SYNC_OFFLOAD_INFLIGHT
 
 
 def _maybe_unused(_: Any) -> None:
