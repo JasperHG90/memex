@@ -68,6 +68,16 @@ Understanding-oriented articles that explain how Memex works and why it is desig
 
 ---
 
+## Design notes
+
+Decision records and design reviews for ongoing or recently-shipped subsystems.
+
+| Note | Description |
+|:-----|:------------|
+| [Note lifecycle review (post-FSFM)](design/lifecycle-review.md) | Re-evaluates the four `Note.status` lifecycle states (`active` / `superseded` / `appended` / `archived`) against the FSFM-driven `is_deprioritized` path shipped in PR #156. Per-state Keep / Consolidate / Patch recommendation (no Remove) + follow-up tickets V13–V16. |
+
+---
+
 ## Package READMEs
 
 Each package in the monorepo has its own README with package-specific details.
