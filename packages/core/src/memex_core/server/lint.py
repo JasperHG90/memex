@@ -25,6 +25,7 @@ from sqlalchemy import text
 
 from memex_common.config import Permission
 from memex_core.api import MemexAPI
+from memex_core.context import get_actor
 from memex_core.server.auth import (
     AuthContext,
     check_vault_access,
@@ -126,23 +127,20 @@ async def lint_findings(
         raise _handle_error(e, 'Failed to list lint findings')
 
 
-def _resolve_actor(auth: AuthContext | None) -> str | None:
-    """Derive a stable actor label from the auth context for audit rows.
+def _audit_actor() -> str:
+    """Return the audit-trail actor label for the current request.
 
-    Prefers the human-readable ``key_name`` (set in ApiKeyConfig.description)
-    and falls back to ``key_prefix`` so the audit trail still identifies
-    *which* key applied the resolution even when the operator forgot to
-    label it.
+    Reads from :func:`memex_core.context.get_actor`, which is set by
+    ``auth_middleware`` for authenticated requests (shape:
+    ``f'{key_name} ({key_prefix})'``). When auth is disabled, the
+    contextvar default is ``'anonymous'``; we promote that to ``'system'``
+    so the apply / reverse endpoints stay reachable in dev/test/CI and
+    the audit row still identifies the call path.
     """
-    if auth is None:
-        return None
-    key_name = getattr(auth, 'key_name', None)
-    if key_name:
-        return str(key_name)
-    key_prefix = getattr(auth, 'key_prefix', None)
-    if key_prefix:
-        return f'key:{key_prefix}'
-    return None
+    actor = get_actor()
+    if not actor or actor == 'anonymous':
+        return 'system'
+    return actor
 
 
 async def _gate_finding_for_write(
@@ -237,7 +235,7 @@ async def lint_apply(
     )
 
     finding_vault = await _gate_finding_for_write(finding_id, api, auth)
-    actor = _resolve_actor(auth)
+    actor = _audit_actor()
     try:
         return await apply_winner_proposal(api, finding_id, vault_id=finding_vault, actor=actor)
     except ContradictionResolutionError as exc:
@@ -265,7 +263,7 @@ async def lint_reverse(
     )
 
     finding_vault = await _gate_finding_for_write(finding_id, api, auth)
-    actor = _resolve_actor(auth)
+    actor = _audit_actor()
     try:
         return await reverse_winner_proposal(api, finding_id, vault_id=finding_vault, actor=actor)
     except ContradictionResolutionError as exc:

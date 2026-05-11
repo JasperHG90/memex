@@ -377,10 +377,15 @@ def make_propose_contradiction_winner_check(
     ``contradicts`` link, loads both units and their source-note
     authority labels, and asks the LLM to nominate a winner + an action.
 
-    Returns ``None`` when no qualifying FSFM finding exists, when a
-    winner-proposal is already pending for the unit, when the LLM
-    returns ``inconclusive`` below ``min_confidence``, or when the
-    contradicting peer cannot be located.
+    A finding is emitted for *any* verdict the LLM returns — including
+    ``inconclusive`` — so the audit trail records that lint ran. Confidence
+    no longer drives ``None``: a definitive ``unit_a`` / ``unit_b`` verdict
+    with ``confidence < min_confidence`` is downgraded to ``inconclusive``
+    (so the apply path is blocked) but still emitted.
+
+    Returns ``None`` only on the pre-check filters: no qualifying FSFM
+    finding for the unit, an existing pending winner-proposal for the
+    same unit, or no inbound contradicts-link peer row.
     """
     predictor = dspy.Predict(ProposeContradictionWinner)
 
@@ -461,8 +466,10 @@ def make_propose_contradiction_winner_check(
         loser_id_label = str(getattr(prediction, 'loser_id', 'none') or 'none')
         rationale = str(getattr(prediction, 'rationale', '') or '')
 
-        # Below-threshold definitive verdicts are downgraded (not dropped) so
-        # the audit trail survives while the apply path is blocked.
+        # Confidence gate is inclusive on the threshold: ``confidence >=
+        # min_confidence`` passes; strictly below ``min_confidence`` is
+        # downgraded to ``inconclusive`` (not dropped) so the audit trail
+        # survives while the apply path is blocked.
         if winner_id_label in ('unit_a', 'unit_b') and confidence < min_confidence:
             winner_id_label = 'inconclusive'
             loser_id_label = 'none'

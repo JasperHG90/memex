@@ -357,3 +357,245 @@ async def test_reverse_requires_vault_id():
             vault_id=None,
             actor='unit-test',
         )
+
+
+# ---------------------------------------------------------------------------
+# Reverse-path guards: CAS state-divergence checks and rowcount checks.
+# ---------------------------------------------------------------------------
+
+
+def _make_session_with_rowcounts(rows_and_rowcounts: list):
+    """Like ``_make_session`` but each entry is ``(row, rowcount)``.
+
+    Lets a test simulate "UPDATE matched zero rows" (deleted target) by
+    yielding a zero-rowcount Result on the appropriate UPDATE call.
+    """
+    captured: list[tuple] = []
+
+    class _Result:
+        def __init__(self, row, rowcount=1):
+            self._row = row
+            self.rowcount = rowcount
+
+        def first(self):
+            return self._row
+
+    async def execute(sql, params=None):
+        try:
+            sql_text = str(getattr(sql, 'text', sql))
+        except Exception:
+            sql_text = ''
+        captured.append((sql_text, params))
+        idx = len(captured) - 1
+        if idx < len(rows_and_rowcounts):
+            entry = rows_and_rowcounts[idx]
+            if isinstance(entry, tuple):
+                row, rowcount = entry
+                return _Result(row, rowcount=rowcount)
+            return _Result(entry)
+        return _Result(None)
+
+    session = AsyncMock()
+    session.execute = AsyncMock(side_effect=execute)
+    session.commit = AsyncMock()
+    session.rollback = AsyncMock()
+    session._captured = captured
+
+    cm = AsyncMock()
+    cm.__aenter__.return_value = session
+    cm.__aexit__.return_value = None
+    return session, cm
+
+
+def _resolved_proposal(
+    *,
+    effective_action: str,
+    loser_unit_id: str | None = None,
+    winner_unit_id: str | None = None,
+    link_id: str | None = None,
+    prior_state: dict | None = None,
+    applied_state: dict | None = None,
+):
+    """Build a resolved proposal row for reverse-path tests."""
+    return _row(
+        id=str(uuid4()),
+        vault_id='11111111-1111-1111-1111-111111111111',
+        rule_name='propose_contradiction_winner',
+        target_type='memory_unit',
+        target_id=loser_unit_id or str(uuid4()),
+        evidence=json.dumps(
+            {
+                'action': effective_action,
+                'winner_unit_id': winner_unit_id,
+                'loser_unit_id': loser_unit_id,
+                'link_id': link_id,
+                'resolution': {
+                    'action': effective_action,
+                    'effective_action': effective_action,
+                    'actor': 'unit-test',
+                    'prior_state': prior_state or {},
+                    'applied_state': applied_state or {},
+                    'applied': {'action': effective_action},
+                },
+            }
+        ),
+        status='resolved',
+    )
+
+
+@pytest.mark.asyncio
+async def test_reverse_mark_loser_stale_refuses_when_state_diverged():
+    from memex_core.services.contradiction_resolution import reverse_winner_proposal
+
+    loser_id = str(uuid4())
+    proposal = _resolved_proposal(
+        effective_action='mark_loser_stale',
+        loser_unit_id=loser_id,
+        prior_state={'loser_unit_status': 'active'},
+        applied_state={'loser_unit_status': 'stale'},
+    )
+    # Current state is 'archived' — diverged from applied 'stale'.
+    current_unit = _row(id=loser_id, status='archived', note_id=str(uuid4()))
+    session, cm = _make_session_with_rowcounts([proposal, current_unit])
+    api = _api_with_session(cm)
+
+    with pytest.raises(ContradictionResolutionError, match='diverged'):
+        await reverse_winner_proposal(
+            api,
+            uuid4(),
+            vault_id=UUID('11111111-1111-1111-1111-111111111111'),
+            actor='unit-test',
+        )
+
+
+@pytest.mark.asyncio
+async def test_reverse_supersede_loser_note_refuses_when_state_diverged():
+    from memex_core.services.contradiction_resolution import reverse_winner_proposal
+
+    loser_note = str(uuid4())
+    winner_note = str(uuid4())
+    other_note = str(uuid4())
+    proposal = _resolved_proposal(
+        effective_action='supersede_loser_note',
+        loser_unit_id=str(uuid4()),
+        winner_unit_id=str(uuid4()),
+        prior_state={'loser_note_id': loser_note, 'loser_note_superseded_by': None},
+        applied_state={'loser_note_id': loser_note, 'loser_note_superseded_by': winner_note},
+    )
+    # Current superseded_by points elsewhere — diverged.
+    current_note = _row(id=loser_note, superseded_by=other_note)
+    session, cm = _make_session_with_rowcounts([proposal, current_note])
+    api = _api_with_session(cm)
+
+    with pytest.raises(ContradictionResolutionError, match='diverged'):
+        await reverse_winner_proposal(
+            api,
+            uuid4(),
+            vault_id=UUID('11111111-1111-1111-1111-111111111111'),
+            actor='unit-test',
+        )
+
+
+@pytest.mark.asyncio
+async def test_reverse_refine_not_contradict_refuses_when_state_diverged():
+    from memex_core.services.contradiction_resolution import reverse_winner_proposal
+
+    link_id = str(uuid4())
+    proposal = _resolved_proposal(
+        effective_action='refine_not_contradict',
+        loser_unit_id=str(uuid4()),
+        winner_unit_id=str(uuid4()),
+        link_id=link_id,
+        prior_state={'link_id': link_id, 'link_type': 'contradicts'},
+        applied_state={'link_id': link_id, 'link_type': 'refines'},
+    )
+    # Link is now 'supports' — someone else mutated it after apply.
+    current_link = _row(
+        id=link_id, link_type='supports', from_unit_id=str(uuid4()), to_unit_id=str(uuid4())
+    )
+    session, cm = _make_session_with_rowcounts([proposal, current_link])
+    api = _api_with_session(cm)
+
+    with pytest.raises(ContradictionResolutionError, match='diverged'):
+        await reverse_winner_proposal(
+            api,
+            uuid4(),
+            vault_id=UUID('11111111-1111-1111-1111-111111111111'),
+            actor='unit-test',
+        )
+
+
+@pytest.mark.asyncio
+async def test_reverse_mark_loser_stale_refuses_when_unit_deleted():
+    from memex_core.services.contradiction_resolution import reverse_winner_proposal
+
+    loser_id = str(uuid4())
+    proposal = _resolved_proposal(
+        effective_action='mark_loser_stale',
+        loser_unit_id=loser_id,
+        prior_state={'loser_unit_status': 'active'},
+        applied_state={'loser_unit_status': 'stale'},
+    )
+    # Loader returns None — unit no longer exists.
+    session, cm = _make_session_with_rowcounts([proposal, None])
+    api = _api_with_session(cm)
+
+    with pytest.raises(ContradictionResolutionError, match='no longer exists'):
+        await reverse_winner_proposal(
+            api,
+            uuid4(),
+            vault_id=UUID('11111111-1111-1111-1111-111111111111'),
+            actor='unit-test',
+        )
+
+
+@pytest.mark.asyncio
+async def test_reverse_supersede_loser_note_refuses_when_note_deleted():
+    from memex_core.services.contradiction_resolution import reverse_winner_proposal
+
+    loser_note = str(uuid4())
+    winner_note = str(uuid4())
+    proposal = _resolved_proposal(
+        effective_action='supersede_loser_note',
+        loser_unit_id=str(uuid4()),
+        winner_unit_id=str(uuid4()),
+        prior_state={'loser_note_id': loser_note, 'loser_note_superseded_by': None},
+        applied_state={'loser_note_id': loser_note, 'loser_note_superseded_by': winner_note},
+    )
+    # Note loader returns None — note no longer exists.
+    session, cm = _make_session_with_rowcounts([proposal, None])
+    api = _api_with_session(cm)
+
+    with pytest.raises(ContradictionResolutionError, match='no longer exists'):
+        await reverse_winner_proposal(
+            api,
+            uuid4(),
+            vault_id=UUID('11111111-1111-1111-1111-111111111111'),
+            actor='unit-test',
+        )
+
+
+@pytest.mark.asyncio
+async def test_reverse_refine_not_contradict_refuses_when_link_deleted():
+    from memex_core.services.contradiction_resolution import reverse_winner_proposal
+
+    link_id = str(uuid4())
+    proposal = _resolved_proposal(
+        effective_action='refine_not_contradict',
+        loser_unit_id=str(uuid4()),
+        winner_unit_id=str(uuid4()),
+        link_id=link_id,
+        prior_state={'link_id': link_id, 'link_type': 'contradicts'},
+        applied_state={'link_id': link_id, 'link_type': 'refines'},
+    )
+    # Link loader returns None — link no longer exists.
+    session, cm = _make_session_with_rowcounts([proposal, None])
+    api = _api_with_session(cm)
+
+    with pytest.raises(ContradictionResolutionError, match='no longer exists'):
+        await reverse_winner_proposal(
+            api,
+            uuid4(),
+            vault_id=UUID('11111111-1111-1111-1111-111111111111'),
+            actor='unit-test',
+        )

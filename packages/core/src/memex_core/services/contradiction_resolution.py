@@ -178,6 +178,7 @@ async def apply_winner_proposal(
         link_id = evidence.get('link_id')
 
         prior_state: dict[str, Any] = {}
+        applied_state: dict[str, Any] = {}
         applied: dict[str, Any] = {'action': action}
         fallback_reason: str | None = None
 
@@ -206,6 +207,7 @@ async def apply_winner_proposal(
                 {'unit_id': str(loser_unit_id), 'status': 'stale'},
             )
             applied['loser_unit_status'] = 'stale'
+            applied_state['loser_unit_status'] = 'stale'
 
         elif effective_action == 'supersede_loser_note':
             if loser_row.note_id is None or winner_row is None or winner_row.note_id is None:
@@ -227,6 +229,8 @@ async def apply_winner_proposal(
                 },
             )
             applied['loser_note_superseded_by'] = winner_row.note_id
+            applied_state['loser_note_id'] = loser_row.note_id
+            applied_state['loser_note_superseded_by'] = winner_row.note_id
 
         elif effective_action == 'refine_not_contradict':
             if not link_id:
@@ -243,6 +247,8 @@ async def apply_winner_proposal(
                 {'link_id': str(link_id), 'link_type': 'refines'},
             )
             applied['link_type'] = 'refines'
+            applied_state['link_id'] = link_row.id
+            applied_state['link_type'] = 'refines'
 
         elif effective_action == 'inconclusive':
             applied['noop'] = True
@@ -255,6 +261,7 @@ async def apply_winner_proposal(
             'effective_action': effective_action,
             'actor': actor,
             'prior_state': prior_state,
+            'applied_state': applied_state,
             'applied': applied,
         }
         if fallback_reason is not None:
@@ -346,14 +353,35 @@ async def reverse_winner_proposal(
             raise ContradictionResolutionError(f'finding {finding_id} has already been reversed')
         effective_action = str(resolution.get('effective_action') or '')
         prior_state = resolution.get('prior_state') or {}
+        applied_state = resolution.get('applied_state') or {}
 
         if effective_action == 'mark_loser_stale':
             loser_unit_id = evidence.get('loser_unit_id') or proposal.target_id
             prev_status = prior_state.get('loser_unit_status', 'active')
-            await session.execute(
+            # CAS: refuse to reverse if the row has diverged from what apply wrote.
+            # ``applied_state`` may be missing on findings applied before this
+            # guard existed — skip the check in that case for backward-compat.
+            current_unit = (
+                await session.execute(_LOAD_UNIT_SQL, {'unit_id': str(loser_unit_id)})
+            ).first()
+            if current_unit is None:
+                raise ContradictionResolutionError(
+                    f'cannot reverse — loser unit {loser_unit_id} no longer exists'
+                )
+            expected_status = applied_state.get('loser_unit_status')
+            if expected_status is not None and current_unit.status != expected_status:
+                raise ContradictionResolutionError(
+                    'cannot reverse — current state has diverged from the applied state. '
+                    'Manual reconciliation required.'
+                )
+            result = await session.execute(
                 _UPDATE_UNIT_STATUS_SQL,
                 {'unit_id': str(loser_unit_id), 'status': prev_status},
             )
+            if not result.rowcount:
+                raise ContradictionResolutionError(
+                    f'cannot reverse — loser unit {loser_unit_id} no longer exists'
+                )
 
         elif effective_action == 'supersede_loser_note':
             note_id = prior_state.get('loser_note_id')
@@ -362,18 +390,38 @@ async def reverse_winner_proposal(
                 raise ContradictionResolutionError(
                     'cannot reverse supersede_loser_note without prior_state.loser_note_id'
                 )
+            current_note = (
+                await session.execute(_LOAD_NOTE_SQL, {'note_id': str(note_id)})
+            ).first()
+            if current_note is None:
+                raise ContradictionResolutionError(
+                    f'cannot reverse — loser note {note_id} no longer exists'
+                )
+            expected_superseded_by = applied_state.get('loser_note_superseded_by')
+            if expected_superseded_by is not None and (
+                current_note.superseded_by is None
+                or str(current_note.superseded_by) != str(expected_superseded_by)
+            ):
+                raise ContradictionResolutionError(
+                    'cannot reverse — current state has diverged from the applied state. '
+                    'Manual reconciliation required.'
+                )
             if prev_superseded_by is None:
-                await session.execute(
+                result = await session.execute(
                     _UPDATE_NOTE_SUPERSEDED_BY_NULL_SQL,
                     {'note_id': str(note_id)},
                 )
             else:
-                await session.execute(
+                result = await session.execute(
                     _UPDATE_NOTE_SUPERSEDED_BY_SQL,
                     {
                         'note_id': str(note_id),
                         'superseded_by': str(prev_superseded_by),
                     },
+                )
+            if not result.rowcount:
+                raise ContradictionResolutionError(
+                    f'cannot reverse — loser note {note_id} no longer exists'
                 )
 
         elif effective_action == 'refine_not_contradict':
@@ -383,10 +431,27 @@ async def reverse_winner_proposal(
                 raise ContradictionResolutionError(
                     'cannot reverse refine_not_contradict without prior_state.link_id'
                 )
-            await session.execute(
+            current_link = (
+                await session.execute(_LOAD_LINK_SQL, {'link_id': str(link_id)})
+            ).first()
+            if current_link is None:
+                raise ContradictionResolutionError(
+                    f'cannot reverse — link {link_id} no longer exists'
+                )
+            expected_link_type = applied_state.get('link_type')
+            if expected_link_type is not None and current_link.link_type != expected_link_type:
+                raise ContradictionResolutionError(
+                    'cannot reverse — current state has diverged from the applied state. '
+                    'Manual reconciliation required.'
+                )
+            result = await session.execute(
                 _UPDATE_LINK_TYPE_SQL,
                 {'link_id': str(link_id), 'link_type': prev_link_type},
             )
+            if not result.rowcount:
+                raise ContradictionResolutionError(
+                    f'cannot reverse — link {link_id} no longer exists'
+                )
 
         elif effective_action == 'inconclusive':
             pass
