@@ -167,6 +167,17 @@ class ContradictionEngine:
                 await session.exec(upsert_stmt)  # type: ignore[arg-type]
                 all_links = list(deduped.values())
 
+            explicit_claim_links = sum(
+                1 for lk in all_links if lk.link_metadata.get('claim_type') is not None
+            )
+            if span is not None:
+                try:
+                    span.set_attribute(
+                        'contradiction.explicit_claim_links', str(explicit_claim_links)
+                    )
+                except Exception:
+                    pass
+
             # Clamp per-unit deltas via SQL LEAST/GREATEST to prevent races on
             # overlapping units (mirrors application-level max(0, min(1, ...))).
             for unit_id, delta in confidence_deltas.items():
@@ -234,7 +245,12 @@ class ContradictionEngine:
         linguistic evidence on the claim itself substitutes for tight
         semantic matching.
         """
-        target_entity_ids = _extract_target_entity_ids(unit)
+        extracted_target_ids = _extract_target_entity_ids(unit)
+        target_entity_ids: list[UUID] | None
+        if extracted_target_ids:
+            target_entity_ids = extracted_target_ids
+        else:
+            target_entity_ids = None
         if unit.claim_type is not None:
             threshold = self.config.similarity_threshold_explicit_claim
         else:
@@ -246,7 +262,7 @@ class ContradictionEngine:
             unit.id,
             vault_id,
             unit.claim_type,
-            len(target_entity_ids),
+            len(target_entity_ids) if target_entity_ids else 0,
             threshold,
         )
 
@@ -256,7 +272,7 @@ class ContradictionEngine:
             vault_id,
             k=self.config.max_candidates_per_unit,
             threshold=threshold,
-            target_entity_ids=target_entity_ids or None,
+            target_entity_ids=target_entity_ids,
         )
 
         if not candidates:
@@ -349,16 +365,12 @@ class ContradictionEngine:
 
         Default contradiction-engine link weight is 1.0. For explicit-claim
         units, weight depends on the claim_type:
-          - claim_type='contradiction' + 'contradict' relation: 1.0
-            (direct negation — strongest signal).
           - claim_type='resolution' + 'weaken' relation: 0.7
             (resolution softens the prior but does not negate it).
           - All other combinations: 1.0 (default).
         """
         if claim_type == 'resolution' and relation == 'weaken':
             return 0.7
-        if claim_type == 'contradiction' and relation == 'contradict':
-            return 1.0
         return 1.0
 
     async def _classify(

@@ -85,6 +85,7 @@ def _make_entity(name: str) -> Entity:
 
 
 @pytest.mark.integration
+@pytest.mark.llm_mock
 @pytest.mark.asyncio
 async def test_get_candidates_filters_by_target_entity_ids(session: AsyncSession) -> None:
     """The entity-overlap path narrows to only listed target entity IDs."""
@@ -138,6 +139,7 @@ async def test_get_candidates_filters_by_target_entity_ids(session: AsyncSession
 
 
 @pytest.mark.integration
+@pytest.mark.llm_mock
 @pytest.mark.asyncio
 async def test_explicit_claim_link_carries_claim_type_metadata(
     session: AsyncSession, contradiction_config: ContradictionConfig

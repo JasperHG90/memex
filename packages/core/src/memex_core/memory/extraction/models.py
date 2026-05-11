@@ -575,9 +575,9 @@ class RawFact(BaseFact):
         IDs.
         """
         if self.claim_type is None:
-            object.__setattr__(self, 'claim_target', None)
+            self.claim_target = None
         elif self.claim_target is None:
-            object.__setattr__(self, 'claim_target', ClaimTarget())
+            self.claim_target = ClaimTarget()
         return self
 
     @field_validator('occurred_start', 'occurred_end')
@@ -721,9 +721,9 @@ class ExtractedFact(BaseFact):
     @model_validator(mode='after')
     def _enforce_claim_target_with_claim_type(self) -> 'ExtractedFact':
         if self.claim_type is None:
-            object.__setattr__(self, 'claim_target', None)
+            self.claim_target = None
         elif self.claim_target is None:
-            object.__setattr__(self, 'claim_target', ClaimTarget())
+            self.claim_target = ClaimTarget()
         return self
 
 
