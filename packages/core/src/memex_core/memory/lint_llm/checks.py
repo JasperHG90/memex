@@ -475,6 +475,10 @@ def make_propose_contradiction_winner_check(
             loser_id_label = 'none'
             action = 'inconclusive'
 
+        if winner_id_label == 'inconclusive':
+            action = 'inconclusive'
+            loser_id_label = 'none'
+
         if winner_id_label == 'unit_a':
             resolved_winner_unit_id = peer_row.source_unit_id
             resolved_loser_unit_id = str(unit_id)

@@ -86,10 +86,13 @@ the agent does not auto-apply silently.
 ## Tuning
 
 - `server.memory.lint_llm.propose_winner_min_confidence` — minimum
-  DSPy-reported confidence below which an `inconclusive` proposal is
-  suppressed. Definitive (`unit_a` / `unit_b`) proposals are always
-  emitted; only the `inconclusive` branch is gated by this threshold.
-  Env: `MEMEX_SERVER_LINT_LLM_PROPOSE_WINNER_MIN_CONFIDENCE`. Default
-  `0.6`.
+  DSPy-reported confidence for a definitive winner verdict. Definitive
+  (`unit_a` / `unit_b`) verdicts with `confidence < min_confidence` are
+  emitted with `action='inconclusive'` so the audit trail survives but
+  the apply path is blocked. Increase the threshold to require higher
+  LLM confidence before mutations can land; decrease to permit
+  lower-confidence verdicts. Inconclusive verdicts from the LLM itself
+  are always emitted regardless of confidence. Env:
+  `MEMEX_SERVER_LINT_LLM_PROPOSE_WINNER_MIN_CONFIDENCE`. Default `0.6`.
 - `server.memory.lint_llm.checks.propose_contradiction_winner.enabled`
   — per-check feature flag.

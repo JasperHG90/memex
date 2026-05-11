@@ -66,6 +66,14 @@ _UPDATE_EVIDENCE_SQL = text("""
 """)
 
 
+_UPDATE_EVIDENCE_REVERSAL_SQL = text("""
+    UPDATE maintenance_proposals
+    SET evidence = :evidence
+    WHERE id = :finding_id
+      AND (evidence -> 'resolution' ->> 'reversed_at') IS NULL
+""")
+
+
 _INSERT_REVERSAL_SQL = text("""
     INSERT INTO maintenance_proposals (
         vault_id, lint_type, target_type, target_id,
@@ -533,10 +541,21 @@ async def reverse_winner_proposal(
         resolution['reversal_actor'] = actor
         evidence['resolution'] = resolution
 
-        await session.execute(
-            _UPDATE_EVIDENCE_SQL,
+        evidence_result = await session.execute(
+            _UPDATE_EVIDENCE_REVERSAL_SQL,
             {'finding_id': str(finding_id), 'evidence': json.dumps(evidence)},
         )
+        if not evidence_result.rowcount:
+            logger.warning(
+                'contradiction_resolution.reverse.already_reversed',
+                extra={
+                    'finding_id': str(finding_id),
+                    'effective_action': effective_action,
+                },
+            )
+            raise ContradictionResolutionError(
+                f'finding {finding_id} has already been reversed by a concurrent caller'
+            )
 
         reversal_evidence = {
             'reverses_finding_id': str(finding_id),

@@ -1499,10 +1499,10 @@ class LintLLMConfig(BaseModel):
         ge=0.0,
         le=1.0,
         description=(
-            'Minimum confidence for a definitive winner proposal. Below this, '
-            'a definitive (unit_a / unit_b) verdict is downgraded to inconclusive '
-            'before the finding is emitted — the audit trail survives but the '
-            'apply path is blocked until a human re-reviews. '
+            'Minimum confidence for a definitive winner proposal. Below this '
+            'threshold, definitive verdicts are downgraded to `inconclusive` — '
+            'the proposal lands in the lint ledger for audit but the apply '
+            'path is blocked. '
             'Env: MEMEX_SERVER_LINT_LLM_PROPOSE_WINNER_MIN_CONFIDENCE.'
         ),
     )

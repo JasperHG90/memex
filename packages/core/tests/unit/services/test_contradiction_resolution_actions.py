@@ -807,6 +807,45 @@ async def test_reverse_refuses_when_schema_version_too_low():
 
 
 @pytest.mark.asyncio
+async def test_concurrent_reverse_loses_second_caller():
+    """Two concurrent reverses both observe ``reversed_at=None`` on the
+    initial SELECT. Caller A commits first; caller B's evidence UPDATE
+    must match zero rows (guarded by the partial WHERE clause on
+    ``reversed_at``) and raise ``already been reversed`` so the second
+    caller doesn't double-write a reversal audit row."""
+    from memex_core.services.contradiction_resolution import reverse_winner_proposal
+
+    loser_id = str(uuid4())
+    proposal = _resolved_proposal(
+        effective_action='mark_loser_stale',
+        loser_unit_id=loser_id,
+        prior_state={'loser_unit_status': 'active'},
+        applied_state={'loser_unit_status': 'stale'},
+    )
+    # Loader sees pre-reversal state (concurrent caller A hasn't committed yet);
+    # the prior_state restore UPDATE succeeds; but the evidence UPDATE matches
+    # zero rows because A's commit landed in between with reversed_at set.
+    current_unit = _row(id=loser_id, status='stale', note_id=str(uuid4()))
+    rows_and_rowcounts: list = [
+        proposal,
+        current_unit,
+        (None, 1),  # restore unit status UPDATE: succeeds
+        (None, 0),  # evidence UPDATE: 0 rows matched — A already reversed.
+    ]
+    session, cm = _make_session_with_rowcounts(rows_and_rowcounts)
+    api = _api_with_session(cm)
+
+    with pytest.raises(ContradictionResolutionError, match='already been reversed'):
+        await reverse_winner_proposal(
+            api,
+            uuid4(),
+            vault_id=UUID('11111111-1111-1111-1111-111111111111'),
+            actor='unit-test',
+        )
+    assert not session.commit.await_count, 'reverse must not commit on race loss'
+
+
+@pytest.mark.asyncio
 async def test_apply_records_schema_version_in_resolution():
     loser_id = str(uuid4())
     winner_id = str(uuid4())

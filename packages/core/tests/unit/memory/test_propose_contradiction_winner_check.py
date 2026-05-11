@@ -159,3 +159,33 @@ async def test_inconclusive_verdict_emitted_for_audit_trail(
     assert finding is not None
     assert finding.extra_evidence['action'] == 'inconclusive'
     assert finding.extra_evidence['winner_unit_id'] is None
+
+
+@pytest.mark.asyncio
+async def test_inconclusive_winner_forces_inconclusive_action(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """When the LLM returns winner_id='inconclusive' but a definitive
+    action (e.g. mark_loser_stale), the emitted finding must normalize
+    the action to ``inconclusive`` and loser_id to ``none`` so the apply
+    path cannot run a definitive mutation with no real winner."""
+    fake_prediction = SimpleNamespace(
+        winner_id='inconclusive',
+        loser_id='unit_b',
+        action='mark_loser_stale',
+        confidence=0.95,
+        rationale='conflicting signals from LLM',
+    )
+    mock_run = AsyncMock(return_value=fake_prediction)
+    monkeypatch.setattr('memex_core.llm.run_dspy_operation', mock_run)
+
+    session = _make_session([_fsfm_row(), None, _peer_row(), _loser_row()])
+    check = make_propose_contradiction_winner_check(lm=object(), min_confidence=0.6)
+
+    finding = await check(uuid4(), uuid4(), session, None)
+
+    assert finding is not None
+    assert finding.extra_evidence['action'] == 'inconclusive'
+    assert finding.extra_evidence['winner_id'] == 'inconclusive'
+    assert finding.extra_evidence['loser_id'] == 'none'
+    assert finding.extra_evidence['winner_unit_id'] is None
