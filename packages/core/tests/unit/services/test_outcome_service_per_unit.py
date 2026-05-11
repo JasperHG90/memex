@@ -146,11 +146,11 @@ class TestResolveUnitOutcomes:
                 reason=None,
             )
 
-    def test_empty_returns_empty(self):
-        out = OutcomeService._resolve_unit_outcomes(
-            units=None, unit_ids=None, success=None, reason=None
-        )
-        assert out == []
+    def test_empty_raises_value_error(self):
+        with pytest.raises(ValueError, match='received neither'):
+            OutcomeService._resolve_unit_outcomes(
+                units=None, unit_ids=None, success=None, reason=None
+            )
 
     def test_outcome_rejects_units_and_success_together(self):
         with pytest.raises(ValueError, match='Cannot mix'):
