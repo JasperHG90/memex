@@ -692,3 +692,58 @@ class TestThompsonExploration:
 
         config = RetrievalConfig(exploration_mode='off', exploration_epsilon=1.0)
         assert config.exploration_mode == 'off'
+
+
+class TestExplorationModeEpsilonInteractionValidator:
+    """``_log_exploration_mode_epsilon_interaction`` emits an INFO log when an
+    operator sets ``exploration_epsilon`` to a non-default value under a mode
+    that ignores it (e.g. ``thompson``).
+    """
+
+    _LOGGER_NAME = 'memex.common.config'
+    _MESSAGE_FRAGMENT = 'is ignored under exploration_mode'
+
+    def test_validator_logs_when_epsilon_high_and_mode_thompson(self, caplog):
+        import logging
+
+        from memex_common.config import RetrievalConfig
+
+        with caplog.at_level(logging.INFO, logger=self._LOGGER_NAME):
+            RetrievalConfig(exploration_mode='thompson', exploration_epsilon=0.1)
+
+        matches = [r for r in caplog.records if self._MESSAGE_FRAGMENT in r.getMessage()]
+        assert len(matches) == 1
+        assert matches[0].levelno == logging.INFO
+
+    def test_validator_silent_when_epsilon_low_and_mode_thompson(self, caplog):
+        import logging
+
+        from memex_common.config import RetrievalConfig
+
+        with caplog.at_level(logging.INFO, logger=self._LOGGER_NAME):
+            RetrievalConfig(exploration_mode='thompson', exploration_epsilon=0.05)
+
+        matches = [r for r in caplog.records if self._MESSAGE_FRAGMENT in r.getMessage()]
+        assert matches == []
+
+    def test_validator_silent_when_epsilon_zero_and_mode_thompson(self, caplog):
+        import logging
+
+        from memex_common.config import RetrievalConfig
+
+        with caplog.at_level(logging.INFO, logger=self._LOGGER_NAME):
+            RetrievalConfig(exploration_mode='thompson', exploration_epsilon=0.0)
+
+        matches = [r for r in caplog.records if self._MESSAGE_FRAGMENT in r.getMessage()]
+        assert matches == []
+
+    def test_validator_silent_when_mode_epsilon_greedy_regardless_of_epsilon(self, caplog):
+        import logging
+
+        from memex_common.config import RetrievalConfig
+
+        with caplog.at_level(logging.INFO, logger=self._LOGGER_NAME):
+            RetrievalConfig(exploration_mode='epsilon_greedy', exploration_epsilon=0.1)
+
+        matches = [r for r in caplog.records if self._MESSAGE_FRAGMENT in r.getMessage()]
+        assert matches == []
