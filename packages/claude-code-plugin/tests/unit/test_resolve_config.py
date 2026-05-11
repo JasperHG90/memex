@@ -43,6 +43,36 @@ def test_project_id_from_git_remote(mock_memex: MockMemex, temp_git_repo: Path) 
     assert result.stdout.strip() == 'github.com/acme/myapp'
 
 
+@pytest.mark.parametrize(
+    'remote_url',
+    [
+        'https://github.com/acme/myapp.git',
+        'https://oauth2:token@github.com/acme/myapp.git',
+        'git@github.com:acme/myapp.git',
+        'ssh://git@github.com/acme/myapp.git',
+    ],
+)
+def test_project_id_normalizes_url_formats(
+    mock_memex: MockMemex, tmp_path: Path, remote_url: str
+) -> None:
+    """All common URL formats for the same repo must produce the same project ID.
+
+    Otherwise a contributor cloning via SSH gets a different KV key than one
+    cloning via HTTPS — and the per-project vault binding splits in two.
+    """
+    repo = tmp_path / 'repo'
+    repo.mkdir()
+    subprocess.run(['git', 'init', '-q'], cwd=repo, check=True)
+    subprocess.run(['git', 'remote', 'add', 'origin', remote_url], cwd=repo, check=True)
+    result = _run_resolver(
+        'memex_resolve_project_id',
+        env=mock_memex.env,
+        cwd=repo,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stdout.strip() == 'github.com/acme/myapp'
+
+
 def test_project_id_falls_back_to_path_outside_repo(mock_memex: MockMemex, tmp_path: Path) -> None:
     workdir = tmp_path / 'plain'
     workdir.mkdir()

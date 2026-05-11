@@ -134,8 +134,14 @@ if [ -f "$PLUGIN_ROOT/.claude-plugin/plugin.json" ]; then
     [ -n "$_plugin_version" ] && _auto_tags+=("cc:plugin=$_plugin_version")
 fi
 
-# Convert auto-tags array → JSON array
-_auto_tags_json=$(printf '%s\n' "${_auto_tags[@]}" | jq -R . | jq -s .)
+# Convert auto-tags array → JSON array. The empty-array guard isn't load-bearing
+# today (`surface:claude-code` is unconditionally pushed above) but prevents a
+# `set -u` "unbound variable" trap if a future refactor makes every tag conditional.
+if [ "${#_auto_tags[@]}" -eq 0 ]; then
+    _auto_tags_json='[]'
+else
+    _auto_tags_json=$(printf '%s\n' "${_auto_tags[@]}" | jq -R . | jq -s .)
+fi
 
 # ---------------------------------------------------------------------------
 # Compose updatedInput: preserve everything from tool_input, merge tags,

@@ -77,7 +77,28 @@ memex_resolve_project_id() {
         local _remote
         _remote=$(git remote get-url origin 2>/dev/null) || true
         if [ -n "$_remote" ]; then
-            _id=$(printf '%s' "$_remote" | sed 's/\.git$//; s|https://[^@]*@|https://|; s|[a-zA-Z][a-zA-Z0-9+.-]*://||')
+            # Normalize HTTPS, SSH, and SCP-style remotes to the same
+            # `host/owner/repo` shape so contributors who cloned via different
+            # URL formats share a project ID (and therefore the same
+            # `app:claude-code:project:<id>:vault` KV key). Worked examples:
+            #
+            #   https://github.com/acme/myapp.git           → github.com/acme/myapp
+            #   https://oauth2:t0k@github.com/acme/myapp    → github.com/acme/myapp
+            #   git@github.com:acme/myapp.git               → github.com/acme/myapp
+            #   ssh://git@github.com/acme/myapp.git         → github.com/acme/myapp
+            #
+            # Pipeline:
+            #   1. strip trailing `.git`
+            #   2. strip HTTPS basic-auth (`user:password@`)
+            #   3. strip `<scheme>://`
+            #   4. collapse `user@host[:/]path` → `host/path` (handles both the
+            #      SCP-style colon separator and the post-scheme-strip slash)
+            _id=$(printf '%s' "$_remote" | sed '
+                s/\.git$//
+                s|https://[^@]*@|https://|
+                s|^[a-zA-Z][a-zA-Z0-9+.-]*://||
+                s|^[^@]*@\([^:/]*\)[:/]|\1/|
+            ')
         fi
     fi
     if [ -z "$_id" ]; then
@@ -209,6 +230,17 @@ memex_resolve_active_vault() {
 #   - State tracked via $state_dir/session_note_created_<safe_session_id>.
 #
 # Returns 0 on success, non-zero on failure. Caller decides what to surface.
+#
+# Concurrency assumption:
+#   PreCompact (sync) and SessionEnd (async) callers share `_flag_file` as
+#   the "note created" sentinel. The flag is written AFTER `memex note add`
+#   succeeds, leaving a small window where the CLI has succeeded but the
+#   flag is absent on disk. Under Claude Code's hook ordering, PreCompact
+#   completes before SessionEnd is dispatched, so the window is not
+#   observable in practice. If a future host runs the two hooks
+#   concurrently, this needs a `flock` (or a server-side
+#   "create-if-missing" path) to remain safe. Documented to keep future
+#   refactors honest.
 # ---------------------------------------------------------------------------
 memex_persist_session_delta() {
     local _state_dir="$1"; shift
