@@ -32,6 +32,7 @@ depends_on: Union[str, Sequence[str], None] = None
 _AUDIT_TABLE = 'outcome_audit_log'
 _AUDIT_VAULT_TS_INDEX = 'idx_outcome_audit_log_vault_ts'
 _AUDIT_CALLER_INDEX = 'idx_outcome_audit_log_caller'
+_AUDIT_UNITS_IS_ARRAY = 'outcome_audit_log_units_is_array'
 
 
 def upgrade() -> None:
@@ -62,8 +63,12 @@ def upgrade() -> None:
             sa.ForeignKey('vaults.id', ondelete='CASCADE'),
             nullable=False,
         ),
-        sa.Column('caller_id', sa.Text(), nullable=True),
+        sa.Column('caller_id', sa.String(length=128), nullable=True),
         sa.Column('units', JSONB(), nullable=False),
+        sa.CheckConstraint(
+            "jsonb_typeof(units) = 'array'",
+            name=_AUDIT_UNITS_IS_ARRAY,
+        ),
         sa.Column('turn_outcome', sa.Text(), nullable=True),
         sa.Column('retrieved_set_size', sa.Integer(), nullable=True),
         sa.Column('coverage_ratio', sa.Float(), nullable=True),

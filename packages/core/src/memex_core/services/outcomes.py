@@ -56,7 +56,11 @@ class UnitOutcome(BaseModel):
 
     unit_id: UUID = Field(..., description='UUID of the memory unit.')
     verb: UnitOutcomeVerb = Field(..., description='Per-unit verb classification.')
-    reason: str | None = Field(default=None, description='Free-text reason (≤ 200 chars).')
+    reason: str | None = Field(
+        default=None,
+        max_length=200,
+        description='Free-text reason (≤ 200 chars).',
+    )
 
     @model_validator(mode='after')
     def _reason_required_for_credit(self) -> 'UnitOutcome':
@@ -195,16 +199,25 @@ class OutcomeService:
         )
 
         if retrieved_set_size is not None and retrieved_set_size > 0:
-            coverage_ratio = min(1.0, len(resolved_units) / retrieved_set_size)
+            coverage_ratio = len(resolved_units) / retrieved_set_size
         else:
             coverage_ratio = None
 
-        if coverage_check_mode == 'strict':
-            if retrieved_set_size is not None and len(resolved_units) < retrieved_set_size:
+        if coverage_ratio is not None and coverage_ratio > 1.0:
+            logger.warning(
+                'outcome.coverage_over_one',
+                reported=len(resolved_units),
+                retrieved=retrieved_set_size,
+                coverage_ratio=coverage_ratio,
+            )
+
+        if coverage_check_mode == 'strict' and retrieved_set_size is not None:
+            if len(resolved_units) != retrieved_set_size:
                 raise ValueError(
                     'Strict coverage: reported '
                     f'{len(resolved_units)} of {retrieved_set_size} retrieved units. '
-                    'Classify every retrieved unit or switch coverage_check_mode to permissive.'
+                    'Classify exactly every retrieved unit or switch coverage_check_mode '
+                    'to permissive.'
                 )
 
         try:
@@ -465,6 +478,10 @@ class OutcomeService:
         if units is not None and unit_ids:
             raise ValueError(
                 "Pass either 'units' (preferred) or legacy ('unit_ids' + 'success'), not both."
+            )
+        if units is not None and success is not None:
+            raise ValueError(
+                "Cannot mix new 'units' shape with legacy 'success' shape; choose one."
             )
 
         resolved: list[UnitOutcome] = []

@@ -142,10 +142,12 @@ class ContradictionEngine:
                 await session.exec(upsert_stmt)  # type: ignore[arg-type]
                 all_links = list(deduped.values())
 
-            # Stored failure_co_count is an integer; the configured weight
-            # decides per-link bump via round() so 0.0 disables wiring and
-            # >=0.5 yields +1 per negative-evidence link.
-            failure_bump_per_link = round(max(0.0, self.failure_co_count_weight))
+            # Stored failure_co_count is an integer; half-up rounding maps the
+            # configured weight to a per-link bump so 0.0 disables wiring and
+            # >=0.5 yields +1 per negative-evidence link. (Plain round() would
+            # use banker's rounding and silently turn the 0.5 default into 0.)
+            weight = max(0.0, self.failure_co_count_weight)
+            failure_bump_per_link = 1 if weight >= 0.5 else 0
 
             # Clamp per-unit deltas via SQL LEAST/GREATEST to prevent races on
             # overlapping units (mirrors application-level max(0, min(1, ...))).

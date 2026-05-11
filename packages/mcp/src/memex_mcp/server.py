@@ -3802,6 +3802,18 @@ async def memex_record_outcome(
         vault_id = vault_id or _default_write_vault(ctx)
         resolved_vid = await _resolve_vault_id(api, vault_id)
 
+        resolved_retrieved_set_size = retrieved_set_size
+        if resolved_retrieved_set_size is None and target_type == 'memory_unit':
+            try:
+                dedup = _get_session_dedup(ctx.session_id)
+                seen = len(dedup.seen_memory_ids)
+                if seen > 0:
+                    resolved_retrieved_set_size = seen
+            except Exception:
+                # Session-state lookup is best-effort; coverage_ratio simply
+                # stays None when the seen-set is unavailable.
+                pass
+
         return await api.record_outcome(
             unit_ids=unit_ids,
             success=success,
@@ -3811,7 +3823,7 @@ async def memex_record_outcome(
             target_type=target_type,
             kv_key=kv_key,
             units=units,
-            retrieved_set_size=retrieved_set_size,
+            retrieved_set_size=resolved_retrieved_set_size,
         )
 
     except ToolError:

@@ -151,3 +151,22 @@ class TestResolveUnitOutcomes:
             units=None, unit_ids=None, success=None, reason=None
         )
         assert out == []
+
+    def test_outcome_rejects_units_and_success_together(self):
+        with pytest.raises(ValueError, match='Cannot mix'):
+            OutcomeService._resolve_unit_outcomes(
+                units=[UnitOutcome(unit_id=uuid4(), verb='not_used')],
+                unit_ids=None,
+                success=True,
+                reason=None,
+            )
+
+
+class TestUnitOutcomeReasonLengthCap:
+    def test_reason_under_cap_accepted(self):
+        uo = UnitOutcome(unit_id=uuid4(), verb='helpful', reason='a' * 200)
+        assert uo.reason == 'a' * 200
+
+    def test_reason_over_cap_rejected(self):
+        with pytest.raises(ValueError):
+            UnitOutcome(unit_id=uuid4(), verb='helpful', reason='a' * 201)

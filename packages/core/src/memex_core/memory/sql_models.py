@@ -3,7 +3,7 @@ from enum import Enum, StrEnum
 from typing import Any
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Boolean,
@@ -11,6 +11,7 @@ from sqlalchemy import (
     Computed,
     ForeignKey,
     Integer,
+    String,
     Text,
     Float,
     func,
@@ -1475,14 +1476,28 @@ class OutcomeAuditLog(SQLModel, table=True):  # type: ignore
     vault_id: UUID = vault_id_field()
     caller_id: str | None = Field(
         default=None,
-        sa_column=Column(Text, nullable=True),
-        description='Session id or caller fingerprint (no PII).',
+        max_length=128,
+        sa_column=Column(String(128), nullable=True),
+        description='Session id or caller fingerprint (no PII, ≤ 128 chars).',
     )
     units: list[dict[str, Any]] = Field(
         default_factory=list,
         sa_column=Column(JSONB, nullable=False),
         description='Per-unit payload: list of {unit_id, verb, reason?}.',
     )
+
+    @field_validator('units')
+    @classmethod
+    def _units_must_be_array_of_dicts(cls, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not isinstance(value, list):
+            raise ValueError('OutcomeAuditLog.units must be a list')
+        for idx, item in enumerate(value):
+            if not isinstance(item, dict):
+                raise ValueError(
+                    f'OutcomeAuditLog.units[{idx}] must be a dict, got {type(item).__name__}'
+                )
+        return value
+
     turn_outcome: str | None = Field(
         default=None,
         sa_column=Column(Text, nullable=True),
@@ -1512,6 +1527,10 @@ class OutcomeAuditLog(SQLModel, table=True):  # type: ignore
     __table_args__ = (
         Index('idx_outcome_audit_log_vault_ts', 'vault_id', sql_text('created_at DESC')),
         Index('idx_outcome_audit_log_caller', 'caller_id'),
+        CheckConstraint(
+            "jsonb_typeof(units) = 'array'",
+            name='outcome_audit_log_units_is_array',
+        ),
     )
 
 

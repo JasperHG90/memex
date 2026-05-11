@@ -248,6 +248,8 @@ def mock_config():
     consolidate_cfg.per_vault_per_seconds = 3600
     consolidate_cfg.burst = 1
     consolidate_cfg.max_keys = 1000
+    # Default Memory Worth mode for newly created vaults.
+    config.server.memory.outcomes.mw_mode_default = 'ema'
     return config
 
 

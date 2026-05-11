@@ -1003,11 +1003,11 @@ class OutcomesConfig(BaseModel):
         description=(
             'Per-link failure-counter bump applied when the contradiction '
             'engine commits a weakens or contradicts link. Stored as int; '
-            'the per-link bump = round(weight) — 0.0 disables wiring, '
-            '>=0.5 yields a +1 bump per negative-evidence link.'
+            'the per-link bump uses half-up rounding — 0.0 disables wiring, '
+            '0.5 (default) and above yield a +1 bump per negative-evidence link.'
         ),
     )
-    mw_mode_default: str = Field(
+    mw_mode_default: Literal['stationary', 'ema'] = Field(
         default='ema',
         description=(
             'Default Memory Worth counter mode for newly created vaults. '
