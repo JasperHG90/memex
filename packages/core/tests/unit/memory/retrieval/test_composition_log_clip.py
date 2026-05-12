@@ -5,7 +5,10 @@ import pytest
 from pydantic import ValidationError
 
 from memex_common.config import RetrievalConfig
-from memex_core.memory.retrieval.engine import _compose_boosts_logspace
+from memex_core.memory.retrieval.engine import (
+    LOG_FLOOR_COMPOSITE_BOOST,
+    _compose_boosts_logspace,
+)
 
 
 def _compose(
@@ -119,25 +122,20 @@ class TestZeroAndNegativeBoosts:
         assert actual == pytest.approx(ce * math.exp(-L), rel=1e-12)
 
     def test_negative_boost_treated_as_floor(self):
+        ce = 0.5
         actual_neg = _compose(
-            0.5,
-            recency=-0.5,
-            temporal=1.0,
-            mw=1.0,
-            confidence=1.0,
-            decay=1.0,
-            log_clip=math.inf,
+            ce, recency=-0.5, temporal=1.0, mw=1.0, confidence=1.0, decay=1.0, log_clip=math.inf
         )
-        actual_zero = _compose(
-            0.5,
-            recency=0.0,
-            temporal=1.0,
-            mw=1.0,
-            confidence=1.0,
-            decay=1.0,
-            log_clip=math.inf,
+        expected = ce * LOG_FLOOR_COMPOSITE_BOOST
+        assert actual_neg == pytest.approx(expected, rel=1e-9)
+
+    def test_zero_boost_lands_at_log_floor(self):
+        ce = 0.5
+        actual = _compose(
+            ce, recency=0.0, temporal=1.0, mw=1.0, confidence=1.0, decay=1.0, log_clip=math.inf
         )
-        assert actual_neg == pytest.approx(actual_zero, rel=1e-12)
+        expected = ce * LOG_FLOOR_COMPOSITE_BOOST
+        assert actual == pytest.approx(expected, rel=1e-9)
 
 
 class TestNaNGuard:
@@ -162,6 +160,40 @@ class TestNaNGuard:
         _compose(0.7, recency=math.nan, temporal=1.0, mw=1.0, confidence=1.0, decay=1.0)
         after = COMPOSITE_BOOST_NAN_GUARD_TRIGGERED._value.get()
         assert after == before + 1
+
+
+class TestNonFiniteBoostGuard:
+    def test_positive_inf_boost_returns_ce_score(self):
+        result = _compose(0.7, recency=math.inf, temporal=1.0, mw=1.0, confidence=1.0, decay=1.0)
+        assert result == pytest.approx(0.7, rel=1e-12)
+
+    def test_negative_inf_boost_returns_ce_score(self):
+        result = _compose(0.7, recency=-math.inf, temporal=1.0, mw=1.0, confidence=1.0, decay=1.0)
+        assert result == pytest.approx(0.7, rel=1e-12)
+
+    def test_inf_ce_score_returns_ce_score(self):
+        result = _compose(math.inf, recency=1.0, temporal=1.0, mw=1.0, confidence=1.0, decay=1.0)
+        assert math.isinf(result)
+
+    def test_inf_boost_with_zero_ce_score_does_not_nan(self):
+        result = _compose(0.0, recency=math.inf, temporal=1.0, mw=1.0, confidence=1.0, decay=1.0)
+        assert math.isfinite(result)
+        assert result == 0.0
+
+    def test_inf_log_clip_is_accepted_as_default(self):
+        result = _compose(
+            0.5, recency=1.5, temporal=1.5, mw=1.5, confidence=1.5, decay=1.5, log_clip=math.inf
+        )
+        expected = 0.5 * (1.5**5)
+        assert result == pytest.approx(expected, rel=1e-9)
+
+    def test_inf_boost_skips_clipped_histogram(self):
+        from memex_core.metrics import COMPOSITE_BOOST_CLIPPED
+
+        before_sum = COMPOSITE_BOOST_CLIPPED._sum.get()
+        _compose(0.7, recency=math.inf, temporal=1.0, mw=1.0, confidence=1.0, decay=1.0)
+        after_sum = COMPOSITE_BOOST_CLIPPED._sum.get()
+        assert after_sum == before_sum
 
 
 class TestMetricEmission:

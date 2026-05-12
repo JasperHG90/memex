@@ -79,7 +79,8 @@ from memex_core.metrics import (
 
 logger = logging.getLogger('memex.core.memory.retrieval.engine')
 
-_LOG_FLOOR = 1e-9
+LOG_FLOOR_COMPOSITE_BOOST = 1e-9
+_LOG_FLOOR = LOG_FLOOR_COMPOSITE_BOOST
 
 
 def _compose_boosts_logspace(
@@ -118,8 +119,10 @@ def _compose_boosts_logspace(
     operator visibility into whether the clip is firing in production
     traffic.
     """
-    if math.isnan(ce_score) or any(
-        math.isnan(b) for b in (recency, temporal, mw, confidence, decay, log_clip)
+    if (
+        not math.isfinite(ce_score)
+        or any(not math.isfinite(b) for b in (recency, temporal, mw, confidence, decay))
+        or math.isnan(log_clip)
     ):
         COMPOSITE_BOOST_NAN_GUARD_TRIGGERED.inc()
         return ce_score
