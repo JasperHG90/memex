@@ -270,3 +270,55 @@ def test_parse_datetime_batch(benchmark):
             parse_iso_datetime(d)
 
     benchmark(run)
+
+
+@pytest.mark.benchmark(group='composition')
+def test_compose_boosts_logspace_batch(benchmark):
+    import math
+
+    from memex_core.memory.retrieval.engine import _compose_boosts_logspace
+
+    inputs = [
+        (
+            0.05 + 0.9 * (i / 256),
+            {
+                'recency': 0.5 + 1.0 * ((i * 13) % 17) / 17,
+                'temporal': 0.5 + 1.0 * ((i * 7) % 11) / 11,
+                'mw': 0.5 + 1.0 * ((i * 5) % 13) / 13,
+                'confidence': 0.5 + 1.0 * ((i * 3) % 19) / 19,
+                'decay': 0.5 + 1.0 * ((i * 11) % 23) / 23,
+            },
+        )
+        for i in range(256)
+    ]
+
+    def run():
+        out = 0.0
+        for ce, boosts in inputs:
+            out += _compose_boosts_logspace(ce, log_clip=math.inf, **boosts)
+        return out
+
+    benchmark(run)
+
+
+@pytest.mark.benchmark(group='composition')
+def test_multiplicative_product_batch_reference(benchmark):
+    inputs = [
+        (
+            0.05 + 0.9 * (i / 256),
+            0.5 + 1.0 * ((i * 13) % 17) / 17,
+            0.5 + 1.0 * ((i * 7) % 11) / 11,
+            0.5 + 1.0 * ((i * 5) % 13) / 13,
+            0.5 + 1.0 * ((i * 3) % 19) / 19,
+            0.5 + 1.0 * ((i * 11) % 23) / 23,
+        )
+        for i in range(256)
+    ]
+
+    def run():
+        out = 0.0
+        for ce, r, t, m, c, d in inputs:
+            out += ce * r * t * m * c * d
+        return out
+
+    benchmark(run)

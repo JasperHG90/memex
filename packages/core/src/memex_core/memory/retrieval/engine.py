@@ -77,6 +77,29 @@ from memex_core.metrics import (
 
 logger = logging.getLogger('memex.core.memory.retrieval.engine')
 
+_LOG_FLOOR = 1e-9
+
+
+def _compose_boosts_logspace(
+    ce_score: float,
+    *,
+    recency: float,
+    temporal: float,
+    mw: float,
+    confidence: float,
+    decay: float,
+    log_clip: float,
+) -> float:
+    log_boost = (
+        math.log(max(recency, _LOG_FLOOR))
+        + math.log(max(temporal, _LOG_FLOOR))
+        + math.log(max(mw, _LOG_FLOOR))
+        + math.log(max(confidence, _LOG_FLOOR))
+        + math.log(max(decay, _LOG_FLOOR))
+    )
+    clipped = max(-log_clip, min(log_clip, log_boost))
+    return ce_score * math.exp(clipped)
+
 
 def _get_confidence(unit: HasConfidence) -> float:
     """Resolve a unit's confidence with defensive fallback to 1.0.
@@ -1537,6 +1560,7 @@ class RetrievalEngine:
             mw_alpha = self.retrieval_config.reranking_mw_alpha
             confidence_alpha = self.retrieval_config.confidence_alpha
             decay_alpha = self.retrieval_config.decay_alpha
+            composite_log_clip = self.retrieval_config.composite_boost_log_clip
 
             boosted_scores: list[float] = []
             for unit, ce_score in zip(results, normalized_scores):
@@ -1615,12 +1639,15 @@ class RetrievalEngine:
                 DECAY_BOOST_OBSERVED.observe(decay_boost)
 
                 boosted_scores.append(
-                    ce_score
-                    * recency_boost
-                    * temporal_boost
-                    * mw_boost
-                    * confidence_boost
-                    * decay_boost
+                    _compose_boosts_logspace(
+                        ce_score,
+                        recency=recency_boost,
+                        temporal=temporal_boost,
+                        mw=mw_boost,
+                        confidence=confidence_boost,
+                        decay=decay_boost,
+                        log_clip=composite_log_clip,
+                    )
                 )
 
             scored_results = []

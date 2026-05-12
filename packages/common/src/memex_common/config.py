@@ -1,6 +1,7 @@
 """Configuration for Memex based on Persona library"""
 
 import logging
+import math
 from enum import Enum
 from typing import Literal, Self, Union, Annotated, Any, TypeAlias
 import pathlib as plb
@@ -866,6 +867,21 @@ class RetrievalConfig(BaseModel):
         'recency/temporal/mw magnitude) in a follow-on config commit. '
         'Bounded to [0.0, 2.0]: negative alpha would invert the boost direction; above 2.0 '
         'the boost can go negative for stale low-importance units.',
+    )
+    composite_boost_log_clip: float = Field(
+        default=math.inf,
+        ge=0.0,
+        description='Symmetric clip on the aggregate metadata multiplier applied to the '
+        'cross-encoder score during reranking. The five boost factors compose in log space '
+        '(sum of log(b_i)), the sum is clipped to [-L, +L], then exponentiated and applied '
+        'to ce_score. At default L = math.inf the clip is a no-op (mathematically identical '
+        'to the prior multiplicative product, modulo 1e-9 floating-point). Finite L bounds '
+        'the aggregate metadata multiplier to [exp(-L), exp(+L)], preventing any single '
+        'heuristic or product of heuristics from arbitrarily compressing or amplifying the '
+        'semantic signal. Empirical L (typically the p95 of |log(aggregate)| from the '
+        'aggregate-boost telemetry histogram) lands via a follow-up config commit once '
+        'distribution data accumulates. Negative L is rejected: it would invert clip '
+        'semantics.',
     )
     certainty_modulation_enabled: bool = Field(
         default=False,
