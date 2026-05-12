@@ -250,6 +250,51 @@ class TestConfigValidator:
             RetrievalConfig(composite_boost_log_clip=-math.inf)
 
 
+class TestConfigJSONSerialization:
+    def test_python_dump_preserves_inf_as_float(self):
+        config = RetrievalConfig()
+        assert config.model_dump(mode='python')['composite_boost_log_clip'] == math.inf
+
+    def test_json_dump_emits_inf_as_string(self):
+        config = RetrievalConfig()
+        assert config.model_dump(mode='json')['composite_boost_log_clip'] == 'inf'
+
+    def test_json_dump_emits_finite_as_float(self):
+        config = RetrievalConfig(composite_boost_log_clip=0.7)
+        assert config.model_dump(mode='json')['composite_boost_log_clip'] == 0.7
+
+    def test_model_dump_json_is_rfc8259_compliant(self):
+        import json
+
+        config = RetrievalConfig()
+        json_str = config.model_dump_json()
+        json.loads(
+            json_str, parse_constant=lambda c: (_ for _ in ()).throw(ValueError(f'rejected: {c}'))
+        )
+
+    def test_load_from_inf_string(self):
+        config = RetrievalConfig(composite_boost_log_clip='inf')
+        assert config.composite_boost_log_clip == math.inf
+
+    def test_load_from_infinity_string(self):
+        config = RetrievalConfig(composite_boost_log_clip='infinity')
+        assert config.composite_boost_log_clip == math.inf
+
+    def test_load_from_numeric_string(self):
+        config = RetrievalConfig(composite_boost_log_clip='0.7')
+        assert config.composite_boost_log_clip == 0.7
+
+    def test_json_roundtrip_preserves_inf(self):
+        config = RetrievalConfig()
+        roundtripped = RetrievalConfig.model_validate_json(config.model_dump_json())
+        assert roundtripped.composite_boost_log_clip == math.inf
+
+    def test_json_roundtrip_preserves_finite(self):
+        config = RetrievalConfig(composite_boost_log_clip=1.5)
+        roundtripped = RetrievalConfig.model_validate_json(config.model_dump_json())
+        assert roundtripped.composite_boost_log_clip == 1.5
+
+
 class TestRankPreservationAtInfiniteClip:
     def test_ranking_preserved_for_diverse_units(self):
         rng = random.Random(0x1234)

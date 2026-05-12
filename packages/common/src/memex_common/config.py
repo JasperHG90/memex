@@ -14,7 +14,15 @@ from uuid import UUID
 logger = logging.getLogger('memex.common.config')
 
 from platformdirs import user_cache_dir, user_config_dir, user_data_dir, user_log_dir
-from pydantic import BaseModel, Field, SecretStr, HttpUrl, field_serializer, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    HttpUrl,
+    SecretStr,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict, PydanticBaseSettingsSource
 
 from memex_common.types import ReasoningEffort
@@ -894,6 +902,23 @@ class RetrievalConfig(BaseModel):
         'distribution data accumulates. Negative L is rejected: it would invert clip '
         'semantics.',
     )
+
+    @field_validator('composite_boost_log_clip', mode='before')
+    @classmethod
+    def _parse_composite_boost_log_clip(cls, value: object) -> object:
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {'inf', '+inf', 'infinity', '+infinity'}:
+                return math.inf
+            return float(normalized)
+        return value
+
+    @field_serializer('composite_boost_log_clip', when_used='json')
+    def _serialize_composite_boost_log_clip(self, value: float) -> float | str:
+        if math.isinf(value):
+            return 'inf'
+        return value
+
     certainty_modulation_enabled: bool = Field(
         default=False,
         description='When True, the confidence_boost is multiplied by a certainty '
