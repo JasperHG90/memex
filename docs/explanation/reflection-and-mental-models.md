@@ -46,7 +46,16 @@ Entities below `min_priority` (default: 0.3) are skipped entirely, conserving LL
 
 The reflection queue uses PostgreSQL's `SELECT ... FOR UPDATE SKIP LOCKED` for atomic task claiming. This allows multiple workers to process reflection tasks concurrently without conflicts or double-processing. A worker claims a batch of entities, processes them, and marks them complete — all within a single transaction.
 
-Additionally, each entity reflection acquires a PostgreSQL advisory lock (`pg_try_advisory_xact_lock`) to prevent concurrent reflection on the same entity from different workers.
+#### Per-entity serialization and concurrent-write safety
+
+Within a single worker process, two coroutines that happen to reflect on the same entity serialize on a process-local `asyncio.Lock` keyed by `entity_id`. The lock registry uses a `WeakValueDictionary` so locks are garbage-collected once no coroutine holds or waits on them — the registry doesn't grow unboundedly across a long-running process.
+
+Cross-worker mutual exclusion is handled at two complementary layers:
+
+- The queue's `SELECT ... FOR UPDATE SKIP LOCKED` claim means two workers rarely pick up the same entity. The asyncio lock alone is sufficient for the within-worker case.
+- Phase 5's write is a **compare-and-set** `UPDATE mental_models SET observations=…, version=version+1, … WHERE id=:id AND version=:claimed_version`. If a second worker slips through the queue and reads the same row before the first commits, the first to acquire the row lock wins; the loser's `WHERE version=:claimed_version` matches zero rows after the bump, the helper returns an abandon signal, and the in-memory mental model is left unchanged. The next scheduler tick re-runs reflection on the fresher state.
+
+No Postgres advisory locks are taken on the reflection path. The earlier `pg_try_advisory_xact_lock(hashtext('reflect:<id>'))` pattern was removed because the advisory lock was held at *transaction scope* — i.e. across the orchestrator's batch and therefore across every DSPy LLM call in the batch (30–60 s per entity), pinning MVCC snapshots open against `VACUUM`. The CAS UPDATE delivers the same write-time exclusion without spanning LLM I/O.
 
 ## Reflection Pipeline Overview
 
