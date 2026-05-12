@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING
 from aioclock import AioClock
 from aioclock.triggers import Every
 from sqlalchemy.engine.url import make_url
+from sqlalchemy.exc import SQLAlchemyError
 
 from memex_core.config import MemexConfig
 from memex_core.context import background_session
@@ -50,7 +51,13 @@ async def periodic_reflection_task(api: 'MemexAPI', batch_size: int):
             logger.info(f'Scheduler: Reflecting on {len(requests)} entities.')
             await api.reflect_batch(requests)
 
-        except (OSError, RuntimeError, ValueError) as e:
+        except (OSError, RuntimeError, ValueError, SQLAlchemyError) as e:
+            # SQLAlchemyError covers IntegrityError on the orchestrator
+            # session commit that flushes newly-created MentalModel rows
+            # (race on the (entity_id, vault_id) unique index when two
+            # workers attempt to create a row for the same entity in the
+            # same tick). The next tick re-claims via SKIP LOCKED and
+            # recover_stale_processing absorbs any PROCESSING leftovers.
             logger.error(f'Scheduler: Task failed: {e}', exc_info=True)
 
 

@@ -47,6 +47,7 @@ from memex_core.memory.reflect.trends import compute_trend
 from memex_core.memory.models.protocols import EmbeddingsModel
 from memex_core.memory.formatting import format_for_embedding
 from memex_core.memory.confidence import extract_confidence_and_count, mean_and_variance
+from memex_core.metrics import REFLECTION_CAS_ABANDONS_TOTAL
 
 logger = logging.getLogger('memex.core.memory.reflect.reflection')
 
@@ -486,6 +487,7 @@ class ReflectionEngine:
         result = await active_session.execute(stmt)
         rowcount = getattr(result, 'rowcount', 0) or 0
         if rowcount == 0:
+            REFLECTION_CAS_ABANDONS_TOTAL.inc()
             logger.warning(
                 'CAS abandon for mental model %s (entity %s): version=%d (concurrent refresh won; '
                 'next scheduler tick will retry)',

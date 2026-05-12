@@ -76,7 +76,7 @@ graph TD
         --> P2["Phase 2: Hunt<br/>pgvector similarity search per candidate<br/>+ tail sampling (5% rate)<br/><i>0 LLM calls</i>"]
         --> P3["Phase 3: Validate<br/>LLM validates candidates against evidence<br/>Extract exact supporting quotes<br/><i>1 LLM call</i>"]
         --> P4["Phase 4: Compare/Merge<br/>Merge new + existing observations<br/>Compute trends via temporal density<br/><i>1 LLM call</i>"]
-        --> P5["Phase 5: Finalize<br/>CAS UPDATE on mental_models<br/>WHERE id AND version=:claimed<br/>Loser abandons; next tick retries<br/><i>0 LLM calls</i>"]
+        --> P5["Phase 5: Finalize<br/>CAS UPDATE on mental_models<br/>WHERE id=:id AND version=:claimed<br/>Loser abandons; next tick retries<br/><i>0 LLM calls</i>"]
         --> P6["Phase 6: Enrich<br/>Tag contributing memory units with<br/>concepts from reflection<br/><i>1 LLM call (optional)</i>"]
     end
 ```
