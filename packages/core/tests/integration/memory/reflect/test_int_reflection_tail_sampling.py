@@ -1,5 +1,4 @@
 import pytest
-import asyncio
 from uuid import uuid4
 from datetime import datetime, timezone
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -58,8 +57,7 @@ async def test_phase_2_hunt_tail_sampling(session: AsyncSession, memex_config: M
     )
 
     # 4. Run Hunt
-    db_lock = asyncio.Lock()
-    results = await engine._phase_2_hunt([candidate], db_lock, vault_id=GLOBAL_VAULT_ID)
+    results = await engine._phase_2_hunt([candidate], vault_id=GLOBAL_VAULT_ID)
 
     # 5. Verify
     assert len(results) == 1

@@ -85,7 +85,6 @@ async def test_phase_6_skips_when_no_observations(engine, db_lock):
             entity_summary='A test entity.',
             final_obs=[],
             recent_memories=[unit],
-            db_lock=db_lock,
         )
         mock_llm.assert_not_called()
 
@@ -101,7 +100,6 @@ async def test_phase_6_skips_when_no_evidence_ids(engine, db_lock):
             entity_summary='A test entity.',
             final_obs=[obs],
             recent_memories=[],
-            db_lock=db_lock,
         )
         mock_llm.assert_not_called()
 
@@ -136,7 +134,6 @@ async def test_phase_6_skips_when_evidence_units_not_found(engine, db_lock):
             entity_summary='Test.',
             final_obs=[obs],
             recent_memories=[],
-            db_lock=db_lock,
         )
         # No target units found → no LLM call
         mock_llm.assert_not_called()
@@ -158,7 +155,6 @@ async def test_phase_6_skips_when_llm_returns_none(engine, db_lock):
             entity_summary='Test.',
             final_obs=[obs],
             recent_memories=[unit],
-            db_lock=db_lock,
         )
 
     # No enrichment applied
@@ -183,7 +179,6 @@ async def test_phase_6_skips_when_llm_returns_empty_enrichments(engine, db_lock)
             entity_summary='Test.',
             final_obs=[obs],
             recent_memories=[unit],
-            db_lock=db_lock,
         )
 
     assert 'enriched_tags' not in unit.unit_metadata
@@ -218,7 +213,6 @@ async def test_phase_6_applies_enrichments(engine, db_lock):
             entity_summary='Authentication middleware being rewritten for compliance.',
             final_obs=[obs],
             recent_memories=[unit],
-            db_lock=db_lock,
         )
 
     assert 'enriched_tags' in unit.unit_metadata
@@ -265,7 +259,6 @@ async def test_phase_6_accumulates_tags_across_cycles(engine, db_lock):
             entity_summary='Auth middleware.',
             final_obs=[obs],
             recent_memories=[unit],
-            db_lock=db_lock,
         )
 
     # Should be union, no duplicates
@@ -299,7 +292,6 @@ async def test_phase_6_normalizes_tags_to_lowercase(engine, db_lock):
             entity_summary='Test.',
             final_obs=[obs],
             recent_memories=[unit],
-            db_lock=db_lock,
         )
 
     assert set(unit.unit_metadata['enriched_tags']) == {'compliance', 'eu-regulation', 'gdpr'}
@@ -331,7 +323,6 @@ async def test_phase_6_handles_out_of_bounds_index(engine, db_lock):
             entity_summary='Test.',
             final_obs=[obs],
             recent_memories=[unit],
-            db_lock=db_lock,
         )
 
     # Only the valid enrichment should be applied
@@ -359,7 +350,6 @@ async def test_phase_6_deduplicates_evidence_across_observations(engine, db_lock
             entity_summary='Test.',
             final_obs=[obs1, obs2],
             recent_memories=[shared_unit],
-            db_lock=db_lock,
         )
 
     # LLM should receive exactly 1 memory (deduplicated)
@@ -389,7 +379,6 @@ async def test_phase_6_handles_none_unit_metadata(engine, db_lock):
             entity_summary='Test.',
             final_obs=[obs],
             recent_memories=[unit],
-            db_lock=db_lock,
         )
 
     assert unit.unit_metadata is not None
@@ -423,7 +412,6 @@ async def test_phase_6_preserves_existing_non_enriched_metadata(engine, db_lock)
             entity_summary='Test.',
             final_obs=[obs],
             recent_memories=[unit],
-            db_lock=db_lock,
         )
 
     # Original metadata preserved
@@ -457,7 +445,6 @@ async def test_phase_6_llm_context_includes_existing_tags(engine, db_lock):
             entity_summary='Auth.',
             final_obs=[obs],
             recent_memories=[unit],
-            db_lock=db_lock,
         )
 
     # Check the memory content sent to LLM includes tag suffix
@@ -484,7 +471,6 @@ async def test_phase_6_llm_context_metadata_correct(engine, db_lock):
             entity_summary='Test.',
             final_obs=[obs],
             recent_memories=[unit],
-            db_lock=db_lock,
         )
 
     # Verify run_dspy_operation was called
@@ -516,7 +502,6 @@ async def test_phase_6_enriches_multiple_units(engine, db_lock):
             entity_summary='Auth system under compliance rewrite.',
             final_obs=[obs],
             recent_memories=[unit_a, unit_b, unit_c],
-            db_lock=db_lock,
         )
 
     assert set(unit_a.unit_metadata['enriched_tags']) == {'compliance'}
@@ -582,7 +567,6 @@ async def test_phase_6_loads_missing_evidence_units(engine, db_lock):
             entity_summary='Test.',
             final_obs=[obs],
             recent_memories=[unit_in_memory],
-            db_lock=db_lock,
         )
 
     # Verify DB was queried for the missing unit
@@ -613,7 +597,6 @@ async def test_phase_6_does_not_query_db_when_all_units_in_memory(engine, db_loc
             entity_summary='Test.',
             final_obs=[obs],
             recent_memories=[unit],
-            db_lock=db_lock,
         )
 
     # Should NOT have called session.exec (no missing units to load)

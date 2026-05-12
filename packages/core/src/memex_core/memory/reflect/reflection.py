@@ -2,9 +2,11 @@
 
 import asyncio
 import logging
-from datetime import datetime, timezone
-from uuid import UUID
 from collections import defaultdict
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from datetime import datetime, timezone
+from typing import AsyncIterator, Callable
+from uuid import UUID
 
 import dspy
 from sqlmodel import select, col
@@ -13,6 +15,8 @@ from sqlalchemy import func, update as sa_update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import defer
 from sqlalchemy.orm.attributes import flag_modified
+
+EntitySessionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
 
 from memex_core.config import MemexConfig, GLOBAL_VAULT_ID
 from memex_core.llm import run_dspy_operation
@@ -64,6 +68,7 @@ def get_reflection_engine(
     session: AsyncSession,
     config: MemexConfig,
     embedder: EmbeddingsModel,
+    entity_session_factory: EntitySessionFactory | None = None,
 ) -> 'ReflectionEngine':
     """
     Factory method to create a ReflectionEngine with dependencies.
@@ -72,6 +77,7 @@ def get_reflection_engine(
         session=session,
         config=config,
         embedder=embedder,
+        entity_session_factory=entity_session_factory,
     )
 
 
@@ -83,8 +89,23 @@ class ReflectionEngine:
         session: AsyncSession,
         config: MemexConfig,
         embedder: EmbeddingsModel,
+        entity_session_factory: EntitySessionFactory | None = None,
     ):
+        # ``session`` is the orchestrator-level session used for the batch
+        # fetches in ``reflect_batch`` (one-shot reads before LLM phases).
+        #
+        # ``entity_session_factory`` is the per-entity short-session
+        # opener used inside each reflection's DB-touching phases — see
+        # ``_entity_session``. Per-entity sessions release their
+        # transactions between phases, so no DB transaction spans an LLM
+        # call, eliminating the connection-pool exhaustion and VACUUM-
+        # blocking behaviour of the pre-V18 shared-session model.
+        # Production callers pass ``metastore.session`` (an async context
+        # manager) here; legacy callers (unit tests) may omit it, in
+        # which case the helper falls back to yielding ``self.session``
+        # so existing single-session test scaffolds keep working.
         self.session = session
+        self.entity_session_factory = entity_session_factory
         self.config = config or MemexConfig()
         self.embedder = embedder
 
@@ -121,6 +142,29 @@ class ReflectionEngine:
             )
             self.lm = None
 
+    @asynccontextmanager
+    async def _entity_session(self) -> AsyncIterator[AsyncSession]:
+        """Yield a session for *per-entity* DB work inside a reflection.
+
+        When ``entity_session_factory`` is configured (production path),
+        opens a fresh ``AsyncSession`` from the factory's async context
+        manager. The transaction is released on context exit — so between
+        LLM phases no DB transaction is held, no MVCC snapshot is pinned,
+        and the connection returns to the pool.
+
+        When ``entity_session_factory`` is None (legacy tests and the
+        ``get_reflection_engine`` factory without an explicit override),
+        falls back to yielding the shared orchestrator session. Single-
+        session semantics — same behaviour as the pre-V18 code path.
+        Production callers must plumb a factory in to unlock the per-
+        entity transaction lifecycle.
+        """
+        if self.entity_session_factory is not None:
+            async with self.entity_session_factory() as session:
+                yield session
+        else:
+            yield self.session
+
     async def reflect_batch(self, requests: list[ReflectionRequest]) -> list[MentalModel]:
         """Run reflection for multiple entities in parallel, grouped by vault_id."""
         if not requests:
@@ -136,14 +180,17 @@ class ReflectionEngine:
         )
 
         all_success_models = []
-        db_lock = asyncio.Lock()
         concurrency = self.config.server.memory.reflection.max_concurrency
         sem = asyncio.Semaphore(concurrency)
 
         for vault_id, v_requests in vault_groups.items():
             entity_ids = [r.entity_id for r in v_requests]
 
-            # 1.1 Batch Load Data for this Vault (Serial DB Access)
+            # 1.1 Batch Load Data for this Vault (Serial DB Access).
+            # This is the one-shot orchestrator-level read; uses self.session.
+            # All subsequent per-entity DB work opens its own short session
+            # via ``_entity_session`` (V18-c) so transactions don't span
+            # the per-entity LLM phases.
             models_map = await self._batch_get_or_create_models(entity_ids, vault_id=vault_id)
             entities_map = await self._batch_get_entities(entity_ids)
             # Batch fetch uses the most-permissive limit in the group;
@@ -170,7 +217,6 @@ class ReflectionEngine:
                         entities_map,
                         memories_map,
                         sem,
-                        db_lock,
                     )
                     for req in v_requests
                 ]
@@ -197,7 +243,6 @@ class ReflectionEngine:
         entities_map: dict[UUID, Entity],
         memories_map: dict[UUID, list[MemoryUnit]],
         sem: asyncio.Semaphore,
-        db_lock: asyncio.Lock,
     ) -> MentalModel | None:
         """Process a single entity reflection with semaphore control."""
         eid = req.entity_id
@@ -217,7 +262,6 @@ class ReflectionEngine:
                     mental_model=models_map[eid],
                     entity=entity,
                     recent_memories=recent_memories,
-                    db_lock=db_lock,
                     vault_id=req.vault_id,
                 )
             except Exception as e:
@@ -247,7 +291,6 @@ class ReflectionEngine:
         mental_model: MentalModel,
         entity: Entity | None,
         recent_memories: list[MemoryUnit],
-        db_lock: asyncio.Lock,
         vault_id: UUID = GLOBAL_VAULT_ID,
     ) -> MentalModel:
         """Internal logic for single entity reflection, decoupled from DB fetching logic."""
@@ -272,33 +315,51 @@ class ReflectionEngine:
                     'reflection.vault_id': str(vault_id),
                 },
             ):
-                # Phase 0: Update Existing
+                # Capture pre-Phase-0 observation count so the no-memories
+                # early-return can detect whether Phase 0 pruned anything
+                # (the only thing that can change ``mental_model.observations``
+                # on that path).
+                pre_phase0_obs_count = len(mental_model.observations or [])
+
+                # Phase 0: Update Existing — opens its own short DB tx
+                # internally; no transaction held during the LLM call.
                 updated_observations = await self._phase_0_update(
                     mental_model, entity_name, recent_memories, vault_id=vault_id
                 )
 
                 if not recent_memories:
-                    mental_model.observations = [
-                        obs.model_dump(mode='json') for obs in updated_observations
-                    ]
+                    # No new memories. If Phase 0 pruned dead refs the
+                    # observation count drops; persist via CAS so the
+                    # prune doesn't get lost (pre-V18 the orchestrator's
+                    # batch commit handled it). Otherwise it's a true
+                    # no-op — return without touching the DB.
+                    post_phase0_obs_count = len(mental_model.observations or [])
+                    if post_phase0_obs_count != pre_phase0_obs_count and updated_observations:
+                        async with self._entity_session() as ph5_session:
+                            await self._phase_5_finalize(
+                                mental_model,
+                                updated_observations,
+                                session=ph5_session,
+                                entity_summary='',
+                                entity_type=entity_type,
+                            )
                     return mental_model
 
-                # Phase 1: Seed (LLM)
+                # Phase 1: Seed (pure LLM — no DB)
                 candidates = await self._phase_1_seed(
                     recent_memories, entity_name, updated_observations, vault_id=vault_id
                 )
 
-                # Phase 2: Hunt (Vector Search)
-                candidates_with_evidence = await self._phase_2_hunt(
-                    candidates, db_lock, vault_id=vault_id
-                )
+                # Phase 2: Hunt — opens its own short DB tx for the vector
+                # search + unit hydration; releases it before returning.
+                candidates_with_evidence = await self._phase_2_hunt(candidates, vault_id=vault_id)
 
-                # Phase 3: Validate (LLM)
+                # Phase 3: Validate (pure LLM — no DB)
                 validated = await self._phase_3_validate(
                     candidates_with_evidence, vault_id=vault_id
                 )
 
-                # Phase 4: Compare (LLM)
+                # Phase 4: Compare (pure LLM — no DB)
                 final_obs, entity_summary = await self._phase_4_compare(
                     updated_observations,
                     validated,
@@ -306,27 +367,31 @@ class ReflectionEngine:
                     entity_name=entity_name,
                 )
 
-                # Phase 5: Finalize Model (CAS UPDATE — may abandon on version conflict)
-                applied = await self._phase_5_finalize(
-                    mental_model,
-                    final_obs,
-                    entity_summary=entity_summary,
-                    entity_type=entity_type,
-                )
+                # Phase 5: Finalize Model (CAS UPDATE — may abandon on version
+                # conflict). Opens its own short DB tx and commits per-entity.
+                async with self._entity_session() as ph5_session:
+                    applied = await self._phase_5_finalize(
+                        mental_model,
+                        final_obs,
+                        session=ph5_session,
+                        entity_summary=entity_summary,
+                        entity_type=entity_type,
+                    )
                 if not applied:
-                    # Another worker refreshed this entity while our LLM phases
-                    # ran. Return the unmodified model; next scheduler tick
-                    # re-runs on the fresher state.
+                    # Another worker refreshed this entity while our LLM
+                    # phases ran. Return the unmodified model; next
+                    # scheduler tick re-runs on the fresher state.
                     return mental_model
 
-                # Phase 6: Enrich (Memory Evolution)
+                # Phase 6: Enrich (Memory Evolution) — opens its own short DB
+                # tx for the unit-metadata writes; releases it before any
+                # follow-on LLM call.
                 if self.config.server.memory.reflection.enrichment_enabled:
                     await self._phase_6_enrich(
                         entity_name=entity_name,
                         entity_summary=entity_summary,
                         final_obs=final_obs,
                         recent_memories=recent_memories,
-                        db_lock=db_lock,
                         vault_id=vault_id,
                     )
 
@@ -336,27 +401,38 @@ class ReflectionEngine:
         self,
         mental_model: MentalModel,
         final_obs: list[Observation],
+        session: AsyncSession | None = None,
         entity_summary: str = '',
         entity_type: str | None = None,
     ) -> bool:
         """Phase 5: CAS UPDATE on mental_models, version-checked.
 
         Issues a single ``UPDATE mental_models ... WHERE id = :id AND
-        version = :claimed_version`` and bumps the version atomically. If
-        another worker has refreshed this entity since the version was
-        read, the WHERE clause matches zero rows and this reflection is
-        abandoned (returns ``False``); the in-memory ``mental_model`` is
-        left unchanged so the caller doesn't surface stale state. The
-        next scheduler tick will re-run reflection on the fresher state.
+        version = :claimed_version`` and bumps the version atomically.
+        If another worker has refreshed this entity since the version
+        was read, the WHERE clause matches zero rows and this reflection
+        is abandoned (returns ``False``); the in-memory ``mental_model``
+        is left unchanged so the caller doesn't surface stale state.
+        The next scheduler tick will re-run reflection on the fresher
+        state.
 
         On success, the in-memory ``mental_model`` is mutated to match
-        what was written so callers and tests see consistent state, and
-        ``True`` is returned.
+        what was written and ``session.commit()`` is called so the
+        write is visible to other transactions before this function
+        returns. ``True`` is returned.
+
+        ``session`` may be ``None`` for legacy callers (unit tests with
+        a mocked engine session); in that case the orchestrator's
+        ``self.session`` is used directly (single-session semantics).
+        Production callers pass a per-entity session from
+        ``_entity_session()`` so the CAS UPDATE runs in its own short
+        transaction without spanning any LLM I/O.
 
         The CAS UPDATE is its own atomic SQL statement — no asyncio.Lock
         is needed to serialize concurrent writes to the row; Postgres'
         row-level locking handles that.
         """
+        active_session = session if session is not None else self.session
         claimed_version = mental_model.version
         new_observations = [obs.model_dump(mode='json') for obs in final_obs]
         new_entity_metadata = {
@@ -392,7 +468,7 @@ class ReflectionEngine:
             # mutates the in-memory model explicitly below.
             .execution_options(synchronize_session=False)
         )
-        result = await self.session.execute(stmt)
+        result = await active_session.execute(stmt)
         rowcount = getattr(result, 'rowcount', 0) or 0
         if rowcount == 0:
             logger.warning(
@@ -403,6 +479,14 @@ class ReflectionEngine:
                 claimed_version,
             )
             return False
+
+        # Commit the per-entity session so the write is visible to other
+        # transactions before we return. When ``session`` was passed in,
+        # the caller's `async with self._entity_session()` block will see
+        # this committed state on exit. When the orchestrator's
+        # ``self.session`` is used (legacy single-session path), the
+        # commit closes the implicit autobegin transaction.
+        await active_session.commit()
 
         mental_model.observations = new_observations
         mental_model.entity_metadata = new_entity_metadata
@@ -417,10 +501,19 @@ class ReflectionEngine:
         entity_summary: str,
         final_obs: list[Observation],
         recent_memories: list[MemoryUnit],
-        db_lock: asyncio.Lock,
         vault_id: UUID = GLOBAL_VAULT_ID,
     ) -> None:
-        """Phase 6: Push enriched tags from mental model back into evidence units."""
+        """Phase 6: Push enriched tags from mental model back into evidence units.
+
+        Opens a single per-entity session for the duration of the phase.
+        The read transaction is committed before the LLM call so no DB
+        transaction is held during DSPy I/O; the same session is reused
+        for the write transaction afterwards. Connection is held for the
+        duration of this entity's enrichment but only for *one entity*,
+        not the whole batch — V18-c's per-entity session is what keeps
+        the connection pool from being saturated across many concurrent
+        reflections.
+        """
         if not final_obs:
             return
 
@@ -434,69 +527,80 @@ class ReflectionEngine:
         if not evidence_ids:
             return
 
-        # 2. Build unit map from recent_memories, load any missing from DB
-        unit_map: dict[UUID, MemoryUnit] = {m.id: m for m in recent_memories}
-        missing_ids = set(evidence_ids.keys()) - set(unit_map.keys())
+        async with self._entity_session() as ph6_session:
+            # 2. Build unit map from recent_memories, load any missing from DB
+            unit_map: dict[UUID, MemoryUnit] = {m.id: m for m in recent_memories}
+            missing_ids = set(evidence_ids.keys()) - set(unit_map.keys())
 
-        if missing_ids:
-            async with db_lock:
+            if missing_ids:
                 stmt = select(MemoryUnit).where(col(MemoryUnit.id).in_(list(missing_ids)))
-                result = await self.session.exec(stmt)
+                result = await ph6_session.exec(stmt)
                 for unit in result.all():
                     unit_map[unit.id] = unit
 
-        # 3. Filter to only units we have evidence for
-        target_units = [unit_map[uid] for uid in evidence_ids if uid in unit_map]
-        if not target_units:
-            return
+            # 3. Filter to only units we have evidence for
+            target_units = [unit_map[uid] for uid in evidence_ids if uid in unit_map]
+            if not target_units:
+                return
 
-        # 4. Build LLM context
-        obs_context = [
-            ReflectObservationContext(index_id=i, title=o.title, content=o.content)
-            for i, o in enumerate(final_obs)
-        ]
+            # 4. Build LLM context
+            obs_context = [
+                ReflectObservationContext(index_id=i, title=o.title, content=o.content)
+                for i, o in enumerate(final_obs)
+            ]
 
-        memory_context = []
-        for i, unit in enumerate(target_units):
-            meta = unit.unit_metadata or {}
-            existing_tags = meta.get('enriched_tags', [])
-            existing_kw = meta.get('enriched_keywords', [])
-            all_existing = existing_tags + existing_kw
-            tag_suffix = f' [tags: {", ".join(all_existing)}]' if all_existing else ''
-            occurred = (unit.event_date or datetime.now(timezone.utc)).isoformat()
-            memory_context.append(
-                ReflectMemoryContext(
-                    index_id=i,
-                    content=unit.text + tag_suffix,
-                    occurred=occurred,
+            memory_context = []
+            for i, unit in enumerate(target_units):
+                meta = unit.unit_metadata or {}
+                existing_tags = meta.get('enriched_tags', [])
+                existing_kw = meta.get('enriched_keywords', [])
+                all_existing = existing_tags + existing_kw
+                tag_suffix = f' [tags: {", ".join(all_existing)}]' if all_existing else ''
+                occurred = (unit.event_date or datetime.now(timezone.utc)).isoformat()
+                memory_context.append(
+                    ReflectMemoryContext(
+                        index_id=i,
+                        content=unit.text + tag_suffix,
+                        occurred=occurred,
+                    )
                 )
+
+            # 5. Release the read transaction before the LLM call so no
+            # MVCC snapshot is pinned across DSPy I/O.
+            try:
+                await ph6_session.commit()
+            except SQLAlchemyError:
+                # No active transaction (e.g. when recent_memories covered
+                # everything and no DB read happened). Safe to ignore.
+                pass
+
+            # 6. Call LLM — session is open but no transaction held.
+            enrich_predictor = dspy.Predict(EnrichmentSignature)
+
+            assert self.lm is not None, 'LM must be initialized for Phase 6'
+            result = await run_dspy_operation(
+                lm=self.lm,
+                predictor=enrich_predictor,
+                input_kwargs={
+                    'entity_name': entity_name,
+                    'entity_summary': entity_summary,
+                    'observations': obs_context,
+                    'memories': memory_context,
+                },
+                operation_name='reflection.enrich',
             )
 
-        # 5. Call LLM
-        enrich_predictor = dspy.Predict(EnrichmentSignature)
+            if not result or not result.enrichments:
+                logger.info('Phase 6: No enrichments generated.')
+                return
 
-        assert self.lm is not None, 'LM must be initialized for Phase 6'
-        result = await run_dspy_operation(
-            lm=self.lm,
-            predictor=enrich_predictor,
-            input_kwargs={
-                'entity_name': entity_name,
-                'entity_summary': entity_summary,
-                'observations': obs_context,
-                'memories': memory_context,
-            },
-            operation_name='reflection.enrich',
-        )
+            # 7. Apply enrichments — new implicit transaction begins on first
+            # DB op. Mutations to target_units (whether they came from
+            # recent_memories or from the DB load in step 2) are flushed by
+            # the commit below.
+            now_iso = datetime.now(timezone.utc).isoformat()
+            enriched_count = 0
 
-        if not result or not result.enrichments:
-            logger.info('Phase 6: No enrichments generated.')
-            return
-
-        # 6. Apply enrichments under db_lock
-        now_iso = datetime.now(timezone.utc).isoformat()
-        enriched_count = 0
-
-        async with db_lock:
             for enrichment in result.enrichments:
                 idx = enrichment.memory_index
                 if idx < 0 or idx >= len(target_units):
@@ -520,7 +624,17 @@ class ReflectionEngine:
                 unit.unit_metadata['enriched_by_entity'] = entity_name
 
                 flag_modified(unit, 'unit_metadata')
+                # Ensure the unit is attached to the per-entity session so the
+                # mutation persists when this session commits. ``session.add``
+                # is a no-op if the instance is already attached to this
+                # session, and ``merge`` would re-load from the DB — ``add``
+                # is the right primitive here for instances that may be
+                # attached to a *different* session (the orchestrator's, when
+                # they came from ``recent_memories``).
+                ph6_session.add(unit)
                 enriched_count += 1
+
+            await ph6_session.commit()
 
         logger.info(f'Phase 6: Enriched {enriched_count} memory units for entity "{entity_name}".')
 
@@ -665,13 +779,21 @@ class ReflectionEngine:
                 all_evidence_ids.add(ev.memory_id)
 
         if all_evidence_ids:
-            live_stmt = select(MemoryUnit.id).where(
-                col(MemoryUnit.id).in_(list(all_evidence_ids)),
-                (col(MemoryUnit.vault_id) == vault_id)
-                | (col(MemoryUnit.vault_id) == GLOBAL_VAULT_ID),
-            )
-            live_result = await self.session.exec(live_stmt)
-            live_ids = set(live_result.all())
+            # Per-entity DB session for the live-ID lookup. The session
+            # closes before the LLM call below, so no transaction is held
+            # during DSPy I/O. The in-memory ``model.observations`` mutation
+            # is unflushed-attribute on an instance attached to the
+            # orchestrator's session — Phase 5's CAS UPDATE is the
+            # authoritative persistence path; this flag is only consumed
+            # by the legacy single-session test scaffold.
+            async with self._entity_session() as ph0_session:
+                live_stmt = select(MemoryUnit.id).where(
+                    col(MemoryUnit.id).in_(list(all_evidence_ids)),
+                    (col(MemoryUnit.vault_id) == vault_id)
+                    | (col(MemoryUnit.vault_id) == GLOBAL_VAULT_ID),
+                )
+                live_result = await ph0_session.exec(live_stmt)
+                live_ids = set(live_result.all())
             dead_ids = all_evidence_ids - live_ids
 
             if dead_ids:
@@ -797,10 +919,13 @@ class ReflectionEngine:
     async def _phase_2_hunt(
         self,
         candidates: list[CandidateObservation],
-        db_lock: asyncio.Lock,
         vault_id: UUID = GLOBAL_VAULT_ID,
     ) -> list[tuple[CandidateObservation, list[MemoryUnit]]]:
-        """Phase 2: Retrieve evidence for candidates via vector search + tail sampling."""
+        """Phase 2: Retrieve evidence for candidates via vector search + tail sampling.
+
+        Holds a single per-entity DB session for the duration of the search
+        loop, then releases it. No DB transaction outlives this call.
+        """
         from memex_core.memory.extraction import storage
 
         if not candidates:
@@ -810,15 +935,15 @@ class ReflectionEngine:
         embeddings = await self._async_encode(texts)
         results: list[tuple[CandidateObservation, list[MemoryUnit]]] = []
 
-        # 2b. Tail Sampling: Sample random memories from the vault
-        tail_memories = await self._sample_tail_memories(vault_id=vault_id)
+        async with self._entity_session() as ph2_session:
+            # 2b. Tail Sampling: Sample random memories from the vault
+            tail_memories = await self._sample_tail_memories(ph2_session, vault_id=vault_id)
 
-        for i, cand in enumerate(candidates):
-            embedding = embeddings[i]
+            for i, cand in enumerate(candidates):
+                embedding = embeddings[i]
 
-            async with db_lock:
                 similar_items = await storage.find_similar_facts(
-                    self.session,
+                    ph2_session,
                     embedding,
                     limit=self.config.server.memory.reflection.search_limit,
                     threshold=self.config.server.memory.reflection.similarity_threshold,
@@ -836,26 +961,28 @@ class ReflectionEngine:
                     .where(col(MemoryUnit.id).in_(unit_ids))
                     .options(defer(MemoryUnit.embedding))  # type: ignore
                 )
-                units_result = await self.session.exec(unit_stmt)
+                units_result = await ph2_session.exec(unit_stmt)
                 found_memories = list(units_result.all())
 
-            # Similarity-based re-ranking
-            similarity_map = {item[0]: item[1] for item in similar_items}
-            found_memories.sort(
-                key=lambda m: similarity_map.get(m.id, 0.0),
-                reverse=True,
-            )
+                # Similarity-based re-ranking
+                similarity_map = {item[0]: item[1] for item in similar_items}
+                found_memories.sort(
+                    key=lambda m: similarity_map.get(m.id, 0.0),
+                    reverse=True,
+                )
 
-            # Merge similar and tail memories (deduplicate by ID)
-            all_mems = {m.id: m for m in found_memories}
-            for tm in tail_memories:
-                if tm.id not in all_mems:
-                    all_mems[tm.id] = tm
+                # Merge similar and tail memories (deduplicate by ID)
+                all_mems = {m.id: m for m in found_memories}
+                for tm in tail_memories:
+                    if tm.id not in all_mems:
+                        all_mems[tm.id] = tm
 
-            results.append((cand, list(all_mems.values())))
+                results.append((cand, list(all_mems.values())))
         return results
 
-    async def _sample_tail_memories(self, vault_id: UUID) -> list[MemoryUnit]:
+    async def _sample_tail_memories(
+        self, session: AsyncSession, vault_id: UUID
+    ) -> list[MemoryUnit]:
         """Sample random memories from the vault to avoid echo chambers."""
         rate = self.config.server.memory.reflection.tail_sampling_rate
         if rate <= 0:
@@ -877,7 +1004,7 @@ class ReflectionEngine:
             .options(defer(MemoryUnit.embedding))  # type: ignore
         )
 
-        result = await self.session.exec(query)
+        result = await session.exec(query)
         return list(result.all())
 
     async def _phase_3_validate(

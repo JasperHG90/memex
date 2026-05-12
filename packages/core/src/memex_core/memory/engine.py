@@ -256,7 +256,10 @@ class MemoryEngine:
                 f'Triggering immediate reflection on touched entities for vault {vault_id}...'
             )
             reflector = ReflectionEngine(
-                session, self.config, embedder=self.extraction.embedding_model
+                session,
+                self.config,
+                embedder=self.extraction.embedding_model,
+                entity_session_factory=self._session_factory,
             )
 
             # Use optimized batch reflection
@@ -348,7 +351,12 @@ class MemoryEngine:
         Returns:
             The updated MentalModel.
         """
-        reflector = ReflectionEngine(session, self.config, embedder=self.extraction.embedding_model)
+        reflector = ReflectionEngine(
+            session,
+            self.config,
+            embedder=self.extraction.embedding_model,
+            entity_session_factory=self._session_factory,
+        )
         return await reflector.reflect_on_entity(request)
 
     async def process_reflection_queue(
@@ -396,7 +404,12 @@ class MemoryEngine:
         logger.info(f'Processing reflection queue batch: {len(tasks)} tasks')
 
         # 3. Reflect
-        reflector = ReflectionEngine(session, self.config, embedder=self.extraction.embedding_model)
+        reflector = ReflectionEngine(
+            session,
+            self.config,
+            embedder=self.extraction.embedding_model,
+            entity_session_factory=self._session_factory,
+        )
         requests = [ReflectionRequest(entity_id=t.entity_id, vault_id=t.vault_id) for t in tasks]
 
         try:

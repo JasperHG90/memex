@@ -104,7 +104,12 @@ class ReflectionService:
         async with self.metastore.session() as session:
             from memex_core.memory.reflect.reflection import ReflectionEngine
 
-            reflector = ReflectionEngine(session, self.config, self.embedding_model)
+            reflector = ReflectionEngine(
+                session,
+                self.config,
+                self.embedding_model,
+                entity_session_factory=self.metastore.session,
+            )
 
             models = await reflector.reflect_batch([request])
             if not models:
@@ -194,7 +199,12 @@ class ReflectionService:
         async with self.metastore.session() as session:
             from memex_core.memory.reflect.reflection import ReflectionEngine
 
-            reflector = ReflectionEngine(session, self.config, self.embedding_model)
+            reflector = ReflectionEngine(
+                session,
+                self.config,
+                self.embedding_model,
+                entity_session_factory=self.metastore.session,
+            )
 
             models = await reflector.reflect_batch(requests)
 

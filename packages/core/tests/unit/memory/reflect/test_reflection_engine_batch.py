@@ -179,9 +179,7 @@ async def test_process_entity_reflection_slices_per_request(engine):
 
     captured = {}
 
-    async def _fake_internal(
-        *, entity_id, mental_model, entity, recent_memories, db_lock, vault_id
-    ):
+    async def _fake_internal(*, entity_id, mental_model, entity, recent_memories, vault_id):
         captured['recent_memories'] = recent_memories
         return MagicMock()
 
@@ -190,7 +188,6 @@ async def test_process_entity_reflection_slices_per_request(engine):
     import asyncio
 
     sem = asyncio.Semaphore(1)
-    db_lock = asyncio.Lock()
 
     req = ReflectionRequest(entity_id=eid, limit_recent_memories=20)
     await engine._process_entity_reflection(
@@ -199,7 +196,6 @@ async def test_process_entity_reflection_slices_per_request(engine):
         entities_map={},
         memories_map=memories_map,
         sem=sem,
-        db_lock=db_lock,
     )
     assert len(captured['recent_memories']) == 20
 
@@ -211,7 +207,6 @@ async def test_process_entity_reflection_slices_per_request(engine):
         entities_map={},
         memories_map=memories_map,
         sem=sem,
-        db_lock=db_lock,
     )
     assert len(captured['recent_memories']) == 30
 
