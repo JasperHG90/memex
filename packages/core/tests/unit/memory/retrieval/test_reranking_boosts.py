@@ -1,5 +1,6 @@
 """Tests for cross-encoder recency, temporal proximity, and MW boosts."""
 
+import math
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock
 from uuid import uuid4
@@ -461,3 +462,76 @@ class TestSingleUnit:
         result = await engine._rerank_results('query', [unit])
         assert len(result) == 1
         assert result[0] is unit
+
+
+def _make_engine_with_clip(
+    scores: list[float],
+    log_clip: float,
+    recency_alpha: float = 1.0,
+) -> RetrievalEngine:
+    reranker = MagicMock()
+    reranker.score.return_value = scores
+    config = RetrievalConfig(
+        reranking_recency_alpha=recency_alpha,
+        reranking_temporal_alpha=0.0,
+        reranking_mw_alpha=0.0,
+        composite_boost_log_clip=log_clip,
+    )
+    return RetrievalEngine(
+        embedder=MagicMock(),
+        reranker=reranker,
+        retrieval_config=config,
+    )
+
+
+class TestCompositeLogClipIntegration:
+    """Drive the full `_rerank_results` entry point with finite and inf clips."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize('log_clip', [0.0, 0.7, 1.0, 1.5, math.inf])
+    async def test_clip_does_not_invert_ce_score_order(self, log_clip: float) -> None:
+        """At any log_clip, two equally-aged units with strictly higher ce_score
+        sort first. Floor of clip = 0 collapses metadata; no metadata signal
+        should ever invert ce_score ordering."""
+        now = datetime.now(timezone.utc)
+        unit_high = _make_unit(event_date=now, text='high')
+        unit_low = _make_unit(event_date=now, text='low')
+        engine = _make_engine_with_clip([2.0, -2.0], log_clip=log_clip)
+        result = await engine._rerank_results('q', [unit_high, unit_low])
+        assert result == [unit_high, unit_low]
+
+    @pytest.mark.asyncio
+    async def test_clip_at_zero_collapses_metadata_so_ce_score_decides(self) -> None:
+        """L = 0 ⇒ exp(clip(*, 0, 0)) = 1 ⇒ ranking by ce_score alone."""
+        now = datetime.now(timezone.utc)
+        old = now - timedelta(days=300)
+        unit_recent_low_ce = _make_unit(event_date=now, text='recent-low-ce')
+        unit_old_high_ce = _make_unit(event_date=old, text='old-high-ce')
+        engine = _make_engine_with_clip(
+            [-2.0, 2.0],
+            log_clip=0.0,
+            recency_alpha=2.0,
+        )
+        result = await engine._rerank_results('q', [unit_recent_low_ce, unit_old_high_ce])
+        assert result == [unit_old_high_ce, unit_recent_low_ce]
+
+    @pytest.mark.asyncio
+    async def test_clip_inf_default_preserves_product_ranking(self) -> None:
+        """L = math.inf ⇒ math identical to prior multiplicative product."""
+        now = datetime.now(timezone.utc)
+        old = now - timedelta(days=300)
+        unit_recent = _make_unit(event_date=now, text='recent')
+        unit_old = _make_unit(event_date=old, text='old')
+        engine = _make_engine_with_clip(
+            [0.0, 0.0],
+            log_clip=math.inf,
+            recency_alpha=2.0,
+        )
+        result = await engine._rerank_results('q', [unit_old, unit_recent])
+        assert result == [unit_recent, unit_old]
+
+    @pytest.mark.asyncio
+    async def test_default_config_uses_inf_clip(self) -> None:
+        """RetrievalConfig() ships with composite_boost_log_clip = math.inf."""
+        config = RetrievalConfig()
+        assert config.composite_boost_log_clip == math.inf

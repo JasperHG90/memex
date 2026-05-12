@@ -5,6 +5,7 @@ Run with: just benchmark
 Or: uv run pytest packages/core/tests/benchmarks --benchmark-only -v
 """
 
+import math as _math
 from datetime import datetime, timedelta, timezone
 from uuid import UUID, uuid4
 
@@ -274,8 +275,18 @@ def test_parse_datetime_batch(benchmark):
 
 @pytest.mark.benchmark(group='composition')
 def test_compose_boosts_logspace_batch(benchmark):
-    import math
+    """Microbenchmark of the log-additive helper at L=inf.
 
+    Comparison case ``test_multiplicative_product_batch_reference`` below
+    measures the bare 5-factor product. The log-additive helper is roughly
+    20-30× slower per call than the bare product because of the five
+    math.log calls and math.exp, but the absolute cost per call is
+    sub-microsecond. At a typical retrieval candidate pool of ~200, the
+    extra cost is ~0.1ms on a 180-620ms query (well within the plan's 10%
+    latency budget). No assertion: this is informational, not a regression
+    gate; the system-level latency budget is owned by the E7 ranking
+    baseline + the existing retrieval integration tests.
+    """
     from memex_core.memory.retrieval.engine import _compose_boosts_logspace
 
     inputs = [
@@ -295,7 +306,7 @@ def test_compose_boosts_logspace_batch(benchmark):
     def run():
         out = 0.0
         for ce, boosts in inputs:
-            out += _compose_boosts_logspace(ce, log_clip=math.inf, **boosts)
+            out += _compose_boosts_logspace(ce, log_clip=_math.inf, **boosts)
         return out
 
     benchmark(run)

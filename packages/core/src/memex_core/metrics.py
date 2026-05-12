@@ -171,6 +171,15 @@ MW_BOOST_OBSERVED = Histogram(
     buckets=(0.70, 0.80, 0.85, 0.90, 0.95, 1.0, 1.05, 1.10, 1.15, 1.20, 1.30),
 )
 
+COMPOSITE_BOOST_CLIPPED = Histogram(
+    'memex_composite_boost_clipped',
+    'Post-clip aggregate multiplier applied to ce_score during reranking, equal to '
+    'exp(clip(sum(log(b_i)), -L, +L)) where L = composite_boost_log_clip. At default '
+    'L = math.inf the value equals the prior multiplicative product of the five boost '
+    'factors. Wider spread than 1.0 indicates the clip is firing.',
+    buckets=(0.1, 0.3, 0.5, 0.7, 0.85, 1.0, 1.15, 1.3, 1.5, 2.0, 3.0, 5.0, 10.0),
+)
+
 # ---------------------------------------------------------------------------
 # Pre-reranker filter observability
 # ---------------------------------------------------------------------------

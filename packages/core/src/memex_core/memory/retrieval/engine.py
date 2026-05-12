@@ -67,6 +67,7 @@ from memex_core.memory.confidence import (
 )
 from memex_core.memory.formatting import format_for_reranking
 from memex_core.metrics import (
+    COMPOSITE_BOOST_CLIPPED,
     CONFIDENCE_BOOST_OBSERVED,
     CONFIDENCE_SCORE_DISTRIBUTION,
     CONFIDENCE_VARIANCE_OBSERVED,
@@ -90,6 +91,22 @@ def _compose_boosts_logspace(
     decay: float,
     log_clip: float,
 ) -> float:
+    """Compose five boost factors onto ce_score with log-space additive clip.
+
+    Returns ``ce_score * exp(clip(sum(log(b_i)), -log_clip, +log_clip))``.
+    Boost values at or below ``_LOG_FLOOR = 1e-9`` are floored at the floor
+    before taking the log, so zero or (theoretically) negative inputs do not
+    raise. At the ship default ``log_clip = math.inf`` the clip is a no-op and
+    the result equals the prior multiplicative product for strictly positive
+    boost inputs; for an input that hits the floor (e.g. a boost of exactly
+    ``0.0``), the new form produces ``ce_score * 1e-45`` rather than ``0.0``,
+    which preserves rank ordering by ``ce_score`` instead of tying at zero.
+    Under ship-default alphas every boost evaluates to ``1.0`` (or strictly
+    positive), so the zero-input path is dormant.
+
+    Emits the post-clip multiplier to ``COMPOSITE_BOOST_CLIPPED`` so operators
+    can observe whether the clip is firing in production traffic.
+    """
     log_boost = (
         math.log(max(recency, _LOG_FLOOR))
         + math.log(max(temporal, _LOG_FLOOR))
@@ -98,7 +115,9 @@ def _compose_boosts_logspace(
         + math.log(max(decay, _LOG_FLOOR))
     )
     clipped = max(-log_clip, min(log_clip, log_boost))
-    return ce_score * math.exp(clipped)
+    multiplier = math.exp(clipped)
+    COMPOSITE_BOOST_CLIPPED.observe(multiplier)
+    return ce_score * multiplier
 
 
 def _get_confidence(unit: HasConfidence) -> float:

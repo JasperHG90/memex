@@ -123,6 +123,7 @@ The tables below summarize which parameters are worth tuning and which are best 
 | `mmr_lambda` | 0.9 | **Yes** | Diversity vs relevance. 1.0 = pure relevance (may return near-duplicates). 0.7--0.8 = moderate diversity. Set to `null` to disable MMR entirely. |
 | `temporal_decay_days` | 30.0 | Rarely | Half-life for recency scoring. At 30 days, a month-old fact scores 50% of a fresh one. Lower values create stronger recency bias. |
 | `reranking_recency_alpha` | 0.2 | Rarely | Multiplicative recency boost during reranking. 0 = disabled, 0.2 = subtle, 0.5 = strong. |
+| `composite_boost_log_clip` | `inf` | Eventually | Symmetric log-space clip on the aggregate metadata multiplier (recency × temporal × MW × confidence × decay). At default `inf` the clip is a no-op (mathematically identical to the prior product). Set to a finite `L` (e.g. `0.7` → aggregate bounded to roughly `[0.50, 2.01]`; `1.0` → `[0.37, 2.72]`; `1.5` → `[0.22, 4.48]`) once the `memex_aggregate_boost` histogram has accumulated representative traffic. See [Retrieval scoring](../explanation/retrieval-scoring.md). |
 | `rrf_k` | 60 | **No** | RRF smoothing constant. 60 is well-studied in the literature. Changing this rarely improves results. |
 | `similarity_threshold` | 0.3 | **No** | pg_trgm threshold for entity name fuzzy matching in graph strategies. Leave alone. |
 | `temporal_decay_base` | 2.0 | **No** | Exponential base for temporal decay. Leave alone. |
