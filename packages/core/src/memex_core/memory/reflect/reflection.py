@@ -12,7 +12,6 @@ import dspy
 from sqlmodel import select, col
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlalchemy import func, update as sa_update
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import defer
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -215,21 +214,27 @@ class ReflectionEngine:
             # connection would not see them, and Phase 5's
             # WHERE id=:id AND version=0 predicate would match zero rows,
             # silently abandoning every brand-new entity's reflection.
+            # A commit with no pending state is a no-op in SQLAlchemy
+            # asyncio mode, not an error — so a bare commit is safe even
+            # when every entity in this batch already had its row.
             #
-            # Expunge each MentalModel from self.session afterwards so any
-            # in-memory attribute mutations made by the per-entity phase
-            # methods on these instances cannot flow into a second UPDATE
-            # via dirty-tracking — Phase 5's per-entity CAS is the
+            # If the commit raises (e.g. IntegrityError on a duplicate
+            # (entity_id, vault_id), OperationalError on a connection drop,
+            # serialisation failure), the exception propagates up to the
+            # caller and aborts this batch. Swallowing it silently would
+            # leave the batch's Phase 5 CAS UPDATEs targeting non-existent
+            # rows and abandoning every reflection without a log line —
+            # exactly the failure mode the round-1 fix had to prevent.
+            await self.session.commit()
+
+            # Expunge each MentalModel from self.session so any in-memory
+            # attribute mutations made by the per-entity phase methods on
+            # these instances cannot flow into a second UPDATE via
+            # dirty-tracking — Phase 5's per-entity CAS is the
             # authoritative write path, and a second un-versioned UPDATE
             # would silently overwrite concurrent writes. Only the
             # MentalModel instances are expunged; entities, units, and
             # other test-loaded state stay attached to self.session.
-            try:
-                await self.session.commit()
-            except SQLAlchemyError:
-                # Nothing pending to commit (e.g. all models already existed
-                # before this batch) — no rescue needed.
-                pass
             for mm in models_map.values():
                 if mm in self.session:
                     self.session.expunge(mm)
@@ -336,13 +341,22 @@ class ReflectionEngine:
                     # batch commit handled it). Otherwise it's a true no-op
                     # — return without touching the DB.
                     if phase0_mutated:
+                        # Preserve the prior entity_metadata description on
+                        # this prune-only path — Phase 4 was not run, so we
+                        # don't have a fresh ``entity_summary`` to use.
+                        # Passing ``entity_summary=''`` here would clobber
+                        # the description built by the most recent full
+                        # reflection cycle, which is a real regression.
+                        prior_meta = mental_model.entity_metadata or {}
+                        prior_summary = prior_meta.get('description', '') or ''
+                        prior_type = prior_meta.get('category') or entity_type
                         async with self._entity_session() as ph5_session:
                             await self._phase_5_finalize(
                                 mental_model,
                                 updated_observations,
                                 session=ph5_session,
-                                entity_summary='',
-                                entity_type=entity_type,
+                                entity_summary=prior_summary,
+                                entity_type=prior_type,
                             )
                     return mental_model
 
@@ -600,6 +614,14 @@ class ReflectionEngine:
             now_iso = datetime.now(timezone.utc).isoformat()
             enriched_count = 0
 
+            # First-pass: apply enrichments in-memory to ``target_units``.
+            # We DO NOT issue merge() here — that step happens in a second
+            # pass over a unit_id-sorted list so concurrent Phase 6 calls on
+            # different entities sharing overlapping evidence units acquire
+            # row locks in the same (id-ascending) order, eliminating the
+            # cross-entity two-row deadlock pattern that would otherwise
+            # leave one worker's reflection failing per cycle.
+            units_to_merge: list[MemoryUnit] = []
             for enrichment in result.enrichments:
                 idx = enrichment.memory_index
                 if idx < 0 or idx >= len(target_units):
@@ -623,16 +645,16 @@ class ReflectionEngine:
                 unit.unit_metadata['enriched_by_entity'] = entity_name
 
                 flag_modified(unit, 'unit_metadata')
-                # Bring the unit into this session so the mutation persists
-                # at commit. ``merge`` works whether the instance is detached,
-                # attached to *this* session, or attached to a *different*
-                # session (the orchestrator's, when units came from
-                # ``recent_memories``) — ``session.add`` on a cross-session
-                # instance raises ``InvalidRequestError``. ``merge`` issues
-                # a SELECT to load the current row and copies the in-memory
-                # state onto the session-attached copy.
-                await ph6_session.merge(unit)
+                units_to_merge.append(unit)
                 enriched_count += 1
+
+            # Merge in id-ascending order. ``merge`` issues SELECT…FOR
+            # UPDATE-equivalent row locking via the dirty UPDATE that
+            # follows at commit; deterministic ordering means two
+            # concurrent enrichments on overlapping unit sets cannot
+            # deadlock on opposing lock-acquisition order.
+            for unit in sorted(units_to_merge, key=lambda u: u.id):
+                await ph6_session.merge(unit)
 
             await ph6_session.commit()
 

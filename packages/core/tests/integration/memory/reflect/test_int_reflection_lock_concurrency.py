@@ -247,15 +247,10 @@ async def test_entity_lock_helper_distinguishes_locks_across_entities(
 async def test_phase_5_cas_via_entity_session_factory_persists_to_separate_session(
     session_manager, memex_config: MemexConfig
 ):
-    """Drives ReflectionEngine with an ``entity_session_factory`` (production
-    wiring) so Phase 5's CAS UPDATE runs in a session distinct from the
-    orchestrator's ``self.session``. Verifies that the write actually lands
-    in the DB and a third observer session can see it — i.e., the per-
-    entity session lifecycle from V18-c is end-to-end correct.
-
-    Without ``entity_session_factory`` the engine falls back to single-
-    session semantics; every other reflection test exercises only that
-    path. This test is the lone production-path gate.
+    """Drives ``_phase_5_finalize`` with an explicitly-supplied session
+    from a factory that is independent of the engine's ``self.session``.
+    Verifies the CAS UPDATE persists on the factory-opened session and
+    a third observer session sees the write.
     """
     async with session_manager() as setup_session:
         _entity, model = await _seed_entity_and_model(setup_session, version=4)
@@ -268,27 +263,23 @@ async def test_phase_5_cas_via_entity_session_factory_persists_to_separate_sessi
             _make_embedder(),
             entity_session_factory=session_manager,
         )
-        result = await orchestrator_session.execute(
-            select(MentalModel).where(MentalModel.id == model_id)
-        )
-        loaded = result.scalar_one()
-        applied = await engine._phase_5_finalize(
-            loaded,
-            [Observation(title='FromProd', content='via factory', evidence=[])],
-            entity_summary='via factory',
-            entity_type='thing',
-        )
-        # Engine's _phase_5_finalize uses self._entity_session() which opens
-        # a fresh session from the factory; the CAS runs there, not on
-        # orchestrator_session. Caller passes session=None implicitly, so
-        # the helper falls back to self.session inside the engine — but
-        # the engine resolves via _entity_session() at the caller site.
-        # Here we're calling _phase_5_finalize directly so it uses
-        # orchestrator_session unless we pass session= explicitly.
-        # To actually drive the factory path, call via _reflect_entity_internal.
-        assert applied is True
+        async with engine._entity_session() as factory_session:
+            assert factory_session is not orchestrator_session, (
+                'factory_session must be distinct from orchestrator_session'
+            )
+            result = await factory_session.execute(
+                select(MentalModel).where(MentalModel.id == model_id)
+            )
+            loaded = result.scalar_one()
+            applied = await engine._phase_5_finalize(
+                loaded,
+                [Observation(title='FromProd', content='via factory', evidence=[])],
+                session=factory_session,
+                entity_summary='via factory',
+                entity_type='thing',
+            )
+            assert applied is True
 
-    # The write must be visible from a fresh session opened independently
     async with session_manager() as observer_session:
         result = await observer_session.execute(
             select(MentalModel).where(MentalModel.id == model_id)
@@ -296,6 +287,186 @@ async def test_phase_5_cas_via_entity_session_factory_persists_to_separate_sessi
         persisted = result.scalar_one()
         assert persisted.version == 5
         assert persisted.entity_metadata['description'] == 'via factory'
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_two_workers_different_entities_run_in_parallel(
+    session_manager, memex_config: MemexConfig
+):
+    """Wall-clock parallelism gate: two reflections on different entities
+    must not serialize on each other. Mocks DSPy phases with asyncio.sleep
+    so the entire reflection takes ~sleep_for; gathered concurrently, the
+    total wall-clock should be ~sleep_for (parallel) rather than
+    ~2*sleep_for (serialised).
+    """
+    from unittest.mock import patch, AsyncMock
+    from memex_core.memory.sql_models import MemoryUnit
+    from memex_common.types import FactTypes
+
+    async with session_manager() as setup_session:
+        entity_a, model_a = await _seed_entity_and_model(setup_session, version=0)
+        entity_b, model_b = await _seed_entity_and_model(setup_session, version=0)
+
+    sleep_for = 0.5
+
+    async def run_reflection(entity, model):
+        async with session_manager() as orchestrator_session:
+            engine = ReflectionEngine(
+                orchestrator_session,
+                memex_config,
+                _make_embedder(),
+                entity_session_factory=session_manager,
+            )
+            engine.lm = MagicMock()
+            with (
+                patch.object(engine, '_phase_1_seed', new_callable=AsyncMock) as mock_seed,
+                patch.object(engine, '_phase_2_hunt', new_callable=AsyncMock) as mock_hunt,
+                patch.object(engine, '_phase_3_validate', new_callable=AsyncMock) as mock_val,
+                patch.object(engine, '_phase_4_compare', new_callable=AsyncMock) as mock_comp,
+            ):
+
+                async def _sleepy(*args, **kwargs):
+                    await asyncio.sleep(sleep_for / 4)
+                    return []
+
+                async def _sleepy_compare(*args, **kwargs):
+                    await asyncio.sleep(sleep_for / 4)
+                    return ([Observation(title='T', content='C', evidence=[])], 'summary')
+
+                mock_seed.side_effect = _sleepy
+                mock_hunt.side_effect = _sleepy
+                mock_val.side_effect = _sleepy
+                mock_comp.side_effect = _sleepy_compare
+
+                fake_memory = MemoryUnit(
+                    id=uuid4(),
+                    text='trigger',
+                    vault_id=GLOBAL_VAULT_ID,
+                    fact_type=FactTypes.WORLD,
+                    embedding=[0.0] * 384,
+                )
+                await engine._reflect_entity_internal(
+                    entity_id=entity.id,
+                    mental_model=model,
+                    entity=entity,
+                    recent_memories=[fake_memory],
+                    vault_id=GLOBAL_VAULT_ID,
+                )
+
+    loop = asyncio.get_event_loop()
+    start = loop.time()
+    await asyncio.gather(
+        run_reflection(entity_a, model_a),
+        run_reflection(entity_b, model_b),
+    )
+    elapsed = loop.time() - start
+    # Both reflections run in ~sleep_for; parallel should be ≤ 1.4× sleep_for
+    # (allow margin for non-LLM overhead — DB roundtrips, embedding calc).
+    # Serialised would be ≥ 1.8 × sleep_for.
+    assert elapsed < sleep_for * 1.5, (
+        f'reflections on distinct entities should run in parallel; '
+        f'elapsed={elapsed:.3f}s, sleep_for={sleep_for:.3f}s (parallel target <{sleep_for * 1.5:.3f}s)'
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_no_long_running_transaction_during_llm_phases(
+    session_manager, memex_config: MemexConfig
+):
+    """V18's primary motivation: no DB transaction should outlive an LLM call.
+    Observer session polls pg_stat_activity for the engine's connection
+    while a reflection is mid-LLM-phase; asserts no transaction has been
+    open for more than 0.5s during the LLM-bound sleep.
+    """
+    from unittest.mock import patch, AsyncMock
+    from memex_core.memory.sql_models import MemoryUnit
+    from memex_common.types import FactTypes
+
+    async with session_manager() as setup_session:
+        entity, model = await _seed_entity_and_model(setup_session, version=0)
+
+    sleep_for = 1.0
+    observed_xact_durations: list[float] = []
+    observation_stop = asyncio.Event()
+
+    async def observer():
+        async with session_manager() as obs_session:
+            while not observation_stop.is_set():
+                # xact_start is NULL for connections without an active xact
+                result = await obs_session.execute(
+                    sql_text(
+                        'SELECT EXTRACT(EPOCH FROM (now() - xact_start)) '
+                        'FROM pg_stat_activity '
+                        'WHERE xact_start IS NOT NULL AND datname = current_database()'
+                    )
+                )
+                for row in result:
+                    if row[0] is not None:
+                        observed_xact_durations.append(float(row[0]))
+                await asyncio.sleep(0.1)
+
+    async def run_reflection():
+        async with session_manager() as orchestrator_session:
+            engine = ReflectionEngine(
+                orchestrator_session,
+                memex_config,
+                _make_embedder(),
+                entity_session_factory=session_manager,
+            )
+            engine.lm = MagicMock()
+            with (
+                patch.object(engine, '_phase_1_seed', new_callable=AsyncMock) as mock_seed,
+                patch.object(engine, '_phase_2_hunt', new_callable=AsyncMock) as mock_hunt,
+                patch.object(engine, '_phase_3_validate', new_callable=AsyncMock) as mock_val,
+                patch.object(engine, '_phase_4_compare', new_callable=AsyncMock) as mock_comp,
+            ):
+
+                async def _sleepy(*args, **kwargs):
+                    await asyncio.sleep(sleep_for / 4)
+                    return []
+
+                async def _sleepy_compare(*args, **kwargs):
+                    await asyncio.sleep(sleep_for / 4)
+                    return ([Observation(title='T', content='C', evidence=[])], 'summary')
+
+                mock_seed.side_effect = _sleepy
+                mock_hunt.side_effect = _sleepy
+                mock_val.side_effect = _sleepy
+                mock_comp.side_effect = _sleepy_compare
+
+                fake_memory = MemoryUnit(
+                    id=uuid4(),
+                    text='trigger',
+                    vault_id=GLOBAL_VAULT_ID,
+                    fact_type=FactTypes.WORLD,
+                    embedding=[0.0] * 384,
+                )
+                await engine._reflect_entity_internal(
+                    entity_id=entity.id,
+                    mental_model=model,
+                    entity=entity,
+                    recent_memories=[fake_memory],
+                    vault_id=GLOBAL_VAULT_ID,
+                )
+        observation_stop.set()
+
+    await asyncio.gather(observer(), run_reflection())
+
+    # The longest observed transaction duration during the reflection
+    # should be much less than the total reflection wall-clock. Each LLM-
+    # bound sleep is ~sleep_for/4 = 0.25s; transactions for DB ops are
+    # at most a few ms. Setting the threshold at sleep_for/2 = 0.5s
+    # leaves headroom for slow CI but still catches a regression that
+    # held a transaction across all four LLM phases.
+    if observed_xact_durations:
+        max_xact = max(observed_xact_durations)
+        assert max_xact < sleep_for / 2, (
+            f'a transaction was held for {max_xact:.3f}s, exceeding the '
+            f'{sleep_for / 2:.3f}s budget — V18 invariant "no DB transaction '
+            f'spans an LLM call" is violated.'
+        )
 
 
 @pytest.mark.integration

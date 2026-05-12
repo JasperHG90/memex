@@ -76,11 +76,9 @@ graph TD
         --> P2["Phase 2: Hunt<br/>pgvector similarity search per candidate<br/>+ tail sampling (5% rate)<br/><i>0 LLM calls</i>"]
         --> P3["Phase 3: Validate<br/>LLM validates candidates against evidence<br/>Extract exact supporting quotes<br/><i>1 LLM call</i>"]
         --> P4["Phase 4: Compare/Merge<br/>Merge new + existing observations<br/>Compute trends via temporal density<br/><i>1 LLM call</i>"]
-        --> P5["Phase 5: Finalize<br/>Persist as JSONB, increment version<br/>Embed model summary<br/><i>0 LLM calls</i>"]
+        --> P5["Phase 5: Finalize<br/>CAS UPDATE on mental_models<br/>WHERE id AND version=:claimed<br/>Loser abandons; next tick retries<br/><i>0 LLM calls</i>"]
         --> P6["Phase 6: Enrich<br/>Tag contributing memory units with<br/>concepts from reflection<br/><i>1 LLM call (optional)</i>"]
     end
-
-    P6 --> BC["Batch Commit<br/>Rescue mode on fail: one-by-one with rollback"]
 ```
 
 ### Trend Tracking State Machine
@@ -167,7 +165,7 @@ After the mental model is finalized, Phase 6 pushes enriched tags back into the 
 2. **Load units** — use units already loaded in the session; fetch any missing evidence units from the database
 3. **Build LLM context** — include existing enriched tags to prevent duplicates
 4. **Generate tags** — the LLM produces enriched tags and keywords for each memory unit based on the mental model's understanding
-5. **Write overlay** — under a database lock, set-union the new tags with existing ones and record `enriched_at` timestamp and `enriched_by_entity`
+5. **Write overlay** — set-union the new tags with existing ones and record `enriched_at` timestamp and `enriched_by_entity`. Writes use SQLAlchemy `merge()` ordered by `unit_id` so concurrent enrichments on overlapping evidence units acquire row locks in deterministic order and don't deadlock
 
 **Example:** A 3-month-old memory "Project Alpha is rewriting its auth middleware" (original tags: `auth, middleware`) is invisible to "compliance work" queries. After enrichment, that memory gains `enriched_tags: ["compliance", "eu-regulation"]` and becomes findable via the keyword strategy.
 
@@ -183,9 +181,9 @@ Enrichment can be disabled by setting `enrichment_enabled: false` in the reflect
 
 Reflection processes entities in batches to minimize database round-trips:
 
-1. **Batch load**: All entities, mental models, and recent memories for the batch are fetched in bulk.
+1. **Batch load**: All entities, mental models, and recent memories for the batch are fetched in bulk on the orchestrator session; any newly-created mental_models rows are committed immediately so the per-entity CAS writes can target them.
 2. **Concurrent processing**: Each entity is reflected upon concurrently, up to `max_concurrency` (default: 3) simultaneous LLM operations.
-3. **Optimistic commit**: All updated mental models are committed in a single transaction. If the batch commit fails, a "rescue mode" saves models one by one.
+3. **Per-entity CAS persistence**: Each reflection's Phase 5 finalize issues an atomic `UPDATE mental_models … WHERE id=:id AND version=:claimed_version` on its own short DB session. There is no batch-end commit — per-entity CAS is the sole write path, so a concurrent worker's write can never be overwritten by a stale, un-versioned batch commit.
 
 The `background_reflection_batch_size` (default: 10) controls how many entities are processed per cycle, and `background_reflection_interval_seconds` (default: 600) controls how often the cycle runs.
 
