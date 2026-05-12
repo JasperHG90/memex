@@ -386,6 +386,11 @@ class ReflectionEngine:
                 last_refreshed=now,
                 embedding=new_embedding,
             )
+            # Skip ORM synchronize: callers may still hold the loaded
+            # MentalModel instance and shouldn't have its attributes
+            # silently expired by a Core UPDATE — the success path
+            # mutates the in-memory model explicitly below.
+            .execution_options(synchronize_session=False)
         )
         result = await self.session.execute(stmt)
         rowcount = getattr(result, 'rowcount', 0) or 0
