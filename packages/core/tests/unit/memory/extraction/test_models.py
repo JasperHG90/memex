@@ -304,3 +304,85 @@ class TestExtractedFactClassificationValidators:
         pf = ProcessedFact.from_extracted_fact(ef, [0.0] * 384)
         assert pf.intent_class.value == 'durable'
         assert pf.risk_class.value == 'none'
+
+
+class TestClaimTypeValidators:
+    """Validator + model-validator behaviour for ``claim_type`` / ``claim_target``."""
+
+    @pytest.mark.parametrize('value', ['resolution', 'contradiction', None])
+    def test_coerce_claim_type_valid(self, value: object) -> None:
+        fact = RawFact(
+            what='Test',
+            fact_type=FactTypes.WORLD,
+            fact_kind=FactKindTypes.CONVERSATION,
+            claim_type=value,  # type: ignore[arg-type]
+        )
+        assert fact.claim_type == value
+
+    @pytest.mark.parametrize('garbage', ['bogus', '', 123, ['resolution'], {'k': 'resolution'}])
+    def test_coerce_claim_type_invalid_defaults_none(self, garbage: object) -> None:
+        fact = RawFact(
+            what='Test',
+            fact_type=FactTypes.WORLD,
+            fact_kind=FactKindTypes.CONVERSATION,
+            claim_type=garbage,  # type: ignore[arg-type]
+        )
+        assert fact.claim_type is None
+
+    def test_claim_target_defaulted_when_claim_type_set_without_target(self) -> None:
+        from memex_core.memory.extraction.models import ClaimTarget
+
+        fact = RawFact(
+            what='Test',
+            fact_type=FactTypes.WORLD,
+            fact_kind=FactKindTypes.CONVERSATION,
+            claim_type='resolution',
+        )
+        assert isinstance(fact.claim_target, ClaimTarget)
+        assert fact.claim_target.target_topic is None
+        assert fact.claim_target.target_entity_ids == []
+
+    def test_claim_target_dropped_when_claim_type_none(self) -> None:
+        from memex_core.memory.extraction.models import ClaimTarget
+
+        fact = RawFact(
+            what='Test',
+            fact_type=FactTypes.WORLD,
+            fact_kind=FactKindTypes.CONVERSATION,
+            claim_type=None,
+            claim_target=ClaimTarget(target_topic='ignored'),
+        )
+        assert fact.claim_target is None
+
+    def test_extracted_fact_claim_type_propagates_through_processed(self) -> None:
+        import datetime as _dt
+
+        from memex_core.memory.extraction.models import ClaimTarget, ProcessedFact
+
+        ef = ExtractedFact(
+            fact_text='x',
+            fact_type=FactTypes.WORLD,
+            content_index=0,
+            chunk_index=0,
+            mentioned_at=_dt.datetime.now(_dt.timezone.utc),
+            claim_type='contradiction',
+            claim_target=ClaimTarget(target_topic='the X decision'),
+        )
+        pf = ProcessedFact.from_extracted_fact(ef, [0.0] * 384)
+        assert pf.claim_type == 'contradiction'
+        assert pf.claim_target is not None
+        assert pf.claim_target.target_topic == 'the X decision'
+
+    def test_extracted_fact_claim_type_invalid_coerces_to_none(self) -> None:
+        import datetime as _dt
+
+        ef = ExtractedFact(
+            fact_text='x',
+            fact_type=FactTypes.WORLD,
+            content_index=0,
+            chunk_index=0,
+            mentioned_at=_dt.datetime.now(_dt.timezone.utc),
+            claim_type='garbage',  # type: ignore[arg-type]
+        )
+        assert ef.claim_type is None
+        assert ef.claim_target is None

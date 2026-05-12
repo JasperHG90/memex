@@ -76,6 +76,22 @@ class ExtractSemanticFacts(dspy.Signature):
     surrounding text.
 
     risk_class: none (default), sensitive (flagged), private (excluded from retrieval), safety (blocked).
+
+    claim_type — explicit corrective-claim signal. DEFAULT is null/absent.
+    Only set when the fact EXPLICITLY negates / supersedes / resolves a
+    PRIOR claim that exists elsewhere in memory. Do NOT set on general
+    statements, first-time observations, or descriptive facts.
+      - 'resolution': the fact resolves or decides a prior open question
+        or issue. Signals: "the X problem is solved", "we figured out
+        that X", "X is no longer an issue".
+      - 'contradiction': the fact directly disagrees with a prior claim.
+        Signals: "X is NOT true", "we no longer use X", "we changed our
+        mind about X".
+    When claim_type is set, also populate claim_target.target_topic with
+    a short noun-phrase paraphrase of what is being resolved/contradicted
+    (e.g. "the note-search bug", "the Postgres decision"). Leave
+    claim_target.target_entity_ids empty — entity IDs are populated
+    downstream by the extraction engine.
     """
 
     chunk_text: str = dspy.InputField(

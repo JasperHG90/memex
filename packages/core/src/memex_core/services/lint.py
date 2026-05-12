@@ -269,6 +269,26 @@ _DANGLING_ENTITY_REF_IN_UNIT_SQL = """
 """
 
 
+# Safety: vault_id and ``claim_too_aggressive_max_links`` are bound via
+# named placeholders; no user-controlled string interpolation. See S608
+# invariant block above ``_COLD_LOW_MW_UNIT_SQL``.
+_CLAIM_TOO_AGGRESSIVE_SQL = """
+    SELECT
+        mu.id::text AS target_id,
+        jsonb_build_object(
+            'claim_type', mu.claim_type,
+            'link_count', COUNT(ml.to_unit_id)
+        ) AS evidence
+    FROM memory_units mu
+    JOIN memory_links ml ON ml.from_unit_id = mu.id
+    WHERE mu.vault_id = :vault_id
+      AND mu.claim_type IS NOT NULL
+      AND ml.link_type IN ('contradicts', 'weakens')
+    GROUP BY mu.id, mu.claim_type
+    HAVING COUNT(*) > CAST(:claim_too_aggressive_max_links AS integer)
+"""
+
+
 # ---------------------------------------------------------------------------
 # FSFM-inspired graph-aware deprioritization scoring rules.
 #
@@ -550,6 +570,19 @@ V1_RULES: tuple[RuleSpec, ...] = (
             'contradicted_low_credibility_max',
         ),
     ),
+    RuleSpec(
+        name='claim_too_aggressive',
+        lint_type=LintType.QUALITY,
+        target_type='memory_unit',
+        suggested_action=(
+            'Explicit-claim unit produced more contradiction/weaken links '
+            'in one pass than the configured ceiling. Review for over-matching '
+            '(too-broad target_topic or stale-prior bleed) and consider tightening '
+            'the explicit-claim similarity threshold.'
+        ),
+        select_sql=_CLAIM_TOO_AGGRESSIVE_SQL,
+        param_keys=('claim_too_aggressive_max_links',),
+    ),
 )
 
 
@@ -794,6 +827,7 @@ class LintService(BaseService):
         :class:`KeyError` instead of silently falling back.
         """
         cfg = self.config.server.memory.deprioritize_score
+        contradiction_cfg = self.config.server.contradiction
         known: dict[str, Any] = {
             'lambda_link': cfg.lambda_link,
             'mu_entity': cfg.mu_entity,
@@ -806,6 +840,7 @@ class LintService(BaseService):
             'high_mw_min_outcomes': cfg.thresholds.high_mw_min_outcomes,
             'disagreement_range': cfg.thresholds.disagreement_range,
             'contradicted_low_credibility_max': cfg.thresholds.contradicted_low_credibility_max,
+            'claim_too_aggressive_max_links': contradiction_cfg.claim_too_aggressive_max_links,
         }
         try:
             return {k: known[k] for k in keys}

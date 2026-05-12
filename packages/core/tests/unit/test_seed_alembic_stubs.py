@@ -56,13 +56,15 @@ def test_seed_chain_is_linear_and_correct() -> None:
     sd = ScriptDirectory.from_config(cfg)
 
     heads = sd.get_heads()
-    assert heads == ['037_entity_last_merge_scan_at'], (
-        f'Expected single head 037_entity_last_merge_scan_at, got {heads}'
+    assert heads == ['039_memory_unit_claim_type'], (
+        f'Expected single head 039_memory_unit_claim_type, got {heads}'
     )
 
     walk = list(sd.walk_revisions())
     top10 = [(r.revision, r.down_revision) for r in walk[:10]]
     expected_top10 = [
+        ('039_memory_unit_claim_type', '038_link_type_refines'),
+        ('038_link_type_refines', '037_entity_last_merge_scan_at'),
         ('037_entity_last_merge_scan_at', '036_fsfm_cooldown_index'),
         ('036_fsfm_cooldown_index', '035_drop_fsrs_revisit_columns'),
         ('035_drop_fsrs_revisit_columns', '034_add_mw_mode'),
@@ -71,8 +73,6 @@ def test_seed_chain_is_linear_and_correct() -> None:
         ('032_fsfm_decay_columns', '031_proposal_resolved_by'),
         ('031_proposal_resolved_by', '030_revisit_last_reviewed_at'),
         ('030_revisit_last_reviewed_at', '029_lint_llm_quota'),
-        ('029_lint_llm_quota', '028_procedure_outcomes'),
-        ('028_procedure_outcomes', '027_consolidation_ticks'),
     ]
     assert top10 == expected_top10, f'Tier A chain mismatch: got {top10}'
 

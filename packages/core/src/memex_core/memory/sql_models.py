@@ -611,6 +611,15 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
         description='Content sensitivity set at write time: none | sensitive | private | safety.',
     )
 
+    claim_type: str | None = Field(
+        default=None,
+        sa_column=Column(Text, nullable=True),
+        description=(
+            'Explicit corrective-claim signal: resolution | contradiction | NULL. '
+            'NULL means the unit was not extracted as an explicit claim.'
+        ),
+    )
+
     confidence: float = Field(
         default=1.0,
         sa_column=Column(Float, nullable=False, server_default='1.0'),
@@ -726,6 +735,10 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
         CheckConstraint(
             "risk_class IN ('none', 'sensitive', 'private', 'safety')",
             name='ck_memory_units_risk_class',
+        ),
+        CheckConstraint(
+            "claim_type IS NULL OR claim_type IN ('resolution', 'contradiction')",
+            name='ck_memory_units_claim_type',
         ),
         CheckConstraint(
             'confidence >= 0.0 AND confidence <= 1.0',

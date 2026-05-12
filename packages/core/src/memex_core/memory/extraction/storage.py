@@ -7,6 +7,7 @@ Handles insertion of facts into the database using SQLModel.
 import hashlib
 import logging
 from datetime import datetime, timedelta
+from typing import Any
 from uuid import UUID
 
 from sqlalchemy import case, type_coerce, update
@@ -53,13 +54,18 @@ async def insert_facts_batch(
 
         # Merge specific fields into metadata if not present on model
         # (Assuming 'tags' and 'chunk_id' go into unit_metadata based on previous schema)
-        metadata_merged: dict[str, str | list[str]] = (
+        metadata_merged: dict[str, Any] = (
             {k: v for k, v in fact.payload.items()} if fact.payload is not None else {}
         )
         if fact.tags:
             metadata_merged['tags'] = fact.tags
         if fact.chunk_id:
             metadata_merged['chunk_id'] = fact.chunk_id
+        if fact.claim_target is not None:
+            metadata_merged['claim_target'] = {
+                'target_topic': fact.claim_target.target_topic,
+                'target_entity_ids': [str(eid) for eid in fact.claim_target.target_entity_ids],
+            }
 
         row = {
             'text': fact.fact_text,
@@ -77,6 +83,7 @@ async def insert_facts_batch(
             'status': ContentStatus.ACTIVE,
             'intent_class': fact.intent_class,
             'risk_class': fact.risk_class,
+            'claim_type': fact.claim_type,
         }
         if fact.chunk_id:
             logger.debug(f'Linking fact to chunk_id: {fact.chunk_id}')
@@ -87,7 +94,21 @@ async def insert_facts_batch(
 
     results = await session.exec(stmt)
 
-    return [str(row[0]) for row in results.all()]
+    unit_id_strings = [str(row[0]) for row in results.all()]
+
+    try:
+        from memex_core.metrics import CLAIM_TYPED_UNITS_TOTAL
+
+        for fact in facts:
+            if fact.claim_type is not None:
+                CLAIM_TYPED_UNITS_TOTAL.labels(
+                    claim_type=fact.claim_type,
+                    vault_id=str(fact.vault_id if fact.vault_id else GLOBAL_VAULT_ID),
+                ).inc()
+    except Exception:
+        logger.debug('Skipping CLAIM_TYPED_UNITS_TOTAL increment', exc_info=True)
+
+    return unit_id_strings
 
 
 async def handle_document_tracking(
