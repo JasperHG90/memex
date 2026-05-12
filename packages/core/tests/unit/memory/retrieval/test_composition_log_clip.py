@@ -162,6 +162,42 @@ class TestNaNGuard:
         assert after == before + 1
 
 
+class TestNegativeLogClipGuard:
+    def test_negative_finite_log_clip_returns_ce_score(self):
+        result = _compose(
+            0.7, recency=1.0, temporal=1.0, mw=1.0, confidence=1.0, decay=1.0, log_clip=-0.5
+        )
+        assert result == pytest.approx(0.7, rel=1e-12)
+
+    def test_negative_inf_log_clip_returns_ce_score(self):
+        result = _compose(
+            0.7,
+            recency=1.0,
+            temporal=1.0,
+            mw=1.0,
+            confidence=1.0,
+            decay=1.0,
+            log_clip=-math.inf,
+        )
+        assert result == pytest.approx(0.7, rel=1e-12)
+
+    def test_negative_log_clip_increments_guard_counter(self):
+        from memex_core.metrics import COMPOSITE_BOOST_NON_FINITE_GUARD_TRIGGERED
+
+        before = COMPOSITE_BOOST_NON_FINITE_GUARD_TRIGGERED._value.get()
+        _compose(0.7, recency=1.0, temporal=1.0, mw=1.0, confidence=1.0, decay=1.0, log_clip=-0.5)
+        after = COMPOSITE_BOOST_NON_FINITE_GUARD_TRIGGERED._value.get()
+        assert after == before + 1
+
+    def test_negative_log_clip_skips_clipped_histogram(self):
+        from memex_core.metrics import COMPOSITE_BOOST_CLIPPED
+
+        before_sum = COMPOSITE_BOOST_CLIPPED._sum.get()
+        _compose(0.7, recency=1.0, temporal=1.0, mw=1.0, confidence=1.0, decay=1.0, log_clip=-0.5)
+        after_sum = COMPOSITE_BOOST_CLIPPED._sum.get()
+        assert after_sum == before_sum
+
+
 class TestNonFiniteBoostGuard:
     def test_positive_inf_boost_returns_ce_score(self):
         result = _compose(0.7, recency=math.inf, temporal=1.0, mw=1.0, confidence=1.0, decay=1.0)
@@ -249,6 +285,10 @@ class TestConfigValidator:
         with pytest.raises(ValidationError):
             RetrievalConfig(composite_boost_log_clip=-math.inf)
 
+    def test_nan_rejected(self):
+        with pytest.raises(ValidationError):
+            RetrievalConfig(composite_boost_log_clip=math.nan)
+
 
 class TestConfigJSONSerialization:
     def test_python_dump_preserves_inf_as_float(self):
@@ -264,13 +304,11 @@ class TestConfigJSONSerialization:
         assert config.model_dump(mode='json')['composite_boost_log_clip'] == 0.7
 
     def test_model_dump_json_is_rfc8259_compliant(self):
-        import json
-
         config = RetrievalConfig()
         json_str = config.model_dump_json()
-        json.loads(
-            json_str, parse_constant=lambda c: (_ for _ in ()).throw(ValueError(f'rejected: {c}'))
-        )
+        assert 'Infinity' not in json_str
+        assert 'NaN' not in json_str
+        assert '"composite_boost_log_clip":"inf"' in json_str
 
     def test_load_from_inf_string(self):
         config = RetrievalConfig(composite_boost_log_clip='inf')

@@ -905,7 +905,7 @@ class RetrievalConfig(BaseModel):
 
     @field_validator('composite_boost_log_clip', mode='before')
     @classmethod
-    def _parse_composite_boost_log_clip(cls, value: object) -> object:
+    def _parse_composite_boost_log_clip(cls, value: object) -> float | object:
         if isinstance(value, str):
             normalized = value.strip().lower()
             if normalized in {'inf', '+inf', 'infinity', '+infinity'}:
@@ -915,7 +915,7 @@ class RetrievalConfig(BaseModel):
 
     @field_serializer('composite_boost_log_clip', when_used='json')
     def _serialize_composite_boost_log_clip(self, value: float) -> float | str:
-        if math.isinf(value):
+        if value == math.inf:
             return 'inf'
         return value
 

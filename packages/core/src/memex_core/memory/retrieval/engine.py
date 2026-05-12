@@ -108,11 +108,17 @@ def _compose_boosts_logspace(
     zero-boost unit at zero. Under ship-default alphas every boost evaluates
     to ``1.0`` (or strictly positive), so the zero-input path is dormant.
 
-    Any non-finite input (``NaN`` or ``±inf``) on a boost, ``ce_score``, or
-    ``log_clip`` short-circuits: the function returns ``ce_score`` unmodified
-    and emits a separate ``COMPOSITE_BOOST_NON_FINITE_GUARD_TRIGGERED`` counter
-    increment instead of observing ``1.0`` to the regular histogram (which
-    would be indistinguishable from a genuine neutral multiplier).
+    Any non-finite input (``NaN`` or ``±inf``) on a boost or ``ce_score``,
+    a ``NaN`` ``log_clip``, or a negative ``log_clip`` short-circuits: the
+    function returns ``ce_score`` unmodified and emits a separate
+    ``COMPOSITE_BOOST_NON_FINITE_GUARD_TRIGGERED`` counter increment instead
+    of observing ``1.0`` to the regular histogram (which would be
+    indistinguishable from a genuine neutral multiplier). The negative-clip
+    rejection is defense-in-depth: ``RetrievalConfig`` already enforces
+    ``ge=0.0`` at construction time, but a direct caller could pass a
+    negative clip, where ``max(-log_clip, min(log_clip, log_boost))`` would
+    silently flip into a maximum-multiplier path. The guard ensures the
+    function is correct standalone, not just via its caller chain.
 
     Emits the post-clip multiplier to ``COMPOSITE_BOOST_CLIPPED`` for
     operator visibility into whether the clip is firing in production
@@ -122,6 +128,7 @@ def _compose_boosts_logspace(
         not math.isfinite(ce_score)
         or any(not math.isfinite(b) for b in (recency, temporal, mw, confidence, decay))
         or math.isnan(log_clip)
+        or log_clip < 0
     ):
         COMPOSITE_BOOST_NON_FINITE_GUARD_TRIGGERED.inc()
         return ce_score
