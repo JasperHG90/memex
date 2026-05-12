@@ -24,7 +24,7 @@ final_score   = ce_score * exp(clipped)
 
 where `L = composite_boost_log_clip` is a per-config knob.
 
-- At `L = math.inf` (ship default), the clip is a no-op and the result is mathematically identical to the prior `ce_score × b₁ × b₂ × b₃ × b₄ × b₅` product (modulo 1e-9 floating-point).
+- At `L = math.inf` (ship default), the clip is a no-op and the result is mathematically identical to the prior `ce_score × b₁ × b₂ × b₃ × b₄ × b₅` product for strictly positive boost inputs (modulo 1e-9 floating-point). For a boost that hits exactly `0.0` — reachable only when an alpha is non-zero and a unit was contradicted to zero, dormant under ship defaults — the new form preserves rank ordering by `ce_score` instead of tying at `0.0`; see [Floor for zero / negative boost values](#floor-for-zero--negative-boost-values).
 - At finite `L`, the aggregate metadata multiplier is bounded to `[exp(-L), exp(+L)]`. The per-factor alpha knobs still bound each individual factor; the clip bounds the *product*. This prevents both single-factor noise and compound noise from dominating `ce_score`.
 
 | `L` value | Aggregate multiplier bounds |
@@ -40,11 +40,11 @@ where `L = composite_boost_log_clip` is a per-config knob.
 
 `L = math.inf` (ship default) is the safe starting point: it preserves the prior behavior exactly. To tighten the clip, observe the aggregate distribution first:
 
-1. Let the `memex_aggregate_boost` histogram (pre-clip) accumulate representative traffic for ≥ 1 week.
+1. Let the `memex_composite_boost_clipped` histogram (post-clip) accumulate representative traffic for ≥ 1 week. At the ship default `L = math.inf` the clip is a no-op, so this metric observes the **pre-clip aggregate product directly** — exactly the distribution needed to tune `L`. (A separate dedicated pre-clip histogram is on a follow-up ticket; until then, `memex_composite_boost_clipped` at `L=inf` is the metric to read.)
 2. Compute the empirical distribution of `|log(aggregate)|`. The `p95` of that distribution is a sensible upper bound for `L`: it accepts 95% of observed compositions unchanged and clips only the extreme tail.
 3. Land an empirical `L` via a follow-up config commit (no code change needed).
 
-The post-clip histogram `memex_composite_boost_clipped` shows what the reranker actually applied after clipping, so the operator can confirm the clip behaves as intended without re-deriving from raw scores.
+Once `L` is finite, the same `memex_composite_boost_clipped` histogram shows what the reranker actually applied **after** clipping, so the operator can confirm the clip behaves as intended without re-deriving from raw scores.
 
 ## Floor for zero / negative boost values
 

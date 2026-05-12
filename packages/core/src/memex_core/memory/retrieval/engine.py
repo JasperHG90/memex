@@ -107,6 +107,11 @@ def _compose_boosts_logspace(
     Emits the post-clip multiplier to ``COMPOSITE_BOOST_CLIPPED`` so operators
     can observe whether the clip is firing in production traffic.
     """
+    if math.isnan(ce_score) or any(
+        math.isnan(b) for b in (recency, temporal, mw, confidence, decay, log_clip)
+    ):
+        COMPOSITE_BOOST_CLIPPED.observe(1.0)
+        return ce_score
     log_boost = (
         math.log(max(recency, _LOG_FLOOR))
         + math.log(max(temporal, _LOG_FLOOR))
@@ -1518,9 +1523,13 @@ class RetrievalEngine:
         *,
         mw_mode: MWMode = MWMode.STATIONARY,
     ) -> list[MemoryUnit]:
-        """Re-rank results using a cross-encoder with multiplicative boosts.
+        """Re-rank results using a cross-encoder with log-additive bounded boosts.
 
-        Applies sigmoid-normalized cross-encoder scores, then multiplies by:
+        Applies sigmoid-normalized cross-encoder scores, then composes five
+        boost factors in log space and clips the sum symmetrically before
+        exponentiating — see :func:`_compose_boosts_logspace` for the
+        mechanism. The five boost factors are:
+
         * **recency boost** -- scaled by ``RetrievalConfig.reranking_recency_alpha``
           (linear decay over 365 days)
         * **temporal proximity boost** -- scaled by
@@ -1533,8 +1542,16 @@ class RetrievalEngine:
           ``RetrievalConfig.confidence_alpha`` (uses ``unit.confidence``;
           cold-start confidence = 1.0 → boost > 1.0 when alpha > 0; default
           alpha = 0.0 ships boost = 1.0 for every unit)
+        * **FSFM decay boost** -- scaled by ``RetrievalConfig.decay_alpha``
+          (Ebbinghaus × importance; default alpha = 0.0 ships boost = 1.0)
 
-        Set any alpha to 0 to disable that boost (backward compatible).
+        Set any alpha to 0 to disable that boost (backward compatible). The
+        aggregate metadata multiplier is bounded by
+        ``RetrievalConfig.composite_boost_log_clip`` (``L``): the post-clip
+        multiplier lies in ``[exp(-L), exp(+L)]``. Ship default ``L = math.inf``
+        is a no-op (mathematically identical to the prior multiplicative
+        product for strictly positive boost inputs); set a finite ``L`` to
+        bound the aggregate metadata influence on ``ce_score``.
         """
         if not self.reranker or not results:
             # Emit zero-input observation so the histogram is always

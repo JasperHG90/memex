@@ -140,6 +140,22 @@ class TestZeroAndNegativeBoosts:
         assert actual_neg == pytest.approx(actual_zero, rel=1e-12)
 
 
+class TestNaNGuard:
+    def test_nan_boost_returns_ce_score_untouched(self):
+        result = _compose(0.7, recency=math.nan, temporal=1.0, mw=1.0, confidence=1.0, decay=1.0)
+        assert result == pytest.approx(0.7, rel=1e-12)
+
+    def test_nan_ce_score_propagates_as_nan(self):
+        result = _compose(math.nan, recency=1.0, temporal=1.0, mw=1.0, confidence=1.0, decay=1.0)
+        assert math.isnan(result)
+
+    def test_nan_log_clip_returns_ce_score(self):
+        result = _compose(
+            0.5, recency=1.0, temporal=1.0, mw=1.0, confidence=1.0, decay=1.0, log_clip=math.nan
+        )
+        assert result == pytest.approx(0.5, rel=1e-12)
+
+
 class TestConfigValidator:
     def test_default_is_inf(self):
         config = RetrievalConfig()
