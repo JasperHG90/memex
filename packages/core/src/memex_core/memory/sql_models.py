@@ -3,7 +3,7 @@ from enum import Enum, StrEnum
 from typing import Any
 from uuid import UUID, uuid4
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import (
     Boolean,
@@ -11,6 +11,7 @@ from sqlalchemy import (
     Computed,
     ForeignKey,
     Integer,
+    String,
     Text,
     Float,
     func,
@@ -173,6 +174,16 @@ class MentalModel(SQLModel, table=True):  # type: ignore
         default=0,
         sa_column=Column(Integer, server_default='0'),
         description='Memory Worth failure co-occurrence counter (vault-scoped).',
+    )
+
+    unused_co_count: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default='0'),
+        description=(
+            'Engagement counter: bumped when a unit was retrieved but the '
+            'caller marked it as not_used. Does NOT enter the Beta-Bernoulli '
+            'posterior (engagement-only signal).'
+        ),
     )
 
     __table_args__ = (
@@ -593,6 +604,16 @@ class MemoryUnit(SQLModel, MemoryUnitBase, table=True):  # type: ignore
         description='Number of failure outcome co-occurrences for Memory Worth scoring.',
     )
 
+    unused_co_count: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default='0'),
+        description=(
+            'Engagement counter: bumped when a unit was retrieved but the '
+            'caller marked it as not_used. Does NOT enter the Beta-Bernoulli '
+            'posterior (engagement-only signal).'
+        ),
+    )
+
     is_deprioritized: bool = Field(
         default=False,
         sa_column=Column(Boolean, server_default='false'),
@@ -999,6 +1020,16 @@ class UnitEntity(SQLModel, table=True):  # type: ignore
         default=0,
         sa_column=Column(Integer, server_default='0'),
         description='Memory Worth failure co-occurrence counter (vault-scoped).',
+    )
+
+    unused_co_count: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default='0'),
+        description=(
+            'Engagement counter: bumped when a unit was retrieved but the '
+            'caller marked it as not_used. Does NOT enter the Beta-Bernoulli '
+            'posterior (engagement-only signal).'
+        ),
     )
 
     # Relationships
@@ -1450,6 +1481,82 @@ class AuditLog(SQLModel, table=True):  # type: ignore
         Index('idx_audit_logs_actor', 'actor'),
         Index('idx_audit_logs_action', 'action'),
         Index('idx_audit_logs_resource', 'resource_type', 'resource_id'),
+    )
+
+
+class OutcomeAuditLog(SQLModel, table=True):  # type: ignore
+    """One row per `record_outcome` call.
+
+    Records the per-unit verb payload, coverage stats, and exploration tag
+    so signal-quality regressions can be audited offline. Append-only;
+    vault-scoped so outcome audit never leaks across tenants.
+    """
+
+    __tablename__ = 'outcome_audit_log'
+
+    id: UUID = Field(
+        default_factory=uuid4,
+        sa_column=Column(SA_UUID(), primary_key=True, server_default=sql_text('gen_random_uuid()')),
+        description='Unique identifier for this audit row.',
+    )
+    vault_id: UUID = vault_id_field()
+    caller_id: str | None = Field(
+        default=None,
+        max_length=128,
+        sa_column=Column(String(128), nullable=True),
+        description='Session id or caller fingerprint (no PII, ≤ 128 chars).',
+    )
+    units: list[dict[str, Any]] = Field(
+        default_factory=list,
+        sa_column=Column(JSONB, nullable=False),
+        description='Per-unit payload: list of {unit_id, verb, reason?}.',
+    )
+
+    @field_validator('units')
+    @classmethod
+    def _units_must_be_array_of_dicts(cls, value: list[dict[str, Any]]) -> list[dict[str, Any]]:
+        if not isinstance(value, list):
+            raise ValueError('OutcomeAuditLog.units must be a list')
+        for idx, item in enumerate(value):
+            if not isinstance(item, dict):
+                raise ValueError(
+                    f'OutcomeAuditLog.units[{idx}] must be a dict, got {type(item).__name__}'
+                )
+        return value
+
+    turn_outcome: str | None = Field(
+        default=None,
+        sa_column=Column(Text, nullable=True),
+        description='Coarse turn-level outcome label (success/failure/mixed/None).',
+    )
+    retrieved_set_size: int | None = Field(
+        default=None,
+        sa_column=Column(Integer, nullable=True),
+        description='Size of the retrieved set the caller was asked to classify.',
+    )
+    coverage_ratio: float | None = Field(
+        default=None,
+        sa_column=Column(Float, nullable=True),
+        description='reported / retrieved (NULL when retrieved_set_size is unknown).',
+    )
+    exploration_tagged: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, nullable=False, server_default='false'),
+        description='True iff any unit was exploration-injected on retrieval.',
+    )
+    created_at: datetime = Field(
+        default_factory=lambda: datetime.now(timezone.utc),
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=False, server_default=func.now()),
+        description='Server-side row insertion timestamp.',
+    )
+
+    __table_args__ = (
+        Index('idx_outcome_audit_log_vault_ts', 'vault_id', sql_text('created_at DESC')),
+        Index('idx_outcome_audit_log_caller', 'caller_id'),
+        CheckConstraint(
+            "jsonb_typeof(units) = 'array'",
+            name='outcome_audit_log_units_is_array',
+        ),
     )
 
 

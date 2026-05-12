@@ -1014,6 +1014,43 @@ class RetrievalConfig(BaseModel):
         return self
 
 
+class OutcomesConfig(BaseModel):
+    """Configuration for outcome-attribution signal quality.
+
+    Owns the per-unit-verb coverage check, contradiction→failure wiring
+    weight, and the default Memory Worth counter mode for new vaults.
+    """
+
+    coverage_check_mode: Literal['strict', 'permissive'] = Field(
+        default='permissive',
+        description=(
+            "Coverage policy for record_outcome. 'strict' rejects calls where "
+            'the reported units do not cover the full retrieved set. '
+            "'permissive' accepts partial coverage and records coverage_ratio "
+            'on the audit row + metric.'
+        ),
+    )
+    contradiction_failure_weight: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description=(
+            'Per-link failure-counter bump applied when the contradiction '
+            'engine commits a weakens or contradicts link. Stored as int; '
+            'the per-link bump uses half-up rounding — 0.0 disables wiring, '
+            '0.5 (default) and above yield a +1 bump per negative-evidence link.'
+        ),
+    )
+    mw_mode_default: Literal['stationary', 'ema'] = Field(
+        default='ema',
+        description=(
+            'Default Memory Worth counter mode for newly created vaults. '
+            "'ema' applies EMA decay; 'stationary' keeps raw counters. "
+            'Per-vault `Vault.mw_mode` overrides this default.'
+        ),
+    )
+
+
 class ContradictionConfig(BaseModel):
     """Configuration for retain-time contradiction detection."""
 
@@ -1806,6 +1843,11 @@ class MemoryConfig(BaseModel):
         description='Configuration for contradiction detection.',
     )
 
+    outcomes: OutcomesConfig = Field(
+        default_factory=OutcomesConfig,
+        description='Configuration for outcome-attribution signal quality.',
+    )
+
     consolidation: ConsolidationConfig = Field(
         default_factory=ConsolidationConfig,
         description='Consolidation orchestrator configuration.',
@@ -2326,6 +2368,7 @@ __all__ = [
     'ExtractionConfig',
     'RetrievalConfig',
     'ContradictionConfig',
+    'OutcomesConfig',
     'MemoryConfig',
     'TracingConfig',
     'ServerConfig',

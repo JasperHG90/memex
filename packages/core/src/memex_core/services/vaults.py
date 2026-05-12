@@ -86,7 +86,12 @@ class VaultService(BaseService):
             if existing:
                 raise ValueError(f"Vault with name '{name}' already exists.")
 
-            vault = Vault(name=name, description=description)
+            default_mode = self.config.server.memory.outcomes.mw_mode_default
+            if default_mode not in (MWMode.STATIONARY, MWMode.EMA):
+                raise ValueError(
+                    f"mw_mode_default must be 'stationary' or 'ema', got '{default_mode}'"
+                )
+            vault = Vault(name=name, description=description, mw_mode=default_mode)
             session.add(vault)
             await session.commit()
             await session.refresh(vault)

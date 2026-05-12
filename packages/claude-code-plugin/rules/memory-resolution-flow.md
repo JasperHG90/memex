@@ -14,14 +14,17 @@
 
 4. **+5. Paired writes** against the LLM-judged-relevant subset only:
    ```
-   memex_record_outcome(unit_ids=[...], success=false, reason="user confirmed fixed")
+   memex_record_outcome(units=[
+       {"unit_id": "...", "verb": "not_helpful", "reason": "user confirmed fixed"},
+       ...
+   ])
    memex_memory_deprioritize(unit_id=..., reason="user confirmed fixed YYYY-MM-DD")
    ```
    Both against the **same** subset. The two verbs are orthogonal:
-   - `record_outcome(success=...)` — MW gradient, append-only, not reversible
+   - `record_outcome(units=[{verb: ...}])` — MW gradient, append-only, not reversible
    - `memory_deprioritize(reason)` — binary surface state, reversible via `memory_restore`
 
-**Imperfect recall is by design** — exploration is the safety net. Units that slip past will re-surface; another `record_outcome(success=false)` compounds the MW penalty.
+**Imperfect recall is by design** — exploration is the safety net. Units that slip past will re-surface; another `record_outcome` with `verb="not_helpful"` compounds the MW penalty.
 
 ## Historical / audit-query routing (NOT the resolution flow)
 

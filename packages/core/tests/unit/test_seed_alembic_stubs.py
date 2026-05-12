@@ -56,13 +56,14 @@ def test_seed_chain_is_linear_and_correct() -> None:
     sd = ScriptDirectory.from_config(cfg)
 
     heads = sd.get_heads()
-    assert heads == ['039_memory_unit_claim_type'], (
-        f'Expected single head 039_memory_unit_claim_type, got {heads}'
+    assert heads == ['040_outcome_per_unit_schema'], (
+        f'Expected single head 040_outcome_per_unit_schema, got {heads}'
     )
 
     walk = list(sd.walk_revisions())
     top10 = [(r.revision, r.down_revision) for r in walk[:10]]
     expected_top10 = [
+        ('040_outcome_per_unit_schema', '039_memory_unit_claim_type'),
         ('039_memory_unit_claim_type', '038_link_type_refines'),
         ('038_link_type_refines', '037_entity_last_merge_scan_at'),
         ('037_entity_last_merge_scan_at', '036_fsfm_cooldown_index'),
@@ -72,7 +73,6 @@ def test_seed_chain_is_linear_and_correct() -> None:
         ('033_confidence_evidence_count', '032_fsfm_decay_columns'),
         ('032_fsfm_decay_columns', '031_proposal_resolved_by'),
         ('031_proposal_resolved_by', '030_revisit_last_reviewed_at'),
-        ('030_revisit_last_reviewed_at', '029_lint_llm_quota'),
     ]
     assert top10 == expected_top10, f'Tier A chain mismatch: got {top10}'
 

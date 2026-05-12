@@ -54,16 +54,35 @@ def test_handler_dispatchable():
 
 
 def test_schema_shape():
-    """Schema covers both modes; only success is required at the schema level
-    (mode-specific requirements are validated in the handler/route since they
-    depend on target_type — the JSON-schema ``required`` array can't express
-    that conditionally without oneOf bloat)."""
+    """Schema covers both shapes (per-unit `units` + legacy `unit_ids`/`success`)
+    and both modes (memory_unit / kv_key). Mode-specific requirements are
+    validated in the handler since they depend on target_type — the JSON-schema
+    `required` array can't express that conditionally without oneOf bloat."""
     props = RECORD_OUTCOME_SCHEMA['parameters']['properties']
-    assert {'success', 'unit_ids', 'kv_key', 'target_type', 'vault_id'} <= set(props)
-    assert RECORD_OUTCOME_SCHEMA['parameters']['required'] == ['success']
+    assert {
+        'success',
+        'units',
+        'unit_ids',
+        'kv_key',
+        'target_type',
+        'vault_id',
+        'caller_id',
+        'turn_outcome',
+        'exploration_tagged',
+    } <= set(props)
     assert props['target_type']['enum'] == ['memory_unit', 'kv_key']
     assert props['outcome_confidence']['minimum'] == 0.0
     assert props['outcome_confidence']['maximum'] == 1.0
+    assert props['caller_id']['type'] == 'string'
+    assert props['turn_outcome']['type'] == 'string'
+    assert props['exploration_tagged']['type'] == 'boolean'
+    # Per-unit shape carries verb enum.
+    units_items = props['units']['items']
+    assert units_items['properties']['verb']['enum'] == [
+        'helpful',
+        'not_helpful',
+        'not_used',
+    ]
 
 
 def test_protocol_method_present():
@@ -106,7 +125,15 @@ def test_dispatch_memory_unit_passthrough(config, vault_id):
         1.0,  # outcome_confidence
         None,  # reason
     )
-    assert call.kwargs == {'target_type': 'memory_unit', 'kv_key': None}
+    assert call.kwargs == {
+        'target_type': 'memory_unit',
+        'kv_key': None,
+        'units': None,
+        'caller_id': None,
+        'turn_outcome': None,
+        'retrieved_set_size': None,
+        'exploration_tagged': False,
+    }
 
 
 def test_dispatch_kv_key_mode(config, vault_id):
@@ -143,6 +170,49 @@ def test_dispatch_kv_key_mode(config, vault_id):
     assert call.kwargs['kv_key'] == 'procedure:run-tests:default'
 
 
+def test_dispatch_audit_fields_passthrough(config, vault_id):
+    """caller_id, turn_outcome, and exploration_tagged must flow to api.record_outcome
+    so Hermes-driven outcomes carry the same audit context the HTTP route does."""
+    api = Mock()
+    api.record_outcome = AsyncMock(return_value={'units_updated': 1})
+    dispatch(
+        'memex_record_outcome',
+        {
+            'success': True,
+            'unit_ids': ['u1'],
+            'caller_id': 'hermes-session-abc',
+            'turn_outcome': 'success',
+            'exploration_tagged': True,
+        },
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    call = api.record_outcome.await_args
+    assert call is not None
+    assert call.kwargs['caller_id'] == 'hermes-session-abc'
+    assert call.kwargs['turn_outcome'] == 'success'
+    assert call.kwargs['exploration_tagged'] is True
+
+
+def test_dispatch_audit_fields_type_validation(config, vault_id):
+    """Invalid types for the new audit fields must error before the api call."""
+    api = Mock(spec=[])
+    for bad in (
+        {'success': True, 'unit_ids': ['u1'], 'caller_id': 123},
+        {'success': True, 'unit_ids': ['u1'], 'turn_outcome': 99},
+        {'success': True, 'unit_ids': ['u1'], 'exploration_tagged': 'yes'},
+    ):
+        out = dispatch(
+            'memex_record_outcome',
+            bad,
+            api=api,
+            config=config,
+            vault_id=vault_id,
+        )
+        assert 'error' in json.loads(out)
+
+
 def test_dispatch_explicit_vault_overrides_session(config, vault_id):
     """When args carry vault_id, it overrides the session-bound vault."""
     api = Mock()
@@ -165,18 +235,16 @@ def test_dispatch_explicit_vault_overrides_session(config, vault_id):
 # ---------------------------------------------------------------------------
 
 
-def test_missing_success_returns_tool_error(config, vault_id):
-    """ADD-2 invariant: success is required; absent → tool_error JSON.
+def test_missing_required_fields_returns_tool_error(config, vault_id):
+    """Memory_unit mode requires either `units` or legacy `unit_ids`+`success`.
 
-    The handler must reject before calling api.record_outcome — a regression
-    that defaulted success=False would silently train MW counters with
-    failure signals on every kwargless agent call. The api mock is left
-    un-stubbed so any call would raise AttributeError and surface here.
+    A kwargless call must reject before calling api.record_outcome — silently
+    defaulting would train MW counters with phantom signal.
     """
     api = Mock(spec=[])  # spec=[] means no attributes; any access raises.
     out = dispatch(
         'memex_record_outcome',
-        {'unit_ids': ['u1']},
+        {},
         api=api,
         config=config,
         vault_id=vault_id,

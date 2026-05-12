@@ -106,7 +106,7 @@ class AutoDeprioritizeSummary:
         return len(self.deprioritized)
 
 
-from memex_core.services.outcomes import OutcomeService
+from memex_core.services.outcomes import OutcomeService, UnitOutcome
 from memex_core.services.reflection import ReflectionService
 from memex_core.services.search import SearchService
 from memex_core.services.stats import StatsService
@@ -1595,23 +1595,38 @@ class MemexAPI:
 
     async def record_outcome(
         self,
-        unit_ids: list[str] | None,
-        success: bool,
+        unit_ids: list[str] | None = None,
+        success: bool | None = None,
         vault_id: str | None = None,
         outcome_confidence: float = 1.0,
         reason: str | None = None,
         *,
         target_type: str = 'memory_unit',
         kv_key: str | None = None,
+        units: list[UnitOutcome] | list[dict[str, Any]] | None = None,
+        caller_id: str | None = None,
+        turn_outcome: str | None = None,
+        retrieved_set_size: int | None = None,
+        exploration_tagged: bool = False,
     ) -> dict[str, Any]:
         """Record an outcome. Delegates to OutcomeService.
 
+        Two accepted shapes for ``units``:
+
+        * ``list[UnitOutcome]`` — structured Pydantic objects (preferred for
+          in-process callers).
+        * ``list[dict[str, Any]]`` — typed dicts on the HTTP / Hermes wire
+          where each item has ``{unit_id, verb, reason}``.
+
+        Legacy ``(unit_ids, success)`` shape still accepted with a
+        FutureWarning.
+
         For ``target_type='kv_key'``, increments the vault-scoped
         success/failure counters on ``procedure_outcomes`` for ``kv_key``
-        instead of memory units. See
-        :meth:`OutcomeService.record_outcome` for the full contract.
+        instead of memory units.
         """
         half_life = self.config.server.memory.retrieval.mw_ema_half_life_days
+        coverage_mode = self.config.server.memory.outcomes.coverage_check_mode
         async with self.metastore.session() as session:
             return await self._outcomes.record_outcome(
                 session=session,
@@ -1623,6 +1638,12 @@ class MemexAPI:
                 target_type=target_type,
                 kv_key=kv_key,
                 mw_ema_half_life_days=half_life,
+                units=units,
+                caller_id=caller_id,
+                turn_outcome=turn_outcome,
+                retrieved_set_size=retrieved_set_size,
+                exploration_tagged=exploration_tagged,
+                coverage_check_mode=coverage_mode,
             )
 
     async def create_vault(self, name: str, description: str | None = None) -> Any:

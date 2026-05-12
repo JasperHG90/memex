@@ -114,7 +114,10 @@ def _build_contradiction_engine(config: MemexConfig) -> ContradictionEngine | No
             timeout=model_config.timeout,
             num_retries=model_config.num_retries,
         )
-        engine = ContradictionEngine(lm=lm, config=contradiction_config)
+        failure_weight = config.server.memory.outcomes.contradiction_failure_weight
+        engine = ContradictionEngine(
+            lm=lm, config=contradiction_config, failure_co_count_weight=failure_weight
+        )
         logger.info(
             'Contradiction engine created (model=%s, threshold=%.2f, alpha=%.2f)',
             model_config.model,

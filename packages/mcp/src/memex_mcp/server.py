@@ -3701,21 +3701,41 @@ from memex_mcp._resolution_flow_descriptions import (
 async def memex_record_outcome(
     ctx: Context,
     success: Annotated[
-        bool,
+        bool | None,
         BeforeValidator(_coerce_bool),
         Field(
-            description='True if the task succeeded using these memories, false if they were misleading.'
+            default=None,
+            description=(
+                'kv_key mode only or legacy memory_unit shape. True if the task '
+                'succeeded, false if it failed. For memory_unit mode prefer the '
+                '`units` parameter with per-unit verbs.'
+            ),
         ),
-    ],
+    ] = None,
+    units: Annotated[
+        list[dict] | None,
+        BeforeValidator(_coerce_list),
+        Field(
+            default=None,
+            description=(
+                'memory_unit mode only. Per-unit verb classifications. Each entry: '
+                '{unit_id: UUID, verb: "helpful"|"not_helpful"|"not_used", '
+                'reason: str}. `reason` is required for helpful and not_helpful. '
+                'Examples — good: [{"unit_id": "...", "verb": "helpful", '
+                '"reason": "named the right module"}, {"unit_id": "...", '
+                '"verb": "not_used", "reason": null}]. Bad: classifying everything '
+                'helpful or omitting reason for credit-bearing verbs.'
+            ),
+        ),
+    ] = None,
     unit_ids: Annotated[
         list[str] | None,
         BeforeValidator(_coerce_list),
         Field(
             default=None,
             description=(
-                'memory_unit mode only. UUIDs of memory units you actually used — '
-                'not all retrieved units, only the ones that were load-bearing '
-                'in your reasoning. Required when target_type="memory_unit".'
+                'Legacy memory_unit shape (FutureWarning). UUIDs of memory units '
+                'you actually used. Prefer the `units` parameter.'
             ),
         ),
     ] = None,
@@ -3746,8 +3766,8 @@ async def memex_record_outcome(
             default='memory_unit',
             description=(
                 'What the outcome scores. "memory_unit" (default) increments '
-                'Memory Worth counters on memory units in unit_ids. "kv_key" '
-                'increments vault-scoped counters on the procedure_outcomes '
+                'Memory Worth counters on the memory units in `units` or `unit_ids`. '
+                '"kv_key" increments vault-scoped counters on the procedure_outcomes '
                 'row for kv_key.'
             ),
         ),
@@ -3760,6 +3780,18 @@ async def memex_record_outcome(
                 'kv_key mode only. Procedure KV key (procedure:<verb>:<context-tag>) '
                 'whose Memory Worth counters should be incremented. '
                 'Required when target_type="kv_key".'
+            ),
+        ),
+    ] = None,
+    retrieved_set_size: Annotated[
+        int | None,
+        Field(
+            default=None,
+            ge=0,
+            description=(
+                'Size of the retrieved set the caller was asked to classify. '
+                'Drives coverage_ratio on the audit log. Pass explicitly to '
+                'enable coverage tracking; omitting leaves coverage_ratio NULL.'
             ),
         ),
     ] = None,
@@ -3778,6 +3810,8 @@ async def memex_record_outcome(
             reason=reason,
             target_type=target_type,
             kv_key=kv_key,
+            units=units,
+            retrieved_set_size=retrieved_set_size,
         )
 
     except ToolError:
