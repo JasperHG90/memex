@@ -13,13 +13,33 @@ argument-hint: "[what to remember]"
    - **markdown_content**: specific enough to be useful without the original conversation, 5-15 lines
    - **description**: one-sentence summary, ≤250 words
    - **author**: `"claude-code"`
-   - **tags**: always include `"claude-code"` + `"manual-capture"` + 1-3 topic tags
+   - **tags**: include `"manual-capture"` + 1-3 topic tags (the plugin auto-injects ambient tags — do not repeat them)
 
 3. **Surface**: note (`memex_add_note` / `memex_append_note`) for facts/decisions/context. Use `procedure:` KV for how-tos.
 
 4. **Template**: `memex_list_templates` → `memex_get_template(slug)` → `memex_add_note(..., template=slug)`. Skip for short captures.
 
-5. **Save**: call `memex_add_note` with `background: true`. Confirm to the user.
+5. **Save**: call `memex_add_note`. The plugin auto-defaults `background: true`; pass it explicitly only if you need synchronous ingestion.
+
+## Auto-injected metadata
+
+A `PreToolUse` hook augments every `memex_add_note` call with ambient capture metadata so you don't have to repeat it on each invocation:
+
+| Tag | When |
+| --- | --- |
+| `surface:claude-code` | Always |
+| `session:<note_key>` | Always (groups all notes from one CC session) |
+| `project:<project_id>` | Always (cross-vault discoverability) |
+| `git:branch=<branch>` | When inside a git repo |
+| `git:sha=<short>` | When a commit exists |
+| `git:repo=<owner/name>` | When `origin` remote is set |
+| `git:dirty` | When the working tree has uncommitted changes |
+| `claude:model=<id>` | When SessionStart cached the model identifier |
+| `cc:plugin=<version>` | Plugin version provenance |
+
+The hook also defaults `background=true` and `vault_id=<active_vault>` when those fields are absent. Pre-existing values you supply are preserved — passing `background: false` for synchronous ingestion still works.
+
+To opt out for a specific call, pass an explicit `tags` array containing only what you want. The hook merges (deduplicating); it does not strip values.
 
 ## Deprioritize vs archive
 

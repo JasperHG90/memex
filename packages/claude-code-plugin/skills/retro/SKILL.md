@@ -36,13 +36,12 @@ You have been invoked via the `/retro` slash command.
    - **markdown_content**: The filled-in template.
    - **description**: A one-sentence summary of the session outcome.
    - **author**: `"claude-code"`
-   - **tags**: `["agent-reflection", "session-postmortem"]` plus 1-2 topic tags.
+   - **tags**: `["agent-reflection", "session-postmortem"]` plus 1-2 topic tags. The plugin auto-injects ambient tags (`surface:claude-code`, `session:*`, `git:*`, …) — do not repeat them.
    - **template**: `"agent_reflection"`
-   - **background**: `false`
 
-   Synchronous ingestion ensures entities are extracted immediately and queued
-   for reflection. Reflection runs on a background schedule, but extraction
-   happens before this call returns.
+   The plugin defaults `background: true`, which is the right setting here —
+   server-side extraction runs asynchronously regardless. If you need to know
+   the note exists before continuing (rare), pass `background: false` explicitly.
 
 4. **Extract durable learnings for CLAUDE.md.**
    Review the filled-in retro — specifically **What Worked**, **What Failed**,
