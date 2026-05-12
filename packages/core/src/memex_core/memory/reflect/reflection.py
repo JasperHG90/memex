@@ -567,13 +567,11 @@ class ReflectionEngine:
                 )
 
             # 5. Release the read transaction before the LLM call so no
-            # MVCC snapshot is pinned across DSPy I/O.
-            try:
-                await ph6_session.commit()
-            except SQLAlchemyError:
-                # No active transaction (e.g. when recent_memories covered
-                # everything and no DB read happened). Safe to ignore.
-                pass
+            # MVCC snapshot is pinned across DSPy I/O. A commit with no
+            # active transaction (e.g. when recent_memories covered all
+            # evidence and no DB read fired) is a no-op in SQLAlchemy
+            # asyncio mode, not an error.
+            await ph6_session.commit()
 
             # 6. Call LLM — session is open but no transaction held.
             enrich_predictor = dspy.Predict(EnrichmentSignature)

@@ -55,6 +55,10 @@ Cross-worker mutual exclusion is handled at two complementary layers:
 - The queue's `SELECT ... FOR UPDATE SKIP LOCKED` claim means two workers rarely pick up the same entity. The asyncio lock alone is sufficient for the within-worker case.
 - Phase 5's write is a **compare-and-set** `UPDATE mental_models SET observations=…, version=version+1, … WHERE id=:id AND version=:claimed_version`. If a second worker slips through the queue and reads the same row before the first commits, the first to acquire the row lock wins; the loser's `WHERE version=:claimed_version` matches zero rows after the bump, the helper returns an abandon signal, and the in-memory mental model is left unchanged. The next scheduler tick re-runs reflection on the fresher state.
 
+#### Session lifecycle across LLM phases
+
+Each entity reflection opens its own short DB sessions for the DB-touching phases (Phase 0 live-ID lookup, Phase 2 vector search + unit hydration, Phase 5 CAS UPDATE, Phase 6 unit enrichment). Phases 0, 2, and 5 use single-purpose sessions opened by `async with self._entity_session()` — the session is closed before any subsequent DSPy LLM call, so no DB transaction is held across LLM I/O and no MVCC snapshot is pinned. Phase 6 holds a single session open across the read and write halves, but explicitly commits the read transaction before the LLM call so the *transaction* is released across DSPy I/O even though the *connection* stays bound to the session for the duration of that one entity's enrichment. The connection-pool concern is bounded by the number of *concurrent* reflections, not by the per-reflection LLM-call duration.
+
 No Postgres advisory locks are taken on the reflection path. The earlier `pg_try_advisory_xact_lock(hashtext('reflect:<id>'))` pattern was removed because the advisory lock was held at *transaction scope* — i.e. across the orchestrator's batch and therefore across every DSPy LLM call in the batch (30–60 s per entity), pinning MVCC snapshots open against `VACUUM`. The CAS UPDATE delivers the same write-time exclusion without spanning LLM I/O.
 
 ## Reflection Pipeline Overview
