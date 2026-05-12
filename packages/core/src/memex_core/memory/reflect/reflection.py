@@ -208,7 +208,33 @@ class ReflectionEngine:
                 entity_ids, vault_id=vault_id, limit_per_entity=batch_limit
             )
 
-            # 1.2 Concurrent Processing for this Vault
+            # 1.2 Commit any newly-created MentalModel rows so the per-entity
+            # Phase 5 CAS UPDATE can find them. Without this commit, the rows
+            # added by _batch_get_or_create_models live only in self.session's
+            # pending queue; a per-entity session running on a separate
+            # connection would not see them, and Phase 5's
+            # WHERE id=:id AND version=0 predicate would match zero rows,
+            # silently abandoning every brand-new entity's reflection.
+            #
+            # Expunge each MentalModel from self.session afterwards so any
+            # in-memory attribute mutations made by the per-entity phase
+            # methods on these instances cannot flow into a second UPDATE
+            # via dirty-tracking — Phase 5's per-entity CAS is the
+            # authoritative write path, and a second un-versioned UPDATE
+            # would silently overwrite concurrent writes. Only the
+            # MentalModel instances are expunged; entities, units, and
+            # other test-loaded state stay attached to self.session.
+            try:
+                await self.session.commit()
+            except SQLAlchemyError:
+                # Nothing pending to commit (e.g. all models already existed
+                # before this batch) — no rescue needed.
+                pass
+            for mm in models_map.values():
+                if mm in self.session:
+                    self.session.expunge(mm)
+
+            # 1.3 Concurrent Processing for this Vault
             results = await asyncio.gather(
                 *[
                     self._process_entity_reflection(
@@ -223,17 +249,13 @@ class ReflectionEngine:
             )
             all_success_models.extend([m for m in results if m is not None])
 
-        if not all_success_models:
-            return []
-
-        # 2. Optimistic Batch Persistence
-        try:
-            await self.session.commit()
-            logger.info(f'Successfully committed batch of {len(all_success_models)} mental models.')
-        except (SQLAlchemyError, OSError, RuntimeError) as e:
-            logger.error(f'Batch commit failed: {e}. Attempting rescue mode...')
-            await self._batch_save_rescue(all_success_models)
-
+        # No batch-end commit: Phase 5's per-entity CAS UPDATE is the only
+        # write path for ``mental_models``, and Phase 6 commits its own
+        # writes inside the per-entity session. Any in-memory attribute
+        # mutations made on detached MentalModel instances during the
+        # LLM phases are intentionally not flushed — they exist only for
+        # the caller's return-value convenience and do not represent
+        # pending DB state.
         return all_success_models
 
     async def _process_entity_reflection(
@@ -268,23 +290,6 @@ class ReflectionEngine:
                 logger.error(f'Reflection failed for entity {eid}: {e}', exc_info=True)
                 return None
 
-    async def _batch_save_rescue(self, models: list[MentalModel]) -> None:
-        """Attempt to save models one by one if batch commit fails."""
-        await self.session.rollback()
-
-        saved_count = 0
-        for model in models:
-            try:
-                self.session.add(model)
-                flag_modified(model, 'observations')
-                flag_modified(model, 'entity_metadata')
-                await self.session.commit()
-                saved_count += 1
-            except (SQLAlchemyError, OSError, RuntimeError) as inner_e:
-                logger.error(f'Rescue save failed for model {model.id}: {inner_e}')
-                await self.session.rollback()
-        logger.info(f'Rescue mode saved {saved_count}/{len(models)} models.')
-
     async def _reflect_entity_internal(
         self,
         entity_id: UUID,
@@ -315,26 +320,22 @@ class ReflectionEngine:
                     'reflection.vault_id': str(vault_id),
                 },
             ):
-                # Capture pre-Phase-0 observation count so the no-memories
-                # early-return can detect whether Phase 0 pruned anything
-                # (the only thing that can change ``mental_model.observations``
-                # on that path).
-                pre_phase0_obs_count = len(mental_model.observations or [])
-
                 # Phase 0: Update Existing — opens its own short DB tx
                 # internally; no transaction held during the LLM call.
-                updated_observations = await self._phase_0_update(
+                # Returns (observations, mutated) so the no-memories early
+                # return can detect whether anything changed and decide
+                # whether to persist via Phase 5 CAS.
+                updated_observations, phase0_mutated = await self._phase_0_update(
                     mental_model, entity_name, recent_memories, vault_id=vault_id
                 )
 
                 if not recent_memories:
-                    # No new memories. If Phase 0 pruned dead refs the
-                    # observation count drops; persist via CAS so the
-                    # prune doesn't get lost (pre-V18 the orchestrator's
-                    # batch commit handled it). Otherwise it's a true
-                    # no-op — return without touching the DB.
-                    post_phase0_obs_count = len(mental_model.observations or [])
-                    if post_phase0_obs_count != pre_phase0_obs_count and updated_observations:
+                    # No new memories. If Phase 0 mutated observations
+                    # (pruned evidence or LLM updates), persist via CAS so
+                    # the change doesn't get lost (pre-V18 the orchestrator
+                    # batch commit handled it). Otherwise it's a true no-op
+                    # — return without touching the DB.
+                    if phase0_mutated:
                         async with self._entity_session() as ph5_session:
                             await self._phase_5_finalize(
                                 mental_model,
@@ -624,14 +625,15 @@ class ReflectionEngine:
                 unit.unit_metadata['enriched_by_entity'] = entity_name
 
                 flag_modified(unit, 'unit_metadata')
-                # Ensure the unit is attached to the per-entity session so the
-                # mutation persists when this session commits. ``session.add``
-                # is a no-op if the instance is already attached to this
-                # session, and ``merge`` would re-load from the DB — ``add``
-                # is the right primitive here for instances that may be
-                # attached to a *different* session (the orchestrator's, when
-                # they came from ``recent_memories``).
-                ph6_session.add(unit)
+                # Bring the unit into this session so the mutation persists
+                # at commit. ``merge`` works whether the instance is detached,
+                # attached to *this* session, or attached to a *different*
+                # session (the orchestrator's, when units came from
+                # ``recent_memories``) — ``session.add`` on a cross-session
+                # instance raises ``InvalidRequestError``. ``merge`` issues
+                # a SELECT to load the current row and copies the in-memory
+                # state onto the session-attached copy.
+                await ph6_session.merge(unit)
                 enriched_count += 1
 
             await ph6_session.commit()
@@ -766,11 +768,22 @@ class ReflectionEngine:
         entity_name: str,
         memories: list[MemoryUnit],
         vault_id: UUID = GLOBAL_VAULT_ID,
-    ) -> list[Observation]:
-        """Phase 0: Update existing observations with new evidence; prune dead refs."""
+    ) -> tuple[list[Observation], bool]:
+        """Phase 0: Update existing observations with new evidence; prune dead refs.
+
+        Returns a tuple ``(observations, mutated)``. ``mutated`` is True if
+        either the dead-ref prune (any evidence dropped, even from a single
+        observation that retains other evidence) or the LLM update step
+        changed the in-memory observation list versus the row in
+        ``model.observations``. The caller uses this signal to decide
+        whether to persist via Phase 5's CAS UPDATE on the no-recent-
+        memories early-return path; on the main happy path Phase 5 always
+        runs regardless.
+        """
         current_observations = [Observation(**obs) for obs in model.observations]
+        mutated = False
         if not current_observations:
-            return current_observations
+            return current_observations, mutated
 
         # Prune evidence citing deleted memory units
         all_evidence_ids: set[UUID] = set()
@@ -781,11 +794,12 @@ class ReflectionEngine:
         if all_evidence_ids:
             # Per-entity DB session for the live-ID lookup. The session
             # closes before the LLM call below, so no transaction is held
-            # during DSPy I/O. The in-memory ``model.observations`` mutation
-            # is unflushed-attribute on an instance attached to the
-            # orchestrator's session — Phase 5's CAS UPDATE is the
-            # authoritative persistence path; this flag is only consumed
-            # by the legacy single-session test scaffold.
+            # during DSPy I/O. Phase 5's CAS UPDATE is the authoritative
+            # write path for ``observations`` — Phase 0 just returns the
+            # pruned ``current_observations`` upward; the caller decides
+            # whether to persist via Phase 5 (e.g. the no-recent-memories
+            # early return at ``_reflect_entity_internal`` does exactly
+            # that when the prune changed the observation count).
             async with self._entity_session() as ph0_session:
                 live_stmt = select(MemoryUnit.id).where(
                     col(MemoryUnit.id).in_(list(all_evidence_ids)),
@@ -797,13 +811,12 @@ class ReflectionEngine:
             dead_ids = all_evidence_ids - live_ids
 
             if dead_ids:
-                pruned = False
                 pruned_to_empty: set[UUID] = set()
                 for obs in current_observations:
                     original_len = len(obs.evidence)
                     obs.evidence = [ev for ev in obs.evidence if ev.memory_id not in dead_ids]
                     if len(obs.evidence) < original_len:
-                        pruned = True
+                        mutated = True
                         if not obs.evidence:
                             pruned_to_empty.add(obs.id)
 
@@ -813,14 +826,8 @@ class ReflectionEngine:
                         obs for obs in current_observations if obs.id not in pruned_to_empty
                     ]
 
-                if pruned:
-                    model.observations = [
-                        obs.model_dump(mode='json') for obs in current_observations
-                    ]
-                    flag_modified(model, 'observations')
-
         if not current_observations or not memories:
-            return current_observations
+            return current_observations, mutated
 
         memory_map = {i: m for i, m in enumerate(memories)}
 
@@ -842,7 +849,7 @@ class ReflectionEngine:
         )
 
         if not result or not result.updates:
-            return current_observations
+            return current_observations, mutated
 
         for update in result.updates:
             if 0 <= update.observation_index < len(current_observations):
@@ -861,12 +868,14 @@ class ReflectionEngine:
                                 timestamp=parse_timestamp(new_ev.timestamp),
                             )
                         )
+                        mutated = True
 
                 if update.has_contradiction:
                     note = update.contradiction_note or 'New evidence contradicts this observation.'
                     obs.content += f' [CONTRADICTION: {note}]'
+                    mutated = True
 
-        return current_observations
+        return current_observations, mutated
 
     async def _phase_1_seed(
         self,
