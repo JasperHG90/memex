@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from aioclock import AioClock
 from aioclock.triggers import Every
 from sqlalchemy.engine.url import make_url
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import IntegrityError, OperationalError
 
 from memex_core.config import MemexConfig
 from memex_core.context import background_session
@@ -51,18 +51,30 @@ async def periodic_reflection_task(api: 'MemexAPI', batch_size: int):
             logger.info(f'Scheduler: Reflecting on {len(requests)} entities.')
             await api.reflect_batch(requests)
 
-        except (OSError, RuntimeError, ValueError, IntegrityError) as e:
+        except (OSError, RuntimeError, ValueError, IntegrityError, OperationalError) as e:
             # IntegrityError is the V18-specific failure mode: the
             # orchestrator-session commit that flushes newly-created
             # MentalModel rows can race the (entity_id, vault_id) unique
             # index when two workers attempt to create a row for the
             # same entity in the same tick. The race window is narrow
             # (between SKIP LOCKED claim and the model-insert commit).
-            # We catch only IntegrityError, NOT the wider SQLAlchemyError
-            # tree, so ProgrammingError / DataError / InternalError
-            # (real bugs, schema drift, DB corruption) still propagate
-            # up and crash-loop the task — which is the right behavior
-            # for surfacing programming errors in alerting.
+            #
+            # OperationalError covers the legitimate-retry signals
+            # Postgres returns under cross-worker contention:
+            # deadlock_detected (pgcode 40P01) and serialization_failure
+            # (pgcode 40001). V18 explicitly increases write concurrency
+            # on the mental_models table (parallel per-entity gather),
+            # so these are NORMAL responses to contention — the right
+            # app behavior is to log and let the next tick retry, not
+            # to crash-loop. Connection drops (also OperationalError)
+            # similarly should not kill the periodic task.
+            #
+            # We catch ONLY these two SQLAlchemy subclasses, NOT the
+            # wider SQLAlchemyError tree, so ProgrammingError /
+            # DataError / InternalError (real bugs, schema drift, DB
+            # corruption) still propagate up and crash-loop the task —
+            # the right behavior for surfacing programming errors in
+            # alerting.
             #
             # Queue recovery: when this except fires, the queue items
             # claimed earlier in this tick remain in PROCESSING (the

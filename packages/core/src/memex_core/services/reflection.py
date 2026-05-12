@@ -33,6 +33,18 @@ logger = logging.getLogger('memex.core.services.reflection')
 SummarizeScope = Literal['incremental', 'full']
 
 
+class ReflectionAbandonedError(Exception):
+    """Raised when a synchronous on-demand reflection abandons because a
+    concurrent worker advanced the mental_models.version between read and
+    Phase 5 CAS UPDATE. The entity has been re-enqueued via mark_abandoned
+    (retry_count unchanged); callers should treat this as a transient
+    "try again shortly" signal and translate to a 503 / Retry-After at
+    the surface (HTTP / MCP / Hermes). The previous behavior — returning
+    a synthetic empty MentalModel — silently misrepresented the entity
+    as observation-less and is a UX defect this exception replaces.
+    """
+
+
 class ReflectionService:
     """Reflection operations.
 
@@ -112,7 +124,25 @@ class ReflectionService:
             )
 
             models = await reflector.reflect_batch([request])
+            abandoned_ids = set(reflector.last_abandoned_entity_ids)
             if not models:
+                if request.entity_id in abandoned_ids:
+                    # CAS abandon — re-enqueue without retry_count increment,
+                    # then raise so the caller (summarize_node / HTTP / MCP)
+                    # can translate to a "try again" envelope. Returning a
+                    # synthetic empty MentalModel here would silently misrepresent
+                    # the entity as observation-less to the agent / user.
+                    await self.queue_service.mark_abandoned(
+                        session,
+                        entity_id=request.entity_id,
+                        vault_id=request.vault_id,
+                    )
+                    raise ReflectionAbandonedError(
+                        f'Reflection for entity {request.entity_id} abandoned '
+                        f'because a concurrent worker advanced the version. '
+                        f'Re-enqueued for the next scheduler tick.'
+                    )
+                # Real failure (exception in the engine path).
                 await self.queue_service.mark_failed(
                     session,
                     entity_id=request.entity_id,
@@ -207,6 +237,12 @@ class ReflectionService:
             )
 
             models = await reflector.reflect_batch(requests)
+            # CAS-abandoned entities are NOT in ``models`` — the engine
+            # tracks them separately so we can re-enqueue without
+            # incrementing retry_count (abandons are benign concurrency
+            # contention, not failures, and must not consume the DEAD_LETTER
+            # budget).
+            abandoned_ids = set(reflector.last_abandoned_entity_ids)
 
             from collections import defaultdict
 
@@ -215,11 +251,27 @@ class ReflectionService:
             for m in models:
                 processed_by_vault[m.vault_id].append(m.entity_id)
 
+            # Order is intentional: complete_reflection's commit fires first
+            # (deletes succeeded queue rows). The two subsequent loops then
+            # run in a fresh SQLAlchemy autobegin transaction on the same
+            # session — a failure in either does not roll back the deletes.
             for vid, eids in processed_by_vault.items():
                 await self.queue_service.complete_reflection(session, eids, vault_id=vid)
 
+            # CAS-abandoned: re-enqueue (PENDING) without incrementing
+            # retry_count. SKIP LOCKED on the next tick re-claims them.
             for req in requests:
-                if req.entity_id not in succeeded_ids:
+                if req.entity_id in abandoned_ids:
+                    await self.queue_service.mark_abandoned(
+                        session,
+                        entity_id=req.entity_id,
+                        vault_id=req.vault_id,
+                    )
+
+            # Real failures (exceptions in _process_entity_reflection):
+            # mark_failed, increments retry_count toward DEAD_LETTER.
+            for req in requests:
+                if req.entity_id not in succeeded_ids and req.entity_id not in abandoned_ids:
                     await self.queue_service.mark_failed(
                         session,
                         entity_id=req.entity_id,

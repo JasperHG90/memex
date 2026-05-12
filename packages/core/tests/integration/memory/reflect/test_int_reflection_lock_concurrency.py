@@ -641,6 +641,99 @@ async def test_reflect_entity_internal_returns_none_on_cas_abandon(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_reflect_batch_tracks_cas_abandons_separately_from_success(
+    session_manager, memex_config: MemexConfig
+):
+    """Round-5 HIGH regression guard: ``ReflectionEngine.last_abandoned_entity_ids``
+    captures CAS-abandoned entities so the service layer can route them
+    through ``mark_abandoned`` (no retry_count increment) instead of
+    ``mark_failed`` (counts toward DEAD_LETTER).
+
+    A hot entity in a multi-worker cluster could race repeatedly. Without
+    this separation, three unlucky CAS losses would DEAD_LETTER it.
+    """
+    from unittest.mock import patch, AsyncMock
+    from memex_core.memory.sql_models import MemoryUnit
+    from memex_common.types import FactTypes
+    from memex_core.memory.reflect.models import ReflectionRequest
+    from sqlalchemy import update as sa_update
+
+    async with session_manager() as setup_session:
+        entity, model = await _seed_entity_and_model(setup_session, version=2)
+        entity_id = entity.id
+        model_id = model.id
+
+    # Concurrent winner bumps the row.
+    async with session_manager() as winner_session:
+        await winner_session.execute(
+            sa_update(MentalModel).where(MentalModel.id == model_id).values(version=3)
+        )
+        await winner_session.commit()
+
+    async with session_manager() as orchestrator_session:
+        engine = ReflectionEngine(
+            orchestrator_session,
+            memex_config,
+            _make_embedder(),
+            entity_session_factory=session_manager,
+        )
+        engine.lm = MagicMock()
+        with (
+            patch.object(engine, '_phase_1_seed', new_callable=AsyncMock) as mock_seed,
+            patch.object(engine, '_phase_2_hunt', new_callable=AsyncMock) as mock_hunt,
+            patch.object(engine, '_phase_3_validate', new_callable=AsyncMock) as mock_val,
+            patch.object(engine, '_phase_4_compare', new_callable=AsyncMock) as mock_comp,
+        ):
+            mock_seed.return_value = []
+            mock_hunt.return_value = []
+            mock_val.return_value = []
+            mock_comp.return_value = (
+                [Observation(title='Stale', content='will lose', evidence=[])],
+                'summary',
+            )
+
+            # ``model`` in setup_session is at version=2; the winner bumped to 3.
+            # The orchestrator's _batch_get_or_create_models will re-read,
+            # so we patch that to return our stale-version copy.
+            async def fake_get_or_create(entity_ids, vault_id=GLOBAL_VAULT_ID):
+                return {entity_id: model}
+
+            async def fake_get_entities(entity_ids):
+                return {entity_id: entity}
+
+            async def fake_fetch_memories(entity_ids, vault_id=None, limit_per_entity=20):
+                return {
+                    entity_id: [
+                        MemoryUnit(
+                            id=uuid4(),
+                            text='trigger',
+                            vault_id=GLOBAL_VAULT_ID,
+                            fact_type=FactTypes.WORLD,
+                            embedding=[0.0] * 384,
+                        )
+                    ]
+                }
+
+            engine._batch_get_or_create_models = fake_get_or_create  # type: ignore[assignment]
+            engine._batch_get_entities = fake_get_entities  # type: ignore[assignment]
+            engine._batch_fetch_recent_memories = fake_fetch_memories  # type: ignore[assignment]
+
+            results = await engine.reflect_batch(
+                [ReflectionRequest(entity_id=entity_id, vault_id=GLOBAL_VAULT_ID)]
+            )
+
+    # Engine returns empty applied list — abandoned entity went elsewhere.
+    assert results == [], "CAS-abandoned entity must not appear in reflect_batch's applied list."
+    # And the abandon was recorded for the service-layer router.
+    assert engine.last_abandoned_entity_ids == [entity_id], (
+        'CAS-abandoned entity_id must be tracked in last_abandoned_entity_ids '
+        'so the service layer routes it through mark_abandoned (no retry++) '
+        'instead of mark_failed.'
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_reflect_entity_internal_prune_only_cas_abandon_returns_none(
     session_manager, memex_config: MemexConfig
 ):

@@ -285,6 +285,41 @@ class ReflectionQueueService:
             await session.delete(item)
         await session.commit()
 
+    async def mark_abandoned(
+        self,
+        session: AsyncSession,
+        entity_id: UUID,
+        vault_id: UUID = GLOBAL_VAULT_ID,
+    ) -> None:
+        """Re-enqueue a queue item after Phase 5 CAS UPDATE abandoned.
+
+        Used when a concurrent worker advanced the row's version between
+        our read and our CAS UPDATE. CAS abandons are benign concurrency
+        contention — the work itself didn't fail, another writer just
+        committed first. We flip the row back to PENDING so the next
+        scheduler tick re-claims via SKIP LOCKED. retry_count is NOT
+        incremented (the entity didn't fail), so a hot entity in a
+        multi-worker cluster cannot DEAD_LETTER from contention alone.
+        """
+        stmt = (
+            select(ReflectionQueue)
+            .where(col(ReflectionQueue.entity_id) == entity_id)
+            .where(col(ReflectionQueue.vault_id) == vault_id)
+        )
+        result = await session.exec(stmt)
+        item = result.first()
+        if item is None:
+            return
+
+        item.status = ReflectionStatus.PENDING
+        item.last_error = 'CAS abandon (concurrent refresh won)'
+        session.add(item)
+        await session.commit()
+        logger.info(
+            'Reflection task for entity %s re-enqueued after CAS abandon (retry_count unchanged)',
+            entity_id,
+        )
+
     async def mark_failed(
         self,
         session: AsyncSession,

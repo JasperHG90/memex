@@ -12,6 +12,7 @@ import dspy
 from sqlmodel import select, col
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlalchemy import func, update as sa_update
+from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.orm import defer
 from sqlalchemy.orm.attributes import flag_modified
 
@@ -109,6 +110,17 @@ class ReflectionEngine:
         self.config = config or MemexConfig()
         self.embedder = embedder
 
+        # Entity-ids whose Phase 5 CAS UPDATE abandoned during the most
+        # recent ``reflect_batch`` call. Populated by
+        # ``_process_entity_reflection`` when ``_reflect_entity_internal``
+        # returns None. The service layer reads this after reflect_batch
+        # to route abandoned entities through ``queue_service.mark_abandoned``
+        # (PENDING, retry_count unchanged) instead of ``mark_failed``
+        # (increments retry_count toward DEAD_LETTER) — CAS abandons are
+        # benign concurrency contention, NOT task failures, and should not
+        # consume the retry budget. Cleared at the start of each call.
+        self.last_abandoned_entity_ids: list[UUID] = []
+
         # Prefer injected LM; fall back to dspy.settings.lm, then extraction model.
         self.lm: dspy.LM | None
         try:
@@ -166,7 +178,22 @@ class ReflectionEngine:
             yield self.session
 
     async def reflect_batch(self, requests: list[ReflectionRequest]) -> list[MentalModel]:
-        """Run reflection for multiple entities in parallel, grouped by vault_id."""
+        """Run reflection for multiple entities in parallel, grouped by vault_id.
+
+        Returns the list of MentalModels whose Phase 5 CAS UPDATE applied.
+        Entities whose CAS UPDATE abandoned (a concurrent worker advanced
+        the row's version between our read and write) are NOT in the
+        returned list — they are tracked separately in
+        ``self.last_abandoned_entity_ids`` so the caller can route them
+        through the queue layer's abandon path (no retry_count increment)
+        instead of the failure path (increments toward DEAD_LETTER).
+        """
+        # Reset per-call abandon tracking. ReflectionEngine is constructed
+        # fresh per service call, so this is defensive — but explicit
+        # clear avoids any cross-batch leakage if a caller reuses an
+        # engine instance.
+        self.last_abandoned_entity_ids = []
+
         if not requests:
             return []
 
@@ -285,13 +312,21 @@ class ReflectionEngine:
                     if req.limit_recent_memories is None
                     else fetched[: req.limit_recent_memories]
                 )
-                return await self._reflect_entity_internal(
+                outcome = await self._reflect_entity_internal(
                     entity_id=eid,
                     mental_model=models_map[eid],
                     entity=entity,
                     recent_memories=recent_memories,
                     vault_id=req.vault_id,
                 )
+                if outcome is None:
+                    # CAS abandon — track separately so the caller can
+                    # re-enqueue via mark_abandoned (no retry_count
+                    # increment) instead of routing through mark_failed
+                    # (counts toward DEAD_LETTER). CAS abandons are
+                    # benign concurrency contention, not failures.
+                    self.last_abandoned_entity_ids.append(eid)
+                return outcome
             except Exception as e:
                 logger.error(f'Reflection failed for entity {eid}: {e}', exc_info=True)
                 return None
@@ -700,8 +735,6 @@ class ReflectionEngine:
         # dirty flag is cleared — tests using ``session.refresh(unit)``
         # still observe the committed Phase 6 enrichments via the
         # subsequent SELECT.
-        from sqlalchemy.exc import InvalidRequestError
-
         for unit in units_to_merge:
             try:
                 if unit in self.session:
@@ -804,9 +837,25 @@ class ReflectionEngine:
         return memories_map
 
     async def reflect_on_entity(self, request: ReflectionRequest) -> MentalModel:
-        """Legacy wrapper for single entity reflection."""
+        """Legacy wrapper for single entity reflection.
+
+        Returns the applied MentalModel on success. Raises RuntimeError
+        on failure. If the Phase 5 CAS UPDATE abandoned (concurrent
+        worker won the version race), this raises a RuntimeError whose
+        message identifies the abandon — callers that want to handle
+        abandons gracefully should switch to ``reflect_batch`` and
+        inspect ``engine.last_abandoned_entity_ids``.
+        """
         results = await self.reflect_batch([request])
         if not results:
+            if request.entity_id in self.last_abandoned_entity_ids:
+                raise RuntimeError(
+                    f'Reflection for {request.entity_id} abandoned: '
+                    'a concurrent worker advanced the mental_models.version '
+                    'between read and Phase 5 CAS UPDATE. The entity has '
+                    'NOT been re-enqueued by this wrapper — the service '
+                    'layer handles re-enqueue when called via reflect_batch.'
+                )
             raise RuntimeError(f'Reflection failed for {request.entity_id}')
         return results[0]
 
