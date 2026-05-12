@@ -9,7 +9,7 @@ from collections import defaultdict
 import dspy
 from sqlmodel import select, col
 from sqlmodel.ext.asyncio.session import AsyncSession
-from sqlalchemy import func
+from sqlalchemy import func, update as sa_update
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.orm import defer
 from sqlalchemy.orm.attributes import flag_modified
@@ -302,14 +302,18 @@ class ReflectionEngine:
                 updated_observations, validated, vault_id=vault_id, entity_name=entity_name
             )
 
-            # Phase 5: Finalize Model
-            await self._phase_5_finalize(
+            # Phase 5: Finalize Model (CAS UPDATE — may abandon on version conflict)
+            applied = await self._phase_5_finalize(
                 mental_model,
                 final_obs,
-                db_lock,
                 entity_summary=entity_summary,
                 entity_type=entity_type,
             )
+            if not applied:
+                # Another worker refreshed this entity while our LLM phases ran.
+                # Return the unmodified model; next scheduler tick re-runs on the
+                # fresher state.
+                return mental_model
 
             # Phase 6: Enrich (Memory Evolution)
             if self.config.server.memory.reflection.enrichment_enabled:
@@ -328,16 +332,30 @@ class ReflectionEngine:
         self,
         mental_model: MentalModel,
         final_obs: list[Observation],
-        db_lock: asyncio.Lock,
         entity_summary: str = '',
         entity_type: str | None = None,
-    ) -> None:
-        """Phase 5: Update observations, version, embedding, and entity metadata."""
-        mental_model.observations = [obs.model_dump(mode='json') for obs in final_obs]
-        mental_model.version += 1
-        mental_model.last_refreshed = datetime.now(timezone.utc)
+    ) -> bool:
+        """Phase 5: CAS UPDATE on mental_models, version-checked.
 
-        mental_model.entity_metadata = {
+        Issues a single ``UPDATE mental_models ... WHERE id = :id AND
+        version = :claimed_version`` and bumps the version atomically. If
+        another worker has refreshed this entity since the version was
+        read, the WHERE clause matches zero rows and this reflection is
+        abandoned (returns ``False``); the in-memory ``mental_model`` is
+        left unchanged so the caller doesn't surface stale state. The
+        next scheduler tick will re-run reflection on the fresher state.
+
+        On success, the in-memory ``mental_model`` is mutated to match
+        what was written so callers and tests see consistent state, and
+        ``True`` is returned.
+
+        The CAS UPDATE is its own atomic SQL statement — no asyncio.Lock
+        is needed to serialize concurrent writes to the row; Postgres'
+        row-level locking handles that.
+        """
+        claimed_version = mental_model.version
+        new_observations = [obs.model_dump(mode='json') for obs in final_obs]
+        new_entity_metadata = {
             'description': entity_summary,
             'category': entity_type,
             'observation_count': len(final_obs),
@@ -350,12 +368,39 @@ class ReflectionEngine:
             context=mental_model.name,
         )
         embedding_list = await self._async_encode([full_text])
-        mental_model.embedding = embedding_list[0]
+        new_embedding = embedding_list[0]
+        now = datetime.now(timezone.utc)
 
-        async with db_lock:
-            self.session.add(mental_model)
-            flag_modified(mental_model, 'observations')
-            flag_modified(mental_model, 'entity_metadata')
+        stmt = (
+            sa_update(MentalModel)
+            .where(MentalModel.id == mental_model.id)  # type: ignore[arg-type]
+            .where(MentalModel.version == claimed_version)  # type: ignore[arg-type]
+            .values(
+                observations=new_observations,
+                entity_metadata=new_entity_metadata,
+                version=MentalModel.version + 1,
+                last_refreshed=now,
+                embedding=new_embedding,
+            )
+        )
+        result = await self.session.execute(stmt)
+        rowcount = getattr(result, 'rowcount', 0) or 0
+        if rowcount == 0:
+            logger.warning(
+                'CAS abandon for mental model %s (entity %s): version=%d (concurrent refresh won; '
+                'next scheduler tick will retry)',
+                mental_model.id,
+                mental_model.entity_id,
+                claimed_version,
+            )
+            return False
+
+        mental_model.observations = new_observations
+        mental_model.entity_metadata = new_entity_metadata
+        mental_model.version = claimed_version + 1
+        mental_model.last_refreshed = now
+        mental_model.embedding = new_embedding
+        return True
 
     async def _phase_6_enrich(
         self,
