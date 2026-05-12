@@ -311,6 +311,7 @@ _FSFM_COMPOSITE_DEPRIORITIZE_SQL = """
                         WHEN 'caused_by' THEN -0.1
                         WHEN 'enables' THEN -0.1
                         WHEN 'prevents' THEN -0.1
+                        WHEN 'refines' THEN 0.0
                         ELSE 0.0
                     END
                     * ml.weight
@@ -325,7 +326,7 @@ _FSFM_COMPOSITE_DEPRIORITIZE_SQL = """
                   AND src.vault_id = mu.vault_id
                   AND ml.link_type IN (
                     'contradicts', 'weakens', 'reinforces',
-                    'causes', 'caused_by', 'enables', 'prevents'
+                    'causes', 'caused_by', 'enables', 'prevents', 'refines'
                   )
             ) AS graph_pressure_raw,
             (

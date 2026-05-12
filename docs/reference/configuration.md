@@ -386,6 +386,21 @@ Protects against cascading failures from LLM provider outages.
 | `failure_threshold` | int | `5` | >= 1 | Number of consecutive failures before opening the circuit. |
 | `reset_timeout_seconds` | float | `60.0` | > 0 | Seconds to stay open before allowing a probe request. |
 
+#### LLM Lint (`server.memory.lint_llm`)
+
+Surprise-gated LLM-driven lint pass. Adds an extra pass over candidate
+memory units to flag semantic contradictions, schema drift, and propose
+winners between FSFM-flagged contradicting pairs.
+
+| Key | Type | Default | Constraints | Description |
+|:----|:-----|:--------|:------------|:------------|
+| `enabled` | bool | `true` | — | Master switch; when false the tick is a no-op. |
+| `cost_cap_per_24h` | int | `10` | >= 0 | Max LLM lint calls per vault per 24h. `0` disables the tick. |
+| `propose_winner_min_confidence` | float | `0.6` | `[0.0, 1.0]` | Minimum DSPy-reported confidence below which an `inconclusive` winner proposal is suppressed. Env: `MEMEX_SERVER_LINT_LLM_PROPOSE_WINNER_MIN_CONFIDENCE`. |
+| `checks.semantic_contradiction.enabled` | bool | `true` | — | Per-check feature flag for the semantic-contradiction signature. |
+| `checks.schema_drift.enabled` | bool | `true` | — | Per-check feature flag for the schema-drift signature. |
+| `checks.propose_contradiction_winner.enabled` | bool | `true` | — | Per-check feature flag for the ProposeContradictionWinner signature (fires on FSFM contradiction-pressure findings). |
+
 ---
 
 ### Document Search (`server.document`)

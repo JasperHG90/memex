@@ -21,7 +21,7 @@ argument-hint: "[search query]"
 4. **Procedure recall**: for "how do I X?" queries, check `procedure:` KV namespace first:
    - `memex_kv_list(namespaces=["procedure"])` → `memex_kv_get(key)` for active value
 
-5. **Memory hygiene**: when asked about stale facts, call `memex_get_lint_flags(vault_id=...)`. Act autonomously on low-risk findings.
+5. **Memory hygiene**: when asked about stale facts, call `memex_get_lint_flags(vault_id=...)`. Act autonomously on low-risk findings. When a finding has `rule_name='propose_contradiction_winner'`, call `memex_lint_apply_winner` after surfacing the proposal to the user.
 
 6. **Diagnostics**: "how is this vault doing?" → `memex_get_diagnostics_summary(vault_id=...)`.
 

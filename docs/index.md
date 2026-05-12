@@ -36,6 +36,7 @@ Goal-oriented recipes for specific tasks. Assumes you have a working Memex insta
 | [Sync Notes](how-to/sync-notes.md) | Sync a folder of Markdown notes to Memex with incremental updates. |
 | [Override Vault with Frontmatter](how-to/override-vault-with-frontmatter.md) | Route individual notes to a different vault using a `vault:` key in YAML frontmatter, with archive-on-migration semantics. |
 | [Firefox Extension](how-to/firefox-extension.md) | Capture articles and PDFs from Firefox directly into Memex. |
+| [Resolve Contradictions](how-to/resolve-contradictions.md) | Review and apply LLM-proposed winners between contradicting memory units. |
 
 ---
 

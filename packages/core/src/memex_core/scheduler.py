@@ -231,6 +231,7 @@ async def periodic_lint_llm_task(api: 'MemexAPI'):
     whatever the first one left.
     """
     from memex_core.memory.lint_llm.checks import (
+        make_propose_contradiction_winner_check,
         make_schema_drift_check,
         make_semantic_contradiction_check,
     )
@@ -273,7 +274,14 @@ async def periodic_lint_llm_task(api: 'MemexAPI'):
     if settings.checks.schema_drift.enabled:
         checks.append(('schema_drift', make_schema_drift_check(api.lm, k=settings.surprise_k)))
 
-    if not checks:
+    propose_winner_check: object | None = None
+    if settings.checks.propose_contradiction_winner.enabled:
+        propose_winner_check = make_propose_contradiction_winner_check(
+            api.lm,
+            min_confidence=settings.propose_winner_min_confidence,
+        )
+
+    if not checks and propose_winner_check is None:
         logger.info('Scheduler: Lint_llm — no checks enabled, skipping tick')
         return
 
@@ -311,6 +319,29 @@ async def periodic_lint_llm_task(api: 'MemexAPI'):
                         logger.warning(
                             'Scheduler: Lint_llm[%s] failed for vault %s: %s',
                             check_name,
+                            vault.name,
+                            e,
+                        )
+
+                if propose_winner_check is not None:
+                    try:
+                        summary = await api.lint_llm.tick_propose_winner(
+                            vault.id,
+                            run_llm_check=propose_winner_check,
+                        )
+                        if summary.findings_emitted or summary.deferred:
+                            logger.info(
+                                'Scheduler: Lint_llm[propose_contradiction_winner] '
+                                'vault=%s: evaluated=%d emitted=%d deferred=%d',
+                                vault.name,
+                                summary.candidates_evaluated,
+                                summary.findings_emitted,
+                                summary.deferred,
+                            )
+                    except Exception as e:
+                        logger.warning(
+                            'Scheduler: Lint_llm[propose_contradiction_winner] '
+                            'failed for vault %s: %s',
                             vault.name,
                             e,
                         )

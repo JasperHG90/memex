@@ -6,6 +6,8 @@ Routes:
 - GET    /api/v1/lint/flags                           — cursor-paginated agent surface
 - POST   /api/v1/lint/findings/{finding_id}/dismiss   — flip status to 'dismissed'
 - POST   /api/v1/lint/findings/{finding_id}/resolve   — flip status to 'resolved'
+- POST   /api/v1/lint/findings/{finding_id}/apply     — apply a winner-proposal action
+- POST   /api/v1/lint/findings/{finding_id}/reverse   — reverse a previously applied winner-proposal
 
 The ``findings`` endpoint backs ``memex lint findings`` (CLI). The
 ``flags`` endpoint is the agent surface — shape-stable returns and
@@ -15,6 +17,7 @@ opaque cursor pagination, mirrored by ``memex_get_lint_flags`` MCP.
 from __future__ import annotations
 
 import logging
+import os
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -23,6 +26,7 @@ from sqlalchemy import text
 
 from memex_common.config import Permission
 from memex_core.api import MemexAPI
+from memex_core.context import get_actor
 from memex_core.server.auth import (
     AuthContext,
     check_vault_access,
@@ -34,6 +38,33 @@ from memex_core.server.common import _handle_error, get_api
 from memex_core.services.lint import LintSubsystemNotInitializedError
 
 logger = logging.getLogger('memex.core.server.lint')
+
+_UNATTENDED_OPT_IN_ENV = 'MEMEX_LINT_ALLOW_UNATTENDED_APPLY'
+
+
+def _require_attended_mode(api: MemexAPI) -> None:
+    """Block destructive lint mutations when auth is disabled.
+
+    The apply / reverse endpoints mutate memory units, notes, and link
+    typing — the audit row identifies the call path but does not gate the
+    write. When ``server.auth.enabled=False`` no human principal is on the
+    request, so an unattended LLM driver could end-to-end drive both calls
+    without review. Refuse unless the operator explicitly opts in via
+    ``MEMEX_LINT_ALLOW_UNATTENDED_APPLY=1`` (or ``true`` / ``yes``).
+    """
+    if api.config.server.auth.enabled:
+        return
+    opt_in = os.environ.get(_UNATTENDED_OPT_IN_ENV, '').strip().lower()
+    if opt_in in ('1', 'true', 'yes'):
+        return
+    raise HTTPException(
+        status_code=403,
+        detail=(
+            'Destructive lint mutations require auth enabled. '
+            f'Set {_UNATTENDED_OPT_IN_ENV}=1 to override (e.g. for trusted CI).'
+        ),
+    )
+
 
 router = APIRouter(prefix='/api/v1/lint')
 
@@ -124,17 +155,39 @@ async def lint_findings(
         raise _handle_error(e, 'Failed to list lint findings')
 
 
+def _audit_actor() -> str:
+    """Return the audit-trail actor label for the current request.
+
+    Reads from :func:`memex_core.context.get_actor`, which is set by
+    ``auth_middleware`` for authenticated requests (shape:
+    ``f'{key_name} ({key_prefix})'``). When auth is disabled, the
+    contextvar default is ``'anonymous'``; we promote that to
+    ``'system:auth-disabled'`` so the apply / reverse endpoints stay
+    reachable in dev/test/CI, the audit row still identifies the call
+    path, and the value cannot be confused with a real principal whose
+    key is literally named "system".
+    """
+    actor = get_actor()
+    if not actor or actor == 'anonymous':
+        return 'system:auth-disabled'
+    return actor
+
+
 async def _gate_finding_for_write(
     finding_id: UUID,
     api: MemexAPI,
     auth: AuthContext | None,
 ) -> UUID | None:
-    """Defense-in-depth helper for ``/findings/{id}/dismiss`` + ``/resolve``.
+    """Defense-in-depth vault-scope helper for finding write endpoints.
 
     Looks up the finding's vault_id, then gates the auth context against it.
     Returns the resolved vault_id (or ``None`` for global findings) so the
     caller can pass it through to ``LintService.set_status`` for SQL-level
     constraint as well (cross-vault mutation rejected: route + service layered checks).
+
+    Does NOT check the finding's status — the service layer raises a 409
+    with the correct status-transition semantics (pending vs. resolved
+    constraints differ by endpoint).
 
     Raises:
       - 404 if the finding does not exist.
@@ -142,7 +195,7 @@ async def _gate_finding_for_write(
     """
     found, finding_vault = await api.lint.get_finding_vault_id(finding_id)
     if not found:
-        raise HTTPException(status_code=404, detail='Finding not found or not pending')
+        raise HTTPException(status_code=404, detail='Finding not found')
     if finding_vault is not None:
         await check_vault_access(auth, [finding_vault], api, permission=Permission.WRITE)
     return finding_vault
@@ -362,6 +415,65 @@ async def _resolve_winner_id(winner_param: str, cluster_members: list[str], api:
     return rows[0]['id']
 
 
+@router.post('/findings/{finding_id}/apply', dependencies=[Depends(require_write)])
+async def lint_apply(
+    finding_id: UUID,
+    api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+) -> dict[str, Any]:
+    """Apply a winner-proposal finding's recorded action.
+
+    Gates by the finding's vault (same path as resolve/dismiss). The action
+    semantics — mark_loser_stale / supersede_loser_note /
+    refine_not_contradict / inconclusive — are captured under
+    ``evidence.action`` when the finding is emitted; this endpoint dispatches
+    on that literal and records ``prior_state`` so the change is reversible.
+    """
+    from memex_core.services.contradiction_resolution import (
+        ContradictionResolutionError,
+        apply_winner_proposal,
+    )
+
+    _require_attended_mode(api)
+    finding_vault = await _gate_finding_for_write(finding_id, api, auth)
+    actor = _audit_actor()
+    try:
+        return await apply_winner_proposal(api, finding_id, vault_id=finding_vault, actor=actor)
+    except ContradictionResolutionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as e:
+        raise _handle_error(e, 'Failed to apply winner proposal')
+
+
+@router.post('/findings/{finding_id}/reverse', dependencies=[Depends(require_write)])
+async def lint_reverse(
+    finding_id: UUID,
+    api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+) -> dict[str, Any]:
+    """Reverse a previously applied winner-proposal.
+
+    Reads ``evidence.resolution.prior_state`` and atomically restores the
+    affected rows. Writes a paired ``propose_contradiction_winner_reversal``
+    audit row; the original resolved finding stays resolved so the unique
+    partial index on pending findings remains valid.
+    """
+    from memex_core.services.contradiction_resolution import (
+        ContradictionResolutionError,
+        reverse_winner_proposal,
+    )
+
+    _require_attended_mode(api)
+    finding_vault = await _gate_finding_for_write(finding_id, api, auth)
+    actor = _audit_actor()
+    try:
+        return await reverse_winner_proposal(api, finding_id, vault_id=finding_vault, actor=actor)
+    except ContradictionResolutionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except Exception as e:
+        raise _handle_error(e, 'Failed to reverse winner proposal')
+
+
 @router.post('/run/{vault_id}', dependencies=[Depends(require_write)])
 async def lint_run(
     vault_id: UUID,
@@ -427,6 +539,7 @@ async def lint_llm_run(
     (the cap-zero gate that short-circuits the periodic task).
     """
     from memex_core.memory.lint_llm.checks import (
+        make_propose_contradiction_winner_check,
         make_schema_drift_check,
         make_semantic_contradiction_check,
     )
@@ -468,7 +581,14 @@ async def lint_llm_run(
     if settings.checks.schema_drift.enabled:
         checks.append(('schema_drift', make_schema_drift_check(api.lm, k=settings.surprise_k)))
 
-    if not checks:
+    propose_winner_check: Any | None = None
+    if settings.checks.propose_contradiction_winner.enabled:
+        propose_winner_check = make_propose_contradiction_winner_check(
+            api.lm,
+            min_confidence=settings.propose_winner_min_confidence,
+        )
+
+    if not checks and propose_winner_check is None:
         return {
             'vault_id': str(vault_id),
             'summaries': [],
@@ -497,6 +617,25 @@ async def lint_llm_run(
         except Exception as exc:
             logger.warning('lint_llm[%s] failed: %s', check_name, exc)
             summaries.append({'check': check_name, 'error': str(exc)})
+
+    if propose_winner_check is not None:
+        try:
+            s = await api.lint_llm.tick_propose_winner(
+                vault_id,
+                run_llm_check=propose_winner_check,
+            )
+            summaries.append(
+                {
+                    'check': 'propose_contradiction_winner',
+                    'evaluated': s.candidates_evaluated,
+                    'emitted': s.findings_emitted,
+                    'deferred': s.deferred,
+                    'deferred_processed': s.deferred_processed,
+                }
+            )
+        except Exception as exc:
+            logger.warning('lint_llm[propose_contradiction_winner] failed: %s', exc)
+            summaries.append({'check': 'propose_contradiction_winner', 'error': str(exc)})
 
     return {'vault_id': str(vault_id), 'summaries': summaries}
 

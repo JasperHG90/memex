@@ -1361,6 +1361,23 @@ class RemoteMemexAPI:
         body: dict[str, Any] = params or {}
         return await self._post(f'lint/findings/{finding_id}/resolve', body)
 
+    async def lint_apply_winner(self, finding_id: str) -> dict[str, Any]:
+        """Apply a winner-proposal finding's recorded action.
+
+        The finding's ``evidence.action`` literal drives the mutation —
+        mark a unit stale, mark a note superseded, or rewrite a contradicts
+        link as refines. Returns the applied details; raises on conflict.
+        """
+        return await self._post(f'lint/findings/{finding_id}/apply', {})
+
+    async def lint_reverse_winner(self, finding_id: str) -> dict[str, Any]:
+        """Reverse a previously applied winner-proposal.
+
+        Restores the row(s) recorded under ``evidence.resolution.prior_state``
+        and writes a paired audit row. The original finding stays resolved.
+        """
+        return await self._post(f'lint/findings/{finding_id}/reverse', {})
+
     async def run_lint_rules(self, vault_id: str | UUID) -> dict[str, Any]:
         """Synchronously run the V1 lint rule registry for ``vault_id``.
 

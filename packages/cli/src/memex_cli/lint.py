@@ -6,6 +6,8 @@ Subcommands:
 * ``memex lint findings [--type ...]`` — list findings.
 * ``memex lint dismiss <finding_id>`` — flip to dismissed.
 * ``memex lint resolve <finding_id>`` — flip to resolved.
+* ``memex lint apply <finding_id>`` — apply a winner-proposal action.
+* ``memex lint reverse <finding_id>`` — reverse an applied winner-proposal.
 * ``memex lint review [--vault X | --global | --all] [--apply]`` —
   interactive triage.
 
@@ -230,6 +232,67 @@ async def lint_resolve_cmd(
             handle_api_error(e)
             return
     console.print(f'[green]resolved:[/green] {payload["finding_id"]}')
+
+
+@app.command('apply')
+@async_command
+async def lint_apply_cmd(
+    ctx: typer.Context,
+    finding_id: Annotated[
+        str,
+        typer.Argument(help='Finding UUID (winner-proposal) to apply.'),
+    ],
+):
+    """Apply a winner-proposal finding's recorded action.
+
+    The finding's ``evidence.action`` drives the mutation: mark a unit
+    stale, mark a note superseded, rewrite a contradicts link as refines,
+    or a no-op write when inconclusive. Captures ``prior_state`` so the
+    change can be reversed with ``memex lint reverse``.
+    """
+    parse_uuid(finding_id, 'finding_id')
+    config: MemexConfig = ctx.obj
+    async with get_api_context(config) as api:
+        try:
+            payload = await api.lint_apply_winner(finding_id)
+        except Exception as e:
+            handle_api_error(e)
+            return
+    effective = payload.get('effective_action', 'unknown')
+    console.print(
+        f'[green]applied:[/green] {payload["finding_id"]} [dim](action={effective})[/dim]'
+    )
+    fallback = payload.get('fallback_reason')
+    if fallback:
+        console.print(f'[yellow]fallback:[/yellow] {fallback}')
+
+
+@app.command('reverse')
+@async_command
+async def lint_reverse_cmd(
+    ctx: typer.Context,
+    finding_id: Annotated[
+        str,
+        typer.Argument(help='Finding UUID (winner-proposal) to reverse.'),
+    ],
+):
+    """Reverse a previously applied winner-proposal.
+
+    Restores the row(s) recorded under ``evidence.resolution.prior_state``
+    and writes a paired audit row. The original finding stays resolved.
+    """
+    parse_uuid(finding_id, 'finding_id')
+    config: MemexConfig = ctx.obj
+    async with get_api_context(config) as api:
+        try:
+            payload = await api.lint_reverse_winner(finding_id)
+        except Exception as e:
+            handle_api_error(e)
+            return
+    effective = payload.get('effective_action', 'unknown')
+    console.print(
+        f'[green]reversed:[/green] {payload["finding_id"]} [dim](action={effective})[/dim]'
+    )
 
 
 @app.command('review')

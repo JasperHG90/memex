@@ -1510,6 +1510,14 @@ class LintLLMChecksConfig(BaseModel):
         default_factory=LintLLMCheckConfig,
         description='CheckSchemaDrift signature (date format / id style / structure).',
     )
+    propose_contradiction_winner: LintLLMCheckConfig = Field(
+        default_factory=LintLLMCheckConfig,
+        description=(
+            'ProposeContradictionWinner signature — fires on FSFM contradiction-pressure '
+            'findings (flag_reason ∈ low_credibility_contradiction_only | components_disagree) '
+            'and emits a reversible winner proposal.'
+        ),
+    )
 
 
 class LintLLMConfig(BaseModel):
@@ -1584,6 +1592,18 @@ class LintLLMConfig(BaseModel):
         description='NLI polarity classifier configuration (entailment / neutral / '
         'contradiction). The NLI branch only fires when cosine surprise is below '
         'surprise_threshold, so this is a fallback signal — never a primary gate.',
+    )
+    propose_winner_min_confidence: float = Field(
+        default=0.6,
+        ge=0.0,
+        le=1.0,
+        description=(
+            'Minimum confidence for a definitive winner proposal. Below this '
+            'threshold, definitive verdicts are downgraded to `inconclusive` — '
+            'the proposal lands in the lint ledger for audit but the apply '
+            'path is blocked. '
+            'Env: MEMEX_SERVER_LINT_LLM_PROPOSE_WINNER_MIN_CONFIDENCE.'
+        ),
     )
 
 
