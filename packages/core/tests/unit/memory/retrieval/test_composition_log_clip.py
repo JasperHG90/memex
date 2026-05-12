@@ -154,11 +154,11 @@ class TestNaNGuard:
         assert result == pytest.approx(0.5, rel=1e-12)
 
     def test_nan_guard_increments_dedicated_counter(self):
-        from memex_core.metrics import COMPOSITE_BOOST_NAN_GUARD_TRIGGERED
+        from memex_core.metrics import COMPOSITE_BOOST_NON_FINITE_GUARD_TRIGGERED
 
-        before = COMPOSITE_BOOST_NAN_GUARD_TRIGGERED._value.get()
+        before = COMPOSITE_BOOST_NON_FINITE_GUARD_TRIGGERED._value.get()
         _compose(0.7, recency=math.nan, temporal=1.0, mw=1.0, confidence=1.0, decay=1.0)
-        after = COMPOSITE_BOOST_NAN_GUARD_TRIGGERED._value.get()
+        after = COMPOSITE_BOOST_NON_FINITE_GUARD_TRIGGERED._value.get()
         assert after == before + 1
 
 

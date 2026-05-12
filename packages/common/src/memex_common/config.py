@@ -831,9 +831,9 @@ class RetrievalConfig(BaseModel):
     )
     reranking_recency_alpha: float = Field(
         default=0.2,
-        description='Recency boost strength for cross-encoder reranking. The per-factor '
-        'value is exponentiated in log-space composition (sum of log(b_i)) before applying '
-        'as an aggregate multiplier on ce_score. 0 = no boost (backward compatible).',
+        description='Recency boost strength for cross-encoder reranking. Composed '
+        'log-additively with the other four factors (see composite_boost_log_clip). '
+        '0 = no boost (backward compatible).',
     )
     reranking_temporal_alpha: float = Field(
         default=0.2,

@@ -68,7 +68,7 @@ from memex_core.memory.confidence import (
 from memex_core.memory.formatting import format_for_reranking
 from memex_core.metrics import (
     COMPOSITE_BOOST_CLIPPED,
-    COMPOSITE_BOOST_NAN_GUARD_TRIGGERED,
+    COMPOSITE_BOOST_NON_FINITE_GUARD_TRIGGERED,
     CONFIDENCE_BOOST_OBSERVED,
     CONFIDENCE_SCORE_DISTRIBUTION,
     CONFIDENCE_VARIANCE_OBSERVED,
@@ -108,11 +108,11 @@ def _compose_boosts_logspace(
     zero-boost unit at zero. Under ship-default alphas every boost evaluates
     to ``1.0`` (or strictly positive), so the zero-input path is dormant.
 
-    Any ``NaN`` input (boost, ``ce_score``, or ``log_clip``) short-circuits:
-    the function returns ``ce_score`` unmodified and emits a separate
-    ``COMPOSITE_BOOST_NAN_GUARD_TRIGGERED`` counter increment instead of
-    observing ``1.0`` to the regular histogram (which would be
-    indistinguishable from a genuine neutral multiplier).
+    Any non-finite input (``NaN`` or ``±inf``) on a boost, ``ce_score``, or
+    ``log_clip`` short-circuits: the function returns ``ce_score`` unmodified
+    and emits a separate ``COMPOSITE_BOOST_NON_FINITE_GUARD_TRIGGERED`` counter
+    increment instead of observing ``1.0`` to the regular histogram (which
+    would be indistinguishable from a genuine neutral multiplier).
 
     Emits the post-clip multiplier to ``COMPOSITE_BOOST_CLIPPED`` for
     operator visibility into whether the clip is firing in production
@@ -123,7 +123,7 @@ def _compose_boosts_logspace(
         or any(not math.isfinite(b) for b in (recency, temporal, mw, confidence, decay))
         or math.isnan(log_clip)
     ):
-        COMPOSITE_BOOST_NAN_GUARD_TRIGGERED.inc()
+        COMPOSITE_BOOST_NON_FINITE_GUARD_TRIGGERED.inc()
         return ce_score
     log_boost = (
         math.log(max(recency, LOG_FLOOR_COMPOSITE_BOOST))
