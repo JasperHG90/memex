@@ -305,6 +305,7 @@ The dotted path follows `MemexConfig.model_fields` traversal. Examples:
 | FSFM graph weight | `server.memory.retrieval.deprioritize.weights.graph` |
 | FSFM mw weight | `server.memory.retrieval.deprioritize.weights.mw` |
 | Exploration epsilon | `server.memory.retrieval.exploration_epsilon` |
+| Exploration mode | `server.memory.retrieval.exploration_mode` (`epsilon_greedy` \| `thompson` \| `off`) |
 | Confidence boost alpha | `server.memory.retrieval.confidence_alpha` |
 | Decay boost alpha | `server.memory.retrieval.reranking_decay_alpha` |
 | Propose threshold | `server.memory.reflection.propose_threshold` |

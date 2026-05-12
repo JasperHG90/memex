@@ -5,12 +5,16 @@ from uuid import uuid4
 
 from memex_core.memory.confidence import MAX_VARIANCE
 from memex_core.memory.confidence import mean_and_variance as _real_mean_and_variance
+import random
+
 from memex_core.memory.retrieval.exploration import (
     DEFAULT_HIGH_VARIANCE_FRACTION,
     inject_edge_exploration,
     inject_exploration_units,
+    inject_thompson_exploration,
     select_edge_exploration_candidates,
     select_exploration_candidates,
+    select_thompson_candidates,
 )
 from memex_core.memory.sql_models import ContentStatus, MemoryUnit
 
@@ -536,3 +540,210 @@ class TestCrossPathInjectionGuard:
         selected_ids = {u.id for u in selected}
         assert cold_falsy_annotated.id not in selected_ids
         assert cold_clean.id in selected_ids
+
+
+class TestThompsonExploration:
+    """Thompson-sampling exploration injector (V10)."""
+
+    def test_thompson_seeded_rng_deterministic_injection(self):
+        """A seeded ``random.Random`` gives the same picks on every call."""
+        results = [_make_unit(success=10, failure=2, text='in_results')]
+        candidates = [
+            _make_unit(success=0, failure=0, text='cold_a'),
+            _make_unit(success=5, failure=5, text='balanced'),
+            _make_unit(success=20, failure=1, text='strong'),
+        ]
+        rng_a = random.Random(42)
+        rng_b = random.Random(42)
+        picks_a, thetas_a = select_thompson_candidates(
+            results, candidates, max_injections=2, rng=rng_a
+        )
+        picks_b, thetas_b = select_thompson_candidates(
+            results, candidates, max_injections=2, rng=rng_b
+        )
+        assert [u.id for u in picks_a] == [u.id for u in picks_b]
+        assert thetas_a == thetas_b
+        assert all(0.0 <= t <= 1.0 for t in thetas_a)
+
+    def test_thompson_cold_start_fair_shake(self):
+        """Cold-start units beat a strong unit at a non-trivial rate.
+
+        Documents the "fair-shake invariant" from V10's BACKLOG: with a
+        ``Beta(1, 1) = Uniform(0, 1)`` posterior, a cold-start unit's draw
+        equals or exceeds a high-credit ``Beta(21, 1)`` unit's draw at a
+        rate that vastly exceeds the ε-greedy floor's effective rate
+        (which is ε × 1/N = 0.05 × 0.5 = 2.5% for two candidates).
+        """
+        results: list[MemoryUnit] = []
+        rng = random.Random(2026)
+        cold = _make_unit(success=0, failure=0, text='cold')
+        strong = _make_unit(success=20, failure=0, text='strong')
+        cold_wins = 0
+        n_trials = 2000
+        for _ in range(n_trials):
+            cold.unit_metadata = None
+            strong.unit_metadata = None
+            picks, _ = select_thompson_candidates(
+                results, [cold, strong], max_injections=1, rng=rng
+            )
+            if picks and picks[0].id == cold.id:
+                cold_wins += 1
+        cold_rate = cold_wins / n_trials
+        assert 0.03 < cold_rate < 0.10, f'cold-start rate out of band: {cold_rate}'
+
+    def test_thompson_skips_deprioritized_and_stale(self):
+        results = [_make_unit(success=10, failure=2)]
+        deprioritized = _make_unit(success=0, failure=0, is_deprioritized=True)
+        stale = _make_unit(success=0, failure=0, status=ContentStatus.STALE)
+        cold = _make_unit(success=0, failure=0, text='cold_eligible')
+        picks, _ = select_thompson_candidates(
+            results, [deprioritized, stale, cold], max_injections=3, rng=random.Random(1)
+        )
+        picked_ids = {u.id for u in picks}
+        assert deprioritized.id not in picked_ids
+        assert stale.id not in picked_ids
+        assert cold.id in picked_ids
+
+    def test_thompson_excludes_already_injected_units(self):
+        results = [_make_unit(success=10, failure=2)]
+        cold = _make_unit(success=0, failure=0)
+        cold.unit_metadata = {'exploration': True, 'exploration_mode': 'epsilon_greedy'}
+        edge = _make_unit(success=0, failure=0)
+        edge.unit_metadata = {'edge_exploration': True}
+        clean = _make_unit(success=0, failure=0)
+        picks, _ = select_thompson_candidates(
+            results, [cold, edge, clean], max_injections=3, rng=random.Random(1)
+        )
+        picked_ids = {u.id for u in picks}
+        assert cold.id not in picked_ids
+        assert edge.id not in picked_ids
+        assert clean.id in picked_ids
+
+    def test_thompson_extreme_posteriors_invariant_holds(self):
+        """High-posterior units pin θ near 1.0; sampler stays consistent.
+
+        Documents (does not assert as a failure) the degeneracy mode V10's
+        BACKLOG flagged: as ``success + failure → ∞`` the variance collapses
+        and Thompson becomes "always pick the highest-MW unit." Mitigation
+        is the V11 EMA default flip; this test guards against NaN / exception
+        regressions in the sampler itself.
+        """
+        results: list[MemoryUnit] = []
+        extreme = _make_unit(success=10000, failure=0, text='extreme')
+        cold = _make_unit(success=0, failure=0, text='cold')
+        rng = random.Random(7)
+        thetas: list[float] = []
+        extreme_wins = 0
+        for _ in range(200):
+            extreme.unit_metadata = None
+            cold.unit_metadata = None
+            picks, theta_vals = select_thompson_candidates(
+                results, [extreme, cold], max_injections=1, rng=rng
+            )
+            assert picks, 'sampler returned empty under extreme posterior'
+            thetas.extend(theta_vals)
+            if picks[0].id == extreme.id:
+                extreme_wins += 1
+        assert all(0.0 <= t <= 1.0 for t in thetas)
+        assert extreme_wins / 200 > 0.9, (
+            'degeneracy invariant: extreme posterior should dominate cold-start'
+        )
+
+    def test_thompson_inject_annotates_mode_label(self):
+        """Injected units carry both ``exploration=True`` and ``exploration_mode='thompson'``."""
+        results = [_make_unit(success=10, failure=2, text='in_results')]
+        cold = _make_unit(success=0, failure=0, text='cold')
+        new_results, thetas = inject_thompson_exploration(
+            results, [cold], max_injections=1, rng=random.Random(1)
+        )
+        assert len(new_results) == 2
+        injected = new_results[-1]
+        assert injected.unit_metadata == {
+            'exploration': True,
+            'exploration_mode': 'thompson',
+        }
+        assert len(thetas) == 1
+        assert 0.0 <= thetas[0] <= 1.0
+
+    def test_epsilon_greedy_inject_annotates_mode_label(self):
+        """Symmetric annotation on the ε-greedy path so downstream code can branch on mode."""
+        results = [_make_unit(success=10, failure=2)]
+        cold = _make_unit(success=0, failure=0)
+        # Force-fire by passing ε=1.0 (matches engine.py's forcing pattern).
+        new_results = inject_exploration_units(results, [cold], epsilon=1.0, max_injections=1)
+        assert len(new_results) == 2
+        injected = new_results[-1]
+        assert injected.unit_metadata.get('exploration') is True
+        assert injected.unit_metadata.get('exploration_mode') == 'epsilon_greedy'
+
+    def test_dispatch_off_mode_no_injection(self):
+        """Config-layer contract: ``RetrievalConfig.exploration_mode='off'``
+        is a valid, accepted value (the engine's dispatch keys on it).
+
+        Limitations: this is a contract check on the knob, not on the engine
+        dispatch. The actual short-circuit at
+        ``packages/core/src/memex_core/memory/retrieval/engine.py:732``
+        (``if final_results and exploration_mode != 'off':``) shares no code
+        with this assertion — a refactor that breaks the dispatch will not
+        break this test. Cover the real dispatch behaviour with an integration
+        test that calls ``engine.retrieve`` and asserts zero metric increment.
+        """
+        from memex_common.config import RetrievalConfig
+
+        config = RetrievalConfig(exploration_mode='off', exploration_epsilon=1.0)
+        assert config.exploration_mode == 'off'
+
+
+class TestExplorationModeEpsilonInteractionValidator:
+    """``_log_exploration_mode_epsilon_interaction`` emits an INFO log when an
+    operator sets ``exploration_epsilon`` to a non-default value under a mode
+    that ignores it (e.g. ``thompson``).
+    """
+
+    _LOGGER_NAME = 'memex.common.config'
+    _MESSAGE_FRAGMENT = 'is ignored under exploration_mode'
+
+    def test_validator_logs_when_epsilon_high_and_mode_thompson(self, caplog):
+        import logging
+
+        from memex_common.config import RetrievalConfig
+
+        with caplog.at_level(logging.INFO, logger=self._LOGGER_NAME):
+            RetrievalConfig(exploration_mode='thompson', exploration_epsilon=0.1)
+
+        matches = [r for r in caplog.records if self._MESSAGE_FRAGMENT in r.getMessage()]
+        assert len(matches) == 1
+        assert matches[0].levelno == logging.INFO
+
+    def test_validator_silent_when_epsilon_low_and_mode_thompson(self, caplog):
+        import logging
+
+        from memex_common.config import RetrievalConfig
+
+        with caplog.at_level(logging.INFO, logger=self._LOGGER_NAME):
+            RetrievalConfig(exploration_mode='thompson', exploration_epsilon=0.05)
+
+        matches = [r for r in caplog.records if self._MESSAGE_FRAGMENT in r.getMessage()]
+        assert matches == []
+
+    def test_validator_silent_when_epsilon_zero_and_mode_thompson(self, caplog):
+        import logging
+
+        from memex_common.config import RetrievalConfig
+
+        with caplog.at_level(logging.INFO, logger=self._LOGGER_NAME):
+            RetrievalConfig(exploration_mode='thompson', exploration_epsilon=0.0)
+
+        matches = [r for r in caplog.records if self._MESSAGE_FRAGMENT in r.getMessage()]
+        assert matches == []
+
+    def test_validator_silent_when_mode_epsilon_greedy_regardless_of_epsilon(self, caplog):
+        import logging
+
+        from memex_common.config import RetrievalConfig
+
+        with caplog.at_level(logging.INFO, logger=self._LOGGER_NAME):
+            RetrievalConfig(exploration_mode='epsilon_greedy', exploration_epsilon=0.1)
+
+        matches = [r for r in caplog.records if self._MESSAGE_FRAGMENT in r.getMessage()]
+        assert matches == []

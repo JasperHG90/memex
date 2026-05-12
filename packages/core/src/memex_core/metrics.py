@@ -182,10 +182,20 @@ CROSS_ENCODER_INPUT_COUNT_HISTOGRAM = Histogram(
 
 EXPLORATION_INJECTED_TOTAL = Counter(
     'memex_exploration_injected_total',
-    'Count of low-Memory Worth candidates that the separate exploration hydration query '
-    'surfaced for exploration injection (i.e., units the pre-filter would '
-    'have removed but the exploration path bypasses). Validates that the '
-    'bypass actually fires.',
+    'Count of candidates surfaced by the exploration-floor injector, labelled by '
+    'algorithm (``epsilon_greedy`` floors at fixed ε; ``thompson`` draws θ ~ Beta '
+    'per candidate). Validates that the bypass actually fires under each mode.',
+    ['mode'],
+)
+
+EXPLORATION_THOMPSON_THETA_DISTRIBUTION = Histogram(
+    'memex_exploration_thompson_theta_distribution',
+    'Distribution of winning θ values for Thompson-sampled exploration injections. '
+    'High concentration near 1.0 indicates the high-posterior degeneracy mode: '
+    'extreme posteriors collapse the sampler toward "always pick the highest-MW '
+    'unit" and the exploration property is lost. Mitigation lives in the MW EMA '
+    'mode (memory worth decay), not in this metric.',
+    buckets=(0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
 )
 
 # ---------------------------------------------------------------------------

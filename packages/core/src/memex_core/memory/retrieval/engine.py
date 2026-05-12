@@ -708,21 +708,44 @@ class RetrievalEngine:
                 final_results.insert(insert_at, vunit)
         t_mmr = _t() - t0
 
-        # 9b. Exploration floor: ε-greedy injection of low-Memory Worth units.
+        # 9b. Exploration floor: inject under-explored units back into the
+        # result set so Memory Worth doesn't become monotonic. Two
+        # algorithms are dispatched on ``RetrievalConfig.exploration_mode``:
         #
-        # Exploration must run on a separate retrieval path that bypasses
-        # the pre-filter; otherwise low-Memory Worth units (the very ones exploration
-        # is meant to re-validate) can never re-surface and Memory Worth becomes
-        # monotonic. The bypass query only fires when the ε-greedy roll
-        # succeeds *and* the pre-filter is active — paying the extra
-        # round-trip on every retrieve call would push the N+1 budget over
-        # its threshold for the ~95% of calls (with default ε=0.05) that
-        # don't end up injecting.
-        if final_results and self.retrieval_config.exploration_epsilon > 0:
-            from memex_core.memory.retrieval.exploration import inject_exploration_units
-            from memex_core.metrics import EXPLORATION_INJECTED_TOTAL
+        # - ``'epsilon_greedy'`` (ship default): outer roll at ε, then
+        #   inject up to ``exploration_max_injections`` from the
+        #   low-Memory-Worth tail (the existing behaviour).
+        # - ``'thompson'``: draw θ ~ Beta(success+1, failure+1) per
+        #   eligible candidate, inject the top-θ units (cold-start-fair
+        #   by construction; the ε roll is bypassed).
+        # - ``'off'``: skip the injector entirely.
+        #
+        # Both injecting modes share the bypass-pool re-hydration: when
+        # the pre-filter is active, the exploration path must see units
+        # the main path filtered out, otherwise the very units we want
+        # to re-surface are invisible to the injector. Cost profile is
+        # mode-asymmetric: ε-greedy pays the bypass round-trip only on
+        # the ~ε fraction of calls where the outer roll succeeds (≈5% at
+        # the ship default). Thompson pays it on every retrieval, by
+        # design — the algorithm samples each call, and degeneracy
+        # mitigation lives in the sampler (cold-start fair-shake +
+        # MW EMA decay), not in gating. Operators trading away the
+        # per-call cost should run ``exploration_mode='off'``.
+        exploration_mode = self.retrieval_config.exploration_mode
+        if final_results and exploration_mode != 'off':
+            from memex_core.memory.retrieval.exploration import (
+                inject_exploration_units,
+                inject_thompson_exploration,
+            )
+            from memex_core.metrics import (
+                EXPLORATION_INJECTED_TOTAL,
+                EXPLORATION_THOMPSON_THETA_DISTRIBUTION,
+            )
 
-            should_inject = self._rng.random() < self.retrieval_config.exploration_epsilon
+            if exploration_mode == 'epsilon_greedy':
+                should_inject = self._rng.random() < self.retrieval_config.exploration_epsilon
+            else:  # thompson
+                should_inject = True
 
             if should_inject:
                 exploration_pool = hydrated_candidates
@@ -747,19 +770,32 @@ class RetrievalEngine:
                     exploration_pool = bypass_pool
 
                 if exploration_pool:
-                    # Force inner ε=1.0: we already rolled the dice; the
-                    # inner roll would otherwise re-roll and could veto.
                     pre_inject_count = len(final_results)
-                    final_results = inject_exploration_units(
-                        final_results,
-                        exploration_pool,
-                        epsilon=1.0,
-                        max_injections=self.retrieval_config.exploration_max_injections,
-                        low_mw_threshold=self.retrieval_config.exploration_low_mw_threshold,
-                    )
-                    injected = len(final_results) - pre_inject_count
-                    if injected > 0:
-                        EXPLORATION_INJECTED_TOTAL.inc(injected)
+                    if exploration_mode == 'epsilon_greedy':
+                        # Force inner ε=1.0: we already rolled the dice; the
+                        # inner roll would otherwise re-roll and could veto.
+                        final_results = inject_exploration_units(
+                            final_results,
+                            exploration_pool,
+                            epsilon=1.0,
+                            max_injections=self.retrieval_config.exploration_max_injections,
+                            low_mw_threshold=self.retrieval_config.exploration_low_mw_threshold,
+                        )
+                        injected = len(final_results) - pre_inject_count
+                        if injected > 0:
+                            EXPLORATION_INJECTED_TOTAL.labels(mode='epsilon_greedy').inc(injected)
+                    else:  # thompson
+                        final_results, thetas = inject_thompson_exploration(
+                            final_results,
+                            exploration_pool,
+                            max_injections=self.retrieval_config.exploration_max_injections,
+                            rng=self._rng,
+                        )
+                        injected = len(final_results) - pre_inject_count
+                        if injected > 0:
+                            EXPLORATION_INJECTED_TOTAL.labels(mode='thompson').inc(injected)
+                            for theta in thetas:
+                                EXPLORATION_THOMPSON_THETA_DISTRIBUTION.observe(theta)
 
         # 10. Collect resonance update info (deferred to background)
         t0 = _t()
