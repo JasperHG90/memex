@@ -2334,65 +2334,26 @@ async def run_suite(
                         default_vault_id,
                     )
                 if not preserve_vaults:
-                    # Best-effort cleanup: delete the temp vault(s) so we
-                    # don't leak state. Surface failures — silent
-                    # suppression makes 401/permission issues invisible
-                    # and the next run refuses on a leftover import-
-                    # state row whose target vault was never actually
-                    # cleaned up.
-                    deleted_vaults: list[UUID] = []
+                    # Wipe every SQLModel-managed table + alembic_version,
+                    # then recreate the schema from current metadata.
+                    # API-level vault deletion is insufficient — it leaks
+                    # reflection_queue, audit_logs, kv_entries,
+                    # outcome_audit_log, maintenance_proposals,
+                    # consolidation_ticks, and eval_import_state. Surface
+                    # failure but don't raise: the run already completed,
+                    # and the user can re-nuke manually with the same
+                    # helper if needed.
+                    from memex_eval.suite.db_reset import drop_and_recreate_schema
+
                     try:
-                        await api.delete_vault(default_vault_id)
-                        deleted_vaults.append(default_vault_id)
+                        await drop_and_recreate_schema()
                     except Exception as e:
                         logger.warning(
-                            'Failed to delete primary vault %s on cleanup: %s. '
-                            'Vault will leak; remove manually via `memex vault delete %s`.',
-                            default_vault_id,
+                            'End-of-run DB reset failed: %s. State from this run '
+                            'will leak into the next; rerun manually via '
+                            '`memex database stamp head` after dropping tables.',
                             e,
-                            default_vault_id,
                         )
-                    for name, vid in vault_map.items():
-                        if name is None:
-                            continue
-                        try:
-                            await api.delete_vault(vid)
-                            deleted_vaults.append(vid)
-                        except Exception as e:
-                            logger.warning(
-                                'Failed to delete secondary vault %s (%s) on cleanup: %s. '
-                                'Vault will leak; remove manually.',
-                                vid,
-                                name,
-                                e,
-                            )
-                    # For each successfully-deleted vault, drop its
-                    # eval_import_state row so a subsequent
-                    # --from-snapshot run isn't refused on a stale
-                    # "already imported into <gone>" record.
-                    if deleted_vaults and use_import:
-                        try:
-                            from memex_eval.snapshot.runtime import snapshot_runtime
-
-                            async with snapshot_runtime() as rt:
-                                from sqlalchemy import text as _text
-
-                                await rt.session.execute(
-                                    _text(
-                                        'DELETE FROM eval_import_state '
-                                        'WHERE target_vault_id = ANY(:ids)'
-                                    ),
-                                    {'ids': [str(v) for v in deleted_vaults]},
-                                )
-                                await rt.session.commit()
-                        except Exception as e:
-                            logger.warning(
-                                'Failed to clean up eval_import_state rows for '
-                                'deleted vaults %s: %s. Next --from-snapshot run '
-                                'may need to clear them manually.',
-                                deleted_vaults,
-                                e,
-                            )
     except KeyboardInterrupt:
         logger.warning('Run interrupted by user')
         raise

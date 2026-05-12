@@ -43,6 +43,17 @@ Compatibility with run modes:
   ``skip_reason='mutating_under_reuse_vault'``. The plugin-gap xfail
   tripwires also skip under reuse (they're marked mutating too); to
   verify gap-closure run WITHOUT ``--reuse-vault``.
+
+End-of-run cleanup:
+- Default mode wipes every SQLModel-managed table (drop_all) and
+  recreates the schema. API-level vault deletion alone leaked rows in
+  ``reflection_queue``, ``audit_logs``, ``kv_entries``, and
+  ``outcome_audit_log`` between runs; the schema wipe fixes that. The
+  server's connection pool is terminated; restart it after a run if you
+  see asyncpg ``InterfaceError`` on the next request (rare — usually
+  reconnects lazily).
+- ``--keep-vault`` and ``--reuse-vault`` suppress the wipe so the
+  preserved vault survives.
 """
 
 from pathlib import Path
