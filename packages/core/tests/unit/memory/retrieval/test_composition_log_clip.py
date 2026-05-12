@@ -155,6 +155,42 @@ class TestNaNGuard:
         )
         assert result == pytest.approx(0.5, rel=1e-12)
 
+    def test_nan_guard_increments_dedicated_counter(self):
+        from memex_core.metrics import COMPOSITE_BOOST_NAN_GUARD_TRIGGERED
+
+        before = COMPOSITE_BOOST_NAN_GUARD_TRIGGERED._value.get()
+        _compose(0.7, recency=math.nan, temporal=1.0, mw=1.0, confidence=1.0, decay=1.0)
+        after = COMPOSITE_BOOST_NAN_GUARD_TRIGGERED._value.get()
+        assert after == before + 1
+
+
+class TestMetricEmission:
+    def test_clipped_histogram_observes_on_each_call(self):
+        from memex_core.metrics import COMPOSITE_BOOST_CLIPPED
+
+        before = COMPOSITE_BOOST_CLIPPED._sum.get()
+        _compose(0.7, recency=1.0, temporal=1.0, mw=1.0, confidence=1.0, decay=1.0)
+        after = COMPOSITE_BOOST_CLIPPED._sum.get()
+        assert after == pytest.approx(before + 1.0, rel=1e-9)
+
+    def test_clipped_histogram_reflects_finite_clip(self):
+        from memex_core.metrics import COMPOSITE_BOOST_CLIPPED
+
+        L = 0.7
+        before = COMPOSITE_BOOST_CLIPPED._sum.get()
+        _compose(0.5, recency=2.0, temporal=2.0, mw=2.0, confidence=2.0, decay=2.0, log_clip=L)
+        after = COMPOSITE_BOOST_CLIPPED._sum.get()
+        observed = after - before
+        assert observed == pytest.approx(math.exp(L), rel=1e-9)
+
+    def test_nan_guard_skips_clipped_histogram(self):
+        from memex_core.metrics import COMPOSITE_BOOST_CLIPPED
+
+        before_sum = COMPOSITE_BOOST_CLIPPED._sum.get()
+        _compose(0.7, recency=math.nan, temporal=1.0, mw=1.0, confidence=1.0, decay=1.0)
+        after_sum = COMPOSITE_BOOST_CLIPPED._sum.get()
+        assert after_sum == before_sum
+
 
 class TestConfigValidator:
     def test_default_is_inf(self):

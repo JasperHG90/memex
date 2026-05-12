@@ -68,6 +68,7 @@ from memex_core.memory.confidence import (
 from memex_core.memory.formatting import format_for_reranking
 from memex_core.metrics import (
     COMPOSITE_BOOST_CLIPPED,
+    COMPOSITE_BOOST_NAN_GUARD_TRIGGERED,
     CONFIDENCE_BOOST_OBSERVED,
     CONFIDENCE_SCORE_DISTRIBUTION,
     CONFIDENCE_VARIANCE_OBSERVED,
@@ -99,18 +100,28 @@ def _compose_boosts_logspace(
     raise. At the ship default ``log_clip = math.inf`` the clip is a no-op and
     the result equals the prior multiplicative product for strictly positive
     boost inputs; for an input that hits the floor (e.g. a boost of exactly
-    ``0.0``), the new form produces ``ce_score * 1e-45`` rather than ``0.0``,
-    which preserves rank ordering by ``ce_score`` instead of tying at zero.
-    Under ship-default alphas every boost evaluates to ``1.0`` (or strictly
-    positive), so the zero-input path is dormant.
+    ``0.0``), the new form produces ``ce_score * ~1e-9`` for a single zero
+    factor (``ce_score * 1e-9^k`` if ``k`` factors hit the floor; degenerate
+    all-five case is ``ce_score * 1e-45``) rather than the strict ``0.0`` the
+    multiplicative product would return. Rank-equivalent for retrieval
+    scoring (both at the bottom), but no longer ties every zero-boost unit
+    at zero. Under ship-default alphas every boost evaluates to ``1.0`` (or
+    strictly positive), so the zero-input path is dormant.
 
-    Emits the post-clip multiplier to ``COMPOSITE_BOOST_CLIPPED`` so operators
-    can observe whether the clip is firing in production traffic.
+    Any ``NaN`` input (boost, ``ce_score``, or ``log_clip``) short-circuits:
+    the function returns ``ce_score`` unmodified and emits a separate
+    ``COMPOSITE_BOOST_NAN_GUARD_TRIGGERED`` counter increment instead of
+    observing ``1.0`` to the regular histogram (which would be
+    indistinguishable from a genuine neutral multiplier).
+
+    Emits the post-clip multiplier to ``COMPOSITE_BOOST_CLIPPED`` for
+    operator visibility into whether the clip is firing in production
+    traffic.
     """
     if math.isnan(ce_score) or any(
         math.isnan(b) for b in (recency, temporal, mw, confidence, decay, log_clip)
     ):
-        COMPOSITE_BOOST_CLIPPED.observe(1.0)
+        COMPOSITE_BOOST_NAN_GUARD_TRIGGERED.inc()
         return ce_score
     log_boost = (
         math.log(max(recency, _LOG_FLOOR))
@@ -1585,8 +1596,8 @@ class RetrievalEngine:
             # Normalize cross-encoder scores to [0, 1] via sigmoid
             normalized_scores = [1.0 / (1.0 + math.exp(-s)) for s in scores]
 
-            # Apply multiplicative recency, temporal proximity, Memory Worth, confidence,
-            # and decay boosts.
+            # Compose the five boost factors with log-additive bounded
+            # clip; see ``_compose_boosts_logspace`` above.
             from memex_core.memory.retrieval.decay import compute_decay_boost
             from memex_core.services.outcomes import compute_mw_boost
 

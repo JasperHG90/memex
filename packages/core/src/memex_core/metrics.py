@@ -177,7 +177,15 @@ COMPOSITE_BOOST_CLIPPED = Histogram(
     'exp(clip(sum(log(b_i)), -L, +L)) where L = composite_boost_log_clip. At default '
     'L = math.inf the value equals the prior multiplicative product of the five boost '
     'factors. Wider spread than 1.0 indicates the clip is firing.',
-    buckets=(0.1, 0.3, 0.5, 0.7, 0.85, 1.0, 1.15, 1.3, 1.5, 2.0, 3.0, 5.0, 10.0),
+    buckets=(0.1, 0.3, 0.5, 0.7, 0.85, 1.0, 1.15, 1.3, 1.5, 2.0, 3.0, 5.0, 10.0, 25.0, 50.0),
+)
+
+COMPOSITE_BOOST_NAN_GUARD_TRIGGERED = Counter(
+    'memex_composite_boost_nan_guard_triggered_total',
+    'Count of reranking composition calls where the NaN guard short-circuited. '
+    'Indicates a NaN flowed into one of ce_score, the five boost factors, or '
+    'composite_boost_log_clip. Non-zero values mean upstream calibration or '
+    'config drifted into NaN territory — investigate immediately.',
 )
 
 # ---------------------------------------------------------------------------

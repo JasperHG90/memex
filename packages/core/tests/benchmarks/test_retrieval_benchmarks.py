@@ -284,8 +284,8 @@ def test_compose_boosts_logspace_batch(benchmark):
     sub-microsecond. At a typical retrieval candidate pool of ~200, the
     extra cost is ~0.1ms on a 180-620ms query (well within the plan's 10%
     latency budget). No assertion: this is informational, not a regression
-    gate; the system-level latency budget is owned by the E7 ranking
-    baseline + the existing retrieval integration tests.
+    gate; the system-level latency budget is owned by the ranking baseline
+    and the existing retrieval integration tests.
     """
     from memex_core.memory.retrieval.engine import _compose_boosts_logspace
 
