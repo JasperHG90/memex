@@ -19,6 +19,7 @@ from memex_core.llm import run_dspy_operation
 from memex_core.tracing import trace_span
 from memex_core.memory.sql_models import Entity, MemoryUnit, UnitEntity, ContentStatus
 from memex_core.memory.sql_models import MentalModel, Observation, EvidenceItem
+from memex_core.memory.reflect.entity_locks import get_entity_lock
 from memex_core.memory.reflect.models import ReflectionRequest
 from memex_core.memory.reflect.prompts import (
     SeedPhaseSignature,
@@ -253,80 +254,83 @@ class ReflectionEngine:
         entity_name = entity.canonical_name if entity else 'Unknown'
         entity_type = entity.entity_type if entity else None
 
-        # Advisory lock prevents concurrent reflection on the same entity.
-        # Transaction-level lock (released at session/transaction end).
-        lock_query = select(func.pg_try_advisory_xact_lock(func.hashtext(f'reflect:{entity_id}')))
-        is_locked = (await self.session.exec(lock_query)).one()
-
-        if not is_locked:
-            logger.warning(
-                f'Skipping reflection for entity {entity_id}: Could not acquire advisory lock (already running).'
-            )
-            return mental_model
-
-        with trace_span(
-            'memex.reflection',
-            'reflection',
-            {
-                'reflection.entity_id': str(entity_id),
-                'reflection.entity_name': entity_name,
-                'reflection.vault_id': str(vault_id),
-            },
-        ):
-            # Phase 0: Update Existing
-            updated_observations = await self._phase_0_update(
-                mental_model, entity_name, recent_memories, vault_id=vault_id
-            )
-
-            if not recent_memories:
-                mental_model.observations = [
-                    obs.model_dump(mode='json') for obs in updated_observations
-                ]
-                return mental_model
-
-            # Phase 1: Seed (LLM)
-            candidates = await self._phase_1_seed(
-                recent_memories, entity_name, updated_observations, vault_id=vault_id
-            )
-
-            # Phase 2: Hunt (Vector Search)
-            candidates_with_evidence = await self._phase_2_hunt(
-                candidates, db_lock, vault_id=vault_id
-            )
-
-            # Phase 3: Validate (LLM)
-            validated = await self._phase_3_validate(candidates_with_evidence, vault_id=vault_id)
-
-            # Phase 4: Compare (LLM)
-            final_obs, entity_summary = await self._phase_4_compare(
-                updated_observations, validated, vault_id=vault_id, entity_name=entity_name
-            )
-
-            # Phase 5: Finalize Model (CAS UPDATE — may abandon on version conflict)
-            applied = await self._phase_5_finalize(
-                mental_model,
-                final_obs,
-                entity_summary=entity_summary,
-                entity_type=entity_type,
-            )
-            if not applied:
-                # Another worker refreshed this entity while our LLM phases ran.
-                # Return the unmodified model; next scheduler tick re-runs on the
-                # fresher state.
-                return mental_model
-
-            # Phase 6: Enrich (Memory Evolution)
-            if self.config.server.memory.reflection.enrichment_enabled:
-                await self._phase_6_enrich(
-                    entity_name=entity_name,
-                    entity_summary=entity_summary,
-                    final_obs=final_obs,
-                    recent_memories=recent_memories,
-                    db_lock=db_lock,
-                    vault_id=vault_id,
+        # Intra-worker per-entity serialization: two coroutines reflecting on
+        # the same entity within this process serialize on the same
+        # asyncio.Lock and run sequentially. Cross-worker dedup is handled by
+        # the reflection queue's SELECT FOR UPDATE SKIP LOCKED claim, so this
+        # lock does not need to be visible across processes. Phase 5's CAS
+        # UPDATE protects against any cross-process race that slips through
+        # the queue — the loser of the version race abandons cleanly.
+        entity_lock = await get_entity_lock(entity_id)
+        async with entity_lock:
+            with trace_span(
+                'memex.reflection',
+                'reflection',
+                {
+                    'reflection.entity_id': str(entity_id),
+                    'reflection.entity_name': entity_name,
+                    'reflection.vault_id': str(vault_id),
+                },
+            ):
+                # Phase 0: Update Existing
+                updated_observations = await self._phase_0_update(
+                    mental_model, entity_name, recent_memories, vault_id=vault_id
                 )
 
-            return mental_model
+                if not recent_memories:
+                    mental_model.observations = [
+                        obs.model_dump(mode='json') for obs in updated_observations
+                    ]
+                    return mental_model
+
+                # Phase 1: Seed (LLM)
+                candidates = await self._phase_1_seed(
+                    recent_memories, entity_name, updated_observations, vault_id=vault_id
+                )
+
+                # Phase 2: Hunt (Vector Search)
+                candidates_with_evidence = await self._phase_2_hunt(
+                    candidates, db_lock, vault_id=vault_id
+                )
+
+                # Phase 3: Validate (LLM)
+                validated = await self._phase_3_validate(
+                    candidates_with_evidence, vault_id=vault_id
+                )
+
+                # Phase 4: Compare (LLM)
+                final_obs, entity_summary = await self._phase_4_compare(
+                    updated_observations,
+                    validated,
+                    vault_id=vault_id,
+                    entity_name=entity_name,
+                )
+
+                # Phase 5: Finalize Model (CAS UPDATE — may abandon on version conflict)
+                applied = await self._phase_5_finalize(
+                    mental_model,
+                    final_obs,
+                    entity_summary=entity_summary,
+                    entity_type=entity_type,
+                )
+                if not applied:
+                    # Another worker refreshed this entity while our LLM phases
+                    # ran. Return the unmodified model; next scheduler tick
+                    # re-runs on the fresher state.
+                    return mental_model
+
+                # Phase 6: Enrich (Memory Evolution)
+                if self.config.server.memory.reflection.enrichment_enabled:
+                    await self._phase_6_enrich(
+                        entity_name=entity_name,
+                        entity_summary=entity_summary,
+                        final_obs=final_obs,
+                        recent_memories=recent_memories,
+                        db_lock=db_lock,
+                        vault_id=vault_id,
+                    )
+
+                return mental_model
 
     async def _phase_5_finalize(
         self,
