@@ -502,18 +502,41 @@ class TestCompositeLogClipIntegration:
 
     @pytest.mark.asyncio
     async def test_clip_at_zero_collapses_metadata_so_ce_score_decides(self) -> None:
-        """L = 0 ⇒ exp(clip(*, 0, 0)) = 1 ⇒ ranking by ce_score alone."""
+        """L = 0 ⇒ exp(clip(*, 0, 0)) = 1 ⇒ ranking by ce_score alone.
+
+        This test is a *discriminator* between L=0 and L=inf: the chosen ce
+        and recency setup produces opposite orderings under the two regimes,
+        so it actually exercises the clip path rather than passing under both.
+        - recent_low_ce has logit -0.5 (σ ≈ 0.378), event_date=now,
+          so recency=1.0 ⇒ recency_boost = 1.0 + 2.0*(1.0-0.5) = 2.0.
+        - old_high_ce has logit 0.5 (σ ≈ 0.622), event_date=now-300d,
+          so recency ≈ 0.178 ⇒ recency_boost ≈ 0.356.
+        At L=inf the product is 0.378*2.0=0.756 vs 0.622*0.356=0.221 →
+        metadata flips the order to [recent, old]. At L=0 the aggregate
+        multiplier collapses to 1.0 → ce alone decides → [old, recent].
+        """
         now = datetime.now(timezone.utc)
         old = now - timedelta(days=300)
         unit_recent_low_ce = _make_unit(event_date=now, text='recent-low-ce')
         unit_old_high_ce = _make_unit(event_date=old, text='old-high-ce')
-        engine = _make_engine_with_clip(
-            [-2.0, 2.0],
+        engine_clip0 = _make_engine_with_clip(
+            [-0.5, 0.5],
             log_clip=0.0,
             recency_alpha=2.0,
         )
-        result = await engine._rerank_results('q', [unit_recent_low_ce, unit_old_high_ce])
-        assert result == [unit_old_high_ce, unit_recent_low_ce]
+        result_clip0 = await engine_clip0._rerank_results(
+            'q', [unit_recent_low_ce, unit_old_high_ce]
+        )
+        assert result_clip0 == [unit_old_high_ce, unit_recent_low_ce]
+        engine_clip_inf = _make_engine_with_clip(
+            [-0.5, 0.5],
+            log_clip=math.inf,
+            recency_alpha=2.0,
+        )
+        result_clip_inf = await engine_clip_inf._rerank_results(
+            'q', [unit_recent_low_ce, unit_old_high_ce]
+        )
+        assert result_clip_inf == [unit_recent_low_ce, unit_old_high_ce]
 
     @pytest.mark.asyncio
     async def test_clip_inf_default_preserves_product_ranking(self) -> None:

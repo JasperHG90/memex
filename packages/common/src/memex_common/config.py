@@ -831,28 +831,32 @@ class RetrievalConfig(BaseModel):
     )
     reranking_recency_alpha: float = Field(
         default=0.2,
-        description='Multiplicative recency boost strength for cross-encoder reranking. '
-        '0 = no boost (backward compatible).',
+        description='Recency boost strength for cross-encoder reranking. The per-factor '
+        'value is exponentiated in log-space composition (sum of log(b_i)) before applying '
+        'as an aggregate multiplier on ce_score. 0 = no boost (backward compatible).',
     )
     reranking_temporal_alpha: float = Field(
         default=0.2,
-        description='Multiplicative temporal proximity boost strength for cross-encoder reranking. '
+        description='Temporal proximity boost strength for cross-encoder reranking. '
+        'Composed log-additively with the other four factors (see composite_boost_log_clip). '
         '0 = no boost (backward compatible).',
     )
     reranking_mw_alpha: float = Field(
         default=0.3,
-        description='Multiplicative Memory Worth boost strength for cross-encoder reranking. '
+        description='Memory Worth boost strength for cross-encoder reranking. Composed '
+        'log-additively with the other four factors (see composite_boost_log_clip). '
         '0 = no Memory Worth influence. Default 0.3 matches recency/temporal magnitude.',
     )
     confidence_alpha: float = Field(
         default=0.0,
         ge=0.0,
         le=2.0,
-        description='Multiplicative contradiction-derived confidence boost strength for '
-        'cross-encoder reranking. Default 0.0 (off) at ship time — flip to non-zero '
+        description='Contradiction-derived confidence boost strength for cross-encoder '
+        'reranking. Composed log-additively with the other four factors (see '
+        'composite_boost_log_clip). Default 0.0 (off) at ship time — flip to non-zero '
         '(target ~0.3) only after CONFIDENCE_SCORE_DISTRIBUTION calibration data accumulates. '
         'With confidence=1.0 schema default, any non-zero alpha gives every never-contradicted '
-        'unit a multiplicative lift before calibration justifies it. '
+        'unit a lift before calibration justifies it. '
         'Bounded to [0.0, 2.0]: negative alpha would invert the boost direction (penalise '
         'clean units, lift contradicted ones); above 2.0 the boost can go negative for '
         'low-confidence units.',
@@ -861,9 +865,10 @@ class RetrievalConfig(BaseModel):
         default=0.0,
         ge=0.0,
         le=2.0,
-        description='Multiplicative FSFM-lite decay boost strength for cross-encoder '
-        'reranking. Default 0.0 (off) at ship time — composition is a no-op until the '
-        'before/after benchmark validates the lift; flip to non-zero (target 0.3 to match '
+        description='FSFM-lite decay boost strength for cross-encoder reranking. Composed '
+        'log-additively with the other four factors (see composite_boost_log_clip). '
+        'Default 0.0 (off) at ship time — composition is a no-op until the before/after '
+        'benchmark validates the lift; flip to non-zero (target 0.3 to match '
         'recency/temporal/mw magnitude) in a follow-on config commit. '
         'Bounded to [0.0, 2.0]: negative alpha would invert the boost direction; above 2.0 '
         'the boost can go negative for stale low-importance units.',

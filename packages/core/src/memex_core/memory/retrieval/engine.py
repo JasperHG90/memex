@@ -80,7 +80,6 @@ from memex_core.metrics import (
 logger = logging.getLogger('memex.core.memory.retrieval.engine')
 
 LOG_FLOOR_COMPOSITE_BOOST = 1e-9
-_LOG_FLOOR = LOG_FLOOR_COMPOSITE_BOOST
 
 
 def _compose_boosts_logspace(
@@ -96,18 +95,18 @@ def _compose_boosts_logspace(
     """Compose five boost factors onto ce_score with log-space additive clip.
 
     Returns ``ce_score * exp(clip(sum(log(b_i)), -log_clip, +log_clip))``.
-    Boost values at or below ``_LOG_FLOOR = 1e-9`` are floored at the floor
-    before taking the log, so zero or (theoretically) negative inputs do not
-    raise. At the ship default ``log_clip = math.inf`` the clip is a no-op and
-    the result equals the prior multiplicative product for strictly positive
-    boost inputs; for an input that hits the floor (e.g. a boost of exactly
-    ``0.0``), the new form produces ``ce_score * ~1e-9`` for a single zero
-    factor (``ce_score * 1e-9^k`` if ``k`` factors hit the floor; degenerate
-    all-five case is ``ce_score * 1e-45``) rather than the strict ``0.0`` the
-    multiplicative product would return. Rank-equivalent for retrieval
-    scoring (both at the bottom), but no longer ties every zero-boost unit
-    at zero. Under ship-default alphas every boost evaluates to ``1.0`` (or
-    strictly positive), so the zero-input path is dormant.
+    Boost values at or below ``LOG_FLOOR_COMPOSITE_BOOST = 1e-9`` are floored
+    at the floor before taking the log, so zero or (theoretically) negative
+    inputs do not raise. At the ship default ``log_clip = math.inf`` the clip
+    is a no-op and the result equals the prior multiplicative product for
+    strictly positive boost inputs; for an input that hits the floor (e.g. a
+    boost of exactly ``0.0``), the new form produces ``ce_score * ~1e-9`` for
+    a single zero factor (``ce_score * 1e-9^k`` if ``k`` factors hit the
+    floor; degenerate all-five case is ``ce_score * 1e-45``) rather than the
+    strict ``0.0`` the multiplicative product would return. Rank-equivalent
+    for retrieval scoring (both at the bottom), but no longer ties every
+    zero-boost unit at zero. Under ship-default alphas every boost evaluates
+    to ``1.0`` (or strictly positive), so the zero-input path is dormant.
 
     Any ``NaN`` input (boost, ``ce_score``, or ``log_clip``) short-circuits:
     the function returns ``ce_score`` unmodified and emits a separate
@@ -127,11 +126,11 @@ def _compose_boosts_logspace(
         COMPOSITE_BOOST_NAN_GUARD_TRIGGERED.inc()
         return ce_score
     log_boost = (
-        math.log(max(recency, _LOG_FLOOR))
-        + math.log(max(temporal, _LOG_FLOOR))
-        + math.log(max(mw, _LOG_FLOOR))
-        + math.log(max(confidence, _LOG_FLOOR))
-        + math.log(max(decay, _LOG_FLOOR))
+        math.log(max(recency, LOG_FLOOR_COMPOSITE_BOOST))
+        + math.log(max(temporal, LOG_FLOOR_COMPOSITE_BOOST))
+        + math.log(max(mw, LOG_FLOOR_COMPOSITE_BOOST))
+        + math.log(max(confidence, LOG_FLOOR_COMPOSITE_BOOST))
+        + math.log(max(decay, LOG_FLOOR_COMPOSITE_BOOST))
     )
     clipped = max(-log_clip, min(log_clip, log_boost))
     multiplier = math.exp(clipped)

@@ -48,7 +48,7 @@ Once `L` is finite, the same `memex_composite_boost_clipped` histogram shows wha
 
 ## Floor for zero / negative boost values
 
-The helper floors each individual boost at `_LOG_FLOOR = 1e-9` before taking the log. This handles two corner cases without raising:
+The helper floors each individual boost at `LOG_FLOOR_COMPOSITE_BOOST = 1e-9` before taking the log. This handles two corner cases without raising:
 
 - A boost legitimately at exactly `0.0` (e.g. `confidence_boost` when `confidence_alpha > 0` and a unit was contradicted to zero). The product form returns exactly `0.0` for any zero factor; the log-additive form returns roughly `ce_score × 1e-9` when a single factor hits the floor (`ce_score × 1e-9^k` when `k` factors hit; the degenerate all-five case is `ce_score × 1e-45`). Both effectively collapse the unit to the bottom of the ranking, but the log-additive form preserves rank ordering by `ce_score` instead of tying every zero-boost unit at exactly zero. At ship-default alphas (`confidence_alpha = decay_alpha = 0.0`) the zero-boost path is dormant.
 - A boost that goes negative through a future bug or misconfiguration. The floor produces a finite result instead of `math.log(<negative>)` raising `ValueError`.
