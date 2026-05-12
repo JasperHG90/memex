@@ -840,41 +840,6 @@ suite.register(
 # --- Plugin-gap xfail tripwires (xfail under hermes; should xpass under claude-code) ---
 
 suite.register(
-    id='review_loop_drives_due',
-    group='review',
-    query='What memory units are due for review right now?',
-    max_duration_ms=_DUR_MS,
-    expected=ToolCallContains(
-        type='tool_call_contains',
-        expected_tools=['memex_get_due_for_review'],
-        min_count=1,
-        match_mode='any',
-    ),
-    expected_failure_modes=['hermes'],
-    replicates_override=1,
-    mutating_scenario=True,
-)
-
-suite.register(
-    id='review_loop_records_rating',
-    group='review',
-    query=(
-        "I just reviewed the fact about Project Alpha's tech stack — it was "
-        'easy. Record that rating.'
-    ),
-    max_duration_ms=_DUR_MS,
-    expected=ToolCallContains(
-        type='tool_call_contains',
-        expected_tools=['memex_memory_review'],
-        min_count=1,
-        match_mode='any',
-    ),
-    expected_failure_modes=['hermes'],
-    replicates_override=1,
-    mutating_scenario=True,
-)
-
-suite.register(
     id='asset_lifecycle_detach',
     group='lifecycle',
     query=(

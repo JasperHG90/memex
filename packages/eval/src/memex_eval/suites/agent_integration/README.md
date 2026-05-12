@@ -12,21 +12,18 @@ Two layers, 26 scenarios across 10 groups:
 
 1. **Smoke** (3 scenarios, group=`smoke`) — verifies the agent loads the
    plugin, finds a basic fact, calls a search tool. Inherited from 1.0.0.
-2. **Tool-surface synthesis** (20 active + 3 xfail tripwires) —
+2. **Tool-surface synthesis** (20 active + 1 xfail tripwire) —
    measures synthesis quality across `triage`, `temporal`, `entity`,
    `survey`, `faithfulness`, `navigation`, `feedback`, `kv`,
-   `lifecycle`, `review`. The 3 xfail scenarios under `review` and
-   `lifecycle` are tripwires for plugin gaps that exist in MCP but
-   not in the Hermes tool list:
+   `lifecycle`. The xfail scenario under `lifecycle` is a tripwire
+   for a plugin gap that exists in MCP but not in the Hermes tool list:
    - `memex_delete_assets`
-   - `memex_get_due_for_review`
-   - `memex_memory_review`
 
-   They're declared `expected_failure_modes=['hermes']`. Under
-   `--answer-mode claude-code` (MCP has all three) they should pass
-   normally. When the Hermes plugin ships them, they flip from `xfail`
-   to `xpass` → "the constraint embedded here is wrong / now stale" →
-   time to remove the expected_failure_mode and reshape the scenario.
+   It's declared `expected_failure_modes=['hermes']`. Under
+   `--answer-mode claude-code` (MCP has it) it should pass normally.
+   When the Hermes plugin ships it, it flips from `xfail` to `xpass`
+   → "the constraint embedded here is wrong / now stale" → time to
+   remove the expected_failure_mode and reshape the scenario.
 
 ## Why this matters
 

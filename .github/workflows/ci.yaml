@@ -50,6 +50,7 @@ jobs:
               - 'pyproject.toml'
               - 'uv.lock'
               - '.pre-commit-config.yaml'
+              - 'scripts/ci/**'
             firefox-extension:
               - 'packages/firefox-extension/**'
             docker:
@@ -73,6 +74,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      - uses: actions/checkout@v4
       - name: Run pre-commit checks
         uses: JasperHG90/toiminnot/actions/prek@main
         with:
@@ -104,6 +106,25 @@ jobs:
           uv_version: ${{ env.UV_VERSION }}
           python_version: ${{ matrix.python-version }}
           markers: "integration and not llm"
+
+  mcp-import-check:
+    needs: changes
+    if: always() && (github.event_name == 'push' || needs.changes.outputs.python == 'true' || needs.changes.outputs.ci-config == 'true')
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+      - uses: astral-sh/setup-uv@v5
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+      - name: Sync workspace
+        run: uv sync --all-extras --all-packages
+      - name: Collect MCP tests (import-time gate)
+        run: uv run pytest packages/mcp/tests --collect-only -q
 
   firefox-extension-lint-test:
     needs: changes
@@ -204,7 +225,7 @@ jobs:
         run: uv run pytest packages/hermes-plugin/tests/integration/ -v --tb=short -m hermes_integration
 
   build-python:
-    needs: [changes, pre-commit, python-tests]
+    needs: [changes, pre-commit, python-tests, mcp-import-check]
     if: always() && !failure() && !cancelled() && (github.event_name == 'push' || needs.changes.outputs.python == 'true' || needs.changes.outputs.ci-config == 'true')
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -220,7 +241,7 @@ jobs:
           package: ${{ matrix.package }}
 
   docker-build-memex:
-    needs: [changes, pre-commit, python-tests]
+    needs: [changes, pre-commit, python-tests, mcp-import-check]
     if: >-
       always() && !failure() && !cancelled() &&
       (github.event_name == 'push' ||
