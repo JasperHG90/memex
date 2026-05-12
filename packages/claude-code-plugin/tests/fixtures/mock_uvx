@@ -1,0 +1,39 @@
+#!/usr/bin/env bash
+# Mock uvx that intercepts `uvx --from <pkg> memex <args>` calls and
+# dispatches them to the mock_memex binary.
+#
+# Records every invocation to ${MOCK_MEMEX_CALLS} (one JSON object per line).
+# Returns canned responses based on ${MOCK_MEMEX_RESPONSES} (a YAML/JSON file
+# read on demand, or env-var based).
+set -uo pipefail
+
+# Skip leading flags up to and including `--from <pkg>`
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --from)
+            shift; shift  # --from <pkg>
+            ;;
+        --*)
+            shift  # any other flag with no arg
+            ;;
+        *)
+            break
+            ;;
+    esac
+done
+
+# Next positional should be `memex`
+if [ "${1:-}" != "memex" ]; then
+    echo "mock_uvx: expected 'memex' command, got: $*" >&2
+    exit 1
+fi
+shift
+
+# Dispatch to mock_memex (resolve through symlinks so we find the sibling
+# even when $0 is a symlink in some test bin dir).
+_self="$0"
+if command -v readlink >/dev/null 2>&1; then
+    _resolved=$(readlink -f "$_self" 2>/dev/null || readlink "$_self" 2>/dev/null || true)
+    [ -n "$_resolved" ] && _self="$_resolved"
+fi
+exec "$(dirname "$_self")/mock_memex" "$@"

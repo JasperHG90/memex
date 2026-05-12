@@ -6,7 +6,10 @@ argument-hint: "[search query]"
 
 # /recall — Search Memex
 
-1. Use `$ARGUMENTS` as the search query. If empty, ask the user.
+1. **Query source**:
+   - If `$ARGUMENTS` is non-empty, use it as the search query.
+   - If `$ARGUMENTS` is empty, look for a "Composed query" block in the additional context — the plugin's `UserPromptExpansion` hook supplies one when you invoke `/recall` without arguments. Print a one-line summary of the composed query so the user can see what's being matched.
+   - If neither is available, ask the user.
 
 2. **Search strategy**:
    - `memex_memory_search` AND `memex_note_search` in parallel. If insufficient, retry with `expand_query=true`.
@@ -21,3 +24,7 @@ argument-hint: "[search query]"
 5. **Memory hygiene**: when asked about stale facts, call `memex_get_lint_flags(vault_id=...)`. Act autonomously on low-risk findings.
 
 6. **Diagnostics**: "how is this vault doing?" → `memex_get_diagnostics_summary(vault_id=...)`.
+
+## Transcript-aware fallback contract
+
+When you invoke `/recall` with no arguments, a `UserPromptExpansion` hook reads the conversation transcript, extracts the last `MEMEX_CC_RECALL_TURNS` turns (default 3, range 1–10), and injects a composed query as additional context. The composed text is enclosed between `--- Composed query (last N turns) ---` markers so the skill can locate it deterministically. If an explicit query is supplied, the hook does not run — your `$ARGUMENTS` always wins.
