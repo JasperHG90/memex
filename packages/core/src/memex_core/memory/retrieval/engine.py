@@ -98,7 +98,8 @@ def _compose_boosts_logspace(
     Boost values at or below ``LOG_FLOOR_COMPOSITE_BOOST = 1e-9`` are floored
     at the floor before taking the log, so zero or (theoretically) negative
     inputs do not raise. At the ship default ``log_clip = math.inf`` the clip
-    is a no-op and the result equals the prior multiplicative product for
+    is a no-op and the result equals the prior multiplicative product
+    (within float-precision rounding from the log/exp round-trip) for
     strictly positive boost inputs; for an input that hits the floor (e.g. a
     boost of exactly ``0.0``), the new form produces ``ce_score * ~1e-9`` for
     a single zero factor (``ce_score * 1e-9^k`` if ``k`` factors hit the

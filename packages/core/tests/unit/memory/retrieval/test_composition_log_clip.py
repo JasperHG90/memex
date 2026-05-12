@@ -139,6 +139,16 @@ class TestZeroAndNegativeBoosts:
 
 
 class TestNaNGuard:
+    """NaN handling in `_compose_boosts_logspace`.
+
+    Two distinct behaviors live here:
+    - NaN ``ce_score`` propagates unchanged (returning ``ce_score`` per
+      contract; NaN flows downstream as a poisoned sentinel).
+    - NaN on any *boost* short-circuits via the non-finite guard and
+      returns ``ce_score`` *untouched* (no boost applied; counter fires).
+    Both paths are covered below.
+    """
+
     def test_nan_boost_returns_ce_score_untouched(self):
         result = _compose(0.7, recency=math.nan, temporal=1.0, mw=1.0, confidence=1.0, decay=1.0)
         assert result == pytest.approx(0.7, rel=1e-12)
@@ -331,6 +341,20 @@ class TestConfigJSONSerialization:
         config = RetrievalConfig(composite_boost_log_clip=1.5)
         roundtripped = RetrievalConfig.model_validate_json(config.model_dump_json())
         assert roundtripped.composite_boost_log_clip == 1.5
+
+    def test_mutated_nan_serializes_to_null(self):
+        config = RetrievalConfig()
+        config.composite_boost_log_clip = math.nan
+        json_str = config.model_dump_json()
+        assert 'NaN' not in json_str
+        assert '"composite_boost_log_clip":null' in json_str
+
+    def test_mutated_negative_inf_serializes_to_null(self):
+        config = RetrievalConfig()
+        config.composite_boost_log_clip = -math.inf
+        json_str = config.model_dump_json()
+        assert '-Infinity' not in json_str
+        assert '"composite_boost_log_clip":null' in json_str
 
 
 class TestRankPreservationAtInfiniteClip:

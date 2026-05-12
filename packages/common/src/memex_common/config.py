@@ -914,9 +914,11 @@ class RetrievalConfig(BaseModel):
         return value
 
     @field_serializer('composite_boost_log_clip', when_used='json')
-    def _serialize_composite_boost_log_clip(self, value: float) -> float | str:
+    def _serialize_composite_boost_log_clip(self, value: float) -> float | str | None:
         if value == math.inf:
             return 'inf'
+        if not math.isfinite(value):
+            return None
         return value
 
     certainty_modulation_enabled: bool = Field(
