@@ -13,6 +13,7 @@ from memex_core.server.auth import (
     get_auth_context,
     require_delete,
     require_read,
+    require_write,
 )
 from memex_common.exceptions import MemexError
 from memex_common.schemas import (
@@ -282,6 +283,43 @@ async def delete_entity(entity_id: UUID, api: Annotated[MemexAPI, Depends(get_ap
         return {'status': 'success'}
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Entity deletion failed')
+
+
+@router.post('/entities/scan-merges', dependencies=[Depends(require_write)])
+async def scan_entity_merges(
+    api: Annotated[MemexAPI, Depends(get_api)],
+    top_n: Annotated[int | None, Query(ge=2, le=10_000)] = None,
+    scan_cooldown_days: Annotated[int | None, Query(ge=0)] = None,
+    pair_threshold: Annotated[float | None, Query(ge=0.0, le=1.0)] = None,
+    cluster_min_threshold: Annotated[float | None, Query(ge=0.0, le=1.0)] = None,
+):
+    """Run a one-shot cross-batch entity-cluster collapse scan.
+
+    Cross-vault scope; intended for operator-only access. The scan performs
+    INSERT/UPDATE against ``maintenance_proposals`` and bumps
+    ``entities.last_merge_scan_at`` for every scanned entity — including rows
+    outside the caller's vault scope — so this endpoint requires the WRITE
+    permission and is best gated behind an operator-only key in deployments
+    that enable auth.
+
+    Complements the scheduler. Emits one MaintenanceProposal per surviving
+    cluster (after the cohesion guard); rescan-collisions UPDATE existing
+    findings in place. The merge itself is NOT applied — operators approve
+    via ``memex lint resolve --winner ...``.
+    """
+    from memex_core.services.entity_maintenance import scan_collapse_clusters
+
+    try:
+        summary = await scan_collapse_clusters(
+            api,
+            top_n=top_n,
+            scan_cooldown_days=scan_cooldown_days,
+            pair_threshold=pair_threshold,
+            cluster_min_threshold=cluster_min_threshold,
+        )
+        return summary
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Entity merge scan failed')
 
 
 @router.delete('/entities/{entity_id}/mental-model', dependencies=[Depends(require_delete)])

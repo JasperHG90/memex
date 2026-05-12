@@ -144,3 +144,46 @@ class TestVaultConfigResolution:
         )
         assert config.write_vault == 'proj'
         assert config.read_vaults == ['proj', 'shared']
+
+
+# ---------------------------------------------------------------------------
+# EntityMaintenanceConfig
+# ---------------------------------------------------------------------------
+
+
+class TestEntityMaintenanceConfig:
+    """Defaults + validator for the cross-batch entity-cluster collapse loop."""
+
+    def test_defaults_off(self):
+        from memex_common.config import EntityMaintenanceConfig
+
+        cfg = EntityMaintenanceConfig()
+        assert cfg.scan_enabled is False
+        assert cfg.top_n == 100
+        assert cfg.scan_cooldown_days == 7
+        assert cfg.pair_threshold == 0.85
+        assert cfg.cluster_min_threshold == 0.70
+
+    def test_validator_rejects_cluster_min_above_pair_threshold(self):
+        import pytest
+        from pydantic import ValidationError
+
+        from memex_common.config import EntityMaintenanceConfig
+
+        with pytest.raises(ValidationError):
+            EntityMaintenanceConfig(pair_threshold=0.7, cluster_min_threshold=0.8)
+
+    def test_validator_allows_equal_thresholds(self):
+        from memex_common.config import EntityMaintenanceConfig
+
+        cfg = EntityMaintenanceConfig(pair_threshold=0.75, cluster_min_threshold=0.75)
+        assert cfg.cluster_min_threshold == cfg.pair_threshold
+
+    def test_top_n_below_two_rejected_by_config(self):
+        import pytest
+        from pydantic import ValidationError
+
+        from memex_common.config import EntityMaintenanceConfig
+
+        with pytest.raises(ValidationError):
+            EntityMaintenanceConfig(top_n=1)

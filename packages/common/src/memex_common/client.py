@@ -531,6 +531,32 @@ class RemoteMemexAPI:
                 return False
             raise
 
+    async def scan_entity_merges(
+        self,
+        *,
+        top_n: int | None = None,
+        scan_cooldown_days: int | None = None,
+        pair_threshold: float | None = None,
+        cluster_min_threshold: float | None = None,
+    ) -> dict[str, Any]:
+        """Run a one-shot cross-batch entity-cluster collapse scan.
+
+        Emits one MaintenanceProposal per surviving cluster (cohesion-guarded);
+        on rescan, existing pending findings are UPDATEd in place. Does NOT
+        apply the collapse — operators approve via ``memex lint resolve``.
+        """
+        params: dict[str, Any] = {}
+        if top_n is not None:
+            params['top_n'] = top_n
+        if scan_cooldown_days is not None:
+            params['scan_cooldown_days'] = scan_cooldown_days
+        if pair_threshold is not None:
+            params['pair_threshold'] = pair_threshold
+        if cluster_min_threshold is not None:
+            params['cluster_min_threshold'] = cluster_min_threshold
+        response = await self.client.post('entities/scan-merges', params=params or None, json={})
+        return await self._handle_response(response)
+
     async def delete_mental_model(self, entity_id: UUID, vault_id: UUID | None = None) -> bool:
         """Delete a mental model for a specific entity in a specific vault."""
         params = {}
@@ -1318,9 +1344,22 @@ class RemoteMemexAPI:
         """Flip a pending finding to ``dismissed``."""
         return await self._post(f'lint/findings/{finding_id}/dismiss', {})
 
-    async def lint_resolve(self, finding_id: str) -> dict[str, Any]:
-        """Flip a pending finding to ``resolved``."""
-        return await self._post(f'lint/findings/{finding_id}/resolve', {})
+    async def lint_resolve(
+        self,
+        finding_id: str,
+        *,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Flip a pending finding to ``resolved``.
+
+        ``params`` is forwarded to the server as the JSON request body and is
+        rule-specific. For ``entity_collapse_cluster`` findings, pass
+        ``{"winner_id": "<uuid>"}`` (or ``"winner_canonical_name"``) to
+        override the suggested winner; otherwise the server defaults to the
+        suggested winner recorded in the finding's evidence.
+        """
+        body: dict[str, Any] = params or {}
+        return await self._post(f'lint/findings/{finding_id}/resolve', body)
 
     async def run_lint_rules(self, vault_id: str | UUID) -> dict[str, Any]:
         """Synchronously run the V1 lint rule registry for ``vault_id``.

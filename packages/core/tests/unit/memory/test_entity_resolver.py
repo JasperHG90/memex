@@ -185,3 +185,90 @@ async def test_persist_resolutions_v2(resolver, mock_session):
     assert final_ids[0] == 'existing-uuid'
     assert final_ids[1] == str(new_id)
     assert mock_session.exec.call_count == 3
+
+
+# -- score_entity_pair (cross-batch pair scorer) --
+
+
+from memex_core.memory.entity_resolver import score_entity_pair  # noqa: E402
+
+
+def test_score_entity_pair_high_similarity():
+    """Case-folded near-identical + matching phonetic + neighbour overlap → score >= 0.8."""
+    score = score_entity_pair(
+        a_name='ACME Corp',
+        b_name='acme corp',
+        a_phonetic='AKM',
+        b_phonetic='AKM',
+        a_neighbors={'ceo': 5, 'product launch': 3},
+        b_neighbors={'ceo': 4, 'investor': 2},
+    )
+    assert score >= 0.8, f'expected >= 0.8, got {score}'
+
+
+def test_score_entity_pair_low_similarity():
+    """Disjoint names + disjoint phonetic + no neighbour overlap → score below threshold."""
+    score = score_entity_pair(
+        a_name='ACME Corp',
+        b_name='Globex Inc',
+        a_phonetic='AKM',
+        b_phonetic='KLPKS',
+        a_neighbors={'ceo': 5},
+        b_neighbors={'investor': 2},
+    )
+    assert score < 0.5, f'expected < 0.5, got {score}'
+
+
+def test_score_entity_pair_phonetic_floor():
+    """Trigram weak but matching phonetic code lifts the name score above floor."""
+    score_no_phonetic = score_entity_pair(
+        a_name='abcdefg',
+        b_name='zyxwvu',
+        a_phonetic=None,
+        b_phonetic=None,
+        a_neighbors={},
+        b_neighbors={},
+    )
+    score_phonetic = score_entity_pair(
+        a_name='abcdefg',
+        b_name='zyxwvu',
+        a_phonetic='PFK',
+        b_phonetic='PFK',
+        a_neighbors={},
+        b_neighbors={},
+    )
+    assert score_phonetic > score_no_phonetic
+
+
+def test_score_entity_pair_neighbor_overlap_contributes():
+    """Shared neighbours lift the score over the no-overlap baseline."""
+    base = score_entity_pair(
+        a_name='Foo Bar',
+        b_name='Foo Baz',
+        a_phonetic=None,
+        b_phonetic=None,
+        a_neighbors={},
+        b_neighbors={},
+    )
+    with_neighbors = score_entity_pair(
+        a_name='Foo Bar',
+        b_name='Foo Baz',
+        a_phonetic=None,
+        b_phonetic=None,
+        a_neighbors={'shared_co': 1},
+        b_neighbors={'shared_co': 1},
+    )
+    assert with_neighbors > base
+
+
+def test_score_entity_pair_identical_names_max():
+    """Identical names + matching phonetic = perfect score."""
+    score = score_entity_pair(
+        a_name='Same Name',
+        b_name='Same Name',
+        a_phonetic='SNM',
+        b_phonetic='SNM',
+        a_neighbors={},
+        b_neighbors={},
+    )
+    assert score >= 0.8

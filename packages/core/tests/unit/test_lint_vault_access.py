@@ -45,7 +45,26 @@ def mock_api():
     # Default: finding belongs to ALLOWED_VAULT (tests override per-case).
     api.lint.get_finding_vault_id = AsyncMock(return_value=(True, ALLOWED_VAULT))
     api.lint.set_status = AsyncMock(return_value=True)
-    api.metastore = SimpleNamespace()
+    # ``lint_status?scope=all`` (default) and the resolve dispatcher both query
+    # ``api.metastore.session().execute(...).scalar()/.mappings().first()`` —
+    # stub a session that returns zero scalar and an empty mapping; per-test
+    # overrides may replace ``api.metastore`` with a richer stub.
+    metastore = AsyncMock()
+    session_cm = AsyncMock()
+
+    async def _execute(stmt, params=None):
+        result = AsyncMock()
+        result.scalar = lambda: 0
+        mappings = AsyncMock()
+        mappings.first = lambda: None
+        result.mappings = lambda: mappings
+        return result
+
+    session_cm.execute = AsyncMock(side_effect=_execute)
+    session_cm.__aenter__ = AsyncMock(return_value=session_cm)
+    session_cm.__aexit__ = AsyncMock(return_value=None)
+    metastore.session = lambda: session_cm
+    api.metastore = metastore
     return api
 
 
@@ -187,6 +206,40 @@ def _scoped_writer() -> AuthContext:
 FINDING_ID = uuid4()
 
 
+def _stub_metastore_finding(
+    mock_api,
+    *,
+    rule_name: str = 'duplicate_notes',
+    vault_id: str | None = None,
+    evidence: dict | None = None,
+    status: str = 'pending',
+) -> None:
+    """Stub ``api.metastore.session().execute(...)`` to return a synthetic
+    maintenance_proposals row for the routes that load findings directly.
+    """
+    mock_api.metastore = AsyncMock()
+    session_cm = AsyncMock()
+
+    async def _execute(stmt, params=None):
+        result = AsyncMock()
+        mappings = AsyncMock()
+        mappings.first = lambda: {
+            'id': str(FINDING_ID),
+            'vault_id': vault_id,
+            'rule_name': rule_name,
+            'target_id': str(uuid4()),
+            'evidence': evidence or {},
+            'status': status,
+        }
+        result.mappings = lambda: mappings
+        return result
+
+    session_cm.execute = AsyncMock(side_effect=_execute)
+    session_cm.__aenter__ = AsyncMock(return_value=session_cm)
+    session_cm.__aexit__ = AsyncMock(return_value=None)
+    mock_api.metastore.session = lambda: session_cm
+
+
 class TestLintMutationForbiddenVault:
     def test_dismiss_blocks_when_finding_belongs_to_other_vault(self, mock_api):
         # Finding belongs to FORBIDDEN_VAULT; caller is scoped to ALLOWED_VAULT.
@@ -198,6 +251,7 @@ class TestLintMutationForbiddenVault:
 
     def test_resolve_blocks_when_finding_belongs_to_other_vault(self, mock_api):
         mock_api.lint.get_finding_vault_id = AsyncMock(return_value=(True, FORBIDDEN_VAULT))
+        _stub_metastore_finding(mock_api, vault_id=str(FORBIDDEN_VAULT))
         client = _make_client(mock_api, _scoped_writer())
         resp = client.post(f'/api/v1/lint/findings/{FINDING_ID}/resolve')
         assert resp.status_code == 403, resp.text
@@ -224,6 +278,7 @@ class TestLintMutationAllowedVault:
 
     def test_resolve_allows_in_scope_finding(self, mock_api):
         mock_api.lint.get_finding_vault_id = AsyncMock(return_value=(True, ALLOWED_VAULT))
+        _stub_metastore_finding(mock_api, vault_id=str(ALLOWED_VAULT))
         client = _make_client(mock_api, _scoped_writer())
         resp = client.post(f'/api/v1/lint/findings/{FINDING_ID}/resolve')
         assert resp.status_code == 200, resp.text
@@ -252,3 +307,211 @@ class TestLintMutationGlobalFinding:
         mock_api.lint.set_status.assert_awaited_once()
         call = mock_api.lint.set_status.await_args
         assert call.kwargs['vault_id'] is None
+
+
+class TestCollapseClusterEmptyVaultsAffected:
+    """An entity_collapse_cluster finding with an empty ``vaults_affected``
+    list must be rejected (400) at the dispatcher. Cross-vault destructive
+    operations require an explicit scope; fail-open is unacceptable.
+    """
+
+    def _stub_finding(self, mock_api, vaults_affected: list[str]) -> None:
+        mock_api.metastore = AsyncMock()
+        session_cm = AsyncMock()
+
+        async def _execute(stmt, params=None):
+            result = AsyncMock()
+            mappings = AsyncMock()
+            mappings.first = lambda: {
+                'id': str(FINDING_ID),
+                'vault_id': None,
+                'rule_name': 'entity_collapse_cluster',
+                'target_id': str(uuid4()),
+                'evidence': {
+                    'cluster_members': [str(uuid4()), str(uuid4())],
+                    'suggested_winner_id': str(uuid4()),
+                    'vaults_affected': vaults_affected,
+                },
+                'status': 'pending',
+            }
+            result.mappings = lambda: mappings
+            return result
+
+        session_cm.execute = AsyncMock(side_effect=_execute)
+        session_cm.__aenter__ = AsyncMock(return_value=session_cm)
+        session_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_api.metastore.session = lambda: session_cm
+
+    def test_resolve_rejects_empty_vaults_affected(self, mock_api):
+        self._stub_finding(mock_api, vaults_affected=[])
+        client = _make_client(mock_api, _scoped_writer())
+        resp = client.post(
+            f'/api/v1/lint/findings/{FINDING_ID}/resolve',
+            json={'winner_id': str(uuid4())},
+        )
+        assert resp.status_code == 400, resp.text
+        assert 'vaults_affected' in resp.text
+        mock_api.lint.set_status.assert_not_called()
+
+
+class TestCollapseClusterEmptyBody:
+    """A POST with no body to an entity_collapse_cluster finding MUST NOT
+    bypass the rule-keyed dispatcher: the suggested winner should be applied,
+    the empty-``vaults_affected`` guard should still run, and the multi-vault
+    auth check should still gate the mutation.
+    """
+
+    def _stub_finding(
+        self,
+        mock_api,
+        *,
+        vaults_affected: list[str],
+        cluster_members: list[str],
+        suggested_winner_id: str,
+    ) -> None:
+        mock_api.metastore = AsyncMock()
+        session_cm = AsyncMock()
+
+        async def _execute(stmt, params=None):
+            result = AsyncMock()
+            mappings = AsyncMock()
+            mappings.first = lambda: {
+                'id': str(FINDING_ID),
+                'vault_id': None,
+                'rule_name': 'entity_collapse_cluster',
+                'target_id': suggested_winner_id,
+                'evidence': {
+                    'cluster_members': cluster_members,
+                    'suggested_winner_id': suggested_winner_id,
+                    'vaults_affected': vaults_affected,
+                },
+                'status': 'pending',
+            }
+            result.mappings = lambda: mappings
+            return result
+
+        session_cm.execute = AsyncMock(side_effect=_execute)
+        session_cm.__aenter__ = AsyncMock(return_value=session_cm)
+        session_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_api.metastore.session = lambda: session_cm
+
+    def test_resolve_collapse_with_empty_body_applies_suggested_winner(self, mock_api):
+        winner = str(uuid4())
+        loser = str(uuid4())
+        self._stub_finding(
+            mock_api,
+            vaults_affected=[str(ALLOWED_VAULT)],
+            cluster_members=[winner, loser],
+            suggested_winner_id=winner,
+        )
+        mock_api.entities = AsyncMock()
+        mock_api.entities.collapse_cluster = AsyncMock(
+            return_value={'winner_id': winner, 'losers_collapsed': 1}
+        )
+        client = _make_client(mock_api, _scoped_writer())
+        resp = client.post(f'/api/v1/lint/findings/{FINDING_ID}/resolve')
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body['rule_name'] == 'entity_collapse_cluster'
+        assert body['winner_id'] == winner
+        assert body['winner_overridden'] is False
+        mock_api.entities.collapse_cluster.assert_awaited_once()
+        mock_api.lint.set_status.assert_awaited_once()
+
+    def test_resolve_collapse_with_empty_body_still_enforces_empty_vaults_guard(self, mock_api):
+        winner = str(uuid4())
+        loser = str(uuid4())
+        self._stub_finding(
+            mock_api,
+            vaults_affected=[],
+            cluster_members=[winner, loser],
+            suggested_winner_id=winner,
+        )
+        mock_api.entities = AsyncMock()
+        mock_api.entities.collapse_cluster = AsyncMock()
+        client = _make_client(mock_api, _scoped_writer())
+        resp = client.post(f'/api/v1/lint/findings/{FINDING_ID}/resolve')
+        assert resp.status_code == 400, resp.text
+        assert 'vaults_affected' in resp.text
+        mock_api.entities.collapse_cluster.assert_not_called()
+        mock_api.lint.set_status.assert_not_called()
+
+
+class TestCollapseClusterWinnerCanonicalNameAmbiguity:
+    """If multiple cluster members share the same canonical_name, the
+    --winner=<name> lookup MUST refuse to silently pick one — the operator
+    sees one name in the CLI and must explicitly disambiguate with a UUID.
+    """
+
+    def _stub_finding_and_ambiguous_winner(
+        self,
+        mock_api,
+        *,
+        cluster_members: list[str],
+        vaults_affected: list[str],
+        winner_name: str,
+        matching_ids: list[str],
+    ) -> None:
+        mock_api.metastore = AsyncMock()
+        session_cm = AsyncMock()
+
+        calls = {'n': 0}
+
+        async def _execute(stmt, params=None):
+            calls['n'] += 1
+            result = AsyncMock()
+            mappings = AsyncMock()
+            stmt_text = str(stmt).lower()
+            if 'maintenance_proposals' in stmt_text:
+                mappings.first = lambda: {
+                    'id': str(FINDING_ID),
+                    'vault_id': None,
+                    'rule_name': 'entity_collapse_cluster',
+                    'target_id': cluster_members[0],
+                    'evidence': {
+                        'cluster_members': cluster_members,
+                        'suggested_winner_id': cluster_members[0],
+                        'vaults_affected': vaults_affected,
+                    },
+                    'status': 'pending',
+                }
+                result.mappings = lambda: mappings
+                return result
+            if 'from entities' in stmt_text and 'canonical_name' in stmt_text:
+                mappings.all = lambda: [{'id': mid} for mid in matching_ids]
+                mappings.first = lambda: ({'id': matching_ids[0]} if matching_ids else None)
+                result.mappings = lambda: mappings
+                return result
+            mappings.first = lambda: None
+            mappings.all = lambda: []
+            result.mappings = lambda: mappings
+            result.scalar = lambda: 0
+            return result
+
+        session_cm.execute = AsyncMock(side_effect=_execute)
+        session_cm.__aenter__ = AsyncMock(return_value=session_cm)
+        session_cm.__aexit__ = AsyncMock(return_value=None)
+        mock_api.metastore.session = lambda: session_cm
+
+    def test_winner_canonical_name_ambiguity_rejected(self, mock_api):
+        winner_a = str(uuid4())
+        winner_b = str(uuid4())
+        third = str(uuid4())
+        self._stub_finding_and_ambiguous_winner(
+            mock_api,
+            cluster_members=[winner_a, winner_b, third],
+            vaults_affected=[str(ALLOWED_VAULT)],
+            winner_name='AcmeCorp',
+            matching_ids=[winner_a, winner_b],
+        )
+        mock_api.entities = AsyncMock()
+        mock_api.entities.collapse_cluster = AsyncMock()
+        client = _make_client(mock_api, _scoped_writer())
+        resp = client.post(
+            f'/api/v1/lint/findings/{FINDING_ID}/resolve',
+            json={'winner_canonical_name': 'AcmeCorp'},
+        )
+        assert resp.status_code == 400, resp.text
+        assert 'ambiguous' in resp.text.lower()
+        mock_api.entities.collapse_cluster.assert_not_called()
+        mock_api.lint.set_status.assert_not_called()

@@ -15,7 +15,8 @@ for human inspection and reconciliation.
 
 from __future__ import annotations
 
-from typing import Annotated
+from typing import Annotated, Any
+from uuid import UUID
 
 import typer
 from rich.console import Console
@@ -193,13 +194,38 @@ async def lint_dismiss_cmd(
 async def lint_resolve_cmd(
     ctx: typer.Context,
     finding_id: Annotated[str, typer.Argument(help='Finding UUID to mark resolved.')],
+    winner: Annotated[
+        str | None,
+        typer.Option(
+            '--winner',
+            '-w',
+            help=(
+                'For entity_collapse_cluster findings, override the suggested winner. '
+                'Accepts either a UUID (must match a cluster member) or a canonical '
+                'name (case-sensitive match against the cluster). The collapse '
+                'affects every vault in evidence.vaults_affected.'
+            ),
+        ),
+    ] = None,
 ):
-    """Flip a pending finding to ``resolved``."""
+    """Flip a pending finding to ``resolved``.
+
+    For ``entity_collapse_cluster`` findings, optionally override the
+    suggested cluster winner with ``--winner / -w``. Without the flag,
+    the server applies the suggested winner recorded in the finding.
+    """
     parse_uuid(finding_id, 'finding_id')
     config: MemexConfig = ctx.obj
+    params: dict[str, Any] | None = None
+    if winner is not None:
+        try:
+            UUID(winner)
+            params = {'winner_id': winner}
+        except ValueError:
+            params = {'winner_canonical_name': winner}
     async with get_api_context(config) as api:
         try:
-            payload = await api.lint_resolve(finding_id)
+            payload = await api.lint_resolve(finding_id, params=params)
         except Exception as e:
             handle_api_error(e)
             return

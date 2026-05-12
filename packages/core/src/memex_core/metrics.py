@@ -1,5 +1,7 @@
 """Custom Prometheus metrics for Memex application monitoring."""
 
+from typing import Literal
+
 from prometheus_client import Counter, Gauge, Histogram
 
 # ---------------------------------------------------------------------------
@@ -314,6 +316,35 @@ LINT_RUN_DURATION_SECONDS = Histogram(
     'memex_lint_run_duration_seconds',
     'Wall-clock duration of a single lint rule execution (seconds).',
     ['rule_name'],
+    buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0),
+)
+
+# ---------------------------------------------------------------------------
+# Entity-cluster collapse maintenance
+# ---------------------------------------------------------------------------
+
+# Convention-only label aliases. prometheus_client's ``.labels(**kwargs)``
+# accepts arbitrary strings — mypy does not narrow against these.
+EntityCollapseScanResultLabel = Literal[
+    'proposed', 'rejected_cohesion', 'rescan_updated', 'no_candidates', 'concurrent_skipped'
+]
+EntityCollapseApplyOutcomeLabel = Literal['success', 'failed']
+
+ENTITY_COLLAPSE_SCAN_EMITTED_TOTAL = Counter(
+    'memex_entity_collapse_scan_emitted_total',
+    'Cluster proposals produced by the entity-cluster collapse scan.',
+    ['result'],
+)
+
+ENTITY_COLLAPSE_APPLY_TOTAL = Counter(
+    'memex_entity_collapse_apply_total',
+    'Cluster collapses applied via EntityService.collapse_cluster.',
+    ['outcome'],
+)
+
+ENTITY_COLLAPSE_APPLY_DURATION_SECONDS = Histogram(
+    'memex_entity_collapse_apply_duration_seconds',
+    'Wall-clock duration of EntityService.collapse_cluster (seconds).',
     buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0),
 )
 

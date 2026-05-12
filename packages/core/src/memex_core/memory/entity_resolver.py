@@ -11,7 +11,7 @@ import math
 import itertools
 
 from sqlalchemy.dialects.postgresql import insert as pg_insert
-from sqlalchemy import func
+from sqlalchemy import case, func, null, or_
 from sqlmodel import col, text, update, select, desc
 from sqlmodel.ext.asyncio.session import AsyncSession
 from pydantic import BaseModel
@@ -49,6 +49,87 @@ class ResolutionResult(BaseModel):
     entity_id: str | None = None
     is_new: bool = False
     input_data: EntityInput
+
+
+def score_entity_pair(
+    a_name: str,
+    b_name: str,
+    a_phonetic: str | None,
+    b_phonetic: str | None,
+    a_neighbors: dict[str, int],
+    b_neighbors: dict[str, int],
+    *,
+    trigram_weight: float = 0.6,
+    phonetic_weight: float = 0.2,
+    neighbor_weight: float = 0.2,
+    phonetic_floor: float = 0.5,
+) -> float:
+    """Cross-batch entity-pair similarity used by the cluster-collapse scan.
+
+    Differs from :func:`calculate_match_score` (ingestion path) by computing
+    its own name-similarity component (trigram + phonetic) rather than
+    consuming a precomputed ``EntityCandidate``. The composition is:
+
+      - 60% trigram (case-folded Jaccard-ish ratio over character trigrams)
+      - 20% phonetic (Double Metaphone equality; gives a floor boost when
+        trigram is low but phonetic matches)
+      - 20% neighbourhood (overlap of cooccurrence partners, TF-IDF
+        weighted by partner mention frequency)
+
+    Returns a float in ``[0.0, 1.0]``. Deterministic given inputs.
+    """
+    a = (a_name or '').lower().strip()
+    b = (b_name or '').lower().strip()
+
+    name_score = _trigram_similarity(a, b)
+    phonetic_match = bool(a_phonetic and b_phonetic and a_phonetic == b_phonetic)
+    if phonetic_match and name_score < phonetic_floor:
+        name_score = phonetic_floor
+
+    score_name = name_score * trigram_weight + (1.0 if phonetic_match else 0.0) * phonetic_weight
+
+    score_neighbors = 0.0
+    if a_neighbors and b_neighbors:
+        common = set(a_neighbors.keys()) & set(b_neighbors.keys())
+        if common:
+            matched_weight = 0.0
+            for n in common:
+                freq_a = max(int(a_neighbors[n]), 0)
+                freq_b = max(int(b_neighbors[n]), 0)
+                pooled = freq_a + freq_b
+                weight = 1.0 / math.log2(2 + pooled)
+                matched_weight += weight
+            denom = max(min(len(a_neighbors), len(b_neighbors)), 1)
+            score_neighbors = min(matched_weight / denom, 1.0) * neighbor_weight
+
+    return min(max(score_name + score_neighbors, 0.0), 1.0)
+
+
+def _trigram_similarity(a: str, b: str) -> float:
+    """Compute trigram similarity using the Jaccard ratio.
+
+    Returns |trigrams(a) ∩ trigrams(b)| / |trigrams(a) ∪ trigrams(b)| over the
+    character trigram sets. PostgreSQL's pg_trgm ``similarity()`` function uses
+    Sørensen-Dice (2 × intersection / (|A| + |B|)), so thresholds are NOT directly
+    portable between this helper and pg_trgm. Both are bounded in [0, 1].
+    """
+    if not a and not b:
+        return 1.0
+    if not a or not b:
+        return 0.0
+    if a == b:
+        return 1.0
+
+    def _trigrams(s: str) -> set[str]:
+        padded = f'  {s} '
+        return {padded[i : i + 3] for i in range(len(padded) - 2)}
+
+    ta, tb = _trigrams(a), _trigrams(b)
+    if not ta or not tb:
+        return 0.0
+    inter = len(ta & tb)
+    union = len(ta | tb)
+    return inter / union if union else 0.0
 
 
 def calculate_match_score(
@@ -571,12 +652,18 @@ class EntityResolver:
                 'cooccurrence_count': EntityCooccurrence.cooccurrence_count
                 + stmt.excluded.cooccurrence_count,
                 'last_cooccurred': stmt.excluded.last_cooccurred,
-                # Keep the earliest valid_from. LEAST(x, NULL) returns NULL in
-                # Postgres, so wrap in COALESCE to preserve the non-NULL side.
-                'valid_from': func.coalesce(
-                    func.least(EntityCooccurrence.valid_from, stmt.excluded.valid_from),
-                    EntityCooccurrence.valid_from,
-                    stmt.excluded.valid_from,
+                # NULL valid_from means "open start" — preserve it. If either
+                # side is NULL the merged interval stays open; otherwise pick
+                # the earlier date.
+                'valid_from': case(
+                    (
+                        or_(
+                            EntityCooccurrence.valid_from.is_(None),
+                            stmt.excluded.valid_from.is_(None),
+                        ),
+                        null(),
+                    ),
+                    else_=func.least(EntityCooccurrence.valid_from, stmt.excluded.valid_from),
                 ),
             },
         )

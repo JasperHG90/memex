@@ -33,6 +33,42 @@ def _wrap_with_metadata(entity: Any, mental_model: Any | None) -> EntityWithMeta
     return EntityWithMetadata(entity=entity, metadata=metadata, observations=observations)
 
 
+def _merge_observations(
+    winner_obs: list[dict[str, Any]],
+    loser_obs: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Merge two MentalModel.observations lists with deterministic dedup.
+
+    Two observations collide iff their canonical JSON serialization matches.
+    The winner's ordering is preserved for surviving rows; loser rows that
+    do not already appear are appended in their iteration order.
+    """
+    import json as _json
+
+    seen: set[str] = set()
+    out: list[dict[str, Any]] = []
+
+    def _key(o: dict[str, Any]) -> str:
+        try:
+            return _json.dumps(o, sort_keys=True, default=str)
+        except Exception:
+            return repr(o)
+
+    for o in winner_obs or []:
+        k = _key(o)
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(o)
+    for o in loser_obs or []:
+        k = _key(o)
+        if k in seen:
+            continue
+        seen.add(k)
+        out.append(o)
+    return out
+
+
 class EntityService(BaseService):
     """Entity CRUD, search, and graph traversal operations."""
 
@@ -260,6 +296,389 @@ class EntityService(BaseService):
 
         audit_event(self._audit_service, 'entity.deleted', 'entity', str(entity_id))
         return True
+
+    async def collapse_cluster(
+        self,
+        *,
+        winner_id: UUID,
+        loser_ids: list[UUID],
+        actor: str | None = None,
+    ) -> dict[str, Any]:
+        """Merge a cluster of duplicate entities into one canonical winner.
+
+        Resolves the six referential-integrity hazards in a single
+        transaction:
+
+        1. ``MemoryLink.entity_id`` repoint loser->winner (before the entity
+           hard-delete; otherwise FK CASCADE would drop the rows).
+        2. ``EntityCooccurrence`` re-ordered (smaller id as ``entity_id_1``)
+           and summed with ON CONFLICT DO UPDATE.
+        3. ``EntityAlias`` absorbed with ON CONFLICT (canonical_id, name)
+           DO NOTHING; the loser's canonical_name is also recorded as an
+           alias of the winner.
+        4. ``UnitEntity`` re-inserted on the winner with summed counters,
+           then loser rows dropped.
+        5. ``MentalModel`` merged per-vault: loser's observations appended
+           (dedup-aware), ``version = max(winner, loser) + 1``.
+        6. ``Entity`` hard-delete losers (LAST).
+        7. Append a single ``entity.collapse_cluster`` AuditLog row.
+
+        Returns a summary dict suitable for logging / API response.
+        """
+        from datetime import datetime, timezone
+        from uuid import UUID as PyUUID
+
+        from sqlalchemy import case, func, null, or_, text
+        from sqlalchemy.dialects.postgresql import insert as pg_insert
+        from sqlmodel import col, select, update
+
+        from memex_core.memory.sql_models import (
+            Entity,
+            EntityAlias,
+            EntityCooccurrence,
+            MemoryLink,
+            MentalModel,
+            UnitEntity,
+        )
+        from memex_core.memory.utils import get_phonetic_code
+        from memex_core import metrics
+        import time as _time
+
+        if not loser_ids:
+            raise ValueError('collapse_cluster requires at least one loser_id')
+        if winner_id in loser_ids:
+            raise ValueError('winner_id must not appear in loser_ids')
+
+        try:
+            from opentelemetry import trace as _otel_trace
+
+            _tracer = _otel_trace.get_tracer('memex.entity_maintenance')
+        except Exception:  # pragma: no cover
+            _tracer = None
+
+        start = _time.perf_counter()
+        span_cm = (
+            _tracer.start_as_current_span(
+                'memex.entity_maintenance.collapse_cluster',
+                attributes={
+                    'cluster_size': len(loser_ids) + 1,
+                    'winner_id': str(winner_id),
+                },
+            )
+            if _tracer
+            else None
+        )
+        if span_cm is not None:
+            span_cm.__enter__()
+
+        outcome = 'failed'
+        try:
+            async with self.metastore.session() as session:
+                winner = await session.get(Entity, winner_id)
+                if winner is None:
+                    raise EntityNotFoundError(f'Entity {winner_id} not found.')
+
+                loser_uuids = [PyUUID(str(lid)) for lid in loser_ids]
+                stmt = select(Entity).where(col(Entity.id).in_(loser_uuids))
+                losers = list((await session.exec(stmt)).all())
+                missing = set(str(u) for u in loser_uuids) - {str(e.id) for e in losers}
+                if missing:
+                    raise EntityNotFoundError(f'Entities not found: {sorted(missing)}')
+
+                vaults_affected: set[str] = set()
+
+                # 1) MemoryLink: repoint entity_id loser -> winner BEFORE hard delete
+                ml_stmt = (
+                    update(MemoryLink)
+                    .where(col(MemoryLink.entity_id).in_(loser_uuids))
+                    .values(entity_id=winner_id)
+                )
+                ml_result = await session.exec(ml_stmt)
+                links_repointed = int(getattr(ml_result, 'rowcount', 0) or 0)
+
+                # 2) EntityCooccurrence: rewrite loser-side rows so they reference
+                # the winner instead, with canonical (smaller, larger) ordering and
+                # summed counts. Loser rows are deleted afterwards.
+                co_stmt = select(EntityCooccurrence).where(
+                    col(EntityCooccurrence.entity_id_1).in_(loser_uuids)
+                    | col(EntityCooccurrence.entity_id_2).in_(loser_uuids)
+                )
+                co_rows = list((await session.exec(co_stmt)).all())
+                cooccurrences_merged = 0
+                for row in co_rows:
+                    other = row.entity_id_2 if row.entity_id_1 in loser_uuids else row.entity_id_1
+                    if other in loser_uuids or other == winner_id:
+                        # Intentional drop: post-collapse, winner and loser are
+                        # the same entity, so a W<->L (or L<->L) cooccurrence
+                        # becomes a self-loop, which the table CHECK constraint
+                        # forbids. The loser-row DELETE below consumes the row.
+                        continue
+                    e1, e2 = sorted([winner_id, other], key=str)
+                    upsert = pg_insert(EntityCooccurrence).values(
+                        entity_id_1=e1,
+                        entity_id_2=e2,
+                        vault_id=row.vault_id,
+                        cooccurrence_count=row.cooccurrence_count,
+                        last_cooccurred=row.last_cooccurred,
+                        valid_from=row.valid_from,
+                        valid_to=row.valid_to,
+                    )
+                    upsert = upsert.on_conflict_do_update(
+                        index_elements=['entity_id_1', 'entity_id_2'],
+                        set_={
+                            'cooccurrence_count': (
+                                EntityCooccurrence.cooccurrence_count + row.cooccurrence_count
+                            ),
+                            'last_cooccurred': func.greatest(
+                                EntityCooccurrence.last_cooccurred,
+                                upsert.excluded.last_cooccurred,
+                            ),
+                            'valid_from': case(
+                                (
+                                    or_(
+                                        EntityCooccurrence.valid_from.is_(None),
+                                        upsert.excluded.valid_from.is_(None),
+                                    ),
+                                    null(),
+                                ),
+                                else_=func.least(
+                                    EntityCooccurrence.valid_from,
+                                    upsert.excluded.valid_from,
+                                ),
+                            ),
+                            'valid_to': case(
+                                (
+                                    or_(
+                                        EntityCooccurrence.valid_to.is_(None),
+                                        upsert.excluded.valid_to.is_(None),
+                                    ),
+                                    null(),
+                                ),
+                                else_=func.greatest(
+                                    EntityCooccurrence.valid_to,
+                                    upsert.excluded.valid_to,
+                                ),
+                            ),
+                        },
+                    )
+                    await session.exec(upsert)
+                    cooccurrences_merged += 1
+
+                # Drop the loser-side rows (any direction)
+                await session.exec(
+                    text(
+                        'DELETE FROM entity_cooccurrences '
+                        'WHERE entity_id_1 = ANY(CAST(:ids AS uuid[])) '
+                        'OR entity_id_2 = ANY(CAST(:ids AS uuid[]))'
+                    ).bindparams(ids=[str(u) for u in loser_uuids])
+                )
+
+                # 3) EntityAlias: absorb loser aliases onto winner, plus a fresh
+                # alias for each loser's canonical_name so future lookups find
+                # the winner via the loser's spelling.
+                alias_stmt = select(EntityAlias).where(
+                    col(EntityAlias.canonical_id).in_(loser_uuids)
+                )
+                alias_rows = list((await session.exec(alias_stmt)).all())
+                alias_values = [
+                    {
+                        'canonical_id': winner_id,
+                        'name': a.name,
+                        'phonetic_code': a.phonetic_code,
+                    }
+                    for a in alias_rows
+                ]
+                for loser in losers:
+                    alias_values.append(
+                        {
+                            'canonical_id': winner_id,
+                            'name': loser.canonical_name,
+                            'phonetic_code': loser.phonetic_code
+                            or get_phonetic_code(loser.canonical_name),
+                        }
+                    )
+                aliases_absorbed = 0
+                if alias_values:
+                    alias_upsert = (
+                        pg_insert(EntityAlias)
+                        .values(alias_values)
+                        .on_conflict_do_nothing(index_elements=['canonical_id', 'name'])
+                    )
+                    await session.exec(alias_upsert)
+                    aliases_absorbed = len(alias_values)
+
+                # 4) UnitEntity: roll loser's per-unit rows onto the winner, with
+                # summed counters; then delete loser rows. Per-(unit_id, winner_id)
+                # collisions resolved via the UPDATE-after-aggregate idiom.
+                ue_stmt = select(UnitEntity).where(col(UnitEntity.entity_id).in_(loser_uuids))
+                ue_rows = list((await session.exec(ue_stmt)).all())
+                unit_entities_merged = 0
+                if ue_rows:
+                    upsert_sql = text(
+                        """
+                        INSERT INTO unit_entities (
+                            unit_id, entity_id, vault_id,
+                            success_co_count, failure_co_count
+                        )
+                        VALUES (
+                            CAST(:unit_id AS uuid),
+                            CAST(:winner_id AS uuid),
+                            CAST(:vault_id AS uuid),
+                            :success_co_count,
+                            :failure_co_count
+                        )
+                        ON CONFLICT (unit_id, entity_id) DO UPDATE SET
+                            success_co_count = unit_entities.success_co_count
+                                + EXCLUDED.success_co_count,
+                            failure_co_count = unit_entities.failure_co_count
+                                + EXCLUDED.failure_co_count
+                        """
+                    )
+                    for row in ue_rows:
+                        await session.exec(
+                            upsert_sql.bindparams(
+                                unit_id=str(row.unit_id),
+                                winner_id=str(winner_id),
+                                vault_id=str(row.vault_id),
+                                success_co_count=row.success_co_count,
+                                failure_co_count=row.failure_co_count,
+                            )
+                        )
+                        unit_entities_merged += 1
+                    await session.exec(
+                        text(
+                            'DELETE FROM unit_entities WHERE entity_id = ANY(CAST(:ids AS uuid[]))'
+                        ).bindparams(ids=[str(u) for u in loser_uuids])
+                    )
+
+                # 5) MentalModel: per-vault merge. For each vault that the
+                # losers have a model in, fold their observations into the
+                # winner's model and bump the version.
+                mm_stmt = select(MentalModel).where(
+                    col(MentalModel.entity_id).in_(loser_uuids + [winner_id])
+                )
+                mm_rows = list((await session.exec(mm_stmt)).all())
+                # Bucket by vault
+                by_vault: dict[Any, dict[str, Any]] = {}
+                for mm in mm_rows:
+                    bucket = by_vault.setdefault(mm.vault_id, {'winner': None, 'losers': []})
+                    if mm.entity_id == winner_id:
+                        bucket['winner'] = mm
+                    else:
+                        bucket['losers'].append(mm)
+
+                mental_models_merged = 0
+                for vault_id, bucket in by_vault.items():
+                    vaults_affected.add(str(vault_id))
+                    winner_mm = bucket['winner']
+                    loser_mms = bucket['losers']
+                    if not loser_mms:
+                        continue
+
+                    if winner_mm is None:
+                        # No winner MM yet — promote the highest-versioned loser
+                        # to be the winner MM in place (update entity_id), then
+                        # absorb the rest.
+                        loser_mms_sorted = sorted(loser_mms, key=lambda m: m.version, reverse=True)
+                        promoted = loser_mms_sorted[0]
+                        remaining = loser_mms_sorted[1:]
+                        merged_obs = _merge_observations(
+                            promoted.observations or [],
+                            [o for m in remaining for o in (m.observations or [])],
+                        )
+                        promoted.entity_id = winner_id
+                        promoted.observations = merged_obs
+                        promoted.version = (
+                            max([promoted.version] + [m.version for m in remaining]) + 1
+                        )
+                        promoted.last_refreshed = datetime.now(timezone.utc)
+                        session.add(promoted)
+                        for m in remaining:
+                            await session.delete(m)
+                        mental_models_merged += 1 + len(remaining)
+                    else:
+                        merged_obs = _merge_observations(
+                            winner_mm.observations or [],
+                            [o for m in loser_mms for o in (m.observations or [])],
+                        )
+                        winner_mm.observations = merged_obs
+                        winner_mm.version = (
+                            max([winner_mm.version] + [m.version for m in loser_mms]) + 1
+                        )
+                        winner_mm.last_refreshed = datetime.now(timezone.utc)
+                        session.add(winner_mm)
+                        for m in loser_mms:
+                            await session.delete(m)
+                        mental_models_merged += 1 + len(loser_mms)
+
+                # Materialize ORM-pending mental-model deletes before the raw
+                # SQL DELETE on entities — without this, the entity hard-delete
+                # could fire while stale MentalModel rows still hold FK references.
+                await session.flush()
+
+                # 6) Entity: hard-delete losers — LAST step before commit.
+                # Use raw SQL to bypass ORM cascade replay on already-cleaned tables.
+                await session.exec(
+                    text('DELETE FROM entities WHERE id = ANY(CAST(:ids AS uuid[]))').bindparams(
+                        ids=[str(u) for u in loser_uuids]
+                    )
+                )
+
+                # Refresh the winner's bookkeeping
+                merged_mention = winner.mention_count + sum(
+                    int(getattr(loser, 'mention_count', 0) or 0) for loser in losers
+                )
+                await session.exec(
+                    update(Entity)
+                    .where(col(Entity.id) == winner_id)
+                    .values(
+                        mention_count=merged_mention,
+                        last_seen=datetime.now(timezone.utc),
+                    )
+                )
+
+                summary = {
+                    'winner_id': str(winner_id),
+                    'loser_ids': [str(u) for u in loser_uuids],
+                    'links_repointed': links_repointed,
+                    'cooccurrences_merged': cooccurrences_merged,
+                    'aliases_absorbed': aliases_absorbed,
+                    'unit_entities_merged': unit_entities_merged,
+                    'mental_models_merged': mental_models_merged,
+                    'vaults_affected': sorted(vaults_affected),
+                }
+
+                # 7) AuditLog: append (NOTE column is `details`, not `metadata`).
+                from memex_core.memory.sql_models import AuditLog as _AuditLog
+
+                session.add(
+                    _AuditLog(
+                        actor=actor,
+                        action='entity.collapse_cluster',
+                        resource_type='entity',
+                        resource_id=str(winner_id),
+                        details=summary,
+                    )
+                )
+
+                await session.commit()
+
+            outcome = 'success'
+            metrics.ENTITY_COLLAPSE_APPLY_TOTAL.labels(outcome='success').inc()
+            return summary
+        except Exception:
+            metrics.ENTITY_COLLAPSE_APPLY_TOTAL.labels(outcome='failed').inc()
+            raise
+        finally:
+            metrics.ENTITY_COLLAPSE_APPLY_DURATION_SECONDS.observe(_time.perf_counter() - start)
+            if span_cm is not None:
+                span_cm.__exit__(None, None, None)
+            logger.info(
+                'entity.collapse_cluster outcome=%s winner_id=%s cluster_size=%d',
+                outcome,
+                winner_id,
+                len(loser_ids) + 1,
+            )
 
     async def delete_mental_model(self, entity_id: UUID, vault_id: UUID) -> bool:
         """
