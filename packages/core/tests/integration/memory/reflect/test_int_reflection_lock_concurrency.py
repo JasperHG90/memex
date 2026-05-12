@@ -544,3 +544,146 @@ async def test_reflect_entity_internal_via_factory_persists_full_pipeline(
         assert persisted.entity_metadata['description'] == 'summary'
         assert len(persisted.observations) == 1
         assert persisted.observations[0]['title'] == 'Prod'
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_reflect_entity_internal_returns_none_on_cas_abandon(
+    session_manager, memex_config: MemexConfig
+):
+    """Round-4 CRITICAL regression guard: on CAS abandon, the engine's
+    per-entity coroutine MUST return None — NOT the (unchanged) MentalModel.
+
+    Returning the model would route the entity through
+    ``services.reflection.queue_service.complete_reflection`` (which DELETES
+    the queue row), losing the retry path. Returning None lets the service
+    layer's else-branch fire ``mark_failed`` which flips the row back to
+    FAILED so the next ``claim_reflection_queue_batch`` SKIP LOCKED tick
+    re-picks the entity.
+    """
+    from unittest.mock import patch, AsyncMock
+    from memex_core.memory.sql_models import MemoryUnit
+    from memex_common.types import FactTypes
+    from sqlalchemy import update as sa_update
+
+    async with session_manager() as setup_session:
+        entity, model = await _seed_entity_and_model(setup_session, version=3)
+        entity_id = entity.id
+        model_id = model.id
+
+    # Simulate a concurrent winner that bumped version 3 -> 4 between our
+    # _batch_get_or_create_models read (still sees version=3) and our
+    # Phase 5 CAS UPDATE.
+    async with session_manager() as winner_session:
+        await winner_session.execute(
+            sa_update(MentalModel).where(MentalModel.id == model_id).values(version=4)
+        )
+        await winner_session.commit()
+
+    async with session_manager() as orchestrator_session:
+        engine = ReflectionEngine(
+            orchestrator_session,
+            memex_config,
+            _make_embedder(),
+            entity_session_factory=session_manager,
+        )
+        engine.lm = MagicMock()
+        with (
+            patch.object(engine, '_phase_1_seed', new_callable=AsyncMock) as mock_seed,
+            patch.object(engine, '_phase_2_hunt', new_callable=AsyncMock) as mock_hunt,
+            patch.object(engine, '_phase_3_validate', new_callable=AsyncMock) as mock_val,
+            patch.object(engine, '_phase_4_compare', new_callable=AsyncMock) as mock_comp,
+        ):
+            mock_seed.return_value = []
+            mock_hunt.return_value = []
+            mock_val.return_value = []
+            mock_comp.return_value = (
+                [Observation(title='Stale', content='will lose CAS', evidence=[])],
+                'stale-summary',
+            )
+
+            fake_memory = MemoryUnit(
+                id=uuid4(),
+                text='trigger',
+                vault_id=GLOBAL_VAULT_ID,
+                fact_type=FactTypes.WORLD,
+                embedding=[0.0] * 384,
+            )
+
+            # ``model`` is the in-memory copy that still has version=3.
+            returned = await engine._reflect_entity_internal(
+                entity_id=entity_id,
+                mental_model=model,
+                entity=entity,
+                recent_memories=[fake_memory],
+                vault_id=GLOBAL_VAULT_ID,
+            )
+
+    # The CRITICAL fix: CAS-abandon path returns None, NOT the model.
+    assert returned is None, (
+        'CAS abandon must return None so engine.reflect_batch filters '
+        'this entity out of all_success_models and the service layer '
+        'routes to mark_failed (re-enqueue), not complete_reflection '
+        '(delete queue row).'
+    )
+
+    # And the row stays at the winner's version — our stale write did
+    # not overwrite the concurrent refresh.
+    async with session_manager() as observer_session:
+        result = await observer_session.execute(
+            select(MentalModel).where(MentalModel.id == model_id)
+        )
+        persisted = result.scalar_one()
+        assert persisted.version == 4, (
+            f'winner version=4 must survive; observed {persisted.version}'
+        )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_reflect_entity_internal_prune_only_cas_abandon_returns_none(
+    session_manager, memex_config: MemexConfig
+):
+    """Round-4 MEDIUM: the no-recent-memories prune-only path must also
+    return None on CAS abandon (parallel of the main-path regression guard).
+    """
+    from unittest.mock import patch, AsyncMock
+    from sqlalchemy import update as sa_update
+
+    async with session_manager() as setup_session:
+        entity, model = await _seed_entity_and_model(setup_session, version=7)
+        entity_id = entity.id
+        model_id = model.id
+
+    # Concurrent winner bumps the row.
+    async with session_manager() as winner_session:
+        await winner_session.execute(
+            sa_update(MentalModel).where(MentalModel.id == model_id).values(version=8)
+        )
+        await winner_session.commit()
+
+    async with session_manager() as orchestrator_session:
+        engine = ReflectionEngine(
+            orchestrator_session,
+            memex_config,
+            _make_embedder(),
+            entity_session_factory=session_manager,
+        )
+        engine.lm = MagicMock()
+        # Force phase_0_mutated=True so the prune-only path enters Phase 5.
+        with patch.object(engine, '_phase_0_update', new_callable=AsyncMock) as mock_p0:
+            mock_p0.return_value = (
+                [Observation(title='Pruned', content='ok', evidence=[])],
+                True,
+            )
+            returned = await engine._reflect_entity_internal(
+                entity_id=entity_id,
+                mental_model=model,
+                entity=entity,
+                recent_memories=[],  # triggers prune-only branch
+                vault_id=GLOBAL_VAULT_ID,
+            )
+
+    assert returned is None, (
+        'prune-only CAS abandon must also return None so the queue layer re-enqueues for retry.'
+    )

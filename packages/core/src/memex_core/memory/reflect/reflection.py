@@ -303,8 +303,20 @@ class ReflectionEngine:
         entity: Entity | None,
         recent_memories: list[MemoryUnit],
         vault_id: UUID = GLOBAL_VAULT_ID,
-    ) -> MentalModel:
-        """Internal logic for single entity reflection, decoupled from DB fetching logic."""
+    ) -> MentalModel | None:
+        """Internal logic for single entity reflection, decoupled from DB fetching logic.
+
+        Returns ``None`` when the Phase 5 CAS UPDATE abandoned because a
+        concurrent worker advanced the ``mental_models.version`` between
+        our read and write. The caller (engine.reflect_batch) filters
+        None out of ``all_success_models``, so the service layer's
+        ``mark_failed`` re-enqueues the entity for a fresh attempt on
+        the next scheduler tick. Returning the in-memory model here
+        would route the entity through ``complete_reflection``, which
+        DELETES the queue row — the work would be lost until some
+        unrelated path re-enqueued the entity, contradicting the
+        design-doc invariant that says "next tick retries."
+        """
         entity_name = entity.canonical_name if entity else 'Unknown'
         entity_type = entity.entity_type if entity else None
 
@@ -352,13 +364,18 @@ class ReflectionEngine:
                         prior_summary = prior_meta.get('description', '') or ''
                         prior_type = prior_meta.get('category') or entity_type
                         async with self._entity_session() as ph5_session:
-                            await self._phase_5_finalize(
+                            applied = await self._phase_5_finalize(
                                 mental_model,
                                 updated_observations,
                                 session=ph5_session,
                                 entity_summary=prior_summary,
                                 entity_type=prior_type,
                             )
+                        if not applied:
+                            # Prune lost the CAS race. Surface as failure so
+                            # the queue layer re-enqueues for retry instead
+                            # of deleting the row.
+                            return None
                     return mental_model
 
                 # Phase 1: Seed (pure LLM — no DB)
@@ -395,9 +412,14 @@ class ReflectionEngine:
                     )
                 if not applied:
                     # Another worker refreshed this entity while our LLM
-                    # phases ran. Return the unmodified model; next
-                    # scheduler tick re-runs on the fresher state.
-                    return mental_model
+                    # phases ran. Return None so engine.reflect_batch
+                    # excludes us from ``all_success_models`` and the
+                    # service layer routes us to ``mark_failed`` (which
+                    # flips the queue row back to FAILED so the next
+                    # scheduler tick re-claims it via SKIP LOCKED) instead
+                    # of ``complete_reflection`` (which would DELETE the
+                    # queue row, losing the retry).
+                    return None
 
                 # Phase 6: Enrich (Memory Evolution) — opens its own short DB
                 # tx for the unit-metadata writes; releases it before any
@@ -659,6 +681,33 @@ class ReflectionEngine:
                 await ph6_session.merge(unit)
 
             await ph6_session.commit()
+
+        # Clear the dirty flag on the orchestrator-session copy of each
+        # mutated unit. ``recent_memories`` units are attached to
+        # ``self.session``; ``flag_modified(unit, 'unit_metadata')``
+        # above flagged them dirty there. If we leave them dirty, the
+        # orchestrator's downstream commit (in
+        # services.reflection.reflect_batch via
+        # queue_service.complete_reflection) will flush the same mutation
+        # a second time on a different connection — without Phase 6's
+        # id-ascending row lock ordering (opening a cross-worker
+        # deadlock window on shared evidence units) and without a
+        # version guard (opening a "last writer on self.session.commit
+        # wins" race that can roll back a co-tenant worker's Phase 6
+        # writes). The ph6_session merge() above already produced the
+        # authoritative row in the DB. We expire the orchestrator-session
+        # copy so the next read fetches fresh state from the DB and the
+        # dirty flag is cleared — tests using ``session.refresh(unit)``
+        # still observe the committed Phase 6 enrichments via the
+        # subsequent SELECT.
+        from sqlalchemy.exc import InvalidRequestError
+
+        for unit in units_to_merge:
+            try:
+                if unit in self.session:
+                    self.session.expire(unit)
+            except InvalidRequestError:
+                pass
 
         logger.info(f'Phase 6: Enriched {enriched_count} memory units for entity "{entity_name}".')
 

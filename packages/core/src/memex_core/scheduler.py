@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING
 from aioclock import AioClock
 from aioclock.triggers import Every
 from sqlalchemy.engine.url import make_url
-from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.exc import IntegrityError
 
 from memex_core.config import MemexConfig
 from memex_core.context import background_session
@@ -51,13 +51,26 @@ async def periodic_reflection_task(api: 'MemexAPI', batch_size: int):
             logger.info(f'Scheduler: Reflecting on {len(requests)} entities.')
             await api.reflect_batch(requests)
 
-        except (OSError, RuntimeError, ValueError, SQLAlchemyError) as e:
-            # SQLAlchemyError covers IntegrityError on the orchestrator
-            # session commit that flushes newly-created MentalModel rows
-            # (race on the (entity_id, vault_id) unique index when two
-            # workers attempt to create a row for the same entity in the
-            # same tick). The next tick re-claims via SKIP LOCKED and
-            # recover_stale_processing absorbs any PROCESSING leftovers.
+        except (OSError, RuntimeError, ValueError, IntegrityError) as e:
+            # IntegrityError is the V18-specific failure mode: the
+            # orchestrator-session commit that flushes newly-created
+            # MentalModel rows can race the (entity_id, vault_id) unique
+            # index when two workers attempt to create a row for the
+            # same entity in the same tick. The race window is narrow
+            # (between SKIP LOCKED claim and the model-insert commit).
+            # We catch only IntegrityError, NOT the wider SQLAlchemyError
+            # tree, so ProgrammingError / DataError / InternalError
+            # (real bugs, schema drift, DB corruption) still propagate
+            # up and crash-loop the task — which is the right behavior
+            # for surfacing programming errors in alerting.
+            #
+            # Queue recovery: when this except fires, the queue items
+            # claimed earlier in this tick remain in PROCESSING (the
+            # claim was its own committed transaction). They will NOT
+            # be re-claimed by SKIP LOCKED on the next tick — SKIP LOCKED
+            # only picks PENDING/FAILED. ``recover_stale_processing``
+            # flips them back to PENDING after
+            # ``stale_processing_timeout_seconds`` (default 30 min).
             logger.error(f'Scheduler: Task failed: {e}', exc_info=True)
 
 
