@@ -88,20 +88,24 @@ class BriefingCache:
             self._ready.clear()
 
 
-_RESOLUTION_FLOW_PRIMER = """### When the user reports an issue resolved (§3.5 5-step flow)
+_RESOLUTION_FLOW_PRIMER = """### When the user signals an outcome on prior advice (resolved / held / didn't work)
+
+Triggers cover BOTH directions: "that worked", "it's been holding", "lock the lesson in", "record as successful" (success); "stop suggesting X", "we removed it", "that didn't work" (failure).
 
 1. **Disambiguate first.** If scope is ambiguous — multiple candidate notes, no temporal anchor, or conflated issues — ASK before writing.
 
 2. **Route by info quality.** Title-fragment → `memex_find_note(query="...")`. Title unknown → `memex_memory_search`. Then pick a coverage path:
    - **A: entity-anchored**: `memex_list_entities` → `memex_get_entity_mentions`. Structural; no rank miss.
-   - **B: cross-note semantic**: `memex_memory_search(top_k=30)`. CRITICAL: `top_k` ≥ 30.
+   - **B: cross-note semantic**: `memex_memory_search(top_k=10)` (default). Widen to 20 only if the first pass looks under-covered. Reading bodies of more than ~10 hits in one turn burns output budget and rarely improves judgment.
    - **C: single-note PageIndex**: `memex_get_page_indices` → `memex_get_memory_units(chunk_ids=[...])`.
 
-3. **LLM-judge the candidates.** READ unit bodies; pick the fix-relevant subset. NEVER bulk-write.
+3. **LLM-judge the candidates.** READ unit bodies; pick the outcome-relevant subset. NEVER bulk-write.
 
-4.+5. **Paired writes** against the judged-relevant subset:
-   `memex_record_outcome(units=[{"unit_id":"...","verb":"not_helpful","reason":"..."}])` AND
-   `memex_memory_deprioritize(unit_id=..., reason="...")`. Same subset.
+4.+5. **Paired writes** against the judged-relevant subset. Pick the verb by the user's signal:
+   - Success signal → `memex_record_outcome(units=[{"unit_id":"...","verb":"helpful","reason":"..."}])`. No deprioritize.
+   - Failure signal → `memex_record_outcome(units=[{"unit_id":"...","verb":"not_helpful","reason":"..."}])` AND `memex_memory_deprioritize(unit_id=..., reason="...")`. Same subset.
+
+   **`record_outcome` REQUIRES a target.** Pass `units=[{unit_id, verb, reason}, …]`. Calling `memex_record_outcome(success=True)` alone — without `units` and without `unit_ids` — is INVALID and the server will reject it. If you cannot find a target via steps 1-3, ASK the user which memory the outcome applies to rather than calling the tool with a bare success flag.
 
    Orthogonal axes: `record_outcome` = MW gradient (append-only); `deprioritize` = binary surface state (reversible via `memory_restore`).
 
@@ -113,6 +117,15 @@ _RESOLUTION_FLOW_PRIMER = """### When the user reports an issue resolved (§3.5 
 
 
 _LAYER_ROUTING_PRIMER = LAYER_ROUTING_PRIMER_TABLE
+
+
+_CITATION_DISCIPLINE = """### Citing sources
+
+When answering a question grounded in Memex content, cite the source note(s) inline so the reader can trace each claim.
+
+- Reference notes by their title (or note id) in square brackets at the end of the supporting sentence, e.g. `…the team chose PostgreSQL for its JSONB and pgvector support [tech-stack-decision-record].`
+- One reference per load-bearing claim; multiple notes when a claim is supported by more than one.
+- Do not fabricate titles or ids — if you cannot identify a specific source, say so explicitly rather than inventing one."""
 
 
 _STORAGE_MODEL_PRIMER = """### How Memex stores knowledge
@@ -131,7 +144,7 @@ _ROUTING_GUIDE = """### How to use Memex tools
 - **Vault discovery** → `memex_list_vaults()` / `memex_get_vault_summary(vault_id="...")`.
 - **Title known** → `memex_find_note(query="fragment")`.
 - **Content lookup** → `memex_memory_search` AND `memex_note_search` in parallel. Use both only when genuinely needed.
-- **Broad/panoramic** → `memex_get_vault_summary` first (cheap, precomputed). Escalate to `memex_survey(query)` only if too coarse.
+- **Broad/panoramic** → `memex_get_vault_summary` first (cheap, precomputed). Escalate to `memex_survey(query)` only if too coarse. Triggers: "what's in this vault", "give me an overview", "high-level picture of X", "everything you know about X", "comprehensive view of …". Do NOT compose a panoramic answer from `memex_memory_search` / `memex_note_search` — these are content-lookup tools and will miss the entity- and theme-level structure that `vault_summary` / `survey` are built to surface.
 - **Entities** → `memex_list_entities` → `memex_get_entity_mentions` / `memex_get_entity_cooccurrences`.
 - **Batch fetch** → `memex_get_entities(entity_ids=[...])` / `memex_get_memory_units(unit_ids=[...])`.
 - **Lineage** → `memex_get_memory_links(unit_ids=[...])` for typed links; `memex_get_lineage(entity_type=..., entity_id=...)` for provenance chains.
@@ -171,6 +184,7 @@ def format_briefing_block(
     lines.append('\n' + _STORAGE_MODEL_PRIMER)
     lines.append('\n' + _LAYER_ROUTING_PRIMER)
     lines.append('\n' + _RESOLUTION_FLOW_PRIMER)
+    lines.append('\n' + _CITATION_DISCIPLINE)
 
     lines.append(
         f'\nSession note key: `{session_note_key}`. Use '

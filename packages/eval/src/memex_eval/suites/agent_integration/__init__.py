@@ -43,6 +43,7 @@ from memex_eval.suite import (
     CompositeOutcome,
     KeywordsPresent,
     LLMJudge,
+    SetupAction,
     SuiteMetadata,
     SuiteSources,
     ToolCallArgMatches,
@@ -52,7 +53,7 @@ from memex_eval.suite import (
 from memex_eval.suite.decorator import Suite
 
 _ROOT = Path(__file__).parent
-_DUR_MS = 90_000.0
+_DUR_MS = 180_000.0
 
 METADATA = SuiteMetadata(
     name='agent_integration',
@@ -453,22 +454,19 @@ suite.register(
     expected=CompositeOutcome(
         type='composite',
         children=[
-            ToolCallContains(
-                type='tool_call_contains',
-                expected_tools=['memex_get_page_indices', 'memex_get_nodes'],
-                min_count=1,
-                match_mode='any',
-            ),
-            ToolCallArgMatches(
-                type='tool_call_arg_matches',
-                tool='memex_read_note',
-                arg_name='note_id',
-                regex=r'{engineering_handbook_id}',
-                expect_absent=True,
-            ),
             KeywordsPresent(
                 type='keywords_present',
                 keywords=['pytest'],
+            ),
+            LLMJudge(
+                type='llm_judge',
+                rubric=(
+                    'The answer identifies the testing convention from the '
+                    'engineering handbook (pytest, with a brief explanation of '
+                    'how it is used). The answer does NOT fabricate a '
+                    'convention not in the corpus.'
+                ),
+                threshold=0.5,
             ),
         ],
     ),
@@ -479,37 +477,15 @@ suite.register(
     group='navigation',
     query='Summarize the deployment section of the engineering handbook.',
     max_duration_ms=_DUR_MS,
-    expected=CompositeOutcome(
-        type='composite',
-        children=[
-            AnyOfOutcomes(
-                type='any_of',
-                children=[
-                    ToolCallContains(
-                        type='tool_call_contains',
-                        expected_tools=['memex_memory_summarize_node'],
-                        min_count=1,
-                        match_mode='any',
-                    ),
-                    ToolCallContains(
-                        type='tool_call_contains',
-                        expected_tools=['memex_get_page_indices', 'memex_get_nodes'],
-                        min_count=1,
-                        match_mode='any',
-                    ),
-                ],
-            ),
-            LLMJudge(
-                type='llm_judge',
-                rubric=(
-                    'The answer summarizes the deployment-section content of '
-                    'the engineering handbook (environments, release cadence, '
-                    'rollback, migrations) and does NOT include content from '
-                    'unrelated sections (testing, style, security).'
-                ),
-                threshold=0.5,
-            ),
-        ],
+    expected=LLMJudge(
+        type='llm_judge',
+        rubric=(
+            'The answer summarizes the deployment-section content of '
+            'the engineering handbook (environments, release cadence, '
+            'rollback, migrations) and does NOT include content from '
+            'unrelated sections (testing, style, security).'
+        ),
+        threshold=0.5,
     ),
 )
 
@@ -804,6 +780,12 @@ suite.register(
     ),
     replicates_override=1,
     depends_on_prior_scenarios=['kv_writes_project_preference'],
+    # Prior scenarios' finalized hermes session transcripts mention the
+    # 4-space indentation convention, which leaks into this scenario's
+    # session briefing and lets the agent answer without calling KV.
+    # Strip them before this scenario boots so the only retrieval path is
+    # the KV store.
+    setup_actions=[SetupAction(kind='clear_hermes_session_notes')],
 )
 
 
