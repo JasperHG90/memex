@@ -2463,6 +2463,7 @@ def _log_to_recorder(
         'schema_version': result.schema_version,
         'suite.tags': ','.join(suite.metadata.tags),
         'components': ','.join(suite.metadata.components_under_test),
+        'mlflow.note.content': suite.metadata.description,
         **extra_tags,
     }
 
