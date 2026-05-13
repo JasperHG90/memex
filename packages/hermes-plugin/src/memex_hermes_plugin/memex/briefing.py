@@ -105,6 +105,8 @@ Triggers cover BOTH directions: "that worked", "it's been holding", "lock the le
    - Success signal → `memex_record_outcome(units=[{"unit_id":"...","verb":"helpful","reason":"..."}])`. No deprioritize.
    - Failure signal → `memex_record_outcome(units=[{"unit_id":"...","verb":"not_helpful","reason":"..."}])` AND `memex_memory_deprioritize(unit_id=..., reason="...")`. Same subset.
 
+   **Virtual units cannot be deprioritized.** Memory units whose metadata contains `"virtual": true` (synthesized from MentalModel observations) have no DB row — calling `memex_memory_deprioritize` on their UUID returns 404. Before mutating, filter retrieval candidates: keep only units with `unit_metadata.virtual` unset or false. If the candidate set is empty after the filter, fall back to entity-anchored search (`memex_list_entities` → `memex_get_entity_mentions`) to recover real source units before pairing.
+
    **`record_outcome` REQUIRES a target.** Pass `units=[{unit_id, verb, reason}, …]`. Calling `memex_record_outcome(success=True)` alone — without `units` and without `unit_ids` — is INVALID and the server will reject it. If you cannot find a target via steps 1-3, ASK the user which memory the outcome applies to rather than calling the tool with a bare success flag.
 
    Orthogonal axes: `record_outcome` = MW gradient (append-only); `deprioritize` = binary surface state (reversible via `memory_restore`).

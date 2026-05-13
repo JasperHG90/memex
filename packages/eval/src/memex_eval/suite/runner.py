@@ -1596,7 +1596,16 @@ async def run_suite(
     judge: Judge | None = None
     judge_model_probe: dict[str, Any] | None = None
     judge_model_value: str | None = None
-    if any(isinstance(s.expected, (LLMJudge, UsefulAtK)) for s in suite.scenarios):
+
+    def _scenario_needs_judge(outcome: Any) -> bool:
+        if isinstance(outcome, (LLMJudge, UsefulAtK)):
+            return True
+        children = getattr(outcome, 'children', None)
+        if children:
+            return any(_scenario_needs_judge(c) for c in children)
+        return False
+
+    if any(_scenario_needs_judge(s.expected) for s in suite.scenarios):
         try:
             judge = Judge(model=judge_model)
             judge_model_value = judge.lm.model
