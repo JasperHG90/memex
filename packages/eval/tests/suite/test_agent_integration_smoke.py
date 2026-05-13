@@ -60,7 +60,10 @@ def _tool_call_outcomes():
 
 class TestSuiteStructure:
     def test_scenarios_count(self) -> None:
-        assert len(SUITE.scenarios) == 31
+        # 29 = 31 original minus two FSRS-tool xfail tripwires
+        # (`review_loop_drives_due`, `review_loop_records_rating`) that the
+        # FSFM rip-out removed the MCP tools for. See suite docstring.
+        assert len(SUITE.scenarios) == 29
 
     def test_scenario_ids_unique(self) -> None:
         ids = [s.id for s in SUITE.scenarios]
@@ -150,8 +153,6 @@ class TestMutatingDiscipline:
         'kv_writes_global_convention',
         'kv_writes_app_setting',
         'lifecycle_append_meeting',
-        'review_loop_drives_due',
-        'review_loop_records_rating',
         'asset_lifecycle_detach',
     }
 
@@ -215,9 +216,8 @@ class TestKvNamespaceCoverage:
 
 
 class TestXfailDiscipline:
+    # `review_loop_*` tripwires removed alongside FSRS — see suite docstring.
     _XFAIL_IDS = {
-        'review_loop_drives_due',
-        'review_loop_records_rating',
         'asset_lifecycle_detach',
     }
 

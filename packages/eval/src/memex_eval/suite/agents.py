@@ -453,7 +453,7 @@ _CLAUDE_MCP_TEMPLATE = """\
 """
 
 
-_CLAUDE_MD = """\
+_CLAUDE_MD_NO_PLUGIN = """\
 # Memex memory retrieval
 
 You have access to Memex, a long-term memory system, via the MCP tool prefix
@@ -469,21 +469,150 @@ When answering:
 """
 
 
+_CLAUDE_MD_WITH_PLUGIN = """\
+# Agent integration evaluation
+
+You are answering an evaluation question against a Memex vault. The
+active vault is ``{vault_name}``. All vault data is reached via the
+Memex MCP tools (prefix ``memex_*``). Ground every answer in retrieved
+evidence; do NOT use prior knowledge.
+
+## Plugin briefing
+
+Retrieval routing, KV-namespace conventions, citation discipline, and
+tool-usage rules come from the memex Claude Code plugin (loaded
+automatically via ``--plugin-dir``). Follow them.
+
+## First action
+
+Load schemas for the tools the suite exercises in a single ToolSearch
+call:
+
+```
+ToolSearch(query="select:mcp__memex__memex_memory_search,mcp__memex__memex_note_search,\
+mcp__memex__memex_find_note,mcp__memex__memex_get_page_indices,\
+mcp__memex__memex_get_nodes,mcp__memex__memex_list_entities,\
+mcp__memex__memex_get_entity_mentions,mcp__memex__memex_get_entity_cooccurrences,\
+mcp__memex__memex_kv_write,mcp__memex__memex_append_note,\
+mcp__memex__memex_set_note_status", max_results=11)
+```
+
+## Answer format
+
+Reply concisely in plain text. The final message you send is the answer.
+"""
+
+
+# Allow-list of memex MCP tools the agent_integration suite exercises.
+# Written into ``.claude/settings.local.json`` so Claude Code permits the
+# tool calls without prompting; ``--permission-mode bypassPermissions``
+# stays on the command line as belt-and-suspenders.
+_MEMEX_TOOL_ALLOWLIST: tuple[str, ...] = (
+    # retrieval
+    'mcp__memex__memex_memory_search',
+    'mcp__memex__memex_note_search',
+    'mcp__memex__memex_find_note',
+    'mcp__memex__memex_survey',
+    'mcp__memex__memex_recent_notes',
+    'mcp__memex__memex_search_user_notes',
+    'mcp__memex__memex_read_note',
+    'mcp__memex__memex_get_page_indices',
+    'mcp__memex__memex_get_nodes',
+    'mcp__memex__memex_get_notes_metadata',
+    # entity graph
+    'mcp__memex__memex_list_entities',
+    'mcp__memex__memex_get_entities',
+    'mcp__memex__memex_get_entity_mentions',
+    'mcp__memex__memex_get_entity_cooccurrences',
+    'mcp__memex__memex_get_memory_units',
+    'mcp__memex__memex_get_memory_links',
+    'mcp__memex__memex_get_lineage',
+    'mcp__memex__memex_get_vault_summary',
+    'mcp__memex__memex_list_vaults',
+    'mcp__memex__memex_active_vault',
+    # lifecycle writes
+    'mcp__memex__memex_add_note',
+    'mcp__memex__memex_append_note',
+    'mcp__memex__memex_set_note_status',
+    'mcp__memex__memex_rename_note',
+    # KV
+    'mcp__memex__memex_kv_write',
+    'mcp__memex__memex_kv_get',
+    'mcp__memex__memex_kv_list',
+    'mcp__memex__memex_kv_search',
+    # assets
+    'mcp__memex__memex_list_assets',
+    'mcp__memex__memex_get_resources',
+    'mcp__memex__memex_add_assets',
+    'mcp__memex__memex_delete_assets',
+)
+
+
+def _resolve_suite_plugin_dir() -> Path | None:
+    """Locate the memex Claude Code plugin directory for the suite backend.
+
+    Resolution order:
+      1. ``MEMEX_CLAUDE_PLUGIN_DIR`` env var.
+      2. ``<workspace_root>/packages/claude-code-plugin/`` (monorepo default;
+         workspace root located by ascending until ``pyproject.toml`` +
+         ``packages/`` are siblings).
+
+    Returns ``None`` (with a logged warning) if neither candidate has a
+    ``.claude-plugin/plugin.json`` manifest. The backend then falls back
+    to plugin-less invocation; suite scenarios that depend on plugin
+    briefing (KV namespaces, append_note, citation discipline) will fail
+    loudly — that's the intended signal.
+    """
+    candidates: list[Path] = []
+    env_override = os.environ.get('MEMEX_CLAUDE_PLUGIN_DIR')
+    if env_override:
+        candidates.append(Path(env_override))
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        if (parent / 'pyproject.toml').is_file() and (parent / 'packages').is_dir():
+            candidates.append(parent / 'packages' / 'claude-code-plugin')
+            break
+    for cand in candidates:
+        if (cand / '.claude-plugin' / 'plugin.json').is_file():
+            logger.info('memex Claude Code plugin resolved at %s', cand)
+            return cand
+    logger.warning(
+        'memex Claude Code plugin not found (checked: %s). '
+        'Suite scenarios that depend on plugin briefing will likely fail.',
+        ', '.join(str(c) for c in candidates) or '<no candidates>',
+    )
+    return None
+
+
 @register_backend('claude-code')
 class ClaudeCodeBackend(AnswerBackend):
     """Spawn the ``claude`` CLI as a subagent with Memex MCP wired up.
 
-    Builds a temporary workspace with ``.mcp.json`` + ``CLAUDE.md``,
-    spawns ``claude -p <question>`` with streaming JSON output, and
-    parses the trace for the final answer + tool calls + retrieved unit
-    IDs.
+    Builds a temporary workspace with ``.mcp.json``, ``CLAUDE.md``, and
+    ``.claude/settings.local.json``, spawns ``claude -p <question>`` with
+    streaming JSON output, and parses the trace for the final answer +
+    tool calls + retrieved unit IDs.
+
+    The memex Claude Code plugin (resolved via ``_resolve_suite_plugin_dir``)
+    is mounted via ``--plugin-dir`` so the agent gets the same briefing
+    Hermes gets via the ``memex-hermes-plugin``. If the plugin can't be
+    found, the backend falls back to plugin-less invocation and logs a
+    warning.
+
+    The model defaults to ``claude-sonnet-4-6`` (matching longmemeval's
+    pin) and is overridable via ``MEMEX_EVAL_CLAUDE_MODEL`` for
+    reproducible per-shell runs.
 
     Requires ``claude`` on the PATH.
     """
 
+    DEFAULT_MODEL: ClassVar[str] = 'claude-sonnet-4-6'
+
     def __init__(self, claude_bin: str | None = None, timeout_s: float = 300.0) -> None:
         self.claude_bin: str = claude_bin or os.environ.get('CLAUDE_BIN') or 'claude'
         self.timeout_s = timeout_s
+        self.model: str = os.environ.get('MEMEX_EVAL_CLAUDE_MODEL') or self.DEFAULT_MODEL
+        self.plugin_dir: Path | None = _resolve_suite_plugin_dir()
 
     async def answer(
         self,
@@ -540,11 +669,31 @@ class ClaudeCodeBackend(AnswerBackend):
             (tmpdir / '.mcp.json').write_text(
                 _CLAUDE_MCP_TEMPLATE.format(workspace=workspace_root, server_url=server_url)
             )
-            (tmpdir / 'CLAUDE.md').write_text(
-                _CLAUDE_MD.format(vault_name=vault_name or str(vault_id))
+            md_template = (
+                _CLAUDE_MD_WITH_PLUGIN if self.plugin_dir is not None else _CLAUDE_MD_NO_PLUGIN
             )
+            (tmpdir / 'CLAUDE.md').write_text(
+                md_template.format(vault_name=vault_name or str(vault_id))
+            )
+            claude_dir = tmpdir / '.claude'
+            claude_dir.mkdir()
+            (claude_dir / 'settings.local.json').write_text(
+                json.dumps(
+                    {'permissions': {'allow': list(_MEMEX_TOOL_ALLOWLIST)}},
+                    indent=2,
+                )
+            )
+            # Silence ``claude``'s non-git-workdir warning (matches longmemeval).
+            subprocess.run(['git', 'init'], cwd=tmpdir, capture_output=True, check=False)
+
             cmd = [
                 self.claude_bin,
+                '--model',
+                self.model,
+            ]
+            if self.plugin_dir is not None:
+                cmd += ['--plugin-dir', str(self.plugin_dir)]
+            cmd += [
                 '-p',
                 scenario.query,
                 '--output-format',

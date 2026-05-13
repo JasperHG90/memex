@@ -2,7 +2,12 @@
 
 Default agent: ``hermes`` (memex-hermes-plugin). Override with
 ``--answer-mode claude-code`` to run the same scenarios against the
-Claude Code MCP integration.
+Claude Code MCP integration. Under ``claude-code`` the suite backend
+mounts the memex Claude Code plugin via ``--plugin-dir`` so the agent
+gets briefing parity with Hermes (KV-namespace routing, citation
+discipline, ``/remember`` / ``/recall`` skills). The plugin is
+auto-resolved from the monorepo's ``packages/claude-code-plugin/``;
+override with ``MEMEX_CLAUDE_PLUGIN_DIR``.
 
 The suite covers two layers:
 
@@ -26,6 +31,10 @@ Required env vars:
 Optional:
 - ``EVAL_JUDGE_MODEL`` — override the judge model.
 - ``HERMES_MODEL`` — override the agent model under hermes mode.
+- ``MEMEX_EVAL_CLAUDE_MODEL`` — override the agent model under
+  ``claude-code`` mode (default ``claude-sonnet-4-6``).
+- ``MEMEX_CLAUDE_PLUGIN_DIR`` — override the Claude Code plugin
+  location (default: monorepo's ``packages/claude-code-plugin/``).
 
 Compatibility with run modes:
 - ``--from-snapshot auto``: supported. Mutations don't poison the cache;
@@ -34,6 +43,17 @@ Compatibility with run modes:
   ``skip_reason='mutating_under_reuse_vault'``. The plugin-gap xfail
   tripwires also skip under reuse (they're marked mutating too); to
   verify gap-closure run WITHOUT ``--reuse-vault``.
+
+End-of-run cleanup:
+- Default mode wipes every SQLModel-managed table (drop_all) and
+  recreates the schema. API-level vault deletion alone leaked rows in
+  ``reflection_queue``, ``audit_logs``, ``kv_entries``, and
+  ``outcome_audit_log`` between runs; the schema wipe fixes that. The
+  server's connection pool is terminated; restart it after a run if you
+  see asyncpg ``InterfaceError`` on the next request (rare — usually
+  reconnects lazily).
+- ``--keep-vault`` and ``--reuse-vault`` suppress the wipe so the
+  preserved vault survives.
 """
 
 from pathlib import Path
@@ -820,6 +840,13 @@ suite.register(
 
 
 # --- Plugin-gap xfail tripwires (xfail under hermes; should xpass under claude-code) ---
+#
+# Two earlier `review_loop_*` tripwires were dropped: the MCP tools they
+# pointed at were retired alongside the FSFM-inspired deprioritization
+# redesign on the release branch. `asset_lifecycle_detach` is the only
+# remaining tripwire — it tests that the agent picks the right tool for
+# detaching an attached image, which Hermes still misses in its plugin
+# briefing but Claude Code resolves via the MCP tool surface.
 
 suite.register(
     id='asset_lifecycle_detach',

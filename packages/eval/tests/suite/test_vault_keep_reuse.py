@@ -157,7 +157,13 @@ def _build_mock_api(
 
 @pytest.fixture
 def patch_api(monkeypatch):
-    """Patch RemoteMemexAPI(client) → mock and capture the mock for assertions."""
+    """Patch RemoteMemexAPI(client) → mock and capture the mock for assertions.
+
+    Also stubs ``drop_and_recreate_schema`` so the runner's end-of-run DB
+    wipe doesn't reach for a live Postgres during unit tests.
+    """
+
+    nuke_mock = AsyncMock(return_value=None)
 
     def _install(api: MagicMock):
         monkeypatch.setattr('memex_eval.suite.runner.RemoteMemexAPI', lambda _client: api)
@@ -175,6 +181,8 @@ def patch_api(monkeypatch):
             return None
 
         monkeypatch.setattr('memex_eval.suite.runner.wait_for_extraction', _noop_wait)
+        monkeypatch.setattr('memex_eval.suite.db_reset.drop_and_recreate_schema', nuke_mock)
+        api.nuke_mock = nuke_mock  # expose for assertions
         return api
 
     return _install
@@ -209,6 +217,9 @@ class TestKeepVault:
         assert UUID(payload['primary_vault']['id']) == primary_id
         # Vault deletion MUST be skipped when keep_vault is set.
         api.delete_vault.assert_not_awaited()
+        # The end-of-run DB wipe must also be skipped — otherwise the
+        # vault we just preserved would be destroyed seconds later.
+        api.nuke_mock.assert_not_awaited()
 
 
 # --------------------------------------------------------------------------- #
@@ -250,6 +261,9 @@ class TestReuseVault:
             manifest_dir=manifest_dir,
         )
 
+        # The end-of-run DB wipe must be skipped — the reused vault has
+        # to survive for the next reuse run to bind to it.
+        api.nuke_mock.assert_not_awaited()
         # ingest must be skipped (no creating notes, no creating vaults).
         api.ingest.assert_not_awaited()
         api.create_vault.assert_not_awaited()
@@ -488,6 +502,37 @@ class TestKeepVaultRunCompletedGate:
         # Vault MUST still be preserved (no delete_vault calls), so user
         # can inspect the partial state manually.
         api.delete_vault.assert_not_awaited()
+
+
+# --------------------------------------------------------------------------- #
+# End-of-run DB wipe (default path, no preserve flag)                          #
+# --------------------------------------------------------------------------- #
+
+
+class TestEndOfRunDbWipe:
+    """The runner must call ``drop_and_recreate_schema`` at end-of-run
+    when no preserve flag is set. API-level vault deletion left orphan
+    rows in sibling tables (reflection_queue, audit_logs, kv_entries,
+    outcome_audit_log, …) that the next run inherited; the schema wipe
+    fixes that.
+
+    The preserve-mode counter-assertions live in the keep-vault and
+    reuse-vault tests above — those guarantee the wipe is SKIPPED under
+    --keep-vault / --reuse-vault.
+    """
+
+    @pytest.mark.asyncio
+    async def test_default_run_calls_schema_wipe(self, tmp_path, patch_api) -> None:
+        suite = _make_suite(tmp_path)
+        api = _build_mock_api(primary_vault_id=uuid4(), note_id=uuid4())
+        patch_api(api)
+
+        await run_suite(
+            suite,
+            server_url='http://x/api/v1/',
+            manifest_dir=tmp_path / 'manifests',
+        )
+        api.nuke_mock.assert_awaited_once()
 
 
 class TestRegistryDrivenReuseRefusal:
