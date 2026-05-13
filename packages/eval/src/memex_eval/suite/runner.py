@@ -1199,6 +1199,7 @@ async def _execute_scenario(
                 cost_usd=answer.cost_usd,
                 answer_text=answer.answer_text,
                 tool_calls=answer.tool_calls,
+                session_log_text=answer.session_log_text,
             )
         if is_xfail_mode:
             status: Literal['pass', 'fail', 'skip', 'error', 'xfail', 'xpass'] = (
@@ -1237,6 +1238,7 @@ async def _execute_scenario(
             cost_usd=answer.cost_usd,
             answer_text=answer.answer_text,
             tool_calls=answer.tool_calls,
+            session_log_text=answer.session_log_text,
         )
     except Exception as e:
         # Outer catch: setup/act/backend phase crashes (including
@@ -2537,6 +2539,25 @@ def _log_to_recorder(
                             asset_target.parent.mkdir(parents=True, exist_ok=True)
                             asset_target.write_bytes(asset_path.read_bytes())
                 recorder.log_artifact(snapshot_dir)
+
+            # Per-scenario agent session logs (stream-json for claude-code,
+            # ndjson of callback events for hermes). One file per scenario;
+            # uploaded as a single ``session_logs/`` directory so an MLflow
+            # browser can pick out individual scenarios.
+            session_logs_dir = tmpdir / 'session_logs'
+            wrote_any = False
+            for outcome in result.scenario_outcomes:
+                if not outcome.session_log_text:
+                    continue
+                session_logs_dir.mkdir(exist_ok=True)
+                # ``.ndjson`` extension matches both shapes (stream-json
+                # and hermes callback events are both newline-delimited JSON).
+                fname = f'{outcome.scenario_id}.rep{outcome.replicate_index}.{outcome.answer_mode}.ndjson'
+                (session_logs_dir / fname).write_text(outcome.session_log_text)
+                wrote_any = True
+            if wrote_any:
+                with contextlib.suppress(Exception):
+                    recorder.log_artifact(session_logs_dir)
     finally:
         recorder.end_run()
 

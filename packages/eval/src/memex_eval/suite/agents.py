@@ -91,6 +91,12 @@ class AgentAnswer(BaseModel):
     cost_usd: float = 0.0
     backend_name: str = ''
     raw_trace: dict[str, Any] | None = None
+    # Full agent-session log captured during the scenario.
+    # - claude-code: raw stream-json stdout (one JSON message per line).
+    # - hermes: newline-delimited JSON of agent callback events
+    #   (tool_start, tool_complete, step, thinking, etc.).
+    # Runner uploads this verbatim as an MLflow artifact per scenario.
+    session_log_text: str | None = None
     error: str | None = None
 
 
@@ -614,6 +620,40 @@ class ClaudeCodeBackend(AnswerBackend):
         self.model: str = os.environ.get('MEMEX_EVAL_CLAUDE_MODEL') or self.DEFAULT_MODEL
         self.plugin_dir: Path | None = _resolve_suite_plugin_dir()
 
+    def _executable_path(self) -> str:
+        """Binary that must be on PATH for this backend; subclasses override."""
+        return self.claude_bin
+
+    def _executable_missing_error(self) -> str:
+        return f'{self.claude_bin!r} not on PATH; install Claude Code or set CLAUDE_BIN'
+
+    def _build_claude_flags(self, scenario: 'Scenario') -> list[str]:
+        """Flags passed to the claude CLI after the executable (or after the
+        ``--`` separator when launched via a wrapper like ``ollama launch``).
+        Does NOT include ``--model`` — wrappers may inject that themselves."""
+        flags: list[str] = []
+        if self.plugin_dir is not None:
+            flags += ['--plugin-dir', str(self.plugin_dir)]
+        flags += [
+            '-p',
+            scenario.query,
+            '--output-format',
+            'stream-json',
+            '--include-partial-messages',
+            '--verbose',
+            '--permission-mode',
+            'bypassPermissions',
+        ]
+        return flags
+
+    def _build_subprocess_cmd(self, scenario: 'Scenario') -> list[str]:
+        return [
+            self.claude_bin,
+            '--model',
+            self.model,
+            *self._build_claude_flags(scenario),
+        ]
+
     async def answer(
         self,
         scenario: 'Scenario',
@@ -623,10 +663,10 @@ class ClaudeCodeBackend(AnswerBackend):
         server_url: str,
         judge: 'Judge | None' = None,
     ) -> AgentAnswer:
-        if not shutil.which(self.claude_bin):
+        if not shutil.which(self._executable_path()):
             return AgentAnswer(
                 backend_name=self.name,
-                error=f'{self.claude_bin!r} not on PATH; install Claude Code or set CLAUDE_BIN',
+                error=self._executable_missing_error(),
             )
 
         out = AgentAnswer(backend_name=self.name)
@@ -686,23 +726,7 @@ class ClaudeCodeBackend(AnswerBackend):
             # Silence ``claude``'s non-git-workdir warning (matches longmemeval).
             subprocess.run(['git', 'init'], cwd=tmpdir, capture_output=True, check=False)
 
-            cmd = [
-                self.claude_bin,
-                '--model',
-                self.model,
-            ]
-            if self.plugin_dir is not None:
-                cmd += ['--plugin-dir', str(self.plugin_dir)]
-            cmd += [
-                '-p',
-                scenario.query,
-                '--output-format',
-                'stream-json',
-                '--include-partial-messages',
-                '--verbose',
-                '--permission-mode',
-                'bypassPermissions',
-            ]
+            cmd = self._build_subprocess_cmd(scenario)
             try:
                 proc = subprocess.run(
                     cmd,
@@ -713,12 +737,17 @@ class ClaudeCodeBackend(AnswerBackend):
                     check=False,
                 )
             except subprocess.TimeoutExpired:
-                out.error = f'claude subprocess timed out after {self.timeout_s}s'
+                out.error = f'{cmd[0]} subprocess timed out after {self.timeout_s}s'
                 out.duration_ms = (time.monotonic() - started) * 1000
                 return out
 
             if proc.returncode != 0:
-                out.error = f'claude exited {proc.returncode}: {(proc.stderr or "").strip()[:500]}'
+                out.error = (
+                    f'{cmd[0]} exited {proc.returncode}: {(proc.stderr or "").strip()[:500]}'
+                )
+
+            # Stash the raw stream-json verbatim for MLflow artifact upload.
+            out.session_log_text = proc.stdout or ''
 
             # Parse stream-json trace: one JSON-encoded message per line.
             for line in (proc.stdout or '').splitlines():
@@ -733,6 +762,53 @@ class ClaudeCodeBackend(AnswerBackend):
 
         out.duration_ms = (time.monotonic() - started) * 1000
         return out
+
+
+@register_backend('ollama-claude')
+class OllamaClaudeBackend(ClaudeCodeBackend):
+    """Spawn ``claude`` via ``ollama launch claude`` so the model is supplied by Ollama.
+
+    Identical to ``ClaudeCodeBackend`` (workspace setup, plugin mount,
+    stream-json parsing, session-log capture) except for the subprocess
+    prefix:
+
+        ollama launch claude --model <model> -- <standard claude flags>
+
+    Use this when you don't have ANTHROPIC_API_KEY but do have Ollama
+    Cloud access (``OLLAMA_API_KEY`` for hosted ``:cloud`` models, or a
+    local model registered with ``ollama pull``). The default model is
+    ``glm-5.1:cloud`` — override via ``MEMEX_EVAL_OLLAMA_CLAUDE_MODEL``.
+
+    Requires both ``ollama`` and ``claude`` on the PATH; the former
+    launches the latter and routes its model traffic through Ollama.
+    """
+
+    DEFAULT_MODEL: ClassVar[str] = 'glm-5.1:cloud'
+
+    def __init__(self, ollama_bin: str | None = None, timeout_s: float = 300.0) -> None:
+        super().__init__(timeout_s=timeout_s)
+        self.ollama_bin: str = ollama_bin or os.environ.get('OLLAMA_BIN') or 'ollama'
+        # The parent picks up MEMEX_EVAL_CLAUDE_MODEL; we want a separate
+        # env var so the two backends can coexist with different defaults
+        # in the same shell.
+        self.model = os.environ.get('MEMEX_EVAL_OLLAMA_CLAUDE_MODEL') or self.DEFAULT_MODEL
+
+    def _executable_path(self) -> str:
+        return self.ollama_bin
+
+    def _executable_missing_error(self) -> str:
+        return f'{self.ollama_bin!r} not on PATH; install Ollama or set OLLAMA_BIN'
+
+    def _build_subprocess_cmd(self, scenario: 'Scenario') -> list[str]:
+        return [
+            self.ollama_bin,
+            'launch',
+            'claude',
+            '--model',
+            self.model,
+            '--',
+            *self._build_claude_flags(scenario),
+        ]
 
 
 def _strip_mcp_prefix(name: str) -> str:
@@ -1038,8 +1114,91 @@ class HermesBackend(AnswerBackend):
         # main thread (not the per-tool worker pool).
         tool_calls: list[dict[str, Any]] = []
 
-        def _on_tool_start(_tool_id: str, name: str, args: Any) -> None:
-            tool_calls.append({'tool': name, 'input': args})
+        # Per-scenario session log: append an event per agent callback so
+        # the runner can upload the full transcript to MLflow as an artifact.
+        # ndjson — one JSON event per line, ordered, mirrors claude-code's
+        # stream-json shape so downstream tooling can treat them uniformly.
+        #
+        # Each callback uses (*args, **kwargs) because ``run_agent.AIAgent``
+        # has minor signature variations across versions (e.g. tool_complete
+        # passes ``(id, name, args, result)``, step passes
+        # ``(api_call_count, prev_tools)``, interim_assistant passes
+        # ``(text, already_streamed=...)``). Pinning to a specific arity
+        # would silently no-op on a version skew — run_agent wraps every
+        # callback in try/except, so mismatches don't crash the agent,
+        # they just produce empty logs.
+        session_events: list[dict[str, Any]] = []
+        # Cap to bound memory + MLflow artifact size on long traces.
+        # Average event ~200 bytes → ~10MB cap per scenario.
+        _MAX_EVENTS = 50_000
+
+        def _log_event(event_type: str, **payload: Any) -> None:
+            if len(session_events) >= _MAX_EVENTS:
+                return
+            entry: dict[str, Any] = {'type': event_type}
+            entry.update(payload)
+            session_events.append(entry)
+
+        def _safe_repr(value: Any, max_len: int = 4_000) -> Any:
+            """Return a JSON-friendly representation; truncate long strings."""
+            if isinstance(value, (str, int, float, bool, type(None))):
+                if isinstance(value, str) and len(value) > max_len:
+                    return value[:max_len] + f'...<truncated {len(value) - max_len}b>'
+                return value
+            if isinstance(value, (list, dict)):
+                # Pydantic / Mapping / list-of-primitives serialize fine via
+                # json.dumps(default=str); deep structures get truncated by
+                # the per-line dump cap below if they exceed sensible size.
+                return value
+            return str(value)[:max_len]
+
+        def _on_tool_start(*args: Any, **kwargs: Any) -> None:
+            # Signature: (tool_id, name, args). Defend against version skew.
+            tool_id = args[0] if len(args) > 0 else kwargs.get('tool_id', '')
+            name = args[1] if len(args) > 1 else kwargs.get('name', '')
+            tool_input = args[2] if len(args) > 2 else kwargs.get('args')
+            tool_calls.append({'tool': name, 'input': tool_input})
+            _log_event(
+                'tool_start', tool_id=str(tool_id), name=str(name), input=_safe_repr(tool_input)
+            )
+
+        def _on_tool_complete(*args: Any, **kwargs: Any) -> None:
+            # Signature: (tool_id, name, args, result). 4 positional in
+            # current run_agent; some older versions pass (tool_id, name, result).
+            tool_id = args[0] if len(args) > 0 else ''
+            name = args[1] if len(args) > 1 else ''
+            result = args[-1] if len(args) >= 3 else kwargs.get('result')
+            _log_event(
+                'tool_complete', tool_id=str(tool_id), name=str(name), result=_safe_repr(result)
+            )
+
+        def _on_step(*args: Any, **kwargs: Any) -> None:
+            # Signature: (api_call_count, prev_tools).
+            api_call_count = args[0] if len(args) > 0 else kwargs.get('api_call_count')
+            prev_tools = args[1] if len(args) > 1 else kwargs.get('prev_tools')
+            _log_event(
+                'step', api_call_count=_safe_repr(api_call_count), prev_tools=_safe_repr(prev_tools)
+            )
+
+        def _on_thinking(*args: Any, **kwargs: Any) -> None:
+            # Signature: (text,).
+            text = args[0] if len(args) > 0 else kwargs.get('text', '')
+            _log_event('thinking', text=_safe_repr(text))
+
+        def _on_interim_assistant(*args: Any, **kwargs: Any) -> None:
+            # Signature: (visible, already_streamed=bool).
+            text = args[0] if len(args) > 0 else kwargs.get('visible', kwargs.get('text', ''))
+            already_streamed = kwargs.get('already_streamed', False)
+            _log_event(
+                'interim_assistant',
+                text=_safe_repr(text),
+                already_streamed=bool(already_streamed),
+            )
+
+        def _on_reasoning(*args: Any, **kwargs: Any) -> None:
+            # Signature: (text,).
+            text = args[0] if len(args) > 0 else kwargs.get('text', '')
+            _log_event('reasoning', text=_safe_repr(text))
 
         agent: Any = None
         try:
@@ -1050,6 +1209,11 @@ class HermesBackend(AnswerBackend):
                 save_trajectories=False,
                 quiet_mode=True,
                 tool_start_callback=_on_tool_start,
+                tool_complete_callback=_on_tool_complete,
+                step_callback=_on_step,
+                thinking_callback=_on_thinking,
+                interim_assistant_callback=_on_interim_assistant,
+                reasoning_callback=_on_reasoning,
             )
             # AIAgent.run_conversation is sync; offload to a worker thread so
             # the asyncio event loop in the runner stays responsive.
@@ -1057,10 +1221,34 @@ class HermesBackend(AnswerBackend):
 
             final_response = await asyncio.to_thread(agent.run_conversation, scenario.query)
             self._populate_answer_from_response(out, final_response, tool_calls)
+            _log_event(
+                'final_response',
+                response=_safe_repr(
+                    final_response
+                    if isinstance(final_response, (dict, str))
+                    else str(final_response)
+                ),
+            )
         except Exception as e:
             out.error = f'hermes agent failed: {type(e).__name__}: {e}'
             logger.exception('HermesBackend.answer raised')
+            _log_event('error', message=out.error)
         finally:
+            # Serialize the collected events to ndjson regardless of pass/fail
+            # so a failed scenario still produces an inspectable transcript.
+            # Wrap per-event so a single unserializable payload doesn't blank
+            # the entire transcript.
+            _lines: list[str] = []
+            for ev in session_events:
+                try:
+                    _lines.append(json.dumps(ev, default=str))
+                except (TypeError, ValueError) as ser_err:
+                    _lines.append(
+                        json.dumps(
+                            {'type': ev.get('type', 'unknown'), 'serialize_error': str(ser_err)}
+                        )
+                    )
+            out.session_log_text = '\n'.join(_lines)
             if agent is not None:
                 out.tokens_in = int(getattr(agent, 'session_input_tokens', 0) or 0)
                 out.tokens_out = int(getattr(agent, 'session_output_tokens', 0) or 0)

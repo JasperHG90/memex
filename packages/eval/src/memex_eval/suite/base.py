@@ -1684,6 +1684,11 @@ class ScenarioOutcome(BaseModel):
     cost_usd: float = 0.0
     answer_text: str | None = None
     tool_calls: list[dict[str, Any]] = Field(default_factory=list)
+    # Full agent-session log captured during the scenario; uploaded as an
+    # MLflow artifact (one file per scenario). Verbatim from the backend:
+    # stream-json stdout for claude-code, ndjson of agent callback events
+    # for hermes.
+    session_log_text: str | None = None
     # Loud-skip reason. Free-form string; conventional values are
     # 'nli_disabled' (P7 — only emitted when /system/config IS readable
     # and explicitly reports polarity disabled), 'setup_action_not_reusable' (P8).

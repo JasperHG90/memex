@@ -658,7 +658,7 @@ def suite_run(
     answer_mode: str | None = typer.Option(
         None,
         '--answer-mode',
-        help='Override Suite.default_answer_mode for this run (api / claude-code / hermes / custom).',
+        help='Override Suite.default_answer_mode for this run (api / claude-code / ollama-claude / hermes / custom).',
     ),
     overrides: list[str] = typer.Option(
         [], '--override', help='Repeatable. KEY=VALUE for MLflow params (logged only).'
