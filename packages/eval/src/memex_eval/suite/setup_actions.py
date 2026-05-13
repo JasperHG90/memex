@@ -697,6 +697,48 @@ class _ConsolidationTick(SetupActionHandler):
     # which are cheap to keep and unsafe to revert.
 
 
+@register_setup_action('clear_hermes_session_notes')
+class _ClearHermesSessionNotes(SetupActionHandler):
+    """Delete hermes session-transcript notes from the vault.
+
+    Use before scenarios where prior-session transcripts would leak the
+    expected answer into the agent's session briefing (or recent-notes
+    view) and short-circuit the tool routing under test.
+
+    Source notes, KV entries, memory units, and any non-hermes notes
+    are untouched — only notes tagged ``hermes`` are removed.
+
+    Not reusable under ``--reuse-vault``: deletion is destructive and
+    would leave the prior run's transcripts gone if the next reuse-vault
+    run expected them.
+    """
+
+    reusable_under_reuse_vault: ClassVar[bool] = False
+
+    async def run(
+        self, api: 'RemoteMemexAPI', vault_id: UUID, params: dict[str, Any]
+    ) -> dict[str, Any] | None:
+        deleted = 0
+        # Drain every page; we keep offset=0 because deletes shrink the
+        # set in place.
+        while True:
+            notes = await api.list_notes(vault_id=vault_id, tags=['hermes'], limit=100)
+            if not notes:
+                break
+            for note in notes:
+                try:
+                    await api.delete_note(note.id)
+                    deleted += 1
+                except Exception as exc:
+                    logger.warning('clear_hermes_session_notes: delete %s failed: %s', note.id, exc)
+                    # Bail on persistent failure so we don't loop forever.
+                    return {'deleted_count': deleted, 'error': str(exc)}
+        return {'deleted_count': deleted}
+
+    # teardown: no-op. End-of-run schema wipe handles any new session
+    # notes the scenario itself wrote.
+
+
 @register_setup_action('trigger_reflections')
 class _TriggerReflections(SetupActionHandler):
     """Trigger reflection on the top-N entities in the vault and wait for
