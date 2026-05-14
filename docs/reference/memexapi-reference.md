@@ -281,7 +281,7 @@ async def set_note_status(
 ) -> dict[str, Any]
 ```
 
-Set a note's lifecycle status (`active`, `superseded`, or `appended`).
+Set a note's lifecycle status (`active`, `superseded`, `appended`, or `archived`). `archived` records `Note.archived_at` and cascades `MemoryUnit.is_deprioritized=true` (FSFM suppression) rather than `status='stale'`.
 
 ### `update_note_title`
 

@@ -23,8 +23,11 @@ class UnitsService(BaseService):
     """Memory unit curation: deprioritize / restore.
 
     Non-destructive counterpart to deletion (`StatsService.delete_memory_unit`).
-    Per vault-scoping invariant: deprioritize is the NON-destructive verb; archive
-    remains the destructive cleanup. They coexist.
+    Per-unit deprioritize and note-level archive both flip
+    ``MemoryUnit.is_deprioritized=true`` — neither destroys rows. The
+    difference is scope: deprioritize targets a single unit;
+    ``Notes.set_note_status(note_id, 'archived')`` cascades the same flip
+    to every unit of the note (alongside recording ``Note.archived_at``).
     """
 
     async def set_unit_deprioritized(

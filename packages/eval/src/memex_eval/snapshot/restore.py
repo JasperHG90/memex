@@ -136,8 +136,8 @@ def _resolve_snapshot_dir(snapshot_dir: str | Path) -> Path:
 async def _read_manifest(snapshot_dir: Path) -> SnapshotManifestImport:
     raw = (snapshot_dir / 'manifest.json').read_text(encoding='utf-8')
     data = json.loads(raw)
-    # SnapshotManifestImport allows ``extra='ignore'`` so a v1.2+ manifest
-    # with new fields parses cleanly on a v1.1-pinned importer.
+    # SnapshotManifestImport allows ``extra='ignore'`` so a manifest with
+    # newer MINOR-bump fields parses cleanly on the current importer.
     return SnapshotManifestImport.model_validate(data)
 
 
@@ -806,6 +806,7 @@ class SnapshotImporter:
                         'status': note.status,
                         'superseded_by': note.superseded_by,
                         'appended_to': note.appended_to,
+                        'archived_at': note.archived_at,
                         'summary_version_incorporated': note.summary_version_incorporated,
                         'created_at': note.created_at,
                         'updated_at': note.updated_at,

@@ -402,6 +402,7 @@ class SnapshotExporter:
                 status=str(note.status),
                 superseded_by=note.superseded_by,
                 appended_to=note.appended_to,
+                archived_at=note.archived_at,
                 summary_version_incorporated=note.summary_version_incorporated,
                 created_at=note.created_at,
                 updated_at=note.updated_at,

@@ -972,11 +972,15 @@ SET_NOTE_STATUS_SCHEMA: dict[str, Any] = {
     'name': 'memex_set_note_status',
     'description': (
         'Set note lifecycle status: active, superseded, appended, or archived. '
-        '**Cascading side-effect:** marking a note `superseded` flags every '
-        'memory unit extracted from it as stale. Prefer letting contradiction '
-        'detection auto-supersede facts via a new ingested note; reach for '
-        'this tool only for explicit archival or when an immediate state '
-        'change is required. Optionally link to the replacing/parent note via '
+        '**Cascades:** `superseded` flags every memory unit extracted from '
+        'the note as stale. `archived` records an `archived_at` timestamp '
+        'and flips the note units to `is_deprioritized=true` (FSFM '
+        'suppression) — the units stay active and can be surfaced via '
+        '`include_deprioritized=True` retrieval, then restored with '
+        '`memex_memory_restore`. Prefer letting contradiction detection '
+        'auto-supersede facts via a new ingested note; reach for this tool '
+        'only for explicit archival or when an immediate state change is '
+        'required. Optionally link to the replacing/parent note via '
         'linked_note_id.'
     ),
     'parameters': {
@@ -3435,8 +3439,10 @@ MEMORY_DEPRIORITIZE_SCHEMA: dict[str, Any] = {
     'description': (
         "Lower a memory unit's retrieval rank without deleting it (NON-DESTRUCTIVE). "
         'Use when a memory is misleading, outdated, or noise that contaminates retrieval. '
-        'Companion to memex_memory_restore. Contrast with archive (destructive) — '
-        'prefer deprioritize unless the unit must leave the entity graph entirely. '
+        'Companion to memex_memory_restore. Note-level archive '
+        '(memex_set_note_status status=archived) deprioritizes EVERY unit '
+        'from that note in one call; reach for memex_memory_deprioritize '
+        'when only a single unit is the noise source. '
         '\n\n'
         'When the user reports an issue resolved, follow the §3.5 5-step flow '
         '(see briefing): disambiguate first, route by info quality (Options A/B/C; '

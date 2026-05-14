@@ -275,7 +275,7 @@ class TestVersionGate:
         )
 
         assert PINNED_SNAPSHOT_MAJOR == 1
-        assert PINNED_SNAPSHOT_MINOR == 1
+        assert PINNED_SNAPSHOT_MINOR == 2
 
     def test_snapshot_version_parsing(self) -> None:
         v = SnapshotVersion.parse('1.1.0')

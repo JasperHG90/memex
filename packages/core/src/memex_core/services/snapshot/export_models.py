@@ -69,6 +69,7 @@ class NoteExport(_ExportBase):
     status: str
     superseded_by: UUID | None = None
     appended_to: UUID | None = None
+    archived_at: datetime | None = None
     summary_version_incorporated: int | None = None
     created_at: datetime
     updated_at: datetime

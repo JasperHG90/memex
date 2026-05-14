@@ -285,7 +285,8 @@ class Note(SQLModel, table=True):  # type: ignore
             server_default='active',
             index=True,
         ),
-        description='Note lifecycle status: active, superseded, appended, archived.',
+        description='Note lifecycle status: active, superseded, appended. '
+        'Archive intent is recorded in archived_at + FSFM (units deprioritized).',
     )
 
     superseded_by: UUID | None = Field(
@@ -298,6 +299,14 @@ class Note(SQLModel, table=True):  # type: ignore
         default=None,
         sa_column=Column(SA_UUID(), nullable=True),
         description='ID of the note this one was appended to.',
+    )
+
+    archived_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=True, index=True),
+        description='Human-intent archive timestamp. Non-NULL means the note '
+        'was archived; the cascade lives in FSFM via '
+        'MemoryUnit.is_deprioritized=true rather than in the status enum.',
     )
 
     summary_version_incorporated: int | None = Field(
@@ -321,7 +330,7 @@ class Note(SQLModel, table=True):  # type: ignore
     __table_args__ = (
         Index('idx_notes_content_hash', 'content_hash'),
         CheckConstraint(
-            "status IN ('active', 'superseded', 'appended', 'archived')",
+            "status IN ('active', 'superseded', 'appended')",
             name='ck_notes_status',
         ),
         Index(

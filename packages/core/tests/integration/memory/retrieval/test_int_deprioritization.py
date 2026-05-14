@@ -129,3 +129,92 @@ class TestDeprioritizationFilter:
 
         for unit in results:
             assert unit.is_deprioritized is False
+
+
+@pytest.mark.integration
+class TestArchiveCascadeRoundTrip:
+    """Note-level archive cascades to per-unit deprioritization, the
+    units stay reachable via ``include_deprioritized=True``, and a
+    later ``set_note_status('active')`` restores them to default
+    retrieval. End-to-end coverage of the archive AC."""
+
+    @pytest_asyncio.fixture(scope='class')
+    async def embedder(self):
+        return await get_embedding_model()
+
+    @pytest_asyncio.fixture
+    async def engine_instance(self, embedder):
+        return RetrievalEngine(embedder=embedder)
+
+    @pytest_asyncio.fixture
+    async def seeded_note_units(self, session: AsyncSession):
+        vault_id = GLOBAL_VAULT_ID
+        note_id = uuid4()
+        unit_id = uuid4()
+        entity_id = uuid4()
+        emb = [0.1] * 384
+
+        note = Note(
+            id=note_id,
+            original_text='Legacy warehouse note',
+            vault_id=vault_id,
+            content_hash=f'h-{uuid4().hex[:8]}',
+        )
+        unit = MemoryUnit(
+            id=unit_id,
+            note_id=note_id,
+            text='Legacy warehouse runs on Redshift',
+            fact_type=FactTypes.WORLD,
+            embedding=emb,
+            vault_id=vault_id,
+            event_date=datetime.now(timezone.utc),
+            is_deprioritized=False,
+        )
+        entity = Entity(id=entity_id, canonical_name='Legacy warehouse')
+        ue = UnitEntity(unit_id=unit_id, entity_id=entity_id, vault_id=vault_id)
+        session.add(note)
+        session.add(unit)
+        session.add(entity)
+        session.add(ue)
+        await session.commit()
+        return {'note_id': note_id, 'unit_id': unit_id}
+
+    async def test_archive_suppresses_and_restore_revives(
+        self, session: AsyncSession, engine_instance, seeded_note_units, api
+    ) -> None:
+        note_id = seeded_note_units['note_id']
+        unit_id = seeded_note_units['unit_id']
+
+        baseline_request = RetrievalRequest(
+            query='legacy warehouse', limit=10, vault_ids=[GLOBAL_VAULT_ID]
+        )
+        baseline_results, _ = await engine_instance.retrieve(session, baseline_request)
+        assert unit_id in [r.id for r in baseline_results]
+
+        await api.set_note_status(note_id, 'archived')
+        # Service used its own session; expire the test session's identity
+        # map so retrieval sees the post-commit unit state.
+        session.expire_all()
+
+        default_results, _ = await engine_instance.retrieve(session, baseline_request)
+        assert unit_id not in [r.id for r in default_results]
+
+        include_request = RetrievalRequest(
+            query='legacy warehouse',
+            limit=10,
+            include_deprioritized=True,
+            vault_ids=[GLOBAL_VAULT_ID],
+        )
+        include_results, _ = await engine_instance.retrieve(session, include_request)
+        include_ids = [r.id for r in include_results]
+        assert unit_id in include_ids
+        archived_unit = next(r for r in include_results if r.id == unit_id)
+        assert archived_unit.is_deprioritized is True
+
+        await api.set_note_status(note_id, 'active')
+        session.expire_all()
+
+        restored_results, _ = await engine_instance.retrieve(session, baseline_request)
+        assert unit_id in [r.id for r in restored_results]
+        restored_unit = next(r for r in restored_results if r.id == unit_id)
+        assert restored_unit.is_deprioritized is False

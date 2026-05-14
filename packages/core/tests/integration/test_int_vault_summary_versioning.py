@@ -25,7 +25,13 @@ async def _insert_note(
     summary_version_incorporated=None,
     status='active',
 ) -> Note:
-    """Insert a note directly via SQL for test setup."""
+    """Insert a note directly via SQL; ``status='archived'`` is translated to ``status='active' AND archived_at IS NOT NULL`` so callers keep their semantic intent."""
+    from datetime import datetime, timezone
+
+    archived_at = None
+    if status == 'archived':
+        status = 'active'
+        archived_at = datetime.now(timezone.utc)
     note = Note(
         id=uuid4(),
         vault_id=vault_id,
@@ -33,6 +39,7 @@ async def _insert_note(
         original_text=f'Content of {title} {uuid4()}',
         content_hash=str(uuid4()),
         status=status,
+        archived_at=archived_at,
         summary_version_incorporated=summary_version_incorporated,
     )
     session.add(note)
