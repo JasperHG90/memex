@@ -72,6 +72,21 @@ class RateLimitExceeded(Exception):
         super().__init__(message)
 
 
+class ReflectionAbandoned(Exception):
+    """Raised when a summarize-node endpoint returns HTTP 503 with
+    ``error: 'reflection_abandoned'`` — a concurrent worker refreshed
+    the entity's mental model first.
+
+    Carries ``retry_after_seconds`` so surface adapters (MCP/Hermes) can
+    present a structured retry hint. CAS abandons are benign concurrency
+    contention, NOT task failures — agents should retry, not give up.
+    """
+
+    def __init__(self, retry_after_seconds: float, message: str) -> None:
+        self.retry_after_seconds = retry_after_seconds
+        super().__init__(message)
+
+
 class RemoteMemexAPI:
     """
     Client for interacting with a remote Memex server via REST.
@@ -1033,7 +1048,10 @@ class RemoteMemexAPI:
 
         On HTTP 429, raises a structured ``RateLimitExceeded`` carrying
         ``retry_after_seconds`` so callers can surface the back-off time
-        without re-parsing the body.
+        without re-parsing the body. On HTTP 503 with
+        ``error='reflection_abandoned'``, raises ``ReflectionAbandoned``
+        with the same ``retry_after_seconds`` shape — CAS abandons are
+        benign concurrency, surface as "try again shortly".
         """
         body: dict[str, Any] = {'entity_id': str(entity_id), 'scope': scope}
         if vault_id is not None:
@@ -1045,6 +1063,18 @@ class RemoteMemexAPI:
                 retry_after_seconds=float(payload.get('retry_after_seconds', 0.0)),
                 message=str(payload.get('message', 'Rate limit exceeded.')),
             )
+        if response.status_code == 503:
+            payload = response.json()
+            if payload.get('error') == 'reflection_abandoned':
+                raise ReflectionAbandoned(
+                    retry_after_seconds=float(payload.get('retry_after_seconds', 2.0)),
+                    message=str(
+                        payload.get(
+                            'message',
+                            'Reflection abandoned by concurrent refresh; retry.',
+                        )
+                    ),
+                )
         response.raise_for_status()
         return ReflectionResultDTO(**response.json())
 

@@ -3595,7 +3595,7 @@ def handle_memory_summarize_node(
     vault_id: UUID | None,
     args: dict[str, Any],
 ) -> str:
-    from memex_common.client import RateLimitExceeded
+    from memex_common.client import RateLimitExceeded, ReflectionAbandoned
 
     try:
         raw_entity_id = _require(args, 'entity_id')
@@ -3692,6 +3692,15 @@ def handle_memory_summarize_node(
         return json.dumps(
             {
                 'error': 'rate_limit_exceeded',
+                'entity_id': str(entity_uuid),
+                'retry_after_seconds': exc.retry_after_seconds,
+                'message': str(exc),
+            }
+        )
+    except ReflectionAbandoned as exc:
+        return json.dumps(
+            {
+                'error': 'reflection_abandoned',
                 'entity_id': str(entity_uuid),
                 'retry_after_seconds': exc.retry_after_seconds,
                 'message': str(exc),

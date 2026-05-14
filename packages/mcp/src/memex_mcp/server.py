@@ -3983,7 +3983,7 @@ async def memex_memory_summarize_node(
     ] = None,
 ) -> dict[str, Any]:
     """Synchronously consolidate memories on an entity into its mental model."""
-    from memex_common.client import RateLimitExceeded
+    from memex_common.client import RateLimitExceeded, ReflectionAbandoned
 
     try:
         api = get_api(ctx)
@@ -4006,6 +4006,13 @@ async def memex_memory_summarize_node(
         except RateLimitExceeded as exc:
             return {
                 'error': 'rate_limit_exceeded',
+                'entity_id': entity_id,
+                'retry_after_seconds': exc.retry_after_seconds,
+                'message': str(exc),
+            }
+        except ReflectionAbandoned as exc:
+            return {
+                'error': 'reflection_abandoned',
                 'entity_id': entity_id,
                 'retry_after_seconds': exc.retry_after_seconds,
                 'message': str(exc),

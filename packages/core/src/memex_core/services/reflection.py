@@ -30,19 +30,9 @@ from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
 logger = logging.getLogger('memex.core.services.reflection')
 
 
+from memex_core.memory.reflect.exceptions import ReflectionAbandonedError
+
 SummarizeScope = Literal['incremental', 'full']
-
-
-class ReflectionAbandonedError(Exception):
-    """Raised when a synchronous on-demand reflection abandons because a
-    concurrent worker advanced the mental_models.version between read and
-    Phase 5 CAS UPDATE. The entity has been re-enqueued via mark_abandoned
-    (retry_count unchanged); callers should treat this as a transient
-    "try again shortly" signal and translate to a 503 / Retry-After at
-    the surface (HTTP / MCP / Hermes). The previous behavior — returning
-    a synthetic empty MentalModel — silently misrepresented the entity
-    as observation-less and is a UX defect this exception replaces.
-    """
 
 
 class ReflectionService:
@@ -88,6 +78,19 @@ class ReflectionService:
                     logger.info(f'Starting background reflection for entity {request.entity_id}')
                     await self.reflect(request)
                     logger.info(f'Completed background reflection for entity {request.entity_id}')
+                except ReflectionAbandonedError as exc:
+                    # Benign concurrency contention — the entity was already
+                    # re-enqueued by reflect() via mark_abandoned. Log at INFO
+                    # so production alerting (which typically pages on
+                    # error-level reflection failures) is not woken up.
+                    # Abandon volume is observable via
+                    # ``memex_reflection_cas_abandons_total``.
+                    logger.info(
+                        'Background reflection abandoned for entity %s '
+                        '(re-enqueued for next tick): %s',
+                        request.entity_id,
+                        exc,
+                    )
                 except Exception as e:
                     logger.error(
                         f'Error during background reflection for entity {request.entity_id}: {e}',

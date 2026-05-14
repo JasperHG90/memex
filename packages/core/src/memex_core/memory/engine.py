@@ -414,18 +414,23 @@ class MemoryEngine:
 
         try:
             results = await reflector.reflect_batch(requests)
+            # CAS-abandoned entities live on the engine; route them
+            # through the queue's PENDING path with retry_count untouched
+            # so a hot entity in a multi-worker cluster cannot DEAD_LETTER
+            # from contention alone.
+            abandoned_ids = set(reflector.last_abandoned_entity_ids)
 
-            # Map results back to tasks to identify successes
-            # We use (entity_id, vault_id) pair as key
             succeeded_pairs = {(m.entity_id, m.vault_id) for m in results}
 
-            # 4. Cleanup / Update Queue
             for task in tasks:
                 if (task.entity_id, task.vault_id) in succeeded_pairs:
-                    # Success: Remove from queue
                     await session.delete(task)
+                elif task.entity_id in abandoned_ids:
+                    task.status = ReflectionStatus.PENDING
+                    if not task.last_error or 'CAS abandon' in task.last_error:
+                        task.last_error = 'CAS abandon (concurrent refresh won)'
+                    session.add(task)
                 else:
-                    # Failure: Mark as FAILED
                     task.status = ReflectionStatus.FAILED
                     session.add(task)
 

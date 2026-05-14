@@ -734,6 +734,121 @@ async def test_reflect_batch_tracks_cas_abandons_separately_from_success(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_mark_abandoned_preserves_retry_count_across_repeated_abandons(
+    session_manager, memex_config: MemexConfig
+):
+    """Round-6 HIGH regression guard for the H1 invariant.
+
+    Drive the queue layer with N successive CAS abandons on the same
+    queue row; assert retry_count stays at 0 the whole time. The
+    invariant: benign concurrency contention must NOT consume the
+    DEAD_LETTER budget. Pre-V18 round-5 behavior would have called
+    mark_failed three times, flipping the entity to DEAD_LETTER.
+    """
+    from datetime import datetime, timezone
+    from memex_core.memory.reflect.queue_service import (
+        ReflectionQueueService,
+        ReflectionStatus,
+    )
+    from memex_core.memory.sql_models import ReflectionQueue
+
+    queue_service = ReflectionQueueService(memex_config.server.memory.reflection)
+
+    async with session_manager() as setup_session:
+        entity, _model = await _seed_entity_and_model(setup_session, version=0)
+        entity_id = entity.id
+        # Create a queue row in PROCESSING state (simulates having been
+        # claimed by claim_next_batch).
+        queue_row = ReflectionQueue(
+            entity_id=entity_id,
+            vault_id=GLOBAL_VAULT_ID,
+            status=ReflectionStatus.PROCESSING,
+            priority_score=1.0,
+            retry_count=0,
+            max_retries=3,
+            last_queued_at=datetime.now(timezone.utc),
+        )
+        setup_session.add(queue_row)
+        await setup_session.commit()
+        queue_row_id = queue_row.id
+
+    # Five successive CAS abandons. retry_count must stay at 0 throughout.
+    for _ in range(5):
+        async with session_manager() as session:
+            await queue_service.mark_abandoned(
+                session, entity_id=entity_id, vault_id=GLOBAL_VAULT_ID
+            )
+
+    # Verify final state: PENDING, retry_count=0, NOT dead-lettered.
+    async with session_manager() as verify_session:
+        result = await verify_session.execute(
+            select(ReflectionQueue).where(ReflectionQueue.id == queue_row_id)
+        )
+        final = result.scalar_one()
+        assert final.status == ReflectionStatus.PENDING, (
+            f'expected PENDING after CAS abandons; got {final.status}'
+        )
+        assert final.retry_count == 0, (
+            f'CAS abandons must NOT consume retry budget; retry_count={final.retry_count}'
+        )
+        assert final.last_error is not None
+        assert 'CAS abandon' in final.last_error
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_mark_abandoned_preserves_prior_real_failure_error_message(
+    session_manager, memex_config: MemexConfig
+):
+    """Round-6 MEDIUM: ``mark_abandoned`` must NOT stomp ``last_error``
+    when a prior real failure (LLM timeout etc) is still relevant for
+    operator triage.
+    """
+    from datetime import datetime, timezone
+    from memex_core.memory.reflect.queue_service import (
+        ReflectionQueueService,
+        ReflectionStatus,
+    )
+    from memex_core.memory.sql_models import ReflectionQueue
+
+    queue_service = ReflectionQueueService(memex_config.server.memory.reflection)
+    original_error = 'LLM timeout after 60s'
+
+    async with session_manager() as setup_session:
+        entity, _model = await _seed_entity_and_model(setup_session, version=0)
+        entity_id = entity.id
+        queue_row = ReflectionQueue(
+            entity_id=entity_id,
+            vault_id=GLOBAL_VAULT_ID,
+            status=ReflectionStatus.PROCESSING,
+            priority_score=1.0,
+            retry_count=2,
+            max_retries=3,
+            last_queued_at=datetime.now(timezone.utc),
+            last_error=original_error,
+        )
+        setup_session.add(queue_row)
+        await setup_session.commit()
+        queue_row_id = queue_row.id
+
+    async with session_manager() as session:
+        await queue_service.mark_abandoned(session, entity_id=entity_id, vault_id=GLOBAL_VAULT_ID)
+
+    async with session_manager() as verify_session:
+        result = await verify_session.execute(
+            select(ReflectionQueue).where(ReflectionQueue.id == queue_row_id)
+        )
+        final = result.scalar_one()
+        assert final.status == ReflectionStatus.PENDING
+        assert final.retry_count == 2, 'retry_count must remain unchanged'
+        assert final.last_error == original_error, (
+            'mark_abandoned must not stomp a prior real-failure last_error; '
+            f'expected {original_error!r}, got {final.last_error!r}'
+        )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_reflect_entity_internal_prune_only_cas_abandon_returns_none(
     session_manager, memex_config: MemexConfig
 ):

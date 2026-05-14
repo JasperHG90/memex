@@ -27,6 +27,7 @@ from memex_core.server.common import (
     ndjson_response,
     resolve_vault_ids,
 )
+from memex_core.memory.reflect.exceptions import ReflectionAbandonedError
 from memex_core.services.rate_limit import RateLimitExceededError
 
 router = APIRouter(prefix='/api/v1')
@@ -92,7 +93,27 @@ async def reflect(
                     }
                 }
             },
-        }
+        },
+        503: {
+            'description': (
+                'Reflection was abandoned because a concurrent worker '
+                "refreshed the entity's mental model first. The entity "
+                'has been re-enqueued (retry_count unchanged); retry '
+                'after the suggested back-off.'
+            ),
+            'content': {
+                'application/json': {
+                    'example': {
+                        'error': 'reflection_abandoned',
+                        'retry_after_seconds': 2.0,
+                        'message': (
+                            'Concurrent worker refreshed first; re-enqueued '
+                            'for next scheduler tick.'
+                        ),
+                    }
+                }
+            },
+        },
     },
 )
 async def summarize_node(
@@ -104,7 +125,8 @@ async def summarize_node(
     Mirrors the synchronous contract — does NOT use BackgroundTasks.
     Rate-limited per (entity_id, vault_id) at the service layer; the endpoint is a
     thin transport that translates ``RateLimitExceededError`` into a 429 envelope
-    with a ``Retry-After`` header.
+    with a ``Retry-After`` header, and ``ReflectionAbandonedError`` into a 503
+    envelope with a small ``Retry-After`` (concurrency contention, not failure).
     """
     try:
         result = await api.summarize_node(
@@ -122,6 +144,20 @@ async def summarize_node(
                 'message': str(exc),
             },
             headers={'Retry-After': str(retry_after)},
+        )
+    except ReflectionAbandonedError as exc:
+        # CAS abandon — benign concurrency contention. Suggest a small
+        # back-off (next scheduler tick is typically <1s away in default
+        # configuration; a 2-second hint gives plenty of headroom).
+        retry_after_seconds = 2.0
+        return JSONResponse(
+            status_code=503,
+            content={
+                'error': 'reflection_abandoned',
+                'retry_after_seconds': retry_after_seconds,
+                'message': str(exc),
+            },
+            headers={'Retry-After': str(int(retry_after_seconds))},
         )
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Summarize-node reflection failed')

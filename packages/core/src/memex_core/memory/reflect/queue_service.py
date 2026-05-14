@@ -312,7 +312,13 @@ class ReflectionQueueService:
             return
 
         item.status = ReflectionStatus.PENDING
-        item.last_error = 'CAS abandon (concurrent refresh won)'
+        # Preserve ``last_error`` from any prior real failure. CAS abandons
+        # are benign concurrency contention; stomping the column would hide
+        # an outstanding LLM-timeout / parse-error / etc. that an operator
+        # is investigating. Only write when the column is empty or already
+        # records a CAS abandon (so consecutive abandons don't accumulate).
+        if not item.last_error or 'CAS abandon' in item.last_error:
+            item.last_error = 'CAS abandon (concurrent refresh won)'
         session.add(item)
         await session.commit()
         logger.info(

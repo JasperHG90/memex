@@ -24,6 +24,7 @@ from memex_core.tracing import trace_span
 from memex_core.memory.sql_models import Entity, MemoryUnit, UnitEntity, ContentStatus
 from memex_core.memory.sql_models import MentalModel, Observation, EvidenceItem
 from memex_core.memory.reflect.entity_locks import get_entity_lock
+from memex_core.memory.reflect.exceptions import ReflectionAbandonedError
 from memex_core.memory.reflect.models import ReflectionRequest
 from memex_core.memory.reflect.prompts import (
     SeedPhaseSignature,
@@ -839,17 +840,21 @@ class ReflectionEngine:
     async def reflect_on_entity(self, request: ReflectionRequest) -> MentalModel:
         """Legacy wrapper for single entity reflection.
 
-        Returns the applied MentalModel on success. Raises RuntimeError
-        on failure. If the Phase 5 CAS UPDATE abandoned (concurrent
-        worker won the version race), this raises a RuntimeError whose
-        message identifies the abandon — callers that want to handle
-        abandons gracefully should switch to ``reflect_batch`` and
-        inspect ``engine.last_abandoned_entity_ids``.
+        Returns the applied MentalModel on success. Raises
+        ``ReflectionAbandonedError`` (typed, surface adapters translate
+        to a structured retry envelope) when the Phase 5 CAS UPDATE
+        abandoned because a concurrent worker advanced the version.
+        Raises ``RuntimeError`` only for true failures (exceptions in
+        the engine path).
+
+        The wrapper does NOT re-enqueue the queue row on abandon — the
+        service layer handles queue routing when callers go through
+        ``services.reflection.reflect_batch``.
         """
         results = await self.reflect_batch([request])
         if not results:
             if request.entity_id in self.last_abandoned_entity_ids:
-                raise RuntimeError(
+                raise ReflectionAbandonedError(
                     f'Reflection for {request.entity_id} abandoned: '
                     'a concurrent worker advanced the mental_models.version '
                     'between read and Phase 5 CAS UPDATE. The entity has '
