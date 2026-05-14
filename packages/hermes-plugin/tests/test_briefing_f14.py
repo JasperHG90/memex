@@ -33,7 +33,9 @@ def test_kv_write_description_documents_procedure_namespace_and_record_outcome_p
     assert 'target_type="kv_key"' in hermes_desc
 
     # MCP-side description (what MCP clients like Claude Code see).
-    tool = asyncio.get_event_loop().run_until_complete(mcp.get_tool('memex_kv_write'))
+    # asyncio.run() creates a fresh event loop — robust across test ordering
+    # (the `get_event_loop()` pattern breaks when prior tests close the loop).
+    tool = asyncio.run(mcp.get_tool('memex_kv_write'))
     mcp_desc = tool.description
     assert 'procedure:<verb>:<context-tag>' in mcp_desc
     assert 'memex_record_outcome' in mcp_desc

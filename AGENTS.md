@@ -113,6 +113,24 @@ memex_core/
 - **Lineage tracking**: upstream/downstream provenance chains
 - **Entity graph**: cooccurrence tracking + hybrid ranking
 
+## Agent-surface architecture
+
+Agent-facing prompt content lives in three tiers. SSOTs are `packages/common/src/memex_common/agent_surface.py` (universal) and `packages/common/src/memex_common/tool_descriptions.py` (per-tool).
+
+<constraint name="agent-surface-tiers" priority="high">
+1a (MCP, terse): `memex_mcp/server.py` `instructions=` (~500 tok) + per-tool descriptions (~300 tok each). Tool contracts + 4xx triggers ONLY. No multi-step composition flow.
+1b (universal, SSOT): `memex_common.agent_surface` (~1000 tok). LLM-optimized; concrete; imperative. Composed via `compose_universal()`.
+2 (agent-specific): hermes `briefing.py` + Claude Code SessionStart hook output (~400 tok each).
+</constraint>
+
+**Decision rule** — where does new agent-facing prose go?
+- Triggers a 4xx at the server? → MCP tool description (`tool_descriptions.py`).
+- Universal across agents (storage model, routing, paired writes)? → `agent_surface`.
+- Agent-specific framing (Hermes session-note wiring, Claude Code `author="claude-code"`)? → that agent's surface.
+- Slash-command behavior (`/remember`, `/recall`)? → Claude Code plugin only.
+
+**Composition**: hermes imports `agent_surface` in-process; Claude Code receives it via `memex agent-surface --for=claude-code` from the plugin's `SessionStart` hook. Drift prevention: MCP descriptions and Hermes schemas import the SAME object from `tool_descriptions` (identity check in tests). Budgets enforced by `packages/common/tests/test_agent_surface.py`, `test_tool_descriptions.py`, and per-package boundary tests.
+
 ## Git workflow
 
 - Commit after completing each logical unit of work — do not batch unrelated changes

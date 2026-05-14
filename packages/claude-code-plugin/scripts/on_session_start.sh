@@ -107,9 +107,18 @@ briefing_args=(briefing --budget 2000)
 [ -n "$project_vault" ] && briefing_args+=(--vault "$project_vault")
 [ -n "$project_id" ] && briefing_args+=(--project-id "$project_id")
 
-# --- Fetch session briefing (single CLI call) ---
+# --- Compose Tier 1b (universal) + Tier 2 (claude-code) system-prompt content ---
+# Static; same bytes every session. Drawn from memex_common.agent_surface via
+# the CLI bridge — no server roundtrip, cacheable prompt prefix.
+tmp_surface=$(mktemp)
+agent_surface_content=""
+if memex agent-surface --for=claude-code > "$tmp_surface" 2>/dev/null; then
+    agent_surface_content=$(cat "$tmp_surface")
+fi
+
+# --- Fetch dynamic session briefing (per-vault state from the server) ---
 tmp_briefing=$(mktemp)
-trap 'rm -f "$tmp_briefing"' EXIT
+trap 'rm -f "$tmp_briefing" "$tmp_surface"' EXIT
 
 if ! memex "${briefing_args[@]}" > "$tmp_briefing" 2>/dev/null; then
     cat <<'EOF'
@@ -118,8 +127,17 @@ EOF
     exit 0
 fi
 
-# --- Build additionalContext ---
-briefing_content=$(cat "$tmp_briefing")
+# --- Build additionalContext (Tier 1b/2 prefix, then dynamic briefing) ---
+server_briefing=$(cat "$tmp_briefing")
+if [ -n "$agent_surface_content" ]; then
+    briefing_content="${agent_surface_content}
+
+---
+
+${server_briefing}"
+else
+    briefing_content="${server_briefing}"
+fi
 status="🧠 Memex connected"
 
 if [ -n "$project_vault" ]; then
