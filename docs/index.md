@@ -51,6 +51,7 @@ Technical descriptions of every interface, command, endpoint, and configuration 
 | [MCP Tools](reference/mcp-tools.md) | All 35 MCP tools with parameter tables and usage workflow. |
 | [MemexAPI](reference/memexapi-reference.md) | Python API class — 60+ public methods for programmatic access. |
 | [Configuration](reference/configuration.md) | Every configuration key, type, default, and environment variable mapping. |
+| [Observability](reference/observability.md) | Prometheus metrics endpoint, reranking-composition histograms, and the dual interpretation of `memex_composite_boost_clipped` at `L = math.inf` vs finite `L`. |
 | [Evaluation Report](reference/evaluation-report.md) | LoCoMo benchmark results with retrieval efficiency analysis and distribution plots. |
 
 ---
