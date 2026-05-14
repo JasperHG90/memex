@@ -266,7 +266,7 @@ class MemoryEngine:
             requests = [
                 ReflectionRequest(entity_id=eid, vault_id=vault_id) for eid in touched_entities
             ]
-            results, _abandoned = await reflector.reflect_batch(requests)
+            results, _abandoned, _failed = await reflector.reflect_batch(requests)
 
             logger.info(f'Reflected on {len(results)}/{len(touched_entities)} entities.')
 
@@ -413,11 +413,19 @@ class MemoryEngine:
         requests = [ReflectionRequest(entity_id=t.entity_id, vault_id=t.vault_id) for t in tasks]
 
         try:
-            results, abandoned_list = await reflector.reflect_batch(requests)
-            # Route CAS-abandoned entities through the queue's PENDING
-            # path with retry_count untouched so a hot entity in a
-            # multi-worker cluster cannot DEAD_LETTER from contention.
+            results, abandoned_list, failed_list = await reflector.reflect_batch(requests)
+            # Three disjoint outcome buckets:
+            # * succeeded → delete the queue row
+            # * abandoned (CAS lost) → re-enqueue PENDING without bumping
+            #   retry_count so a hot entity does not DEAD_LETTER from
+            #   contention
+            # * failed (real exception) → mark FAILED so retry_count
+            #   increments toward DEAD_LETTER and operators get
+            #   visibility. Routing failures through the abandoned bucket
+            #   would carousel a broken entity between PENDING and
+            #   PROCESSING forever.
             abandoned_ids = set(abandoned_list)
+            failed_ids = set(failed_list)
 
             succeeded_pairs = {(m.entity_id, m.vault_id) for m in results}
 
@@ -429,7 +437,15 @@ class MemoryEngine:
                     if not task.last_error or 'CAS abandon' in task.last_error:
                         task.last_error = 'CAS abandon (concurrent refresh won)'
                     session.add(task)
+                elif task.entity_id in failed_ids:
+                    task.status = ReflectionStatus.FAILED
+                    session.add(task)
                 else:
+                    # Engine returned no model for this entity but did
+                    # not classify it as abandoned or failed — treat as
+                    # a real failure (defensive: the engine's contract
+                    # promises one of the three buckets, but bugs there
+                    # should not silently lose work).
                     task.status = ReflectionStatus.FAILED
                     session.add(task)
 

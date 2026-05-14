@@ -169,22 +169,45 @@ class ReflectionEngine:
 
     async def reflect_batch(
         self, requests: list[ReflectionRequest]
-    ) -> tuple[list[MentalModel], list[UUID]]:
+    ) -> tuple[list[MentalModel], list[UUID], list[UUID]]:
         """Run reflection for multiple entities in parallel, grouped by vault_id.
 
-        Returns ``(models, abandoned_entity_ids)``:
+        Returns ``(models, abandoned_entity_ids, failed_entity_ids)``:
 
         * ``models`` is the list of MentalModels whose Phase 5 CAS UPDATE
           applied.
         * ``abandoned_entity_ids`` is entities whose CAS UPDATE abandoned
           (a concurrent worker advanced the row's version between our
           read and write) — the caller routes them through the queue
-          layer's abandon path (no retry_count increment) instead of
-          the failure path (increments toward DEAD_LETTER).
+          layer's abandon path (no retry_count increment).
+        * ``failed_entity_ids`` is entities that raised a non-cancellation
+          exception during reflection (LM circuit open, DB hiccup,
+          extraction error, etc.) — the caller routes them through
+          ``mark_failed`` so retry_count increments toward DEAD_LETTER
+          and operators get visibility. Conflating these with
+          ``abandoned_entity_ids`` would silently carousel a broken
+          entity between PENDING/PROCESSING forever.
         """
         if not requests:
-            return [], []
+            return [], [], []
+
+        # Dedupe by entity_id so the queue routing in the service layer
+        # doesn't race on a single queue row (a duplicate would otherwise
+        # produce two competing mark_abandoned / mark_failed UPDATEs).
+        # Keep the first request per entity_id; this preserves the
+        # caller's intent for per-request limits when distinct requests
+        # for the same entity collide in one batch.
+        seen_entities: set[UUID] = set()
+        deduped: list[ReflectionRequest] = []
+        for r in requests:
+            if r.entity_id in seen_entities:
+                continue
+            seen_entities.add(r.entity_id)
+            deduped.append(r)
+        requests = deduped
+
         abandoned_entity_ids: list[UUID] = []
+        failed_entity_ids: list[UUID] = []
 
         # 1. Group by Vault ID to optimize DB fetching
         vault_groups = defaultdict(list)
@@ -256,7 +279,13 @@ class ReflectionEngine:
                 if mm in self.session:
                     self.session.expunge(mm)
 
-            # 1.3 Concurrent Processing for this Vault
+            # 1.3 Concurrent Processing for this Vault.
+            # ``return_exceptions=True`` ensures that a BaseException in
+            # one coroutine (e.g. CancelledError on shutdown) does NOT
+            # tear down sibling coroutines mid-flight with partially
+            # populated abandoned/failed lists. Normal exceptions are
+            # already trapped inside _process_entity_reflection and
+            # routed into ``failed_entity_ids`` explicitly.
             results = await asyncio.gather(
                 *[
                     self._process_entity_reflection(
@@ -266,11 +295,26 @@ class ReflectionEngine:
                         memories_map,
                         sem,
                         abandoned_entity_ids,
+                        failed_entity_ids,
                     )
                     for req in v_requests
-                ]
+                ],
+                return_exceptions=True,
             )
-            all_success_models.extend([m for m in results if m is not None])
+            for req, outcome in zip(v_requests, results, strict=True):
+                if isinstance(outcome, MentalModel):
+                    all_success_models.append(outcome)
+                elif isinstance(outcome, BaseException):
+                    # A BaseException escaped the inner handler — log and
+                    # route to failed so the queue layer increments
+                    # retry_count and surfaces the failure.
+                    logger.error(
+                        'Reflection BaseException for entity %s: %r',
+                        req.entity_id,
+                        outcome,
+                    )
+                    if req.entity_id not in failed_entity_ids:
+                        failed_entity_ids.append(req.entity_id)
 
         # No batch-end commit: Phase 5's per-entity CAS UPDATE is the only
         # write path for ``mental_models``, and Phase 6 commits its own
@@ -279,7 +323,7 @@ class ReflectionEngine:
         # LLM phases are intentionally not flushed — they exist only for
         # the caller's return-value convenience and do not represent
         # pending DB state.
-        return all_success_models, abandoned_entity_ids
+        return all_success_models, abandoned_entity_ids, failed_entity_ids
 
     async def _process_entity_reflection(
         self,
@@ -289,8 +333,22 @@ class ReflectionEngine:
         memories_map: dict[UUID, list[MemoryUnit]],
         sem: asyncio.Semaphore,
         abandoned_entity_ids: list[UUID],
+        failed_entity_ids: list[UUID],
     ) -> MentalModel | None:
-        """Process a single entity reflection with semaphore control."""
+        """Process a single entity reflection with semaphore control.
+
+        Returns:
+            * ``MentalModel`` on success (Phase 5 CAS UPDATE applied).
+            * ``None`` when the Phase 5 CAS UPDATE abandoned (concurrent
+              writer won the version race) — entity_id is appended to
+              ``abandoned_entity_ids``.
+            * ``None`` when a non-cancellation exception was raised
+              inside the per-entity pipeline — entity_id is appended to
+              ``failed_entity_ids``. These two lists are disjoint:
+              CAS abandons must NOT enter the failure path because the
+              queue's ``mark_failed`` increments retry_count and a
+              perpetually-contended entity would hit DEAD_LETTER.
+        """
         eid = req.entity_id
         async with sem:
             try:
@@ -313,12 +371,17 @@ class ReflectionEngine:
                 if outcome is None:
                     # CAS abandon — caller re-enqueues via mark_abandoned
                     # (no retry_count increment) instead of mark_failed
-                    # (counts toward DEAD_LETTER). CAS abandons are
-                    # benign concurrency contention, not failures.
+                    # (counts toward DEAD_LETTER).
                     abandoned_entity_ids.append(eid)
                 return outcome
             except Exception as e:
+                # Real failure (LM circuit-broken, DB OperationalError,
+                # extraction crash). Routing this through the abandon
+                # path would silently carousel the entity between
+                # PENDING and PROCESSING forever. The failed list is
+                # routed through mark_failed at the service layer.
                 logger.error(f'Reflection failed for entity {eid}: {e}', exc_info=True)
+                failed_entity_ids.append(eid)
                 return None
 
     async def _reflect_entity_internal(
@@ -726,6 +789,14 @@ class ReflectionEngine:
         # dirty flag is cleared — tests using ``session.refresh(unit)``
         # still observe the committed Phase 6 enrichments via the
         # subsequent SELECT.
+        # Note: this is the units path (recent_memories) — distinct from
+        # the MentalModel expunge in reflect_batch (Phase 5's CAS owns
+        # mental_model writes; here Phase 6's ph6_session.merge owns
+        # unit writes). The two clean-up paths are intentionally
+        # different: expunge severs the orchestrator-session reference
+        # entirely (Phase 5 must own the write); expire just clears the
+        # dirty flag so the orchestrator-session reference is kept
+        # alive for tests / downstream reads.
         for unit in units_to_merge:
             try:
                 if unit in self.session:
@@ -841,7 +912,7 @@ class ReflectionEngine:
         service layer handles queue routing when callers go through
         ``services.reflection.reflect_batch``.
         """
-        results, abandoned = await self.reflect_batch([request])
+        results, abandoned, failed = await self.reflect_batch([request])
         if not results:
             if request.entity_id in abandoned:
                 raise ReflectionAbandonedError(
@@ -851,6 +922,11 @@ class ReflectionEngine:
                     'NOT been re-enqueued by this wrapper — the service '
                     'layer handles re-enqueue when called via reflect_batch.'
                 )
+            # ``failed`` and the implicit "no models" fall-through both
+            # land here. Either way the engine recorded a real failure
+            # (or produced nothing for an unexpected reason); raising
+            # RuntimeError signals the caller to route through
+            # mark_failed at the service layer.
             raise RuntimeError(f'Reflection failed for {request.entity_id}')
         return results[0]
 
@@ -955,7 +1031,8 @@ class ReflectionEngine:
 
         update_predictor = dspy.Predict(UpdateExistingSignature)
 
-        assert self.lm is not None, 'LM must be initialized'
+        if self.lm is None:
+            raise RuntimeError('LM must be initialized')
         result = await run_dspy_operation(
             lm=self.lm,
             predictor=update_predictor,
@@ -1012,7 +1089,8 @@ class ReflectionEngine:
 
         seed_predictor = dspy.Predict(SeedPhaseSignature)
 
-        assert self.lm is not None, 'LM must be initialized'
+        if self.lm is None:
+            raise RuntimeError('LM must be initialized')
         result = await run_dspy_operation(
             lm=self.lm,
             predictor=seed_predictor,
@@ -1158,7 +1236,8 @@ class ReflectionEngine:
 
         validate_predictor = dspy.Predict(ValidatePhaseSignature)
 
-        assert self.lm is not None, 'LM must be initialized'
+        if self.lm is None:
+            raise RuntimeError('LM must be initialized')
         result = await run_dspy_operation(
             lm=self.lm,
             predictor=validate_predictor,
@@ -1282,7 +1361,8 @@ class ReflectionEngine:
         # 3. Call LLM
         compare_predictor = dspy.Predict(ComparePhaseSignature)
 
-        assert self.lm is not None, 'LM must be initialized'
+        if self.lm is None:
+            raise RuntimeError('LM must be initialized')
         result = await run_dspy_operation(
             lm=self.lm,
             predictor=compare_predictor,

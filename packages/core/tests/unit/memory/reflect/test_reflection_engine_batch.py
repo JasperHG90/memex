@@ -191,6 +191,7 @@ async def test_process_entity_reflection_slices_per_request(engine):
 
     req = ReflectionRequest(entity_id=eid, limit_recent_memories=20)
     abandoned: list = []
+    failed: list = []
     await engine._process_entity_reflection(
         req=req,
         models_map={eid: MagicMock()},
@@ -198,6 +199,7 @@ async def test_process_entity_reflection_slices_per_request(engine):
         memories_map=memories_map,
         sem=sem,
         abandoned_entity_ids=abandoned,
+        failed_entity_ids=failed,
     )
     assert len(captured['recent_memories']) == 20
 
@@ -210,6 +212,7 @@ async def test_process_entity_reflection_slices_per_request(engine):
         memories_map=memories_map,
         sem=sem,
         abandoned_entity_ids=abandoned,
+        failed_entity_ids=failed,
     )
     assert len(captured['recent_memories']) == 30
 

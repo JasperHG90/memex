@@ -719,7 +719,7 @@ async def test_reflect_batch_tracks_cas_abandons_separately_from_success(
             engine._batch_get_entities = fake_get_entities  # type: ignore[assignment]
             engine._batch_fetch_recent_memories = fake_fetch_memories  # type: ignore[assignment]
 
-            results, abandoned_list = await engine.reflect_batch(
+            results, abandoned_list, failed_list = await engine.reflect_batch(
                 [ReflectionRequest(entity_id=entity_id, vault_id=GLOBAL_VAULT_ID)]
             )
 
@@ -730,6 +730,11 @@ async def test_reflect_batch_tracks_cas_abandons_separately_from_success(
         'CAS-abandoned entity_id must be returned in the abandoned tuple '
         'so the service layer routes it through mark_abandoned (no retry++) '
         'instead of mark_failed.'
+    )
+    assert failed_list == [], (
+        'CAS abandons must NOT enter the failed bucket; if they did, '
+        'retry_count would increment toward DEAD_LETTER on every '
+        'concurrent contention event.'
     )
 
 
@@ -896,3 +901,108 @@ async def test_reflect_entity_internal_prune_only_cas_abandon_returns_none(
     assert returned is None, (
         'prune-only CAS abandon must also return None so the queue layer re-enqueues for retry.'
     )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_reflect_batch_routes_real_exceptions_to_failed_bucket(
+    session_manager, memex_config: MemexConfig
+):
+    """Round-10 CRIT regression guard.
+
+    A real exception raised inside the per-entity reflection pipeline
+    (LM not initialized, OperationalError, anything in the except
+    Exception block) must land in the FAILED bucket, not the ABANDONED
+    bucket. Conflating these would route a broken entity through
+    mark_abandoned (which does not increment retry_count), making the
+    entity carousel between PENDING and PROCESSING forever without
+    ever surfacing the failure to operators via DEAD_LETTER.
+    """
+    from memex_core.memory.reflect.models import ReflectionRequest
+
+    async with session_manager() as orchestrator_session:
+        entity, model = await _seed_entity_and_model(orchestrator_session, version=0)
+        entity_id = entity.id
+
+        engine = ReflectionEngine(
+            orchestrator_session,
+            memex_config,
+            _make_embedder(),
+            entity_session_factory=session_manager,
+        )
+        engine.lm = MagicMock()
+
+        # Force a real exception inside _reflect_entity_internal so the
+        # except Exception in _process_entity_reflection trips. The
+        # message is distinctive so a regression that re-routes through
+        # the abandoned branch is easy to diagnose.
+        async def _boom(*args, **kwargs):
+            raise RuntimeError('synthetic failure to verify failed-bucket routing')
+
+        engine._reflect_entity_internal = _boom  # type: ignore[method-assign]
+
+        results, abandoned, failed = await engine.reflect_batch(
+            [ReflectionRequest(entity_id=entity_id, vault_id=GLOBAL_VAULT_ID)]
+        )
+
+    assert results == [], 'entity that raised must not appear in success list'
+    assert abandoned == [], (
+        'a real exception must NOT enter the abandoned bucket — that path is '
+        'reserved for benign CAS contention and skips retry_count.'
+    )
+    assert failed == [entity_id], (
+        'real exceptions must enter the failed bucket so the service layer '
+        'routes through mark_failed and retry_count moves toward DEAD_LETTER.'
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_reflect_batch_dedupes_duplicate_entity_id_requests(
+    session_manager, memex_config: MemexConfig
+):
+    """Round-10 MED-5 regression guard.
+
+    Two ReflectionRequests for the same entity_id in the same batch
+    must be collapsed to one engine pass. Otherwise the service-layer
+    queue routing would issue two competing UPDATEs on the same
+    queue row.
+    """
+    from memex_core.memory.reflect.models import ReflectionRequest
+
+    async with session_manager() as orchestrator_session:
+        entity, model = await _seed_entity_and_model(orchestrator_session, version=0)
+        entity_id = entity.id
+
+        engine = ReflectionEngine(
+            orchestrator_session,
+            memex_config,
+            _make_embedder(),
+            entity_session_factory=session_manager,
+        )
+        engine.lm = MagicMock()
+
+        call_count = 0
+
+        async def _track(*args, **kwargs):
+            nonlocal call_count
+            call_count += 1
+            return None  # CAS abandon — keeps the test independent of phase wiring
+
+        engine._reflect_entity_internal = _track  # type: ignore[method-assign]
+
+        requests = [
+            ReflectionRequest(entity_id=entity_id, vault_id=GLOBAL_VAULT_ID),
+            ReflectionRequest(entity_id=entity_id, vault_id=GLOBAL_VAULT_ID),
+            ReflectionRequest(entity_id=entity_id, vault_id=GLOBAL_VAULT_ID),
+        ]
+        results, abandoned, failed = await engine.reflect_batch(requests)
+
+    assert call_count == 1, (
+        f'duplicate entity_id requests must collapse to one engine pass; '
+        f'got call_count={call_count}'
+    )
+    assert results == []
+    # The deduped survivor still routes to abandoned (single None outcome).
+    assert abandoned == [entity_id]
+    assert failed == []

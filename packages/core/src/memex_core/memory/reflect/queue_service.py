@@ -178,20 +178,30 @@ class ReflectionQueueService:
         result = await session.exec(stmt)
         rows = result.all()
 
-        existing_ids = set()
+        # The query selects ``ReflectionQueue.entity_id``, so in
+        # production rows are bare UUIDs. The branches below tolerate
+        # the additional shapes that show up in tests where the same
+        # ``session.exec`` is mocked across query variants:
+        # tuple-wrapped scalars, row objects exposing ``entity_id`` or
+        # ``id``, and stringified UUIDs. Anything that cannot be
+        # coerced is skipped so an unreadable row does not crash the
+        # batch and re-queue every entity in it.
+        existing_ids: set[UUID] = set()
         for r in rows:
             val = r[0] if isinstance(r, (tuple, list)) else r
+            if isinstance(val, UUID):
+                existing_ids.add(val)
+                continue
             if hasattr(val, 'entity_id'):
                 existing_ids.add(val.entity_id)
-            elif hasattr(val, 'id'):
+                continue
+            if hasattr(val, 'id'):
                 existing_ids.add(val.id)
-            elif isinstance(val, UUID):
-                existing_ids.add(val)
-            else:
-                try:
-                    existing_ids.add(UUID(str(val)))
-                except (ValueError, TypeError):
-                    continue
+                continue
+            try:
+                existing_ids.add(UUID(str(val)))
+            except (ValueError, TypeError):
+                continue
 
         missing_ids = entity_ids - existing_ids
         if not missing_ids:

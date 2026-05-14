@@ -126,7 +126,7 @@ class ReflectionService:
                 entity_session_factory=self.metastore.session,
             )
 
-            models, abandoned_list = await reflector.reflect_batch([request])
+            models, abandoned_list, _failed_list = await reflector.reflect_batch([request])
             abandoned_ids = set(abandoned_list)
             if not models:
                 if request.entity_id in abandoned_ids:
@@ -250,16 +250,21 @@ class ReflectionService:
                 entity_session_factory=self.metastore.session,
             )
 
-            # CAS-abandoned entities are NOT in ``models``; the engine
-            # tracks them separately so we can re-enqueue without
-            # incrementing retry_count (abandons are benign contention,
-            # not failures, and must not consume the DEAD_LETTER budget).
-            models, abandoned_list = await reflector.reflect_batch(requests)
+            # The engine tracks three disjoint outcomes per entity:
+            # ``models`` (Phase 5 CAS UPDATE applied), ``abandoned_list``
+            # (CAS lost the version race — benign contention), and
+            # ``failed_list`` (a real exception inside the per-entity
+            # pipeline). Routing CAS abandons through mark_failed would
+            # increment retry_count and eventually DEAD_LETTER an
+            # entity that is merely contended; routing real failures
+            # through mark_abandoned would carousel a broken entity
+            # forever without ever surfacing the failure to operators.
+            models, abandoned_list, failed_list = await reflector.reflect_batch(requests)
             abandoned_ids = set(abandoned_list)
+            failed_ids = set(failed_list)
 
             from collections import defaultdict
 
-            succeeded_ids = {m.entity_id for m in models}
             processed_by_vault = defaultdict(list)
             for m in models:
                 processed_by_vault[m.vault_id].append(m.entity_id)
@@ -271,27 +276,34 @@ class ReflectionService:
             for vid, eids in processed_by_vault.items():
                 await self.queue_service.complete_reflection(session, eids, vault_id=vid)
 
+            # Build a (entity_id, vault_id) lookup so we can route on
+            # the request's own vault_id — falling back to "find any
+            # request" would risk routing a failure to the wrong vault
+            # if duplicates ever slipped past the engine's dedup.
+            req_vaults: dict[UUID, UUID] = {}
+            for req in requests:
+                req_vaults.setdefault(req.entity_id, req.vault_id)
+
             # CAS-abandoned: re-enqueue (PENDING) without incrementing
             # retry_count. SKIP LOCKED on the next tick re-claims them.
-            for req in requests:
-                if req.entity_id in abandoned_ids:
-                    await self.queue_service.mark_abandoned(
-                        session,
-                        entity_id=req.entity_id,
-                        vault_id=req.vault_id,
-                    )
+            for eid in abandoned_ids:
+                await self.queue_service.mark_abandoned(
+                    session,
+                    entity_id=eid,
+                    vault_id=req_vaults.get(eid, GLOBAL_VAULT_ID),
+                )
 
             # Real failures (exceptions in _process_entity_reflection):
             # mark_failed, increments retry_count toward DEAD_LETTER.
-            for req in requests:
-                if req.entity_id not in succeeded_ids and req.entity_id not in abandoned_ids:
-                    await self.queue_service.mark_failed(
-                        session,
-                        entity_id=req.entity_id,
-                        vault_id=req.vault_id,
-                        error=f'Reflection failed for entity {req.entity_id}',
-                    )
+            for eid in failed_ids:
+                await self.queue_service.mark_failed(
+                    session,
+                    entity_id=eid,
+                    vault_id=req_vaults.get(eid, GLOBAL_VAULT_ID),
+                    error=f'Reflection failed for entity {eid}',
+                )
 
+            succeeded_ids = {m.entity_id for m in models}
             results = []
             for model in models:
                 results.append(
