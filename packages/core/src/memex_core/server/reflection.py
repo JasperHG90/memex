@@ -98,17 +98,26 @@ async def reflect(
             'description': (
                 'Reflection was abandoned because a concurrent worker '
                 "refreshed the entity's mental model first. The entity "
-                'has been re-enqueued (retry_count unchanged); retry '
-                'after the suggested back-off.'
+                'has been re-enqueued (retry_count unchanged). The fresh '
+                'model state is already persisted — clients should '
+                'typically re-read via memex_get_entity / '
+                'memex_memory_search rather than retrying summarize_node. '
+                '``retry_after_seconds`` mirrors the rate-limit window '
+                'so a compliant retry will not immediately 429.'
             ),
             'content': {
                 'application/json': {
                     'example': {
                         'error': 'reflection_abandoned',
-                        'retry_after_seconds': 2.0,
+                        'retry_after_seconds': 60.0,
                         'message': (
                             'Concurrent worker refreshed first; re-enqueued '
                             'for next scheduler tick.'
+                        ),
+                        'hint': (
+                            "A concurrent worker refreshed this entity's "
+                            'mental model. Prefer re-reading rather than '
+                            'retrying summarize_node.'
                         ),
                     }
                 }
@@ -146,18 +155,32 @@ async def summarize_node(
             headers={'Retry-After': str(retry_after)},
         )
     except ReflectionAbandonedError as exc:
-        # CAS abandon — benign concurrency contention. Suggest a small
-        # back-off (next scheduler tick is typically <1s away in default
-        # configuration; a 2-second hint gives plenty of headroom).
-        retry_after_seconds = 2.0
+        # CAS abandon — benign concurrency contention. A concurrent
+        # worker just committed a fresh reflection; the right next
+        # action is usually to re-read the entity's mental model
+        # rather than retry summarize_node. We still suggest a
+        # retry_after_seconds in case the caller wants to retry: it
+        # is derived from the summarize_node rate-limit window so a
+        # compliant caller doesn't immediately hit a 429 (the abandoned
+        # request consumed a rate-limit token before the abandon was
+        # detected). Default config: per_entity_per_seconds=60s.
+        rate_limit_cfg = api.config.server.memory.reflection.summarize_node_rate_limit
+        retry_after_seconds = float(rate_limit_cfg.per_entity_per_seconds)
+        retry_after = max(0, int(retry_after_seconds + 0.999))
         return JSONResponse(
             status_code=503,
             content={
                 'error': 'reflection_abandoned',
                 'retry_after_seconds': retry_after_seconds,
                 'message': str(exc),
+                'hint': (
+                    "A concurrent worker refreshed this entity's mental "
+                    'model. The fresh state is already persisted; prefer '
+                    're-reading via memex_get_entity / memex_memory_search '
+                    'rather than retrying summarize_node.'
+                ),
             },
-            headers={'Retry-After': str(int(retry_after_seconds))},
+            headers={'Retry-After': str(retry_after)},
         )
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Summarize-node reflection failed')

@@ -3562,7 +3562,11 @@ MEMORY_SUMMARIZE_NODE_SCHEMA: dict[str, Any] = {
         'conflicting memories into a coherent mental model BEFORE continuing. '
         'Synchronous in-session counterpart to background reflect (queued, scheduler-driven). '
         'Rate-limited per (entity, vault); on rejection the response carries '
-        "'retry_after_seconds' — do not retry-loop. Use sparingly; reflection is LLM-intensive."
+        "'retry_after_seconds' — do not retry-loop. Use sparingly; reflection is LLM-intensive. "
+        "Error envelopes: rate-limit returns {error:'rate_limit_exceeded',retry_after_seconds}. "
+        "Concurrent refresh returns {error:'reflection_abandoned',retry_after_seconds,hint} — "
+        'the fresh model is already persisted, prefer re-reading via memex_get_entity / '
+        'memex_memory_search rather than retrying.'
     ),
     'parameters': {
         'type': 'object',
@@ -3576,7 +3580,7 @@ MEMORY_SUMMARIZE_NODE_SCHEMA: dict[str, Any] = {
                 'enum': ['incremental', 'full'],
                 'description': (
                     "'incremental' (default — only new evidence) or 'full' "
-                    '(re-evaluate all evidence; capped at 1000 most-recent units).'
+                    '(re-evaluate all evidence; capped at 100 most-recent units).'
                 ),
             },
             'vault_id': {
@@ -3698,14 +3702,15 @@ def handle_memory_summarize_node(
             }
         )
     except ReflectionAbandoned as exc:
-        return json.dumps(
-            {
-                'error': 'reflection_abandoned',
-                'entity_id': str(entity_uuid),
-                'retry_after_seconds': exc.retry_after_seconds,
-                'message': str(exc),
-            }
-        )
+        envelope: dict[str, Any] = {
+            'error': 'reflection_abandoned',
+            'entity_id': str(entity_uuid),
+            'retry_after_seconds': exc.retry_after_seconds,
+            'message': str(exc),
+        }
+        if exc.hint:
+            envelope['hint'] = exc.hint
+        return json.dumps(envelope)
     except Exception as e:
         logger.warning('memex_memory_summarize_node failed: %s', e)
         return tool_error(f'summarize_node failed: {e}')

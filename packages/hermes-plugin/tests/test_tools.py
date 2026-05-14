@@ -3687,6 +3687,69 @@ def test_summarize_node_timeout_error_returns_distinct_timeout_message(config, v
     api.summarize_node.assert_not_called()
 
 
+def test_summarize_node_reflection_abandoned_returns_structured_envelope(config, vault_id):
+    """V18 round-7: a ``ReflectionAbandoned`` from the HTTP client lib
+    must translate to a structured envelope that agents can interpret
+    programmatically — NOT a generic tool_error.
+    """
+    from memex_common.client import ReflectionAbandoned
+
+    api = Mock()
+    api.resolve_vault_identifier = AsyncMock(return_value=vault_id)
+    api.summarize_node = AsyncMock(
+        side_effect=ReflectionAbandoned(
+            retry_after_seconds=60.0,
+            message='Reflection for entity abandoned by concurrent refresh.',
+            hint='Prefer re-reading via memex_get_entity / memex_memory_search.',
+        )
+    )
+
+    entity_id = uuid4()
+    out = dispatch(
+        'memex_memory_summarize_node',
+        {'entity_id': str(entity_id), 'vault_id': str(vault_id)},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert data['error'] == 'reflection_abandoned'
+    assert data['entity_id'] == str(entity_id)
+    assert data['retry_after_seconds'] == 60.0
+    assert 'abandoned' in data['message'].lower()
+    assert 'hint' in data
+    assert 'memex_get_entity' in data['hint']
+
+
+def test_summarize_node_rate_limit_envelope_unchanged_by_round_7(config, vault_id):
+    """Regression guard: the round-6/7 abandon work did not alter the
+    existing 429 envelope shape.
+    """
+    from memex_common.client import RateLimitExceeded
+
+    api = Mock()
+    api.resolve_vault_identifier = AsyncMock(return_value=vault_id)
+    api.summarize_node = AsyncMock(
+        side_effect=RateLimitExceeded(
+            retry_after_seconds=12.5,
+            message='Rate limit exceeded.',
+        )
+    )
+
+    entity_id = uuid4()
+    out = dispatch(
+        'memex_memory_summarize_node',
+        {'entity_id': str(entity_id), 'vault_id': str(vault_id)},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert data['error'] == 'rate_limit_exceeded'
+    assert data['entity_id'] == str(entity_id)
+    assert data['retry_after_seconds'] == 12.5
+
+
 def test_summarize_node_none_target_vault_returns_internal_error(config, vault_id):
     """Round-9 regression: when ``resolve_vault_identifier`` returns ``None``
     (the protocol stub permits ``UUID | None``), the handler MUST surface a

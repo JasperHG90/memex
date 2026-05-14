@@ -4011,12 +4011,15 @@ async def memex_memory_summarize_node(
                 'message': str(exc),
             }
         except ReflectionAbandoned as exc:
-            return {
+            envelope: dict[str, Any] = {
                 'error': 'reflection_abandoned',
                 'entity_id': entity_id,
                 'retry_after_seconds': exc.retry_after_seconds,
                 'message': str(exc),
             }
+            if exc.hint:
+                envelope['hint'] = exc.hint
+            return envelope
         return {
             'entity_id': str(result.entity_id),
             'observation_count': len(result.new_observations),

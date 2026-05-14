@@ -62,6 +62,14 @@ class ReflectionService:
         self.queue_service = queue_service
         self.embedding_model = embedding_model
         self._reflection_lock = asyncio.Lock()
+        # Entity_ids whose Phase 5 CAS UPDATE abandoned during the most
+        # recent ``reflect_batch`` call. Mirrors ReflectionEngine's
+        # like-named attribute up to the service layer so multi-entity
+        # synchronous callers (e.g. ``reconsolidate_entity``) can
+        # distinguish "reflected but no new observations" from
+        # "concurrent worker won; the model is fresh elsewhere" without
+        # having to introspect the engine instance themselves.
+        self.last_abandoned_entity_ids: list[UUID] = []
         rate_limit_cfg = config.server.memory.reflection.summarize_node_rate_limit
         self._summarize_node_limiter = TokenBucketRateLimiter(
             per_seconds=rate_limit_cfg.per_entity_per_seconds,
@@ -246,6 +254,10 @@ class ReflectionService:
             # contention, not failures, and must not consume the DEAD_LETTER
             # budget).
             abandoned_ids = set(reflector.last_abandoned_entity_ids)
+            # Mirror up to the service layer so other synchronous
+            # callers (reconsolidate_entity) can detect the abandon
+            # without holding an engine reference.
+            self.last_abandoned_entity_ids = list(reflector.last_abandoned_entity_ids)
 
             from collections import defaultdict
 

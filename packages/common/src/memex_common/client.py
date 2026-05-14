@@ -77,13 +77,22 @@ class ReflectionAbandoned(Exception):
     ``error: 'reflection_abandoned'`` — a concurrent worker refreshed
     the entity's mental model first.
 
-    Carries ``retry_after_seconds`` so surface adapters (MCP/Hermes) can
-    present a structured retry hint. CAS abandons are benign concurrency
-    contention, NOT task failures — agents should retry, not give up.
+    Carries ``retry_after_seconds`` (mirrors the rate-limit window so a
+    naive retry won't immediately 429) and an optional ``hint`` that
+    suggests the right next action — typically "re-read the entity's
+    mental model directly rather than retrying summarize_node, since
+    the fresh state is already persisted by the concurrent worker."
+    CAS abandons are benign concurrency contention, NOT task failures.
     """
 
-    def __init__(self, retry_after_seconds: float, message: str) -> None:
+    def __init__(
+        self,
+        retry_after_seconds: float,
+        message: str,
+        hint: str | None = None,
+    ) -> None:
         self.retry_after_seconds = retry_after_seconds
+        self.hint = hint
         super().__init__(message)
 
 
@@ -1066,14 +1075,16 @@ class RemoteMemexAPI:
         if response.status_code == 503:
             payload = response.json()
             if payload.get('error') == 'reflection_abandoned':
+                hint = payload.get('hint')
                 raise ReflectionAbandoned(
-                    retry_after_seconds=float(payload.get('retry_after_seconds', 2.0)),
+                    retry_after_seconds=float(payload.get('retry_after_seconds', 60.0)),
                     message=str(
                         payload.get(
                             'message',
                             'Reflection abandoned by concurrent refresh; retry.',
                         )
                     ),
+                    hint=str(hint) if hint else None,
                 )
         response.raise_for_status()
         return ReflectionResultDTO(**response.json())

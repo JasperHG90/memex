@@ -61,6 +61,17 @@ Each entity reflection opens its own short DB sessions for the DB-touching phase
 
 No Postgres advisory locks are taken on the reflection path. The earlier `pg_try_advisory_xact_lock(hashtext('reflect:<id>'))` pattern was removed because the advisory lock was held at *transaction scope* — i.e. across the orchestrator's batch and therefore across every DSPy LLM call in the batch (30–60 s per entity), pinning MVCC snapshots open against `VACUUM`. The CAS UPDATE delivers the same write-time exclusion without spanning LLM I/O.
 
+#### Surface-adapter behavior on abandons
+
+For the **synchronous** on-demand reflection path (`summarize_node`, `reconsolidate_entity`) — i.e. paths that fan out to user-facing surfaces — a CAS abandon is translated through the surface adapters:
+
+- **HTTP** (`POST /api/v1/memories/summarize-node`): returns **503** with body `{"error": "reflection_abandoned", "retry_after_seconds": N, "message": ..., "hint": ...}` and a `Retry-After` header. `retry_after_seconds` mirrors the summarize-node rate-limit window (default 60s) so a naive retry won't immediately 429.
+- **HTTP client** (`memex_common.client`): raises `ReflectionAbandoned(retry_after_seconds, message, hint)` parallel to `RateLimitExceeded`.
+- **MCP** (`memex_memory_summarize_node`) and **Hermes** plugin (`memex_memory_summarize_node`): each catch `ReflectionAbandoned` and return a structured envelope `{"error": "reflection_abandoned", "entity_id": ..., "retry_after_seconds": ..., "message": ..., "hint": ...}` rather than a generic tool-failure.
+- **CLI/HTTP `/memory/reconsolidate`**: the response dict carries `"abandoned": true` so agents can distinguish "reflected but no new observations" from "concurrent worker won the race; re-read the model".
+
+The recommended agent action on `reflection_abandoned` is to **re-read** the entity's mental model directly (the fresh state is already persisted by the concurrent winner) rather than retry the synchronous reflection — the envelope's `hint` field surfaces this guidance. The asynchronous (background) reflection path swallows abandons internally via `mark_abandoned` → PENDING re-enqueue; no envelope is generated.
+
 ## Reflection Pipeline Overview
 
 ```mermaid
