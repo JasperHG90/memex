@@ -944,7 +944,7 @@ Use this in preference to re-sending the full body via `POST /api/v1/notes` when
 
 ### `PATCH /api/v1/notes/{note_id}/status`
 
-Set note lifecycle status: `active`, `superseded`, `appended`, or `archived`. **Cascades:** `superseded` marks every memory unit stale. `archived` records `archived_at` and flips units to `is_deprioritized=true` (FSFM suppression) — surface via `include_deprioritized=True`, restore via `POST /api/v1/memory/{unit_id}/restore`.
+Set note lifecycle status: `active` or `superseded`. **Cascade:** `superseded` marks every memory unit stale. To append content to an existing note, use `POST /api/v1/notes/append` (atomic + idempotent). To archive, use the dedicated archive endpoint, which records `archived_at` and flips units to `is_deprioritized=true` (FSFM suppression) — surface via `include_deprioritized=True`, restore via `POST /api/v1/memory/{unit_id}/restore`.
 
 #### Path Parameters
 
@@ -963,7 +963,7 @@ Set note lifecycle status: `active`, `superseded`, `appended`, or `archived`. **
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `status` | string | Yes | New status: `active`, `superseded`, `appended`, or `archived`. |
+| `status` | string | Yes | New status: `active` or `superseded`. |
 | `linked_note_id` | UUID | No | UUID of the replacing/parent note. |
 
 #### Response (200)

@@ -25,17 +25,37 @@ _memex_emit_systemMessage() {
     fi
 }
 
-if ! command -v uvx >/dev/null 2>&1; then
-    _memex_emit_systemMessage <<'EOF'
+# MEMEX_LOCAL_PATH escape hatch — point at a local Memex workspace checkout
+# instead of `uvx`-installing from GitHub. Used by the eval suite to run
+# claude-code against the same code path Hermes runs against.
+if [ -n "${MEMEX_LOCAL_PATH:-}" ]; then
+    if ! command -v uv >/dev/null 2>&1; then
+        _memex_emit_systemMessage <<'EOF'
+{"systemMessage": "❌ MEMEX_LOCAL_PATH is set but `uv` is not on PATH."}
+EOF
+        memex() { return 1; }
+        return 0 2>/dev/null || exit 0
+    fi
+    if [ ! -d "$MEMEX_LOCAL_PATH" ]; then
+        memex() { return 1; }
+        return 0 2>/dev/null || exit 0
+    fi
+    _memex_local_path="$MEMEX_LOCAL_PATH"
+else
+    _memex_local_path=""
+
+    if ! command -v uvx >/dev/null 2>&1; then
+        _memex_emit_systemMessage <<'EOF'
 {"systemMessage": "❌ `uvx` is not on PATH. Hooks require it to run the Memex CLI.\n\nInstall uv: https://docs.astral.sh/uv/getting-started/installation/"}
 EOF
-    # Stub out memex so callers can still source us safely; calls just fail.
-    memex() { return 1; }
-    return 0 2>/dev/null || exit 0
-fi
+        # Stub out memex so callers can still source us safely; calls just fail.
+        memex() { return 1; }
+        return 0 2>/dev/null || exit 0
+    fi
 
-_memex_ref="${MEMEX_PLUGIN_VERSION:-latest}"
-_memex_pkg="memex-cli @ git+https://github.com/JasperHG90/memex.git@${_memex_ref}#subdirectory=packages/cli"
+    _memex_ref="${MEMEX_PLUGIN_VERSION:-latest}"
+    _memex_pkg="memex-cli @ git+https://github.com/JasperHG90/memex.git@${_memex_ref}#subdirectory=packages/cli"
+fi
 
 # Validate a non-`latest` ref against the remote, with a day-grained on-disk
 # cache so we don't hit `git ls-remote` on every hook invocation. The remote
@@ -89,7 +109,7 @@ _memex_validate_ref() {
     return 1
 }
 
-if [ "$_memex_ref" != "latest" ]; then
+if [ -z "$_memex_local_path" ] && [ "$_memex_ref" != "latest" ]; then
     if ! _memex_validate_ref "$_memex_ref"; then
         # Build the diagnostic JSON via `printf` + `jq --arg` rather than an
         # unquoted heredoc. The previous `<<EOF` form would expand `$(...)`
@@ -134,12 +154,18 @@ memex() {
     # `gtimeout(1)` is the homebrew/coreutils name. Probe both before
     # falling back to an unbounded call so a hung server can't quietly
     # stall hooks on Apple machines.
-    if command -v timeout >/dev/null 2>&1; then
-        timeout "$_timeout" uvx --from "$_memex_pkg" memex "$@"
-    elif command -v gtimeout >/dev/null 2>&1; then
-        gtimeout "$_timeout" uvx --from "$_memex_pkg" memex "$@"
+    local _cmd
+    if [ -n "$_memex_local_path" ]; then
+        _cmd=(uv run --project "$_memex_local_path" --package memex-cli memex "$@")
     else
-        uvx --from "$_memex_pkg" memex "$@"
+        _cmd=(uvx --from "$_memex_pkg" memex "$@")
+    fi
+    if command -v timeout >/dev/null 2>&1; then
+        timeout "$_timeout" "${_cmd[@]}"
+    elif command -v gtimeout >/dev/null 2>&1; then
+        gtimeout "$_timeout" "${_cmd[@]}"
+    else
+        "${_cmd[@]}"
     fi
 }
 

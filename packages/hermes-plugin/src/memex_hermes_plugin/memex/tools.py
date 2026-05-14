@@ -774,7 +774,7 @@ LIST_NOTES_SCHEMA: dict[str, Any] = {
             },
             'status': {
                 'type': 'string',
-                'description': 'Filter by lifecycle status (active/superseded/appended/archived).',
+                'description': 'Filter by lifecycle status (active/superseded/archived).',
             },
             'date_by': {
                 'type': 'string',
@@ -974,7 +974,7 @@ GET_LINEAGE_SCHEMA: dict[str, Any] = {
 
 # --- Lifecycle/templates (Stream 4) ---
 
-_VALID_NOTE_STATUSES = frozenset({'active', 'superseded', 'appended', 'archived'})
+_VALID_NOTE_STATUSES = frozenset({'active', 'superseded', 'archived'})
 
 # Canonical set accepted by ``client.list_notes(date_field=...)`` — see the
 # docstring at ``packages/common/src/memex_common/client.py:list_notes``.
@@ -983,13 +983,15 @@ _VALID_DATE_BY = frozenset({'coalesce', 'created_at', 'publish_date'})
 SET_NOTE_STATUS_SCHEMA: dict[str, Any] = {
     'name': 'memex_set_note_status',
     'description': (
-        'Set note lifecycle status: active, superseded, appended, or archived. '
+        'Set note lifecycle status: active, superseded, or archived. '
         '**Cascades:** `superseded` flags every memory unit extracted from '
         'the note as stale. `archived` records an `archived_at` timestamp '
         'and flips the note units to `is_deprioritized=true` (FSFM '
         'suppression) — the units stay active and can be surfaced via '
         '`include_deprioritized=True` retrieval, then restored with '
-        '`memex_memory_restore`. Prefer letting contradiction detection '
+        '`memex_memory_restore`. To append content to an existing note, '
+        'use `memex_append_note`; that is the only path that sets the '
+        '`appended_to` relation. Prefer letting contradiction detection '
         'auto-supersede facts via a new ingested note; reach for this tool '
         'only for explicit archival or when an immediate state change is '
         'required. Optionally link to the replacing/parent note via '
@@ -1004,8 +1006,8 @@ SET_NOTE_STATUS_SCHEMA: dict[str, Any] = {
             },
             'status': {
                 'type': 'string',
-                'enum': ['active', 'superseded', 'appended', 'archived'],
-                'description': 'New status: active, superseded, appended, or archived.',
+                'enum': ['active', 'superseded', 'archived'],
+                'description': 'New status: active, superseded, or archived.',
             },
             'linked_note_id': {
                 'type': 'string',
@@ -2749,6 +2751,12 @@ def handle_set_note_status(
     except ValueError as e:
         return tool_error(str(e))
 
+    if status == 'appended':
+        return tool_error(
+            "'appended' is not a settable lifecycle status; use "
+            "'memex_append_note' to append content to a note (that is the "
+            'only path that sets the appended_to relation).'
+        )
     if status not in _VALID_NOTE_STATUSES:
         return tool_error(
             f'Invalid status: {status!r}. Must be one of: {", ".join(sorted(_VALID_NOTE_STATUSES))}'

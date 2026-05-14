@@ -281,7 +281,7 @@ async def set_note_status(
 ) -> dict[str, Any]
 ```
 
-Set a note's lifecycle status (`active`, `superseded`, `appended`, or `archived`). `archived` records `Note.archived_at` and cascades `MemoryUnit.is_deprioritized=true` (FSFM suppression) rather than `status='stale'`.
+Set a note's lifecycle status (`active` or `superseded`). Raises `ValueError` if `status='appended'` is passed; append content via `Ingestion.append_to_note` (HTTP `POST /notes/append`, MCP `memex_append_note`) instead. To archive, use the dedicated archive endpoint, which records `Note.archived_at` and cascades `MemoryUnit.is_deprioritized=true` (FSFM suppression) rather than `status='stale'`.
 
 ### `update_note_title`
 

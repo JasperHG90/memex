@@ -210,13 +210,44 @@ class NoteService:
         status: str,
         linked_note_id: UUID | None = None,
     ) -> dict[str, Any]:
-        """Set lifecycle status (``'active' | 'superseded' | 'appended' | 'archived'``); archive cascades via FSFM (units deprioritized, not stale)."""
+        """Set lifecycle status.
+
+        Accepts ``'active' | 'superseded' | 'archived'``. ``'appended'``
+        is rejected with ``ValueError``; use the append verb (HTTP
+        ``POST /notes/append`` with the parent identifier in the request
+        body, or the ``memex_append_note`` tool) to set the
+        ``appended_to`` relation atomically with post-commit
+        contradiction detection.
+
+        Cascades:
+        * ``'superseded'`` marks every memory unit ``status='stale'`` and
+          prunes mental-model evidence; affected entities are queued
+          for reflection.
+        * ``'archived'`` records ``Note.archived_at`` and flips units to
+          ``is_deprioritized=true`` (FSFM suppression) — units stay
+          ``status='active'``, can be surfaced via
+          ``include_deprioritized=True``, and restored individually via
+          ``memex_memory_restore``. ``Note.status`` is intentionally
+          NOT flipped here so an already-superseded or appended note
+          keeps its provenance label.
+        * ``'active'`` reactivates every unit and clears the
+          archive/supersede pointers.
+        """
         from datetime import datetime, timezone
 
         from memex_core.memory.sql_models import MemoryUnit, Note
         from sqlmodel import select
 
-        valid_statuses = ('active', 'superseded', 'appended', 'archived')
+        if status == 'appended':
+            raise ValueError(
+                "'appended' is not a settable lifecycle status; append "
+                'content to an existing note via the append verb (HTTP '
+                'POST /notes/append with the parent identifier in the body, '
+                'or the `memex_append_note` tool), which is the only path '
+                'that sets the appended_to FK and runs post-commit '
+                'contradiction detection atomically.'
+            )
+        valid_statuses = ('active', 'superseded', 'archived')
         if status not in valid_statuses:
             raise ValueError(f'Invalid status: {status}. Must be one of {valid_statuses}.')
 
@@ -242,16 +273,13 @@ class NoteService:
             elif status == 'archived':
                 # Archive intent is recorded in archived_at + unit
                 # deprioritization; doc.status is intentionally left
-                # alone so an already-superseded or appended note keeps
-                # its provenance label (both signals can coexist).
+                # alone so an already-superseded note keeps its
+                # provenance label (both signals can coexist).
                 # Idempotent re-archive preserves the original
                 # archived_at so the MCP idempotentHint holds.
                 if doc.archived_at is None:
                     doc.archived_at = datetime.now(timezone.utc)
                 await self._deprioritize_note_units(session, note_id)
-            elif status == 'appended':
-                doc.status = status
-                doc.appended_to = linked_note_id
             elif status == 'active':
                 # Only reverse ``is_deprioritized`` when the note was actually
                 # archived; otherwise preserve per-unit deprioritize signals.

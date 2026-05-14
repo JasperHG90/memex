@@ -310,12 +310,12 @@ Atomically append a content delta to an existing note's body without reading it 
 
 ### `memex_set_note_status`
 
-Set note lifecycle status: `active`, `superseded`, `appended`, or `archived`. **Cascades:** `superseded` flags every memory unit extracted from the note as stale. `archived` records `archived_at` and flips the note units to `is_deprioritized=true` (FSFM suppression) — the units stay active and can be surfaced via `include_deprioritized=True` retrieval, then restored individually with `memex_memory_restore`. Optionally link to the replacing/parent note.
+Set note lifecycle status: `active` or `superseded`. **Cascades:** `superseded` flags every memory unit extracted from the note as stale. To append content to an existing note, use `memex_append_note` (atomic + idempotent). To archive a note, use the dedicated archive endpoint, which records `archived_at` and flips the note units to `is_deprioritized=true` (FSFM suppression — units stay active and can be surfaced via `include_deprioritized=True` retrieval, then restored individually with `memex_memory_restore`). Optionally link to the replacing/parent note.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `note_id` | string | Yes | - | The UUID of the note. |
-| `status` | string | Yes | - | New status: `active`, `superseded`, `appended`, or `archived`. |
+| `status` | string | Yes | - | New status: `active` or `superseded`. |
 | `linked_note_id` | string | No | - | UUID of the note that supersedes or contains this one. |
 
 ---

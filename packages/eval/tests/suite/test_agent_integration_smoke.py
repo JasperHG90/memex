@@ -154,6 +154,7 @@ class TestMutatingDiscipline:
         'kv_writes_app_setting',
         'lifecycle_append_meeting',
         'lifecycle_archive_legacy_warehouse_note',
+        'lifecycle_append_parent_remains_retrievable',
         'review_loop_drives_due',
         'review_loop_records_rating',
         'asset_lifecycle_detach',

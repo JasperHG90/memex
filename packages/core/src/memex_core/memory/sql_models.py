@@ -285,8 +285,9 @@ class Note(SQLModel, table=True):  # type: ignore
             server_default='active',
             index=True,
         ),
-        description='Note lifecycle status: active, superseded, appended. '
-        'Archive intent is recorded in archived_at + FSFM (units deprioritized).',
+        description='Note lifecycle status: active or superseded. '
+        'Append intent is recorded via the dedicated append endpoint; '
+        'archive intent is recorded in archived_at + FSFM (units deprioritized).',
     )
 
     superseded_by: UUID | None = Field(
@@ -330,7 +331,7 @@ class Note(SQLModel, table=True):  # type: ignore
     __table_args__ = (
         Index('idx_notes_content_hash', 'content_hash'),
         CheckConstraint(
-            "status IN ('active', 'superseded', 'appended')",
+            "status IN ('active', 'superseded')",
             name='ck_notes_status',
         ),
         Index(

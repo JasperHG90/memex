@@ -2137,7 +2137,7 @@ def test_set_note_status_schema_requires_note_id_and_status():
     required = SET_NOTE_STATUS_SCHEMA['parameters']['required']
     assert 'note_id' in props and 'status' in props and 'linked_note_id' in props
     assert set(required) == {'note_id', 'status'}
-    assert props['status'].get('enum') == ['active', 'superseded', 'appended', 'archived']
+    assert props['status'].get('enum') == ['active', 'superseded', 'archived']
 
 
 def test_update_user_notes_schema_allows_null_user_notes():
@@ -2173,9 +2173,9 @@ def test_register_template_schema_requires_slug_and_template():
 # -- set_note_status (AC-027..AC-030) ----------------------------------------
 
 
-@pytest.mark.parametrize('status', ['active', 'superseded', 'appended', 'archived'])
-def test_set_note_status_accepts_all_four_statuses(config, vault_id, status):
-    """AC-028: all four documented statuses are accepted client-side."""
+@pytest.mark.parametrize('status', ['active', 'superseded', 'archived'])
+def test_set_note_status_accepts_all_documented_statuses(config, vault_id, status):
+    """AC-028: every documented status is accepted client-side."""
     api = Mock()
     api.set_note_status = AsyncMock(return_value={'status': status})
     note_uuid = uuid4()
@@ -2209,6 +2209,27 @@ def test_set_note_status_rejects_unknown_status(config, vault_id):
     data = json.loads(out)
     assert 'error' in data
     assert 'bogus' in data['error']
+    api.set_note_status.assert_not_awaited()
+
+
+def test_set_note_status_rejects_appended_with_pointer_to_append_tool(config, vault_id):
+    """``appended`` is a chronology marker set by ``memex_append_note``; the
+    Hermes client rejects it locally before reaching the API and the error
+    message names the append verb so the caller can self-correct."""
+    api = Mock()
+    api.set_note_status = AsyncMock()
+    out = dispatch(
+        'memex_set_note_status',
+        {'note_id': str(uuid4()), 'status': 'appended'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    err = data['error']
+    assert "'appended' is not a settable lifecycle status" in err
+    assert 'memex_append_note' in err
     api.set_note_status.assert_not_awaited()
 
 

@@ -704,10 +704,16 @@ class ClaudeCodeBackend(AnswerBackend):
         except Exception:
             pass
 
+        # The MCP server's lifespan appends ``/api/v1/`` to MEMEX_SERVER_URL
+        # itself; passing the eval's full ``…/api/v1/`` URL would double the
+        # prefix and 404 every MCP call. Strip before injecting.
+        mcp_server_url = server_url.rstrip('/')
+        if mcp_server_url.endswith('/api/v1'):
+            mcp_server_url = mcp_server_url[: -len('/api/v1')]
         with tempfile.TemporaryDirectory(prefix='memex-eval-claude-') as tmp:
             tmpdir = Path(tmp)
             (tmpdir / '.mcp.json').write_text(
-                _CLAUDE_MCP_TEMPLATE.format(workspace=workspace_root, server_url=server_url)
+                _CLAUDE_MCP_TEMPLATE.format(workspace=workspace_root, server_url=mcp_server_url)
             )
             md_template = (
                 _CLAUDE_MD_WITH_PLUGIN if self.plugin_dir is not None else _CLAUDE_MD_NO_PLUGIN
@@ -727,6 +733,14 @@ class ClaudeCodeBackend(AnswerBackend):
             subprocess.run(['git', 'init'], cwd=tmpdir, capture_output=True, check=False)
 
             cmd = self._build_subprocess_cmd(scenario)
+            # Inject MEMEX_LOCAL_PATH so the plugin's SessionStart hook
+            # resolves `memex` against the workspace checkout (where this
+            # branch's agent-surface refactor lives) instead of `uvx --from
+            # git+https://github.com/.../memex@latest`. Explicit env values
+            # are respected so callers can opt out for distribution tests.
+            child_env = os.environ.copy()
+            if 'MEMEX_LOCAL_PATH' not in os.environ:
+                child_env['MEMEX_LOCAL_PATH'] = workspace_root
             try:
                 proc = subprocess.run(
                     cmd,
@@ -735,6 +749,7 @@ class ClaudeCodeBackend(AnswerBackend):
                     text=True,
                     timeout=self.timeout_s,
                     check=False,
+                    env=child_env,
                 )
             except subprocess.TimeoutExpired:
                 out.error = f'{cmd[0]} subprocess timed out after {self.timeout_s}s'

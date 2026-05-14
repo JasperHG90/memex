@@ -641,3 +641,18 @@ class TestSetNoteStatusCascade:
         assert unit.status == 'active'
         assert unit.success_co_count == 17
         assert unit.failure_co_count == 4
+
+    @pytest.mark.asyncio
+    async def test_set_note_status_appended_raises_with_pointer_to_append(
+        self, service: NoteService
+    ) -> None:
+        """``'appended'`` is not a settable lifecycle status; the message
+        must redirect to the public append verb, not an internal symbol."""
+        note_id = uuid4()
+        with pytest.raises(ValueError) as exc_info:
+            await service.set_note_status(note_id, 'appended')
+        msg = str(exc_info.value)
+        assert "'appended' is not a settable lifecycle status" in msg
+        assert 'memex_append_note' in msg
+        assert 'POST /notes/append' in msg
+        service.metastore.session.assert_not_called()

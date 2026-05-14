@@ -847,6 +847,44 @@ suite.register(
 )
 
 
+suite.register(
+    id='lifecycle_append_parent_remains_retrievable',
+    group='lifecycle',
+    query=('What did the team decide for analytics in the March meeting notes?'),
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_note_search', 'memex_memory_search'],
+                min_count=1,
+                match_mode='any',
+            ),
+            LLMJudge(
+                type='llm_judge',
+                rubric=(
+                    'The answer names BigQuery (the decision the prior '
+                    'scenario appended to the March meeting notes) and '
+                    'attributes it to the March meeting notes. A response '
+                    'that says the note is gone, archived, stale, or '
+                    'cannot be found fails. A response that mentions a '
+                    'different analytics tool fails. The append flow '
+                    'extends content in-place on the same note_id, so the '
+                    'note must still be retrievable as an active note '
+                    'containing both the original content and the '
+                    'BigQuery addition.'
+                ),
+                threshold=0.5,
+            ),
+        ],
+    ),
+    replicates_override=1,
+    depends_on_prior_scenarios=['lifecycle_append_meeting'],
+    mutating_scenario=True,
+)
+
+
 # --- Plugin-gap xfail tripwires (xfail under hermes; should xpass under claude-code) ---
 #
 # Two earlier `review_loop_*` tripwires were dropped: the MCP tools they
