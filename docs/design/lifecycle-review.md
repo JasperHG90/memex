@@ -20,7 +20,7 @@ Two of the four lifecycle states earn less of their keep post-FSFM: `archived` d
 | Q3 — `archived` destructive cascade | **Consolidate** | V14 (proposed) |
 | Q4 — `appended` as a status value | **Consolidate** | V15 (proposed) |
 | Q5 — Hard overrides in FSFM | **Keep** | — |
-| Q6 — Orphan `contradicts` links | **Patch** | V16 (proposed) |
+| Q6 — Orphan `contradicts` links | **Patch** | V16 — Implemented |
 
 ---
 
@@ -130,7 +130,7 @@ Two options:
 
 The second option aligns with the non-destructive-curation invariant (P1).
 
-**Follow-up V16 (proposed):** Add lint rule `orphan_contradicts_links_post_stale` to `packages/core/src/memex_core/services/lint.py`. Rule predicate: `MemoryLink.link_type='contradicts'` where the `to_unit_id` references a unit with `status='stale'` or `is_deprioritized=true`. Emits a `MaintenanceProposal` (`packages/core/src/memex_core/memory/sql_models.py:1721`) with `lint_type='quality'` (per the CHECK at `:1797`: one of `structural` / `quality` / `governance` / `schema` — `quality` fits because the FK is intact and the orphan link is a data-hygiene concern, not a graph-integrity violation) and `source='rule'`. Surfaces via `memex_get_lint_flags`. Observability: counter `memex_orphan_contradicts_links_total{vault_id}`. Migration: none (read-only lint rule). Eval coverage: integration scenario seeds a contradiction edge, archives the source, verifies the lint rule proposes the link for triage without auto-applying.
+**V16 — Implemented.** Lint rule `orphan_contradicts_links_post_stale` is registered in `V1_RULES` at `packages/core/src/memex_core/services/lint.py` with `lint_type=LintType.QUALITY` and `target_type='memory_unit'`. The SQL predicate aggregates per active source unit: `MemoryLink.link_type='contradicts' AND target_unit.status='stale' AND source_unit.status='active' AND link.vault_id=:vault_id`. The partial unique index `(rule_name, target_type, target_id, vault_id) WHERE status='pending'` collapses multiple stale targets reached from the same source into a single proposal; `evidence` carries `orphan_link_count`, the list of `stale_target_unit_ids`, and the oldest `stale_targets_oldest_updated_at` so the operator can navigate to the source unit and reap the orphan edges through the lint dashboard. Surfaces via `memex_get_lint_flags` (HTTP, MCP, CLI) without any surface code change — the `lint_type` query path already accepts the new rule. Observability: the existing `memex_lint_findings_total{rule_name, lint_type, vault_id}` Counter (`packages/core/src/memex_core/metrics.py`) satisfies the per-vault accumulation signal at `rule_name='orphan_contradicts_links_post_stale'`; no dedicated `memex_orphan_contradicts_links_total{vault_id}` counter is shipped because it would duplicate the same series under a narrower name. Tests: `packages/core/tests/integration/services/test_int_lint.py` extends `_seed_all_rules_fire` to seed the orphan case (asserting `total_findings == 5` and idempotent re-run), and `packages/core/tests/integration/services/test_int_lint_orphan_contradicts.py` carries focused negative-case tests (active target, cross-vault scoping, multi-target aggregation, non-`contradicts` link-type rejection). Migration: none (read-only lint rule).
 
 ---
 
@@ -141,7 +141,7 @@ The second option aligns with the non-destructive-curation invariant (P1).
 | V13 | Document supersession→stale→counter retention | Doc + unit test | N/A | N/A | unit test only |
 | V14 | Migrate `archived` into FSFM (`is_deprioritized` cascade) | Schema + service | Drop `archived` from `Note.status` enum; add `Note.archived_at`; backfill units | `memex_set_note_status('archived')` dispatch change | internal-regression scenario |
 | V15 | Drop `appended` from `Note.status` enum | Schema + service | Backfill `status='active'` for existing `appended` rows | `memex_set_note_status` rejects `'appended'` | regression scenario |
-| V16 | Lint rule for orphan `contradicts` links to stale targets | Service + lint | N/A | new `MaintenanceProposal` shape via `memex_get_lint_flags` | integration scenario |
+| V16 ✅ | Lint rule for orphan `contradicts` links to stale targets | Service + lint | N/A | new `MaintenanceProposal` shape via `memex_get_lint_flags` | integration scenario |
 
 Each follow-up file declares its own full DoD, anchors, parity, and eval coverage when it's authored via `memex-feature-plan`.
 
