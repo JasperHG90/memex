@@ -5,12 +5,13 @@ surfaces (MCP tool descriptions × 5 tools, hermes briefing constant, hermes
 templates fragment, Claude Code plugin rule, repo AGENTS.md). The test pinned
 cross-surface parity to catch drift between independent copies.
 
-After 2026-05-14 (three-tier agent-surface architecture): there is exactly
-one copy — ``memex_common.agent_surface.LAYER_ROUTING_PRIMER_TABLE`` /
-``LAYER_ROUTING_PRIMER_PROSE`` / ``LAYER_ROUTING_PRIMER_FRAGMENT``. Downstream
-surfaces re-export by object identity (no local string redefinition). Drift
-is impossible because there is only one source of truth — this file pins the
-SSOT itself plus the re-export identity invariants.
+After 2026-05-14 (three-tier agent-surface architecture): there are
+exactly two canonical renderings — ``LAYER_ROUTING_PRIMER_TABLE``
+(markdown table for briefing / claude-code rule) and
+``LAYER_ROUTING_PRIMER_FRAGMENT`` (bullet-list for MCP search-tool
+descriptions and Hermes per-turn templates). Downstream surfaces
+re-export by object identity (no local string redefinition). Drift is
+impossible because each rendering has exactly one source of truth.
 
 If a future surface intentionally wants the table, it should:
 1. Import ``LAYER_ROUTING_PRIMER_TABLE`` from ``memex_common.agent_surface``.
@@ -29,7 +30,6 @@ from __future__ import annotations
 
 from memex_common.agent_surface import (
     LAYER_ROUTING_PRIMER_FRAGMENT,
-    LAYER_ROUTING_PRIMER_PROSE,
     LAYER_ROUTING_PRIMER_TABLE,
 )
 from memex_hermes_plugin.memex.briefing import _LAYER_ROUTING_PRIMER
@@ -67,11 +67,11 @@ def test_table_carries_every_canonical_tool() -> None:
         )
 
 
-def test_prose_carries_every_layer_name() -> None:
-    """SSOT (prose form) must carry every layer name."""
+def test_fragment_carries_every_layer_name() -> None:
+    """SSOT (fragment form) must carry every layer name."""
     for layer in _LAYER_NAMES:
-        assert layer in LAYER_ROUTING_PRIMER_PROSE, (
-            f'LAYER_ROUTING_PRIMER_PROSE missing canonical layer name {layer!r}'
+        assert layer in LAYER_ROUTING_PRIMER_FRAGMENT, (
+            f'LAYER_ROUTING_PRIMER_FRAGMENT missing canonical layer name {layer!r}'
         )
 
 
@@ -115,7 +115,6 @@ def test_mcp_shim_reexports_are_ssot_objects() -> None:
 
     failures: list[str] = []
     for name, canonical in (
-        ('LAYER_ROUTING_PRIMER_PROSE', LAYER_ROUTING_PRIMER_PROSE),
         ('LAYER_ROUTING_PRIMER_TABLE', LAYER_ROUTING_PRIMER_TABLE),
         ('LAYER_ROUTING_PRIMER_FRAGMENT', LAYER_ROUTING_PRIMER_FRAGMENT),
     ):

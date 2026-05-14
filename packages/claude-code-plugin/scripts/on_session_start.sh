@@ -128,7 +128,7 @@ trap 'rm -f "$tmp_briefing" "$tmp_surface"' EXIT
 # the CLI bridge — no server roundtrip, cacheable prompt prefix.
 tmp_surface=$(mktemp)
 agent_surface_content=""
-if memex agent-surface --for=claude-code > "$tmp_surface" 2>/dev/null; then
+if memex agent-surface claude-code > "$tmp_surface" 2>/dev/null; then
     agent_surface_content=$(cat "$tmp_surface")
 fi
 

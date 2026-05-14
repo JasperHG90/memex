@@ -14,8 +14,8 @@ Output modes:
 - ``--output-format=json``: a JSON envelope ``{"systemPromptAdditions": "..."}``
   per Claude Code's SessionStart-hook contract.
 
-Profiles (``--for``):
-- ``universal`` (default) / ``generic``: only the Tier 1b universal block.
+Targets (positional, required):
+- ``universal`` / ``generic`` (alias): only the Tier 1b universal block.
 - ``hermes``: Tier 1b + the hermes-only Tier 2 harness (outcome lexicon +
   capture cadence). For environments embedding Hermes without going through
   the in-process plugin path.
@@ -26,7 +26,7 @@ Profiles (``--for``):
   is what the MCP ``instructions=`` field carries; the CLI exposes it for
   inspection / debugging.
 
-The output is deterministic: same flags → byte-equal output. This is what
+The output is deterministic: same args → byte-equal output. This is what
 lets the prompt-prefix cache (per dbreunig's Claude Code analysis) survive
 across sessions.
 """
@@ -50,7 +50,7 @@ app = typer.Typer(
 )
 
 
-class Profile(str, Enum):
+class Target(str, Enum):
     universal = 'universal'
     generic = 'generic'  # alias for universal
     hermes = 'hermes'
@@ -69,31 +69,28 @@ Progressive disclosure: `memex_tags()` → `memex_search(query, tags=[...])` →
 
 Vault defaults: writes default to the active vault; reads default to search vaults (.memex.yaml / global config). Pass `vault_id`/`vault_ids` to override.
 
-System-prompt composition: load `memex_common.agent_surface.compose_universal()` (Python) or `memex agent-surface --for=universal` (shell) for the universal Tier 1b system-prompt content. This MCP `instructions=` field is intentionally minimal — it carries transport facts only."""
+System-prompt composition: load `memex_common.agent_surface.compose_universal()` (Python) or `memex agent-surface universal` (shell) for the universal Tier 1b system-prompt content. This MCP `instructions=` field is intentionally minimal — it carries transport facts only."""
 
 
-def _compose_for_profile(profile: Profile) -> str:
-    if profile in (Profile.universal, Profile.generic):
+def _compose_for_target(target: Target) -> str:
+    if target in (Target.universal, Target.generic):
         return compose_universal()
-    if profile == Profile.hermes:
+    if target == Target.hermes:
         return compose_universal() + '\n\n' + HERMES_HARNESS
-    if profile == Profile.claude_code:
+    if target == Target.claude_code:
         return compose_universal() + '\n\n' + CLAUDE_CODE_HARNESS
-    if profile == Profile.mcp:
+    if target == Target.mcp:
         return _MCP_TRANSPORT
-    raise ValueError(f'unknown profile: {profile!r}')
+    raise ValueError(f'unknown target: {target!r}')
 
 
-# `app.command()` with no name + `no_args_is_help=True` + single-command app
-# flattens to `memex agent-surface [OPTIONS]` (no explicit `emit` subcommand
-# argument). Don't claim an `emit` subcommand exists — typer rejects
-# `memex agent-surface emit --for=...` because the bare flag is the only form.
+# `app.command()` with `no_args_is_help=True` on the single-command app makes
+# typer flatten this into `memex agent-surface TARGET [OPTIONS]`.
 @app.command()
 def emit(
-    for_: Profile = typer.Option(
-        Profile.universal,
-        '--for',
-        help='Composition profile: universal/generic, hermes, claude-code, mcp.',
+    target: Target = typer.Argument(
+        ...,
+        help='Composition target: universal/generic, hermes, claude-code, mcp.',
         case_sensitive=False,
     ),
     output_format: OutputFormat = typer.Option(
@@ -103,8 +100,8 @@ def emit(
         case_sensitive=False,
     ),
 ) -> None:
-    """Emit the system-prompt content for the requested profile to stdout."""
-    body = _compose_for_profile(for_)
+    """Emit the system-prompt content for the requested target to stdout."""
+    body = _compose_for_target(target)
     if output_format == OutputFormat.json:
         sys.stdout.write(json.dumps({'systemPromptAdditions': body}))
     else:

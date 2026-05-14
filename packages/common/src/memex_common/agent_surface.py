@@ -29,29 +29,8 @@ Exports:
 from __future__ import annotations
 
 # ---------------------------------------------------------------------------
-# 4-layer memory routing (existing; retained verbatim for backwards parity).
+# 4-layer memory routing — single bullet-list form (PROSE was redundant).
 # ---------------------------------------------------------------------------
-
-LAYER_ROUTING_PRIMER_PROSE = (
-    'Memex stores four memory layers. Pick the right tool for the layer you need:\n'
-    '\n'
-    '- Episodic ("what happened, when") → memex_note_search / memex_recent_notes /\n'
-    '  memex_find_note. Notes are timestamped, source-attributed records of sessions,\n'
-    '  reflections, and decisions.\n'
-    '- Semantic ("decontextualised facts") → memex_memory_search /\n'
-    '  memex_get_memory_units / memex_get_entity_mentions. MemoryUnits are short\n'
-    '  fact/observation/event statements extracted from notes.\n'
-    '- Conceptual ("synthesised mental models") → memex_survey /\n'
-    '  memex_get_entities (with mental_models=True). MentalModels are reflection\n'
-    '  output: strengthening / weakening / stable trends per entity.\n'
-    '- Procedural-observations ("adaptations to context") → memex_kv_search /\n'
-    "  memex_kv_get with prefix='procedure:'. Memex stores observations about how\n"
-    '  to adapt your existing skills, not the procedures themselves.\n'
-    '\n'
-    'If unsure, default to memex_memory_search for content-shaped questions and\n'
-    'memex_note_search for source-shaped questions ("show me the notes about X").'
-)
-
 
 LAYER_ROUTING_PRIMER_TABLE = """### Memory layers and tool routing
 
@@ -96,10 +75,21 @@ LAYER_ROUTING_PRIMER_FRAGMENT = (
 
 CRITICAL_HEADER = """## Critical constraints
 
-1. `memex_record_outcome` requires `units=[{unit_id, verb, reason}]`. Bare `success=True` → HTTP 400.
-2. Virtual units (`unit_metadata.virtual: true`) → `memex_memory_deprioritize` returns 404. Filter before paired writes.
-3. KV namespace = scope qualifier (NOT grammatical person). "I prefer X for this project" → `project:<id>:` not `user:`.
-4. Cite every load-bearing claim grounded in Memex content. Never fabricate titles/ids."""
+<critical_constraint name="record_outcome_shape">
+`memex_record_outcome` requires `units=[{unit_id, verb, reason}]`. Bare `success=True` → HTTP 400.
+</critical_constraint>
+
+<critical_constraint name="virtual_unit_404">
+Virtual units (`unit_metadata.virtual: true`) → `memex_memory_deprioritize` returns 404. Filter before paired writes.
+</critical_constraint>
+
+<critical_constraint name="kv_scope_qualifier">
+KV namespace = scope qualifier (NOT grammatical person). "I prefer X for this project" → `project:<id>:` not `user:`.
+</critical_constraint>
+
+<critical_constraint name="citations_required">
+Cite every load-bearing claim grounded in Memex content. Never fabricate titles/ids.
+</critical_constraint>"""
 
 
 STORAGE_MODEL = """## Storage layers
@@ -155,9 +145,11 @@ Triggers: "evolved", "used to", "history of", "what changed", "audit".
 
 VIRTUAL_UNIT = """## Virtual units (cannot be deprioritized)
 
-`unit_metadata.virtual: true` units are synthesized from MentalModel observations — no DB row. `memex_memory_deprioritize` on their UUID returns 404.
+<critical_constraint name="virtual_unit_filter">
+`unit_metadata.virtual: true` units are synthesized from MentalModel observations — no DB row. `memex_memory_deprioritize` on their UUID returns HTTP 404.
 
-Filter candidates to `unit_metadata.virtual` unset/false BEFORE paired writes. If empty, fall back to entity-anchored search to recover real source units."""
+Filter candidates to `unit_metadata.virtual` unset/false BEFORE paired writes. If empty, fall back to entity-anchored search to recover real source units.
+</critical_constraint>"""
 
 
 KV_NAMESPACE = """## KV namespace by scope qualifier
@@ -185,10 +177,21 @@ One reference per load-bearing claim. Never fabricate titles or ids — say "I c
 
 CRITICAL_FOOTER = """## Critical reminders
 
-- `memex_record_outcome`: `units=[{unit_id, verb, reason}]`. Bare `success=True` → 400.
-- Virtual units (`unit_metadata.virtual: true`) → deprio returns 404; filter them.
-- KV namespace: scope qualifier wins. "for this project" → `project:<id>:` even with "I"/"my".
-- Cite inline; never fabricate."""
+<critical_reminder name="record_outcome_shape">
+`memex_record_outcome`: `units=[{unit_id, verb, reason}]`. Bare `success=True` → 400.
+</critical_reminder>
+
+<critical_reminder name="virtual_unit_filter">
+Virtual units (`unit_metadata.virtual: true`) → deprio returns 404; filter them.
+</critical_reminder>
+
+<critical_reminder name="kv_scope_qualifier">
+KV namespace: scope qualifier picks the namespace. "for this project" → `project:<id>:` even with "I"/"my".
+</critical_reminder>
+
+<critical_reminder name="citations_required">
+Cite inline; never fabricate.
+</critical_reminder>"""
 
 
 # ---------------------------------------------------------------------------
@@ -232,7 +235,6 @@ def compose_universal() -> str:
 __all__ = [
     # Existing 4-layer routing primer (Tier 1b component).
     'LAYER_ROUTING_PRIMER_FRAGMENT',
-    'LAYER_ROUTING_PRIMER_PROSE',
     'LAYER_ROUTING_PRIMER_TABLE',
     # New universal sections.
     'AXES',

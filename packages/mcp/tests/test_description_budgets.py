@@ -38,9 +38,9 @@ _INSTRUCTIONS_CHAR_CAP = 2_000
 _TOOL_DESC_CHAR_CAP = 1_200
 
 # F3 deliberate choice: five search tools embed
-# ``memex_common.agent_surface.LAYER_ROUTING_PRIMER_PROSE`` so an agent
+# ``memex_common.agent_surface.LAYER_ROUTING_PRIMER_FRAGMENT`` so an agent
 # picking among them has the routing decision inline with the tool. This
-# adds ~700 chars to each description; the cap is bumped per-tool below.
+# adds ~600 chars to each description; the cap is bumped per-tool below.
 # The primer itself is still authored once (SSOT) — the inclusion is a
 # per-tool strategic-guidance choice, not duplication.
 _LAYER_PRIMER_TOOLS_CHAR_CAP = 1_800
@@ -96,28 +96,28 @@ def _cap_for(name: str) -> int:
     return _LAYER_PRIMER_TOOLS_CHAR_CAP if name in _LAYER_PRIMER_TOOLS else _TOOL_DESC_CHAR_CAP
 
 
-def test_layer_primer_prose_only_in_F3_tools(tool_descriptions: dict[str, str]) -> None:
-    """The 4-layer routing primer prose is intentionally embedded inline in
+def test_layer_primer_only_in_F3_tools(tool_descriptions: dict[str, str]) -> None:
+    """The 4-layer routing primer is intentionally embedded inline in
     exactly the 5 F3 search tools (per the F3 design). It must NOT appear
     in any OTHER tool description — that would silently double the
     Tier 1a budget for that tool and undo the consolidation."""
-    # Unique sentinel from LAYER_ROUTING_PRIMER_PROSE that wouldn't appear
+    # Unique sentinel from LAYER_ROUTING_PRIMER_FRAGMENT that wouldn't appear
     # anywhere else in a tool contract.
-    primer_marker = 'Memex stores four memory layers'
+    primer_marker = 'Memex memory layers (route by query type):'
     leaked = [
         name
         for name, desc in tool_descriptions.items()
         if primer_marker in desc and name not in _LAYER_PRIMER_TOOLS
     ]
     assert not leaked, (
-        f'LAYER_ROUTING_PRIMER_PROSE leaked into non-F3 tools: {leaked!r}. '
+        f'LAYER_ROUTING_PRIMER_FRAGMENT leaked into non-F3 tools: {leaked!r}. '
         f'The primer is only meant to inline into {sorted(_LAYER_PRIMER_TOOLS)!r}.'
     )
 
 
 def test_each_tool_description_within_budget(tool_descriptions: dict[str, str]) -> None:
     """Per-tool descriptions stay within the Tier 1a cap (F3 primer tools
-    have a higher cap because they embed ``LAYER_ROUTING_PRIMER_PROSE``)."""
+    have a higher cap because they embed ``LAYER_ROUTING_PRIMER_FRAGMENT``)."""
     over = {
         name: (len(desc), _approx_tokens(desc), _cap_for(name))
         for name, desc in tool_descriptions.items()

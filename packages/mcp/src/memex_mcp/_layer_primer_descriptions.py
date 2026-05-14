@@ -16,12 +16,10 @@ from __future__ import annotations
 
 from memex_common.agent_surface import (
     LAYER_ROUTING_PRIMER_FRAGMENT,
-    LAYER_ROUTING_PRIMER_PROSE,
     LAYER_ROUTING_PRIMER_TABLE,
 )
 
 __all__ = [
     'LAYER_ROUTING_PRIMER_FRAGMENT',
-    'LAYER_ROUTING_PRIMER_PROSE',
     'LAYER_ROUTING_PRIMER_TABLE',
 ]

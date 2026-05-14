@@ -131,6 +131,14 @@ case "$_subcommand $_subsubcommand" in
         printf '## Memex briefing\n\n(mock briefing content)\n'
         exit 0
         ;;
+    "agent-surface "*|"agent-surface")
+        # `memex agent-surface <target> [--output-format=...]`
+        # Echo a deterministic fixed string so tests can pin the position
+        # of agent-surface content within the hook's concatenated output.
+        _target="${_subsubcommand:-universal}"
+        printf '<mock-agent-surface target="%s"/>\n' "$_target"
+        exit 0
+        ;;
     *)
         echo "mock_memex: unknown subcommand: $_subcommand $_subsubcommand" >&2
         exit 1

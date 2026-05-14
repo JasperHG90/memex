@@ -134,3 +134,90 @@ def test_emits_additional_context_with_briefing(mock_memex: MockMemex, temp_git_
     # The new namespaced KV key should appear in the "no vault set" branch
     # (not relevant here, but sanity-check the project_id is referenced)
     assert 'github.com/acme/myapp' in ctx
+
+
+# ---------------------------------------------------------------------------
+# Agent-surface composition (Phase 5 + round-2 hook fix).
+# ---------------------------------------------------------------------------
+
+
+def test_agent_surface_concatenates_before_briefing(
+    mock_memex: MockMemex, temp_git_repo: Path
+) -> None:
+    """The hook composes Tier 1b/2 (static, from `memex agent-surface`) +
+    `---` separator + dynamic vault briefing (from `memex briefing`) in that
+    order. Order matters — universal static content must sit in the
+    cacheable prompt prefix, not after per-session state."""
+    mock_memex.set_kv('app:claude-code:project:github.com/acme/myapp:vault', 'eng-vault')
+    result = run_script(
+        'on_session_start.sh',
+        stdin=_session_start_payload(),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+    )
+    assert result.returncode == 0, result.stderr
+    out = json.loads(result.stdout)
+    ctx = out['hookSpecificOutput']['additionalContext']
+
+    # Both halves present
+    surface_marker = '<mock-agent-surface target="claude-code"/>'
+    briefing_marker = '(mock briefing content)'
+    assert surface_marker in ctx, f'agent-surface block missing; ctx={ctx[:300]!r}'
+    assert briefing_marker in ctx, f'briefing block missing; ctx={ctx[:300]!r}'
+
+    # Order: agent-surface FIRST, then `---`, then briefing.
+    surface_pos = ctx.index(surface_marker)
+    briefing_pos = ctx.index(briefing_marker)
+    sep_pos = ctx.find('\n---\n', surface_pos)
+    assert surface_pos < sep_pos < briefing_pos, (
+        f'wrong order: surface={surface_pos}, sep={sep_pos}, briefing={briefing_pos}'
+    )
+
+    # The hook invoked `memex agent-surface claude-code` (positional target form).
+    surface_calls = mock_memex.calls_matching('agent-surface', 'claude-code')
+    assert surface_calls, (
+        f'expected `memex agent-surface claude-code` call; got calls='
+        f'{[c.get("argv") for c in mock_memex.calls()]!r}'
+    )
+
+
+def test_agent_surface_failure_falls_back_to_briefing_only(
+    mock_memex: MockMemex, temp_git_repo: Path
+) -> None:
+    """When `memex agent-surface` fails (older plugin install pinned to a
+    version that predates the subcommand), the hook degrades gracefully —
+    no agent-surface block, but the briefing still lands in additionalContext."""
+    mock_memex.set_kv('app:claude-code:project:github.com/acme/myapp:vault', 'eng-vault')
+    mock_memex.force_fail('agent-surface claude-code')
+
+    result = run_script(
+        'on_session_start.sh',
+        stdin=_session_start_payload(),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+    )
+    assert result.returncode == 0, result.stderr
+    out = json.loads(result.stdout)
+    ctx = out['hookSpecificOutput']['additionalContext']
+
+    # Briefing still lands
+    assert '(mock briefing content)' in ctx
+    # No agent-surface marker (the if-guard in the hook caught the failure)
+    assert '<mock-agent-surface' not in ctx
+
+
+def test_temp_files_cleaned_up_on_success(mock_memex: MockMemex, temp_git_repo: Path) -> None:
+    """The hook's EXIT trap removes both `tmp_surface` and `tmp_briefing`
+    on the success path. Verify by listing /tmp before/after and asserting
+    no script-created temp files remain."""
+    before = set(Path('/tmp').glob('tmp.*'))
+    result = run_script(
+        'on_session_start.sh',
+        stdin=_session_start_payload(),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+    )
+    assert result.returncode == 0, result.stderr
+    after = set(Path('/tmp').glob('tmp.*'))
+    leaked = after - before
+    assert not leaked, f'hook leaked temp files: {leaked!r}'

@@ -27,7 +27,7 @@ from pydantic import BeforeValidator, Field
 
 from memex_mcp.lifespan import lifespan, get_api, get_asset_cache, get_config
 from memex_mcp._layer_primer_descriptions import (
-    LAYER_ROUTING_PRIMER_PROSE as _LAYER_ROUTING_PRIMER,
+    LAYER_ROUTING_PRIMER_FRAGMENT as _LAYER_ROUTING_PRIMER,
 )
 from memex_common.tool_descriptions import (
     MEMEX_KV_WRITE_DESC as _MEMEX_KV_WRITE_DESCRIPTION,

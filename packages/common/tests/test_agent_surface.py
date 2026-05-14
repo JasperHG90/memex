@@ -22,7 +22,11 @@ from memex_common import agent_surface as ags
 # ---------------------------------------------------------------------------
 
 
-_UNIVERSAL_CHAR_CAP = 5_500  # ~1,571 tokens at 3.5 chars/token (empirical cl100k)
+_UNIVERSAL_CHAR_CAP = 6_000  # ~1,714 tokens at 3.5 chars/token (empirical cl100k)
+# Bumped 5,500 → 6,000 when CRITICAL_HEADER / VIRTUAL_UNIT / CRITICAL_FOOTER
+# adopted `<critical_constraint name="…">` XML tags (Anthropic best practice:
+# XML disambiguates load-bearing constraints; the model attends more reliably
+# to named-block content than to bullet-list prose).
 
 
 def _approx_tokens(text: str) -> int:
@@ -138,7 +142,6 @@ def test_layer_routing_primer_still_exported() -> None:
     though ``compose_universal()`` does not include it by default —
     agents that want the 4-layer table can append it explicitly."""
     assert ags.LAYER_ROUTING_PRIMER_TABLE
-    assert ags.LAYER_ROUTING_PRIMER_PROSE
     assert ags.LAYER_ROUTING_PRIMER_FRAGMENT
 
 
