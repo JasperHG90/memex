@@ -176,8 +176,11 @@ COMPOSITE_BOOST_CLIPPED = Histogram(
     'Post-clip aggregate multiplier applied to ce_score during reranking, equal to '
     'exp(clip(sum(log(b_i)), -L, +L)) where L = composite_boost_log_clip. At default '
     'L = math.inf the value equals the prior multiplicative product of the five boost '
-    'factors. Wider spread than 1.0 indicates the clip is firing. Calls where any '
-    'input is non-finite (NaN or ±inf) short-circuit before the observe call — see '
+    'factors (clip is a no-op); for finite L the observed value is bounded to '
+    '[exp(-L), exp(+L)] by construction, and mass accumulating at the bucket boundaries '
+    'containing exp(±L) is the clip-firing signal. Calls where ce_score or any boost '
+    'factor is non-finite, or where composite_boost_log_clip is NaN or negative, '
+    'short-circuit before the observe call — see '
     'memex_composite_boost_non_finite_guard_triggered_total for those.',
     buckets=(0.1, 0.3, 0.5, 0.7, 0.85, 1.0, 1.15, 1.3, 1.5, 2.0, 3.0, 5.0, 10.0, 25.0, 50.0),
 )
@@ -185,9 +188,11 @@ COMPOSITE_BOOST_CLIPPED = Histogram(
 COMPOSITE_BOOST_NON_FINITE_GUARD_TRIGGERED = Counter(
     'memex_composite_boost_non_finite_guard_triggered_total',
     'Count of reranking composition calls where the non-finite guard short-circuited. '
-    'Fires when any of ce_score, the five boost factors, or composite_boost_log_clip '
-    'is non-finite (NaN or ±inf). Non-zero values mean upstream calibration or config '
-    'drifted into non-finite territory — investigate immediately.',
+    'Fires when ce_score is non-finite (NaN or ±inf), or any of the five boost factors '
+    'is non-finite, or composite_boost_log_clip is NaN, or composite_boost_log_clip is '
+    'negative. composite_boost_log_clip = math.inf is the supported ship default and '
+    'does NOT trigger the guard. Non-zero rates mean upstream calibration or config '
+    'drifted into territory the composer rejects — investigate immediately.',
 )
 
 # ---------------------------------------------------------------------------

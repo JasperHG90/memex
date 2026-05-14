@@ -40,7 +40,7 @@ where `L = composite_boost_log_clip` is a per-config knob.
 
 `L = math.inf` (ship default) is the safe starting point: it preserves the prior behavior exactly. To tighten the clip, observe the aggregate distribution first:
 
-1. Let the `memex_composite_boost_clipped` histogram (post-clip) accumulate representative traffic for ≥ 1 week. At the ship default `L = math.inf` the clip is a no-op, so this metric observes the **pre-clip aggregate product directly** — exactly the distribution needed to tune `L`. (A separate dedicated pre-clip histogram is on a follow-up ticket; until then, `memex_composite_boost_clipped` at `L=inf` is the metric to read.)
+1. Let the `memex_composite_boost_clipped` histogram (post-clip) accumulate representative traffic for ≥ 1 week. At the ship default `L = math.inf` the clip is a no-op, so this metric observes the **pre-clip aggregate product directly** — exactly the distribution needed to tune `L`. See [Observability → Reranking composition metrics](../reference/observability.md#reranking-composition-metrics) for the dual interpretation and the deferred-decision rationale on a dedicated pre-clip histogram.
 2. Compute the empirical distribution of `|log(aggregate)|`. The `p95` of that distribution is a sensible upper bound for `L`: it accepts 95% of observed compositions unchanged and clips only the extreme tail.
 3. Land an empirical `L` via a follow-up config commit (no code change needed).
 
