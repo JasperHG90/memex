@@ -162,6 +162,10 @@ MEMEX_KV_WRITE_DESC = (
     'Optional: ttl_seconds (entry auto-expires; omit for no expiration). '
     'Generates a semantic embedding for fuzzy lookup via memex_kv_search.\n'
     '\n'
+    'Procedure pairing: for `procedure:<verb>:<context-tag>` keys, pair every '
+    'use with memex_record_outcome(target_type="kv_key", kv_key=...) so the '
+    'procedure carries an MW trail.\n'
+    '\n'
     'Deletion is CLI-only (`memex kv delete`); do NOT attempt to delete entries.'
 )
 

@@ -11,7 +11,7 @@ import threading
 from typing import Any
 from uuid import UUID
 
-from memex_common.agent_surface import LAYER_ROUTING_PRIMER_TABLE
+from memex_common.agent_surface import LAYER_ROUTING_PRIMER_TABLE, compose_universal
 
 from .async_bridge import run_sync
 
@@ -88,32 +88,24 @@ class BriefingCache:
             self._ready.clear()
 
 
-_LAYER_ROUTING_PRIMER = LAYER_ROUTING_PRIMER_TABLE
+_LAYER_ROUTING_PRIMER = LAYER_ROUTING_PRIMER_TABLE  # back-compat re-export
 
 
-_CITATION_DISCIPLINE = """### Citing sources
+# --- Tier 2: Hermes-specific framing (≤400 tokens / ≤1,600 chars).
+# Layered on top of `compose_universal()` (the Tier 1b SSOT). Anything that
+# belongs cross-agent (routing, storage model, 5-step flow, KV namespace,
+# virtual-unit warning, citations) lives in `memex_common.agent_surface`,
+# NOT here. This block covers ONLY hermes-specific framing the agent
+# benefits from above and beyond the universal block.
+_HERMES_HARNESS = """## Hermes-specific framing
 
-When answering a question grounded in Memex content, cite the source note(s) inline so the reader can trace each claim.
+Outcome-signal lexicon for paired writes:
+- Success → "that worked", "lock it in", "record it", "that's the lesson" → verb=`helpful`
+- Failure → "stop suggesting X", "didn't work", "we removed it", "that was wrong" → verb=`not_helpful`
 
-- Reference notes by their title (or note id) in square brackets at the end of the supporting sentence, e.g. `…the team chose PostgreSQL for its JSONB and pgvector support [tech-stack-decision-record].`
-- One reference per load-bearing claim; multiple notes when a claim is supported by more than one.
-- Do not fabricate titles or ids — if you cannot identify a specific source, say so explicitly rather than inventing one."""
+Capture cadence: write a short note (`memex_add_note`, ≤300 tokens, no per-file changelogs) when you finish a multi-step task, diagnose a non-obvious bug, learn a user preference, or resolve a tricky env issue. Use `memex_append_note(note_key, delta)` to extend an existing note rather than re-ingesting.
 
-
-_AGENT_NUDGE = """### Working with Memex (agent-side reminders)
-
-The MCP server already ships the retrieval routing, storage model, KV namespace rules, and the 5-step resolution flow inside its session instructions and per-tool descriptions. Read those first — they are authoritative. The notes below are only the agent-side framing that does not belong in tool descriptions.
-
-- **Outcome signals from the user are GRADIENT, not one-shot.** "That worked", "lock it in" → success verb. "Stop suggesting X", "that didn't work" → failure verb. Follow the 5-step flow on the `memex_record_outcome` / `memex_memory_deprioritize` descriptions before writing.
-- **Disambiguate before mutating.** If the user signal could plausibly target multiple units, ASK before paired-writes.
-- **KV namespace by scope qualifier (NOT grammatical person).** First-person pronouns alone do not pick the namespace; the *scope qualifier* in the request does. Scan for an explicit scope phrase before picking:
-  - No scope qualifier, identity-shaped ("Remember about me: I prefer Neovim", "I'm a senior backend engineer") → `user:` (e.g. `user:editor`, `user:role`).
-  - Scope = "this repo" / "this project" / "for this project" / "on <named project>" → `project:<id>:` (e.g. `project:<repo-id>:indentation`). **This wins even when the request opens with "I" or "my"**: "My preference for this project is Python 3.10" → `project:<id>:lang:python`, not `user:lang`.
-  - Scope = "across our projects" / "we standardise on" / cross-project ecosystem fact → `global:` (e.g. `global:lang:python:version`).
-  - Scope = "in <app-name>" / "default to … in Claude Code" → `app:<app-id>:` (e.g. `app:claude-code:theme`).
-  When two scope phrases compete (identity AND project), the *narrower* scope wins (project beats user). If genuinely ambiguous after reading the scope phrase, ASK which one before writing.
-- **Capture proactively but tersely.** When you finish a multi-step task, fix a non-obvious bug, learn a user preference, or resolve a tricky env issue, write a short note (`memex_add_note`, ≤300 tokens, no per-file changelogs).
-- **Imperfect recall is by design.** Exploration is the safety net; resolution compounds over turns."""
+Disambiguate before mutating: if the user signal could plausibly target multiple units, ASK before paired writes."""
 
 
 def format_briefing_block(
@@ -135,9 +127,10 @@ def format_briefing_block(
     else:
         lines.append(f'Project: `{project_id}` · **No vault bound to this project.**')
 
-    lines.append('\n' + _LAYER_ROUTING_PRIMER)
-    lines.append('\n' + _CITATION_DISCIPLINE)
-    lines.append('\n' + _AGENT_NUDGE)
+    # Tier 1b (universal SSOT) — same bytes every call; cacheable prefix.
+    lines.append('\n## Memex — system instructions\n\n' + compose_universal())
+    # Tier 2 — Hermes-specific framing layered on top.
+    lines.append('\n' + _HERMES_HARNESS)
 
     lines.append(
         f'\nSession note key: `{session_note_key}`. Use '

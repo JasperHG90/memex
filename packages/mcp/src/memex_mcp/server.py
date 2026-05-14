@@ -29,6 +29,9 @@ from memex_mcp.lifespan import lifespan, get_api, get_asset_cache, get_config
 from memex_mcp._layer_primer_descriptions import (
     LAYER_ROUTING_PRIMER_PROSE as _LAYER_ROUTING_PRIMER,
 )
+from memex_common.tool_descriptions import (
+    MEMEX_KV_WRITE_DESC as _MEMEX_KV_WRITE_DESCRIPTION,
+)
 from memex_mcp.models import (
     McpAddAssetsResult,
     McpAddNoteResult,
@@ -246,112 +249,24 @@ logger = structlog.get_logger(__name__)
 
 mcp = FastMCP(
     'memex_mcp',
-    instructions="""Memex is a personal knowledge management system.
+    instructions="""Memex MCP — personal knowledge management.
 
-TOOL DISCOVERY — This server supports progressive disclosure.
-If you see memex_tags/memex_search/memex_get_schema instead of the full tool list:
-  1. `memex_tags()` — see tool categories and counts
-  2. `memex_search(query, tags=[...])` — find tools by keyword, optionally filtered by tag
-  3. `memex_get_schema(tools=[...])` — get parameter details before calling a tool
-You can also call any tool directly by name if you already know it.
+TOOL DISCOVERY (progressive disclosure)
+- If only memex_tags/memex_search/memex_get_schema appear, run:
+    memex_tags() → memex_search(query, tags=[...]) → memex_get_schema(tools=[...])
+- You can also call tools by name if you already know them.
 
-VAULT DEFAULTS — vault parameters are optional. Writes default to the active vault;
-reads default to search vaults (from .memex.yaml or global config). Only pass
-vault_id/vault_ids to override.
+VAULT DEFAULTS — vault parameters are optional. Writes default to the
+active vault; reads default to search vaults (from .memex.yaml or global
+config). Pass vault_id/vault_ids to override.
 
-STORAGE MODEL — three layers:
-- **Notes**: source markdown documents. `note_key` upsert creates new
-  versions; old versions stay queryable. Use `memex_append_note` to
-  extend an existing note instead of re-sending the whole body.
-- **Memory units**: facts/events extracted from notes at ingestion.
-  **Append-only.** Contradiction detection runs at extraction time —
-  it records typed links and lowers an older unit's confidence when a
-  new note conflicts with it; note supersession cascades to stale on
-  its memory units. Do NOT try to edit, replace, or delete memory
-  units — to record a change, ingest a new note via `memex_add_note`.
-- **KV store**: namespaced operational state (preferences, project
-  bindings, conventions). Mutable upsert by exact key; entries support
-  TTL.
+NEVER fabricate IDs. Use only IDs returned from tool output.
 
-Reflection is a separate background loop that reads memory units and
-synthesises observations about entities, bundled into versioned per-entity
-mental models with trend tracking (new/strengthening/stable/weakening/stale).
-Trends live on observations, not on memory units. Reflection output is
-read-only — surface it via search.
-
-ROUTING — select retrieval strategy by query type:
-
-IF you know (part of) the note title:
-  → TITLE SEARCH
-  1. `memex_find_note(query="title fragment")` → note IDs, titles, scores
-  2. Read via `memex_get_page_indices` → `memex_get_nodes` as needed
-
-IF query asks about relationships, connections, "how X fits in", "what relates to X", or landscape:
-  → ENTITY EXPLORATION (can combine with SEARCH)
-  1. `memex_list_entities(query="X")` → entity IDs, types, mention counts
-  2. `memex_get_entity_cooccurrences(entity_id)` → related entities with names, types, counts (single call, no follow-up needed)
-  3. `memex_get_entity_mentions(entity_id)` → source memory units (facts/observations/events) linking back to notes
-  4. Read source notes via SEARCH/READ below as needed
-  Note: search results include `related_notes` and contradiction `links`.
-  For full relationship links (temporal, semantic, causal), use `memex_get_memory_links`.
-
-IF query asks about specific content, topics, or document lookup:
-  → SEARCH
-  1. `memex_memory_search` (broad/exploratory) and/or `memex_note_search` (targeted). Run in parallel.
-  2. FILTER: after `memex_memory_search`, call `memex_get_notes_metadata` with Note IDs. After `memex_note_search`, metadata is inline — skip this.
-  3. READ: `memex_get_page_indices` → `memex_get_nodes` (batch). `memex_read_note` only when total_tokens < 500.
-  4. ASSETS: IF `has_assets: true` in page_index/metadata → call `memex_list_assets` then `memex_get_resources` with all paths at once. Use images as visual input. Reproduce diagrams as Mermaid/ASCII in response. NEVER create diagrams without checking assets first.
-
-IF query is broad (e.g. "explain X and how it fits the architecture", "what do you know about X?"):
-  → Start with `memex_get_vault_summary(vault_id)` — cheap, precomputed, often answers on its own.
-  → Escalate to `memex_survey(query)` only if the summary is too coarse — survey auto-decomposes
-    into sub-questions, runs parallel retrievals, and returns grouped results, but is much
-    more expensive than the summary.
-  For manual control, use ENTITY EXPLORATION and SEARCH in parallel instead.
-
-IF storing/retrieving namespaced operational pointers (preferences, conventions, project bindings):
-  → KV STORE
-  - `memex_kv_write(value, key)` — store an operational pointer
-  - `memex_kv_get(key)` — exact key lookup
-  - `memex_kv_search(query)` — fuzzy semantic search over KV entries
-  - `memex_kv_list()` — list KV entries
-  When the user states a preference, convention, or binding (e.g. "always use uv", "my role is Staff Engineer", "this repo uses the `tidybit` vault"), proactively store it via `memex_kv_write` (e.g. under `project:github.com/user/repo:vault`).
-  Deletion is user-only (CLI). Do NOT attempt to delete KV entries.
-
-RESPONSE FORMAT — MANDATORY for every response:
-- Cite every claim from Memex with numbered references [1], [2], etc. inline.
-- End response with a reference list. Each entry uses a type prefix:
-  `[note]` title + note ID | `[memory]` title + memory ID + source note ID | `[asset]` filename + note ID
-- Example: `[1] [note] Detailing the Sys Layer architecture — 2eb202ed-bee6-7b2a-f0b9-917e8d5dd6f0`
-
-IF checking vault overview, topics, or "what's in this vault":
-  → VAULT SUMMARY + SURVEY
-  1. `memex_get_vault_summary(vault_id)` → natural language summary, topics, stats
-  2. `memex_survey(query)` → decompose into sub-questions, parallel search, grouped results
-  Run both in parallel for comprehensive vault overview.
-
-IF user wants to annotate a note or update their commentary:
-  → USER NOTES
-  - `memex_update_user_notes(note_id, user_notes)` — update user annotations on a note
-  - `memex_search_user_notes(query)` — search only user annotations (source_context='user_notes')
-
-IF capturing structured content (architecture decision, RFC, retro, technical brief, learning):
-  → TEMPLATES (capture flow)
-  1. `memex_list_templates()` — see what's available with descriptions
-  2. `memex_get_template(slug)` — fetch the markdown scaffold
-  3. Write your note body following the template structure
-  4. `memex_add_note(..., template=slug)` — pass the slug so the note is tagged
-     and filterable later (`memex_list_notes(template=slug)`, vault summaries).
-  Built-ins: `general_note`, `technical_brief`, `architectural_decision_record`,
-  `request_for_comments`, `agent_reflection`, `quick_note`. Prefer a template over
-  free-form when the content has clear sections.
-
-RULES:
-- Only use IDs from tool output. Never fabricate IDs.
-- Filter before reading. Never call `memex_get_page_indices` on unconfirmed notes.
-- Never use `memex_recent_notes` for discovery.
-
-`memex_memory_search` strategies: `["semantic"]` vector similarity, `["keyword"]` BM25 full-text, `["graph"]` entity-centric, `["temporal"]` chronological, `["mental_model"]` synthesized. Default (all) is best for general queries.
+This MCP surface is the tool protocol only. Full retrieval routing,
+storage model, 5-step resolution flow, KV namespace rules, virtual-unit
+warning, and citation discipline live in the agent's system prompt —
+compose them from `memex_common.agent_surface.compose_universal()` if
+you are building a Memex-aware agent beyond raw MCP.
 """.strip(),
     version='0.1.0',
     lifespan=lifespan,
@@ -3310,29 +3225,7 @@ async def memex_find_note(
 
 @mcp.tool(
     name='memex_kv_write',
-    description=(
-        'Write a namespaced operational pointer to the key-value store — a '
-        'preference, project binding, or convention. Generates an embedding '
-        'for fuzzy lookup. NOT for facts learned from content (events, '
-        'observations, claims) — those become memory units when you call '
-        '`memex_add_note`. '
-        'Call this proactively when the user says "remember…", "I prefer…", '
-        '"we use…", "default to…", or otherwise asks you to carry a fact '
-        'forward across sessions. Do NOT route those signals to a generic '
-        'memory verb; KV is the durable, namespaced surface that other '
-        'sessions read back. '
-        'Key MUST start with a namespace prefix: '
-        '"global:" (cross-project ecosystem facts), '
-        '"user:" (personal prefs / identity), '
-        '"project:<project-id>:" (repo/project-bound conventions), '
-        '"app:<app-id>:" (agent/app-specific behaviour), or '
-        '"procedure:<verb>:<context-tag>" (learned how-tos / adaptations). '
-        'Examples: "global:tool:python:pkg_mgr", "user:editor", '
-        '"project:github.com/user/repo:formatter", "app:claude-code:theme", '
-        '"procedure:deploy:staging-after-6pm". '
-        'For procedure: keys, track outcomes via '
-        '`memex_record_outcome(target_type="kv_key", kv_key=…, success=…)`.'
-    ),
+    description=_MEMEX_KV_WRITE_DESCRIPTION,
     tags={'storage'},
     annotations={'readOnlyHint': False, 'idempotentHint': True},
     timeout=15.0,

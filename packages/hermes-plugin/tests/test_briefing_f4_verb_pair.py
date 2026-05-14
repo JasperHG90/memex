@@ -15,7 +15,7 @@ from memex_hermes_plugin.memex.tools import MEMORY_DEPRIORITIZE_SCHEMA
 
 
 def test_mcp_description_mentions_deprioritize_verb():
-    assert 'memory_deprioritize' in MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION
+    assert 'deprioritize' in MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION
 
 
 def test_mcp_description_marks_deprioritize_as_non_destructive():

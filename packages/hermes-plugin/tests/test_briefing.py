@@ -1,16 +1,15 @@
 """Tests for briefing cache + block formatting.
 
-After 2026-05-14 compression: the briefing no longer carries the storage
-model, retrieval routing guide, or 5-step resolution flow — those moved to
-the MCP server ``instructions`` field and per-tool descriptions. The
-briefing now carries only the agent-side nudges (citation discipline,
-KV scope-qualifier rule, outcome verb routing, capture cadence) plus the
-layer-routing primer table.
+After 2026-05-14 (three-tier agent-surface architecture): the briefing
+composes ``memex_common.agent_surface.compose_universal()`` (Tier 1b)
+plus a hermes-specific harness block (Tier 2). Universal content lives
+in ``memex_common.agent_surface``; this file pins how Hermes assembles
+it on top of agent-specific framing.
 
-OrangeHermes regression fences that used to live here have been migrated
-to ``packages/mcp/tests/test_mcp_instructions_regression.py`` (storage
-model append-only invariant) and ``test_kv_write_description.py`` (KV
-"not for facts learned from content" rule).
+Regression fences for the universal content live in
+``packages/common/tests/test_agent_surface.py``. Regression fences for
+per-tool descriptions live in
+``packages/common/tests/test_tool_descriptions.py``.
 """
 
 from __future__ import annotations
@@ -21,8 +20,7 @@ from uuid import uuid4
 
 from memex_hermes_plugin.memex.briefing import (
     BriefingCache,
-    _AGENT_NUDGE,
-    _CITATION_DISCIPLINE,
+    _HERMES_HARNESS,
     format_briefing_block,
 )
 
@@ -82,9 +80,10 @@ def test_format_block_with_vault_and_briefing():
     assert '# Recent activity' in block
 
 
-def test_format_block_carries_agent_nudge():
-    """The agent-side nudges (citations, KV scope rule, outcome verbs, capture)
-    are the briefing's payload after compression."""
+def test_format_block_carries_universal_block_from_agent_surface():
+    """The briefing must include the Tier 1b universal content. This is the
+    primary architecture wire — universal content arrives via
+    `compose_universal()`, not redeclared locally."""
     block = format_briefing_block(
         '',
         vault_id='v',
@@ -92,13 +91,16 @@ def test_format_block_carries_agent_nudge():
         session_note_key='k',
         kv_instructions_if_no_vault=False,
     )
-    assert 'Working with Memex (agent-side reminders)' in block
-    assert 'Citing sources' in block
+    # Header from agent_surface
+    assert '## Memex — system instructions' in block
+    # Load-bearing universal-content markers
+    assert 'units=[{unit_id, verb, reason}]' in block
+    assert 'unit_metadata.virtual' in block
+    assert 'scope qualifier' in block
 
 
-def test_format_block_carries_layer_routing_primer():
-    """The 4-layer routing table is the only big primer that stays in the briefing
-    (canonical source is ``memex_common.agent_surface.LAYER_ROUTING_PRIMER_TABLE``)."""
+def test_format_block_carries_hermes_harness():
+    """The Tier 2 hermes-specific framing must layer on top of the universal block."""
     block = format_briefing_block(
         '',
         vault_id='v',
@@ -106,7 +108,8 @@ def test_format_block_carries_layer_routing_primer():
         session_note_key='k',
         kv_instructions_if_no_vault=False,
     )
-    assert 'Memory layers and tool routing' in block
+    assert 'Hermes-specific framing' in block
+    assert 'memex_add_note' in block
 
 
 def test_format_block_without_vault_adds_kv_guidance():
@@ -134,83 +137,57 @@ def test_format_block_skips_briefing_section_when_empty():
     assert '\n---\n' not in block
 
 
-# --- Compression invariants: things that should NO LONGER be in the briefing ---
+# ---------------------------------------------------------------------------
+# Compression invariants: things that should NO LONGER be locally declared
+# in the briefing module (they live in agent_surface).
+# ---------------------------------------------------------------------------
 
 
-def test_briefing_does_not_carry_storage_model_primer():
-    """Storage model moved to MCP server `instructions` field — no duplicate here."""
-    block = format_briefing_block(
-        '',
-        vault_id='v',
-        project_id='p',
-        session_note_key='k',
-        kv_instructions_if_no_vault=False,
+def test_briefing_does_not_locally_declare_universal_constants():
+    """The briefing module must not re-declare universal-tier content
+    locally. compose_universal() is the only source."""
+    from memex_hermes_plugin.memex import briefing as br
+
+    # The renamed constants from earlier compression (_CITATION_DISCIPLINE,
+    # _AGENT_NUDGE, _ROUTING_GUIDE, _STORAGE_MODEL_PRIMER,
+    # _RESOLUTION_FLOW_PRIMER) must not exist anymore; their content moved
+    # to agent_surface.
+    for name in (
+        '_CITATION_DISCIPLINE',
+        '_AGENT_NUDGE',
+        '_ROUTING_GUIDE',
+        '_STORAGE_MODEL_PRIMER',
+        '_RESOLUTION_FLOW_PRIMER',
+    ):
+        assert not hasattr(br, name), (
+            f'briefing.py still declares {name} locally. Universal content '
+            'moved to memex_common.agent_surface (Tier 1b).'
+        )
+
+
+# ---------------------------------------------------------------------------
+# Hermes-harness content (Tier 2 only).
+# ---------------------------------------------------------------------------
+
+
+def test_hermes_harness_carries_outcome_lexicon():
+    """Hermes-specific harness: map user-signal phrases to record_outcome verbs.
+    The universal block teaches the verb shape; this block teaches the lexicon."""
+    assert 'helpful' in _HERMES_HARNESS
+    assert 'not_helpful' in _HERMES_HARNESS
+    assert 'that worked' in _HERMES_HARNESS.lower() or 'lock it in' in _HERMES_HARNESS.lower()
+
+
+def test_hermes_harness_carries_capture_cadence():
+    """The capture nudge is hermes-specific (capture is generally agent-specific;
+    Claude Code has its own capture nudge with author='claude-code')."""
+    assert 'memex_add_note' in _HERMES_HARNESS
+    assert '300 tokens' in _HERMES_HARNESS
+
+
+def test_hermes_harness_within_budget():
+    """Tier 2 hermes harness ≤1,600 chars / ≤400 tokens."""
+    assert len(_HERMES_HARNESS) <= 1_600, (
+        f'_HERMES_HARNESS is {len(_HERMES_HARNESS)} chars; cap is 1,600. '
+        'Move agent-specific content here; universal content belongs in agent_surface.'
     )
-    # The old heading is gone. Storage-model facts live in MCP server instructions.
-    assert '### How Memex stores knowledge' not in block
-
-
-def test_briefing_does_not_carry_routing_guide():
-    """Retrieval routing moved to MCP server `instructions` field — no duplicate here."""
-    block = format_briefing_block(
-        '',
-        vault_id='v',
-        project_id='p',
-        session_note_key='k',
-        kv_instructions_if_no_vault=False,
-    )
-    assert '### How to use Memex tools' not in block
-
-
-def test_briefing_does_not_carry_resolution_flow_primer():
-    """5-step resolution flow lives in MCP `memex_record_outcome` /
-    `memex_memory_deprioritize` tool descriptions — no duplicate here."""
-    block = format_briefing_block(
-        '',
-        vault_id='v',
-        project_id='p',
-        session_note_key='k',
-        kv_instructions_if_no_vault=False,
-    )
-    # The flow's step-by-step prose is now in the tool descriptions, not here.
-    # The briefing only carries a one-line nudge pointing at those descriptions.
-    assert 'Disambiguate first' not in block
-    assert 'Step 1 — Disambiguate' not in block
-
-
-# --- Agent-side nudges (the briefing's actual payload) ---
-
-
-def test_citation_discipline_in_briefing():
-    """Citations are an agent-side output property, not a tool contract; stays in briefing."""
-    assert 'Citing sources' in _CITATION_DISCIPLINE
-    assert 'square brackets' in _CITATION_DISCIPLINE
-    assert 'Do not fabricate' in _CITATION_DISCIPLINE
-
-
-def test_agent_nudge_carries_scope_qualifier_rule():
-    """KV namespace nudge: scope qualifier (not grammatical person) picks the namespace.
-    This is the disambiguation rule that the hermes agent uses to route 'my preference
-    for this project' to `project:` instead of `user:`."""
-    assert 'scope qualifier' in _AGENT_NUDGE
-    # The four namespaces all show up as routing targets.
-    for ns in ('user:', 'project:', 'global:', 'app:'):
-        assert ns in _AGENT_NUDGE
-    # The disambiguating example.
-    assert 'this project' in _AGENT_NUDGE
-
-
-def test_agent_nudge_carries_outcome_verb_routing():
-    """Hermes-specific nudge: map user signals to record_outcome verbs.
-    The tool description carries the contract; this nudges the agent to recognize
-    the signal phrases."""
-    assert 'success verb' in _AGENT_NUDGE.lower() or 'success signal' in _AGENT_NUDGE.lower()
-    assert 'memex_record_outcome' in _AGENT_NUDGE
-    assert 'memex_memory_deprioritize' in _AGENT_NUDGE
-
-
-def test_agent_nudge_carries_capture_cadence():
-    """The capture nudge tells the agent when to write a note proactively.
-    Token budget cap is the load-bearing assertion (resists drift toward verbose notes)."""
-    assert 'memex_add_note' in _AGENT_NUDGE
-    assert '300 tokens' in _AGENT_NUDGE

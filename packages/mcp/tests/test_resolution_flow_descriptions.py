@@ -1,165 +1,78 @@
-"""MCP tool description content pinning.
+"""Post-architecture-refactor: the resolution-flow composite is gone from MCP.
 
-Asserts that the 5-step flow + axes table + historical routing rule are
-present verbatim in the registered descriptions of
-``memex_record_outcome`` and ``memex_memory_deprioritize``.
-The MCP layer is the primary surface.
+Before 2026-05-14: MCP tool descriptions for ``memex_record_outcome`` and
+``memex_memory_deprioritize`` composed a ~12 KB block containing the
+5-step flow, orthogonal axes table, historical routing rule, "imperfect
+recall" framing, and a "do-NOT-add" scope-creep list. This file used to
+pin that content.
 
-When the descriptions change, these assertions fail — that is the contract.
+After 2026-05-14 (three-tier agent-surface architecture):
+- Tier 1a (MCP tool descriptions) carries per-tool contracts only.
+- Tier 1b (``memex_common.agent_surface``) carries the universal flow,
+  axes, historical routing, virtual-unit warning, etc.
+- Agent system prompts compose Tier 1b on top of agent-specific Tier 2.
+
+This test file enforces the architecture boundary: composition content
+MUST NOT appear in MCP tool descriptions (drift fence). Positive presence
+of the flow content in ``compose_universal()`` is pinned by
+``packages/common/tests/test_agent_surface.py``.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from memex_mcp._resolution_flow_descriptions import (
-    MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION,
-    MEMEX_RECORD_OUTCOME_DESCRIPTION,
+from memex_common.tool_descriptions import (
+    MEMEX_MEMORY_DEPRIORITIZE_DESC,
+    MEMEX_RECORD_OUTCOME_DESC,
 )
 
 
-# ---------------------------------------------------------------------------
-# Required content checkpoints.
-# ---------------------------------------------------------------------------
-
-# Step 1 disambiguation.
-_S1_KEYWORDS = ('Disambiguate', 'ASK before writing')
-
-# Step 2 routing — must teach Options A/B/C and the top_k>=30 rule.
-_S2_KEYWORDS = (
-    'memex_find_note',
-    'memex_memory_search',
+# Phrases that used to live in the composite MCP description but now live
+# in ``memex_common.agent_surface`` (Tier 1b). If any of these reappear in
+# a Tier 1a tool description, the architecture has drifted — fix the
+# description, do not relax the assertion.
+_BANNED_IN_MCP_DESCRIPTIONS: tuple[str, ...] = (
     'Option A',
     'Option B',
     'Option C',
-    'memex_list_entities',
-    'memex_get_entity_mentions',
-    'memex_get_page_indices',
-    'memex_get_memory_units',
-    'top_k must be ≥30',
-)
-
-# Step 3 mandatory LLM judgment.
-_S3_KEYWORDS = ('Mandatory LLM judgment', 'NEVER bulk-write')
-
-# Steps 4+5 paired writes.
-_S45_KEYWORDS = (
-    'memex_record_outcome',
-    'memex_memory_deprioritize',
-    'SAME subset',
-)
-
-# Imperfect-recall framing + safety net.
-_IMPERFECT_KEYWORDS = (
-    'Imperfect recall',
-    'exploration is the safety net',
-    'GRADIENT',
-)
-
-# Orthogonal-axes table.
-_AXES_KEYWORDS = (
     'orthogonal axes',
-    'Memory Worth is the gradient',
-    'binary',
-    'Append-only counter',
-    'memory_restore',
-)
-
-# Historical / audit-query routing rule.
-_HISTORICAL_KEYWORDS = (
+    'Imperfect recall',
+    'historical-routing',
     'memex_get_unit_history',
     'apply_pre_filter=False',
-    'evolved',
-    'used to',
-    'history of',
-    'audit',
-    'show me everything',
 )
-
-# What is NOT a gap — codified scope-creep blockers.
-_DO_NOT_ADD_KEYWORDS = (
-    'memex_resolve',
-    'resolved_at',
-    'resolution_type',
-    'bulk-by-source',
-    'Note-level deprioritize',
-)
-
-
-def _assert_all_present(text: str, keywords: tuple[str, ...], section: str) -> None:
-    missing = [kw for kw in keywords if kw not in text]
-    assert not missing, f'Description is missing {section} keywords: {missing!r}.'
 
 
 @pytest.mark.parametrize(
     'description',
-    [MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION, MEMEX_RECORD_OUTCOME_DESCRIPTION],
-    ids=['deprioritize', 'record_outcome'],
+    [MEMEX_RECORD_OUTCOME_DESC, MEMEX_MEMORY_DEPRIORITIZE_DESC],
+    ids=['record_outcome', 'deprioritize'],
 )
-def test_description_includes_5_step_flow(description: str) -> None:
-    _assert_all_present(description, _S1_KEYWORDS, 'Step 1 (disambiguate)')
-    _assert_all_present(description, _S2_KEYWORDS, 'Step 2 (routing + Options A/B/C)')
-    _assert_all_present(description, _S3_KEYWORDS, 'Step 3 (mandatory LLM judgment)')
-    _assert_all_present(description, _S45_KEYWORDS, 'Steps 4+5 (paired writes)')
-
-
-@pytest.mark.parametrize(
-    'description',
-    [MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION, MEMEX_RECORD_OUTCOME_DESCRIPTION],
-    ids=['deprioritize', 'record_outcome'],
-)
-def test_description_includes_imperfect_recall_framing(description: str) -> None:
-    _assert_all_present(description, _IMPERFECT_KEYWORDS, 'imperfect-recall framing')
-
-
-@pytest.mark.parametrize(
-    'description',
-    [MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION, MEMEX_RECORD_OUTCOME_DESCRIPTION],
-    ids=['deprioritize', 'record_outcome'],
-)
-def test_description_includes_axes_table(description: str) -> None:
-    _assert_all_present(description, _AXES_KEYWORDS, 'orthogonal-axes table')
-
-
-@pytest.mark.parametrize(
-    'description',
-    [MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION, MEMEX_RECORD_OUTCOME_DESCRIPTION],
-    ids=['deprioritize', 'record_outcome'],
-)
-def test_description_includes_historical_routing(description: str) -> None:
-    _assert_all_present(description, _HISTORICAL_KEYWORDS, 'historical-routing rule')
-
-
-@pytest.mark.parametrize(
-    'description',
-    [MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION, MEMEX_RECORD_OUTCOME_DESCRIPTION],
-    ids=['deprioritize', 'record_outcome'],
-)
-def test_description_codifies_do_not_add_list(description: str) -> None:
-    _assert_all_present(description, _DO_NOT_ADD_KEYWORDS, 'do-NOT-add list')
+@pytest.mark.parametrize('phrase', _BANNED_IN_MCP_DESCRIPTIONS)
+def test_mcp_description_does_not_carry_universal_content(description: str, phrase: str) -> None:
+    assert phrase not in description, (
+        f'Phrase {phrase!r} appeared in an MCP tool description but belongs in '
+        '``memex_common.agent_surface`` (Tier 1b). MCP tool descriptions carry '
+        'per-tool contracts only.'
+    )
 
 
 @pytest.mark.asyncio
-async def test_record_outcome_tool_registered_with_resolution_flow_description() -> None:
-    """The MCP server registers memex_record_outcome with the composite description."""
+async def test_record_outcome_tool_registered_with_common_description() -> None:
+    """The MCP server registers memex_record_outcome with the description
+    sourced from ``memex_common.tool_descriptions`` — not a local composite."""
     from memex_mcp.server import mcp
 
     tool = await mcp.get_tool('memex_record_outcome')
     assert tool is not None, 'memex_record_outcome tool not registered'
-    assert tool.description == MEMEX_RECORD_OUTCOME_DESCRIPTION, (
-        'memex_record_outcome registered description does not match the '
-        'description constant. Check server.py wiring.'
-    )
+    assert tool.description == MEMEX_RECORD_OUTCOME_DESC
 
 
 @pytest.mark.asyncio
-async def test_deprioritize_tool_registered_with_resolution_flow_description() -> None:
-    """The MCP server registers memex_memory_deprioritize with the composite description."""
+async def test_deprioritize_tool_registered_with_common_description() -> None:
     from memex_mcp.server import mcp
 
     tool = await mcp.get_tool('memex_memory_deprioritize')
     assert tool is not None, 'memex_memory_deprioritize tool not registered'
-    assert tool.description == MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION, (
-        'memex_memory_deprioritize registered description does not match the '
-        'description constant. Check server.py wiring.'
-    )
+    assert tool.description == MEMEX_MEMORY_DEPRIORITIZE_DESC

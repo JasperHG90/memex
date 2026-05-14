@@ -1,223 +1,28 @@
-"""Verbatim agent prompt text for the 5-step resolution flow + historical routing.
+"""Backwards-compat shim for the resolution-flow composite descriptions.
 
-Two surfaces touched:
-- ``MEMEX_RECORD_OUTCOME_DESCRIPTION`` — the outcome verb, expanded with the
-  flow's step-by-step routing.
-- ``MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION`` — the deprioritize verb, expanded
-  with the same flow + the orthogonal-axes table.
+Historically this module composed the bare per-tool preambles (from
+``_outcome_descriptions`` and ``_deprioritize_descriptions``) with a large
+shared block containing the 5-step flow + axes table + historical routing
++ "do-not-add" scope-creep list — and exported the composite under
+``MEMEX_RECORD_OUTCOME_DESCRIPTION`` / ``MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION``.
 
-Both descriptions teach the same flow because both verbs participate in it.
-When the descriptions change, the verbatim test fails — that is the contract.
+As of 2026-05-14 the three-tier agent-surface architecture moved the
+universal flow / axes / routing content to ``memex_common.agent_surface``
+(Tier 1b — delivered via agent system prompts). MCP tool descriptions
+now carry only Tier 1a per-tool contracts, sourced from
+``memex_common.tool_descriptions``. The composite is no longer composed
+here; this module re-exports the bare per-tool descriptions under their
+historical names so existing imports keep working without duplicating
+text across packages.
+
+Importers should migrate to ``memex_common.tool_descriptions`` directly.
 """
 
 from __future__ import annotations
 
-from memex_mcp._outcome_descriptions import (
-    MEMEX_RECORD_OUTCOME_DESCRIPTION as _RECORD_OUTCOME_PREAMBLE,
-)
-from memex_mcp._deprioritize_descriptions import (
-    MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION as _DEPRIORITIZE_PREAMBLE_SRC,
-)
-
-# ---------------------------------------------------------------------------
-# Shared section blocks (composed into both tool descriptions verbatim).
-# ---------------------------------------------------------------------------
-
-_FLOW_HEADER = (
-    'When the user reports an issue resolved ("the X bug is fixed", "we shipped\n'
-    'Y", "issue Z is no longer relevant"), follow the 5-step flow before\n'
-    'writing. Skipping any step (especially Step 1 disambiguation or Step 3 LLM\n'
-    'judgment) leads to bulk-writing irrelevant units.\n'
-)
-
-_FLOW_BODY = (
-    'Step 1 — Disambiguate first.\n'
-    '  If the scope is ambiguous (multiple candidate notes, multiple candidate\n'
-    '  topics, or a topic that may span notes), ASK before writing. Examples:\n'
-    "  'telegram issues from yesterday' when there are three reflection notes\n"
-    "  mentioning Telegram; 'the auth bug we discussed' with no temporal anchor;\n"
-    "  multiple distinct issues conflated into 'the issues are fixed'.\n"
-    '\n'
-    'Step 2 — Route by info quality and pick the cheapest path.\n'
-    '  Title-fragment known → `memex_find_note(query="…")` (indexed, cheap).\n'
-    '  Title unknown, content only → `memex_memory_search` (full pipeline,\n'
-    '  expensive but right when title-fragment lookup is unavailable). Then pick\n'
-    '  one of three coverage paths:\n'
-    '    Option A (entity-anchored, highest recall when topic ↔ entity):\n'
-    '      `memex_list_entities(query="…")` → `memex_get_entity_mentions(entity_id=…)`.\n'
-    '      Structural traversal; no semantic-rank miss.\n'
-    '    Option B (cross-note semantic, when no entity anchor):\n'
-    '      `memex_memory_search(query="…", after="…", top_k=30)`.\n'
-    '      CRITICAL: top_k must be ≥30 — the default 5 is too narrow and will\n'
-    '      miss cross-note matches.\n'
-    '    Option C (single-note PageIndex traversal, when scope is provably one note):\n'
-    '      `memex_get_page_indices(note_id)` → read chunk summaries → pick relevant\n'
-    '      chunks → `memex_get_memory_units(chunk_ids=[…])`. Captures every unit\n'
-    '      in the chunk; semantic top-k can miss paraphrased mentions.\n'
-    '\n'
-    'Step 3 — Mandatory LLM judgment over the candidate set.\n'
-    '  Whichever path returned candidates, READ the unit bodies and judge which\n'
-    "  ones actually correspond to the user's claim. Memory units are short by\n"
-    '  design (single fact / observation / event, ~1–3 sentences) — the search\n'
-    '  response IS the content; reading does not blow up context. The judgment\n'
-    '  CANNOT be skipped: a daily-reflection note contains episodic observations\n'
-    "  ('worked on memex 3h today') that look superficially relevant but are not\n"
-    '  fix-targets. NEVER bulk-write against the raw candidate set.\n'
-    '\n'
-    'Step 4+5 — Paired writes against the LLM-judged-relevant subset only.\n'
-    '  Pick the verb by the user signal. Pass `units=[{unit_id, verb, reason}, …]`\n'
-    '  to `memex_record_outcome` — the per-unit V11 shape is the load-bearing\n'
-    '  input. A bare `memex_record_outcome(success=…)` without `units` is\n'
-    '  INVALID and the server rejects it with 400.\n'
-    '  - Success signal (user-confirmed it worked): for each judged-relevant unit,\n'
-    '      `memex_record_outcome(units=[{"unit_id":"…","verb":"helpful","reason":"…"}])`.\n'
-    '      No deprioritize.\n'
-    '  - Failure signal (user-confirmed it did not help / is stale): for each\n'
-    '      judged-relevant unit, BOTH:\n'
-    '        `memex_record_outcome(units=[{"unit_id":"…","verb":"not_helpful","reason":"…"}])`\n'
-    '        AND `memex_memory_deprioritize(unit_id=…, reason="…")`.\n'
-    '      SAME subset for both calls. The two verbs are orthogonal axes — see the\n'
-    '      table below — and the resolved-issue flow stamps BOTH at once\n'
-    '      (negative-usefulness + binary verdict to stop surfacing).\n'
-    '  Virtual units cannot be deprioritized. Memory units whose metadata\n'
-    '  contains `"virtual": true` (synthesized from MentalModel observations)\n'
-    '  have no DB row — calling `memex_memory_deprioritize` on their UUID\n'
-    '  returns 404. Before pairing, filter the candidate set to units with\n'
-    '  `unit_metadata.virtual` unset or false; if empty, fall back to\n'
-    '  entity-anchored search (Option A) to recover real source units.\n'
-)
-
-_AXES_TABLE = (
-    'Orthogonal axes (Memory Worth is the gradient; deprioritize is\n'
-    'the binary). The two verbs answer different questions; keep them separate:\n'
-    '\n'
-    '  | Tool                   | Question it answers           | Cardinality                | Reversible? |\n'
-    '  |------------------------|-------------------------------|----------------------------|-------------|\n'
-    '  | `memex_record_outcome` | "Did this memory help when    | Append-only counter        | No          |\n'
-    '  |   (success=…)          |  retrieved?"                  | (compounds across retrievals)| (audit log) |\n'
-    '  | `memex_memory_         | "Should this surface by       | Binary state on the unit   | Yes         |\n'
-    '  |   deprioritize`        |  default at all?"             |                            | (memory_restore) |\n'
-    '\n'
-    '  - outcome=false but no deprioritize: gradient signal only — let Memory Worth\n'
-    '    compound; perhaps a different query still legitimately wants this unit.\n'
-    '  - deprioritize but no outcome: verdict without judging past usefulness\n'
-    "    (e.g., 'correct when written but no longer relevant').\n"
-    '  - BOTH (the resolved-issue case): negative-usefulness AND binary verdict.\n'
-)
-
-_IMPERFECT_RECALL = (
-    'Imperfect recall is BY DESIGN. None of Options A/B/C give *provable* 100%\n'
-    'recall on cross-note resolution. Semantic search misses paraphrases; entity\n'
-    'traversal misses oblique references; chunk-scoped reads miss issues split\n'
-    'across chunks. This is fine — exploration is the safety net. Any unit\n'
-    'that slipped past resolution will occasionally re-surface; the user re-\n'
-    'confirms; another `record_outcome(success=false)` compounds the Memory Worth penalty.\n'
-    'User-driven resolution is a GRADIENT across many turns, NOT a one-shot delete.\n'
-)
-
-_HISTORICAL_ROUTING = (
-    'Historical / audit-query routing rule (separate path from the resolution\n'
-    'flow above). The 5-step flow assumes the user is asking "what is true *now*".\n'
-    'For queries about HOW THINGS CHANGED — "how has my view on X evolved", "what\n'
-    'did I used to think about Y", "show me everything I believed about Z\n'
-    'including the wrong stuff" — route differently:\n'
-    '  - Ordered-chain timeline on a specific unit:\n'
-    '      `memex_get_unit_history(unit_id)` — graph walk through\n'
-    '      contradiction links, oldest → newest. Cleaner than ranked search.\n'
-    '  - Broader audit / "show me everything including hidden stuff":\n'
-    '      `memex_memory_search(query="…", apply_pre_filter=False)` — bypasses\n'
-    '      Memory Worth + FSFM + confidence pre-filters so contradicted,\n'
-    '      behaviorally-failed, and decayed units appear. Post-reranker boosts\n'
-    '      (confidence_boost, Memory Worth) still apply, so contradicted units\n'
-    '      rank below clean ones — which is correct for audit queries.\n'
-    '\n'
-    'Disambiguation triggers the agent should learn (any of these → use the\n'
-    'historical routing rule, NOT the resolution flow): "evolved", "used to",\n'
-    '"history of", "what changed", "what did I think before", "audit",\n'
-    '"show me everything", "show me the hidden ones", explicit time-window-\n'
-    'with-no-filter intent.\n'
-    '\n'
-    'When the user says "the X issue is resolved" → resolution flow (Steps 1–5).\n'
-    'When the user says "how has my position on X changed" → historical routing.\n'
-    "Disambiguation is the agent's responsibility.\n"
-)
-
-_DO_NOT_ADD = (
-    'Things this flow DOES NOT need (codified to resist scope creep — do NOT\n'
-    'request these as new endpoints or parameters; the existing primitives are\n'
-    'sufficient):\n'
-    '  - A combined `memex_resolve(unit_ids, reason)` endpoint. Hides the\n'
-    '    orthogonal axes. Compose at the agent layer.\n'
-    '  - A `resolved_at` timestamp column. The maintenance ledger already\n'
-    "    records when deprioritize fired; the note's `created_at` anchors the\n"
-    '    original observation.\n'
-    '  - A `resolution_type` enum on deprioritize. Free text in `reason`\n'
-    '    captures the same information without committing to a closed taxonomy.\n'
-    '  - A `bulk-by-source` parameter on deprioritize. Agents iterate.\n'
-    '  - Note-level deprioritize. Notes are episodic anchors; deprioritization\n'
-    '    applies to the derived units, not the source notes.\n'
-)
-
-
-# ---------------------------------------------------------------------------
-# Composed tool descriptions (the strings the MCP server actually serves).
-# ---------------------------------------------------------------------------
-
-# The outcome-recording verb. The original short docstring is imported from
-# `_outcome_descriptions` (single source of truth) so Memory Worth counter discoverability
-# stays in sync between the standalone tool description and the augmented
-# composite. The verbatim test pins the constant against the spec; the
-# composite appends the 5-step flow + axes table below it. The `\n\n` after the
-# preamble yields a blank line before the section header — visually matches
-# the deprioritize sibling description (see `_DEPRIORITIZE_PREAMBLE` below).
-MEMEX_RECORD_OUTCOME_DESCRIPTION = (
-    _RECORD_OUTCOME_PREAMBLE
-    + '\n\n'
-    + '## When the user reports an issue resolved (5-step flow)\n'
-    + '\n'
-    + _FLOW_HEADER
-    + '\n'
-    + _FLOW_BODY
-    + '\n'
-    + _AXES_TABLE
-    + '\n'
-    + _IMPERFECT_RECALL
-    + '\n'
-    + '## Historical-routing rule\n'
-    + '\n'
-    + _HISTORICAL_ROUTING
-    + '\n'
-    + _DO_NOT_ADD
-)
-
-
-# The deprioritize verb. The original short description (kept as the preamble
-# so deprioritize discoverability for misleading/outdated/noise units is
-# unchanged) is followed by the same 5-step flow + axes + history.
-# Imported from `_deprioritize_descriptions` so there is a single source of truth; the
-# verbatim test (test_deprioritize_tool_descriptions.py) pins the constant against the
-# spec, and the composite just appends a trailing newline for clean section
-# separation.
-_DEPRIORITIZE_PREAMBLE = _DEPRIORITIZE_PREAMBLE_SRC + '\n'
-
-MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION = (
-    _DEPRIORITIZE_PREAMBLE
-    + '\n'
-    + '## When the user reports an issue resolved (5-step flow)\n'
-    + '\n'
-    + _FLOW_HEADER
-    + '\n'
-    + _FLOW_BODY
-    + '\n'
-    + _AXES_TABLE
-    + '\n'
-    + _IMPERFECT_RECALL
-    + '\n'
-    + '## Historical-routing rule\n'
-    + '\n'
-    + _HISTORICAL_ROUTING
-    + '\n'
-    + _DO_NOT_ADD
+from memex_common.tool_descriptions import (
+    MEMEX_MEMORY_DEPRIORITIZE_DESC as MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION,
+    MEMEX_RECORD_OUTCOME_DESC as MEMEX_RECORD_OUTCOME_DESCRIPTION,
 )
 
 

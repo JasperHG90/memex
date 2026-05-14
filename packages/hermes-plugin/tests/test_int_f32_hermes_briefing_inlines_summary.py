@@ -36,9 +36,9 @@ def test_diagnostic_summary_in_briefing_block():
 
     assert '### Memex diagnostics' in block
 
-    # Field 1: manifold status (pending in this fixture; cluster_count null).
+    # Field 1: manifold status (pending in this fixture; cluster count null).
     assert 'pending' in block
-    assert 'cluster_count' in block
+    assert 'clusters' in block
 
     # Field 2: unit counts (active / stale / deprioritized).
     assert '12' in block and '3' in block and '1' in block

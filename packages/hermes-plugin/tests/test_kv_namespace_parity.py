@@ -1,57 +1,60 @@
-"""KV namespace parity test — ensures the Claude Code rule file's KV
-namespace list matches the canonical sources.
+"""KV namespace parity test — post-2026-05-14 three-tier architecture.
 
-The `procedure:` namespace was missing from `memex.md` in a prior revision,
-and no test caught the drift. This test pins the five canonical namespace
-prefixes that MUST appear in every agent surface that documents the KV store.
+Before 2026-05-14: every agent surface (MCP `instructions=`, hermes briefing,
+Claude Code plugin rule, AGENTS.md) duplicated the KV namespace prefix list.
+The test pinned all five prefixes across surfaces because drift had already
+happened (the `procedure:` prefix was missing from `memex.md` once and no
+test caught it).
+
+After 2026-05-14 (three-tier agent-surface architecture):
+- The KV namespace SSOT lives in ``memex_common.agent_surface.KV_NAMESPACE``
+  (Tier 1b) and is surfaced via ``compose_universal()``.
+- ``LAYER_ROUTING_PRIMER_TABLE`` (also Tier 1b) covers the
+  ``procedure:`` prefix as part of its Procedural-observations row.
+- The Claude Code plugin rule is intentionally trimmed (no local KV section);
+  universal content arrives via the SessionStart hook in Phase 5.
+
+This file pins the SSOT directly. Drift across surfaces is now impossible
+because there is only one copy.
 """
 
-from pathlib import Path
+from memex_common.agent_surface import (
+    KV_NAMESPACE,
+    LAYER_ROUTING_PRIMER_TABLE,
+    compose_universal,
+)
 
-from memex_common.agent_surface import LAYER_ROUTING_PRIMER_TABLE
 
-_REPO_ROOT = Path(__file__).resolve().parents[2]
-_CC_RULE_PATH = _REPO_ROOT / 'claude-code-plugin' / 'rules' / 'memex.md'
-
-# The procedure: prefix appears in the layer-routing table; the others
-# appear in the KV store section of agent surfaces. All five MUST be
-# present across surfaces.
 _CANONICAL_KV_PREFIXES = ('global:', 'user:', 'project:', 'app:', 'procedure:')
 
 
 def test_procedure_prefix_in_layer_routing_table() -> None:
-    """The `procedure:` namespace must appear in the canonical
-    `LAYER_ROUTING_PRIMER_TABLE` (it's in the Procedural-observations row)."""
+    """The ``procedure:`` namespace must appear in the canonical
+    ``LAYER_ROUTING_PRIMER_TABLE`` (it's in the Procedural-observations row)."""
     assert 'procedure:' in LAYER_ROUTING_PRIMER_TABLE, (
         '`procedure:` prefix missing from LAYER_ROUTING_PRIMER_TABLE — '
         'the Procedural-observations row must include this namespace.'
     )
 
 
-def test_kv_prefixes_in_claude_code_rule() -> None:
-    """The `memex.md` rule file MUST list all five canonical KV namespace
-    prefixes in its KV store section."""
-    rule_text = _CC_RULE_PATH.read_text()
+def test_kv_namespace_section_lists_all_prefixes() -> None:
+    """The Tier 1b ``KV_NAMESPACE`` section must name every canonical prefix.
 
-    # Find the "## Memex KV store" section
-    kv_section_start = rule_text.find('## Memex KV store')
-    assert kv_section_start != -1, '`memex.md` is missing a "## Memex KV store" section entirely'
-
-    # Extract text until the next heading or end of file
-    next_heading = rule_text.find('\n## ', kv_section_start + 1)
-    kv_section = (
-        rule_text[kv_section_start:next_heading]
-        if next_heading != -1
-        else rule_text[kv_section_start:]
+    This is the SSOT for the KV scope-qualifier rule; if a prefix is missing
+    here it is missing everywhere downstream."""
+    missing = [p for p in _CANONICAL_KV_PREFIXES if p not in KV_NAMESPACE]
+    assert not missing, (
+        f'`agent_surface.KV_NAMESPACE` missing canonical prefixes: {missing}. '
+        'Every KV namespace prefix must appear in the SSOT.'
     )
 
-    missing: list[str] = []
-    for prefix in _CANONICAL_KV_PREFIXES:
-        if prefix not in kv_section:
-            missing.append(prefix)
 
+def test_universal_block_surfaces_kv_namespace() -> None:
+    """``compose_universal()`` must surface every KV prefix (this is what
+    downstream agents see in the system prompt)."""
+    text = compose_universal()
+    missing = [p for p in _CANONICAL_KV_PREFIXES if p not in text]
     assert not missing, (
-        f'`memex.md` KV section is missing canonical namespace prefixes: {missing}. '
-        'Every KV namespace prefix must appear here. '
-        'If a prefix was intentionally removed, update _CANONICAL_KV_PREFIXES.'
+        f'`compose_universal()` does not surface KV prefixes: {missing}. '
+        'Check that KV_NAMESPACE is included in the composition order.'
     )

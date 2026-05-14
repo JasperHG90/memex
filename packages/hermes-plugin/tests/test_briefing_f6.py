@@ -25,7 +25,7 @@ def test_render_lint_block_includes_pending_count_and_cli_pointer():
     assert '7 pending lint findings' in rendered
     # AC-F6-7: the literal CLI pointer must be present so the agent has a
     # concrete next action.
-    assert 'run `memex lint findings`' in rendered
+    assert '`memex lint findings`' in rendered
 
 
 def test_format_briefing_block_includes_lint_section_when_count_positive():
@@ -40,7 +40,7 @@ def test_format_briefing_block_includes_lint_section_when_count_positive():
     )
     assert '### Maintenance findings' in block
     assert '3 pending lint findings' in block
-    assert 'run `memex lint findings`' in block
+    assert '`memex lint findings`' in block
 
 
 def test_format_briefing_block_suppresses_lint_section_when_zero():

@@ -50,6 +50,18 @@ from memex_common.schemas import (
     NoteAppendRequest,
     RiskClass,
 )
+from memex_common.tool_descriptions import (
+    MEMEX_KV_GET_DESC,
+    MEMEX_KV_LIST_DESC,
+    MEMEX_KV_SEARCH_DESC,
+    MEMEX_KV_WRITE_DESC,
+    MEMEX_MEMORY_CONSOLIDATE_DESC,
+    MEMEX_MEMORY_DEPRIORITIZE_DESC,
+    MEMEX_MEMORY_RECONSOLIDATE_DESC,
+    MEMEX_MEMORY_RESTORE_DESC,
+    MEMEX_MEMORY_SUMMARIZE_NODE_DESC,
+    MEMEX_RECORD_OUTCOME_DESC,
+)
 from tools.registry import tool_error  # type: ignore[import-not-found]
 
 from .async_bridge import run_sync
@@ -1241,29 +1253,7 @@ ADD_ASSETS_SCHEMA: dict[str, Any] = {
 
 KV_WRITE_SCHEMA: dict[str, Any] = {
     'name': 'memex_kv_write',
-    'description': (
-        'Write a namespaced operational fact to the KV store — the canonical '
-        'place for preferences, project conventions, and app settings. **Use '
-        'this whenever the user asks you to remember anything operational '
-        'for future sessions**: personal preferences ("remember I prefer '
-        'Neovim"), project conventions ("we use 4-space indentation in this '
-        'repo"), cross-project standards ("we standardise on Python 3.12"), '
-        'app-specific behaviour ("default to dark theme in Claude Code"), '
-        'or learned procedures. Pick the namespace by intent scope:\n'
-        '- user:<facet> — personal preference / identity '
-        '(e.g. user:editor, user:role)\n'
-        '- project:<id>:<facet> — repo/project-bound '
-        '(e.g. project:github.com/user/repo:formatter)\n'
-        '- global:<facet> — cross-project ecosystem fact '
-        '(e.g. global:lang:python:version)\n'
-        '- app:<app-id>:<facet> — agent/app-specific behaviour '
-        '(e.g. app:claude-code:theme)\n'
-        '- procedure:<verb>:<context-tag> — learned how-tos; pair with '
-        'memex_record_outcome(target_type="kv_key", kv_key=...) for MW tracking.\n'
-        'Generates a semantic embedding for fuzzy lookup. NOT for facts '
-        'learned from content; those become memory units via memex_add_note '
-        '(or memex_append_note).'
-    ),
+    'description': MEMEX_KV_WRITE_DESC,
     'parameters': {
         'type': 'object',
         'properties': {
@@ -1288,13 +1278,7 @@ KV_WRITE_SCHEMA: dict[str, Any] = {
 
 KV_GET_SCHEMA: dict[str, Any] = {
     'name': 'memex_kv_get',
-    'description': (
-        'Get a KV entry by exact key. Returns null if not found. For '
-        'procedure: keys (RFC-007), the default response value is the '
-        'unwrapped active procedure text. Pass include_history=true to '
-        'receive the structured envelope ({value, version, history}) so '
-        'you can review prior versions.'
-    ),
+    'description': MEMEX_KV_GET_DESC,
     'parameters': {
         'type': 'object',
         'properties': {
@@ -1318,10 +1302,7 @@ KV_GET_SCHEMA: dict[str, Any] = {
 
 KV_SEARCH_SCHEMA: dict[str, Any] = {
     'name': 'memex_kv_search',
-    'description': (
-        'Semantic search over KV entries. Returns the closest matching '
-        'entries. Optionally filter by namespace prefixes.'
-    ),
+    'description': MEMEX_KV_SEARCH_DESC,
     'parameters': {
         'type': 'object',
         'properties': {
@@ -1345,7 +1326,7 @@ KV_SEARCH_SCHEMA: dict[str, Any] = {
 
 KV_LIST_SCHEMA: dict[str, Any] = {
     'name': 'memex_kv_list',
-    'description': ('List KV entries, optionally filtered by namespace prefixes.'),
+    'description': MEMEX_KV_LIST_DESC,
     'parameters': {
         'type': 'object',
         'properties': {
@@ -3432,32 +3413,7 @@ __all__ = [
 
 MEMORY_DEPRIORITIZE_SCHEMA: dict[str, Any] = {
     'name': 'memex_memory_deprioritize',
-    'description': (
-        "Lower a memory unit's retrieval rank without deleting it (NON-DESTRUCTIVE). "
-        'Use when a memory is misleading, outdated, or noise that contaminates retrieval. '
-        'Companion to memex_memory_restore. Contrast with archive (destructive) — '
-        'prefer deprioritize unless the unit must leave the entity graph entirely. '
-        '\n\n'
-        'When the user reports an issue resolved, follow the 5-step flow: '
-        'disambiguate first, route by info quality (Options A entity-anchored / B '
-        'cross-note memex_memory_search with top_k>=30 / C single-note PageIndex), '
-        'mandatory LLM judgment over candidates, then PAIRED writes — '
-        'memex_record_outcome(units=[{verb: "not_helpful", reason}]) AND '
-        'memex_memory_deprioritize against the LLM-judged-relevant subset only. '
-        'The two verbs are orthogonal axes (MW gradient vs binary surface state); '
-        'user-confirmed-fix is BOTH signals at once. '
-        '\n\n'
-        'Virtual units cannot be deprioritized. Memory units whose metadata '
-        'contains `"virtual": true` (synthesized from MentalModel observations) '
-        'have no DB row — calling memex_memory_deprioritize on their UUID '
-        'returns 404. Filter candidates to those with `unit_metadata.virtual` '
-        'unset or false before pairing; if empty, fall back to entity-anchored '
-        'search to recover real source units. '
-        '\n\n'
-        'Imperfect cross-note recall is by design — exploration is the safety net. '
-        'For HOW-THINGS-CHANGED audit queries, route to '
-        'memex_memory_search(apply_pre_filter=False) instead.'
-    ),
+    'description': MEMEX_MEMORY_DEPRIORITIZE_DESC,
     'parameters': {
         'type': 'object',
         'properties': {
@@ -3482,11 +3438,7 @@ MEMORY_DEPRIORITIZE_SCHEMA: dict[str, Any] = {
 
 MEMORY_RESTORE_SCHEMA: dict[str, Any] = {
     'name': 'memex_memory_restore',
-    'description': (
-        'Restore a previously-deprioritized memory unit. Flips is_deprioritized '
-        'back to false; the unit re-enters default-scope retrieval. Writes an '
-        'audit_logs row.'
-    ),
+    'description': MEMEX_MEMORY_RESTORE_DESC,
     'parameters': {
         'type': 'object',
         'properties': {
@@ -3567,13 +3519,7 @@ ALL_SCHEMAS.extend([MEMORY_DEPRIORITIZE_SCHEMA, MEMORY_RESTORE_SCHEMA])
 
 MEMORY_SUMMARIZE_NODE_SCHEMA: dict[str, Any] = {
     'name': 'memex_memory_summarize_node',
-    'description': (
-        'Trigger reflection synchronously on an entity to consolidate scattered or '
-        'conflicting memories into a coherent mental model BEFORE continuing. '
-        'Synchronous in-session counterpart to background reflect (queued, scheduler-driven). '
-        'Rate-limited per (entity, vault); on rejection the response carries '
-        "'retry_after_seconds' — do not retry-loop. Use sparingly; reflection is LLM-intensive."
-    ),
+    'description': MEMEX_MEMORY_SUMMARIZE_NODE_DESC,
     'parameters': {
         'type': 'object',
         'properties': {
@@ -3729,34 +3675,7 @@ ALL_SCHEMAS.append(MEMORY_SUMMARIZE_NODE_SCHEMA)
 
 RECORD_OUTCOME_SCHEMA: dict[str, Any] = {
     'name': 'memex_record_outcome',
-    'description': (
-        'Record how previously retrieved memories or a stored procedure '
-        'contributed to the outcome. Default mode increments MW counters on '
-        "memory units (target_type='memory_unit', units=[{unit_id, verb, "
-        'reason}]) where verb is "helpful", "not_helpful", or "not_used" — '
-        'reason is required for helpful and not_helpful. Set '
-        "target_type='kv_key' with kv_key='procedure:<verb>:<context-tag>' "
-        'to score a stored procedure. Call after you actually used the '
-        'retrieved memory or the procedure.\n\n'
-        'Call generously. Silence provides no learning signal.\n\n'
-        'A bare memex_record_outcome(success=…) without `units` (or legacy '
-        '`unit_ids`) is INVALID for target_type="memory_unit" and the server '
-        'rejects it with 400. If you cannot identify a target, ASK the user '
-        'which memory the outcome applies to rather than firing a bare success '
-        'flag.\n\n'
-        'When the user reports an issue resolved, follow the 5-step flow: '
-        'disambiguate first, route by info quality (Options A entity-anchored '
-        '/ B cross-note memex_memory_search with top_k>=30 / C single-note '
-        'PageIndex), mandatory LLM judgment over candidates, then PAIRED '
-        'writes — memex_record_outcome with '
-        "units=[{verb: 'not_helpful', ...}] AND memex_memory_deprioritize "
-        'against the LLM-judged-relevant subset only. The two verbs are '
-        'orthogonal axes (MW gradient vs binary surface state); user-'
-        'confirmed-fix is BOTH signals at once. Imperfect cross-note recall '
-        'is by design — exploration is the safety net. For HOW-THINGS-'
-        'CHANGED audit queries, route to '
-        'memex_memory_search(apply_pre_filter=False) instead.'
-    ),
+    'description': MEMEX_RECORD_OUTCOME_DESC,
     'parameters': {
         'type': 'object',
         'properties': {
@@ -4141,13 +4060,7 @@ ALL_SCHEMAS.append(LINT_REVERSE_WINNER_SCHEMA)
 
 MEMORY_RECONSOLIDATE_SCHEMA: dict[str, Any] = {
     'name': 'memex_memory_reconsolidate',
-    'description': (
-        'Re-evaluate memories for a specific entity, detecting contradictions and '
-        'updating mental models. Use when retrieved facts about an entity disagree. '
-        'Runs contradiction detection across all units linked to the entity, then '
-        'triggers reflection. ENTITY-SCOPED counterpart to memex_memory_consolidate '
-        '(vault-wide). LLM-intensive — use only on concrete evidence of conflict.'
-    ),
+    'description': MEMEX_MEMORY_RECONSOLIDATE_DESC,
     'parameters': {
         'type': 'object',
         'properties': {
@@ -4167,13 +4080,7 @@ MEMORY_RECONSOLIDATE_SCHEMA: dict[str, Any] = {
 
 MEMORY_CONSOLIDATE_SCHEMA: dict[str, Any] = {
     'name': 'memex_memory_consolidate',
-    'description': (
-        'Vault-wide batch curation. Identifies low-MW + stale units and '
-        'deprioritizes them; writes findings to the maintenance ledger. '
-        'VAULT-SCOPED counterpart to memex_memory_reconsolidate (per-entity). '
-        'Use sparingly (e.g., monthly per vault). For per-entity hygiene, prefer '
-        'memex_memory_reconsolidate.'
-    ),
+    'description': MEMEX_MEMORY_CONSOLIDATE_DESC,
     'parameters': {
         'type': 'object',
         'properties': {

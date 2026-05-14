@@ -179,6 +179,8 @@ def test_all_schemas_have_required_fields():
     }
     tier_a_linter = {
         'memex_get_lint_flags',
+        'memex_lint_apply_winner',
+        'memex_lint_reverse_winner',
     }
     tier_a_locks = {
         'memex_memory_reconsolidate',
