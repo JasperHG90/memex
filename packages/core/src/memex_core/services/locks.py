@@ -324,7 +324,7 @@ class LocksService:
                     )
                     contradictions_run = len(unit_ids)
 
-                results = await self.reflection.reflect_batch(
+                results, abandoned_ids = await self.reflection.reflect_batch_detailed(
                     [
                         ReflectionRequest(
                             entity_id=entity_id,
@@ -338,8 +338,10 @@ class LocksService:
                 # Same UX defect as the H2 fix on summarize_node: silently
                 # reporting "0 observations" misrepresents the entity, when
                 # in fact a concurrent worker has just refreshed the model
-                # (next read sees fresh state).
-                abandoned = entity_id in set(self.reflection.last_abandoned_entity_ids)
+                # (next read sees fresh state). The detailed-variant return
+                # value is local to this call, so concurrent reconsolidate
+                # calls cannot race on a shared service-instance attribute.
+                abandoned = entity_id in set(abandoned_ids)
                 mental_model_id: str | None = None
                 observations_added = 0
                 if results:

@@ -24,7 +24,14 @@ SUMMARIZE_NODE_DESCRIPTION_VERBATIM = (
     '\n'
     'Returns a ReflectionResult with the updated/new MentalModel(s). Use sparingly;\n'
     'reflection is LLM-intensive. Default to background reflection unless you have a\n'
-    'specific in-session reason to trigger now.'
+    'specific in-session reason to trigger now.\n'
+    '\n'
+    'Error envelopes:\n'
+    '- {"error":"rate_limit_exceeded","retry_after_seconds":N,...}: per-entity bucket\n'
+    '  empty; wait N seconds.\n'
+    '- {"error":"reflection_abandoned","retry_after_seconds":N,"hint":...}: a concurrent\n'
+    '  worker just refreshed the model. The fresh state is already persisted — prefer\n'
+    '  re-reading via memex_get_entity / memex_memory_search rather than retrying.'
 )
 
 

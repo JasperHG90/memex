@@ -402,7 +402,7 @@ ENTITY_LOCK_ACQUIRES_TOTAL = Counter(
 RECONSOLIDATE_TOTAL = Counter(
     'memex_reconsolidate_total',
     'Total memex_memory_reconsolidate invocations by outcome.',
-    ['outcome'],  # success | lock_timeout | error
+    ['outcome'],  # success | lock_timeout | error | abandoned
 )
 
 CONSOLIDATE_TOTAL = Counter(

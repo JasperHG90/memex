@@ -62,14 +62,6 @@ class ReflectionService:
         self.queue_service = queue_service
         self.embedding_model = embedding_model
         self._reflection_lock = asyncio.Lock()
-        # Entity_ids whose Phase 5 CAS UPDATE abandoned during the most
-        # recent ``reflect_batch`` call. Mirrors ReflectionEngine's
-        # like-named attribute up to the service layer so multi-entity
-        # synchronous callers (e.g. ``reconsolidate_entity``) can
-        # distinguish "reflected but no new observations" from
-        # "concurrent worker won; the model is fresh elsewhere" without
-        # having to introspect the engine instance themselves.
-        self.last_abandoned_entity_ids: list[UUID] = []
         rate_limit_cfg = config.server.memory.reflection.summarize_node_rate_limit
         self._summarize_node_limiter = TokenBucketRateLimiter(
             per_seconds=rate_limit_cfg.per_entity_per_seconds,
@@ -229,13 +221,25 @@ class ReflectionService:
         )
         return result
 
-    async def reflect_batch(self, requests: list[ReflectionRequest]) -> list[ReflectionResult]:
-        """
-        Reflect on multiple entities in parallel using a single DB session.
-        This is significantly faster than sequential calls.
+    async def reflect_batch_detailed(
+        self, requests: list[ReflectionRequest]
+    ) -> tuple[list[ReflectionResult], list[UUID]]:
+        """Reflect on multiple entities in parallel and return both
+        applied results AND CAS-abandoned entity_ids.
+
+        Callers that need to distinguish "successfully reflected with no
+        new observations" from "concurrent worker won the CAS race"
+        should use this variant. ``reflect_batch`` discards the abandon
+        list for backward compatibility with callers that don't care.
+
+        Concurrency: each call to this method constructs its own
+        ReflectionEngine and reads ``last_abandoned_entity_ids`` from
+        that local engine instance — no shared service-instance state
+        is touched, so concurrent invocations cannot race on the
+        abandon list.
         """
         if not requests:
-            return []
+            return [], []
 
         async with self.metastore.session() as session:
             from memex_core.memory.reflect.reflection import ReflectionEngine
@@ -252,12 +256,11 @@ class ReflectionService:
             # tracks them separately so we can re-enqueue without
             # incrementing retry_count (abandons are benign concurrency
             # contention, not failures, and must not consume the DEAD_LETTER
-            # budget).
-            abandoned_ids = set(reflector.last_abandoned_entity_ids)
-            # Mirror up to the service layer so other synchronous
-            # callers (reconsolidate_entity) can detect the abandon
-            # without holding an engine reference.
-            self.last_abandoned_entity_ids = list(reflector.last_abandoned_entity_ids)
+            # budget). The abandoned list is captured here on the local
+            # reflector instance and returned to the caller via the tuple
+            # — no shared service-instance state is mutated.
+            abandoned_list = list(reflector.last_abandoned_entity_ids)
+            abandoned_ids = set(abandoned_list)
 
             from collections import defaultdict
 
@@ -313,7 +316,18 @@ class ReflectionService:
                         str(req.entity_id),
                         vault_id=str(req.vault_id),
                     )
-            return results
+            return results, abandoned_list
+
+    async def reflect_batch(self, requests: list[ReflectionRequest]) -> list[ReflectionResult]:
+        """Reflect on multiple entities in parallel using a single DB session.
+
+        Backward-compatible thin wrapper around ``reflect_batch_detailed``
+        that drops the CAS-abandoned entity_ids. Callers that need to
+        distinguish abandons from "no new observations" should call
+        ``reflect_batch_detailed`` directly.
+        """
+        results, _abandoned = await self.reflect_batch_detailed(requests)
+        return results
 
     async def get_reflection_queue_batch(
         self,
