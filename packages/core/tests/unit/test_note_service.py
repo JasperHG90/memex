@@ -499,3 +499,44 @@ class TestSetNoteStatusCascade:
         # Reactivate: units -> active
         await service.set_note_status(note_id, 'active')
         assert units[0].status == 'active'
+
+    @pytest.mark.asyncio
+    async def test_mw_counters_preserved_across_supersede_reactivate(
+        self, service: NoteService
+    ) -> None:
+        """Supersession flips units to ``status='stale'`` but leaves
+        ``success_co_count`` / ``failure_co_count`` untouched (audit
+        trail preserved per P6). Reactivation flips status back to
+        ``'active'``; the counters re-emerge with their pre-supersession
+        values. FSFM short-circuits on ``status='stale'``, so the
+        counters are inert while the unit is stale — they only matter
+        again on reactivation, and they matter exactly as they were."""
+        note_id = uuid4()
+        mock_note = MagicMock()
+        mock_note.status = 'active'
+
+        unit = MagicMock()
+        unit.status = 'active'
+        unit.success_co_count = 17
+        unit.failure_co_count = 4
+
+        mock_session = AsyncMock()
+        mock_session.get = AsyncMock(return_value=mock_note)
+        mock_exec_result = MagicMock()
+        mock_exec_result.first.return_value = mock_note
+        mock_exec_result.all.return_value = [unit]
+        mock_session.exec = AsyncMock(return_value=mock_exec_result)
+        mock_session.add = MagicMock()
+        mock_session.commit = AsyncMock()
+        service.metastore.session.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        service.metastore.session.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        await service.set_note_status(note_id, 'superseded', linked_note_id=uuid4())
+        assert unit.status == 'stale'
+        assert unit.success_co_count == 17
+        assert unit.failure_co_count == 4
+
+        await service.set_note_status(note_id, 'active')
+        assert unit.status == 'active'
+        assert unit.success_co_count == 17
+        assert unit.failure_co_count == 4
