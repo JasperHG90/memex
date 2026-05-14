@@ -124,12 +124,22 @@ Agent-facing prompt content lives in three tiers. SSOTs are `packages/common/src
 </constraint>
 
 **Decision rule** — where does new agent-facing prose go?
-- Triggers a 4xx at the server? → MCP tool description (`tool_descriptions.py`).
+- Triggers a 4xx at the server? → MCP tool description (`tool_descriptions.py` if cross-package, inline in `server.py` if MCP-only).
 - Universal across agents (storage model, routing, paired writes)? → `agent_surface`.
-- Agent-specific framing (Hermes session-note wiring, Claude Code `author="claude-code"`)? → that agent's surface.
+- Agent-specific framing (capture cadence, slash commands, prohibitions)? → `agent_harnesses.py` (cross-package SSOT; consumed by both Hermes briefing and Claude Code SessionStart hook).
 - Slash-command behavior (`/remember`, `/recall`)? → Claude Code plugin only.
 
-**Composition**: hermes imports `agent_surface` in-process; Claude Code receives it via `memex agent-surface --for=claude-code` from the plugin's `SessionStart` hook. Drift prevention: MCP descriptions and Hermes schemas import the SAME object from `tool_descriptions` (identity check in tests). Budgets enforced by `packages/common/tests/test_agent_surface.py`, `test_tool_descriptions.py`, and per-package boundary tests.
+**Adding a new MCP tool**: if Hermes mirrors the schema, put the description in `tool_descriptions.py` (SSOT) and import by identity on both sides. Otherwise inline in `server.py`. Either way: stay within the per-tool 1,200-char cap (1,800 for the 5 F3 search tools that embed `LAYER_ROUTING_PRIMER_PROSE`).
+
+**Composition**: hermes imports `agent_surface` + `agent_harnesses` in-process; Claude Code receives both via `memex agent-surface --for=claude-code` from the plugin's `SessionStart` hook. Drift prevention: every cross-package surface imports the SAME object from `memex_common` (identity check in tests).
+
+**Enforcement** — six load-bearing test files:
+- `packages/common/tests/test_agent_surface.py` — universal block budget + content.
+- `packages/common/tests/test_tool_descriptions.py` — per-tool budgets + load-bearing content.
+- `packages/common/tests/test_agent_harnesses.py` — Tier 2 SSOT identity + budgets.
+- `packages/mcp/tests/test_description_budgets.py` — registered-tool char caps + F3 carve-out.
+- `packages/mcp/tests/test_no_universal_content_in_descriptions.py` — banned-phrase boundary fence.
+- `packages/hermes-plugin/tests/test_briefing_budget.py` + `packages/cli/tests/test_agent_surface_cli.py` — per-surface budgets + CLI profile invariants.
 
 ## Git workflow
 

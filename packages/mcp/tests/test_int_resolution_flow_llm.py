@@ -37,10 +37,20 @@ from typing import Any
 
 import pytest
 
+from memex_common.agent_surface import compose_universal
 from memex_mcp._resolution_flow_descriptions import (
     MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION,
     MEMEX_RECORD_OUTCOME_DESCRIPTION,
 )
+
+
+# After the 2026-05-14 three-tier refactor, the 5-step flow lives in the
+# universal Tier 1b block (`memex_common.agent_surface.compose_universal()`),
+# not in per-tool descriptions. The MCP descriptions imported above are
+# intentionally terse contracts. To reflect the realistic agent setup, the
+# tests in this file prepend the universal block to their system messages
+# (rather than relying on manually-written flow prose inline).
+_UNIVERSAL_BLOCK = compose_universal()
 
 _HAS_GEMINI_KEY = bool(os.environ.get('GEMINI_API_KEY') or os.environ.get('GOOGLE_API_KEY'))
 _HAS_LITELLM = _ilu.find_spec('litellm') is not None
@@ -177,15 +187,13 @@ def test_ambiguous_resolution_prompts_clarification_before_write() -> None:
                 {
                     'role': 'system',
                     'content': (
-                        'You are an agent integrated with Memex. You have several '
+                        _UNIVERSAL_BLOCK
+                        + '\n\n'
+                        + 'You are an agent integrated with Memex. You have several '
                         'reflection notes mentioning Telegram in the last week:\n'
                         '- "Daily reflection 2026-04-29" mentions Telegram cron output\n'
                         '- "Daily reflection 2026-04-30" mentions Telegram briefing alerts\n'
-                        '- "Debugging session 2026-04-30" mentions a Telegram media bug\n'
-                        'Pick a tool to call. If the scope is ambiguous, the 5-step flow '
-                        'requires you to ASK the user FIRST rather than write. Only call '
-                        'memex_record_outcome / memex_memory_deprioritize after you know '
-                        'exactly which units the user means.'
+                        '- "Debugging session 2026-04-30" mentions a Telegram media bug'
                     ),
                 },
                 {
@@ -243,12 +251,11 @@ def test_resolution_calls_search_before_write_when_no_unit_ids_known() -> None:
                 {
                     'role': 'system',
                     'content': (
-                        'You are an agent integrated with Memex. The user is naming a '
-                        'specific bug ("Telegram media handler bug from yesterday\'s '
-                        'reflection") but you do NOT have memory unit IDs. Per the §3.5 '
-                        'flow, route by info quality: title-fragment known -> '
-                        'memex_find_note; content only -> memex_memory_search. Only '
-                        'after you have a candidate set should you write.'
+                        _UNIVERSAL_BLOCK
+                        + '\n\n'
+                        + 'You are an agent integrated with Memex. The user is naming '
+                        'a specific bug ("Telegram media handler bug from yesterday\'s '
+                        'reflection") but you do NOT have memory unit IDs yet.'
                     ),
                 },
                 {
@@ -308,10 +315,11 @@ def test_cross_note_search_uses_top_k_at_least_30() -> None:
                 {
                     'role': 'system',
                     'content': (
-                        'You are an agent integrated with Memex. Use Option B '
-                        '(cross-note memex_memory_search) to gather candidates for the '
-                        '5-step resolution flow. The §3.5 spec says top_k MUST be >= 30; '
-                        'the default 5 is too narrow.'
+                        _UNIVERSAL_BLOCK
+                        + '\n\n'
+                        + 'You are an agent integrated with Memex. Use cross-note '
+                        '`memex_memory_search` (Option B) to gather candidates for the '
+                        'resolution flow.'
                     ),
                 },
                 {
@@ -374,13 +382,15 @@ def test_resolution_issues_paired_writes_against_subset() -> None:
                 {
                     'role': 'system',
                     'content': (
-                        'You are an agent integrated with Memex executing Steps '
-                        '4+5. The user has confirmed a bug fix; you have already done '
-                        'Steps 1-3 and judged exactly ONE unit relevant. Issue PAIRED '
-                        'writes (memex_record_outcome with success=false AND '
-                        'memex_memory_deprioritize) against ONLY the relevant unit_id. '
-                        'Do NOT write against the irrelevant one — that breaches Step 3 '
-                        '(LLM judgment).'
+                        _UNIVERSAL_BLOCK
+                        + '\n\n'
+                        + 'You are an agent integrated with Memex executing the paired-'
+                        'write step of the resolution flow. You have already done '
+                        'disambiguation + routing + judgment and identified exactly ONE '
+                        'unit as relevant. Per the failure-paired-writes rule above, '
+                        'issue BOTH memex_record_outcome (with units=[...]) AND '
+                        'memex_memory_deprioritize against ONLY that one unit. Two '
+                        'separate tool calls.'
                     ),
                 },
                 {

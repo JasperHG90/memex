@@ -32,7 +32,8 @@ _TOTAL_STATIC_PREFIX_CHAR_CAP = 8_000
 
 
 def _approx_tokens(text: str) -> int:
-    return (len(text) + 3) // 4
+    """~3.5 chars/token — empirical against tiktoken cl100k_base on this repo's markdown."""
+    return (len(text) * 2 + 6) // 7
 
 
 def test_hermes_harness_within_char_budget() -> None:

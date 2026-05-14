@@ -12,9 +12,13 @@ reverse-engineering analysis). MCP descriptions are Tier 1a:
   triggers + 1-sentence "when to use". NO multi-step composition (that's
   Tier 1b in ``agent_surface``).
 
-Char budget approximates 4 chars/token (typical English markdown). The
-char check is the load-bearing assertion; the token approximation is
-informational so a future contributor sees both numbers in failure output.
+Char/token ratio: empirical measurement against ``tiktoken cl100k_base``
+on this repo's agent_surface markdown content yields **3.5 chars/token**
+(memex_common.agent_surface.compose_universal() = 4,934 chars / 1,318
+tokens → 3.74 cpt; round down to 3.5 for headroom). Char budget is
+multiplied by 3.5 cpt to get the token approximation; the char check is
+the load-bearing assertion (chars are deterministic; tokens depend on
+the model's BPE).
 
 If a description legitimately needs more space (e.g., a tool with many
 required params and example shapes), bump the cap with intention — the
@@ -52,8 +56,10 @@ _LAYER_PRIMER_TOOLS = frozenset(
 
 
 def _approx_tokens(text: str) -> int:
-    """Approximate token count at ~4 chars/token (English markdown)."""
-    return (len(text) + 3) // 4
+    """Approximate token count at ~3.5 chars/token (empirically measured
+    against ``tiktoken cl100k_base`` on this repo's agent_surface markdown).
+    Multiply chars by 2 then divide by 7 → same ratio, integer-only arithmetic."""
+    return (len(text) * 2 + 6) // 7
 
 
 def test_mcp_instructions_within_budget() -> None:
@@ -68,7 +74,10 @@ def test_mcp_instructions_within_budget() -> None:
 
 
 async def _all_tool_descriptions() -> dict[str, str]:
-    tools = await mcp._list_tools()
+    # ``list_tools()`` is the public FastMCP API and returns the same
+    # FunctionTool objects as the private ``_list_tools`` — use the public
+    # form so a future FastMCP release doesn't silently break this fence.
+    tools = await mcp.list_tools()
     return {t.name: (getattr(t, 'description', '') or '') for t in tools}
 
 
@@ -85,6 +94,25 @@ def test_every_tool_has_description(tool_descriptions: dict[str, str]) -> None:
 
 def _cap_for(name: str) -> int:
     return _LAYER_PRIMER_TOOLS_CHAR_CAP if name in _LAYER_PRIMER_TOOLS else _TOOL_DESC_CHAR_CAP
+
+
+def test_layer_primer_prose_only_in_F3_tools(tool_descriptions: dict[str, str]) -> None:
+    """The 4-layer routing primer prose is intentionally embedded inline in
+    exactly the 5 F3 search tools (per the F3 design). It must NOT appear
+    in any OTHER tool description — that would silently double the
+    Tier 1a budget for that tool and undo the consolidation."""
+    # Unique sentinel from LAYER_ROUTING_PRIMER_PROSE that wouldn't appear
+    # anywhere else in a tool contract.
+    primer_marker = 'Memex stores four memory layers'
+    leaked = [
+        name
+        for name, desc in tool_descriptions.items()
+        if primer_marker in desc and name not in _LAYER_PRIMER_TOOLS
+    ]
+    assert not leaked, (
+        f'LAYER_ROUTING_PRIMER_PROSE leaked into non-F3 tools: {leaked!r}. '
+        f'The primer is only meant to inline into {sorted(_LAYER_PRIMER_TOOLS)!r}.'
+    )
 
 
 def test_each_tool_description_within_budget(tool_descriptions: dict[str, str]) -> None:

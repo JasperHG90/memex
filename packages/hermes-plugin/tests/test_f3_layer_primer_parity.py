@@ -14,7 +14,9 @@ SSOT itself plus the re-export identity invariants.
 
 If a future surface intentionally wants the table, it should:
 1. Import ``LAYER_ROUTING_PRIMER_TABLE`` from ``memex_common.agent_surface``.
-2. Be added to ``_REEXPORTERS`` below so identity is pinned.
+2. Add a dedicated ``test_<surface>_layer_primer_is_ssot_object`` here that
+   pins ``surface.X is memex_common.agent_surface.X`` (object identity).
+   Equality is not enough — a copy can silently drift.
 
 Universal content (the 5-step flow, storage model, KV scope qualifier) is
 covered by ``packages/common/tests/test_agent_surface.py`` and surfaced via

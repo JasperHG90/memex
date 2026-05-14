@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import json
 
+import pytest
 from typer.testing import CliRunner
 
 from memex_cli.agent_surface import app
@@ -22,10 +23,19 @@ runner = CliRunner()
 
 
 def _run(*args: str) -> str:
-    """Invoke the CLI with args, asserting success, and return stdout."""
+    """Invoke the CLI with args; assert success AND empty stderr; return stdout.
+
+    Stderr separation matters because the JSON-envelope output mode is
+    meant for piping into ``jq`` / the Claude Code SessionStart hook —
+    any warning text leaking to stderr while the command exit-codes 0
+    would silently corrupt the consumer."""
     result = runner.invoke(app, list(args))
     assert result.exit_code == 0, f'CLI failed: {result.output!r}'
-    return result.output
+    # `result.stderr` is empty by default in click ≥8.2 (typer ≥0.16);
+    # the assertion catches future regressions that echo to err.
+    stderr = getattr(result, 'stderr', '') or ''
+    assert stderr == '', f'CLI emitted stderr: {stderr!r}'
+    return result.stdout
 
 
 def test_universal_profile_emits_universal_block() -> None:
@@ -64,20 +74,29 @@ def test_claude_code_profile_includes_universal_block_and_harness() -> None:
 
 def test_mcp_profile_is_terse_and_pointer_at_agent_surface() -> None:
     """``--for=mcp`` is the Tier 1a transport surface — minimal, points at
-    `agent_surface` for composition rules."""
+    `agent_surface` for composition rules. Pin both positive content
+    (progressive disclosure, vault defaults, pointer) and negative
+    (Tier 1b content absent)."""
     out = _run('--for', 'mcp')
-    assert 'transport facts' in out
+    # Positive: load-bearing transport facts must be present.
+    assert 'Progressive disclosure' in out
+    assert 'memex_tags' in out
+    assert 'memex_search' in out
+    assert 'memex_get_schema' in out
+    assert 'Vault defaults' in out
     assert 'agent_surface' in out
-    # Tier 1b content must NOT appear here
+    # Negative: Tier 1b content must NOT appear here.
     assert 'Options A/B/C' not in out
     assert '5-step' not in out
 
 
-def test_universal_output_is_deterministic() -> None:
-    """Same flags → byte-equal output (cacheable prefix invariant)."""
-    a = _run('--for', 'universal')
-    b = _run('--for', 'universal')
-    assert a == b
+@pytest.mark.parametrize('profile', ['universal', 'generic', 'hermes', 'claude-code', 'mcp'])
+def test_profile_output_is_deterministic(profile: str) -> None:
+    """Every profile must emit byte-equal output across invocations —
+    cacheable-prefix invariant per dbreunig's Claude Code cache analysis."""
+    a = _run('--for', profile)
+    b = _run('--for', profile)
+    assert a == b, f'profile {profile!r} is non-deterministic: differs by {len(a) - len(b)} chars'
 
 
 def test_json_output_wraps_content_in_session_start_envelope() -> None:

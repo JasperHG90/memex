@@ -52,9 +52,17 @@ DIAGNOSTICS_SUMMARY_PROMPT_FRAGMENT = (
 # --- F43 --- (5-step user-confirmed-fix resolution flow + historical routing)
 # Verb-pair scaffolding for Hermes turns that handle "the X is fixed" prompts.
 # A Hermes turn can lean on this structured prompt rather than free-form
-# generation. Canonical text lives in
-# `memex_mcp._resolution_flow_descriptions` (sent on every tool discovery);
-# this fragment is the same flow rendered as a tool-call planning template.
+# generation.
+#
+# NOTE (2026-05-14 three-tier refactor): the SAME 5-step flow now lives
+# canonically in ``memex_common.agent_surface.RESOLUTION_FLOW`` and arrives
+# in every Memex-aware agent's system prompt via ``compose_universal()``.
+# This fragment is the *prompt-template form* of that flow — it shows up
+# inside a per-turn DSPy/LiteLLM scaffolding prompt, not the system prompt.
+# That use-case is distinct enough to warrant a separate rendering
+# (sequential numbered steps, suitable for chain-of-thought scaffolding)
+# but the prose must stay aligned with ``agent_surface.RESOLUTION_FLOW``.
+# If you edit one, audit the other.
 RESOLUTION_FLOW_PROMPT_FRAGMENT = (
     'When the user reports an issue resolved (§3.5 5-step flow):\n'
     '\n'

@@ -11,6 +11,7 @@ import threading
 from typing import Any
 from uuid import UUID
 
+from memex_common.agent_harnesses import HERMES_HARNESS as _HERMES_HARNESS
 from memex_common.agent_surface import LAYER_ROUTING_PRIMER_TABLE, compose_universal
 
 from .async_bridge import run_sync
@@ -91,21 +92,11 @@ class BriefingCache:
 _LAYER_ROUTING_PRIMER = LAYER_ROUTING_PRIMER_TABLE  # back-compat re-export
 
 
-# --- Tier 2: Hermes-specific framing (≤400 tokens / ≤1,600 chars).
-# Layered on top of `compose_universal()` (the Tier 1b SSOT). Anything that
-# belongs cross-agent (routing, storage model, 5-step flow, KV namespace,
-# virtual-unit warning, citations) lives in `memex_common.agent_surface`,
-# NOT here. This block covers ONLY hermes-specific framing the agent
-# benefits from above and beyond the universal block.
-_HERMES_HARNESS = """## Hermes-specific framing
-
-Outcome-signal lexicon for paired writes:
-- Success → "that worked", "lock it in", "record it", "that's the lesson" → verb=`helpful`
-- Failure → "stop suggesting X", "didn't work", "we removed it", "that was wrong" → verb=`not_helpful`
-
-Capture cadence: write a short note (`memex_add_note`, ≤300 tokens, no per-file changelogs) when you finish a multi-step task, diagnose a non-obvious bug, learn a user preference, or resolve a tricky env issue. Use `memex_append_note(note_key, delta)` to extend an existing note rather than re-ingesting.
-
-Disambiguate before mutating: if the user signal could plausibly target multiple units, ASK before paired writes."""
+# Tier 2 Hermes-specific framing. The string itself lives in
+# `memex_common.agent_harnesses` as the SSOT; this name is a re-export so
+# the Hermes plugin code can refer to `_HERMES_HARNESS` without an import
+# rewrite, and so identity tests can pin both surfaces (in-process and CLI
+# bridge) to the same object.
 
 
 def format_briefing_block(

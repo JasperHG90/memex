@@ -107,6 +107,14 @@ briefing_args=(briefing --budget 2000)
 [ -n "$project_vault" ] && briefing_args+=(--vault "$project_vault")
 [ -n "$project_id" ] && briefing_args+=(--project-id "$project_id")
 
+# --- Register cleanup trap upfront so any later failure cleans temp files ---
+# Set vars to empty so the trap-body `rm -f` is well-defined even before
+# either `mktemp` runs. Then build mktemp results into the same names so
+# the trap sees the actual paths.
+tmp_surface=''
+tmp_briefing=''
+trap 'rm -f "$tmp_briefing" "$tmp_surface"' EXIT
+
 # --- Compose Tier 1b (universal) + Tier 2 (claude-code) system-prompt content ---
 # Static; same bytes every session. Drawn from memex_common.agent_surface via
 # the CLI bridge — no server roundtrip, cacheable prompt prefix.
@@ -118,7 +126,6 @@ fi
 
 # --- Fetch dynamic session briefing (per-vault state from the server) ---
 tmp_briefing=$(mktemp)
-trap 'rm -f "$tmp_briefing" "$tmp_surface"' EXIT
 
 if ! memex "${briefing_args[@]}" > "$tmp_briefing" 2>/dev/null; then
     cat <<'EOF'

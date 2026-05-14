@@ -46,12 +46,13 @@ To opt out for a specific call, pass an explicit `tags` array containing only wh
 - `memex_memory_deprioritize(unit_id, reason)` — non-destructive. Lowers retrieval rank; reversible via `memex_memory_restore`.
 - Archive (CLI-only) — destructive, removes from entity graph. Prefer deprioritize.
 
-## 5-step resolution flow (user reports issue fixed)
+## User reports an issue fixed
 
-1. **Disambiguate** — if scope ambiguous, ASK.
-2. **Route** — title → `memex_find_note`; content → `memex_memory_search`. Pick: (A) entity-anchored, (B) cross-note semantic (top_k≥30), or (C) single-note PageIndex.
-3. **LLM-judge** — read candidate unit bodies, pick fix-relevant subset. Never bulk-write.
-4. **Paired writes**: `memex_record_outcome(success=false)` AND `memex_memory_deprioritize(reason=...)`.
+Follow the 5-step resolution flow in the system prompt (§"5-step resolution flow", arriving via the SessionStart hook). The paired-write shape on failure is:
+
+`memex_record_outcome(units=[{unit_id, verb: "not_helpful", reason}])` AND `memex_memory_deprioritize(unit_id, reason)`
+
+Bare `success=true`/`success=false` without `units` returns HTTP 400.
 
 ## Procedure KV
 

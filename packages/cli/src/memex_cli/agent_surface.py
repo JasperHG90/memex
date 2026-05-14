@@ -39,6 +39,7 @@ from enum import Enum
 
 import typer
 
+from memex_common.agent_harnesses import CLAUDE_CODE_HARNESS, HERMES_HARNESS
 from memex_common.agent_surface import compose_universal
 
 
@@ -62,33 +63,6 @@ class OutputFormat(str, Enum):
     json = 'json'
 
 
-_HERMES_HARNESS = """## Hermes-specific framing
-
-Outcome-signal lexicon for paired writes:
-- Success → "that worked", "lock it in", "record it", "that's the lesson" → verb=`helpful`
-- Failure → "stop suggesting X", "didn't work", "we removed it", "that was wrong" → verb=`not_helpful`
-
-Capture cadence: write a short note (`memex_add_note`, ≤300 tokens, no per-file changelogs) when you finish a multi-step task, diagnose a non-obvious bug, learn a user preference, or resolve a tricky env issue. Use `memex_append_note(note_key, delta)` to extend an existing note rather than re-ingesting.
-
-Disambiguate before mutating: if the user signal could plausibly target multiple units, ASK before paired writes."""
-
-
-_CLAUDE_CODE_HARNESS = """## Claude Code-specific framing
-
-Capture cadence: call `memex_add_note(background=true, author="claude-code")` when you (1) complete a multi-step task, (2) diagnose a bug root cause, (3) make/discover an architectural decision, (4) learn a user preference, or (5) resolve a tricky env issue. Hard max 300 tokens; no per-file changelogs.
-
-Slash commands:
-- `/remember [text]` — save to memory (uses `memex_add_note`).
-- `/recall [query]` — search memories (uses `memex_memory_search` + `memex_note_search`).
-
-Prohibitions:
-- NEVER use `memex_recent_notes` for discovery.
-- NEVER fabricate Note/Node/Unit IDs — only IDs from tool output.
-- NEVER call `memex_get_notes_metadata` after `memex_note_search` (metadata inline).
-- NEVER use `memex_read_note` on notes >500 tokens — use `memex_get_page_indices` + `memex_get_nodes`.
-- NEVER present Memex data without inline numbered citations."""
-
-
 _MCP_TRANSPORT = """## Memex MCP — transport facts
 
 Progressive disclosure: `memex_tags()` → `memex_search(query, tags=[...])` → `memex_get_schema(tools=[...])` → call by name.
@@ -102,15 +76,19 @@ def _compose_for_profile(profile: Profile) -> str:
     if profile in (Profile.universal, Profile.generic):
         return compose_universal()
     if profile == Profile.hermes:
-        return compose_universal() + '\n\n' + _HERMES_HARNESS
+        return compose_universal() + '\n\n' + HERMES_HARNESS
     if profile == Profile.claude_code:
-        return compose_universal() + '\n\n' + _CLAUDE_CODE_HARNESS
+        return compose_universal() + '\n\n' + CLAUDE_CODE_HARNESS
     if profile == Profile.mcp:
         return _MCP_TRANSPORT
     raise ValueError(f'unknown profile: {profile!r}')
 
 
-@app.command('emit')
+# `app.command()` with no name + `no_args_is_help=True` + single-command app
+# flattens to `memex agent-surface [OPTIONS]` (no explicit `emit` subcommand
+# argument). Don't claim an `emit` subcommand exists — typer rejects
+# `memex agent-surface emit --for=...` because the bare flag is the only form.
+@app.command()
 def emit(
     for_: Profile = typer.Option(
         Profile.universal,

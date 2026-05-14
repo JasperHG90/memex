@@ -39,6 +39,7 @@ _BANNED_UNIVERSAL_PHRASES = (
     'Option B',
     'Option C',
     'Mandatory LLM judgment',
+    'Disambiguate',
     # Retrieval-routing fragment — belongs in agent_surface.RETRIEVAL_ROUTING.
     'apply_pre_filter=False',
     # 5-step flow keyword — belongs in agent_surface.RESOLUTION_FLOW.
@@ -46,13 +47,28 @@ _BANNED_UNIVERSAL_PHRASES = (
     'five-step flow',
     # Orthogonal-axes prose — belongs in agent_surface.AXES.
     'orthogonal axes',
+    'MW gradient',
+    # NOTE: "append-only MW counter" remains permissible in the deprioritize
+    # description as a per-tool contrast — that's rationale-that-aids-
+    # generalization for the agent picking record_outcome vs deprioritize.
+    # We ban only the longer-prose AXES *section* content, not the
+    # one-phrase contrast.
     # KV scope-qualifier-wins prose — belongs in agent_surface.KV_NAMESPACE.
     'scope qualifier wins',
+    'narrower scope wins',
+    'scope qualifier picks the namespace',
+    # Historical/audit routing — belongs in agent_surface.HISTORICAL_ROUTING.
+    # memex_get_unit_history naming itself is a tool name — agents that
+    # name the verb (e.g. "see also memex_get_unit_history") are fine; we
+    # only ban the *audit-routing prose phrase* that bundles it with the
+    # apply_pre_filter=False bypass.
+    'bypasses MW/FSFM/confidence filters',
 )
 
 
 async def _all_tool_descriptions() -> dict[str, str]:
-    tools = await mcp._list_tools()
+    # Public FastMCP API — survives FastMCP upgrades.
+    tools = await mcp.list_tools()
     return {t.name: (getattr(t, 'description', '') or '') for t in tools}
 
 
