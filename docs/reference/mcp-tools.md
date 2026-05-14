@@ -310,12 +310,12 @@ Atomically append a content delta to an existing note's body without reading it 
 
 ### `memex_set_note_status`
 
-Set note lifecycle status: active, superseded, or appended. When superseded, all memory units are marked stale. Optionally link to the replacing/parent note.
+Set note lifecycle status: `active`, `superseded`, or `archived`. When `superseded` or `archived`, all memory units are marked stale. To append content to an existing note, use `memex_append_note` instead — that is the only path that records the chronology. Optionally link to the replacing/parent note.
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
 | `note_id` | string | Yes | - | The UUID of the note. |
-| `status` | string | Yes | - | New status: `active`, `superseded`, or `appended`. |
+| `status` | string | Yes | - | New status: `active`, `superseded`, or `archived`. |
 | `linked_note_id` | string | No | - | UUID of the note that supersedes or contains this one. |
 
 ---

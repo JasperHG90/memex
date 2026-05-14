@@ -489,12 +489,15 @@ async def memex_read_note(
 @mcp.tool(
     name='memex_set_note_status',
     description=(
-        'Set note lifecycle status: active, superseded, appended, archived. '
+        'Set note lifecycle status: active, superseded, archived. '
         '**Cascading side-effect:** marking a note `superseded` flags every '
         'memory unit extracted from it as stale. Prefer letting contradiction '
         'detection auto-supersede facts via a new ingested note; reach for '
         'this tool only for explicit archival or when an immediate state '
-        'change is required. Optionally link to the replacing/parent note.'
+        'change is required. To append content to an existing note, use '
+        '`memex_append_note`; that is the only path that sets the '
+        '`appended_to` relation. Optionally link to the replacing/parent '
+        'note via linked_note_id.'
     ),
     tags={'write'},
     annotations={'readOnlyHint': False, 'idempotentHint': True},
@@ -504,7 +507,7 @@ async def memex_set_note_status(
     note_id: Annotated[str, Field(description='Note UUID.')],
     status: Annotated[
         str,
-        Field(description='New status: active, superseded, or appended.'),
+        Field(description='New status: active, superseded, or archived.'),
     ],
     linked_note_id: Annotated[
         str | None,

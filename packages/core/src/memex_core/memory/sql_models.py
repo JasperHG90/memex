@@ -285,7 +285,7 @@ class Note(SQLModel, table=True):  # type: ignore
             server_default='active',
             index=True,
         ),
-        description='Note lifecycle status: active, superseded, appended, archived.',
+        description='Note lifecycle status: active, superseded, archived.',
     )
 
     superseded_by: UUID | None = Field(
@@ -321,7 +321,7 @@ class Note(SQLModel, table=True):  # type: ignore
     __table_args__ = (
         Index('idx_notes_content_hash', 'content_hash'),
         CheckConstraint(
-            "status IN ('active', 'superseded', 'appended', 'archived')",
+            "status IN ('active', 'superseded', 'archived')",
             name='ck_notes_status',
         ),
         Index(

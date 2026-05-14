@@ -281,7 +281,7 @@ async def set_note_status(
 ) -> dict[str, Any]
 ```
 
-Set a note's lifecycle status (`active`, `superseded`, or `appended`).
+Set a note's lifecycle status (`active`, `superseded`, or `archived`). Raises `ValueError` if `status='appended'` is passed; append content via `Ingestion.append_to_note` (HTTP `POST /notes/append`, MCP `memex_append_note`) instead.
 
 ### `update_note_title`
 

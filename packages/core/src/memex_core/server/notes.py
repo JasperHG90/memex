@@ -303,7 +303,7 @@ async def set_note_status(
     request: Annotated[SetNoteStatusRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
 ):
-    """Set note lifecycle status (active, superseded, appended)."""
+    """Set note lifecycle status (active, superseded, archived)."""
     try:
         return await api.set_note_status(note_id, request.status, request.linked_note_id)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:

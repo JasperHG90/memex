@@ -944,7 +944,7 @@ Use this in preference to re-sending the full body via `POST /api/v1/notes` when
 
 ### `PATCH /api/v1/notes/{note_id}/status`
 
-Set note lifecycle status (active, superseded, appended).
+Set note lifecycle status (`active`, `superseded`, or `archived`). To append content to an existing note, use `POST /api/v1/notes/append` — that is the only path that records the chronology.
 
 #### Path Parameters
 
@@ -963,7 +963,7 @@ Set note lifecycle status (active, superseded, appended).
 
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
-| `status` | string | Yes | New status: `active`, `superseded`, or `appended`. |
+| `status` | string | Yes | New status: `active`, `superseded`, or `archived`. |
 | `linked_note_id` | UUID | No | UUID of the replacing/parent note. |
 
 #### Response (200)

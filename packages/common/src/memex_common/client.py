@@ -1097,7 +1097,7 @@ class RemoteMemexAPI:
     async def set_note_status(
         self, note_id: UUID, status: str, linked_note_id: UUID | None = None
     ) -> dict[str, Any]:
-        """Set note lifecycle status (active, superseded, appended)."""
+        """Set note lifecycle status (active, superseded, archived)."""
         return await self._patch(
             f'notes/{note_id}/status',
             {'status': status, 'linked_note_id': str(linked_note_id) if linked_note_id else None},

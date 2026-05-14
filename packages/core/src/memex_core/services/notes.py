@@ -212,6 +212,13 @@ class NoteService:
     ) -> dict[str, Any]:
         """Set a note's lifecycle status and optionally link to another note.
 
+        Accepts ``'active' | 'superseded' | 'archived'``. ``'appended'``
+        is rejected with ``ValueError``; use the append verb (HTTP
+        ``POST /notes/append`` with the parent identifier in the request
+        body, or the ``memex_append_note`` tool) to set the
+        ``appended_to`` relation atomically with post-commit
+        contradiction detection.
+
         When status is 'superseded' or 'archived', marks all memory units as stale
         and prunes mental model evidence + queues affected entities for reflection.
         When status is 'active', reactivates all memory units (sets them back to active).
@@ -219,7 +226,16 @@ class NoteService:
         from memex_core.memory.sql_models import MemoryUnit, Note
         from sqlmodel import select
 
-        valid_statuses = ('active', 'superseded', 'appended', 'archived')
+        if status == 'appended':
+            raise ValueError(
+                "'appended' is not a settable lifecycle status; append "
+                'content to an existing note via the append verb (HTTP '
+                'POST /notes/append with the parent identifier in the body, '
+                'or the `memex_append_note` tool), which is the only path '
+                'that sets the appended_to FK and runs post-commit '
+                'contradiction detection atomically.'
+            )
+        valid_statuses = ('active', 'superseded', 'archived')
         if status not in valid_statuses:
             raise ValueError(f'Invalid status: {status}. Must be one of {valid_statuses}.')
 
@@ -243,8 +259,6 @@ class NoteService:
                 await self._deactivate_note_units(session, note_id, note_vault_id)
             elif status == 'archived':
                 await self._deactivate_note_units(session, note_id, note_vault_id)
-            elif status == 'appended':
-                doc.appended_to = linked_note_id
             elif status == 'active':
                 doc.superseded_by = None
                 doc.appended_to = None
