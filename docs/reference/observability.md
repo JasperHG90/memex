@@ -26,7 +26,7 @@ The cross-encoder reranker composes five multiplicative boost factors — recenc
 
 | `composite_boost_log_clip` | What the histogram measures |
 |---|---|
-| `math.inf` (ship default) | The pre-clip aggregate product itself — clip is a no-op, so the observed value equals the raw `b_1 · b_2 · b_3 · b_4 · b_5` (modulo 1e-9 floating-point) for strictly positive inputs. Read this distribution to choose a finite `L`. |
+| `math.inf` (ship default) | The pre-clip aggregate product itself — clip is a no-op, so the observed value equals the raw `b_1 · b_2 · b_3 · b_4 · b_5` (modulo float-precision round-trip from the `log`/`exp` pair, roughly 1 ULP) for strictly positive inputs. Read this distribution to choose a finite `L`. |
 | Finite `L` (e.g. `0.7`, `1.0`, `1.5`) | The **post-clip** aggregate multiplier actually applied to `ce_score`. Spread wider than `[exp(-L), exp(+L)]` means the clip is firing; tight spread inside that band means the clip is dormant for typical traffic. |
 
 At the ship default, this metric subsumes a dedicated pre-clip histogram — the distribution needed to derive an empirical `L` is observable directly. Once `L` is moved off `math.inf`, the same metric continues to be useful, but it answers a different question (post-clip vs pre-clip). A separate dedicated pre-clip histogram is **not** currently shipped; the decision and rationale are recorded under [Decision: pre-clip histogram for the finite-L regime](#decision-pre-clip-histogram-for-the-finite-l-regime).
@@ -42,13 +42,28 @@ At the ship default, this metric subsumes a dedicated pre-clip histogram — the
 
 **Type:** Counter (no labels)
 
-**Emits on:** any reranking call where `ce_score`, one of the five boost factors, or `composite_boost_log_clip` itself is non-finite (`NaN`, `+inf`, or `-inf`). The guard short-circuits *before* the `Histogram.observe` call, so corrupted observations do not pollute `memex_composite_boost_clipped`.
+**Emits on:** any reranking call where the guard at `packages/core/src/memex_core/memory/retrieval/engine.py:128-135` short-circuits. The guard fires when:
 
-**Operational meaning:** a non-zero rate indicates upstream calibration or configuration drifted into non-finite territory. Common root causes include a `Decimal` → `float` conversion that emitted `NaN`, a Memory Worth feature that produced `inf`, or a misset `composite_boost_log_clip` (e.g., a parsed config value that resolved to `nan`). Investigate before relying on `memex_composite_boost_clipped` for tuning decisions.
+- `ce_score` is non-finite (`NaN`, `+inf`, or `-inf`), or
+- any of the five boost factors is non-finite (`NaN`, `+inf`, or `-inf`), or
+- `composite_boost_log_clip` is `NaN`, or
+- `composite_boost_log_clip` is negative.
+
+`composite_boost_log_clip = math.inf` is the supported ship default and does **not** trigger the guard — `+inf` is treated as "no clip" rather than "non-finite". When the guard fires it returns `ce_score` unmodified and skips the `Histogram.observe` call, so corrupted observations do not pollute `memex_composite_boost_clipped`.
+
+**Operational meaning:** a non-zero rate indicates upstream calibration or configuration drifted into territory the composer rejects — typically a `Decimal` → `float` conversion that emitted `NaN`, a Memory Worth feature that produced `inf`, a misset `composite_boost_log_clip` (e.g., parsed config value that resolved to `nan`), or a negative `composite_boost_log_clip` (which would invert the clip semantics). Investigate before relying on `memex_composite_boost_clipped` for tuning decisions.
 
 ### Per-factor histograms
 
-For deeper analysis of individual boost factors, the same module declares `memex_mw_boost`, `memex_confidence_boost`, and `memex_decay_boost` (all unlabeled histograms). They observe each factor before composition, so divergent shape between any single factor and `memex_composite_boost_clipped` localises which heuristic is doing the most work.
+Three of the five boost factors emit their own pre-composition histograms (all unlabeled):
+
+- `memex_mw_boost` — Memory Worth factor.
+- `memex_confidence_boost` — contradiction-derived confidence factor.
+- `memex_decay_boost` — FSFM-lite decay factor.
+
+Divergent shape between any of these and `memex_composite_boost_clipped` localises which heuristic is doing the most work in production traffic.
+
+The remaining two factors — **recency** and **temporal** — do not currently have dedicated per-factor histograms. Their contribution is only observable via `memex_composite_boost_clipped` (and via eval runs that compare composite-only ranking against ranking with the corresponding alpha set to `0`).
 
 ## Decision: pre-clip histogram for the finite-L regime
 

@@ -27,6 +27,7 @@ nav = [
     "reference/rest-api.md",
     "reference/mcp-tools.md",
     "reference/configuration.md",
+    "reference/observability.md",
     "reference/evaluation-report.md",
   ]},
   { "Explanation" = [
