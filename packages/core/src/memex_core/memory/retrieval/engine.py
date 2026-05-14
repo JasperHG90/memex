@@ -67,6 +67,8 @@ from memex_core.memory.confidence import (
 )
 from memex_core.memory.formatting import format_for_reranking
 from memex_core.metrics import (
+    COMPOSITE_BOOST_CLIPPED,
+    COMPOSITE_BOOST_NON_FINITE_GUARD_TRIGGERED,
     CONFIDENCE_BOOST_OBSERVED,
     CONFIDENCE_SCORE_DISTRIBUTION,
     CONFIDENCE_VARIANCE_OBSERVED,
@@ -76,6 +78,72 @@ from memex_core.metrics import (
 )
 
 logger = logging.getLogger('memex.core.memory.retrieval.engine')
+
+LOG_FLOOR_COMPOSITE_BOOST = 1e-9
+
+
+def _compose_boosts_logspace(
+    ce_score: float,
+    *,
+    recency: float,
+    temporal: float,
+    mw: float,
+    confidence: float,
+    decay: float,
+    log_clip: float,
+) -> float:
+    """Compose five boost factors onto ce_score with log-space additive clip.
+
+    Returns ``ce_score * exp(clip(sum(log(b_i)), -log_clip, +log_clip))``.
+    Boost values at or below ``LOG_FLOOR_COMPOSITE_BOOST = 1e-9`` are floored
+    at the floor before taking the log, so zero or (theoretically) negative
+    inputs do not raise. At the ship default ``log_clip = math.inf`` the clip
+    is a no-op and the result equals the prior multiplicative product
+    (within float-precision rounding from the log/exp round-trip) for
+    strictly positive boost inputs; for an input that hits the floor (e.g. a
+    boost of exactly ``0.0``), the new form produces ``ce_score * ~1e-9`` for
+    a single zero factor (``ce_score * 1e-9^k`` if ``k`` factors hit the
+    floor; degenerate all-five case is ``ce_score * 1e-45``) rather than the
+    strict ``0.0`` the multiplicative product would return. Rank-equivalent
+    for retrieval scoring (both at the bottom), but no longer ties every
+    zero-boost unit at zero. Under ship-default alphas every boost evaluates
+    to ``1.0`` (or strictly positive), so the zero-input path is dormant.
+
+    Any non-finite input (``NaN`` or ``±inf``) on a boost or ``ce_score``,
+    a ``NaN`` ``log_clip``, or a negative ``log_clip`` short-circuits: the
+    function returns ``ce_score`` unmodified and emits a separate
+    ``COMPOSITE_BOOST_NON_FINITE_GUARD_TRIGGERED`` counter increment instead
+    of observing ``1.0`` to the regular histogram (which would be
+    indistinguishable from a genuine neutral multiplier). The negative-clip
+    rejection is defense-in-depth: ``RetrievalConfig`` already enforces
+    ``ge=0.0`` at construction time, but a direct caller could pass a
+    negative clip, where ``max(-log_clip, min(log_clip, log_boost))`` would
+    silently flip into a maximum-multiplier path. The guard ensures the
+    function is correct standalone, not just via its caller chain.
+
+    Emits the post-clip multiplier to ``COMPOSITE_BOOST_CLIPPED`` for
+    operator visibility into whether the clip is firing in production
+    traffic.
+    """
+    if (
+        not math.isfinite(ce_score)
+        or any(not math.isfinite(b) for b in (recency, temporal, mw, confidence, decay))
+        or math.isnan(log_clip)
+        or log_clip < 0
+    ):
+        COMPOSITE_BOOST_NON_FINITE_GUARD_TRIGGERED.inc()
+        return ce_score
+    log_boost = (
+        math.log(max(recency, LOG_FLOOR_COMPOSITE_BOOST))
+        + math.log(max(temporal, LOG_FLOOR_COMPOSITE_BOOST))
+        + math.log(max(mw, LOG_FLOOR_COMPOSITE_BOOST))
+        + math.log(max(confidence, LOG_FLOOR_COMPOSITE_BOOST))
+        + math.log(max(decay, LOG_FLOOR_COMPOSITE_BOOST))
+    )
+    clipped = max(-log_clip, min(log_clip, log_boost))
+    multiplier = math.exp(clipped)
+    COMPOSITE_BOOST_CLIPPED.observe(multiplier)
+    return ce_score * multiplier
 
 
 def _get_confidence(unit: HasConfidence) -> float:
@@ -1476,9 +1544,13 @@ class RetrievalEngine:
         *,
         mw_mode: MWMode = MWMode.STATIONARY,
     ) -> list[MemoryUnit]:
-        """Re-rank results using a cross-encoder with multiplicative boosts.
+        """Re-rank results using a cross-encoder with log-additive bounded boosts.
 
-        Applies sigmoid-normalized cross-encoder scores, then multiplies by:
+        Applies sigmoid-normalized cross-encoder scores, then composes five
+        boost factors in log space and clips the sum symmetrically before
+        exponentiating — see :func:`_compose_boosts_logspace` for the
+        mechanism. The five boost factors are:
+
         * **recency boost** -- scaled by ``RetrievalConfig.reranking_recency_alpha``
           (linear decay over 365 days)
         * **temporal proximity boost** -- scaled by
@@ -1491,8 +1563,16 @@ class RetrievalEngine:
           ``RetrievalConfig.confidence_alpha`` (uses ``unit.confidence``;
           cold-start confidence = 1.0 → boost > 1.0 when alpha > 0; default
           alpha = 0.0 ships boost = 1.0 for every unit)
+        * **FSFM decay boost** -- scaled by ``RetrievalConfig.decay_alpha``
+          (Ebbinghaus × importance; default alpha = 0.0 ships boost = 1.0)
 
-        Set any alpha to 0 to disable that boost (backward compatible).
+        Set any alpha to 0 to disable that boost (backward compatible). The
+        aggregate metadata multiplier is bounded by
+        ``RetrievalConfig.composite_boost_log_clip`` (``L``): the post-clip
+        multiplier lies in ``[exp(-L), exp(+L)]``. Ship default ``L = math.inf``
+        is a no-op (mathematically identical to the prior multiplicative
+        product for strictly positive boost inputs); set a finite ``L`` to
+        bound the aggregate metadata influence on ``ce_score``.
         """
         if not self.reranker or not results:
             # Emit zero-input observation so the histogram is always
@@ -1526,8 +1606,8 @@ class RetrievalEngine:
             # Normalize cross-encoder scores to [0, 1] via sigmoid
             normalized_scores = [1.0 / (1.0 + math.exp(-s)) for s in scores]
 
-            # Apply multiplicative recency, temporal proximity, Memory Worth, confidence,
-            # and decay boosts.
+            # Compose the five boost factors with log-additive bounded
+            # clip; see ``_compose_boosts_logspace`` above.
             from memex_core.memory.retrieval.decay import compute_decay_boost
             from memex_core.services.outcomes import compute_mw_boost
 
@@ -1537,6 +1617,7 @@ class RetrievalEngine:
             mw_alpha = self.retrieval_config.reranking_mw_alpha
             confidence_alpha = self.retrieval_config.confidence_alpha
             decay_alpha = self.retrieval_config.decay_alpha
+            composite_log_clip = self.retrieval_config.composite_boost_log_clip
 
             boosted_scores: list[float] = []
             for unit, ce_score in zip(results, normalized_scores):
@@ -1615,12 +1696,15 @@ class RetrievalEngine:
                 DECAY_BOOST_OBSERVED.observe(decay_boost)
 
                 boosted_scores.append(
-                    ce_score
-                    * recency_boost
-                    * temporal_boost
-                    * mw_boost
-                    * confidence_boost
-                    * decay_boost
+                    _compose_boosts_logspace(
+                        ce_score,
+                        recency=recency_boost,
+                        temporal=temporal_boost,
+                        mw=mw_boost,
+                        confidence=confidence_boost,
+                        decay=decay_boost,
+                        log_clip=composite_log_clip,
+                    )
                 )
 
             scored_results = []

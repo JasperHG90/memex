@@ -1,6 +1,7 @@
 """Configuration for Memex based on Persona library"""
 
 import logging
+import math
 from enum import Enum
 from typing import Literal, Self, Union, Annotated, Any, TypeAlias
 import pathlib as plb
@@ -13,7 +14,15 @@ from uuid import UUID
 logger = logging.getLogger('memex.common.config')
 
 from platformdirs import user_cache_dir, user_config_dir, user_data_dir, user_log_dir
-from pydantic import BaseModel, Field, SecretStr, HttpUrl, field_serializer, model_validator
+from pydantic import (
+    BaseModel,
+    Field,
+    HttpUrl,
+    SecretStr,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
 from pydantic_settings import BaseSettings, SettingsConfigDict, PydanticBaseSettingsSource
 
 from memex_common.types import ReasoningEffort
@@ -830,28 +839,32 @@ class RetrievalConfig(BaseModel):
     )
     reranking_recency_alpha: float = Field(
         default=0.2,
-        description='Multiplicative recency boost strength for cross-encoder reranking. '
+        description='Recency boost strength for cross-encoder reranking. Composed '
+        'log-additively with the other four factors (see composite_boost_log_clip). '
         '0 = no boost (backward compatible).',
     )
     reranking_temporal_alpha: float = Field(
         default=0.2,
-        description='Multiplicative temporal proximity boost strength for cross-encoder reranking. '
+        description='Temporal proximity boost strength for cross-encoder reranking. '
+        'Composed log-additively with the other four factors (see composite_boost_log_clip). '
         '0 = no boost (backward compatible).',
     )
     reranking_mw_alpha: float = Field(
         default=0.3,
-        description='Multiplicative Memory Worth boost strength for cross-encoder reranking. '
+        description='Memory Worth boost strength for cross-encoder reranking. Composed '
+        'log-additively with the other four factors (see composite_boost_log_clip). '
         '0 = no Memory Worth influence. Default 0.3 matches recency/temporal magnitude.',
     )
     confidence_alpha: float = Field(
         default=0.0,
         ge=0.0,
         le=2.0,
-        description='Multiplicative contradiction-derived confidence boost strength for '
-        'cross-encoder reranking. Default 0.0 (off) at ship time — flip to non-zero '
+        description='Contradiction-derived confidence boost strength for cross-encoder '
+        'reranking. Composed log-additively with the other four factors (see '
+        'composite_boost_log_clip). Default 0.0 (off) at ship time — flip to non-zero '
         '(target ~0.3) only after CONFIDENCE_SCORE_DISTRIBUTION calibration data accumulates. '
         'With confidence=1.0 schema default, any non-zero alpha gives every never-contradicted '
-        'unit a multiplicative lift before calibration justifies it. '
+        'unit a lift before calibration justifies it. '
         'Bounded to [0.0, 2.0]: negative alpha would invert the boost direction (penalise '
         'clean units, lift contradicted ones); above 2.0 the boost can go negative for '
         'low-confidence units.',
@@ -860,13 +873,54 @@ class RetrievalConfig(BaseModel):
         default=0.0,
         ge=0.0,
         le=2.0,
-        description='Multiplicative FSFM-lite decay boost strength for cross-encoder '
-        'reranking. Default 0.0 (off) at ship time — composition is a no-op until the '
-        'before/after benchmark validates the lift; flip to non-zero (target 0.3 to match '
+        description='FSFM-lite decay boost strength for cross-encoder reranking. Composed '
+        'log-additively with the other four factors (see composite_boost_log_clip). '
+        'Default 0.0 (off) at ship time — composition is a no-op until the before/after '
+        'benchmark validates the lift; flip to non-zero (target 0.3 to match '
         'recency/temporal/mw magnitude) in a follow-on config commit. '
         'Bounded to [0.0, 2.0]: negative alpha would invert the boost direction; above 2.0 '
         'the boost can go negative for stale low-importance units.',
     )
+    composite_boost_log_clip: float = Field(
+        default=math.inf,
+        ge=0.0,
+        description='Symmetric clip on the aggregate metadata multiplier applied to the '
+        'cross-encoder score during reranking. The five boost factors compose in log space '
+        '(sum of log(b_i)), the sum is clipped to [-L, +L], then exponentiated and applied '
+        'to ce_score. At default L = math.inf the clip is a no-op and the result is '
+        'mathematically identical (modulo 1e-9 floating-point) to the prior multiplicative '
+        'product for strictly positive boost inputs; a boost of exactly 0.0 (reachable only '
+        'when an alpha is non-zero and a unit was contradicted to zero, dormant under ship '
+        'defaults) produces ce_score * ~1e-9 in the new form for a single zero factor '
+        '(ce_score * 1e-9^k for k floored factors) vs ce_score * 0.0 in the old form — '
+        'rank-equivalent for retrieval scoring (both at the bottom) but no longer tying '
+        'at zero. Finite L bounds the aggregate metadata multiplier to [exp(-L), exp(+L)], '
+        'preventing any single heuristic or product of heuristics from arbitrarily '
+        'compressing or amplifying the semantic signal. Empirical L (typically the p95 of '
+        '|log(aggregate)| from the memex_composite_boost_clipped histogram, which at L=inf '
+        'observes the pre-clip product directly) lands via a follow-up config commit once '
+        'distribution data accumulates. Negative L is rejected: it would invert clip '
+        'semantics.',
+    )
+
+    @field_validator('composite_boost_log_clip', mode='before')
+    @classmethod
+    def _parse_composite_boost_log_clip(cls, value: object) -> float | object:
+        if isinstance(value, str):
+            normalized = value.strip().lower()
+            if normalized in {'inf', '+inf', 'infinity', '+infinity'}:
+                return math.inf
+            return float(normalized)
+        return value
+
+    @field_serializer('composite_boost_log_clip', when_used='json')
+    def _serialize_composite_boost_log_clip(self, value: float) -> float | str | None:
+        if value == math.inf:
+            return 'inf'
+        if not math.isfinite(value):
+            return None
+        return value
+
     certainty_modulation_enabled: bool = Field(
         default=False,
         description='When True, the confidence_boost is multiplied by a certainty '
