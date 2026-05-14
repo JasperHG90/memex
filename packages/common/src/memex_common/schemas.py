@@ -1062,6 +1062,8 @@ class NoteDTO(BaseModel):
     assets: list[str] = Field(default_factory=list)
     doc_metadata: dict[str, Any] = Field(default_factory=dict)
     template: str | None = None
+    status: str = 'active'
+    archived_at: dt.datetime | None = None
 
 
 class BlockSummaryDTO(BaseModel):
@@ -1088,6 +1090,8 @@ class NoteListItemDTO(BaseModel):
     doc_metadata: dict[str, Any] = Field(default_factory=dict)
     template: str | None = None
     summaries: list[BlockSummaryDTO] = Field(default_factory=list)
+    status: str = 'active'
+    archived_at: dt.datetime | None = None
 
 
 class MemoryLinkDTO(BaseModel):

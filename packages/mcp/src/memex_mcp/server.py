@@ -388,11 +388,15 @@ async def memex_read_note(
     name='memex_set_note_status',
     description=(
         'Set note lifecycle status: active, superseded, appended, archived. '
-        '**Cascading side-effect:** marking a note `superseded` flags every '
-        'memory unit extracted from it as stale. Prefer letting contradiction '
-        'detection auto-supersede facts via a new ingested note; reach for '
-        'this tool only for explicit archival or when an immediate state '
-        'change is required. Optionally link to the replacing/parent note.'
+        '**Cascades:** `superseded` flags every memory unit extracted from '
+        'the note as stale. `archived` records an `archived_at` timestamp '
+        'and flips the note units to `is_deprioritized=true` (FSFM '
+        'suppression) — the units stay active and can be surfaced via '
+        '`include_deprioritized=True` retrieval, then restored individually '
+        'with `memex_memory_restore`. Prefer letting contradiction detection '
+        'auto-supersede facts via a new ingested note; reach for this tool '
+        'only for explicit archival or when an immediate state change is '
+        'required. Optionally link to the replacing/parent note.'
     ),
     tags={'write'},
     annotations={'readOnlyHint': False, 'idempotentHint': True},
@@ -402,7 +406,7 @@ async def memex_set_note_status(
     note_id: Annotated[str, Field(description='Note UUID.')],
     status: Annotated[
         str,
-        Field(description='New status: active, superseded, or appended.'),
+        Field(description='New status: active, superseded, appended, or archived.'),
     ],
     linked_note_id: Annotated[
         str | None,

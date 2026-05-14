@@ -33,6 +33,10 @@ CLAUDE_CODE_HARNESS = """## Claude Code-specific framing
 
 Capture cadence: call `memex_add_note(background=true, author="claude-code")` when you (1) complete a multi-step task, (2) diagnose a bug root cause, (3) make/discover an architectural decision, (4) learn a user preference, or (5) resolve a tricky env issue. Hard max 300 tokens; no per-file changelogs.
 
+<critical_constraint name="preference_routing">
+"Remember"/"save this"/"for future sessions" directives for preferences or conventions go to `memex_kv_write` — see KV namespace rules above. Do NOT use the built-in `Write` tool to save them into CLAUDE.md / AGENTS.md / .memex/ / any local file. Local files are for project code; KV is for durable settings.
+</critical_constraint>
+
 Slash commands:
 - `/remember [text]` — save to memory (uses `memex_add_note`).
 - `/recall [query]` — search memories (uses `memex_memory_search` + `memex_note_search`).

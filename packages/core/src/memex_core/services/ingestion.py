@@ -558,7 +558,7 @@ ingested_at: {now}
         Raises:
             FeatureDisabledError: server.append_enabled is False.
             NoteNotFoundError: parent not found in the supplied vault.
-            NoteNotAppendableError: parent.status is archived or superseded.
+            NoteNotAppendableError: parent.status is superseded, OR parent.archived_at is set.
             AppendIdConflictError: append_id already used with different parent/delta.
             AppendLockTimeoutError: could not acquire the append lock in time.
         """
@@ -744,6 +744,13 @@ ingested_at: {now}
                 raise NoteNotAppendableError(
                     f'Note {parent_id} status is {parent.status!r}; '
                     f'only active notes can be appended to.'
+                )
+            if parent.archived_at is not None:
+                raise NoteNotAppendableError(
+                    f'Note {parent_id} is archived (archived_at='
+                    f'{parent.archived_at.isoformat()}); only non-archived '
+                    'active notes can be appended to. Reactivate via '
+                    "set_note_status(note_id, 'active') first."
                 )
 
             # Idempotency: did we already process this append_id?

@@ -210,12 +210,9 @@ class NoteService:
         status: str,
         linked_note_id: UUID | None = None,
     ) -> dict[str, Any]:
-        """Set a note's lifecycle status and optionally link to another note.
+        """Set lifecycle status (``'active' | 'superseded' | 'appended' | 'archived'``); archive cascades via FSFM (units deprioritized, not stale)."""
+        from datetime import datetime, timezone
 
-        When status is 'superseded' or 'archived', marks all memory units as stale
-        and prunes mental model evidence + queues affected entities for reflection.
-        When status is 'active', reactivates all memory units (sets them back to active).
-        """
         from memex_core.memory.sql_models import MemoryUnit, Note
         from sqlmodel import select
 
@@ -224,6 +221,7 @@ class NoteService:
             raise ValueError(f'Invalid status: {status}. Must be one of {valid_statuses}.')
 
         note_vault_id: UUID | None = None
+        was_archived_pretransition = False
 
         async with self.metastore.session() as session:
             # SELECT ... FOR UPDATE so concurrent appends/status changes serialise
@@ -236,33 +234,54 @@ class NoteService:
                 raise NoteNotFoundError(f'Note {note_id} not found.')
 
             note_vault_id = doc.vault_id
-            doc.status = status
             assert note_vault_id is not None
             if status == 'superseded':
+                doc.status = status
                 doc.superseded_by = linked_note_id
                 await self._deactivate_note_units(session, note_id, note_vault_id)
             elif status == 'archived':
-                await self._deactivate_note_units(session, note_id, note_vault_id)
+                # Archive intent is recorded in archived_at + unit
+                # deprioritization; doc.status is intentionally left
+                # alone so an already-superseded or appended note keeps
+                # its provenance label (both signals can coexist).
+                # Idempotent re-archive preserves the original
+                # archived_at so the MCP idempotentHint holds.
+                if doc.archived_at is None:
+                    doc.archived_at = datetime.now(timezone.utc)
+                await self._deprioritize_note_units(session, note_id)
             elif status == 'appended':
+                doc.status = status
                 doc.appended_to = linked_note_id
             elif status == 'active':
+                # Only reverse ``is_deprioritized`` when the note was actually
+                # archived; otherwise preserve per-unit deprioritize signals.
+                was_archived_pretransition = doc.archived_at is not None
+                doc.status = status
                 doc.superseded_by = None
                 doc.appended_to = None
+                doc.archived_at = None
                 doc.summary_version_incorporated = None
-                # Cascade: reactivate all memory units
                 from sqlmodel import select
 
                 units_stmt = select(MemoryUnit).where(col(MemoryUnit.note_id) == note_id)
                 units = (await session.exec(units_stmt)).all()
                 for unit in units:
                     unit.status = 'active'
+                    if was_archived_pretransition:
+                        unit.is_deprioritized = False
                     session.add(unit)
 
             session.add(doc)
             await session.commit()
 
-        # Mark vault summary for regeneration after commit (fire-and-forget)
-        if status in ('superseded', 'archived') and note_vault_id and self._vault_summary_service:
+        # Mark vault summary for regeneration after commit (fire-and-forget).
+        # Triggers on supersede, archive, and un-archive (active reactivation
+        # of a previously-archived note) — every transition that changes the
+        # note's contribution to summary aggregates.
+        triggers_regen = status in ('superseded', 'archived') or (
+            status == 'active' and was_archived_pretransition
+        )
+        if triggers_regen and note_vault_id and self._vault_summary_service:
             task = asyncio.create_task(
                 self._vault_summary_service.mark_needs_regeneration(note_vault_id)
             )
@@ -276,6 +295,25 @@ class NoteService:
             'linked_note_id': str(linked_note_id) if linked_note_id else None,
         }
 
+    async def _deprioritize_note_units(
+        self,
+        session: Any,
+        note_id: UUID,
+    ) -> None:
+        """FSFM archive cascade — flip every unit of ``note_id`` to
+        ``is_deprioritized=true`` while leaving ``status`` unchanged.
+        The supersession-stale path lives in ``_deactivate_note_units``.
+        """
+        from sqlmodel import select
+
+        from memex_core.memory.sql_models import MemoryUnit
+
+        units_stmt = select(MemoryUnit).where(col(MemoryUnit.note_id) == note_id)
+        units = (await session.exec(units_stmt)).all()
+        for unit in units:
+            unit.is_deprioritized = True
+            session.add(unit)
+
     async def _deactivate_note_units(
         self,
         session: Any,
@@ -284,7 +322,8 @@ class NoteService:
     ) -> None:
         """Mark note's memory units as stale, prune evidence, and queue for reflection.
 
-        Shared by both 'superseded' and 'archived' status transitions.
+        Used by the ``'superseded'`` status transition; ``'archived'`` now
+        goes through ``_deprioritize_note_units`` (FSFM) instead.
         """
         from sqlmodel import select
 
@@ -728,7 +767,18 @@ class NoteService:
                     .contains(literal(json.dumps(tags)).cast(JSONB))
                 )
             if status is not None:
-                stmt = stmt.where(col(Note.status) == status)
+                # ``'archived'`` is a logical / user-intent status; storage
+                # records it as ``archived_at IS NOT NULL``. Every other
+                # status filter is disjoint from archived — a note that
+                # was first archived and then later superseded surfaces
+                # only under ``status='archived'``, never under the
+                # supersession-state enum filters.
+                if status == 'archived':
+                    stmt = stmt.where(col(Note.archived_at).is_not(None))
+                else:
+                    stmt = stmt.where(col(Note.status) == status).where(
+                        col(Note.archived_at).is_(None)
+                    )
 
             stmt = stmt.order_by(Note.created_at.desc()).offset(offset).limit(limit)  # type: ignore[union-attr]
             notes = list((await session.exec(stmt)).all())

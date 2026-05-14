@@ -836,7 +836,18 @@ def _absorb_claude_message(msg: dict[str, Any], out: AgentAnswer) -> None:
         if 'result' in msg and isinstance(msg['result'], str):
             out.answer_text = msg['result']
         usage = msg.get('usage') or {}
+        # Claude stream-json splits input tokens across three fields when
+        # prompt caching is in play: ``input_tokens`` (fresh / non-cached),
+        # ``cache_creation_input_tokens`` (written into cache this turn),
+        # and ``cache_read_input_tokens`` (served from cache). All three
+        # are billed and represent the actual input volume the model
+        # processed. Counting only the fresh slice under-reported a sonnet
+        # 29-scenario run as 28K-in vs 50K-out — visibly impossible —
+        # because the static MCP-tool-description prefix is cached on
+        # every turn after the first.
         out.tokens_in += int(usage.get('input_tokens', 0) or 0)
+        out.tokens_in += int(usage.get('cache_creation_input_tokens', 0) or 0)
+        out.tokens_in += int(usage.get('cache_read_input_tokens', 0) or 0)
         out.tokens_out += int(usage.get('output_tokens', 0) or 0)
         if 'total_cost_usd' in msg:
             out.cost_usd += float(msg.get('total_cost_usd', 0.0) or 0.0)

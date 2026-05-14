@@ -18,7 +18,7 @@ from uuid import UUID
 from pydantic import BaseModel, ConfigDict, Field
 
 
-SNAPSHOT_VERSION = '1.1.0'
+SNAPSHOT_VERSION = '1.2.0'
 OBSERVATION_SCHEMA_VERSION = '1'
 
 

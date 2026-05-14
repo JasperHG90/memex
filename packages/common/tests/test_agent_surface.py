@@ -22,11 +22,17 @@ from memex_common import agent_surface as ags
 # ---------------------------------------------------------------------------
 
 
-_UNIVERSAL_CHAR_CAP = 6_000  # ~1,714 tokens at 3.5 chars/token (empirical cl100k)
+_UNIVERSAL_CHAR_CAP = 6_500  # ~1,857 tokens at 3.5 chars/token (empirical cl100k)
 # Bumped 5,500 → 6,000 when CRITICAL_HEADER / VIRTUAL_UNIT / CRITICAL_FOOTER
 # adopted `<critical_constraint name="…">` XML tags (Anthropic best practice:
 # XML disambiguates load-bearing constraints; the model attends more reliably
 # to named-block content than to bullet-list prose).
+# Bumped 6,000 → 6,500 when KV_NAMESPACE added a kv_routing constraint + app
+# / global / project examples — 4 of 5 KV scenarios failed in the post-fix
+# eval because sonnet was using `Write` to local files instead of
+# `memex_kv_write` and (when it did use KV) picking `user:` for app-scoped
+# settings. The added prose costs ~400 chars; the empirical lift from
+# closing the 4-of-29-scenario gap justifies the cache cost.
 
 
 def _approx_tokens(text: str) -> int:

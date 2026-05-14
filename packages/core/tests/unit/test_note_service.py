@@ -1,5 +1,6 @@
 """Tests for NoteService."""
 
+from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
 from uuid import uuid4
 
@@ -416,16 +417,25 @@ class TestSetNoteStatusCascade:
         vaults = MagicMock()
         return NoteService(metastore=metastore, filestore=filestore, config=config, vaults=vaults)
 
-    def _make_mock_unit(self, status: str = 'active') -> MagicMock:
+    def _make_mock_unit(self, status: str = 'active', is_deprioritized: bool = False) -> MagicMock:
         unit = MagicMock()
         unit.status = status
+        unit.is_deprioritized = is_deprioritized
         return unit
 
     @pytest.mark.asyncio
-    async def test_archived_marks_units_stale(self, service: NoteService) -> None:
+    async def test_archived_deprioritizes_units_and_records_archived_at(
+        self, service: NoteService
+    ) -> None:
+        """``set_note_status('archived')`` flips every unit to
+        ``is_deprioritized=True`` (FSFM cascade), records
+        ``Note.archived_at``, and keeps the note row at
+        ``status='active'`` (since ``'archived'`` is no longer in the
+        ``ck_notes_status`` enum)."""
         note_id = uuid4()
         mock_note = MagicMock()
         mock_note.status = 'active'
+        mock_note.archived_at = None
 
         units = [self._make_mock_unit('active'), self._make_mock_unit('active')]
 
@@ -442,17 +452,62 @@ class TestSetNoteStatusCascade:
 
         await service.set_note_status(note_id, 'archived')
 
+        assert mock_note.status == 'active'
+        assert mock_note.archived_at is not None
         for unit in units:
-            assert unit.status == 'stale'
+            assert unit.status == 'active'
+            assert unit.is_deprioritized is True
 
     @pytest.mark.asyncio
-    async def test_active_reactivates_stale_units(self, service: NoteService) -> None:
-        """Setting status to 'active' should reactivate all stale memory units."""
+    async def test_archive_preserves_pre_existing_non_active_status(
+        self, service: NoteService
+    ) -> None:
+        """Archiving a superseded note must NOT clobber ``status`` —
+        ``archived_at`` and ``superseded_by`` are independent signals
+        and both must coexist."""
+        note_id = uuid4()
+        linked_id = uuid4()
+        mock_note = MagicMock()
+        mock_note.status = 'superseded'
+        mock_note.superseded_by = linked_id
+        mock_note.archived_at = None
+
+        units = [self._make_mock_unit('stale')]
+
+        mock_session = AsyncMock()
+        mock_session.get = AsyncMock(return_value=mock_note)
+        mock_exec_result = MagicMock()
+        mock_exec_result.first.return_value = mock_note
+        mock_exec_result.all.return_value = units
+        mock_session.exec = AsyncMock(return_value=mock_exec_result)
+        mock_session.add = MagicMock()
+        mock_session.commit = AsyncMock()
+        service.metastore.session.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        service.metastore.session.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        await service.set_note_status(note_id, 'archived')
+
+        assert mock_note.status == 'superseded'
+        assert mock_note.superseded_by == linked_id
+        assert mock_note.archived_at is not None
+
+    @pytest.mark.asyncio
+    async def test_active_reactivates_stale_and_deprioritized_units(
+        self, service: NoteService
+    ) -> None:
+        """``set_note_status('active')`` clears ``archived_at`` and
+        reactivates every unit: ``status='stale' → 'active'`` (the
+        supersession reverse) AND ``is_deprioritized=True → False`` (the
+        archive reverse)."""
         note_id = uuid4()
         mock_note = MagicMock()
-        mock_note.status = 'archived'
+        mock_note.status = 'active'
+        mock_note.archived_at = datetime.now(timezone.utc)
 
-        units = [self._make_mock_unit('stale'), self._make_mock_unit('stale')]
+        units = [
+            self._make_mock_unit('stale', is_deprioritized=True),
+            self._make_mock_unit('active', is_deprioritized=True),
+        ]
 
         mock_session = AsyncMock()
         mock_session.get = AsyncMock(return_value=mock_note)
@@ -469,15 +524,60 @@ class TestSetNoteStatusCascade:
 
         for unit in units:
             assert unit.status == 'active'
+            assert unit.is_deprioritized is False
         assert mock_note.superseded_by is None
         assert mock_note.appended_to is None
+        assert mock_note.archived_at is None
+
+    @pytest.mark.asyncio
+    async def test_active_preserves_per_unit_deprioritize_when_not_archived(
+        self, service: NoteService
+    ) -> None:
+        """``set_note_status('active')`` on a non-archived note (e.g.
+        reactivating a superseded one) must NOT clobber per-unit
+        ``is_deprioritized=True`` signals — those come from
+        ``memex_memory_deprioritize`` and are independent of archive
+        state. The gating predicate is ``doc.archived_at is not None``
+        pre-transition; when it's None, ``is_deprioritized`` stays
+        as-is on each unit."""
+        note_id = uuid4()
+        mock_note = MagicMock()
+        mock_note.status = 'superseded'
+        mock_note.archived_at = None
+
+        units = [
+            self._make_mock_unit('stale', is_deprioritized=False),
+            self._make_mock_unit('stale', is_deprioritized=True),
+        ]
+
+        mock_session = AsyncMock()
+        mock_session.get = AsyncMock(return_value=mock_note)
+        mock_exec_result = MagicMock()
+        mock_exec_result.first.return_value = mock_note
+        mock_exec_result.all.return_value = units
+        mock_session.exec = AsyncMock(return_value=mock_exec_result)
+        mock_session.add = MagicMock()
+        mock_session.commit = AsyncMock()
+        service.metastore.session.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+        service.metastore.session.return_value.__aexit__ = AsyncMock(return_value=False)
+
+        await service.set_note_status(note_id, 'active')
+
+        assert units[0].status == 'active'
+        assert units[0].is_deprioritized is False
+        assert units[1].status == 'active'
+        # Preserved: was True before, still True after — the archive
+        # reversal only fires when archived_at was non-null pre-transition.
+        assert units[1].is_deprioritized is True
 
     @pytest.mark.asyncio
     async def test_active_after_archived_round_trip(self, service: NoteService) -> None:
-        """Full round-trip: active -> archived (stale) -> active (reactivated)."""
+        """Full round-trip: active → archived (deprioritized) → active
+        (reprioritized + archived_at cleared)."""
         note_id = uuid4()
         mock_note = MagicMock()
         mock_note.status = 'active'
+        mock_note.archived_at = None
 
         units = [self._make_mock_unit('active')]
 
@@ -492,13 +592,14 @@ class TestSetNoteStatusCascade:
         service.metastore.session.return_value.__aenter__ = AsyncMock(return_value=mock_session)
         service.metastore.session.return_value.__aexit__ = AsyncMock(return_value=False)
 
-        # Archive: units -> stale
         await service.set_note_status(note_id, 'archived')
-        assert units[0].status == 'stale'
+        assert units[0].is_deprioritized is True
+        assert mock_note.archived_at is not None
 
-        # Reactivate: units -> active
         await service.set_note_status(note_id, 'active')
         assert units[0].status == 'active'
+        assert units[0].is_deprioritized is False
+        assert mock_note.archived_at is None
 
     @pytest.mark.asyncio
     async def test_mw_counters_preserved_across_supersede_reactivate(

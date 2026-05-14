@@ -237,6 +237,7 @@ class VaultSummaryService:
                     .select_from(Note)
                     .where(col(Note.vault_id) == vault_id)
                     .where(col(Note.status) == 'active')
+                    .where(col(Note.archived_at).is_(None))
                 )
             ).one_or_none()
 
@@ -245,6 +246,7 @@ class VaultSummaryService:
                     select(func.max(Note.created_at), func.max(Note.publish_date))
                     .where(col(Note.vault_id) == vault_id)
                     .where(col(Note.status) == 'active')
+                    .where(col(Note.archived_at).is_(None))
                 )
             ).one_or_none()
 
@@ -309,6 +311,7 @@ class VaultSummaryService:
                     .select_from(Note)
                     .where(col(Note.vault_id) == vault_id)
                     .where(col(Note.status) == 'active')
+                    .where(col(Note.archived_at).is_(None))
                 )
                 count = (await session.execute(count_stmt)).scalar() or 0
                 return count > 0
@@ -321,6 +324,7 @@ class VaultSummaryService:
                 .select_from(Note)
                 .where(col(Note.vault_id) == vault_id)
                 .where(col(Note.status) == 'active')
+                .where(col(Note.archived_at).is_(None))
                 .where(
                     (col(Note.summary_version_incorporated).is_(None))
                     | (col(Note.summary_version_incorporated) < summary.version)
@@ -363,6 +367,7 @@ class VaultSummaryService:
                         sa_update(Note)
                         .where(col(Note.vault_id) == vault_id)
                         .where(col(Note.status) == 'active')
+                        .where(col(Note.archived_at).is_(None))
                         .where(
                             (col(Note.summary_version_incorporated).is_(None))
                             | (col(Note.summary_version_incorporated) < current_version)
@@ -378,6 +383,7 @@ class VaultSummaryService:
                 .select_from(Note)
                 .where(col(Note.vault_id) == vault_id)
                 .where(col(Note.status) == 'active')
+                .where(col(Note.archived_at).is_(None))
             )
             total_notes = (await session.execute(total_stmt)).scalar() or 0
 
@@ -465,6 +471,7 @@ class VaultSummaryService:
                 sa_update(Note)
                 .where(col(Note.vault_id) == vault_id)
                 .where(col(Note.status) == 'active')
+                .where(col(Note.archived_at).is_(None))
                 .values(summary_version_incorporated=summary.version)
             )
             await session.execute(mark_all_stmt)
@@ -531,6 +538,7 @@ class VaultSummaryService:
                 sa_update(Note)
                 .where(col(Note.vault_id) == vault_id)
                 .where(col(Note.status) == 'active')
+                .where(col(Note.archived_at).is_(None))
                 .values(summary_version_incorporated=summary.version)
             )
             await session.execute(mark_all_stmt)
@@ -561,6 +569,7 @@ class VaultSummaryService:
                 .select_from(Note)
                 .where(col(Note.vault_id) == vault_id)
                 .where(col(Note.status) == 'active')
+                .where(col(Note.archived_at).is_(None))
             )
             total_notes = (await session.execute(total_stmt)).scalar() or 0
 
@@ -575,6 +584,7 @@ class VaultSummaryService:
                 select(func.min(Note.publish_date), func.max(Note.publish_date))
                 .where(col(Note.vault_id) == vault_id)
                 .where(col(Note.status) == 'active')
+                .where(col(Note.archived_at).is_(None))
                 .where(col(Note.publish_date).isnot(None))
             )
             date_row = (await session.execute(date_range_stmt)).one_or_none()
@@ -590,6 +600,7 @@ class VaultSummaryService:
                 select(Note.doc_metadata)
                 .where(col(Note.vault_id) == vault_id)
                 .where(col(Note.status) == 'active')
+                .where(col(Note.archived_at).is_(None))
                 .where(col(Note.doc_metadata).isnot(None))
             )
             meta_rows = (await session.execute(meta_stmt)).all()
@@ -625,6 +636,7 @@ class VaultSummaryService:
                     .select_from(Note)
                     .where(col(Note.vault_id) == vault_id)
                     .where(col(Note.status) == 'active')
+                    .where(col(Note.archived_at).is_(None))
                     .where(col(Note.created_at) >= now - timedelta(days=7))
                 )
             ).scalar() or 0
@@ -635,6 +647,7 @@ class VaultSummaryService:
                     .select_from(Note)
                     .where(col(Note.vault_id) == vault_id)
                     .where(col(Note.status) == 'active')
+                    .where(col(Note.archived_at).is_(None))
                     .where(col(Note.created_at) >= now - timedelta(days=30))
                 )
             ).scalar() or 0
@@ -644,6 +657,7 @@ class VaultSummaryService:
                     select(func.max(Note.created_at))
                     .where(col(Note.vault_id) == vault_id)
                     .where(col(Note.status) == 'active')
+                    .where(col(Note.archived_at).is_(None))
                 )
             ).scalar()
 
@@ -713,6 +727,7 @@ class VaultSummaryService:
             select(Note.id, Note.title, Note.description, Note.publish_date, Note.doc_metadata)
             .where(col(Note.vault_id) == vault_id)
             .where(col(Note.status) == 'active')
+            .where(col(Note.archived_at).is_(None))
             .order_by(col(Note.created_at))
         )
         if summary_version is not None:

@@ -152,20 +152,29 @@ Filter candidates to `unit_metadata.virtual` unset/false BEFORE paired writes. I
 </critical_constraint>"""
 
 
-KV_NAMESPACE = """## KV namespace by scope qualifier
+KV_NAMESPACE = """## Preferences / conventions → `memex_kv_write`, NOT local files
 
-The scope qualifier picks the namespace, NOT the grammatical person.
+<critical_constraint name="kv_routing">
+"remember"/"save"/"for future sessions"/"going forward" directives conveying a preference, convention, or setting → `memex_kv_write`. Do NOT write to local files (CLAUDE.md, AGENTS.md, .memex/), do NOT use `memex_add_note`, do NOT just acknowledge.
+</critical_constraint>
 
-- No scope, identity-shaped ("Remember about me: I prefer Neovim") → `user:` (e.g. `user:editor`).
-- "this repo"/"this project"/"on <named project>" → `project:<id>:`. **Wins even when request opens with "I" or "my"**: "My preference for this project is Python 3.10" → `project:<id>:lang:python`, NOT `user:lang`.
-- "across our projects"/"we standardise on" → `global:`.
-- "in <app-name>" → `app:<app-id>:`.
-- Learned how-tos → `procedure:<verb>:<context-tag>`; pair with `memex_record_outcome(target_type="kv_key", kv_key=…)`.
+Namespace by scope cue (NOT grammatical person). Narrower wins (project beats user; app beats user):
 
-Narrower scope wins (project beats user). Ambiguous? ASK before writing.
+| Scope cue | Namespace |
+|---|---|
+| identity-shaped, no scope ("about me", "I prefer X") | `user:` |
+| "this repo/project", "in this codebase", "on <project>" | `project:<id>:` |
+| "across our projects", "company-wide", "we standardise on" | `global:` |
+| "when I use <app>", "in Claude Code", "in Hermes" | `app:<app-id>:` |
+| learned procedure | `procedure:<verb>:<context-tag>` (pair with `memex_record_outcome(target_type="kv_key", kv_key=…)`) |
 
-<example>"I prefer Neovim" → memex_kv_write(value="Neovim", key="user:editor")</example>
-<example>"My preference for this project is Python 3.10" → memex_kv_write(value="3.10", key="project:<repo-id>:lang:python")</example>"""
+Ambiguous? ASK before writing.
+
+<example>"I prefer Neovim" → key=`user:editor`</example>
+<example>"For this project, Python 3.10" → key=`project:<id>:lang:python` (NOT `user:`)</example>
+<example>"7-character indent in this repo" → key=`project:<id>:style:indent`</example>
+<example>"Company-wide: Python 3.12 minimum" → key=`global:lang:python:min`</example>
+<example>"When I use Claude Code: dark theme" → key=`app:claude-code:ui` (NOT `user:`)</example>"""
 
 
 CITATIONS = """## Citations

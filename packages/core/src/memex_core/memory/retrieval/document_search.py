@@ -757,10 +757,17 @@ class NoteSearchEngine:
                 else:
                     status_map[nid] = 'active'
             for result in final_results:
-                # Prefer persisted note status over confidence-based derivation
+                # Prefer persisted note status over confidence-based derivation.
+                # ``archived_at IS NOT NULL`` is a separate suppression signal
+                # from ``status``; surface it as the logical ``'archived'`` so
+                # downstream consumers can tell archived notes apart from
+                # plain-active ones.
                 doc = docs.get(result.note_id)
                 persisted = getattr(doc, 'status', None) if doc else None
-                if persisted and persisted != 'active':
+                archived_at = getattr(doc, 'archived_at', None) if doc else None
+                if archived_at is not None:
+                    result.note_status = 'archived'
+                elif persisted and persisted != 'active':
                     result.note_status = persisted
                 else:
                     result.note_status = status_map.get(result.note_id, 'active')

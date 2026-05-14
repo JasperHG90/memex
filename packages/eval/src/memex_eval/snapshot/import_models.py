@@ -23,7 +23,7 @@ from pydantic import BaseModel, ConfigDict, Field
 # higher MINOR is accepted via extra='ignore'; same MAJOR + lower MINOR is
 # refused (older importer can't be sure newer fields aren't load-bearing).
 PINNED_SNAPSHOT_MAJOR = 1
-PINNED_SNAPSHOT_MINOR = 1
+PINNED_SNAPSHOT_MINOR = 2
 
 
 def _import_config() -> ConfigDict:
@@ -57,6 +57,7 @@ class NoteImport(_ImportBase):
     status: str
     superseded_by: UUID | None = None
     appended_to: UUID | None = None
+    archived_at: datetime | None = None
     summary_version_incorporated: int | None = None
     created_at: datetime
     updated_at: datetime
@@ -249,7 +250,7 @@ class SnapshotManifestImport(_ImportBase):
     future MINOR-bumped manifest crashes when read by the V12 importer
     BEFORE ``_check_version`` ever runs — defeating the documented
     forward-compat contract. This import-side mirror ignores extra fields
-    so v1.2+ snapshots remain importable on a v1.1-pinned importer.
+    so MINOR-bumped snapshots remain importable on the current pinned importer.
     """
 
     snapshot_version: str

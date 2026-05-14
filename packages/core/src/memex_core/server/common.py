@@ -127,6 +127,8 @@ def build_note_dto(doc: Any) -> NoteDTO:
             assets=doc.get('assets', []),
             doc_metadata=metadata,
             template=metadata.get('template'),
+            status=doc.get('status', 'active'),
+            archived_at=doc.get('archived_at'),
         )
 
     metadata = doc.doc_metadata or {}
@@ -144,6 +146,8 @@ def build_note_dto(doc: Any) -> NoteDTO:
         assets=getattr(doc, 'assets', []) or [],
         doc_metadata=metadata,
         template=metadata.get('template'),
+        status=getattr(doc, 'status', 'active'),
+        archived_at=getattr(doc, 'archived_at', None),
     )
 
 
@@ -164,6 +168,8 @@ def build_note_list_item_dto(doc: Any) -> NoteListItemDTO:
         doc_metadata=metadata,
         template=metadata.get('template'),
         summaries=getattr(doc, 'summaries', []),
+        status=getattr(doc, 'status', 'active'),
+        archived_at=getattr(doc, 'archived_at', None),
     )
 
 

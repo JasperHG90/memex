@@ -810,6 +810,43 @@ suite.register(
 )
 
 
+suite.register(
+    id='lifecycle_archive_legacy_warehouse_note',
+    group='lifecycle',
+    query=(
+        'The legacy warehouse note is deprecated and should be hidden from '
+        'normal retrieval but kept available for audit. Archive it.'
+    ),
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_find_note', 'memex_note_search'],
+                min_count=1,
+                match_mode='any',
+            ),
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_set_note_status'],
+                min_count=1,
+                match_mode='any',
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_set_note_status',
+                arg_name='status',
+                regex=r'^archived$',
+                min_count=1,
+            ),
+        ],
+    ),
+    replicates_override=1,
+    mutating_scenario=True,
+)
+
+
 # --- Plugin-gap xfail tripwires (xfail under hermes; should xpass under claude-code) ---
 #
 # Two earlier `review_loop_*` tripwires were dropped: the MCP tools they
