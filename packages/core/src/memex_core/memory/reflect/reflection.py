@@ -111,17 +111,6 @@ class ReflectionEngine:
         self.config = config or MemexConfig()
         self.embedder = embedder
 
-        # Entity-ids whose Phase 5 CAS UPDATE abandoned during the most
-        # recent ``reflect_batch`` call. Populated by
-        # ``_process_entity_reflection`` when ``_reflect_entity_internal``
-        # returns None. The service layer reads this after reflect_batch
-        # to route abandoned entities through ``queue_service.mark_abandoned``
-        # (PENDING, retry_count unchanged) instead of ``mark_failed``
-        # (increments retry_count toward DEAD_LETTER) — CAS abandons are
-        # benign concurrency contention, NOT task failures, and should not
-        # consume the retry budget. Cleared at the start of each call.
-        self.last_abandoned_entity_ids: list[UUID] = []
-
         # Prefer injected LM; fall back to dspy.settings.lm, then extraction model.
         self.lm: dspy.LM | None
         try:
@@ -178,25 +167,24 @@ class ReflectionEngine:
         else:
             yield self.session
 
-    async def reflect_batch(self, requests: list[ReflectionRequest]) -> list[MentalModel]:
+    async def reflect_batch(
+        self, requests: list[ReflectionRequest]
+    ) -> tuple[list[MentalModel], list[UUID]]:
         """Run reflection for multiple entities in parallel, grouped by vault_id.
 
-        Returns the list of MentalModels whose Phase 5 CAS UPDATE applied.
-        Entities whose CAS UPDATE abandoned (a concurrent worker advanced
-        the row's version between our read and write) are NOT in the
-        returned list — they are tracked separately in
-        ``self.last_abandoned_entity_ids`` so the caller can route them
-        through the queue layer's abandon path (no retry_count increment)
-        instead of the failure path (increments toward DEAD_LETTER).
-        """
-        # Reset per-call abandon tracking. ReflectionEngine is constructed
-        # fresh per service call, so this is defensive — but explicit
-        # clear avoids any cross-batch leakage if a caller reuses an
-        # engine instance.
-        self.last_abandoned_entity_ids = []
+        Returns ``(models, abandoned_entity_ids)``:
 
+        * ``models`` is the list of MentalModels whose Phase 5 CAS UPDATE
+          applied.
+        * ``abandoned_entity_ids`` is entities whose CAS UPDATE abandoned
+          (a concurrent worker advanced the row's version between our
+          read and write) — the caller routes them through the queue
+          layer's abandon path (no retry_count increment) instead of
+          the failure path (increments toward DEAD_LETTER).
+        """
         if not requests:
-            return []
+            return [], []
+        abandoned_entity_ids: list[UUID] = []
 
         # 1. Group by Vault ID to optimize DB fetching
         vault_groups = defaultdict(list)
@@ -277,6 +265,7 @@ class ReflectionEngine:
                         entities_map,
                         memories_map,
                         sem,
+                        abandoned_entity_ids,
                     )
                     for req in v_requests
                 ]
@@ -290,7 +279,7 @@ class ReflectionEngine:
         # LLM phases are intentionally not flushed — they exist only for
         # the caller's return-value convenience and do not represent
         # pending DB state.
-        return all_success_models
+        return all_success_models, abandoned_entity_ids
 
     async def _process_entity_reflection(
         self,
@@ -299,6 +288,7 @@ class ReflectionEngine:
         entities_map: dict[UUID, Entity],
         memories_map: dict[UUID, list[MemoryUnit]],
         sem: asyncio.Semaphore,
+        abandoned_entity_ids: list[UUID],
     ) -> MentalModel | None:
         """Process a single entity reflection with semaphore control."""
         eid = req.entity_id
@@ -321,12 +311,11 @@ class ReflectionEngine:
                     vault_id=req.vault_id,
                 )
                 if outcome is None:
-                    # CAS abandon — track separately so the caller can
-                    # re-enqueue via mark_abandoned (no retry_count
-                    # increment) instead of routing through mark_failed
+                    # CAS abandon — caller re-enqueues via mark_abandoned
+                    # (no retry_count increment) instead of mark_failed
                     # (counts toward DEAD_LETTER). CAS abandons are
                     # benign concurrency contention, not failures.
-                    self.last_abandoned_entity_ids.append(eid)
+                    abandoned_entity_ids.append(eid)
                 return outcome
             except Exception as e:
                 logger.error(f'Reflection failed for entity {eid}: {e}', exc_info=True)
@@ -650,7 +639,8 @@ class ReflectionEngine:
             # 6. Call LLM — session is open but no transaction held.
             enrich_predictor = dspy.Predict(EnrichmentSignature)
 
-            assert self.lm is not None, 'LM must be initialized for Phase 6'
+            if self.lm is None:
+                raise RuntimeError('LM must be initialized for Phase 6')
             result = await run_dspy_operation(
                 lm=self.lm,
                 predictor=enrich_predictor,
@@ -851,9 +841,9 @@ class ReflectionEngine:
         service layer handles queue routing when callers go through
         ``services.reflection.reflect_batch``.
         """
-        results = await self.reflect_batch([request])
+        results, abandoned = await self.reflect_batch([request])
         if not results:
-            if request.entity_id in self.last_abandoned_entity_ids:
+            if request.entity_id in abandoned:
                 raise ReflectionAbandonedError(
                     f'Reflection for {request.entity_id} abandoned: '
                     'a concurrent worker advanced the mental_models.version '

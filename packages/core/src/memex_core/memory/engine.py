@@ -266,7 +266,7 @@ class MemoryEngine:
             requests = [
                 ReflectionRequest(entity_id=eid, vault_id=vault_id) for eid in touched_entities
             ]
-            results = await reflector.reflect_batch(requests)
+            results, _abandoned = await reflector.reflect_batch(requests)
 
             logger.info(f'Reflected on {len(results)}/{len(touched_entities)} entities.')
 
@@ -413,12 +413,11 @@ class MemoryEngine:
         requests = [ReflectionRequest(entity_id=t.entity_id, vault_id=t.vault_id) for t in tasks]
 
         try:
-            results = await reflector.reflect_batch(requests)
-            # CAS-abandoned entities live on the engine; route them
-            # through the queue's PENDING path with retry_count untouched
-            # so a hot entity in a multi-worker cluster cannot DEAD_LETTER
-            # from contention alone.
-            abandoned_ids = set(reflector.last_abandoned_entity_ids)
+            results, abandoned_list = await reflector.reflect_batch(requests)
+            # Route CAS-abandoned entities through the queue's PENDING
+            # path with retry_count untouched so a hot entity in a
+            # multi-worker cluster cannot DEAD_LETTER from contention.
+            abandoned_ids = set(abandoned_list)
 
             succeeded_pairs = {(m.entity_id, m.vault_id) for m in results}
 

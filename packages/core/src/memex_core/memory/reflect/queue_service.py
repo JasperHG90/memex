@@ -209,7 +209,13 @@ class ReflectionQueueService:
 
         await session.flush()
 
-    async def get_next_batch(self, session, limit=10, vault_id=None, vault_ids=None):
+    async def get_next_batch(
+        self,
+        session: AsyncSession,
+        limit: int = 10,
+        vault_id: UUID | None = None,
+        vault_ids: list[UUID] | None = None,
+    ) -> list[ReflectionQueue]:
         stmt = (
             select(ReflectionQueue)
             .where(

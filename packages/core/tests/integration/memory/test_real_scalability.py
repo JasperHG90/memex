@@ -110,7 +110,7 @@ async def test_real_scalability_concurrent_reflection(session: AsyncSession, pos
 
         requests = [ReflectionRequest(entity_id=e.id) for e in entities]
 
-        results = await engine.reflect_batch(requests)
+        results, _abandoned = await engine.reflect_batch(requests)
 
         end_time = time.perf_counter()
         duration = end_time - start_time

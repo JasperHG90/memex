@@ -126,8 +126,8 @@ class ReflectionService:
                 entity_session_factory=self.metastore.session,
             )
 
-            models = await reflector.reflect_batch([request])
-            abandoned_ids = set(reflector.last_abandoned_entity_ids)
+            models, abandoned_list = await reflector.reflect_batch([request])
+            abandoned_ids = set(abandoned_list)
             if not models:
                 if request.entity_id in abandoned_ids:
                     # CAS abandon — re-enqueue without retry_count increment,
@@ -232,11 +232,10 @@ class ReflectionService:
         should use this variant. ``reflect_batch`` discards the abandon
         list for backward compatibility with callers that don't care.
 
-        Concurrency: each call to this method constructs its own
-        ReflectionEngine and reads ``last_abandoned_entity_ids`` from
-        that local engine instance — no shared service-instance state
-        is touched, so concurrent invocations cannot race on the
-        abandon list.
+        Concurrency: each call constructs its own ReflectionEngine and
+        the abandon list rides back on the engine's return tuple — no
+        shared service-instance state is touched, so concurrent
+        invocations cannot race.
         """
         if not requests:
             return [], []
@@ -251,15 +250,11 @@ class ReflectionService:
                 entity_session_factory=self.metastore.session,
             )
 
-            models = await reflector.reflect_batch(requests)
-            # CAS-abandoned entities are NOT in ``models`` — the engine
+            # CAS-abandoned entities are NOT in ``models``; the engine
             # tracks them separately so we can re-enqueue without
-            # incrementing retry_count (abandons are benign concurrency
-            # contention, not failures, and must not consume the DEAD_LETTER
-            # budget). The abandoned list is captured here on the local
-            # reflector instance and returned to the caller via the tuple
-            # — no shared service-instance state is mutated.
-            abandoned_list = list(reflector.last_abandoned_entity_ids)
+            # incrementing retry_count (abandons are benign contention,
+            # not failures, and must not consume the DEAD_LETTER budget).
+            models, abandoned_list = await reflector.reflect_batch(requests)
             abandoned_ids = set(abandoned_list)
 
             from collections import defaultdict

@@ -644,10 +644,11 @@ async def test_reflect_entity_internal_returns_none_on_cas_abandon(
 async def test_reflect_batch_tracks_cas_abandons_separately_from_success(
     session_manager, memex_config: MemexConfig
 ):
-    """Round-5 HIGH regression guard: ``ReflectionEngine.last_abandoned_entity_ids``
-    captures CAS-abandoned entities so the service layer can route them
-    through ``mark_abandoned`` (no retry_count increment) instead of
-    ``mark_failed`` (counts toward DEAD_LETTER).
+    """Regression guard: ``ReflectionEngine.reflect_batch`` returns a
+    ``(models, abandoned_entity_ids)`` tuple. The abandoned list is
+    what the service layer routes through ``mark_abandoned`` (no
+    retry_count increment) instead of ``mark_failed`` (counts toward
+    DEAD_LETTER).
 
     A hot entity in a multi-worker cluster could race repeatedly. Without
     this separation, three unlucky CAS losses would DEAD_LETTER it.
@@ -718,15 +719,15 @@ async def test_reflect_batch_tracks_cas_abandons_separately_from_success(
             engine._batch_get_entities = fake_get_entities  # type: ignore[assignment]
             engine._batch_fetch_recent_memories = fake_fetch_memories  # type: ignore[assignment]
 
-            results = await engine.reflect_batch(
+            results, abandoned_list = await engine.reflect_batch(
                 [ReflectionRequest(entity_id=entity_id, vault_id=GLOBAL_VAULT_ID)]
             )
 
     # Engine returns empty applied list — abandoned entity went elsewhere.
     assert results == [], "CAS-abandoned entity must not appear in reflect_batch's applied list."
-    # And the abandon was recorded for the service-layer router.
-    assert engine.last_abandoned_entity_ids == [entity_id], (
-        'CAS-abandoned entity_id must be tracked in last_abandoned_entity_ids '
+    # And the abandon was recorded in the returned tuple for the service-layer router.
+    assert abandoned_list == [entity_id], (
+        'CAS-abandoned entity_id must be returned in the abandoned tuple '
         'so the service layer routes it through mark_abandoned (no retry++) '
         'instead of mark_failed.'
     )

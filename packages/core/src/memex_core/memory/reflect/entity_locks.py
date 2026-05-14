@@ -21,6 +21,11 @@ import asyncio
 import weakref
 from uuid import UUID
 
+# Module-level locks are safe on Python ≥3.12: asyncio.Lock no longer
+# binds to the running event loop at construction time, so an instance
+# created at import is reusable across whatever loop ends up calling
+# get_entity_lock. Do NOT replace these with per-loop locals — the whole
+# point of the registry is process-wide identity.
 _entity_locks: weakref.WeakValueDictionary[UUID, asyncio.Lock] = weakref.WeakValueDictionary()
 _registry_lock = asyncio.Lock()
 

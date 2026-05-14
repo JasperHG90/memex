@@ -190,12 +190,14 @@ async def test_process_entity_reflection_slices_per_request(engine):
     sem = asyncio.Semaphore(1)
 
     req = ReflectionRequest(entity_id=eid, limit_recent_memories=20)
+    abandoned: list = []
     await engine._process_entity_reflection(
         req=req,
         models_map={eid: MagicMock()},
         entities_map={},
         memories_map=memories_map,
         sem=sem,
+        abandoned_entity_ids=abandoned,
     )
     assert len(captured['recent_memories']) == 20
 
@@ -207,6 +209,7 @@ async def test_process_entity_reflection_slices_per_request(engine):
         entities_map={},
         memories_map=memories_map,
         sem=sem,
+        abandoned_entity_ids=abandoned,
     )
     assert len(captured['recent_memories']) == 30
 
