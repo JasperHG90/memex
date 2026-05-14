@@ -68,6 +68,10 @@ def metrics_locks_service(metastore, memex_config, asyncpg_dsn) -> LocksService:
 
     reflection = MagicMock(spec=ReflectionService)
     reflection.reflect_batch = AsyncMock(return_value=[])
+    # V18 round-8: reconsolidate_entity now calls reflect_batch_detailed
+    # which returns tuple[results, abandoned_ids]; provide an unpackable
+    # default so the MagicMock(spec) auto-mock doesn't blow up the unpack.
+    reflection.reflect_batch_detailed = AsyncMock(return_value=([], []))
 
     svc = LocksService.__new__(LocksService)
     svc.metastore = metastore
@@ -76,6 +80,7 @@ def metrics_locks_service(metastore, memex_config, asyncpg_dsn) -> LocksService:
     svc.contradiction = contradiction
     svc.units = None  # consolidate dry_run does not need units
     svc._dsn = asyncpg_dsn
+    svc._pool = None  # __new__ skips __init__; seed for _get_pool
     return svc
 
 

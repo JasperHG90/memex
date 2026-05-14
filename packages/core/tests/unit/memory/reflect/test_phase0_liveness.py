@@ -67,7 +67,7 @@ async def test_phase_0_prunes_stale_evidence():
         'memex_core.memory.reflect.reflection.run_dspy_operation', new_callable=AsyncMock
     ) as mock_run:
         mock_run.return_value = (None, None)
-        result = await engine._phase_0_update(model, 'Test Entity', [])
+        result, _ = await engine._phase_0_update(model, 'Test Entity', [])
 
     # obs_only_dead should be dropped entirely, obs_with_both should have 1 evidence
     assert len(result) == 1
@@ -75,8 +75,9 @@ async def test_phase_0_prunes_stale_evidence():
     assert len(result[0].evidence) == 1
     assert result[0].evidence[0].memory_id == live_id
 
-    # model.observations should be updated (flag_modified was called internally)
-    assert len(model.observations) == 1
+    # Phase 0 no longer mutates ``model.observations`` in place — Phase 5
+    # CAS UPDATE is the authoritative write path. The pruned list is
+    # returned upward via the function's return value (asserted above).
 
 
 @pytest.mark.asyncio
@@ -116,7 +117,7 @@ async def test_phase_0_preserves_live_evidence():
         'memex_core.memory.reflect.reflection.run_dspy_operation', new_callable=AsyncMock
     ) as mock_run:
         mock_run.return_value = (None, None)
-        result = await engine._phase_0_update(model, 'Test Entity', [])
+        result, _ = await engine._phase_0_update(model, 'Test Entity', [])
 
     assert len(result) == 1
     assert len(result[0].evidence) == 2
@@ -166,7 +167,7 @@ async def test_phase_0_preserves_naturally_empty_evidence_observations():
         'memex_core.memory.reflect.reflection.run_dspy_operation', new_callable=AsyncMock
     ) as mock_run:
         mock_run.return_value = (None, None)
-        result = await engine._phase_0_update(model, 'Test Entity', [])
+        result, _ = await engine._phase_0_update(model, 'Test Entity', [])
 
     # obs_with_dead should be pruned away, but obs_naturally_empty should survive
     assert len(result) == 1
@@ -212,7 +213,7 @@ async def test_phase_0_prunes_out_of_vault_evidence():
         'memex_core.memory.reflect.reflection.run_dspy_operation', new_callable=AsyncMock
     ) as mock_run:
         mock_run.return_value = (None, None)
-        result = await engine._phase_0_update(model, 'Test Entity', [], vault_id=vault_a)
+        result, _ = await engine._phase_0_update(model, 'Test Entity', [], vault_id=vault_a)
 
     # The unit from vault B should be treated as dead -> observation pruned
     assert len(result) == 0
@@ -259,7 +260,7 @@ async def test_phase_0_keeps_global_vault_evidence():
         'memex_core.memory.reflect.reflection.run_dspy_operation', new_callable=AsyncMock
     ) as mock_run:
         mock_run.return_value = (None, None)
-        result = await engine._phase_0_update(model, 'Test Entity', [], vault_id=vault_a)
+        result, _ = await engine._phase_0_update(model, 'Test Entity', [], vault_id=vault_a)
 
     # Evidence should survive — global vault units are always live
     assert len(result) == 1

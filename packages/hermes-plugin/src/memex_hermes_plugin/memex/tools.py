@@ -3544,7 +3544,7 @@ MEMORY_SUMMARIZE_NODE_SCHEMA: dict[str, Any] = {
                 'enum': ['incremental', 'full'],
                 'description': (
                     "'incremental' (default — only new evidence) or 'full' "
-                    '(re-evaluate all evidence; capped at 1000 most-recent units).'
+                    '(re-evaluate all evidence; capped at 100 most-recent units).'
                 ),
             },
             'vault_id': {
@@ -3563,7 +3563,7 @@ def handle_memory_summarize_node(
     vault_id: UUID | None,
     args: dict[str, Any],
 ) -> str:
-    from memex_common.client import RateLimitExceeded
+    from memex_common.client import RateLimitExceeded, ReflectionAbandoned
 
     try:
         raw_entity_id = _require(args, 'entity_id')
@@ -3665,6 +3665,16 @@ def handle_memory_summarize_node(
                 'message': str(exc),
             }
         )
+    except ReflectionAbandoned as exc:
+        envelope: dict[str, Any] = {
+            'error': 'reflection_abandoned',
+            'entity_id': str(entity_uuid),
+            'retry_after_seconds': exc.retry_after_seconds,
+            'message': str(exc),
+        }
+        if exc.hint:
+            envelope['hint'] = exc.hint
+        return json.dumps(envelope)
     except Exception as e:
         logger.warning('memex_memory_summarize_node failed: %s', e)
         return tool_error(f'summarize_node failed: {e}')

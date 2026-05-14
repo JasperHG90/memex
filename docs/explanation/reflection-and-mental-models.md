@@ -46,7 +46,31 @@ Entities below `min_priority` (default: 0.3) are skipped entirely, conserving LL
 
 The reflection queue uses PostgreSQL's `SELECT ... FOR UPDATE SKIP LOCKED` for atomic task claiming. This allows multiple workers to process reflection tasks concurrently without conflicts or double-processing. A worker claims a batch of entities, processes them, and marks them complete — all within a single transaction.
 
-Additionally, each entity reflection acquires a PostgreSQL advisory lock (`pg_try_advisory_xact_lock`) to prevent concurrent reflection on the same entity from different workers.
+#### Per-entity serialization and concurrent-write safety
+
+Within a single worker process, two coroutines that happen to reflect on the same entity serialize on a process-local `asyncio.Lock` keyed by `entity_id`. The lock registry uses a `WeakValueDictionary` so locks are garbage-collected once no coroutine holds or waits on them — the registry doesn't grow unboundedly across a long-running process.
+
+Cross-worker mutual exclusion is handled at two complementary layers:
+
+- The queue's `SELECT ... FOR UPDATE SKIP LOCKED` claim means two workers rarely pick up the same entity. The asyncio lock alone is sufficient for the within-worker case.
+- Phase 5's write is a **compare-and-set** `UPDATE mental_models SET observations=…, version=version+1, … WHERE id=:id AND version=:claimed_version`. If a second worker slips through the queue and reads the same row before the first commits, the first to acquire the row lock wins; the loser's `WHERE version=:claimed_version` matches zero rows after the bump and `_phase_5_finalize` returns `False`. The per-entity coroutine then returns `None`, which the engine collects into `ReflectionEngine.last_abandoned_entity_ids` (separate from the success list). The service layer routes abandoned entity_ids through `queue_service.mark_abandoned` — which flips the queue row back to `PENDING` **without** incrementing `retry_count` — so the next scheduler tick re-claims them via `SKIP LOCKED`. CAS abandons are benign concurrency contention, not task failures, and intentionally do **not** consume the `max_retries` → `DEAD_LETTER` budget. Real failures (exceptions inside the engine path) still flow through `mark_failed` and count toward `DEAD_LETTER`.
+
+#### Session lifecycle across LLM phases
+
+Each entity reflection opens its own short DB sessions for the DB-touching phases (Phase 0 live-ID lookup, Phase 2 vector search + unit hydration, Phase 5 CAS UPDATE, Phase 6 unit enrichment). Phases 0, 2, and 5 use single-purpose sessions opened by `async with self._entity_session()` — the session is closed before any subsequent DSPy LLM call, so no DB transaction is held across LLM I/O and no MVCC snapshot is pinned. Phase 6 holds a single session open across the read and write halves, but explicitly commits the read transaction before the LLM call so the *transaction* is released across DSPy I/O even though the *connection* stays bound to the session for the duration of that one entity's enrichment. The connection-pool concern is bounded by the number of *concurrent* reflections, not by the per-reflection LLM-call duration.
+
+No Postgres advisory locks are taken on the reflection path. The earlier `pg_try_advisory_xact_lock(hashtext('reflect:<id>'))` pattern was removed because the advisory lock was held at *transaction scope* — i.e. across the orchestrator's batch and therefore across every DSPy LLM call in the batch (30–60 s per entity), pinning MVCC snapshots open against `VACUUM`. The CAS UPDATE delivers the same write-time exclusion without spanning LLM I/O.
+
+#### Surface-adapter behavior on abandons
+
+For the **synchronous** on-demand reflection path (`summarize_node`, `reconsolidate_entity`) — i.e. paths that fan out to user-facing surfaces — a CAS abandon is translated through the surface adapters:
+
+- **HTTP** (`POST /api/v1/memories/summarize-node`): returns **503** with body `{"error": "reflection_abandoned", "retry_after_seconds": N, "message": ..., "hint": ...}` and a `Retry-After` header. `retry_after_seconds` mirrors the summarize-node rate-limit window (default 60s) so a naive retry won't immediately 429.
+- **HTTP client** (`memex_common.client`): raises `ReflectionAbandoned(retry_after_seconds, message, hint)` parallel to `RateLimitExceeded`.
+- **MCP** (`memex_memory_summarize_node`) and **Hermes** plugin (`memex_memory_summarize_node`): each catch `ReflectionAbandoned` and return a structured envelope `{"error": "reflection_abandoned", "entity_id": ..., "retry_after_seconds": ..., "message": ..., "hint": ...}` rather than a generic tool-failure.
+- **CLI/HTTP `/memory/reconsolidate`**: the response dict carries `"abandoned": true` so agents can distinguish "reflected but no new observations" from "concurrent worker won the race; re-read the model".
+
+The recommended agent action on `reflection_abandoned` is to **re-read** the entity's mental model directly (the fresh state is already persisted by the concurrent winner) rather than retry the synchronous reflection — the envelope's `hint` field surfaces this guidance. The asynchronous (background) reflection path swallows abandons internally via `mark_abandoned` → PENDING re-enqueue; no envelope is generated.
 
 ## Reflection Pipeline Overview
 
@@ -63,11 +87,9 @@ graph TD
         --> P2["Phase 2: Hunt<br/>pgvector similarity search per candidate<br/>+ tail sampling (5% rate)<br/><i>0 LLM calls</i>"]
         --> P3["Phase 3: Validate<br/>LLM validates candidates against evidence<br/>Extract exact supporting quotes<br/><i>1 LLM call</i>"]
         --> P4["Phase 4: Compare/Merge<br/>Merge new + existing observations<br/>Compute trends via temporal density<br/><i>1 LLM call</i>"]
-        --> P5["Phase 5: Finalize<br/>Persist as JSONB, increment version<br/>Embed model summary<br/><i>0 LLM calls</i>"]
+        --> P5["Phase 5: Finalize<br/>CAS UPDATE on mental_models<br/>WHERE id=:id AND version=:claimed<br/>Loser abandons; next tick retries<br/><i>0 LLM calls</i>"]
         --> P6["Phase 6: Enrich<br/>Tag contributing memory units with<br/>concepts from reflection<br/><i>1 LLM call (optional)</i>"]
     end
-
-    P6 --> BC["Batch Commit<br/>Rescue mode on fail: one-by-one with rollback"]
 ```
 
 ### Trend Tracking State Machine
@@ -154,7 +176,7 @@ After the mental model is finalized, Phase 6 pushes enriched tags back into the 
 2. **Load units** — use units already loaded in the session; fetch any missing evidence units from the database
 3. **Build LLM context** — include existing enriched tags to prevent duplicates
 4. **Generate tags** — the LLM produces enriched tags and keywords for each memory unit based on the mental model's understanding
-5. **Write overlay** — under a database lock, set-union the new tags with existing ones and record `enriched_at` timestamp and `enriched_by_entity`
+5. **Write overlay** — set-union the new tags with existing ones and record `enriched_at` timestamp and `enriched_by_entity`. Writes use SQLAlchemy `merge()` ordered by `unit_id` so concurrent enrichments on overlapping evidence units acquire row locks in deterministic order and don't deadlock
 
 **Example:** A 3-month-old memory "Project Alpha is rewriting its auth middleware" (original tags: `auth, middleware`) is invisible to "compliance work" queries. After enrichment, that memory gains `enriched_tags: ["compliance", "eu-regulation"]` and becomes findable via the keyword strategy.
 
@@ -170,9 +192,9 @@ Enrichment can be disabled by setting `enrichment_enabled: false` in the reflect
 
 Reflection processes entities in batches to minimize database round-trips:
 
-1. **Batch load**: All entities, mental models, and recent memories for the batch are fetched in bulk.
+1. **Batch load**: All entities, mental models, and recent memories for the batch are fetched in bulk on the orchestrator session; any newly-created mental_models rows are committed immediately so the per-entity CAS writes can target them.
 2. **Concurrent processing**: Each entity is reflected upon concurrently, up to `max_concurrency` (default: 3) simultaneous LLM operations.
-3. **Optimistic commit**: All updated mental models are committed in a single transaction. If the batch commit fails, a "rescue mode" saves models one by one.
+3. **Per-entity CAS persistence**: Each reflection's Phase 5 finalize issues an atomic `UPDATE mental_models … WHERE id=:id AND version=:claimed_version` on its own short DB session. There is no batch-end commit — per-entity CAS is the sole write path, so a concurrent worker's write can never be overwritten by a stale, un-versioned batch commit.
 
 The `background_reflection_batch_size` (default: 10) controls how many entities are processed per cycle, and `background_reflection_interval_seconds` (default: 600) controls how often the cycle runs.
 

@@ -529,3 +529,58 @@ class TestReconsolidateResponseSchemaDrift:
             f'Expected "schema drift" in CRITICAL logs; got: '
             f'{[r.getMessage() for r in critical_records]}'
         )
+
+
+class TestReconsolidateAbandonedRoundTrip:
+    """V18 round-8 H1 regression guard: ``abandoned: bool`` on
+    ``ReconsolidateResponse`` must round-trip through pydantic and
+    reach the HTTP JSON body. Without this test, a future refactor
+    (or pydantic config change tightening unknown fields) could
+    silently strip the field — re-opening the gap the round-8 fix
+    plugged at the DTO boundary.
+    """
+
+    def test_abandoned_true_reaches_http_body(self, mock_api):
+        mock_api.reconsolidate_entity = AsyncMock(
+            return_value={
+                'entity_id': str(ENTITY_ID),
+                'vault_id': str(ALLOWED_VAULT),
+                'units_examined': 3,
+                'contradictions_run': 3,
+                'mental_model_id': None,
+                'observations_added': 0,
+                'abandoned': True,
+            }
+        )
+        client = _make_client(mock_api, _unrestricted_writer())
+        resp = client.post(
+            '/api/v1/memory/reconsolidate',
+            json={
+                'entity_id': str(ENTITY_ID),
+                'vault_id': str(ALLOWED_VAULT),
+                'timeout_seconds': 5.0,
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body['abandoned'] is True, (
+            'CAS-abandon signal must propagate through the DTO to the HTTP body; '
+            'pre-V18-round-8 the field was silently stripped.'
+        )
+
+    def test_abandoned_false_default_on_success_path(self, mock_api):
+        # The default fixture returns a dict WITHOUT ``abandoned``; the
+        # default ``False`` must fill in (covers backward-compat for callers
+        # that haven't been updated yet).
+        client = _make_client(mock_api, _unrestricted_writer())
+        resp = client.post(
+            '/api/v1/memory/reconsolidate',
+            json={
+                'entity_id': str(ENTITY_ID),
+                'vault_id': str(ALLOWED_VAULT),
+                'timeout_seconds': 5.0,
+            },
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        assert body['abandoned'] is False

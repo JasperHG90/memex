@@ -30,6 +30,8 @@ from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
 logger = logging.getLogger('memex.core.services.reflection')
 
 
+from memex_core.memory.reflect.exceptions import ReflectionAbandonedError
+
 SummarizeScope = Literal['incremental', 'full']
 
 
@@ -76,6 +78,19 @@ class ReflectionService:
                     logger.info(f'Starting background reflection for entity {request.entity_id}')
                     await self.reflect(request)
                     logger.info(f'Completed background reflection for entity {request.entity_id}')
+                except ReflectionAbandonedError as exc:
+                    # Benign concurrency contention — the entity was already
+                    # re-enqueued by reflect() via mark_abandoned. Log at INFO
+                    # so production alerting (which typically pages on
+                    # error-level reflection failures) is not woken up.
+                    # Abandon volume is observable via
+                    # ``memex_reflection_cas_abandons_total``.
+                    logger.info(
+                        'Background reflection abandoned for entity %s '
+                        '(re-enqueued for next tick): %s',
+                        request.entity_id,
+                        exc,
+                    )
                 except Exception as e:
                     logger.error(
                         f'Error during background reflection for entity {request.entity_id}: {e}',
@@ -104,10 +119,33 @@ class ReflectionService:
         async with self.metastore.session() as session:
             from memex_core.memory.reflect.reflection import ReflectionEngine
 
-            reflector = ReflectionEngine(session, self.config, self.embedding_model)
+            reflector = ReflectionEngine(
+                session,
+                self.config,
+                self.embedding_model,
+                entity_session_factory=self.metastore.session,
+            )
 
-            models = await reflector.reflect_batch([request])
+            models, abandoned_list, _failed_list = await reflector.reflect_batch([request])
+            abandoned_ids = set(abandoned_list)
             if not models:
+                if request.entity_id in abandoned_ids:
+                    # CAS abandon — re-enqueue without retry_count increment,
+                    # then raise so the caller (summarize_node / HTTP / MCP)
+                    # can translate to a "try again" envelope. Returning a
+                    # synthetic empty MentalModel here would silently misrepresent
+                    # the entity as observation-less to the agent / user.
+                    await self.queue_service.mark_abandoned(
+                        session,
+                        entity_id=request.entity_id,
+                        vault_id=request.vault_id,
+                    )
+                    raise ReflectionAbandonedError(
+                        f'Reflection for entity {request.entity_id} abandoned '
+                        f'because a concurrent worker advanced the version. '
+                        f'Re-enqueued for the next scheduler tick.'
+                    )
+                # Real failure (exception in the engine path).
                 await self.queue_service.mark_failed(
                     session,
                     entity_id=request.entity_id,
@@ -183,40 +221,89 @@ class ReflectionService:
         )
         return result
 
-    async def reflect_batch(self, requests: list[ReflectionRequest]) -> list[ReflectionResult]:
-        """
-        Reflect on multiple entities in parallel using a single DB session.
-        This is significantly faster than sequential calls.
+    async def reflect_batch_detailed(
+        self, requests: list[ReflectionRequest]
+    ) -> tuple[list[ReflectionResult], list[UUID]]:
+        """Reflect on multiple entities in parallel and return both
+        applied results AND CAS-abandoned entity_ids.
+
+        Callers that need to distinguish "successfully reflected with no
+        new observations" from "concurrent worker won the CAS race"
+        should use this variant. ``reflect_batch`` discards the abandon
+        list for backward compatibility with callers that don't care.
+
+        Concurrency: each call constructs its own ReflectionEngine and
+        the abandon list rides back on the engine's return tuple — no
+        shared service-instance state is touched, so concurrent
+        invocations cannot race.
         """
         if not requests:
-            return []
+            return [], []
 
         async with self.metastore.session() as session:
             from memex_core.memory.reflect.reflection import ReflectionEngine
 
-            reflector = ReflectionEngine(session, self.config, self.embedding_model)
+            reflector = ReflectionEngine(
+                session,
+                self.config,
+                self.embedding_model,
+                entity_session_factory=self.metastore.session,
+            )
 
-            models = await reflector.reflect_batch(requests)
+            # The engine tracks three disjoint outcomes per entity:
+            # ``models`` (Phase 5 CAS UPDATE applied), ``abandoned_list``
+            # (CAS lost the version race — benign contention), and
+            # ``failed_list`` (a real exception inside the per-entity
+            # pipeline). Routing CAS abandons through mark_failed would
+            # increment retry_count and eventually DEAD_LETTER an
+            # entity that is merely contended; routing real failures
+            # through mark_abandoned would carousel a broken entity
+            # forever without ever surfacing the failure to operators.
+            models, abandoned_list, failed_list = await reflector.reflect_batch(requests)
+            abandoned_ids = set(abandoned_list)
+            failed_ids = set(failed_list)
 
             from collections import defaultdict
 
-            succeeded_ids = {m.entity_id for m in models}
             processed_by_vault = defaultdict(list)
             for m in models:
                 processed_by_vault[m.vault_id].append(m.entity_id)
 
+            # Order is intentional: complete_reflection's commit fires first
+            # (deletes succeeded queue rows). The two subsequent loops then
+            # run in a fresh SQLAlchemy autobegin transaction on the same
+            # session — a failure in either does not roll back the deletes.
             for vid, eids in processed_by_vault.items():
                 await self.queue_service.complete_reflection(session, eids, vault_id=vid)
 
+            # Build a (entity_id, vault_id) lookup so we can route on
+            # the request's own vault_id — falling back to "find any
+            # request" would risk routing a failure to the wrong vault
+            # if duplicates ever slipped past the engine's dedup.
+            req_vaults: dict[UUID, UUID] = {}
             for req in requests:
-                if req.entity_id not in succeeded_ids:
-                    await self.queue_service.mark_failed(
-                        session,
-                        entity_id=req.entity_id,
-                        vault_id=req.vault_id,
-                        error=f'Reflection failed for entity {req.entity_id}',
-                    )
+                req_vaults.setdefault(req.entity_id, req.vault_id)
 
+            # CAS-abandoned: re-enqueue (PENDING) without incrementing
+            # retry_count. SKIP LOCKED on the next tick re-claims them.
+            for eid in abandoned_ids:
+                await self.queue_service.mark_abandoned(
+                    session,
+                    entity_id=eid,
+                    vault_id=req_vaults.get(eid, GLOBAL_VAULT_ID),
+                )
+
+            # Real failures (exceptions in _process_entity_reflection):
+            # mark_failed, increments retry_count toward DEAD_LETTER.
+            for eid in failed_ids:
+                await self.queue_service.mark_failed(
+                    session,
+                    entity_id=eid,
+                    vault_id=req_vaults.get(eid, GLOBAL_VAULT_ID),
+                    error=f'Reflection failed for entity {eid}',
+                )
+
+            succeeded_ids = {m.entity_id for m in models}
             results = []
             for model in models:
                 results.append(
@@ -236,7 +323,18 @@ class ReflectionService:
                         str(req.entity_id),
                         vault_id=str(req.vault_id),
                     )
-            return results
+            return results, abandoned_list
+
+    async def reflect_batch(self, requests: list[ReflectionRequest]) -> list[ReflectionResult]:
+        """Reflect on multiple entities in parallel using a single DB session.
+
+        Backward-compatible thin wrapper around ``reflect_batch_detailed``
+        that drops the CAS-abandoned entity_ids. Callers that need to
+        distinguish abandons from "no new observations" should call
+        ``reflect_batch_detailed`` directly.
+        """
+        results, _abandoned = await self.reflect_batch_detailed(requests)
+        return results
 
     async def get_reflection_queue_batch(
         self,

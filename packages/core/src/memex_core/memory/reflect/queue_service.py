@@ -178,20 +178,30 @@ class ReflectionQueueService:
         result = await session.exec(stmt)
         rows = result.all()
 
-        existing_ids = set()
+        # The query selects ``ReflectionQueue.entity_id``, so in
+        # production rows are bare UUIDs. The branches below tolerate
+        # the additional shapes that show up in tests where the same
+        # ``session.exec`` is mocked across query variants:
+        # tuple-wrapped scalars, row objects exposing ``entity_id`` or
+        # ``id``, and stringified UUIDs. Anything that cannot be
+        # coerced is skipped so an unreadable row does not crash the
+        # batch and re-queue every entity in it.
+        existing_ids: set[UUID] = set()
         for r in rows:
             val = r[0] if isinstance(r, (tuple, list)) else r
+            if isinstance(val, UUID):
+                existing_ids.add(val)
+                continue
             if hasattr(val, 'entity_id'):
                 existing_ids.add(val.entity_id)
-            elif hasattr(val, 'id'):
+                continue
+            if hasattr(val, 'id'):
                 existing_ids.add(val.id)
-            elif isinstance(val, UUID):
-                existing_ids.add(val)
-            else:
-                try:
-                    existing_ids.add(UUID(str(val)))
-                except (ValueError, TypeError):
-                    continue
+                continue
+            try:
+                existing_ids.add(UUID(str(val)))
+            except (ValueError, TypeError):
+                continue
 
         missing_ids = entity_ids - existing_ids
         if not missing_ids:
@@ -209,7 +219,13 @@ class ReflectionQueueService:
 
         await session.flush()
 
-    async def get_next_batch(self, session, limit=10, vault_id=None, vault_ids=None):
+    async def get_next_batch(
+        self,
+        session: AsyncSession,
+        limit: int = 10,
+        vault_id: UUID | None = None,
+        vault_ids: list[UUID] | None = None,
+    ) -> list[ReflectionQueue]:
         stmt = (
             select(ReflectionQueue)
             .where(
@@ -284,6 +300,47 @@ class ReflectionQueueService:
         for item in items:
             await session.delete(item)
         await session.commit()
+
+    async def mark_abandoned(
+        self,
+        session: AsyncSession,
+        entity_id: UUID,
+        vault_id: UUID = GLOBAL_VAULT_ID,
+    ) -> None:
+        """Re-enqueue a queue item after Phase 5 CAS UPDATE abandoned.
+
+        Used when a concurrent worker advanced the row's version between
+        our read and our CAS UPDATE. CAS abandons are benign concurrency
+        contention — the work itself didn't fail, another writer just
+        committed first. We flip the row back to PENDING so the next
+        scheduler tick re-claims via SKIP LOCKED. retry_count is NOT
+        incremented (the entity didn't fail), so a hot entity in a
+        multi-worker cluster cannot DEAD_LETTER from contention alone.
+        """
+        stmt = (
+            select(ReflectionQueue)
+            .where(col(ReflectionQueue.entity_id) == entity_id)
+            .where(col(ReflectionQueue.vault_id) == vault_id)
+        )
+        result = await session.exec(stmt)
+        item = result.first()
+        if item is None:
+            return
+
+        item.status = ReflectionStatus.PENDING
+        # Preserve ``last_error`` from any prior real failure. CAS abandons
+        # are benign concurrency contention; stomping the column would hide
+        # an outstanding LLM-timeout / parse-error / etc. that an operator
+        # is investigating. Only write when the column is empty or already
+        # records a CAS abandon (so consecutive abandons don't accumulate).
+        if not item.last_error or 'CAS abandon' in item.last_error:
+            item.last_error = 'CAS abandon (concurrent refresh won)'
+        session.add(item)
+        await session.commit()
+        logger.info(
+            'Reflection task for entity %s re-enqueued after CAS abandon (retry_count unchanged)',
+            entity_id,
+        )
 
     async def mark_failed(
         self,

@@ -2507,6 +2507,13 @@ def _log_to_recorder(
             # ``default=`` is a json.dumps kwarg, not model_dump_json's.
             run_result_path.write_text(result.model_dump_json(indent=2))
             recorder.log_artifact(run_result_path)
+            _dd = os.environ.get('MEMEX_EVAL_DUMP_DIR')
+            if _dd:
+                _ddp = Path(_dd)
+                _ddp.mkdir(parents=True, exist_ok=True)
+                (_ddp / f'{suite.name}-{int(time.time())}.json').write_text(
+                    result.model_dump_json(indent=2)
+                )
 
             # Defense-in-depth: re-redact even though the server already did.
             # If a self-hosted memex is older / lacks redaction, we still avoid leaking secrets.

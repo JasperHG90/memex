@@ -26,6 +26,8 @@ import asyncpg
 import pytest
 from fastapi.testclient import TestClient
 
+from memex_core.config import MemexConfig
+from memex_core.memory.reflect.exceptions import ReflectionAbandonedError
 from memex_core.memory.reflect.models import ReflectionResult
 from memex_core.memory.sql_models import MentalModel
 from memex_core.server.common import get_api
@@ -95,10 +97,20 @@ class _FakeAPI:
     body fields exactly mirror the service-layer exception (TC8 amendment b).
     """
 
-    def __init__(self, *, raise_rate_limit: float | None = None):
+    def __init__(
+        self,
+        *,
+        raise_rate_limit: float | None = None,
+        raise_abandoned: bool = False,
+    ):
         self._raise_rate_limit = raise_rate_limit
+        self._raise_abandoned = raise_abandoned
         self.calls: list[dict] = []
-        self.last_exception: RateLimitExceededError | None = None
+        self.last_exception: RateLimitExceededError | ReflectionAbandonedError | None = None
+        # The 503 path reads ``api.config.server.memory.reflection.
+        # summarize_node_rate_limit.per_entity_per_seconds`` to derive
+        # ``retry_after_seconds``; stub a real default MemexConfig for it.
+        self.config = MemexConfig()
 
     async def summarize_node(self, entity_id, *, scope='incremental', vault_id=None):
         self.calls.append({'entity_id': entity_id, 'scope': scope, 'vault_id': vault_id})
@@ -109,6 +121,14 @@ class _FakeAPI:
             )
             self.last_exception = exc
             raise exc
+        if self._raise_abandoned:
+            exc_a = ReflectionAbandonedError(
+                f'Reflection for entity {entity_id} abandoned '
+                f'because a concurrent worker advanced the version. '
+                f'Re-enqueued for the next scheduler tick.'
+            )
+            self.last_exception = exc_a
+            raise exc_a
         return ReflectionResult(
             entity_id=entity_id,
             new_observations=[],
@@ -181,6 +201,44 @@ def test_http_429_envelope_and_retry_after_header(client: TestClient):
     assert int(header_val) == math.ceil(body['retry_after_seconds'])
     # Cross-check the absolute value to lock the contract: ceil(42.7) == 43
     assert header_val == '43'
+
+
+def test_http_503_envelope_on_reflection_abandoned(client: TestClient):
+    """V18 round-7: 503 path translates ``ReflectionAbandonedError`` to a
+    structured envelope with ``retry_after_seconds`` derived from the
+    summarize-node rate-limit window and a ``hint`` suggesting re-read
+    instead of retry.
+    """
+    fake = _FakeAPI(raise_abandoned=True)
+    app.dependency_overrides[get_api] = lambda: fake
+    try:
+        entity_id = str(uuid4())
+        resp = client.post(
+            '/api/v1/memories/summarize-node',
+            json={'entity_id': entity_id, 'scope': 'incremental'},
+        )
+    finally:
+        app.dependency_overrides.pop(get_api, None)
+
+    assert resp.status_code == 503, resp.text
+    body = resp.json()
+    assert body['error'] == 'reflection_abandoned'
+
+    # retry_after_seconds mirrors the rate-limit window (default 60s).
+    expected_window = float(
+        fake.config.server.memory.reflection.summarize_node_rate_limit.per_entity_per_seconds
+    )
+    assert body['retry_after_seconds'] == expected_window
+    assert 'hint' in body and body['hint']
+    assert 're-read' in body['hint'].lower() or 'memex_get_entity' in body['hint']
+
+    # Message echoes the service-layer exception.
+    assert 'abandoned' in body['message'].lower()
+
+    # Retry-After header is ceil(retry_after_seconds) per HTTP spec.
+    header_val = resp.headers.get('Retry-After')
+    assert header_val is not None
+    assert int(header_val) == math.ceil(expected_window)
 
 
 @pytest.mark.parametrize('scope', ['incremental', 'full'])

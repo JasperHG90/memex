@@ -72,6 +72,30 @@ class RateLimitExceeded(Exception):
         super().__init__(message)
 
 
+class ReflectionAbandoned(Exception):
+    """Raised when a summarize-node endpoint returns HTTP 503 with
+    ``error: 'reflection_abandoned'`` — a concurrent worker refreshed
+    the entity's mental model first.
+
+    Carries ``retry_after_seconds`` (mirrors the rate-limit window so a
+    naive retry won't immediately 429) and an optional ``hint`` that
+    suggests the right next action — typically "re-read the entity's
+    mental model directly rather than retrying summarize_node, since
+    the fresh state is already persisted by the concurrent worker."
+    CAS abandons are benign concurrency contention, NOT task failures.
+    """
+
+    def __init__(
+        self,
+        retry_after_seconds: float,
+        message: str,
+        hint: str | None = None,
+    ) -> None:
+        self.retry_after_seconds = retry_after_seconds
+        self.hint = hint
+        super().__init__(message)
+
+
 class RemoteMemexAPI:
     """
     Client for interacting with a remote Memex server via REST.
@@ -1033,7 +1057,10 @@ class RemoteMemexAPI:
 
         On HTTP 429, raises a structured ``RateLimitExceeded`` carrying
         ``retry_after_seconds`` so callers can surface the back-off time
-        without re-parsing the body.
+        without re-parsing the body. On HTTP 503 with
+        ``error='reflection_abandoned'``, raises ``ReflectionAbandoned``
+        with the same ``retry_after_seconds`` shape — CAS abandons are
+        benign concurrency, surface as "try again shortly".
         """
         body: dict[str, Any] = {'entity_id': str(entity_id), 'scope': scope}
         if vault_id is not None:
@@ -1045,6 +1072,20 @@ class RemoteMemexAPI:
                 retry_after_seconds=float(payload.get('retry_after_seconds', 0.0)),
                 message=str(payload.get('message', 'Rate limit exceeded.')),
             )
+        if response.status_code == 503:
+            payload = response.json()
+            if payload.get('error') == 'reflection_abandoned':
+                hint = payload.get('hint')
+                raise ReflectionAbandoned(
+                    retry_after_seconds=float(payload.get('retry_after_seconds', 60.0)),
+                    message=str(
+                        payload.get(
+                            'message',
+                            'Reflection abandoned by concurrent refresh; retry.',
+                        )
+                    ),
+                    hint=str(hint) if hint else None,
+                )
         response.raise_for_status()
         return ReflectionResultDTO(**response.json())
 

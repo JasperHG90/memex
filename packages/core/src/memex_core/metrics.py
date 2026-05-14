@@ -41,6 +41,12 @@ REFLECTION_QUEUE_SIZE = Gauge(
     'Number of pending reflection tasks',
 )
 
+REFLECTION_CAS_ABANDONS_TOTAL = Counter(
+    'memex_reflection_cas_abandons_total',
+    'Number of Phase 5 mental-model writes abandoned because a concurrent '
+    'refresh advanced the version column between read and CAS UPDATE.',
+)
+
 # ---------------------------------------------------------------------------
 # LLM metrics
 # ---------------------------------------------------------------------------
@@ -420,7 +426,7 @@ ENTITY_LOCK_ACQUIRES_TOTAL = Counter(
 RECONSOLIDATE_TOTAL = Counter(
     'memex_reconsolidate_total',
     'Total memex_memory_reconsolidate invocations by outcome.',
-    ['outcome'],  # success | lock_timeout | error
+    ['outcome'],  # success | lock_timeout | error | abandoned
 )
 
 CONSOLIDATE_TOTAL = Counter(

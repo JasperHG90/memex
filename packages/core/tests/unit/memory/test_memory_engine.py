@@ -64,8 +64,8 @@ async def test_retain_with_reflection(memory_engine, mock_session, mock_extracti
     with patch('memex_core.memory.engine.ReflectionEngine') as MockReflectionEngine:
         mock_reflector = MockReflectionEngine.return_value
         mock_reflector.reflect_batch = AsyncMock(
-            return_value=[MagicMock()]
-        )  # Return list of models
+            return_value=([MagicMock()], [], [])
+        )  # Return (models, abandoned_entity_ids, failed_entity_ids)
 
         result = await memory_engine.retain(mock_session, contents, reflect_after=True)
 
@@ -303,7 +303,7 @@ async def test_retain_contradiction_runs_with_entities(
     contents = [RetainContent(content='test')]
 
     with patch('memex_core.memory.engine.ReflectionEngine') as MockReflection:
-        MockReflection.return_value.reflect_batch = AsyncMock(return_value=[MagicMock()])
+        MockReflection.return_value.reflect_batch = AsyncMock(return_value=([MagicMock()], [], []))
 
         result = await engine.retain(session, contents, note_id='note-1', reflect_after=True)
 

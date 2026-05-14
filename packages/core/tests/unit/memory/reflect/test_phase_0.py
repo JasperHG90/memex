@@ -80,7 +80,7 @@ async def test_phase_0_update_logic_happy_path():
         mock_run.return_value = mock_result
 
         # 3. Execute
-        updated_obs_list = await engine._phase_0_update(model, 'Test Entity', memories)
+        updated_obs_list, _ = await engine._phase_0_update(model, 'Test Entity', memories)
 
     # 4. Verify
     assert len(updated_obs_list) == 1
@@ -125,7 +125,7 @@ async def test_phase_0_contradiction_handling():
         'memex_core.memory.reflect.reflection.run_dspy_operation', new_callable=AsyncMock
     ) as mock_run:
         mock_run.return_value = mock_result
-        updated = await engine._phase_0_update(model, 'Test', memories)
+        updated, _ = await engine._phase_0_update(model, 'Test', memories)
 
     assert '[CONTRADICTION: User claims sky is green]' in updated[0].content
 
@@ -167,7 +167,7 @@ async def test_phase_0_none_id_handling():
         'memex_core.memory.reflect.reflection.run_dspy_operation', new_callable=AsyncMock
     ) as mock_run:
         mock_run.return_value = mock_result
-        updated = await engine._phase_0_update(model, 'Test', memories)
+        updated, _ = await engine._phase_0_update(model, 'Test', memories)
 
     # Should have 0 evidence added because ID was None
     assert len(updated[0].evidence) == 0
@@ -210,7 +210,7 @@ async def test_phase_0_out_of_bounds_handling():
         'memex_core.memory.reflect.reflection.run_dspy_operation', new_callable=AsyncMock
     ) as mock_run:
         mock_run.return_value = mock_result
-        updated = await engine._phase_0_update(model, 'Test', memories)
+        updated, _ = await engine._phase_0_update(model, 'Test', memories)
 
     # Should process safely and add no evidence
     assert len(updated[0].evidence) == 0

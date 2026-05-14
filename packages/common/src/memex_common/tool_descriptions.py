@@ -104,6 +104,12 @@ MEMEX_MEMORY_SUMMARIZE_NODE_DESC = (
     'Rate-limited per (entity, vault). On rejection the response carries '
     '`retry_after_seconds` — honor it rather than retry-looping.\n'
     '\n'
+    "Error envelopes: rate-limit returns {error:'rate_limit_exceeded', "
+    'retry_after_seconds}. Concurrent-refresh returns {error:'
+    "'reflection_abandoned', retry_after_seconds, hint} — the fresh "
+    'model is already persisted by another worker; prefer re-reading '
+    'via memex_get_entity or memex_memory_search rather than retrying.\n'
+    '\n'
     'Use sparingly: reflection is LLM-intensive. Default to background reflection '
     'unless you have a specific in-session reason to trigger now.'
 )
@@ -122,7 +128,12 @@ MEMEX_MEMORY_RECONSOLIDATE_DESC = (
     'Contrast with memex_memory_consolidate which is vault-scoped (batch '
     'deprioritizes low-MW + stale units, writes maintenance ledger). Use '
     '`reconsolidate` on concrete contradiction signals; use `consolidate` for '
-    'periodic vault-wide maintenance.'
+    'periodic vault-wide maintenance.\n'
+    '\n'
+    'Returns ``abandoned: true`` when a concurrent worker refreshed the mental '
+    'model between read and write; the fresh state is already persisted — '
+    'prefer re-reading via memex_get_entity / memex_memory_search rather '
+    'than retrying reconsolidate.'
 )
 
 

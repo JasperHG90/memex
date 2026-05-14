@@ -66,10 +66,12 @@ async def test_reflect_batch_grouping(session: AsyncSession, memex_config: Memex
             ReflectionRequest(entity_id=e2.id, vault_id=v1.id),
             ReflectionRequest(entity_id=e3.id, vault_id=v2.id),
         ]
-        results = await engine.reflect_batch(requests)
+        results, abandoned, failed = await engine.reflect_batch(requests)
 
         # 5. Verify results
         assert len(results) == 3
+        assert abandoned == []
+        assert failed == []
         assert mock_reflect.call_count == 3
 
         # Verify vault_id propagation

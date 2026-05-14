@@ -680,7 +680,7 @@ class TestReflectionServiceAuditEvents:
         )
 
         with patch('memex_core.memory.reflect.reflection.ReflectionEngine') as mock_re:
-            mock_re.return_value.reflect_batch = AsyncMock(return_value=[mock_model])
+            mock_re.return_value.reflect_batch = AsyncMock(return_value=([mock_model], [], []))
             reflection_service.queue_service.complete_reflection = AsyncMock()
 
             await reflection_service.reflect(request)
@@ -702,7 +702,7 @@ class TestReflectionServiceAuditEvents:
         request = ReflectionRequest(entity_id=entity_id, vault_id=vault_id)
 
         with patch('memex_core.memory.reflect.reflection.ReflectionEngine') as mock_re:
-            mock_re.return_value.reflect_batch = AsyncMock(return_value=[])
+            mock_re.return_value.reflect_batch = AsyncMock(return_value=([], [], []))
             reflection_service.queue_service.mark_failed = AsyncMock()
 
             await reflection_service.reflect(request)
@@ -731,7 +731,7 @@ class TestReflectionServiceAuditEvents:
         model3 = MentalModel(entity_id=entity3, vault_id=vault_id, name='e3', observations=[])
 
         with patch('memex_core.memory.reflect.reflection.ReflectionEngine') as mock_re:
-            mock_re.return_value.reflect_batch = AsyncMock(return_value=[model1, model3])
+            mock_re.return_value.reflect_batch = AsyncMock(return_value=([model1, model3], [], []))
             reflection_service.queue_service.complete_reflection = AsyncMock()
             reflection_service.queue_service.mark_failed = AsyncMock()
 

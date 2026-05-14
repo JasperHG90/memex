@@ -258,6 +258,18 @@ class ReconsolidateResponse(BaseModel):
     observations_added: int = Field(
         default=0, description='Number of new observations added to the mental model.'
     )
+    abandoned: bool = Field(
+        default=False,
+        description=(
+            'True when the synchronous reflection abandoned because a concurrent '
+            'worker advanced the mental_models.version between read and Phase 5 '
+            'CAS UPDATE. The entity has been re-enqueued (retry_count unchanged) '
+            'and the fresh model is already persisted — re-read via '
+            'memex_get_entity / memex_memory_search rather than retrying '
+            'reconsolidate. Distinguishes "concurrent refresh won" from '
+            '"reflected but no new observations".'
+        ),
+    )
     error: str | None = Field(
         default=None,
         description=(

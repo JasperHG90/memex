@@ -88,7 +88,7 @@ async def test_cli_queue_clearing_bug(
                 name='Reflected Entity',
             )
             results.append(mm)
-        return results
+        return results, [], []
 
     from unittest.mock import patch
 

@@ -23,6 +23,12 @@ def test_reconsolidate_shim_re_exports_common() -> None:
     assert MEMEX_MEMORY_RECONSOLIDATE_DESCRIPTION == MEMEX_MEMORY_RECONSOLIDATE_DESC
 
 
+def test_reconsolidate_description_documents_abandoned_outcome() -> None:
+    """The ``abandoned: true`` envelope must be documented so agents
+    re-read entity state instead of retry-looping after CAS contention."""
+    assert 'abandoned' in MEMEX_MEMORY_RECONSOLIDATE_DESC
+
+
 def test_consolidate_shim_re_exports_common() -> None:
     assert MEMEX_MEMORY_CONSOLIDATE_DESCRIPTION == MEMEX_MEMORY_CONSOLIDATE_DESC
 

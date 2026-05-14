@@ -17,6 +17,13 @@ def test_summarize_node_shim_re_exports_common() -> None:
     assert MEMEX_MEMORY_SUMMARIZE_NODE_DESCRIPTION == MEMEX_MEMORY_SUMMARIZE_NODE_DESC
 
 
+def test_summarize_node_description_covers_reflection_abandoned_envelope() -> None:
+    """Concurrent-refresh envelope must be documented so agents
+    avoid retry-looping after a CAS abandon."""
+    assert 'reflection_abandoned' in MEMEX_MEMORY_SUMMARIZE_NODE_DESC
+    assert 'retry_after_seconds' in MEMEX_MEMORY_SUMMARIZE_NODE_DESC
+
+
 @pytest.mark.asyncio
 async def test_summarize_node_tool_registered_with_common_description() -> None:
     from memex_mcp.server import mcp

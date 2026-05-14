@@ -324,7 +324,7 @@ class LocksService:
                     )
                     contradictions_run = len(unit_ids)
 
-                results = await self.reflection.reflect_batch(
+                results, abandoned_ids = await self.reflection.reflect_batch_detailed(
                     [
                         ReflectionRequest(
                             entity_id=entity_id,
@@ -333,6 +333,15 @@ class LocksService:
                         )
                     ]
                 )
+                # If the only requested entity was CAS-abandoned, surface
+                # that distinctly from "reflected but no new observations".
+                # Same UX defect as the H2 fix on summarize_node: silently
+                # reporting "0 observations" misrepresents the entity, when
+                # in fact a concurrent worker has just refreshed the model
+                # (next read sees fresh state). The detailed-variant return
+                # value is local to this call, so concurrent reconsolidate
+                # calls cannot race on a shared service-instance attribute.
+                abandoned = entity_id in set(abandoned_ids)
                 mental_model_id: str | None = None
                 observations_added = 0
                 if results:
@@ -351,9 +360,10 @@ class LocksService:
                         'units_examined': len(unit_ids),
                         'contradictions_run': contradictions_run,
                         'observations_added': observations_added,
+                        'abandoned': abandoned,
                     },
                 )
-                RECONSOLIDATE_TOTAL.labels(outcome='success').inc()
+                RECONSOLIDATE_TOTAL.labels(outcome='abandoned' if abandoned else 'success').inc()
                 return {
                     'entity_id': str(entity_id),
                     'vault_id': str(vault_id),
@@ -361,6 +371,7 @@ class LocksService:
                     'contradictions_run': contradictions_run,
                     'mental_model_id': mental_model_id,
                     'observations_added': observations_added,
+                    'abandoned': abandoned,
                 }
         except EntityLockTimeoutError:
             RECONSOLIDATE_TOTAL.labels(outcome='lock_timeout').inc()
