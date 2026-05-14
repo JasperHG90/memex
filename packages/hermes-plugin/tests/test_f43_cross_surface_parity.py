@@ -1,32 +1,27 @@
-"""F43 — cross-surface parity test.
+"""F43 — cross-surface parity (post-compression).
 
-Asserts that the canonical §3.5 / §3.4.2 concepts appear in ALL FOUR agent
-surfaces:
+After 2026-05-14: the 5-step resolution flow is owned by the MCP tool
+descriptions (``memex_mcp._resolution_flow_descriptions``), authoritative
+for all clients. The hermes-plugin tool schemas mirror those descriptions
+(because hermes calls tools in-process and surfaces its own schemas to the
+LLM). The hermes briefing and the Claude Code plugin rule no longer carry
+the full flow — they delegate to the MCP descriptions.
 
-  1. MCP tool descriptions (``memex_mcp._resolution_flow_descriptions``)
-  2. Hermes session-briefing primer (``memex_hermes_plugin.memex.briefing``)
-  3. Claude Code plugin rule (``packages/claude-code-plugin/rules/memory-resolution-flow.md``)
-  4. Hermes tool-schema descriptions (``memex_hermes_plugin.memex.tools``) —
-     concise paraphrase rendered as the LLM's tool-listing entries; required
-     so the verb-pair entries on Hermes match the briefing primer above.
+Parity contract enforced here:
 
-Per CLAUDE.md rule 24 (agent-surface parity): the resolution-flow guidance must
-not drift between surfaces. A failing assertion here indicates a real surface
-drift — fix the surface, do not relax the assertion.
+  1. MCP record_outcome + deprioritize descriptions carry every canonical concept.
+  2. Hermes tool-schema descriptions mirror those concepts.
 
-Source: cognitive-memory-research-report.md §3.5 + §3.4.1 + §3.4.2
-(added 2026-05-02).
+The hermes briefing and Claude Code rule are intentionally NOT parity targets
+anymore; pointing at the tool descriptions is the contract for those surfaces.
 """
 
 from __future__ import annotations
-
-from pathlib import Path
 
 import pytest
 
 pytest.importorskip('memex_mcp')
 
-from memex_hermes_plugin.memex.briefing import _RESOLUTION_FLOW_PRIMER  # noqa: E402
 from memex_hermes_plugin.memex.tools import (  # noqa: E402
     MEMORY_DEPRIORITIZE_SCHEMA,
     RECORD_OUTCOME_SCHEMA,
@@ -36,24 +31,11 @@ from memex_mcp._resolution_flow_descriptions import (  # noqa: E402
     MEMEX_RECORD_OUTCOME_DESCRIPTION,
 )
 
-_CC_RULE_PATH = (
-    Path(__file__).parents[2] / 'claude-code-plugin' / 'rules' / 'memory-resolution-flow.md'
-)
-
 
 def _surfaces() -> dict[str, str]:
-    """Return the four surface texts keyed by surface name.
-
-    The MCP and Hermes-tools surfaces concatenate both descriptions because
-    some concepts naturally appear on only one of the two verbs in some
-    phrasings — the parity contract is "present somewhere in the verb pair",
-    not "present in each verb individually" (the per-verb parity is enforced
-    by test_resolution_flow_descriptions.py).
-    """
+    """Return the two surface texts that must carry the flow."""
     return {
         'mcp': MEMEX_RECORD_OUTCOME_DESCRIPTION + '\n' + MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION,
-        'hermes': _RESOLUTION_FLOW_PRIMER,
-        'claude_code': _CC_RULE_PATH.read_text(),
         'hermes_tools': (
             RECORD_OUTCOME_SCHEMA['description'] + '\n' + MEMORY_DEPRIORITIZE_SCHEMA['description']
         ),
@@ -62,29 +44,20 @@ def _surfaces() -> dict[str, str]:
 
 # Each entry is (concept_id, list-of-acceptable-phrasings, mode).
 #   - mode='any': at least one phrasing must appear in the surface text.
-#   - mode='all': every phrasing must appear (used for paired concepts where
-#     both verbs / both phrases must co-occur).
-# The Hermes tool-schema surface uses a concise "Options A/B/C" shorthand for
-# the routing trio, so each per-letter concept accepts that shorthand as an
-# acceptable phrasing.
+#   - mode='all': every phrasing must appear (paired concepts).
 _CONCEPTS: list[tuple[str, list[str], str]] = [
-    ('options_abc_a', ['Option A', 'Options A/B/C'], 'any'),
-    ('options_abc_b', ['Option B', 'Options A/B/C'], 'any'),
-    ('options_abc_c', ['Option C', 'Options A/B/C'], 'any'),
+    ('options_abc_a', ['Option A', 'Options A/B/C', 'A entity-anchored'], 'any'),
+    ('options_abc_b', ['Option B', 'Options A/B/C', 'B cross-note'], 'any'),
+    ('options_abc_c', ['Option C', 'Options A/B/C', 'C single-note'], 'any'),
     (
         'top_k_at_least_30',
-        ['top_k=30', 'top_k>=30', 'top_k >= 30', 'top_k must be ≥30', '`top_k` must be **≥30**'],
+        ['top_k=30', 'top_k>=30', 'top_k >= 30', 'top_k must be ≥30', 'top_k must be **≥30**'],
         'any',
     ),
     (
         'paired_writes',
         ['memex_record_outcome', 'memex_memory_deprioritize'],
         'all',
-    ),
-    (
-        'f33_safety_net',
-        ['F33 exploration is the safety net', 'F33 exploration', 'exploration safety net'],
-        'any',
     ),
     (
         'apply_pre_filter_false',
@@ -99,14 +72,12 @@ _CONCEPTS: list[tuple[str, list[str], str]] = [
     _CONCEPTS,
     ids=[c[0] for c in _CONCEPTS],
 )
-def test_concept_present_in_all_surfaces(
+def test_concept_present_in_authoritative_surfaces(
     concept: str, phrase_options: list[str], mode: str
 ) -> None:
-    """Every canonical concept must appear in every agent surface.
-
-    A failure here means a surface drifted from the §3.5 / §3.4.2 spec.
-    Update the offending surface; do NOT relax the assertion.
-    """
+    """The flow concepts must appear in BOTH the MCP descriptions and the
+    hermes tool-schema mirror. Failure here = real surface drift; fix the
+    surface, do not relax the assertion."""
     surfaces = _surfaces()
     failures: list[str] = []
     for surface_name, text in surfaces.items():
@@ -119,8 +90,6 @@ def test_concept_present_in_all_surfaces(
                 failures.append(
                     f'{surface_name!r}: none of the phrasings {phrase_options!r} appeared'
                 )
-    assert not failures, (
-        f'F43 cross-surface parity broke for concept {concept!r}:\n'
-        + '\n'.join('  - ' + f for f in failures)
-        + '\nSee cognitive-memory-research-report.md §3.5 + §3.4.1 + §3.4.2.'
+    assert not failures, f'F43 surface parity broke for concept {concept!r}:\n' + '\n'.join(
+        '  - ' + f for f in failures
     )

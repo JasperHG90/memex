@@ -119,20 +119,6 @@ def test_cli_kv_py_no_kv_fact_muddle():
     _assert_no_banned_in(text, where='cli kv.py')
 
 
-def test_storage_layer_terminology_is_consistent_in_hermes_briefing():
-    """Hermes briefing must teach the three-layer storage model up front."""
-    text = _read('packages/hermes-plugin/src/memex_hermes_plugin/memex/briefing.py')
-    assert '_STORAGE_MODEL_PRIMER' in text
-    # Primer must contain the three layers and the append-only invariant.
-    for marker in (
-        '**Notes**',
-        '**Memory units**',
-        '**KV store**',
-        'Append-only',
-    ):
-        assert marker in text, f'{marker!r} missing from Hermes storage primer'
-
-
 def test_storage_layer_terminology_is_consistent_in_mcp_instructions():
     """MCP instructions must teach the three-layer storage model up front."""
     text = _read('packages/mcp/src/memex_mcp/server.py')

@@ -13,18 +13,30 @@ The Hermes briefing surface must:
 from __future__ import annotations
 
 from memex_hermes_plugin.memex.briefing import (
-    _ROUTING_GUIDE,
     _render_procedural_block,
     format_briefing_block,
 )
 
 
-def test_routing_guide_documents_procedure_namespace_and_record_outcome_pairing():
-    """The routing guide must document the procedure: namespace + outcome pairing."""
-    assert 'procedure:<verb>:<context-tag>' in _ROUTING_GUIDE
-    assert 'memex_record_outcome' in _ROUTING_GUIDE
-    assert 'target_type="kv_key"' in _ROUTING_GUIDE
-    assert 'include_history=true' in _ROUTING_GUIDE
+def test_kv_write_description_documents_procedure_namespace_and_record_outcome_pairing():
+    """The procedure: namespace and outcome pairing now live in the MCP
+    ``memex_kv_write`` description (authoritative source) and in the hermes-
+    plugin KV_WRITE_SCHEMA description (in-process mirror)."""
+    from memex_hermes_plugin.memex.tools import KV_WRITE_SCHEMA
+    from memex_mcp.server import mcp
+    import asyncio
+
+    # Hermes-side schema description (what hermes' agent loop sees).
+    hermes_desc = KV_WRITE_SCHEMA['description']
+    assert 'procedure:<verb>:<context-tag>' in hermes_desc
+    assert 'memex_record_outcome' in hermes_desc
+    assert 'target_type="kv_key"' in hermes_desc
+
+    # MCP-side description (what MCP clients like Claude Code see).
+    tool = asyncio.get_event_loop().run_until_complete(mcp.get_tool('memex_kv_write'))
+    mcp_desc = tool.description
+    assert 'procedure:<verb>:<context-tag>' in mcp_desc
+    assert 'memex_record_outcome' in mcp_desc
 
 
 def test_render_procedural_block_lists_top_observations_with_counters():

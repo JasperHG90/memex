@@ -88,36 +88,6 @@ class BriefingCache:
             self._ready.clear()
 
 
-_RESOLUTION_FLOW_PRIMER = """### When the user signals an outcome on prior advice (resolved / held / didn't work)
-
-Triggers cover BOTH directions: "that worked", "it's been holding", "lock the lesson in", "record as successful" (success); "stop suggesting X", "we removed it", "that didn't work" (failure).
-
-1. **Disambiguate first.** If scope is ambiguous — multiple candidate notes, no temporal anchor, or conflated issues — ASK before writing.
-
-2. **Route by info quality.** Title-fragment → `memex_find_note(query="...")`. Title unknown → `memex_memory_search`. Then pick a coverage path:
-   - **A: entity-anchored**: `memex_list_entities` → `memex_get_entity_mentions`. Structural; no rank miss.
-   - **B: cross-note semantic**: `memex_memory_search(top_k=10)` (default). Widen to 20 only if the first pass looks under-covered. Reading bodies of more than ~10 hits in one turn burns output budget and rarely improves judgment.
-   - **C: single-note PageIndex**: `memex_get_page_indices` → `memex_get_memory_units(chunk_ids=[...])`.
-
-3. **LLM-judge the candidates.** READ unit bodies; pick the outcome-relevant subset. NEVER bulk-write.
-
-4.+5. **Paired writes** against the judged-relevant subset. Pick the verb by the user's signal:
-   - Success signal → `memex_record_outcome(units=[{"unit_id":"...","verb":"helpful","reason":"..."}])`. No deprioritize.
-   - Failure signal → `memex_record_outcome(units=[{"unit_id":"...","verb":"not_helpful","reason":"..."}])` AND `memex_memory_deprioritize(unit_id=..., reason="...")`. Same subset.
-
-   **Virtual units cannot be deprioritized.** Memory units whose metadata contains `"virtual": true` (synthesized from MentalModel observations) have no DB row — calling `memex_memory_deprioritize` on their UUID returns 404. Before mutating, filter retrieval candidates: keep only units with `unit_metadata.virtual` unset or false. If the candidate set is empty after the filter, fall back to entity-anchored search (`memex_list_entities` → `memex_get_entity_mentions`) to recover real source units before pairing.
-
-   **`record_outcome` REQUIRES a target.** Pass `units=[{unit_id, verb, reason}, …]`. Calling `memex_record_outcome(success=True)` alone — without `units` and without `unit_ids` — is INVALID and the server will reject it. If you cannot find a target via steps 1-3, ASK the user which memory the outcome applies to rather than calling the tool with a bare success flag.
-
-   Orthogonal axes: `record_outcome` = MW gradient (append-only); `deprioritize` = binary surface state (reversible via `memory_restore`).
-
-**Imperfect recall is by design** — exploration is the safety net. Resolution is a GRADIENT across turns, not one-shot delete.
-
-**Historical / audit-query routing (separate path).** Triggers: "evolved", "used to", "history of", "what changed", "audit", "show me everything/hidden".
-- Specific unit → `memex_get_unit_history(unit_id)`.
-- Broad audit → `memex_memory_search(apply_pre_filter=False)`. Bypasses MW/FSFM/confidence filters; reranker boosts still apply."""
-
-
 _LAYER_ROUTING_PRIMER = LAYER_ROUTING_PRIMER_TABLE
 
 
@@ -130,38 +100,20 @@ When answering a question grounded in Memex content, cite the source note(s) inl
 - Do not fabricate titles or ids — if you cannot identify a specific source, say so explicitly rather than inventing one."""
 
 
-_STORAGE_MODEL_PRIMER = """### How Memex stores knowledge
+_AGENT_NUDGE = """### Working with Memex (agent-side reminders)
 
-Three layers:
-- **Notes** — source markdown. `note_key` upserts new versions; old stay queryable. Use `memex_append_note` to extend; `memex_add_note` for first capture or full replace.
-- **Memory units** — atomic facts/events from ingestion. **Append-only.** Contradiction detection runs at extraction time; note supersession cascades to stale. Don't edit/replace/delete units — add a new note to record a change.
-- **KV store** — namespaced operational state. Mutable upsert by exact key; entries support TTL.
+The MCP server already ships the retrieval routing, storage model, KV namespace rules, and the 5-step resolution flow inside its session instructions and per-tool descriptions. Read those first — they are authoritative. The notes below are only the agent-side framing that does not belong in tool descriptions.
 
-Reflection is a background loop synthesising observations into per-entity **mental models** with trend tracking (new/strengthening/stable/weakening/stale). Read-only — surface via search."""
-
-
-_ROUTING_GUIDE = """### How to use Memex tools
-
-- **Vault scoping** — `vault_ids=["my-vault"]` or `vault_ids=["*"]` for all. Omit for session-bound vault. `tags` filters note metadata, NOT vaults.
-- **Vault discovery** → `memex_list_vaults()` / `memex_get_vault_summary(vault_id="...")`.
-- **Title known** → `memex_find_note(query="fragment")`.
-- **Content lookup** → `memex_memory_search` AND `memex_note_search` in parallel. Use both only when genuinely needed.
-- **Broad/panoramic** → `memex_get_vault_summary` first (cheap, precomputed). Escalate to `memex_survey(query)` only if too coarse. Triggers: "what's in this vault", "give me an overview", "high-level picture of X", "everything you know about X", "comprehensive view of …". Do NOT compose a panoramic answer from `memex_memory_search` / `memex_note_search` — these are content-lookup tools and will miss the entity- and theme-level structure that `vault_summary` / `survey` are built to surface.
-- **Entities** → `memex_list_entities` → `memex_get_entity_mentions` / `memex_get_entity_cooccurrences`.
-- **Batch fetch** → `memex_get_entities(entity_ids=[...])` / `memex_get_memory_units(unit_ids=[...])`.
-- **Lineage** → `memex_get_memory_links(unit_ids=[...])` for typed links; `memex_get_lineage(entity_type=..., entity_id=...)` for provenance chains.
-- **KV store** — `memex_kv_write` is the canonical place to remember operational facts. When the user says "remember…", "I prefer…", "we use…", "default to…", or otherwise asks you to carry a fact forward, call `memex_kv_write(value, key)` — do NOT route to a generic memory verb; the KV store is the durable, namespaced surface that other sessions read back. Keys MUST start with `global:`, `user:`, `project:<id>:`, `app:<id>:`, or `procedure:<verb>:<context-tag>`. Choose the namespace by intent scope:
-  - `user:` for personal preferences / identity ("I prefer Neovim", "I'm a senior backend engineer" → `user:editor`, `user:role`)
-  - `project:<id>:` for repo/project-bound conventions ("this repo uses ruff", "we use 4-space indentation in this repo" → `project:<repo-id>:formatter`, `project:<repo-id>:indentation`)
-  - `global:` for cross-project ecosystem facts ("we standardise on Python 3.12 across all our projects" → `global:lang:python:version`)
-  - `app:<id>:` for agent/app-specific behaviour ("default to dark theme in Claude Code" → `app:claude-code:theme`)
-  - `procedure:<verb>:<context-tag>` for learned how-tos / adaptations to context (write here; track outcomes via `memex_record_outcome(target_type="kv_key", kv_key=..., success=...)`)
-  Read with `memex_kv_get(key)` (exact) or `memex_kv_search(query)` (semantic); enumerate with `memex_kv_list()`. For `procedure:` keys, `memex_kv_get(key, include_history=true)` returns the structured envelope with prior versions. Deletion is CLI-only (`memex kv delete`).
-- **Capturing work** — `memex_add_note` for NEW/replace; `memex_append_note(note_key=..., delta=...)` to extend existing. Prefer append over re-ingesting the whole body.
-- **Templates** → `memex_list_templates` for slugs; `memex_get_template(slug)` for the scaffold; `memex_add_note(..., template=slug)` for structured captures.
-- **Curating memory** — `memex_memory_deprioritize(unit_id, reason=...)` is NON-DESTRUCTIVE (unit stays on graph, recallable via `include_deprioritized=true`; rank drops). Pair with `memex_record_outcome(units=[{verb:"not_helpful", reason:"..."}])` when the agent found it wrong. Reversible via `memex_memory_restore`. Archive (CLI-only) is DESTRUCTIVE — prefer deprioritize unless PII removal is required.
-- **Synchronous consolidation** — `memex_memory_summarize_node(entity_id, scope='incremental'|'full')` when in-session facts conflict or scatter. `'incremental'` (default) consolidates new evidence only; `'full'` re-evaluates all (capped 1000 units). Rate-limited per (entity, vault); on rejection, response includes `retry_after_seconds`.
-- **Reconsolidate vs consolidate** — `memex_memory_reconsolidate(entity_id, vault_id)` is entity-scoped (contradiction detection + reflection); `memex_memory_consolidate(vault_id, dry_run)` is vault-scoped (batch deprioritizes low-MW + stale units, writes to maintenance ledger). Use `reconsolidate` on concrete contradiction signals; `consolidate` for periodic maintenance."""
+- **Outcome signals from the user are GRADIENT, not one-shot.** "That worked", "lock it in" → success verb. "Stop suggesting X", "that didn't work" → failure verb. Follow the 5-step flow on the `memex_record_outcome` / `memex_memory_deprioritize` descriptions before writing.
+- **Disambiguate before mutating.** If the user signal could plausibly target multiple units, ASK before paired-writes.
+- **KV namespace by scope qualifier (NOT grammatical person).** First-person pronouns alone do not pick the namespace; the *scope qualifier* in the request does. Scan for an explicit scope phrase before picking:
+  - No scope qualifier, identity-shaped ("Remember about me: I prefer Neovim", "I'm a senior backend engineer") → `user:` (e.g. `user:editor`, `user:role`).
+  - Scope = "this repo" / "this project" / "for this project" / "on <named project>" → `project:<id>:` (e.g. `project:<repo-id>:indentation`). **This wins even when the request opens with "I" or "my"**: "My preference for this project is Python 3.10" → `project:<id>:lang:python`, not `user:lang`.
+  - Scope = "across our projects" / "we standardise on" / cross-project ecosystem fact → `global:` (e.g. `global:lang:python:version`).
+  - Scope = "in <app-name>" / "default to … in Claude Code" → `app:<app-id>:` (e.g. `app:claude-code:theme`).
+  When two scope phrases compete (identity AND project), the *narrower* scope wins (project beats user). If genuinely ambiguous after reading the scope phrase, ASK which one before writing.
+- **Capture proactively but tersely.** When you finish a multi-step task, fix a non-obvious bug, learn a user preference, or resolve a tricky env issue, write a short note (`memex_add_note`, ≤300 tokens, no per-file changelogs).
+- **Imperfect recall is by design.** Exploration is the safety net; resolution compounds over turns."""
 
 
 def format_briefing_block(
@@ -183,10 +135,9 @@ def format_briefing_block(
     else:
         lines.append(f'Project: `{project_id}` · **No vault bound to this project.**')
 
-    lines.append('\n' + _STORAGE_MODEL_PRIMER)
     lines.append('\n' + _LAYER_ROUTING_PRIMER)
-    lines.append('\n' + _RESOLUTION_FLOW_PRIMER)
     lines.append('\n' + _CITATION_DISCIPLINE)
+    lines.append('\n' + _AGENT_NUDGE)
 
     lines.append(
         f'\nSession note key: `{session_note_key}`. Use '
@@ -200,8 +151,6 @@ def format_briefing_block(
         lines.append(
             f'\nTo bind this project to a vault, set `{project_vault_kv_key(project_id)}` to the vault name. Ask the user which vault to use.'
         )
-
-    lines.append('\n' + _ROUTING_GUIDE)
 
     if procedural_observations:
         lines.append('\n' + _render_procedural_block(procedural_observations))

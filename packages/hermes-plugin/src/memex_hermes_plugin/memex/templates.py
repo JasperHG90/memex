@@ -52,9 +52,9 @@ DIAGNOSTICS_SUMMARY_PROMPT_FRAGMENT = (
 # --- F43 --- (5-step user-confirmed-fix resolution flow + historical routing)
 # Verb-pair scaffolding for Hermes turns that handle "the X is fixed" prompts.
 # A Hermes turn can lean on this structured prompt rather than free-form
-# generation — see briefing.py `_RESOLUTION_FLOW_PRIMER` for the canonical text
-# shown in the system prompt; this fragment is the same flow rendered as a
-# tool-call planning template.
+# generation. Canonical text lives in
+# `memex_mcp._resolution_flow_descriptions` (sent on every tool discovery);
+# this fragment is the same flow rendered as a tool-call planning template.
 RESOLUTION_FLOW_PROMPT_FRAGMENT = (
     'When the user reports an issue resolved (§3.5 5-step flow):\n'
     '\n'

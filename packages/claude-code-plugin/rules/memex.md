@@ -6,18 +6,9 @@ ALWAYS preserve proper nouns, amounts, dates, qualifiers from the original quest
 ALWAYS search for the subject/activity, NOT the answer type.
 </constraint>
 
-## Memex retrieval routing
+## Authoritative sources
 
-- **Title known** → `memex_find_note(query="fragment")` → `memex_get_page_indices` + `memex_get_nodes`
-- **Relationships** → `memex_list_entities` → `memex_get_entity_cooccurrences` → `memex_get_entity_mentions`
-- **Content lookup** → `memex_memory_search` AND `memex_note_search` in parallel. Retry with `expand_query=true` if insufficient. Abstain if still nothing. `memory_search` returns facts across notes; `note_search` returns source docs. After `memory_search`, call `memex_get_notes_metadata`; skip after `note_search` (metadata inline). Read via `memex_get_page_indices` + `memex_get_nodes` (`memex_read_note` only when `total_tokens < 500`).
-- **Broad/panoramic** → `memex_survey(query)` (auto-decomposed parallel search) or entity exploration + search in parallel
-- **Vault overview** → `memex_get_vault_summary` + `memex_survey` in parallel
-- **Assets** → `memex_list_assets` → `memex_get_resources` when `has_assets: true`. Reproduce diagrams as Mermaid/ASCII. NEVER skip.
-
-Search results include `related_notes` and `links` — use these for inline relationship data.
-
-Do NOT redundantly search at session start — context is automatic.
+The MCP server ships the **retrieval routing**, **storage model**, **KV namespace rules**, and the **5-step resolution flow** inside its session instructions and per-tool descriptions. Follow those — they are the contract. This rule file only carries the agent-side framing that does not belong in tool descriptions.
 
 ## Memex capture — MANDATORY
 
@@ -31,14 +22,6 @@ Call `memex_add_note` (background: true, author: "claude-code") when:
 5. Resolved a tricky configuration/environment issue
 
 Do NOT save: per-file changelogs, info derivable from code, git history, the fix itself (save the insight why), ephemeral task details.
-
-## Memex KV store
-
-- `memex_kv_write(value, key)` / `memex_kv_get(key)` / `memex_kv_search(query)` / `memex_kv_list()`
-- Keys MUST start with: `global:`, `user:`, `project:<id>:`, `app:<id>:`, or `procedure:<verb>:<context-tag>`
-- `procedure:` namespace: compact, learned how-tos. Write via `memex_kv_write`, read active value via `memex_kv_get(key)`, inspect envelope (active value + version + 5-version history) via `memex_kv_get(key, include_history=true)`. Track outcomes via `memex_record_outcome(target_type="kv_key", kv_key=..., success=...)`.
-- Proactively store user preferences and conventions via `memex_kv_write`
-- Deletion is user-only — do NOT delete KV entries
 
 ## Memex citations — MANDATORY
 

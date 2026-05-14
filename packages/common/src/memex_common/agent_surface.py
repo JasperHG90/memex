@@ -1,21 +1,36 @@
 """Canonical agent-surface text shared across MCP / Hermes / Claude Code.
 
-This module is the **single source of truth** for prompt/primer/fragment
-strings that must stay byte-identical across more than one agent surface
-(per the agent-surface parity rule in CLAUDE.md). Surfaces import from
-here; they do NOT redeclare the same text locally.
+This module is the **single source of truth** for Tier 1b universal system-
+prompt content — the load-bearing agent doctrine every Memex-aware agent
+must internalise. Agent-specific framing (e.g. Hermes session-note wiring,
+Claude Code `author: "claude-code"` capture) lives in the per-agent surface
+and is layered ON TOP of `compose_universal()` output.
 
-Currently exports (4-layer memory-routing primer):
-- ``LAYER_ROUTING_PRIMER_PROSE`` — compact prose for MCP tool descriptions
-- ``LAYER_ROUTING_PRIMER_TABLE`` — markdown table for Hermes briefing /
-  Claude Code rule / CLAUDE.md
-- ``LAYER_ROUTING_PRIMER_FRAGMENT`` — concise tool-call planning fragment
-  for Hermes prompt templates
+See `CLAUDE.md` §"Agent-surface architecture" for the three-tier model.
 
-When the spec changes, edit the strings here and the parity test
-(`packages/hermes-plugin/tests/test_f3_layer_primer_parity.py`) will fail
-until every surface is updated.
+Style discipline (calibrated from Anthropic + indiehackers + Claude Code
+best practices):
+1. Concrete, imperative. Bare imperatives beat descriptive prose.
+2. Schema-shaped where structure helps; flat markdown otherwise.
+3. Bidirectional constraints — pair every prohibition with the right alternative.
+4. Keep rationale that aids generalization; drop pure justification.
+5. U-shaped composition — load-bearing constraints at top AND bottom.
+6. Deterministic output — no time/UUID/env in compose_universal(); cacheable prefix.
+
+Exports:
+- ``LAYER_ROUTING_PRIMER_*`` — 4-layer memory routing (existing).
+- ``STORAGE_MODEL``, ``RETRIEVAL_ROUTING``, ``RESOLUTION_FLOW``, ``AXES``,
+  ``HISTORICAL_ROUTING``, ``VIRTUAL_UNIT``, ``KV_NAMESPACE``, ``CITATIONS``
+  — universal sections.
+- ``compose_universal()`` — deterministic concatenation of universal sections
+  in canonical U-shaped order.
 """
+
+from __future__ import annotations
+
+# ---------------------------------------------------------------------------
+# 4-layer memory routing (existing; retained verbatim for backwards parity).
+# ---------------------------------------------------------------------------
 
 LAYER_ROUTING_PRIMER_PROSE = (
     'Memex stores four memory layers. Pick the right tool for the layer you need:\n'
@@ -73,8 +88,163 @@ LAYER_ROUTING_PRIMER_FRAGMENT = (
 )
 
 
+# ---------------------------------------------------------------------------
+# Tier 1b universal sections — added 2026-05-14.
+# Each section is LLM-optimized. Bare imperatives. Rationale-that-aids-
+# generalization only. No philosophical framing.
+# ---------------------------------------------------------------------------
+
+CRITICAL_HEADER = """## Critical constraints
+
+1. `memex_record_outcome` requires `units=[{unit_id, verb, reason}]`. Bare `success=True` → HTTP 400.
+2. Virtual units (`unit_metadata.virtual: true`) → `memex_memory_deprioritize` returns 404. Filter before paired writes.
+3. KV namespace = scope qualifier (NOT grammatical person). "I prefer X for this project" → `project:<id>:` not `user:`.
+4. Cite every load-bearing claim grounded in Memex content. Never fabricate titles/ids."""
+
+
+STORAGE_MODEL = """## Storage layers
+
+- **Notes** — markdown source. `memex_add_note` for first capture; `memex_append_note(note_key, delta)` to extend (never re-ingest whole body).
+- **Memory units** — append-only facts extracted from notes. NEVER edit/replace/delete. To record a change, ingest a new note; contradiction detection runs at extraction.
+- **KV store** — namespaced operational state. Mutable upsert by key.
+
+Reflection produces per-entity mental models (read-only — surface via `memex_memory_search` / `memex_survey`)."""
+
+
+RETRIEVAL_ROUTING = """## Retrieval routing
+
+- **Title fragment** → `memex_find_note` → `memex_get_page_indices` + `memex_get_nodes`.
+- **Relationships** → `memex_list_entities` → `memex_get_entity_cooccurrences` → `memex_get_entity_mentions`.
+- **Content lookup** → `memex_memory_search` AND `memex_note_search` in parallel. Retry `expand_query=true` if insufficient.
+- **Broad/panoramic** → `memex_get_vault_summary` first; escalate to `memex_survey(query)` if too coarse.
+- **KV** → `memex_kv_get(key)` exact / `memex_kv_search(query)` fuzzy / `memex_kv_list()`.
+
+After `memory_search`: call `memex_get_notes_metadata`. After `note_search`: metadata inline — do NOT call `memex_get_notes_metadata` again. `memex_read_note` only when `total_tokens < 500`."""
+
+
+RESOLUTION_FLOW = """## 5-step resolution flow
+
+Triggers: "that worked"/"lock it in" (success); "stop suggesting X"/"didn't work" (failure).
+
+1. **Disambiguate** — ambiguous scope (multiple candidates, no temporal anchor)? ASK before writing.
+2. **Route** — title → `memex_find_note`; content → `memex_memory_search`. Pick one:
+   - A entity-anchored: `memex_list_entities` → `memex_get_entity_mentions`.
+   - B cross-note: `memex_memory_search(top_k=30)`. `top_k` must be ≥30.
+   - C single-note: `memex_get_page_indices` → `memex_get_memory_units(chunk_ids=…)`.
+3. **Judge** — READ unit bodies; pick outcome-relevant subset. NEVER bulk-write.
+4. **+5. Paired writes** on the judged subset:
+   - Success → `memex_record_outcome(units=[{unit_id, verb:"helpful", reason}])`. No deprio.
+   - Failure → `memex_record_outcome(units=[{unit_id, verb:"not_helpful", reason}])` AND `memex_memory_deprioritize(unit_id, reason)`. SAME subset."""
+
+
+AXES = """## Orthogonal axes
+
+- `memex_record_outcome` = MW gradient (append-only; not reversible).
+- `memex_memory_deprioritize` = binary surface state (reversible via `memex_memory_restore`).
+
+User-confirmed-fix stamps BOTH."""
+
+
+HISTORICAL_ROUTING = """## Historical / audit routing
+
+Triggers: "evolved", "used to", "history of", "what changed", "audit".
+
+- Specific unit → `memex_get_unit_history(unit_id)`.
+- Broad audit → `memex_memory_search(apply_pre_filter=False)` (bypasses MW/FSFM/confidence filters)."""
+
+
+VIRTUAL_UNIT = """## Virtual units (cannot be deprioritized)
+
+`unit_metadata.virtual: true` units are synthesized from MentalModel observations — no DB row. `memex_memory_deprioritize` on their UUID returns 404.
+
+Filter candidates to `unit_metadata.virtual` unset/false BEFORE paired writes. If empty, fall back to entity-anchored search to recover real source units."""
+
+
+KV_NAMESPACE = """## KV namespace by scope qualifier
+
+The scope qualifier picks the namespace, NOT the grammatical person.
+
+- No scope, identity-shaped ("Remember about me: I prefer Neovim") → `user:` (e.g. `user:editor`).
+- "this repo"/"this project"/"on <named project>" → `project:<id>:`. **Wins even when request opens with "I" or "my"**: "My preference for this project is Python 3.10" → `project:<id>:lang:python`, NOT `user:lang`.
+- "across our projects"/"we standardise on" → `global:`.
+- "in <app-name>" → `app:<app-id>:`.
+- Learned how-tos → `procedure:<verb>:<context-tag>`; pair with `memex_record_outcome(target_type="kv_key", kv_key=…)`.
+
+Narrower scope wins (project beats user). Ambiguous? ASK before writing.
+
+<example>"I prefer Neovim" → memex_kv_write(value="Neovim", key="user:editor")</example>
+<example>"My preference for this project is Python 3.10" → memex_kv_write(value="3.10", key="project:<repo-id>:lang:python")</example>"""
+
+
+CITATIONS = """## Citations
+
+Cite source notes inline for every claim grounded in Memex content: `…claim [note-title-or-id].`
+
+One reference per load-bearing claim. Never fabricate titles or ids — say "I cannot identify a specific source" instead."""
+
+
+CRITICAL_FOOTER = """## Critical reminders
+
+- `memex_record_outcome`: `units=[{unit_id, verb, reason}]`. Bare `success=True` → 400.
+- Virtual units (`metadata.virtual: true`) → deprio returns 404; filter them.
+- KV namespace: scope qualifier wins. "for this project" → `project:<id>:` even with "I"/"my".
+- Cite inline; never fabricate."""
+
+
+# ---------------------------------------------------------------------------
+# Composer — deterministic universal block (Tier 1b).
+# ---------------------------------------------------------------------------
+
+
+def compose_universal() -> str:
+    """Return the universal Tier 1b system-prompt block, in canonical U-shaped order.
+
+    Identical bytes on every call (deterministic). No time, UUID, or env state.
+    Suitable for cacheable prompt prefix (per dbreunig's Claude Code cache-
+    boundary finding).
+
+    Composition order (primacy → middle → recency):
+        CRITICAL_HEADER → STORAGE_MODEL → RETRIEVAL_ROUTING →
+        RESOLUTION_FLOW → AXES → HISTORICAL_ROUTING → VIRTUAL_UNIT →
+        KV_NAMESPACE → CITATIONS → CRITICAL_FOOTER
+
+    ``LAYER_ROUTING_PRIMER_TABLE`` is NOT included by default — it overlaps
+    with ``RETRIEVAL_ROUTING`` (by-query-type vs by-layer decomposition of
+    the same routing decisions). Agents that want the 4-layer table can
+    import and append it separately.
+    """
+    return '\n\n'.join(
+        [
+            CRITICAL_HEADER,
+            STORAGE_MODEL,
+            RETRIEVAL_ROUTING,
+            RESOLUTION_FLOW,
+            AXES,
+            HISTORICAL_ROUTING,
+            VIRTUAL_UNIT,
+            KV_NAMESPACE,
+            CITATIONS,
+            CRITICAL_FOOTER,
+        ]
+    )
+
+
 __all__ = [
+    # Existing 4-layer routing primer (Tier 1b component).
     'LAYER_ROUTING_PRIMER_FRAGMENT',
     'LAYER_ROUTING_PRIMER_PROSE',
     'LAYER_ROUTING_PRIMER_TABLE',
+    # New universal sections.
+    'AXES',
+    'CITATIONS',
+    'CRITICAL_FOOTER',
+    'CRITICAL_HEADER',
+    'HISTORICAL_ROUTING',
+    'KV_NAMESPACE',
+    'RESOLUTION_FLOW',
+    'RETRIEVAL_ROUTING',
+    'STORAGE_MODEL',
+    'VIRTUAL_UNIT',
+    # Composer.
+    'compose_universal',
 ]

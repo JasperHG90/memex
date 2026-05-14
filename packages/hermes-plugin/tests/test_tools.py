@@ -3347,11 +3347,22 @@ def test_hermes_routes_structured_capture_to_templates_via_gemini():
     """
     import litellm
 
-    from memex_hermes_plugin.memex.briefing import _ROUTING_GUIDE
+    from memex_hermes_plugin.memex.briefing import format_briefing_block
     from memex_hermes_plugin.memex.tools import (
         GET_TEMPLATE_SCHEMA,
         LIST_TEMPLATES_SCHEMA,
         RETAIN_SCHEMA,
+    )
+
+    # Post-2026-05-14 compression: routing prose is no longer a standalone
+    # constant on the briefing. Use the full assembled briefing block — same
+    # text the production agent sees.
+    _routing_system_prompt = format_briefing_block(
+        '',
+        vault_id='v',
+        project_id='p',
+        session_note_key='k',
+        kv_instructions_if_no_vault=False,
     )
 
     tool_defs = [
@@ -3369,7 +3380,7 @@ def test_hermes_routes_structured_capture_to_templates_via_gemini():
     resp = litellm.completion(
         model='gemini/gemini-3-flash-preview',
         messages=[
-            {'role': 'system', 'content': _ROUTING_GUIDE},
+            {'role': 'system', 'content': _routing_system_prompt},
             {
                 'role': 'user',
                 'content': (

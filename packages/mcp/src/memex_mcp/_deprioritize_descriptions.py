@@ -18,7 +18,15 @@ MEMEX_MEMORY_DEPRIORITIZE_DESCRIPTION = (
     'The unit remains accessible via include_deprioritized=true retrieval. To restore,\n'
     'the user runs `memex memory restore <id>`. This is non-destructive — prefer it\n'
     'over hard delete in almost all cases. Use sparingly: a small number of high-quality\n'
-    'deprioritizations is more valuable than aggressive pruning.'
+    'deprioritizations is more valuable than aggressive pruning.\n'
+    '\n'
+    'Virtual units cannot be deprioritized. Memory units whose metadata contains\n'
+    '`"virtual": true` (synthesized from MentalModel observations) have no DB row —\n'
+    'calling memory_deprioritize on their UUID returns 404. Before calling, filter\n'
+    'retrieval candidates to those with `unit_metadata.virtual` unset or false. If\n'
+    'the candidate set is empty after the filter, fall back to entity-anchored\n'
+    'search (`memex_list_entities` → `memex_get_entity_mentions`) to recover real\n'
+    'source units.'
 )
 
 MEMEX_MEMORY_RESTORE_DESCRIPTION = (

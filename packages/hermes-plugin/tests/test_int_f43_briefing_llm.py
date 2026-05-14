@@ -1,9 +1,11 @@
-"""F43 — Real-LLM golden tests against the Hermes briefing primer.
+"""F43 — Real-LLM golden tests against the Hermes briefing + tool descriptions.
 
 Drives a real LLM agent turn ("Telegram notifications are now resolved") with
-the Hermes session-briefing system block in scope (which carries the
-``_RESOLUTION_FLOW_PRIMER`` + ``_STORAGE_MODEL_PRIMER`` per F43) and asserts
-the same canonical §3.5 Step 1-5 expectations as the MCP-side test.
+the Hermes session-briefing system block in scope (which carries citation +
+KV scope + outcome-routing nudges after 2026-05-14 compression) plus the
+MCP-mirrored tool descriptions (which carry the 5-step flow + virtual-unit
+warning + bare-success-invalid warning). Asserts the same canonical §3.5
+Step 1-5 expectations as the MCP-side test.
 
 Skipped unless GEMINI_API_KEY / GOOGLE_API_KEY is set; uses the same model
 pinning as the rest of the repo's LLM-gated tests

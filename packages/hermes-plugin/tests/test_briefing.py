@@ -1,4 +1,17 @@
-"""Tests for briefing cache + block formatting."""
+"""Tests for briefing cache + block formatting.
+
+After 2026-05-14 compression: the briefing no longer carries the storage
+model, retrieval routing guide, or 5-step resolution flow — those moved to
+the MCP server ``instructions`` field and per-tool descriptions. The
+briefing now carries only the agent-side nudges (citation discipline,
+KV scope-qualifier rule, outcome verb routing, capture cadence) plus the
+layer-routing primer table.
+
+OrangeHermes regression fences that used to live here have been migrated
+to ``packages/mcp/tests/test_mcp_instructions_regression.py`` (storage
+model append-only invariant) and ``test_kv_write_description.py`` (KV
+"not for facts learned from content" rule).
+"""
 
 from __future__ import annotations
 
@@ -8,8 +21,8 @@ from uuid import uuid4
 
 from memex_hermes_plugin.memex.briefing import (
     BriefingCache,
-    _ROUTING_GUIDE,
-    _STORAGE_MODEL_PRIMER,
+    _AGENT_NUDGE,
+    _CITATION_DISCIPLINE,
     format_briefing_block,
 )
 
@@ -32,7 +45,6 @@ def test_cache_returns_result():
     api = Mock()
     api.get_session_briefing = AsyncMock(return_value='# Briefing\nRecent work: X.')
     cache.start_fetch(api, vault_id=uuid4(), budget=2000, project_id='p')
-    # Block up to 5s for the single-call coroutine to finish.
     assert 'Briefing' in cache.get(timeout=5.0)
 
 
@@ -70,9 +82,9 @@ def test_format_block_with_vault_and_briefing():
     assert '# Recent activity' in block
 
 
-def test_format_block_contains_routing_guidance():
-    """Routing advice (parallel for content lookup, survey for broad, etc.) lives here,
-    not in per-tool descriptions."""
+def test_format_block_carries_agent_nudge():
+    """The agent-side nudges (citations, KV scope rule, outcome verbs, capture)
+    are the briefing's payload after compression."""
     block = format_briefing_block(
         '',
         vault_id='v',
@@ -80,9 +92,21 @@ def test_format_block_contains_routing_guidance():
         session_note_key='k',
         kv_instructions_if_no_vault=False,
     )
-    assert 'How to use Memex tools' in block
-    assert 'memex_survey' in block
-    assert 'memex_list_entities' in block
+    assert 'Working with Memex (agent-side reminders)' in block
+    assert 'Citing sources' in block
+
+
+def test_format_block_carries_layer_routing_primer():
+    """The 4-layer routing table is the only big primer that stays in the briefing
+    (canonical source is ``memex_common.agent_surface.LAYER_ROUTING_PRIMER_TABLE``)."""
+    block = format_briefing_block(
+        '',
+        vault_id='v',
+        project_id='p',
+        session_note_key='k',
+        kv_instructions_if_no_vault=False,
+    )
+    assert 'Memory layers and tool routing' in block
 
 
 def test_format_block_without_vault_adds_kv_guidance():
@@ -105,86 +129,16 @@ def test_format_block_skips_briefing_section_when_empty():
         session_note_key='k',
         kv_instructions_if_no_vault=False,
     )
-    # F43 added the resolution-flow primer which uses markdown tables (the
-    # `|---|---|` row contains '---'). The intent of this test is "no
-    # briefing-section separator was appended" — that separator is the
-    # `\n---\n` literal added in format_briefing_block only when the
-    # `briefing` argument is non-empty.
+    # The `\n---\n` literal is the briefing-section separator added in
+    # format_briefing_block only when the `briefing` argument is non-empty.
     assert '\n---\n' not in block
 
 
-# --- Routing-guide bullets (AC-087..AC-092) ---
+# --- Compression invariants: things that should NO LONGER be in the briefing ---
 
 
-def test_routing_guide_explains_vault_scoping():
-    """AC-087: Vault scoping bullet must name vault_ids and warn against tags."""
-    assert '**Vault scoping**' in _ROUTING_GUIDE
-    assert 'vault_ids' in _ROUTING_GUIDE
-    assert 'Do NOT use `tags`' in _ROUTING_GUIDE
-
-
-def test_routing_guide_documents_vault_discovery():
-    """AC-088: Vault discovery bullet names list_vaults and get_vault_summary."""
-    assert '**Vault discovery**' in _ROUTING_GUIDE
-    assert 'memex_list_vaults' in _ROUTING_GUIDE
-    assert 'memex_get_vault_summary' in _ROUTING_GUIDE
-
-
-def test_routing_guide_title_bullet_uses_find_note():
-    """AC-089: Title known bullet must reference memex_find_note, not memex_note_search."""
-    assert '**Title known**' in _ROUTING_GUIDE
-    assert 'memex_find_note' in _ROUTING_GUIDE
-    # Title-known bullet must no longer point at note_search for title lookups.
-    title_idx = _ROUTING_GUIDE.index('**Title known**')
-    next_bullet = _ROUTING_GUIDE.find('\n- **', title_idx)
-    title_bullet = (
-        _ROUTING_GUIDE[title_idx:next_bullet] if next_bullet != -1 else _ROUTING_GUIDE[title_idx:]
-    )
-    assert 'memex_note_search' not in title_bullet
-
-
-def test_routing_guide_documents_kv_store():
-    """AC-090: KV store bullet names all 4 KV tools and 4 namespace prefixes."""
-    assert '**KV store**' in _ROUTING_GUIDE
-    for tool in ('memex_kv_write', 'memex_kv_get', 'memex_kv_search', 'memex_kv_list'):
-        assert tool in _ROUTING_GUIDE
-    for prefix in ('`global:`', '`user:`', '`project:<id>:`', '`app:<id>:`'):
-        assert prefix in _ROUTING_GUIDE
-    assert 'CLI-only' in _ROUTING_GUIDE
-
-
-def test_routing_guide_documents_lineage():
-    """AC-091: Lineage bullet names get_memory_links and get_lineage."""
-    assert '**Lineage / relationships**' in _ROUTING_GUIDE
-    assert 'memex_get_memory_links' in _ROUTING_GUIDE
-    assert 'memex_get_lineage' in _ROUTING_GUIDE
-    # Mention of typed-link kinds and provenance chain.
-    assert 'temporal' in _ROUTING_GUIDE
-    assert 'causal' in _ROUTING_GUIDE
-    assert 'mental_model' in _ROUTING_GUIDE
-
-
-def test_routing_guide_documents_batch_fetch():
-    """AC-092: Batch fetch bullet names get_entities and get_memory_units."""
-    assert '**Batch fetch**' in _ROUTING_GUIDE
-    assert 'memex_get_entities' in _ROUTING_GUIDE
-    assert 'memex_get_memory_units' in _ROUTING_GUIDE
-
-
-def test_routing_guide_documents_templates():
-    """Templates bullet must surface the list → get → retain(template=) flow.
-
-    Without this, agents skip templates even for content that maps cleanly onto
-    a built-in (ADR, RFC, retro, technical brief).
-    """
-    assert '**Templates for structured captures**' in _ROUTING_GUIDE
-    assert 'memex_list_templates' in _ROUTING_GUIDE
-    assert 'memex_get_template' in _ROUTING_GUIDE
-    assert 'template=slug' in _ROUTING_GUIDE
-
-
-def test_routing_guide_bullets_render_in_formatted_block():
-    """Guide must flow through format_briefing_block end-to-end."""
+def test_briefing_does_not_carry_storage_model_primer():
+    """Storage model moved to MCP server `instructions` field — no duplicate here."""
     block = format_briefing_block(
         '',
         vault_id='v',
@@ -192,58 +146,12 @@ def test_routing_guide_bullets_render_in_formatted_block():
         session_note_key='k',
         kv_instructions_if_no_vault=False,
     )
-    for marker in (
-        '**Vault scoping**',
-        '**Vault discovery**',
-        '**Batch fetch**',
-        '**Lineage / relationships**',
-        '**KV store**',
-        '**Templates for structured captures**',
-        'memex_find_note',
-    ):
-        assert marker in block
+    # The old heading is gone. Storage-model facts live in MCP server instructions.
+    assert '### How Memex stores knowledge' not in block
 
 
-# --- Storage-model primer (the OrangeHermes regression fence) ---
-
-
-def test_storage_model_primer_names_three_layers():
-    """The primer must teach all three storage layers by name."""
-    assert '**Notes**' in _STORAGE_MODEL_PRIMER
-    assert '**Memory units**' in _STORAGE_MODEL_PRIMER
-    assert '**KV store**' in _STORAGE_MODEL_PRIMER
-
-
-def test_storage_model_primer_states_append_only_invariant():
-    """Memory units are append-only; the primer must say so and forbid mutation."""
-    assert 'Append-only' in _STORAGE_MODEL_PRIMER or 'append-only' in _STORAGE_MODEL_PRIMER
-    # The verbs must appear inside an explicit prohibition. A revert that
-    # turns the bullet permissive (e.g. "you can edit, replace, or delete...")
-    # would still satisfy a bare "verb in primer" check yet leak the
-    # OrangeHermes regression — so require a negation phrase too.
-    negation_phrases = (
-        "Don't try to edit, replace, or delete",
-        'Do NOT try to edit, replace, or delete',
-        'Do not try to edit, replace, or delete',
-    )
-    # The negation phrase already names ``edit``, ``replace``, and ``delete`` —
-    # checking the verbs separately would only hide a regression that splits
-    # the prohibition into one sentence per verb.
-    assert any(p in _STORAGE_MODEL_PRIMER for p in negation_phrases), (
-        f'primer must contain an explicit prohibition like {negation_phrases[0]!r}'
-    )
-
-
-def test_storage_model_primer_describes_reflection_as_read_only():
-    """The primer must teach that reflection's output is read-only — observations and
-    mental models are produced by reflection, not written by the agent."""
-    assert 'reflection' in _STORAGE_MODEL_PRIMER.lower()
-    assert 'observations' in _STORAGE_MODEL_PRIMER.lower()
-    assert 'read-only' in _STORAGE_MODEL_PRIMER
-
-
-def test_storage_model_primer_renders_in_formatted_block():
-    """Primer must render in the system-prompt block."""
+def test_briefing_does_not_carry_routing_guide():
+    """Retrieval routing moved to MCP server `instructions` field — no duplicate here."""
     block = format_briefing_block(
         '',
         vault_id='v',
@@ -251,13 +159,12 @@ def test_storage_model_primer_renders_in_formatted_block():
         session_note_key='k',
         kv_instructions_if_no_vault=False,
     )
-    assert '### How Memex stores knowledge' in block
-    assert '**Memory units**' in block
-    assert 'Append-only' in block or 'append-only' in block
+    assert '### How to use Memex tools' not in block
 
 
-def test_storage_model_primer_precedes_routing_guide():
-    """Primer must appear before the routing guide so the agent reads the model first."""
+def test_briefing_does_not_carry_resolution_flow_primer():
+    """5-step resolution flow lives in MCP `memex_record_outcome` /
+    `memex_memory_deprioritize` tool descriptions — no duplicate here."""
     block = format_briefing_block(
         '',
         vault_id='v',
@@ -265,17 +172,45 @@ def test_storage_model_primer_precedes_routing_guide():
         session_note_key='k',
         kv_instructions_if_no_vault=False,
     )
-    assert block.index('### How Memex stores knowledge') < block.index('### How to use Memex tools')
+    # The flow's step-by-step prose is now in the tool descriptions, not here.
+    # The briefing only carries a one-line nudge pointing at those descriptions.
+    assert 'Disambiguate first' not in block
+    assert 'Step 1 — Disambiguate' not in block
 
 
-def test_kv_bullet_no_longer_persists_facts():
-    """The KV bullet in the routing guide must not advertise itself as a fact store.
+# --- Agent-side nudges (the briefing's actual payload) ---
 
-    Regression fence for the OrangeHermes muddle: agents previously read 'persist
-    facts and preferences across sessions' and wrote system-status flags into KV
-    to mark stale memory units 'resolved'.
-    """
-    kv_idx = _ROUTING_GUIDE.index('**KV store**')
-    next_bullet = _ROUTING_GUIDE.find('\n- **', kv_idx)
-    kv_bullet = _ROUTING_GUIDE[kv_idx:next_bullet] if next_bullet != -1 else _ROUTING_GUIDE[kv_idx:]
-    assert 'persist facts' not in kv_bullet
+
+def test_citation_discipline_in_briefing():
+    """Citations are an agent-side output property, not a tool contract; stays in briefing."""
+    assert 'Citing sources' in _CITATION_DISCIPLINE
+    assert 'square brackets' in _CITATION_DISCIPLINE
+    assert 'Do not fabricate' in _CITATION_DISCIPLINE
+
+
+def test_agent_nudge_carries_scope_qualifier_rule():
+    """KV namespace nudge: scope qualifier (not grammatical person) picks the namespace.
+    This is the disambiguation rule that the hermes agent uses to route 'my preference
+    for this project' to `project:` instead of `user:`."""
+    assert 'scope qualifier' in _AGENT_NUDGE
+    # The four namespaces all show up as routing targets.
+    for ns in ('user:', 'project:', 'global:', 'app:'):
+        assert ns in _AGENT_NUDGE
+    # The disambiguating example.
+    assert 'this project' in _AGENT_NUDGE
+
+
+def test_agent_nudge_carries_outcome_verb_routing():
+    """Hermes-specific nudge: map user signals to record_outcome verbs.
+    The tool description carries the contract; this nudges the agent to recognize
+    the signal phrases."""
+    assert 'success verb' in _AGENT_NUDGE.lower() or 'success signal' in _AGENT_NUDGE.lower()
+    assert 'memex_record_outcome' in _AGENT_NUDGE
+    assert 'memex_memory_deprioritize' in _AGENT_NUDGE
+
+
+def test_agent_nudge_carries_capture_cadence():
+    """The capture nudge tells the agent when to write a note proactively.
+    Token budget cap is the load-bearing assertion (resists drift toward verbose notes)."""
+    assert 'memex_add_note' in _AGENT_NUDGE
+    assert '300 tokens' in _AGENT_NUDGE
