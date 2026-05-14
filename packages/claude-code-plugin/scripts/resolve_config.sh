@@ -15,6 +15,13 @@
 _memex_emit_systemMessage() {
     if [ "${MEMEX_RESOLVE_VERBOSE:-0}" = "1" ]; then
         cat
+        # Signal to the sourcing hook script that we already emitted a JSON
+        # document on stdout; the outer script must NOT emit a second one
+        # (Claude Code expects exactly one per hook invocation). Set ONLY
+        # when emission actually happened — the variable name encodes the
+        # invariant "emitted ↔ flag set", and a non-verbose code path that
+        # set the flag without emitting would be a silent lie.
+        export MEMEX_HOOK_ALREADY_EMITTED=1
     fi
 }
 
@@ -24,10 +31,6 @@ if ! command -v uvx >/dev/null 2>&1; then
 EOF
     # Stub out memex so callers can still source us safely; calls just fail.
     memex() { return 1; }
-    # Signal to the sourcing hook script that we already emitted the
-    # user-actionable JSON document on stdout; the outer script must NOT
-    # emit a second JSON document (Claude Code expects exactly one).
-    export MEMEX_HOOK_ALREADY_EMITTED=1
     return 0 2>/dev/null || exit 0
 fi
 

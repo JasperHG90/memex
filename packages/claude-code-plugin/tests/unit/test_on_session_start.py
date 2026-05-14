@@ -206,6 +206,51 @@ def test_agent_surface_failure_falls_back_to_briefing_only(
     assert '<mock-agent-surface' not in ctx
 
 
+def test_uvx_missing_emits_exactly_one_json_document(
+    mock_memex: MockMemex, temp_git_repo: Path, tmp_path: Path
+) -> None:
+    """When ``uvx`` is absent, ``resolve_config.sh`` emits the
+    user-actionable systemMessage AND signals
+    ``MEMEX_HOOK_ALREADY_EMITTED=1``. The outer hook MUST exit before
+    writing a second JSON document — Claude Code's SessionStart contract
+    is one document per invocation. Pinned here so a future refactor that
+    drops the flag set / check fails CI rather than silently doubling
+    output."""
+    # Construct a PATH that contains NO uvx (use only system bins).
+    sandbox_bin = tmp_path / 'no-uvx'
+    sandbox_bin.mkdir()
+    env_no_uvx = dict(mock_memex.env)
+    env_no_uvx['PATH'] = f'{sandbox_bin}:/usr/bin:/bin'
+
+    result = run_script(
+        'on_session_start.sh',
+        stdin=_session_start_payload(),
+        env=env_no_uvx,
+        cwd=temp_git_repo,
+    )
+
+    # Exactly one parseable JSON document on stdout.
+    docs = [line for line in result.stdout.split('}\n{') if line.strip()]
+    # `split` above handles two adjacent JSON objects on the SAME line; we also
+    # handle them on separate lines by checking total parseability.
+    stdout = result.stdout.strip()
+    assert stdout, f'no stdout emitted; stderr={result.stderr!r}'
+    # Strict single-document check: the entire stdout must parse as one
+    # JSON object.
+    try:
+        parsed = json.loads(stdout)
+    except json.JSONDecodeError as e:
+        raise AssertionError(
+            f'stdout is not a single JSON document — uvx-missing path emitted '
+            f'≥2 documents. stdout={stdout!r}; parse error={e!r}; '
+            f'split-detection: {docs!r}'
+        ) from None
+
+    # And it must be the uvx-missing systemMessage, not a downstream one.
+    assert 'systemMessage' in parsed
+    assert 'uvx' in parsed['systemMessage']
+
+
 def test_temp_files_cleaned_up_on_success(mock_memex: MockMemex, temp_git_repo: Path) -> None:
     """The hook's EXIT trap removes both `tmp_surface` and `tmp_briefing`
     on the success path. Verify by listing /tmp before/after and asserting

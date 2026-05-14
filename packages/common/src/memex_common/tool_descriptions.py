@@ -157,7 +157,7 @@ MEMEX_KV_WRITE_DESC = (
     '\n'
     'When to call: proactively, when the user says "remember…", "I prefer…", '
     '"we use…", "default to…". For namespace selection rules, see the system '
-    'prompt §KV_NAMESPACE (or `memex agent-surface --for=universal`).\n'
+    'prompt §KV_NAMESPACE (or `memex agent-surface universal`).\n'
     '\n'
     'Optional: ttl_seconds (entry auto-expires; omit for no expiration). '
     'Generates a semantic embedding for fuzzy lookup via memex_kv_search.\n'

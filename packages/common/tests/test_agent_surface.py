@@ -170,3 +170,23 @@ def test_header_and_footer_both_mention_kv_scope_rule() -> None:
 def test_header_and_footer_both_mention_citations() -> None:
     assert 'Cite' in ags.CRITICAL_HEADER or 'cite' in ags.CRITICAL_HEADER.lower()
     assert 'Cite' in ags.CRITICAL_FOOTER or 'cite' in ags.CRITICAL_FOOTER.lower()
+
+
+def test_no_bare_metadata_virtual_attribute_path_anywhere() -> None:
+    """Round-2 trip-wire: the virtual-unit attribute path is
+    ``unit_metadata.virtual``, NOT ``metadata.virtual``. A bare
+    ``metadata.virtual`` reappearing in any section would silently mislead
+    agents into filtering by a non-existent attribute and let virtual units
+    leak through to ``memex_memory_deprioritize`` (which then returns 404).
+
+    The required-keyword test in this file pins ``unit_metadata.virtual``
+    EXISTS, but ``'metadata.virtual' in s`` is True for both forms (the
+    bug substring is a tail of the correct one). This trip-wire asserts
+    every occurrence of ``metadata.virtual`` is prefixed by ``unit_``."""
+    out = ags.compose_universal()
+    # Remove every legitimate occurrence; what's left should be empty.
+    residual = out.replace('unit_metadata.virtual', '')
+    assert 'metadata.virtual' not in residual, (
+        'Bare `metadata.virtual` (wrong attribute path) leaked into '
+        '`compose_universal()` output. Use `unit_metadata.virtual`.'
+    )

@@ -56,23 +56,14 @@ def test_hermes_schema_description_is_ssot_object(constant_name: str, schema_nam
 
 def test_every_tool_descriptions_export_has_a_hermes_pairing() -> None:
     """If ``memex_common.tool_descriptions`` exports a new ``MEMEX_*_DESC``
-    constant, the corresponding Hermes schema must either be added to
-    ``_PAIRINGS`` above OR the new constant explicitly excluded (e.g.
-    MCP-only tools that Hermes does not mirror).
-
-    Today the only exclusions are tools Hermes does not register in its
-    schema set; if you add a new excluded constant, add it to
-    ``_HERMES_EXCLUDED`` with a one-line reason.
-    """
+    constant, the corresponding Hermes schema MUST be added to ``_PAIRINGS``
+    above. Today every export is mirrored — no legitimate exclusions exist.
+    If a real exclusion arises later, re-introduce an exclusion set with a
+    paired test that exercises the path (YAGNI until then)."""
     paired = {p[0] for p in _PAIRINGS}
     exported = {n for n in common_descs.__all__ if n.startswith('MEMEX_')}
-    # No Hermes-excluded tool_descriptions exports today; tighten the
-    # invariant by asserting every export is paired. Add to the
-    # exclusions tuple here if a legitimate exclusion arises.
-    _HERMES_EXCLUDED: frozenset[str] = frozenset()
-    unaccounted = exported - paired - _HERMES_EXCLUDED
+    unaccounted = exported - paired
     assert not unaccounted, (
         f'New `MEMEX_*_DESC` exports without a Hermes identity pairing: '
-        f'{sorted(unaccounted)!r}. Add them to `_PAIRINGS` in this test '
-        '(or to `_HERMES_EXCLUDED` if Hermes legitimately does not mirror them).'
+        f'{sorted(unaccounted)!r}. Add them to `_PAIRINGS` in this test.'
     )
