@@ -100,6 +100,28 @@ def test_phrase_not_in_mcp_instructions(phrase: str) -> None:
     )
 
 
+@pytest.mark.parametrize('phrase', _BANNED_UNIVERSAL_PHRASES)
+def test_phrase_not_in_tier_2_harnesses(phrase: str) -> None:
+    """Universal Tier 1b phrases must not leak into the Tier 2 harness
+    strings either. The harnesses are agent-specific framing layered on
+    top of ``compose_universal()`` — duplicating universal content there
+    re-creates the drift class the SSOT eliminates."""
+    from memex_common.agent_harnesses import CLAUDE_CODE_HARNESS, HERMES_HARNESS
+
+    if phrase in HERMES_HARNESS:
+        raise AssertionError(
+            f'Universal phrase {phrase!r} leaked into HERMES_HARNESS. '
+            'Tier 2 harnesses must not duplicate Tier 1b content '
+            '(it already arrives via `compose_universal()`).'
+        )
+    if phrase in CLAUDE_CODE_HARNESS:
+        raise AssertionError(
+            f'Universal phrase {phrase!r} leaked into CLAUDE_CODE_HARNESS. '
+            'Tier 2 harnesses must not duplicate Tier 1b content '
+            '(it already arrives via `compose_universal()`).'
+        )
+
+
 def test_mcp_instructions_references_agent_surface() -> None:
     """``instructions=`` must point composing agents at the SSOT."""
     text = getattr(mcp, 'instructions', None) or ''

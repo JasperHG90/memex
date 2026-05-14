@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 from memex_common.agent_surface import (
+    HISTORICAL_ROUTING as _CANONICAL_HISTORICAL_ROUTING,
     LAYER_ROUTING_PRIMER_FRAGMENT as _CANONICAL_LAYER_ROUTING_PRIMER_FRAGMENT,
+    RESOLUTION_FLOW as _CANONICAL_RESOLUTION_FLOW,
 )
 
 # Template used for the per-session transcript note ingested on exit.
@@ -49,41 +51,11 @@ DIAGNOSTICS_SUMMARY_PROMPT_FRAGMENT = (
 )
 
 
-# --- F43 --- (5-step user-confirmed-fix resolution flow + historical routing)
-# Verb-pair scaffolding for Hermes turns that handle "the X is fixed" prompts.
-# A Hermes turn can lean on this structured prompt rather than free-form
-# generation.
-#
-# NOTE (2026-05-14 three-tier refactor): the SAME 5-step flow now lives
-# canonically in ``memex_common.agent_surface.RESOLUTION_FLOW`` and arrives
-# in every Memex-aware agent's system prompt via ``compose_universal()``.
-# This fragment is the *prompt-template form* of that flow — it shows up
-# inside a per-turn DSPy/LiteLLM scaffolding prompt, not the system prompt.
-# That use-case is distinct enough to warrant a separate rendering
-# (sequential numbered steps, suitable for chain-of-thought scaffolding)
-# but the prose must stay aligned with ``agent_surface.RESOLUTION_FLOW``.
-# If you edit one, audit the other.
-RESOLUTION_FLOW_PROMPT_FRAGMENT = (
-    'When the user reports an issue resolved (§3.5 5-step flow):\n'
-    '\n'
-    '  1. DISAMBIGUATE — if scope is ambiguous, ASK before writing.\n'
-    '  2. ROUTE — title-fragment → memex_find_note;\n'
-    '     content-only → memex_memory_search; then pick:\n'
-    '       (A) entity-anchored: memex_list_entities → memex_get_entity_mentions\n'
-    '       (B) cross-note semantic: memex_memory_search(top_k>=30, after=...)\n'
-    '       (C) single-note: memex_get_page_indices → memex_get_memory_units(chunk_ids=[...])\n'
-    '  3. JUDGE — read candidate unit bodies; LLM-pick the fix-relevant subset.\n'
-    '  4. RECORD — for each judged-relevant unit:\n'
-    "     memex_record_outcome(units=[{'unit_id':'...','verb':'not_helpful','reason':'...'}])\n"
-    '  5. DEPRIORITIZE — for the SAME subset:\n'
-    "     memex_memory_deprioritize(unit_id=..., reason='...')\n"
-    '\n'
-    'BOTH writes (steps 4 + 5) against the SAME subset only — never bulk-write\n'
-    'against the raw candidate set. The two verbs are orthogonal axes:\n'
-    'record_outcome is the MW gradient (compounds across retrievals);\n'
-    'memory_deprioritize is the binary surface state (reversible via\n'
-    'memex_memory_restore). User-confirmed-fix is BOTH signals at once.'
-)
+# --- F43 --- 5-step user-confirmed-fix resolution flow.
+# SSOT is `memex_common.agent_surface.RESOLUTION_FLOW`. Templates re-export
+# by identity so any per-turn scaffolding prompt that names this constant
+# pulls the canonical bytes — no drift possible.
+RESOLUTION_FLOW_PROMPT_FRAGMENT = _CANONICAL_RESOLUTION_FLOW
 
 
 # --- F3 --- (4-layer memory-routing primer — single source of truth lives in
@@ -94,21 +66,9 @@ RESOLUTION_FLOW_PROMPT_FRAGMENT = (
 LAYER_ROUTING_PROMPT_FRAGMENT = _CANONICAL_LAYER_ROUTING_PRIMER_FRAGMENT
 
 
-# --- F43 --- (historical / audit-query routing rule)
-HISTORICAL_ROUTING_PROMPT_FRAGMENT = (
-    'When the user asks HOW THINGS CHANGED (not "what is true now"), do NOT\n'
-    'use the resolution flow. Triggers: "evolved", "used to", "history of",\n'
-    '"what changed", "what did I think before", "audit", "show me everything",\n'
-    '"show me the hidden ones".\n'
-    '\n'
-    '  - Ordered chain on a specific unit:\n'
-    '    `memex_get_unit_history(unit_id)` — graph walk through\n'
-    '    contradiction links, oldest → newest.\n'
-    '  - Broader audit / "show me everything including hidden stuff":\n'
-    "    `memex_memory_search(query='...', apply_pre_filter=False)` —\n"
-    '    bypasses MW + FSFM + confidence pre-filters; contradicted, decayed,\n'
-    '    and behaviorally-failed units appear. Post-reranker boosts still apply.'
-)
+# --- F43 --- historical / audit-query routing rule.
+# SSOT is `memex_common.agent_surface.HISTORICAL_ROUTING`.
+HISTORICAL_ROUTING_PROMPT_FRAGMENT = _CANONICAL_HISTORICAL_ROUTING
 
 
 __all__ += [

@@ -43,18 +43,6 @@ def test_claude_code_harness_carries_capture_cadence_and_slash_commands() -> Non
     assert '/recall' in CLAUDE_CODE_HARNESS
 
 
-def test_hermes_briefing_reexports_ssot_harness_by_identity() -> None:
-    """Hermes' in-process briefing path must use the same harness object as
-    the CLI bridge — drift across paths is the bug this SSOT prevents."""
-    from memex_hermes_plugin.memex.briefing import _HERMES_HARNESS
-
-    assert _HERMES_HARNESS is HERMES_HARNESS, (
-        '`briefing._HERMES_HARNESS` is not the canonical '
-        '`memex_common.agent_harnesses.HERMES_HARNESS` object — '
-        'this means a local copy was re-introduced; replace with a re-export.'
-    )
-
-
 def test_cli_agent_surface_uses_ssot_harnesses_by_identity() -> None:
     """The CLI bridge composes from the SSOT harness objects directly."""
     from memex_cli import agent_surface as cli_surface

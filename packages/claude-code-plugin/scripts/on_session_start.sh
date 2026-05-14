@@ -19,6 +19,14 @@ PLUGIN_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # errors as systemMessage so the user sees them.
 MEMEX_RESOLVE_VERBOSE=1 source "$SCRIPT_DIR/resolve_config.sh"
 
+# resolve_config.sh sets MEMEX_HOOK_ALREADY_EMITTED=1 if it already wrote
+# a user-actionable JSON document to stdout (e.g. uvx is missing). In
+# that case, the SessionStart contract requires exactly one JSON document
+# — exit cleanly rather than emit a second one downstream.
+if [ "${MEMEX_HOOK_ALREADY_EMITTED:-0}" = "1" ]; then
+    exit 0
+fi
+
 # Read the SessionStart payload from stdin. Empty stdin is OK (defensive
 # for invocations outside Claude Code, e.g. unit tests).
 _payload=""

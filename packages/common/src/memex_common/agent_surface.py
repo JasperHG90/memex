@@ -186,7 +186,7 @@ One reference per load-bearing claim. Never fabricate titles or ids — say "I c
 CRITICAL_FOOTER = """## Critical reminders
 
 - `memex_record_outcome`: `units=[{unit_id, verb, reason}]`. Bare `success=True` → 400.
-- Virtual units (`metadata.virtual: true`) → deprio returns 404; filter them.
+- Virtual units (`unit_metadata.virtual: true`) → deprio returns 404; filter them.
 - KV namespace: scope qualifier wins. "for this project" → `project:<id>:` even with "I"/"my".
 - Cite inline; never fabricate."""
 

@@ -143,6 +143,25 @@ def test_format_block_skips_briefing_section_when_empty():
 # ---------------------------------------------------------------------------
 
 
+def test_hermes_briefing_reexports_ssot_harness_by_identity() -> None:
+    """Hermes' in-process briefing path must use the same harness object as
+    the CLI bridge — drift across paths is the bug this SSOT prevents.
+
+    Lives in hermes-plugin tests (not common tests) because importing
+    ``memex_hermes_plugin.memex.briefing`` transitively imports
+    ``agent.memory_provider``, a Hermes-only module stubbed by this
+    package's conftest.
+    """
+    from memex_common.agent_harnesses import HERMES_HARNESS
+    from memex_hermes_plugin.memex.briefing import _HERMES_HARNESS
+
+    assert _HERMES_HARNESS is HERMES_HARNESS, (
+        '`briefing._HERMES_HARNESS` is not the canonical '
+        '`memex_common.agent_harnesses.HERMES_HARNESS` object — '
+        'this means a local copy was re-introduced; replace with a re-export.'
+    )
+
+
 def test_briefing_does_not_locally_declare_universal_constants():
     """The briefing module must not re-declare universal-tier content
     locally. compose_universal() is the only source."""

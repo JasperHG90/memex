@@ -26,9 +26,7 @@ Outcome-signal lexicon for paired writes:
 - Success → "that worked", "lock it in", "record it", "that's the lesson" → verb=`helpful`
 - Failure → "stop suggesting X", "didn't work", "we removed it", "that was wrong" → verb=`not_helpful`
 
-Capture cadence: write a short note (`memex_add_note`, ≤300 tokens, no per-file changelogs) when you finish a multi-step task, diagnose a non-obvious bug, learn a user preference, or resolve a tricky env issue. Use `memex_append_note(note_key, delta)` to extend an existing note rather than re-ingesting.
-
-Disambiguate before mutating: if the user signal could plausibly target multiple units, ASK before paired writes."""
+Capture cadence: write a short note (`memex_add_note`, ≤300 tokens, no per-file changelogs) when you finish a multi-step task, diagnose a non-obvious bug, learn a user preference, or resolve a tricky env issue. Use `memex_append_note(note_key, delta)` to extend an existing note rather than re-ingesting."""
 
 
 CLAUDE_CODE_HARNESS = """## Claude Code-specific framing

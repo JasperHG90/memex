@@ -4,7 +4,7 @@ cadence, slash commands, prohibitions, citations) arrives at session start
 via the plugin's SessionStart hook → `memex agent-surface --for=claude-code`.
 Only Claude-Code-specific content that is NOT covered by that pipeline
 belongs here. See packages/claude-code-plugin/scripts/on_session_start.sh
-and packages/cli/src/memex_cli/agent_surface.py (_CLAUDE_CODE_HARNESS).
+and packages/common/src/memex_common/agent_harnesses.py (CLAUDE_CODE_HARNESS).
 -->
 
 ## Search query formulation

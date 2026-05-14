@@ -164,23 +164,25 @@ def test_hermes_deprioritize_schema_reexports_tier_1a_description() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_resolution_flow_template_fragment_present() -> None:
-    """The verb-pair scaffolding template fragment carries the 5-step flow.
-    This fragment drives the verb-pair-selection LLM call inside Hermes; it is
-    a separate surface from the tool descriptions."""
-    assert 'DISAMBIGUATE' in RESOLUTION_FLOW_PROMPT_FRAGMENT
-    assert 'ROUTE' in RESOLUTION_FLOW_PROMPT_FRAGMENT
-    assert 'JUDGE' in RESOLUTION_FLOW_PROMPT_FRAGMENT
-    assert 'RECORD' in RESOLUTION_FLOW_PROMPT_FRAGMENT
-    assert 'DEPRIORITIZE' in RESOLUTION_FLOW_PROMPT_FRAGMENT
-    assert 'top_k>=30' in RESOLUTION_FLOW_PROMPT_FRAGMENT
-    assert 'memex_record_outcome' in RESOLUTION_FLOW_PROMPT_FRAGMENT
-    assert 'memex_memory_deprioritize' in RESOLUTION_FLOW_PROMPT_FRAGMENT
+def test_resolution_flow_template_fragment_is_ssot_object() -> None:
+    """``RESOLUTION_FLOW_PROMPT_FRAGMENT`` must be the same Python object
+    as ``memex_common.agent_surface.RESOLUTION_FLOW`` — a re-export by
+    identity, not a hand-edited rewording. The Tier 1b SSOT is the
+    only place this prose is authored."""
+    from memex_common.agent_surface import RESOLUTION_FLOW
+
+    assert RESOLUTION_FLOW_PROMPT_FRAGMENT is RESOLUTION_FLOW, (
+        '`templates.RESOLUTION_FLOW_PROMPT_FRAGMENT` is not the canonical '
+        '`agent_surface.RESOLUTION_FLOW` object — replace with a re-export.'
+    )
 
 
-def test_historical_routing_template_fragment_present() -> None:
-    """The historical-routing fragment names the audit-bypass invariant."""
-    assert 'memex_get_unit_history' in HISTORICAL_ROUTING_PROMPT_FRAGMENT
-    assert 'apply_pre_filter=False' in HISTORICAL_ROUTING_PROMPT_FRAGMENT
-    assert 'evolved' in HISTORICAL_ROUTING_PROMPT_FRAGMENT
-    assert 'audit' in HISTORICAL_ROUTING_PROMPT_FRAGMENT
+def test_historical_routing_template_fragment_is_ssot_object() -> None:
+    """``HISTORICAL_ROUTING_PROMPT_FRAGMENT`` must be the same Python object
+    as ``memex_common.agent_surface.HISTORICAL_ROUTING``."""
+    from memex_common.agent_surface import HISTORICAL_ROUTING
+
+    assert HISTORICAL_ROUTING_PROMPT_FRAGMENT is HISTORICAL_ROUTING, (
+        '`templates.HISTORICAL_ROUTING_PROMPT_FRAGMENT` is not the canonical '
+        '`agent_surface.HISTORICAL_ROUTING` object — replace with a re-export.'
+    )

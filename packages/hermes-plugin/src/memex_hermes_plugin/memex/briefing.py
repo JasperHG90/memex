@@ -11,6 +11,9 @@ import threading
 from typing import Any
 from uuid import UUID
 
+# Tier 2 Hermes-specific framing. SSOT is `memex_common.agent_harnesses`;
+# this re-export-by-alias keeps the in-process `_HERMES_HARNESS` reference
+# stable while making the SSOT identity testable.
 from memex_common.agent_harnesses import HERMES_HARNESS as _HERMES_HARNESS
 from memex_common.agent_surface import LAYER_ROUTING_PRIMER_TABLE, compose_universal
 
@@ -90,13 +93,6 @@ class BriefingCache:
 
 
 _LAYER_ROUTING_PRIMER = LAYER_ROUTING_PRIMER_TABLE  # back-compat re-export
-
-
-# Tier 2 Hermes-specific framing. The string itself lives in
-# `memex_common.agent_harnesses` as the SSOT; this name is a re-export so
-# the Hermes plugin code can refer to `_HERMES_HARNESS` without an import
-# rewrite, and so identity tests can pin both surfaces (in-process and CLI
-# bridge) to the same object.
 
 
 def format_briefing_block(

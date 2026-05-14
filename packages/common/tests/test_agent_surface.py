@@ -22,13 +22,18 @@ from memex_common import agent_surface as ags
 # ---------------------------------------------------------------------------
 
 
-_UNIVERSAL_CHAR_CAP = 5_500  # ~1,375 tokens at 4-chars/token
+_UNIVERSAL_CHAR_CAP = 5_500  # ~1,571 tokens at 3.5 chars/token (empirical cl100k)
+
+
+def _approx_tokens(text: str) -> int:
+    """~3.5 chars/token — empirical against tiktoken cl100k_base on this repo's markdown."""
+    return (len(text) * 2 + 6) // 7
 
 
 def test_compose_universal_within_budget() -> None:
     out = ags.compose_universal()
     assert len(out) <= _UNIVERSAL_CHAR_CAP, (
-        f'compose_universal() is {len(out)} chars (~{len(out) // 4} tokens), '
+        f'compose_universal() is {len(out)} chars (~{_approx_tokens(out)} tokens), '
         f'exceeding cap {_UNIVERSAL_CHAR_CAP}. Either trim a section or '
         'lift the cap with rationale.'
     )
