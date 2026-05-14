@@ -122,6 +122,21 @@ def test_phrase_not_in_tier_2_harnesses(phrase: str) -> None:
         )
 
 
+def test_mcp_instructions_is_ssot_object() -> None:
+    """``mcp.instructions`` MUST be the canonical
+    ``memex_common.agent_surface.MCP_TRANSPORT_INSTRUCTIONS`` object —
+    no local copy. The CLI ``agent-surface mcp`` target reads from the
+    same SSOT, so both surfaces emit byte-identical bytes by construction."""
+    from memex_common.agent_surface import MCP_TRANSPORT_INSTRUCTIONS
+
+    assert mcp.instructions is MCP_TRANSPORT_INSTRUCTIONS, (
+        '`mcp.instructions` is not the canonical '
+        '`memex_common.agent_surface.MCP_TRANSPORT_INSTRUCTIONS` object — '
+        'a local copy would let the MCP server and the CLI inspection '
+        'surface drift apart.'
+    )
+
+
 def test_mcp_instructions_references_agent_surface() -> None:
     """``instructions=`` must point composing agents at the SSOT."""
     text = getattr(mcp, 'instructions', None) or ''

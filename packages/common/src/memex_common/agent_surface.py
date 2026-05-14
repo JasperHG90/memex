@@ -195,6 +195,36 @@ Cite inline; never fabricate.
 
 
 # ---------------------------------------------------------------------------
+# Tier 1a — MCP transport instructions (SSOT).
+#
+# Imported by the MCP server (``server.py`` ``instructions=`` field) AND by
+# the CLI ``agent-surface mcp`` target. Same bytes in both surfaces; pinned
+# by identity tests so a divergent edit cannot ship.
+# ---------------------------------------------------------------------------
+
+
+MCP_TRANSPORT_INSTRUCTIONS = """Memex MCP — personal knowledge management.
+
+TOOL DISCOVERY (progressive disclosure)
+- If only memex_tags/memex_search/memex_get_schema appear, run:
+    memex_tags() → memex_search(query, tags=[...]) → memex_get_schema(tools=[...])
+- You can also call tools by name if you already know them.
+
+VAULT DEFAULTS — vault parameters are optional. Writes default to the
+active vault; reads default to search vaults (from .memex.yaml or global
+config). Pass vault_id/vault_ids to override.
+
+NEVER fabricate IDs. Use only IDs returned from tool output.
+
+This MCP surface is the tool protocol only. Full retrieval routing,
+storage model, 5-step resolution flow, KV namespace rules, virtual-unit
+warning, and citation discipline live in the agent's system prompt —
+compose them from `memex_common.agent_surface.compose_universal()` (Python)
+or `memex agent-surface universal` (shell) if you are building a Memex-
+aware agent beyond raw MCP."""
+
+
+# ---------------------------------------------------------------------------
 # Composer — deterministic universal block (Tier 1b).
 # ---------------------------------------------------------------------------
 
@@ -236,6 +266,8 @@ __all__ = [
     # Existing 4-layer routing primer (Tier 1b component).
     'LAYER_ROUTING_PRIMER_FRAGMENT',
     'LAYER_ROUTING_PRIMER_TABLE',
+    # Tier 1a SSOT (MCP transport instructions).
+    'MCP_TRANSPORT_INSTRUCTIONS',
     # New universal sections.
     'AXES',
     'CITATIONS',

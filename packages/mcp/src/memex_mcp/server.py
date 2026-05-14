@@ -29,6 +29,7 @@ from memex_mcp.lifespan import lifespan, get_api, get_asset_cache, get_config
 from memex_mcp._layer_primer_descriptions import (
     LAYER_ROUTING_PRIMER_FRAGMENT as _LAYER_ROUTING_PRIMER,
 )
+from memex_common.agent_surface import MCP_TRANSPORT_INSTRUCTIONS
 from memex_common.tool_descriptions import (
     MEMEX_KV_WRITE_DESC as _MEMEX_KV_WRITE_DESCRIPTION,
 )
@@ -249,25 +250,7 @@ logger = structlog.get_logger(__name__)
 
 mcp = FastMCP(
     'memex_mcp',
-    instructions="""Memex MCP — personal knowledge management.
-
-TOOL DISCOVERY (progressive disclosure)
-- If only memex_tags/memex_search/memex_get_schema appear, run:
-    memex_tags() → memex_search(query, tags=[...]) → memex_get_schema(tools=[...])
-- You can also call tools by name if you already know them.
-
-VAULT DEFAULTS — vault parameters are optional. Writes default to the
-active vault; reads default to search vaults (from .memex.yaml or global
-config). Pass vault_id/vault_ids to override.
-
-NEVER fabricate IDs. Use only IDs returned from tool output.
-
-This MCP surface is the tool protocol only. Full retrieval routing,
-storage model, 5-step resolution flow, KV namespace rules, virtual-unit
-warning, and citation discipline live in the agent's system prompt —
-compose them from `memex_common.agent_surface.compose_universal()` if
-you are building a Memex-aware agent beyond raw MCP.
-""".strip(),
+    instructions=MCP_TRANSPORT_INSTRUCTIONS,
     version='0.1.0',
     lifespan=lifespan,
     on_duplicate='error',

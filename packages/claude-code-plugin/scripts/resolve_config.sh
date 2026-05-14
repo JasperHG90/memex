@@ -102,6 +102,10 @@ if [ "$_memex_ref" != "latest" ]; then
             _diag_msg=$(printf "❌ MEMEX_PLUGIN_VERSION='%s' does not exist as a tag or branch on github.com/JasperHG90/memex.\n\nAvailable tags: https://github.com/JasperHG90/memex/tags\n\nUnset the variable to use the default (latest)." "$_memex_ref")
             jq -n --arg msg "$_diag_msg" '{systemMessage: $msg}'
             unset _diag_msg
+            # Signal to the sourcing hook script that we already emitted a JSON
+            # document on stdout — Claude Code SessionStart accepts exactly one.
+            # Mirrors the invariant maintained by ``_memex_emit_systemMessage``.
+            export MEMEX_HOOK_ALREADY_EMITTED=1
         fi
         memex() { return 1; }
         return 0 2>/dev/null || exit 0

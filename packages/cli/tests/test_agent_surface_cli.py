@@ -1,10 +1,11 @@
 """Tests for the ``memex agent-surface`` CLI subcommand.
 
 Pins:
-- Each composition profile emits non-empty, deterministic output.
-- ``--for=universal`` and ``--for=mcp`` produce different content
-  (mcp is intentionally minimal transport-only).
-- ``--for=hermes`` and ``--for=claude-code`` include the universal block.
+- Each composition target emits non-empty, deterministic output.
+- ``agent-surface universal`` and ``agent-surface mcp`` produce different
+  content (mcp is intentionally minimal transport-only).
+- ``agent-surface hermes`` and ``agent-surface claude-code`` include the
+  universal block.
 - ``--output-format=json`` wraps the content in the Claude Code SessionStart
   envelope ``{"systemPromptAdditions": "..."}`` so the hook can pipe it
   directly through.
@@ -46,7 +47,7 @@ def test_universal_profile_emits_universal_block() -> None:
 
 
 def test_generic_alias_matches_universal() -> None:
-    """``--for=generic`` is an alias for ``--for=universal``."""
+    """``agent-surface generic`` is an alias for ``agent-surface universal``."""
     universal = _run('universal')
     generic = _run('generic')
     assert universal == generic
@@ -72,22 +73,38 @@ def test_claude_code_profile_includes_universal_block_and_harness() -> None:
     assert '/recall' in out
 
 
-def test_mcp_profile_is_terse_and_pointer_at_agent_surface() -> None:
-    """``--for=mcp`` is the Tier 1a transport surface — minimal, points at
-    `agent_surface` for composition rules. Pin both positive content
-    (progressive disclosure, vault defaults, pointer) and negative
+def test_mcp_target_is_terse_and_pointer_at_agent_surface() -> None:
+    """``agent-surface mcp`` is the Tier 1a transport surface — minimal,
+    points at `agent_surface` for composition rules. Pin both positive
+    content (progressive disclosure, vault defaults, pointer) and negative
     (Tier 1b content absent)."""
     out = _run('mcp')
     # Positive: load-bearing transport facts must be present.
-    assert 'Progressive disclosure' in out
+    assert 'TOOL DISCOVERY' in out
     assert 'memex_tags' in out
     assert 'memex_search' in out
     assert 'memex_get_schema' in out
-    assert 'Vault defaults' in out
+    assert 'VAULT DEFAULTS' in out
     assert 'agent_surface' in out
-    # Negative: Tier 1b content must NOT appear here.
-    assert 'Options A/B/C' not in out
-    assert '5-step' not in out
+    # Negative: Tier 1b CONTENT must NOT appear here (the pointer naming
+    # "5-step resolution flow" is contrastive — that's fine; what we ban is
+    # the actual scaffolding like "Option A"/"Option B").
+    assert 'Option A' not in out
+    assert 'Option B' not in out
+    assert 'Disambiguate —' not in out
+
+
+def test_mcp_target_is_identical_to_mcp_server_instructions() -> None:
+    """``agent-surface mcp`` output must be the same string as
+    ``memex_mcp.server.mcp.instructions`` — the CLI surface is a debug
+    inspection of exactly what MCP serves, not a separate rendering."""
+    from memex_common.agent_surface import MCP_TRANSPORT_INSTRUCTIONS
+
+    out = _run('mcp')
+    assert out == MCP_TRANSPORT_INSTRUCTIONS, (
+        'agent-surface mcp output drifted from the SSOT. Both the CLI and '
+        'the MCP server import from `memex_common.agent_surface.MCP_TRANSPORT_INSTRUCTIONS`.'
+    )
 
 
 @pytest.mark.parametrize('profile', ['universal', 'generic', 'hermes', 'claude-code', 'mcp'])

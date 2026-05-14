@@ -40,7 +40,7 @@ from enum import Enum
 import typer
 
 from memex_common.agent_harnesses import CLAUDE_CODE_HARNESS, HERMES_HARNESS
-from memex_common.agent_surface import compose_universal
+from memex_common.agent_surface import MCP_TRANSPORT_INSTRUCTIONS, compose_universal
 
 
 app = typer.Typer(
@@ -63,15 +63,6 @@ class OutputFormat(str, Enum):
     json = 'json'
 
 
-_MCP_TRANSPORT = """## Memex MCP — transport facts
-
-Progressive disclosure: `memex_tags()` → `memex_search(query, tags=[...])` → `memex_get_schema(tools=[...])` → call by name.
-
-Vault defaults: writes default to the active vault; reads default to search vaults (.memex.yaml / global config). Pass `vault_id`/`vault_ids` to override.
-
-System-prompt composition: load `memex_common.agent_surface.compose_universal()` (Python) or `memex agent-surface universal` (shell) for the universal Tier 1b system-prompt content. This MCP `instructions=` field is intentionally minimal — it carries transport facts only."""
-
-
 def _compose_for_target(target: Target) -> str:
     if target in (Target.universal, Target.generic):
         return compose_universal()
@@ -80,7 +71,9 @@ def _compose_for_target(target: Target) -> str:
     if target == Target.claude_code:
         return compose_universal() + '\n\n' + CLAUDE_CODE_HARNESS
     if target == Target.mcp:
-        return _MCP_TRANSPORT
+        # Same SSOT object as ``memex_mcp.server.mcp.instructions`` — the CLI
+        # ``mcp`` target is a debug-time inspection of exactly that string.
+        return MCP_TRANSPORT_INSTRUCTIONS
     raise ValueError(f'unknown target: {target!r}')
 
 
