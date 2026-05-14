@@ -26,17 +26,17 @@ The cross-encoder reranker composes five multiplicative boost factors — recenc
 
 | `composite_boost_log_clip` | What the histogram measures |
 |---|---|
-| `math.inf` (ship default) | The pre-clip aggregate product itself — clip is a no-op, so the observed value equals the raw `b_1 · b_2 · b_3 · b_4 · b_5` (modulo float-precision round-trip from the `log`/`exp` pair, roughly 1 ULP) for strictly positive inputs. Read this distribution to choose a finite `L`. |
-| Finite `L` (e.g. `0.7`, `1.0`, `1.5`) | The **post-clip** aggregate multiplier actually applied to `ce_score`. Spread wider than `[exp(-L), exp(+L)]` means the clip is firing; tight spread inside that band means the clip is dormant for typical traffic. |
+| `math.inf` (ship default) | The pre-clip aggregate product itself — clip is a no-op, so the observed value equals the raw `b_1 · b_2 · b_3 · b_4 · b_5` for inputs above the per-factor floor `LOG_FLOOR_COMPOSITE_BOOST = 1e-9` (`engine.py:82`). Any factor at or below the floor is clipped to `1e-9` before the log, so a single zero-or-negative factor yields `ce_score · ~1e-9` rather than `ce_score · 0`. Above the floor the round-trip through five logs plus one exp introduces a few ULPs of float-precision drift. Read this distribution to choose a finite `L`. |
+| Finite `L` (e.g. `0.7`, `1.0`, `1.5`) | The **post-clip** aggregate multiplier actually applied to `ce_score`. Every observation is mathematically inside `[exp(-L), exp(+L)]` by construction. Mass accumulating at the bucket boundaries containing `exp(-L)` and `exp(+L)` is the unambiguous "clip is firing" signal — the unclipped product would have been outside the band. A smooth distribution strictly interior to the band means the clip is dormant for typical traffic. |
 
 At the ship default, this metric subsumes a dedicated pre-clip histogram — the distribution needed to derive an empirical `L` is observable directly. Once `L` is moved off `math.inf`, the same metric continues to be useful, but it answers a different question (post-clip vs pre-clip). A separate dedicated pre-clip histogram is **not** currently shipped; the decision and rationale are recorded under [Decision: pre-clip histogram for the finite-L regime](#decision-pre-clip-histogram-for-the-finite-l-regime).
 
 **How to tune `L`:**
 
 1. Let the histogram accumulate representative traffic at `L = math.inf` for ≥ 1 week.
-2. Compute the empirical p95 (or your preferred upper-tail percentile) of `|log(observed_value)|`. The histogram buckets cover the realistic range; if production traffic clusters tightly around `1.0`, even `L = 0.7` is a wide band.
-3. Set `composite_boost_log_clip = L` via the standard configuration path. The clip becomes active at the next reranker call; no restart required if the config is reloadable in your deployment.
-4. Re-run the E7 evaluation gate to confirm ranking drift is within tolerance.
+2. Compute the empirical p95 (or whichever upper-tail percentile the deployment prefers) of `|log(observed_value)|`. The histogram buckets cover the realistic range; if production traffic clusters tightly around `1.0`, even `L = 0.7` is a wide band.
+3. Set `composite_boost_log_clip = L` via the standard configuration path. The clip becomes active at the next reranker call; no restart is required if the deployment uses a reloadable config.
+4. Re-run the retrieval-ranking regression evaluation (`uv run pytest -m benchmark` for the local retrieval benchmarks, plus the LoCoMo eval if the deployment exercises that scenario) to confirm ranking drift stays within tolerance for the deployment's quality budget.
 
 ### `memex_composite_boost_non_finite_guard_triggered_total`
 
