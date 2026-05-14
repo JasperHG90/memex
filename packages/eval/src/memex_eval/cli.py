@@ -814,9 +814,16 @@ def suite_run(
         if answer_mode:
             suite.metadata.default_answer_mode = answer_mode
 
-        experiment = (
-            mlflow_experiment or f'memex-suite-{suite.name}-v{suite.metadata.schema_version}'
-        )
+        canonical_experiment = f'{suite.name}_full'
+        if mlflow_experiment and mlflow_experiment != canonical_experiment:
+            console.print(
+                f'[yellow]warning:[/yellow] --mlflow-experiment override '
+                f'({mlflow_experiment!r}) differs from suite canonical '
+                f'({canonical_experiment!r}). Override is discouraged — '
+                f'history continuity is lost when each run lands in a '
+                f'different experiment.'
+            )
+        experiment = mlflow_experiment or canonical_experiment
         recorder = get_recorder(
             mlflow_uri=mlflow_uri,
             mlflow_experiment=experiment,
@@ -1098,7 +1105,7 @@ def suite_history(
     from memex_eval.suite import load_suite
 
     suite = load_suite(name)
-    experiment = mlflow_experiment or f'memex-suite-{suite.name}-v{suite.metadata.schema_version}'
+    experiment = mlflow_experiment or f'{suite.name}_full'
     # Resolve git commit set
     try:
         proc = _sp.run(
