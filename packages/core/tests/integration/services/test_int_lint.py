@@ -29,6 +29,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from memex_common.types import FactTypes
 from memex_core.memory.sql_models import (
     Entity,
+    MemoryLink,
     MemoryUnit,
     MentalModel,
     Note,
@@ -46,7 +47,7 @@ pytestmark = [pytest.mark.integration]
 
 
 async def _seed_all_rules_fire(session: AsyncSession) -> tuple[UUID, dict[str, str]]:
-    """Seed each of the 4 v1 rules with exactly one fires-case in one vault.
+    """Seed each of the 5 v1 rules with exactly one fires-case in one vault.
 
     Returns: (vault_id, expected_targets) where expected_targets maps
     rule_name → target_id of the seeded row that should fire.
@@ -192,11 +193,52 @@ async def _seed_all_rules_fire(session: AsyncSession) -> tuple[UUID, dict[str, s
         )
         await session.commit()
 
+    # 5) orphan_contradicts_links_post_stale — active source unit holds an
+    #    outbound ``contradicts`` edge to a stale target unit. Retrieval
+    #    filters stale, so the edge is audit history; the lint rule
+    #    surfaces it for human reaping.
+    orphan_source_unit = MemoryUnit(
+        id=uuid4(),
+        vault_id=vault.id,
+        note_id=note.id,
+        text='orphan-contradicts source',
+        fact_type=FactTypes.WORLD,
+        status='active',
+        is_deprioritized=False,
+        risk_class='none',
+        event_date=datetime.now(timezone.utc),
+        embedding=[0.1] * 384,
+    )
+    orphan_target_unit = MemoryUnit(
+        id=uuid4(),
+        vault_id=vault.id,
+        note_id=note.id,
+        text='orphan-contradicts stale target',
+        fact_type=FactTypes.WORLD,
+        status='stale',
+        is_deprioritized=False,
+        risk_class='none',
+        event_date=datetime.now(timezone.utc),
+        embedding=[0.1] * 384,
+    )
+    session.add(orphan_source_unit)
+    session.add(orphan_target_unit)
+    await session.commit()
+    orphan_link = MemoryLink(
+        link_type='contradicts',
+        from_unit_id=orphan_source_unit.id,
+        to_unit_id=orphan_target_unit.id,
+        vault_id=vault.id,
+    )
+    session.add(orphan_link)
+    await session.commit()
+
     targets = {
         'orphan_mental_model': str(orphan_mm.id),
         'cold_low_mw_unit': str(cold_unit.id),
         'sensitive_unreviewed_unit': str(sensitive_unit.id),
         'dangling_entity_ref_in_unit': str(dangling_unit.id),
+        'orphan_contradicts_links_post_stale': str(orphan_source_unit.id),
     }
     return vault.id, targets
 
@@ -226,6 +268,7 @@ async def test_run_rules_emits_findings_and_summary(session: AsyncSession, api) 
         'cold_low_mw_unit',
         'sensitive_unreviewed_unit',
         'dangling_entity_ref_in_unit',
+        'orphan_contradicts_links_post_stale',
     } <= set(by_rule.keys()), f'missing v1 rule(s): {set(by_rule.keys())}'
 
     # Each original v1 rule fires exactly once on its crafted target.
@@ -235,7 +278,7 @@ async def test_run_rules_emits_findings_and_summary(session: AsyncSession, api) 
     # The consolidated FSFM rule fires on this fixture only if the
     # fixture's signals (now-time updated_at, NULL last_outcome_at, no
     # inbound links, no entities) actually push composite > 0.30.
-    # Confirm zero so the ``total_findings == 4`` invariant we want to
+    # Confirm zero so the ``total_findings == 5`` invariant we want to
     # keep is preserved. A regression that lets FSFM fire on neutral
     # units would surface here.
     assert 'composite_deprioritize_candidate' in by_rule, (
@@ -245,9 +288,9 @@ async def test_run_rules_emits_findings_and_summary(session: AsyncSession, api) 
         'FSFM composite_deprioritize_candidate unexpectedly fired on the v1-fixture units'
     )
 
-    assert summary.total_findings == 4
+    assert summary.total_findings == 5
 
-    # Verify ledger contents — exactly 4 rows, one per v1 rule.
+    # Verify ledger contents — exactly 5 rows, one per v1 rule.
     rows = await session.execute(
         text(
             'SELECT rule_name, target_id, status, source, lint_type '
@@ -256,7 +299,7 @@ async def test_run_rules_emits_findings_and_summary(session: AsyncSession, api) 
         {'v': str(vault_id)},
     )
     by_rule_row = {row['rule_name']: dict(row) for row in rows.mappings().all()}
-    assert len(by_rule_row) == 4
+    assert len(by_rule_row) == 5
     for rule_name, expected_target in expected_targets.items():
         row = by_rule_row[rule_name]
         assert row['target_id'] == expected_target
@@ -270,19 +313,19 @@ async def test_run_rules_is_idempotent_on_rerun(session: AsyncSession, api) -> N
     vault_id, _ = await _seed_all_rules_fire(session)
 
     first = await api.lint.run_rules(vault_id)
-    assert first.total_findings == 4
+    assert first.total_findings == 5
 
     second = await api.lint.run_rules(vault_id)
     assert second.total_findings == 0, 'Second run should hit ON CONFLICT DO NOTHING for every row'
 
-    # Ledger still has exactly 4 rows.
+    # Ledger still has exactly 5 rows.
     count = (
         await session.execute(
             text('SELECT count(*) FROM maintenance_proposals WHERE vault_id = :v'),
             {'v': str(vault_id)},
         )
     ).scalar()
-    assert count == 4
+    assert count == 5
 
 
 @pytest.mark.asyncio
@@ -334,7 +377,7 @@ async def test_count_pending_global_excludes_vault_scoped_rows(session: AsyncSes
 
     # Run the rules so we have some vault-scoped pending rows.
     summary = await api.lint.run_rules(vault_id)
-    assert summary.total_findings == 4
+    assert summary.total_findings == 5
 
     # Insert one global (vault_id IS NULL) pending finding directly.
     await session.execute(
@@ -355,9 +398,9 @@ async def test_count_pending_global_excludes_vault_scoped_rows(session: AsyncSes
         f'count_pending(None) returned {global_count}; global scope must exclude vault-scoped rows'
     )
 
-    # Vault count should be exactly 4 (the seeded rules; the global row excluded).
+    # Vault count should be exactly 5 (the seeded rules; the global row excluded).
     vault_count = await api.lint.count_pending(vault_id)
-    assert vault_count == 4
+    assert vault_count == 5
 
 
 @pytest.mark.asyncio

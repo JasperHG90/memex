@@ -269,6 +269,38 @@ _DANGLING_ENTITY_REF_IN_UNIT_SQL = """
 """
 
 
+# Safety: vault_id is parameter-bound; no user-controlled string interpolation.
+# See S608 invariant block above ``_COLD_LOW_MW_UNIT_SQL``.
+#
+# Aggregates orphan ``contradicts`` outbound links per source unit so the
+# partial unique index ``(rule_name, target_type, target_id, vault_id) WHERE
+# status='pending'`` collapses multiple stale targets into one proposal per
+# source unit. The evidence carries the full list of stale target ids and
+# their stale-since timestamp so the operator can navigate to the source
+# unit, inspect each orphan edge, and reap.
+_ORPHAN_CONTRADICTS_LINKS_POST_STALE_SQL = """
+    SELECT
+        ml.from_unit_id::text AS target_id,
+        jsonb_build_object(
+            'orphan_link_count', COUNT(*),
+            'stale_target_unit_ids',
+                jsonb_agg(ml.to_unit_id::text ORDER BY ml.to_unit_id),
+            'stale_targets_oldest_updated_at',
+                MIN(target.updated_at)
+        ) AS evidence
+    FROM memory_links ml
+    JOIN memory_units target ON target.id = ml.to_unit_id
+    JOIN memory_units source ON source.id = ml.from_unit_id
+    WHERE ml.link_type = 'contradicts'
+      AND ml.vault_id = :vault_id
+      AND source.vault_id = :vault_id
+      AND target.vault_id = :vault_id
+      AND target.status = 'stale'
+      AND source.status = 'active'
+    GROUP BY ml.from_unit_id
+"""
+
+
 # Safety: vault_id and ``claim_too_aggressive_max_links`` are bound via
 # named placeholders; no user-controlled string interpolation. See S608
 # invariant block above ``_COLD_LOW_MW_UNIT_SQL``.
@@ -544,6 +576,19 @@ V1_RULES: tuple[RuleSpec, ...] = (
             '(data integrity issue). Remove the dangling reference.'
         ),
         select_sql=_DANGLING_ENTITY_REF_IN_UNIT_SQL,
+    ),
+    RuleSpec(
+        name='orphan_contradicts_links_post_stale',
+        lint_type=LintType.QUALITY,
+        target_type='memory_unit',
+        suggested_action=(
+            "Active source unit holds outbound 'contradicts' edge(s) to "
+            'stale target unit(s). Retrieval already filters stale targets, '
+            'so the edges are audit history but accumulate over time. '
+            'Inspect the source unit and reap the orphan edges through the '
+            'lint dashboard (manual review required; no automated reaping).'
+        ),
+        select_sql=_ORPHAN_CONTRADICTS_LINKS_POST_STALE_SQL,
     ),
     RuleSpec(
         name='composite_deprioritize_candidate',
