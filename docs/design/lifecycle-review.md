@@ -16,7 +16,7 @@ Two of the four lifecycle states earn less of their keep post-FSFM: `archived` d
 | Question | Recommendation | Follow-up ticket |
 |---|---|---|
 | Q1 — `active` vs `is_deprioritized=true` | **Keep** | — |
-| Q2 — MW counters on supersession | **Patch** | V13 (proposed) |
+| Q2 — MW counters on supersession | **Patch** | V13 — Implemented |
 | Q3 — `archived` destructive cascade | **Consolidate** | V14 (proposed) |
 | Q4 — `appended` as a status value | **Consolidate** | V15 (proposed) |
 | Q5 — Hard overrides in FSFM | **Keep** | — |
@@ -50,7 +50,16 @@ There are two questions here:
 1. **Should counters port to the superseder?** *No.* The superseder is, by Memex's append-only model, a new note with new units (`packages/core/src/memex_core/memory/sql_models.py:280-284`). Outcome attribution at the time the counters were incremented was against the old unit's text; porting would conflate contexts. The Beta-Bernoulli prior (`success+1, failure+1`) lets the superseder's new units start fresh at neutral.
 2. **Are the inert counters a bug?** *Almost no, with one patch needed.* The audit trail is valuable — historical lineage is a stated invariant (P6 in §1.2 of `DESIGN_DOCUMENT.md`, gitignored). But re-activating a superseded note today (`Notes.set_note_status(note_id, 'active')`) cascades `unit.status = 'active'` at `packages/core/src/memex_core/services/notes.py:258` (inside the `elif status == 'active'` branch starting at `:248`) and *re-activates the original counters along with the unit*. That is correct (audit trail preserved) but currently undocumented; a reader expecting reset-on-reactivation will be surprised.
 
-**Follow-up V13 (proposed):** Document the supersession→stale→counter retention behavior in `DESIGN_DOCUMENT.md` §2.4.4 and add an audit-event note. Optionally add a unit test under `packages/core/tests/unit/services/test_notes.py` asserting (a) counters are unchanged across supersede+reactivate, (b) FSFM does not read counters of stale units.
+**V13 — Implemented.** Behavior is the right behavior, but it surprises readers expecting reset-on-reactivation, so the retention contract is now codified by tests and documented inline:
+
+* **Counter retention on supersession.** `Notes.set_note_status(note_id, 'superseded')` cascades `MemoryUnit.status='stale'` but does NOT touch `success_co_count` / `failure_co_count`. Those counters are the unit's outcome-attribution history against its own text; preserving them keeps the audit trail (P6 invariant) intact.
+* **FSFM short-circuits on stale.** `compute_composite` at `packages/core/src/memex_core/services/deprioritize_score.py:209-210` returns `(0.0, {}, True, 'status_stale')` before reading counters. The stale unit's counters are operationally inert while stale.
+* **Reactivation restores counters.** `Notes.set_note_status(note_id, 'active')` flips `unit.status='stale' → 'active'` without touching the counters — they re-emerge with their pre-supersession values, exactly as the audit trail recorded them. From the perspective of the next outcome cycle (`record_outcome` → counter bump), the reactivated unit behaves as if it had been continuously active.
+* **No port to superseder.** The superseder is, by Memex's append-only model, a new note with new units. Outcome attribution at the time the original counters were incremented was against the old unit's text; porting counters would conflate contexts. The Beta-Bernoulli prior (`success+1, failure+1`) lets the superseder's new units start fresh at neutral.
+
+Test coverage:
+* `packages/core/tests/unit/services/test_deprioritize_score.py::TestOverrides::test_status_stale_short_circuits_before_reading_counters` — parameterized across counter magnitudes (including a 1-million / 1 lopsided pair) asserts `compute_composite` returns `(0.0, {}, True, 'status_stale')` for stale units regardless of counter values; `components == {}` proves no scorer branch runs.
+* `packages/core/tests/unit/test_note_service.py::TestSetNoteStatusCascade::test_mw_counters_preserved_across_supersede_reactivate` — full round-trip mock: seed `success=17, failure=4`, supersede (asserts status→stale + counters unchanged), reactivate (asserts status→active + counters still 17/4). The mock session captures the exact attribute writes the service performs; the absence of any write to the counter columns is the audit-trail invariant.
 
 ---
 

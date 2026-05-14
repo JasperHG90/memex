@@ -299,6 +299,28 @@ class TestOverrides:
         assert is_protected is True
         assert reason == 'status_stale'
 
+    @pytest.mark.parametrize(
+        'success,failure',
+        [(0, 0), (50, 0), (0, 50), (100, 100), (1_000_000, 1)],
+    )
+    def test_status_stale_short_circuits_before_reading_counters(
+        self, success: int, failure: int
+    ) -> None:
+        """``success_co_count`` / ``failure_co_count`` survive a supersession
+        (the cascade flips ``status='stale'`` and leaves the counters
+        untouched as the audit trail). FSFM's ``status='stale'`` hard
+        override short-circuits before the counters are read, so the
+        score is 0.0 with ``protected_reason='status_stale'`` regardless
+        of counter magnitude."""
+        score, components, is_protected, reason = compute_composite(
+            _unit(status='stale', success=success, failure=failure),
+            now=_NOW,
+        )
+        assert score == 0.0
+        assert components == {}
+        assert is_protected is True
+        assert reason == 'status_stale'
+
     def test_already_deprioritized_returns_zero(self):
         score, _, is_protected, reason = compute_composite(_unit(is_deprioritized=True), now=_NOW)
         assert score == 0.0
