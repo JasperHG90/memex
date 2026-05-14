@@ -36,7 +36,7 @@ At the ship default, this metric subsumes a dedicated pre-clip histogram — the
 1. Let the histogram accumulate representative traffic at `L = math.inf` for ≥ 1 week.
 2. Compute the empirical p95 (or whichever upper-tail percentile the deployment prefers) of `|log(observed_value)|`. The histogram buckets cover the realistic range; if production traffic clusters tightly around `1.0`, even `L = 0.7` is a wide band.
 3. Set `composite_boost_log_clip = L` via the standard configuration path. The clip becomes active at the next reranker call; no restart is required if the deployment uses a reloadable config.
-4. Re-run the retrieval-ranking regression evaluation (`uv run pytest -m benchmark` for the local retrieval benchmarks, plus the LoCoMo eval if the deployment exercises that scenario) to confirm ranking drift stays within tolerance for the deployment's quality budget.
+4. Re-run the retrieval-ranking regression evaluation under the `memex-eval` CLI to confirm ranking drift stays within the deployment's quality budget. Internal suites run via `memex-eval suite run <suite>`; the LoCoMo external benchmark runs as `memex-eval locomo answer && memex-eval locomo judge && memex-eval locomo report`. The `pytest -m benchmark` retrieval suite measures composition wall-clock latency only — it is not a ranking-quality signal.
 
 ### `memex_composite_boost_non_finite_guard_triggered_total`
 
