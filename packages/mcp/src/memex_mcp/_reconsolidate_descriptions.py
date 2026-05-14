@@ -14,7 +14,11 @@ MEMEX_MEMORY_RECONSOLIDATE_DESCRIPTION = (
     '\n'
     'Runs contradiction detection across all units linked to the entity, then triggers\n'
     'reflection to produce updated mental models. LLM-intensive — use only when there\n'
-    'is concrete evidence of conflicting information.'
+    'is concrete evidence of conflicting information.\n'
+    '\n'
+    'Returns ``abandoned: true`` when a concurrent worker refreshed the mental model\n'
+    'first; the fresh state is already persisted — prefer re-reading via\n'
+    'memex_get_entity / memex_memory_search rather than retrying reconsolidate.'
 )
 
 MEMEX_MEMORY_CONSOLIDATE_DESCRIPTION = (

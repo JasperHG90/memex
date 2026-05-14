@@ -74,6 +74,13 @@ def mocked_locks_service(metastore, memex_config, asyncpg_dsn) -> LocksService:
 
     reflection = MagicMock(spec=ReflectionService)
     reflection.reflect_batch = AsyncMock(return_value=[])
+    # V18 round-8: LocksService.reconsolidate_entity now calls
+    # reflect_batch_detailed (returns tuple[results, abandoned_ids]).
+    # The MagicMock(spec=...) auto-creates an AsyncMock for the new
+    # method, but its default return value is a non-iterable Mock that
+    # blows up on the ``results, abandoned_ids = await ...`` unpack.
+    # Default to ``([], [])``; per-test overrides set the populated shape.
+    reflection.reflect_batch_detailed = AsyncMock(return_value=([], []))
 
     svc = LocksService.__new__(LocksService)
     svc.metastore = metastore
@@ -81,6 +88,9 @@ def mocked_locks_service(metastore, memex_config, asyncpg_dsn) -> LocksService:
     svc.reflection = reflection
     svc.contradiction = contradiction
     svc._dsn = asyncpg_dsn
+    # ``_get_pool`` reads ``self._pool``; __new__ skips __init__ so we
+    # have to seed it. None makes the helper lazily open a pool per call.
+    svc._pool = None
     return svc
 
 
@@ -140,14 +150,17 @@ async def test_resolves_unit_ids_then_runs_contradiction_then_reflection(
     )
 
     mm_id = uuid.uuid4()
-    mocked_locks_service.reflection.reflect_batch = AsyncMock(
-        return_value=[
-            ReflectionResult(
-                entity_id=eid,
-                new_observations=[],
-                updated_model=MentalModel(id=mm_id, entity_id=eid, vault_id=vault_id),
-            )
-        ]
+    mocked_locks_service.reflection.reflect_batch_detailed = AsyncMock(
+        return_value=(
+            [
+                ReflectionResult(
+                    entity_id=eid,
+                    new_observations=[],
+                    updated_model=MentalModel(id=mm_id, entity_id=eid, vault_id=vault_id),
+                )
+            ],
+            [],  # no CAS abandons
+        )
     )
 
     result = await mocked_locks_service.reconsolidate_entity(eid, vault_id)
@@ -159,7 +172,7 @@ async def test_resolves_unit_ids_then_runs_contradiction_then_reflection(
     assert kwargs['vault_id'] == vault_id
     assert sorted(kwargs['unit_ids']) == sorted(seeded_unit_ids)
 
-    reflect_call = mocked_locks_service.reflection.reflect_batch.await_args
+    reflect_call = mocked_locks_service.reflection.reflect_batch_detailed.await_args
     assert reflect_call is not None
     requests = reflect_call.args[0]
     assert len(requests) == 1
@@ -174,6 +187,8 @@ async def test_resolves_unit_ids_then_runs_contradiction_then_reflection(
     assert result['contradictions_run'] == 3
     assert result['mental_model_id'] == str(mm_id)
     assert result['observations_added'] == 0
+    # Round-8 H1: abandoned field present in response (False on success path)
+    assert result['abandoned'] is False
 
 
 async def test_resolver_excludes_other_vaults(
@@ -235,6 +250,6 @@ async def test_reconsolidate_blocks_concurrent_same_entity(
         assert str(eid) in str(exc_info.value)
 
         mocked_locks_service.contradiction.detect_contradictions.assert_not_awaited()
-        mocked_locks_service.reflection.reflect_batch.assert_not_awaited()
+        mocked_locks_service.reflection.reflect_batch_detailed.assert_not_awaited()
     finally:
         await helper_conn.execute('SELECT pg_advisory_unlock($1)', lock_id)

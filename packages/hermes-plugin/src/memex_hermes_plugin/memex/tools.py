@@ -4144,7 +4144,10 @@ MEMORY_RECONSOLIDATE_SCHEMA: dict[str, Any] = {
         'updating mental models. Use when retrieved facts about an entity disagree. '
         'Runs contradiction detection across all units linked to the entity, then '
         'triggers reflection. ENTITY-SCOPED counterpart to memex_memory_consolidate '
-        '(vault-wide). LLM-intensive — use only on concrete evidence of conflict.'
+        '(vault-wide). LLM-intensive — use only on concrete evidence of conflict. '
+        'Returns ``abandoned: true`` when a concurrent worker refreshed the mental '
+        'model first; the fresh state is already persisted — prefer re-reading via '
+        'memex_get_entity / memex_memory_search rather than retrying reconsolidate.'
     ),
     'parameters': {
         'type': 'object',
