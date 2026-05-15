@@ -105,8 +105,9 @@ RETRIEVAL_ROUTING = """## Retrieval routing
 
 - **Title fragment** → `memex_find_note` → `memex_get_page_indices` + `memex_get_nodes`.
 - **Relationships** → `memex_list_entities` → `memex_get_entity_cooccurrences` → `memex_get_entity_mentions`.
-- **Content lookup** → `memex_memory_search` AND `memex_note_search` in parallel. Retry `expand_query=true` if insufficient.
-- **Broad/panoramic** → `memex_get_vault_summary` first; escalate to `memex_survey(query)` if too coarse.
+- **Content lookup** (specific fact, single question) → `memex_memory_search` AND `memex_note_search` in parallel. Retry `expand_query=true` if insufficient.
+- **Comprehensive view of a topic/entity** ("give me everything about X", "comprehensive picture of X", "overview of X", "everything you know about Y") → `memex_survey(query)` FIRST. Survey synthesises across all relevant notes; a single content-lookup is not enough for these queries. If `memex_survey` is unavailable, run ≥3 targeted `memex_memory_search` calls (one per facet: leadership, tech, status, …).
+- **Broad/panoramic** (vault-wide, no specific topic) → `memex_get_vault_summary` first; escalate to `memex_survey(query)` if too coarse.
 - **KV** → `memex_kv_get(key)` exact / `memex_kv_search(query)` fuzzy / `memex_kv_list()`. Use FIRST for "what's our X?", "what do I prefer?", "what's the convention for Y?" — preferences/conventions/settings live in KV, not in note content or on the filesystem.
 
 After `memory_search`: call `memex_get_notes_metadata`. After `note_search`: metadata inline — do NOT call `memex_get_notes_metadata` again. `memex_read_note` only when `total_tokens < 500`."""
