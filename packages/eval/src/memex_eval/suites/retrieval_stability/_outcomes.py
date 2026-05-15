@@ -300,9 +300,12 @@ def _retrieved_note_keys(
         return out
 
     # search_type == 'note': the runner injects ``_note_id_by_key``
-    # into scenario_context for every ingested suite. Missing context
-    # or missing key signals a runner-contract break.
-    if not context or '_note_id_by_key' not in context:
+    # into scenario_context for every ingested suite. Missing context,
+    # missing key, or empty mapping all signal a runner-contract
+    # break — fail loudly so a runner regression doesn't quietly
+    # score RBO=0 as a false retrieval regression.
+    note_id_by_key: dict[str, str] = (context or {}).get('_note_id_by_key') or {}
+    if not note_id_by_key:
         raise RuntimeError(
             'note-search scenario received no '
             "``context['_note_id_by_key']`` mapping; the runner is "
@@ -310,7 +313,6 @@ def _retrieved_note_keys(
             'An empty/None mapping would otherwise score RBO=0 as '
             'a false regression.'
         )
-    note_id_by_key: dict[str, str] = context['_note_id_by_key'] or {}
     note_id_to_key: dict[str, str] = {nid: nk for nk, nid in note_id_by_key.items()}
     out = []
     seen = set()

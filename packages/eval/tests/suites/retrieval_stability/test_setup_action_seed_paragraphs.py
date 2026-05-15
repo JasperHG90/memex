@@ -284,6 +284,42 @@ async def test_bom_does_not_break_paragraph_splitter(
     assert texts == ['Paragraph with a leading BOM that should be stripped during splitting.']
 
 
+async def test_split_strips_embedded_nul_bytes() -> None:
+    """``_stable_unit_id`` derives the UUIDv5 from a NUL-separated key.
+    The collision-resistance claim only holds if no field contains a
+    NUL, so the splitter must strip NULs from source content."""
+    from memex_eval.suites.retrieval_stability._setup_actions import (
+        _split_into_paragraphs,
+    )
+
+    body = 'A paragraph that contains\x00an embedded NUL byte in its middle text.'
+    paragraphs = _split_into_paragraphs(body)
+    assert len(paragraphs) == 1
+    assert '\x00' not in paragraphs[0]
+
+
+async def test_split_strips_yaml_frontmatter() -> None:
+    """The source files carry YAML frontmatter; the splitter must drop
+    it so ``title:``/``tags:`` don't seed as a paragraph."""
+    from memex_eval.suites.retrieval_stability._setup_actions import (
+        _split_into_paragraphs,
+    )
+
+    body = (
+        '---\n'
+        'title: Some Doc\n'
+        'tags: [foo, bar]\n'
+        '---\n'
+        '\n'
+        'Body paragraph that should survive the frontmatter strip.\n'
+        '\n'
+        'Second body paragraph below the first.'
+    )
+    paragraphs = _split_into_paragraphs(body)
+    assert len(paragraphs) == 2
+    assert all('title:' not in p for p in paragraphs)
+
+
 async def test_crlf_line_endings_normalized(
     env_dsn: str,
     seeded_vault: UUID,

@@ -406,6 +406,19 @@ class TestStrictMappingGuards:
         with pytest.raises(RuntimeError, match='_note_id_by_key'):
             outcome.score(ans, _scenario(search_type='note'), context={})
 
+    def test_note_search_with_empty_note_id_by_key_raises(self) -> None:
+        """Empty ``_note_id_by_key={}`` must raise — silently scoring
+        RBO=0 would mask a runner-contract break as a false retrieval
+        regression."""
+        outcome = _outcome(baseline=['n1'], expected_search_type='note')
+        ans = AgentAnswer(retrieved_unit_ids=['nid-1'])
+        with pytest.raises(RuntimeError, match='_note_id_by_key'):
+            outcome.score(
+                ans,
+                _scenario(search_type='note'),
+                context={'_note_id_by_key': {}},
+            )
+
 
 class TestBaselineFileIO:
     """The on-disk lifecycle: atomic capture write + corrupt-file

@@ -86,6 +86,11 @@ def _split_into_paragraphs(content: str) -> list[str]:
     """
     normalized = content.removeprefix('\ufeff')
     normalized = re.sub(r'\r\n?', '\n', normalized)
+    # Strip embedded NUL bytes \u2014 ``_stable_unit_id`` relies on NUL being
+    # absent from every field for its collision-free UUIDv5 derivation,
+    # and the docstring of ``_split_into_paragraphs`` upstreams that
+    # invariant to source-file content.
+    normalized = normalized.replace('\x00', '')
     # Drop a leading YAML frontmatter block. ``count=1`` keeps any
     # body-level ``---`` separator intact.
     normalized = re.sub(r'\A---\n.*?\n---\n', '', normalized, count=1, flags=re.DOTALL)
