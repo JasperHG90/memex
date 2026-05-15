@@ -481,14 +481,22 @@ class UnitsService(BaseService):
             # serializes them and holds row locks across the INSERT — SKIP
             # LOCKED lets the second flush move on; any MM it skips will be
             # picked up by the reconcile-tick pass (vault-partitioned).
+            # ``probes`` is bound as an explicit text[] (asyncpg cannot
+            # infer the array element type from a bare ``list[str]``); the
+            # SQL casts to ``jsonb[]`` on the server side.
+            from sqlalchemy import bindparam
+            from sqlalchemy.dialects.postgresql import ARRAY
+            from sqlalchemy import String as SAString
+
+            stmt = text(
+                'SELECT DISTINCT mm.id, mm.entity_id, mm.observations '
+                'FROM mental_models mm, '
+                'LATERAL unnest(CAST(:probes AS jsonb[])) AS probe(p) '
+                'WHERE mm.vault_id = :vault_id AND mm.observations @> probe.p '
+                'FOR UPDATE OF mm SKIP LOCKED'
+            ).bindparams(bindparam('probes', type_=ARRAY(SAString)))
             scan = await session.execute(
-                text(
-                    'SELECT DISTINCT mm.id, mm.entity_id, mm.observations '
-                    'FROM mental_models mm, '
-                    'LATERAL unnest(CAST(:probes AS jsonb[])) AS probe(p) '
-                    'WHERE mm.vault_id = :vault_id AND mm.observations @> probe.p '
-                    'FOR UPDATE OF mm SKIP LOCKED'
-                ),
+                stmt,
                 {'vault_id': vault_id, 'probes': probes_json},
             )
             rows = scan.all()

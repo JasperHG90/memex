@@ -3,7 +3,7 @@ import logging
 from uuid import UUID
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import and_, func, text as sql_text
+from sqlalchemy import and_, func, or_, text as sql_text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import select, col, desc
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -267,7 +267,16 @@ class ReflectionQueueService:
                 col(ReflectionQueue.status).in_([ReflectionStatus.PENDING, ReflectionStatus.FAILED])
             )
             .where(col(ReflectionQueue.priority_score) >= self.config.min_priority)
-            .where(col(ReflectionQueue.last_queued_at) <= now)
+            # Backoff filter — but a freshly enqueued row has
+            # ``last_queued_at IS NULL``, and ``NULL <= now()`` is UNKNOWN
+            # (falsy in WHERE), which would silently exclude every fresh
+            # task. Treat NULL as eligible.
+            .where(
+                or_(
+                    col(ReflectionQueue.last_queued_at) <= now,
+                    col(ReflectionQueue.last_queued_at).is_(None),
+                )
+            )
             .order_by(
                 desc(col(ReflectionQueue.priority_lane)),
                 desc(col(ReflectionQueue.priority_score)),
