@@ -42,6 +42,7 @@ Usage in a suite's `__init__.py`::
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 import uuid
@@ -167,12 +168,14 @@ class _SeedParagraphsFromSources(SetupActionHandler):
             return {'note_key_to_unit_ids': {}}
 
         # Batch-embed in one call — real ONNX models amortise their
-        # session-creation cost across the whole batch.
+        # session-creation cost across the whole batch. The encode call
+        # is synchronous CPU-bound work, so offload to a worker thread
+        # to keep the runner's event loop responsive.
         from memex_core.memory.models import get_embedding_model
 
         embedder = await get_embedding_model()
         texts = [text for _, _, text, _ in plan]
-        embeddings = embedder.encode(texts)
+        embeddings = await asyncio.to_thread(embedder.encode, texts)
 
         # Build metastore against the same DSN the eval framework's
         # teardown helper uses. Same pattern as record_outcome's DB-direct

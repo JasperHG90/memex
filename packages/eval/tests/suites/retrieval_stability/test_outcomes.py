@@ -374,6 +374,41 @@ class TestCaptureMode:
         assert payload['meta']['top_k'] == 5
 
 
+class TestBaselineFileIO:
+    """The on-disk lifecycle: atomic capture write + corrupt-file
+    refusal at load time."""
+
+    def test_capture_write_is_atomic(self, tmp_path: Path) -> None:
+        """``_write_baseline`` writes via tempfile + rename, so a
+        crashed write never leaves a partial file at the canonical path."""
+        baseline_path = tmp_path / 's1-memory.json'
+        outcome = _outcome(baseline=['stale'], baseline_path=str(baseline_path))
+        outcome._write_baseline(_scenario(), ['n1', 'n2'])
+        # Tempfile is cleaned up; canonical path exists with valid JSON.
+        assert not (tmp_path / 's1-memory.json.tmp').exists()
+        assert baseline_path.is_file()
+        payload = json.loads(baseline_path.read_text())
+        assert payload['ranking'] == ['n1', 'n2']
+
+    def test_load_corrupt_baseline_raises_runtime_error(self, tmp_path: Path) -> None:
+        """A truncated baseline JSON surfaces a RuntimeError with a
+        recapture hint — bare ``json.JSONDecodeError`` would crash
+        suite-import (``memex-eval suite list``)."""
+        from memex_eval.suites.retrieval_stability import (
+            _BASELINES_DIR,
+            _load_baseline,
+        )
+
+        bad = _BASELINES_DIR / 's1-corrupt.json'
+        bad.parent.mkdir(parents=True, exist_ok=True)
+        bad.write_text('{"meta": {"top_k": 10},')  # truncated
+        try:
+            with pytest.raises(RuntimeError, match='corrupt'):
+                _load_baseline('s1-corrupt')
+        finally:
+            bad.unlink()
+
+
 def test_metric_keys_declared() -> None:
     outcome = _outcome(baseline=['n1'])
     assert outcome.metric_keys() == ['rbo', 'pass']

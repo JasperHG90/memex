@@ -214,7 +214,13 @@ class RankingBaselineRbo(ExpectedOutcomeBase):
             },
             'ranking': ranking,
         }
-        path.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n')
+        # Atomic write: tempfile in same directory + rename. Without this
+        # a parallelized runner could interleave partial writes and
+        # leave a truncated JSON on disk, which the next verify run
+        # would fail to parse.
+        tmp = path.with_suffix(path.suffix + '.tmp')
+        tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n')
+        tmp.replace(path)
         logger.info(
             'captured baseline for %s → %s (%d note_keys)',
             scenario.id,

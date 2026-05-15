@@ -35,11 +35,14 @@ from __future__ import annotations
 
 import ast
 import json
+import logging
 import re
 from pathlib import Path
 
 from memex_eval.suite import SuiteMetadata, SuiteSources
 from memex_eval.suite.decorator import Suite
+
+logger = logging.getLogger('memex_eval.suites.retrieval_stability')
 
 # Side-effect imports — DO NOT MOVE. These decorator registrations
 # populate the framework's outcome and setup-action registries before
@@ -70,6 +73,12 @@ def _scrape_queries_from_suite(corpus: str) -> list[str]:
     """
     src_path = _SOURCE_SUITES_ROOT / corpus / '__init__.py'
     if not src_path.is_file():
+        logger.warning(
+            'retrieval_stability: source suite %r not found at %s — '
+            'zero scenarios will be registered for this corpus',
+            corpus,
+            src_path,
+        )
         return []
     tree = ast.parse(src_path.read_text(encoding='utf-8'))
     seen: set[str] = set()
@@ -105,11 +114,23 @@ def _load_baseline(scenario_id: str) -> tuple[list[str], dict[str, object]]:
     pending → status='error' with a clear hint) from a 0.0 RBO
     (regression), and compares the persisted ``meta`` block against
     the current scenario state to detect stale baselines.
+
+    A truncated / corrupt JSON is wrapped in a ``RuntimeError`` with
+    a recapture hint — otherwise a bare ``json.JSONDecodeError``
+    crashes suite-import (``memex-eval suite list`` etc.) before
+    operators see a useful message.
     """
     path = _BASELINES_DIR / f'{scenario_id}.json'
     if not path.is_file():
         return [], {}
-    payload = json.loads(path.read_text(encoding='utf-8'))
+    try:
+        payload = json.loads(path.read_text(encoding='utf-8'))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(
+            f'baseline file {path} is corrupt: {exc}. '
+            f'Recapture with `MEMEX_EVAL_CAPTURE_BASELINES=1 '
+            f'memex-eval suite run retrieval_stability`.'
+        ) from exc
     return list(payload.get('ranking', [])), dict(payload.get('meta', {}))
 
 

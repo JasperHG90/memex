@@ -22,6 +22,8 @@ positions dominate the score, which matches how a reranker is judged.
 
 from __future__ import annotations
 
+__all__ = ['rank_biased_overlap']
+
 from typing import Hashable, Sequence
 
 
