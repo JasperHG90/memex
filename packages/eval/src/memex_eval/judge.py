@@ -79,7 +79,7 @@ class Judge:
     """LLM-as-a-judge using dspy with Gemini."""
 
     def __init__(self, model: str | None = None, api_key: str | None = None):
-        model = model or os.environ.get('EVAL_JUDGE_MODEL', 'gemini/gemini-3-flash-preview')
+        model = model or os.environ.get('EVAL_JUDGE_MODEL', 'gemini/gemini-3.1-flash-lite-preview')
         api_key = api_key or os.environ.get('GOOGLE_API_KEY')
         if not api_key:
             raise ValueError(
@@ -99,10 +99,10 @@ class Judge:
         # by default) — an absolute cursor would silently misalign at
         # scale and either over- or under-count tokens.
         self._last_drained_uuid: str | None = None
-        # Some models (notably gemini-3-flash-preview) return empty
-        # `response.usage` through litellm even though `_hidden_params.response_cost`
-        # is populated. We surface this once so a 0-token suite isn't read as
-        # "judge didn't fire."
+        # Some preview models (notably the gemini-3 preview series) return
+        # empty `response.usage` through litellm even though
+        # `_hidden_params.response_cost` is populated. We surface this once
+        # so a 0-token suite isn't read as "judge didn't fire."
         self._warned_missing_usage: bool = False
         self._correctness = dspy.ChainOfThought(BinaryCorrectness)
         self._relevance = dspy.ChainOfThought(RetrievalRelevance)
@@ -154,8 +154,8 @@ class Judge:
             logger.warning(
                 'Judge model %r returned cost but empty token usage from litellm; '
                 'cost.total_usd is accurate but tokens.total_in/out will be 0. '
-                'Known with gemini/gemini-3-flash-preview; switch to a model '
-                'with full litellm telemetry (e.g. gemini/gemini-2.5-flash).',
+                'Known with the gemini-3 preview series (incl. gemini-3.1-flash-lite-preview); '
+                'switch to a model with full litellm telemetry (e.g. gemini/gemini-2.5-flash).',
                 getattr(self.lm, 'model', 'unknown'),
             )
             self._warned_missing_usage = True

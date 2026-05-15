@@ -23,7 +23,7 @@ The suite covers two layers:
    ``--answer-mode claude-code``.
 
 Required env vars:
-- ``GOOGLE_API_KEY`` — for the LLM judge (``gemini/gemini-3-flash-preview``).
+- ``GOOGLE_API_KEY`` — for the LLM judge (``gemini/gemini-3.1-flash-lite-preview``).
 - ``OLLAMA_API_KEY`` — for the Hermes agent (``glm-5.1:cloud``) if running
   in hermes mode. Not needed under ``--answer-mode claude-code``.
 - ``ANTHROPIC_API_KEY`` — for Claude Code if running in that mode.

@@ -53,7 +53,7 @@ uv sync --extra hermes --group hermes-integration
 
 ### Required env vars
 
-- `GOOGLE_API_KEY` — for the LLM judge (`gemini/gemini-3-flash-preview`)
+- `GOOGLE_API_KEY` — for the LLM judge (`gemini/gemini-3.1-flash-lite-preview`)
 - One of (depending on agent backend + model):
   - `OLLAMA_API_KEY` — Hermes mode with default `glm-5.1:cloud`
   - `ANTHROPIC_API_KEY` — Claude Code mode, OR Hermes mode with `anthropic/*`
