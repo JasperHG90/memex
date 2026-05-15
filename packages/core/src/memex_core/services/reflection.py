@@ -449,20 +449,28 @@ class ReflectionService:
             # re-enqueue indefinitely, leaving the MU's observations stale
             # permanently. The dead-letter recovery path is separate (operator
             # action / mark_failed → mark_abandoned cycle).
+            from sqlalchemy import Integer as SAInteger
+            from sqlalchemy import bindparam
+
+            # ``LIMIT :limit`` with a bare int parameter can trip asyncpg's
+            # type inference ("cannot determine data type for parameter $N").
+            # Pin the type explicitly — same discipline as the ``ARRAY(String)``
+            # bind on ``flush_deferred_observation_refresh``'s ``:probes``.
+            stmt = text(
+                'SELECT mu.id FROM memory_units mu '
+                'WHERE mu.vault_id = :vault_id '
+                'AND mu.is_deprioritized = TRUE '
+                'AND NOT EXISTS ('
+                '    SELECT 1 FROM reflection_queue rq '
+                '    WHERE rq.vault_id = mu.vault_id '
+                '    AND rq.source_unit_id = mu.id '
+                "    AND rq.task_type = 'refresh_observation'"
+                "    AND rq.status IN ('pending', 'processing')"
+                ') '
+                'LIMIT :limit'
+            ).bindparams(bindparam('limit', type_=SAInteger))
             scan = await session.execute(
-                text(
-                    'SELECT mu.id FROM memory_units mu '
-                    'WHERE mu.vault_id = :vault_id '
-                    'AND mu.is_deprioritized = TRUE '
-                    'AND NOT EXISTS ('
-                    '    SELECT 1 FROM reflection_queue rq '
-                    '    WHERE rq.vault_id = mu.vault_id '
-                    '    AND rq.source_unit_id = mu.id '
-                    "    AND rq.task_type = 'refresh_observation'"
-                    "    AND rq.status IN ('pending', 'processing')"
-                    ') '
-                    'LIMIT :limit'
-                ),
+                stmt,
                 {'vault_id': vault_id, 'limit': batch_size},
             )
             unit_ids = [row[0] for row in scan.all()]

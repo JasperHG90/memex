@@ -314,11 +314,21 @@ class ReflectionQueueService:
         entity_ids: list[UUID] | set[UUID],
         vault_id: UUID = GLOBAL_VAULT_ID,
     ) -> None:
-        """Delete pending/processing 'reflect' tasks for the given entities.
+        """Delete reflect tasks for the given entities — including historical
+        FAILED and DEAD_LETTER rows for the same ``(entity, vault)``.
 
         Filters by ``task_type='reflect'`` so a reflect ack does NOT nuke any
         pending/processing ``refresh_observation`` rows on the same entity —
         the two task types ride independent lanes by design.
+
+        Asymmetry note: ``complete_refresh`` deletes ONLY the claimed row
+        (scoped by ``ReflectionQueue.id``) and intentionally preserves
+        FAILED/DEAD_LETTER siblings as a diagnostic trail. This method
+        preserves the original pre-V21 behavior — reflect's per-entity
+        rows are coalesced on every ack — because reflect tasks are
+        per-entity (one row per status) whereas refresh tasks are
+        per-observation (many rows per entity, partial-UNIQUE-deduped
+        on the in-flight lane).
         """
         if not entity_ids:
             return

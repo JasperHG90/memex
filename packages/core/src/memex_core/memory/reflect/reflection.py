@@ -812,11 +812,23 @@ class ReflectionEngine:
                 obs_found: dict[str, Any] | None = None
                 obs_index_found: int | None = None
                 original_observations = list(mm.observations or [])
+                # JSONB-loaded observations are dicts in production. Phase 4
+                # reconstruction can transit ``Observation`` instances; the
+                # downstream CAS write needs dicts, so coerce via model_dump
+                # when present. Defensive — should not fire in steady state.
                 for i, candidate in enumerate(original_observations):
-                    if isinstance(candidate, dict) and str(candidate.get('id')) == obs_id_str:
-                        obs_found = candidate
-                        obs_index_found = i
-                        break
+                    if isinstance(candidate, dict):
+                        if str(candidate.get('id')) == obs_id_str:
+                            obs_found = candidate
+                            obs_index_found = i
+                            break
+                    else:
+                        cand_id = getattr(candidate, 'id', None)
+                        dump = getattr(candidate, 'model_dump', None)
+                        if str(cand_id) == obs_id_str and callable(dump):
+                            obs_found = dump(mode='json')
+                            obs_index_found = i
+                            break
                 if obs_found is None or obs_index_found is None:
                     REFRESH_OBSERVATION_TASK_OBS_ALREADY_PRUNED_TOTAL.inc()
                     return
