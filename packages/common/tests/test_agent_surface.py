@@ -84,9 +84,9 @@ _REQUIRED_KEYWORDS: tuple[str, ...] = (
     'units=[{unit_id, verb, reason}]',
     'success=True',  # the bare-success rejection
     '400',
-    # Virtual unit invariant.
+    # Read-only observations invariant (V21).
     'unit_metadata.virtual',
-    '404',
+    'source_memory_units',
     # KV namespace prefixes.
     'user:',
     'project:<id>:',

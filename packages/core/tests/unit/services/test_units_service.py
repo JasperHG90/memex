@@ -24,6 +24,7 @@ class _StubMetastore:
         self._unit = unit
         self.added: list[MemoryUnit] = []
         self.commits = 0
+        self.flushes = 0
         self.refreshes = 0
 
     @asynccontextmanager
@@ -37,11 +38,36 @@ class _StubMetastore:
             def add(self, obj):
                 meta.added.append(obj)
 
+            async def flush(self):
+                meta.flushes += 1
+
             async def commit(self):
                 meta.commits += 1
 
             async def refresh(self, obj):
                 meta.refreshes += 1
+
+            async def exec(self, _stmt):
+                class _Empty:
+                    def all(self):
+                        return []
+
+                    def first(self):
+                        return None
+
+                return _Empty()
+
+            async def execute(self, _stmt):
+                class _Empty:
+                    rowcount = 0
+
+                    def all(self):
+                        return []
+
+                    def first(self):
+                        return None
+
+                return _Empty()
 
         yield _StubSession()
 

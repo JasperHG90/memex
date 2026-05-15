@@ -308,6 +308,7 @@ async def find_similar_facts(
     vault_ids: list[UUID] | None = None,
     pool_multiplier: int = _DEFAULT_POOL_MULTIPLIER,
     max_pool_size: int = _MAX_POOL_SIZE,
+    reflect_input_only: bool = False,
 ) -> list[tuple[UUID, float]]:
     """
     Find semantically similar facts using vector cosine distance.
@@ -360,6 +361,12 @@ async def find_similar_facts(
         .order_by(similarity.desc())
         .limit(pool_size)
     )
+
+    if reflect_input_only:
+        # Reflection synthesis must not pull deprioritized MUs back into observations.
+        # Retrieval callers leave this off — deprioritized units stay queryable for
+        # direct GETs and citation lookups.
+        statement = statement.where(col(MemoryUnit.is_deprioritized).is_(False))
 
     if fact_type:
         statement = statement.where(col(MemoryUnit.fact_type) == fact_type)

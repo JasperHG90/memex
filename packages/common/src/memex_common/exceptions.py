@@ -1,4 +1,5 @@
 from typing import Any
+from uuid import UUID
 
 
 class MemexError(Exception):
@@ -97,3 +98,20 @@ class DeltaValidationError(MemexError, ValueError):
     """
 
     pass
+
+
+class ObservationReadOnlyError(MemexError):
+    """Raised when ``memory_deprioritize`` is called with an ``Observation.id``.
+
+    Mental-model observations are read-only projections of memory units. To
+    suppress an observation, deprioritize one of its source MUs. Carries
+    ``source_memory_units`` so the HTTP layer can return a structured 400
+    body redirecting the caller.
+    """
+
+    def __init__(self, source_memory_units: list[UUID]):
+        super().__init__(
+            'observations are read-only',
+            details={'source_memory_units': [str(u) for u in source_memory_units]},
+        )
+        self.source_memory_units = list(source_memory_units)

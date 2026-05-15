@@ -47,6 +47,82 @@ REFLECTION_CAS_ABANDONS_TOTAL = Counter(
     'refresh advanced the version column between read and CAS UPDATE.',
 )
 
+# Deprioritize/refresh-observation lifecycle counters.
+DEPRIORITIZE_REJECTED_OBSERVATION_UUID_TOTAL = Counter(
+    'memex_deprioritize_rejected_observation_uuid_total',
+    'Calls to memory_deprioritize where the unit_id resolved to an observation, '
+    'not a memory unit; client received HTTP 400 with source_memory_units.',
+)
+
+REFRESH_OBSERVATION_TASK_ENQUEUED_TOTAL = Counter(
+    'memex_refresh_observation_task_enqueued_total',
+    'Refresh-observation tasks enqueued by an MU deprio (after dedupe).',
+)
+
+REFRESH_OBSERVATION_TASK_COMPLETED_TOTAL = Counter(
+    'memex_refresh_observation_task_completed_total',
+    'Refresh-observation tasks completed (any outcome: refreshed, dropped, acked).',
+)
+
+REFRESH_OBSERVATION_TASK_ZERO_EVIDENCE_TOTAL = Counter(
+    'memex_refresh_observation_task_zero_evidence_total',
+    'Refresh tasks that dropped the observation because no surviving evidence remained.',
+)
+
+REFRESH_OBSERVATION_TASK_OBS_ALREADY_PRUNED_TOTAL = Counter(
+    'memex_refresh_observation_task_obs_already_pruned_total',
+    'Refresh tasks idempotently acked because the observation row was already gone by claim time.',
+)
+
+REFRESH_OBSERVATION_TASK_ALREADY_ABSORBED_TOTAL = Counter(
+    'memex_refresh_observation_task_already_absorbed_total',
+    'Post-lock race check: none of the triggering MUs is still cited; acked idempotently.',
+)
+
+REFRESH_OBSERVATION_TASK_DROPPED_BY_LLM_TOTAL = Counter(
+    'memex_refresh_observation_task_dropped_by_llm_total',
+    'LLM returned should_drop=True AND surviving_evidence_count below the retention threshold.',
+)
+
+REFRESH_OBSERVATION_DROP_OVERRIDDEN_TOTAL = Counter(
+    'memex_refresh_observation_drop_overridden_total',
+    'Guardrail: LLM said should_drop=True but surviving_evidence_count >= retention threshold; override.',
+)
+
+REFRESH_OBSERVATION_MERGED_PREDECESSOR_TOTAL = Counter(
+    'memex_refresh_observation_merged_predecessor_total',
+    'Phase 4 dropped a predecessor UUID during a merge (kept the lowest-index UUID).',
+)
+
+PHASE4_PROVENANCE_MALFORMED_TOTAL = Counter(
+    'memex_phase4_provenance_malformed_total',
+    'Phase 4 ComparePhaseOutput.provenance entry malformed; fresh uuid4 used instead.',
+    ['reason'],
+)
+
+RESTORE_OBSERVATION_NO_AFFECTED_ENTITIES_TOTAL = Counter(
+    'memex_restore_observation_no_affected_entities_total',
+    'Restore of an orphan MU (zero unit_entities rows); no priority reflect enqueued.',
+)
+
+REFLECTION_QUEUE_PRIORITY_LANE_ENQUEUED_TOTAL = Counter(
+    'memex_reflection_queue_priority_lane_enqueued_total',
+    'Priority-lane reflect tasks enqueued (e.g. from restore).',
+)
+
+REFRESH_OBSERVATION_RECONCILE_REPAIRED_TOTAL = Counter(
+    'memex_refresh_observation_reconcile_repaired_total',
+    'Reconcile-tick repaired a missing refresh task for a deprioritized MU.',
+    ['vault_id'],
+)
+
+REFRESH_OBSERVATION_TASK_LATENCY_SECONDS = Histogram(
+    'memex_refresh_observation_task_latency_seconds',
+    'Processing wall-clock from claim/dispatch to refresh completion (does NOT '
+    'include queue wait between enqueue and claim). Compute queue-wait from '
+    'reflection_queue.last_queued_at if needed.',
+)
+
 # ---------------------------------------------------------------------------
 # LLM metrics
 # ---------------------------------------------------------------------------

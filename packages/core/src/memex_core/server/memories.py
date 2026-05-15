@@ -9,7 +9,11 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, ValidationError
 
 from memex_common.config import Permission
-from memex_common.exceptions import MemexError, MemoryUnitNotFoundError
+from memex_common.exceptions import (
+    MemexError,
+    MemoryUnitNotFoundError,
+    ObservationReadOnlyError,
+)
 from memex_core.server.auth import (
     AuthContext,
     check_vault_access,
@@ -176,6 +180,18 @@ async def deprioritize_memory_unit(
             background_tasks=background_tasks,
         )
         return build_memory_unit_dto(unit)
+    except ObservationReadOnlyError as e:
+        # Observations are read-only projections of MUs; redirect the caller to
+        # the underlying source MUs. Ordering: catch this BEFORE MemexError, since
+        # ObservationReadOnlyError is a MemexError subclass and the generic catch
+        # below would otherwise flatten the structured detail to a string.
+        raise HTTPException(
+            status_code=400,
+            detail={
+                'error': 'observations are read-only',
+                'source_memory_units': [str(u) for u in e.source_memory_units],
+            },
+        )
     except MemoryUnitNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:

@@ -843,6 +843,7 @@ class MemexAPI:
                             reason=f'fsfm_auto: composite_score={composite_score:.4f}',
                             vault_id=vault_id,
                             actor='fsfm_auto',
+                            defer_observation_refresh=True,
                         )
                     except (MemoryUnitNotFoundError, IntegrityError) as exc:
                         logger.warning(
@@ -878,6 +879,23 @@ class MemexAPI:
                 # session context manager — the metastore's session does
                 # not auto-commit.
                 await session.commit()
+
+            # FSFM deferred each per-unit refresh enqueue (defer_observation_refresh=True);
+            # flush them all in one LATERAL JSONB scan + bulk INSERT now that the
+            # batch is committed. A flush failure is logged but does NOT roll back
+            # the deprios — the reconcile-tick pass repairs missing refresh tasks.
+            if summary.deprioritized:
+                try:
+                    await self._units.flush_deferred_observation_refresh(
+                        [UUID(uid) for uid in summary.deprioritized],
+                        vault_id=vault_id,
+                    )
+                except Exception:
+                    logger.exception(
+                        'FSFM: flush_deferred_observation_refresh failed; reconcile '
+                        'tick will repair. deprio count=%d',
+                        len(summary.deprioritized),
+                    )
 
             FSFM_SCORER_RUNS_TOTAL.labels(outcome='success').inc()
         except Exception:
@@ -1840,6 +1858,24 @@ class MemexAPI:
     ) -> list[Any]:
         """Claim reflection queue batch. Delegates to ReflectionService."""
         return await self._reflection.claim_reflection_queue_batch(limit=limit, vault_id=vault_id)
+
+    async def refresh_observation(self, item: Any) -> None:
+        """Execute a single refresh-observation task. Delegates to ReflectionService."""
+        return await self._reflection.refresh_observation(item)
+
+    async def reclaim_refresh_with_backoff(self, item: Any) -> None:
+        """Re-enqueue a refresh task whose advisory lock was held."""
+        return await self._reflection.reclaim_refresh_with_backoff(item)
+
+    async def mark_queue_item_failed(self, item: Any, error: str) -> None:
+        """Mark a specific claimed queue item as failed."""
+        return await self._reflection.mark_item_failed(item, error)
+
+    async def reconcile_missing_refresh_tasks(self, vault_id: UUID, batch_size: int = 50) -> int:
+        """Reconcile deprio'd MUs missing refresh-observation queue rows."""
+        return await self._reflection.reconcile_missing_refresh_tasks(
+            vault_id=vault_id, batch_size=batch_size
+        )
 
     async def recover_stale_processing(self) -> int:
         """Reset PROCESSING items stuck longer than the configured timeout."""

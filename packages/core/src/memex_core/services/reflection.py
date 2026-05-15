@@ -8,6 +8,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 import dspy
+from sqlalchemy import text
 
 from memex_common.config import GLOBAL_VAULT_ID
 from memex_core.config import MemexConfig
@@ -361,6 +362,123 @@ class ReflectionService:
             return await self.queue_service.claim_next_batch(
                 session, limit=limit, vault_id=vault_id
             )
+
+    async def refresh_observation(self, item: Any) -> None:
+        """Execute a single refresh-observation task end-to-end.
+
+        Constructs a per-call ``ReflectionEngine`` (mirrors the existing
+        per-batch construction in ``reflect_batch_detailed``) and invokes
+        the engine's ``_refresh_observation`` — which opens its own short
+        per-phase sessions internally (Phase A read, Phase C write). On
+        success, opens a fresh session to delete the queue row via
+        ``complete_refresh``.
+
+        No outer session is held across the LLM call: holding a pool
+        connection idle while the LLM round-trip runs would halve effective
+        pool size under refresh load.
+
+        Raises ``AdvisoryLockTakenError`` for the scheduler to treat as a
+        reclaim-without-retry-bump. Other exceptions propagate to the
+        scheduler's per-item error handler which calls ``mark_failed``.
+        """
+        from memex_core.memory.reflect.reflection import get_reflection_engine
+
+        # Engine construction needs an entity_session_factory; pass a no-op
+        # placeholder for the orchestrator session (the engine's
+        # ``_refresh_observation`` does NOT use ``self.session``).
+        engine = get_reflection_engine(
+            session=None,  # type: ignore[arg-type]
+            config=self.config,
+            embedder=self.embedding_model,
+            entity_session_factory=self.metastore.session,
+        )
+        await engine._refresh_observation(item)
+        async with self.metastore.session() as session:
+            await self.queue_service.complete_refresh(session, item)
+
+    async def reclaim_refresh_with_backoff(self, item: Any) -> None:
+        """Reset a refresh task to PENDING with a jittered last_queued_at.
+
+        Used by the scheduler when ``_refresh_observation`` raises
+        ``AdvisoryLockTakenError``. ``retry_count`` is NOT incremented —
+        advisory-lock contention is transient, not a failure.
+        """
+        import random
+
+        cfg = self.config.server.memory.reflection
+        jitter = random.uniform(
+            float(cfg.refresh_obs_retry_backoff_min_seconds),
+            float(cfg.refresh_obs_retry_backoff_max_seconds),
+        )
+        async with self.metastore.session() as session:
+            await self.queue_service.reclaim_with_backoff(session, item, jitter)
+
+    async def mark_item_failed(self, item: Any, error: str) -> None:
+        """Mark a specific claimed queue item as failed, filtered by task_type.
+
+        Refresh-observation failures filter by ``observation_id`` so they
+        don't bump retry_count on a co-pending reflect task for the same
+        entity.
+        """
+        async with self.metastore.session() as session:
+            await self.queue_service.mark_failed(
+                session,
+                entity_id=item.entity_id,
+                vault_id=item.vault_id,
+                error=error,
+                task_type=getattr(item, 'task_type', 'reflect') or 'reflect',
+                observation_id=getattr(item, 'observation_id', None),
+            )
+
+    async def reconcile_missing_refresh_tasks(self, vault_id: UUID, batch_size: int = 50) -> int:
+        """Repair deprio'd MUs that lack a refresh-observation queue row.
+
+        Scoped to a single ``vault_id`` to avoid cross-tenant noise. Returns
+        the number of refresh rows enqueued by the repair pass.
+        """
+        from memex_core.metrics import (
+            REFRESH_OBSERVATION_RECONCILE_REPAIRED_TOTAL,
+        )
+
+        async with self.metastore.session() as session:
+            scan = await session.execute(
+                text(
+                    'SELECT mu.id FROM memory_units mu '
+                    'WHERE mu.vault_id = :vault_id '
+                    'AND mu.is_deprioritized = TRUE '
+                    'AND NOT EXISTS ('
+                    '    SELECT 1 FROM reflection_queue rq '
+                    '    WHERE rq.vault_id = mu.vault_id '
+                    '    AND rq.source_unit_id = mu.id '
+                    "    AND rq.task_type = 'refresh_observation'"
+                    ') '
+                    'LIMIT :limit'
+                ),
+                {'vault_id': vault_id, 'limit': batch_size},
+            )
+            unit_ids = [row[0] for row in scan.all()]
+            if not unit_ids:
+                return 0
+
+        # Construct a thin UnitsService on demand — flush_deferred_observation_refresh
+        # only needs metastore + config; filestore is required by BaseService but the
+        # flush helper never touches it. Reusing the ReflectionService's metastore
+        # keeps every refresh enqueue in the same connection pool.
+        from memex_core.services.units import UnitsService
+
+        units_service = UnitsService(
+            metastore=self.metastore,
+            filestore=None,  # type: ignore[arg-type]  # flush path doesn't read filestore
+            config=self.config,
+        )
+        enqueued = await units_service.flush_deferred_observation_refresh(
+            unit_ids, vault_id=vault_id
+        )
+        if enqueued:
+            REFRESH_OBSERVATION_RECONCILE_REPAIRED_TOTAL.labels(vault_id=str(vault_id)).inc(
+                enqueued
+            )
+        return enqueued
 
     async def recover_stale_processing(self) -> int:
         """Reset PROCESSING items stuck longer than the configured timeout."""

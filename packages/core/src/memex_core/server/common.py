@@ -18,6 +18,7 @@ from memex_common.exceptions import (
     FeatureDisabledError,
     MemexError,
     NoteNotAppendableError,
+    ObservationReadOnlyError,
     ResourceNotFoundError,
     VaultNotFoundError,
 )
@@ -57,6 +58,22 @@ def _handle_error(e: Exception, context: str) -> HTTPException:
         raise e
 
     logger.error(f'{context}: {e}', exc_info=True)
+
+    # ObservationReadOnlyError must precede every other isinstance check.
+    # It is a MemexError subclass; the generic `isinstance(e, MemexError)`
+    # branch below would otherwise flatten its structured `source_memory_units`
+    # detail to a string and silently break the agent contract. Defense in
+    # depth: route handlers also catch this explicitly, but this clause
+    # closes the gap for any future call site that routes through
+    # `_handle_error` directly.
+    if isinstance(e, ObservationReadOnlyError):
+        return HTTPException(
+            status_code=400,
+            detail={
+                'error': 'observations are read-only',
+                'source_memory_units': [str(u) for u in e.source_memory_units],
+            },
+        )
 
     if isinstance(e, VaultNotFoundError):
         return HTTPException(status_code=404, detail=str(e))

@@ -1926,7 +1926,21 @@ class RetrievalEngine:
                 if mid:
                     evidence_ids.append(str(mid))
 
-            virtual_id = uuid5(_VIRTUAL_UNIT_NS, f'{model.id}:{title}')
+            # Use the observation's stable id (uuid4, populated by Phase 4 reconstruction
+            # via ObservationProvenance) as the virtual_id. Falls back to the legacy
+            # uuid5 hash for any legacy JSONB rows that predate observation.id being
+            # persisted — every newly-written observation now carries an id.
+            obs_id_raw = obs.get('id') if isinstance(obs, dict) else getattr(obs, 'id', None)
+            virtual_id: UUID
+            if obs_id_raw is not None:
+                try:
+                    virtual_id = (
+                        obs_id_raw if isinstance(obs_id_raw, UUID) else UUID(str(obs_id_raw))
+                    )
+                except (ValueError, AttributeError, TypeError):
+                    virtual_id = uuid5(_VIRTUAL_UNIT_NS, f'{model.id}:{title}')
+            else:
+                virtual_id = uuid5(_VIRTUAL_UNIT_NS, f'{model.id}:{title}')
             units.append(
                 MemoryUnit(
                     id=virtual_id,
