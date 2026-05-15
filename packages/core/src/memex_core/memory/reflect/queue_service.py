@@ -485,9 +485,17 @@ class ReflectionQueueService:
         # Prefer the currently-PROCESSING row (the one we just failed) over
         # any historical FAILED siblings; without ORDER BY, the planner may
         # return any matching row, leaving the PROCESSING one stuck.
-        stmt = stmt.order_by(
-            (col(ReflectionQueue.status) == ReflectionStatus.PROCESSING).desc(),
-            col(ReflectionQueue.last_queued_at).desc(),
+        # ``LIMIT 1`` + ``FOR UPDATE SKIP LOCKED`` matches ``claim_next_batch``'s
+        # row-level safety — two concurrent failure paths for the same row
+        # don't double-increment retry_count, and a row held by an in-flight
+        # claim is silently skipped.
+        stmt = (
+            stmt.order_by(
+                (col(ReflectionQueue.status) == ReflectionStatus.PROCESSING).desc(),
+                col(ReflectionQueue.last_queued_at).desc(),
+            )
+            .with_for_update(skip_locked=True)
+            .limit(1)
         )
         result = await session.exec(stmt)
         item = result.first()

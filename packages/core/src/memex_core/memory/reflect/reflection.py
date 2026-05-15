@@ -98,8 +98,15 @@ def get_reflection_engine(
     embedder: EmbeddingsModel,
     entity_session_factory: EntitySessionFactory | None = None,
 ) -> 'ReflectionEngine':
-    """
-    Factory method to create a ReflectionEngine with dependencies.
+    """Factory for ReflectionEngine.
+
+    For the refresh-observation path, callers MUST pass an
+    ``entity_session_factory`` — that path opens its own per-phase sessions
+    through the factory and does not read ``self.session``. The shared
+    ``session`` is only used for the batch reflect path. ``_entity_session``
+    raises a clear ``RuntimeError`` if both ``self.session`` is None AND
+    ``entity_session_factory`` is None, so the misconfiguration surfaces at
+    first access rather than as a silent ``AttributeError``.
     """
     return ReflectionEngine(
         session=session,
@@ -253,6 +260,14 @@ class ReflectionEngine:
             async with self.entity_session_factory() as session:
                 yield session
         else:
+            if self.session is None:
+                raise RuntimeError(
+                    'ReflectionEngine has neither entity_session_factory nor '
+                    'a shared session. Construct via get_reflection_engine() '
+                    'with entity_session_factory=metastore.session for the '
+                    'refresh-observation path, or pass a session for legacy '
+                    'single-session callers.'
+                )
             yield self.session
 
     async def reflect_batch(
@@ -889,9 +904,17 @@ class ReflectionEngine:
             # ---------- Phase B: LLM call (no DB tx, no lock) ----------
             refreshed: RefreshedObservation | None = None
             if live_ids and obs_context is not None:
-                refreshed = await self._invoke_refresh_signature_with_context(
-                    obs_context, surviving_context
-                )
+                try:
+                    refreshed = await self._invoke_refresh_signature_with_context(
+                        obs_context, surviving_context
+                    )
+                except (RuntimeError, ValueError) as e:
+                    # Wrap with the observation context so production logs
+                    # can pin a sporadic LLM failure to a specific obs.
+                    raise RuntimeError(
+                        f'refresh signature failed for observation '
+                        f'{obs_id_str} (entity {mm_entity_id}): {e}'
+                    ) from e
 
             # ---------- Phase C: short write tx + CAS UPDATE ----------
             reflect_cfg = self.config.server.memory.reflection
@@ -1816,9 +1839,10 @@ class ReflectionEngine:
         if not provenance:
             # LLM omitted the entire list — every output observation gets a
             # fresh uuid4, losing all existing stable IDs for this entity.
-            # Emit one counter increment per output so the metric reflects
-            # the breadth of the drift rather than a single signal.
-            PHASE4_PROVENANCE_MALFORMED_TOTAL.labels(reason='empty').inc(output_count)
+            # One increment per occurrence keeps the counter unitary; the
+            # ``output_count`` breadth is observable separately via the
+            # phase 4 output_count histogram if/when it lands.
+            PHASE4_PROVENANCE_MALFORMED_TOTAL.labels(reason='empty').inc()
         elif len(provenance) != output_count:
             PHASE4_PROVENANCE_MALFORMED_TOTAL.labels(reason='length_mismatch').inc()
             provenance = []  # ignore the entire list; per-output fresh uuid4

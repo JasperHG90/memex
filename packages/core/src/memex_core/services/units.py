@@ -476,13 +476,18 @@ class UnitsService(BaseService):
         ]
 
         async with self.metastore.session() as session:  # type: AsyncSession
+            # SKIP LOCKED: under a large deprio burst, multiple flushes may
+            # race on the same mental_models rows. A blocking FOR UPDATE
+            # serializes them and holds row locks across the INSERT — SKIP
+            # LOCKED lets the second flush move on; any MM it skips will be
+            # picked up by the reconcile-tick pass (vault-partitioned).
             scan = await session.execute(
                 text(
                     'SELECT DISTINCT mm.id, mm.entity_id, mm.observations '
                     'FROM mental_models mm, '
                     'LATERAL unnest(CAST(:probes AS jsonb[])) AS probe(p) '
                     'WHERE mm.vault_id = :vault_id AND mm.observations @> probe.p '
-                    'FOR UPDATE OF mm'
+                    'FOR UPDATE OF mm SKIP LOCKED'
                 ),
                 {'vault_id': vault_id, 'probes': probes_json},
             )

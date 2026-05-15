@@ -383,9 +383,11 @@ class ReflectionService:
         """
         from memex_core.memory.reflect.reflection import get_reflection_engine
 
-        # Engine construction needs an entity_session_factory; pass a no-op
-        # placeholder for the orchestrator session (the engine's
-        # ``_refresh_observation`` does NOT use ``self.session``).
+        # The refresh path uses ``entity_session_factory`` exclusively —
+        # the engine never reads ``self.session``. We still pass session=
+        # None because ``_entity_session`` raises a loud RuntimeError if
+        # any future code path on this engine instance accidentally falls
+        # through to ``self.session``.
         engine = get_reflection_engine(
             session=None,  # type: ignore[arg-type]
             config=self.config,
@@ -441,6 +443,12 @@ class ReflectionService:
         )
 
         async with self.metastore.session() as session:
+            # The NOT EXISTS subquery filters to in-flight statuses only —
+            # without ``status IN ('pending', 'processing')`` a stuck
+            # DEAD_LETTER (or FAILED, ABANDONED) row would suppress
+            # re-enqueue indefinitely, leaving the MU's observations stale
+            # permanently. The dead-letter recovery path is separate (operator
+            # action / mark_failed → mark_abandoned cycle).
             scan = await session.execute(
                 text(
                     'SELECT mu.id FROM memory_units mu '
@@ -451,6 +459,7 @@ class ReflectionService:
                     '    WHERE rq.vault_id = mu.vault_id '
                     '    AND rq.source_unit_id = mu.id '
                     "    AND rq.task_type = 'refresh_observation'"
+                    "    AND rq.status IN ('pending', 'processing')"
                     ') '
                     'LIMIT :limit'
                 ),
