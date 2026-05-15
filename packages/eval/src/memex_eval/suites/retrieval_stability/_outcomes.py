@@ -118,6 +118,19 @@ class RankingBaselineRbo(ExpectedOutcomeBase):
             self._write_baseline(scenario, retrieved_note_keys)
             return {'rbo': 1.0, 'pass': 1.0}
 
+        # Surface a corrupt-baseline sentinel from _load_baseline as a
+        # per-scenario error rather than letting an empty ranking
+        # silently score 0.0. _load_baseline cannot raise — doing so
+        # would crash `memex-eval suite list` for every suite — so the
+        # detection lives here.
+        if self.baseline_meta.get('_corrupt'):
+            raise RuntimeError(
+                f'baseline file is corrupt for {scenario.id}: '
+                f'{self.baseline_meta.get("_error", "(unknown error)")}. '
+                f'Recapture with `MEMEX_EVAL_CAPTURE_BASELINES=1 '
+                f'memex-eval suite run retrieval_stability`.'
+            )
+
         # Verify mode. The persisted meta block in the baseline JSON is
         # the source of truth for capture-time parameters; compare it
         # against the live scenario state. Without this, the outcome's

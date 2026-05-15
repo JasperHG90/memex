@@ -390,23 +390,32 @@ class TestBaselineFileIO:
         payload = json.loads(baseline_path.read_text())
         assert payload['ranking'] == ['n1', 'n2']
 
-    def test_load_corrupt_baseline_raises_runtime_error(self, tmp_path: Path) -> None:
-        """A truncated baseline JSON surfaces a RuntimeError with a
-        recapture hint — bare ``json.JSONDecodeError`` would crash
-        suite-import (``memex-eval suite list``)."""
-        from memex_eval.suites.retrieval_stability import (
-            _BASELINES_DIR,
-            _load_baseline,
-        )
+    def test_load_corrupt_baseline_returns_sentinel(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A truncated baseline JSON returns a corrupt sentinel rather
+        than raising. ``_load_baseline`` raising at module-import time
+        would crash ``memex-eval suite list`` for every suite, not just
+        this one. Redirect ``_BASELINES_DIR`` to a tmp path so a test
+        crash never leaves a corrupt file in the package."""
+        import memex_eval.suites.retrieval_stability as suite_pkg
 
-        bad = _BASELINES_DIR / 's1-corrupt.json'
-        bad.parent.mkdir(parents=True, exist_ok=True)
-        bad.write_text('{"meta": {"top_k": 10},')  # truncated
-        try:
-            with pytest.raises(RuntimeError, match='corrupt'):
-                _load_baseline('s1-corrupt')
-        finally:
-            bad.unlink()
+        monkeypatch.setattr(suite_pkg, '_BASELINES_DIR', tmp_path)
+        (tmp_path / 's1-corrupt.json').write_text('{"meta": {"top_k": 10},')
+
+        ranking, meta = suite_pkg._load_baseline('s1-corrupt')
+        assert ranking == []
+        assert meta.get('_corrupt') is True
+        assert 's1-corrupt' in str(meta.get('_error', ''))
+
+    def test_score_surfaces_corrupt_sentinel(self) -> None:
+        """The outcome detects a corrupt sentinel in baseline_meta and
+        raises a per-scenario RuntimeError so the runner records
+        status='error' for THIS scenario without breaking the suite."""
+        outcome = _outcome(baseline=[], baseline_meta={'_corrupt': True, '_error': 'truncated'})
+        ans = AgentAnswer(retrieved_unit_ids=['u1'])
+        with pytest.raises(RuntimeError, match='corrupt'):
+            outcome.score(ans, _scenario(), note_key_to_unit_ids={'n1': ['u1']})
 
 
 def test_metric_keys_declared() -> None:

@@ -115,10 +115,12 @@ def _load_baseline(scenario_id: str) -> tuple[list[str], dict[str, object]]:
     (regression), and compares the persisted ``meta`` block against
     the current scenario state to detect stale baselines.
 
-    A truncated / corrupt JSON is wrapped in a ``RuntimeError`` with
-    a recapture hint — otherwise a bare ``json.JSONDecodeError``
-    crashes suite-import (``memex-eval suite list`` etc.) before
-    operators see a useful message.
+    A truncated / corrupt JSON returns a sentinel meta
+    ``{'_corrupt': True, '_error': '<reason>'}`` rather than raising.
+    Raising here propagates up through scenario registration and
+    crashes ``memex-eval suite list`` for every suite. The outcome's
+    ``score()`` detects the sentinel and surfaces the error per
+    scenario.
     """
     path = _BASELINES_DIR / f'{scenario_id}.json'
     if not path.is_file():
@@ -126,11 +128,7 @@ def _load_baseline(scenario_id: str) -> tuple[list[str], dict[str, object]]:
     try:
         payload = json.loads(path.read_text(encoding='utf-8'))
     except json.JSONDecodeError as exc:
-        raise RuntimeError(
-            f'baseline file {path} is corrupt: {exc}. '
-            f'Recapture with `MEMEX_EVAL_CAPTURE_BASELINES=1 '
-            f'memex-eval suite run retrieval_stability`.'
-        ) from exc
+        return [], {'_corrupt': True, '_error': f'{path}: {exc}'}
     return list(payload.get('ranking', [])), dict(payload.get('meta', {}))
 
 
