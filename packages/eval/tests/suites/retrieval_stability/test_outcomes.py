@@ -453,6 +453,23 @@ class TestBaselineFileIO:
         payload = json.loads(baseline_path.read_text())
         assert payload['ranking'] == ['n1', 'n2']
 
+    def test_load_baseline_round_trip(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """A well-formed baseline JSON round-trips through
+        ``_write_baseline`` → ``_load_baseline`` with the ranking and
+        every required meta key intact."""
+        import memex_eval.suites.retrieval_stability as suite_pkg
+
+        monkeypatch.setattr(suite_pkg, '_BASELINES_DIR', tmp_path)
+        baseline_path = tmp_path / 's1_roundtrip.json'
+        outcome = _outcome(baseline=['n1', 'n2'], baseline_path=str(baseline_path))
+        outcome._write_baseline(_scenario(sid='s1_roundtrip'), ['n1', 'n2', 'n3'])
+
+        ranking, meta = suite_pkg._load_baseline('s1_roundtrip')
+        assert ranking == ['n1', 'n2', 'n3']
+        assert meta == {'schema_version': 1, 'top_k': 10, 'search_type': 'memory'}
+
     def test_load_corrupt_baseline_returns_sentinel(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
