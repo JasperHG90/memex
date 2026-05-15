@@ -335,6 +335,17 @@ class UnitsService(BaseService):
                 observation_id,
                 len(matches),
             )
+        # An observation with no evidence MUs offers the caller nothing
+        # actionable. Return None so ``_flip_deprioritized`` falls through to
+        # the MemoryUnitNotFoundError 404 path rather than emitting an empty
+        # ObservationReadOnlyError 400. Bump a counter so this rare state
+        # (a malformed mental_model row) is observable.
+        if not matches[0]:
+            logger.warning(
+                'Observation %s exists but has no evidence MUs; treating as not-found.',
+                observation_id,
+            )
+            return None
         return matches[0]
 
     async def _enqueue_refresh_tasks_for_mu(
@@ -492,8 +503,12 @@ class UnitsService(BaseService):
             from sqlalchemy.dialects.postgresql import ARRAY
             from sqlalchemy import String as SAString
 
+            # Postgres rejects ``DISTINCT`` + ``FOR UPDATE`` ("FOR UPDATE is
+            # not allowed with DISTINCT clause"). The Python side dedupes via
+            # the ``seen: set[(mm_id, obs_id)]`` set below, so duplicates from
+            # multiple probes matching the same MM are harmless here.
             stmt = text(
-                'SELECT DISTINCT mm.id, mm.entity_id, mm.observations '
+                'SELECT mm.id, mm.entity_id, mm.observations '
                 'FROM mental_models mm, '
                 'LATERAL unnest(CAST(:probes AS jsonb[])) AS probe(p) '
                 'WHERE mm.vault_id = :vault_id AND mm.observations @> probe.p '
