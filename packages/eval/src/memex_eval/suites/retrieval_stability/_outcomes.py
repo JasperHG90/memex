@@ -105,8 +105,29 @@ class RankingBaselineRbo(ExpectedOutcomeBase):
         judge: Any | None = None,
         context: dict[str, Any] | None = None,
     ) -> dict[str, float]:
-        # Always resolve the current retrieved note_keys — both modes
-        # use them. Truncate to the scenario's declared top_k.
+        # Wiring guards run FIRST — they catch a code bug in
+        # ``__init__.py`` (scenario and outcome constructed with
+        # divergent parameters) and apply equally in verify and
+        # capture modes. Running them before ``_retrieved_note_keys``
+        # avoids resolving against the wrong search-type branch and
+        # then discarding the result.
+        if scenario.top_k != self.expected_top_k:
+            raise RuntimeError(
+                f'scenario/outcome wiring error for {scenario.id}: '
+                f'scenario.top_k={scenario.top_k} but outcome was '
+                f'constructed with expected_top_k={self.expected_top_k}.'
+            )
+        if scenario.search_type != self.expected_search_type:
+            raise RuntimeError(
+                f'scenario/outcome wiring error for {scenario.id}: '
+                f'scenario.search_type={scenario.search_type!r} but '
+                f'outcome was constructed with '
+                f'expected_search_type={self.expected_search_type!r}.'
+            )
+
+        # Resolve current retrieved note_keys for the (now-confirmed)
+        # search_type. Truncate to the scenario's declared top_k. Both
+        # capture and verify modes consume the result.
         retrieved_note_keys = _retrieved_note_keys(
             answer=answer,
             search_type=self.expected_search_type,
@@ -114,6 +135,8 @@ class RankingBaselineRbo(ExpectedOutcomeBase):
             context=context,
         )[: scenario.top_k]
 
+        # Capture mode: skip verification and rewrite the baseline from
+        # the current scenario state. Meta-mismatch self-heals.
         if _capture_mode_enabled():
             self._write_baseline(scenario, retrieved_note_keys)
             return {'rbo': 1.0, 'pass': 1.0}
@@ -133,10 +156,7 @@ class RankingBaselineRbo(ExpectedOutcomeBase):
 
         # Verify mode. The persisted meta block in the baseline JSON is
         # the source of truth for capture-time parameters; compare it
-        # against the live scenario state. Without this, the outcome's
-        # ``expected_*`` fields and ``scenario.*`` fields are sourced
-        # from the same module literals and the guard becomes
-        # tautological.
+        # against the live scenario state to detect stale baselines.
         recapture = (
             'Recapture with `MEMEX_EVAL_CAPTURE_BASELINES=1 '
             'memex-eval suite run retrieval_stability`.'
@@ -178,22 +198,6 @@ class RankingBaselineRbo(ExpectedOutcomeBase):
                 f'baseline schema_version mismatch for {scenario.id}: '
                 f'outcome expects {self.schema_version} but baseline JSON '
                 f'is at version {captured_schema}. {recapture}'
-            )
-        # Sanity guards: the outcome's expected_* fields document the
-        # intent at scenario-registration time. A drift here would
-        # indicate a coding error in __init__.py, not a stale baseline.
-        if scenario.top_k != self.expected_top_k:
-            raise RuntimeError(
-                f'scenario/outcome wiring error for {scenario.id}: '
-                f'scenario.top_k={scenario.top_k} but outcome was '
-                f'constructed with expected_top_k={self.expected_top_k}.'
-            )
-        if scenario.search_type != self.expected_search_type:
-            raise RuntimeError(
-                f'scenario/outcome wiring error for {scenario.id}: '
-                f'scenario.search_type={scenario.search_type!r} but '
-                f'outcome was constructed with '
-                f'expected_search_type={self.expected_search_type!r}.'
             )
         if not self.baseline_ranking:
             raise RuntimeError(

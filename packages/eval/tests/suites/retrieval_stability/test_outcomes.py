@@ -356,24 +356,41 @@ class TestCaptureMode:
 
     def test_capture_meta_mismatch_does_NOT_raise(self, _capture_env: Path) -> None:
         """Capture mode REWRITES the meta from the current state — a
-        config bump that intentionally mismatches the prior baseline
-        should self-heal on recapture, not error."""
+        stale meta block (e.g. baseline captured at a previous top_k)
+        should self-heal on recapture, not error. Wiring (outcome vs
+        scenario) IS still validated since that's always a code bug."""
         baseline_path = _capture_env / 's1-memory.json'
         outcome = _outcome(
             baseline=['stale'],
             baseline_path=str(baseline_path),
             expected_top_k=10,
             expected_search_type='memory',
+            # Stale meta on disk: previous capture was at top_k=5.
+            baseline_meta={'schema_version': 1, 'top_k': 5, 'search_type': 'memory'},
         )
         ans = AgentAnswer(retrieved_unit_ids=['u1'])
-        # scenario.top_k=5 disagrees with outcome.expected_top_k=10 —
-        # verify mode would raise; capture mode just writes.
-        result = outcome.score(ans, _scenario(top_k=5), note_key_to_unit_ids={'n1': ['u1']})
+        # Scenario is consistent with the outcome (wiring OK); only
+        # the on-disk meta is stale. Capture rewrites it.
+        result = outcome.score(ans, _scenario(top_k=10), note_key_to_unit_ids={'n1': ['u1']})
         assert result['pass'] == 1.0
         payload = json.loads(baseline_path.read_text())
-        # Meta reflects the live scenario.top_k, not the outcome's
-        # stale expected_top_k.
-        assert payload['meta']['top_k'] == 5
+        # Meta reflects the live scenario.top_k, not the stale value
+        # on the prior baseline.
+        assert payload['meta']['top_k'] == 10
+
+    def test_capture_wiring_error_still_raises(self, _capture_env: Path) -> None:
+        """A wiring error in __init__.py (outcome.expected_* diverges
+        from scenario.*) IS a code bug and raises in capture mode too
+        — capture should not paper over a bug it cannot fix."""
+        baseline_path = _capture_env / 's1-memory.json'
+        outcome = _outcome(
+            baseline=['stale'],
+            baseline_path=str(baseline_path),
+            expected_top_k=10,
+        )
+        ans = AgentAnswer(retrieved_unit_ids=['u1'])
+        with pytest.raises(RuntimeError, match='wiring error'):
+            outcome.score(ans, _scenario(top_k=5), note_key_to_unit_ids={'n1': ['u1']})
 
 
 class TestStrictMappingGuards:
