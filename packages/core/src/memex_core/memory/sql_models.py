@@ -1380,13 +1380,9 @@ class ReflectionQueue(SQLModel, table=True):  # type: ignore
         # Postgres canonicalizes to the same shape.
         Index(
             'idx_reflection_queue_lane_priority',
-            'priority_lane',
-            'priority_score',
+            sql_text('priority_lane DESC'),
+            sql_text('priority_score DESC'),
             'last_queued_at',
-            postgresql_ops={
-                'priority_lane': 'DESC',
-                'priority_score': 'DESC',
-            },
             postgresql_where=sql_text("status IN ('pending', 'failed')"),
         ),
         Index(

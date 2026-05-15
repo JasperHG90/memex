@@ -147,6 +147,16 @@ class UnitsService(BaseService):
                     'pass will repair missing refresh tasks. unit_ids=%d',
                     len(updated_ids),
                 )
+        elif updated_ids and vault_id is None:
+            # Legacy callers without a vault scope cannot trigger the vault-scoped
+            # LATERAL scan; observations stay stale until the next routine reflect
+            # or the reconcile-tick (vault-partitioned, opt-in for historical).
+            logger.warning(
+                'batch_set_unit_deprioritized: vault_id missing; %d MUs deprio`d '
+                'but observation-refresh flush skipped. Observations citing these '
+                'MUs will refresh on the next routine reflection cycle.',
+                len(updated_ids),
+            )
 
         if self._audit_service is not None and updated_ids:
             resolved_actor = actor if actor is not None else get_actor()
@@ -291,6 +301,7 @@ class UnitsService(BaseService):
             stmt = stmt.where(col(MentalModel.vault_id) == vault_id)
         result = await session.exec(stmt)
         target = str(observation_id)
+        matches: list[list[UUID]] = []
         for observations in result.all():
             for obs in observations or []:
                 if not isinstance(obs, dict):
@@ -309,8 +320,22 @@ class UnitsService(BaseService):
                         source_mus.append(UUID(str(mid)))
                     except (ValueError, TypeError):
                         continue
-                return source_mus
-        return None
+                matches.append(source_mus)
+        if not matches:
+            return None
+        if len(matches) > 1:
+            # Observation UUIDs come from uuid4 (default_factory) and should be
+            # globally unique. Multiple MentalModels matching the same id is
+            # invariant violation — log loudly so it doesn't go unnoticed.
+            # We return the first match's source MUs (deterministic on the
+            # query plan); the operator should investigate the duplicate.
+            logger.error(
+                'Observation %s matched %d MentalModels (UUID collision — '
+                'invariant violation); returning first match only.',
+                observation_id,
+                len(matches),
+            )
+        return matches[0]
 
     async def _enqueue_refresh_tasks_for_mu(
         self,

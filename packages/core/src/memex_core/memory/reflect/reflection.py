@@ -34,8 +34,9 @@ from memex_core.memory.sql_models import (
 )
 from memex_core.memory.reflect.entity_locks import get_entity_lock
 from memex_core.memory.reflect.exceptions import (
-    AdvisoryLockTakenError,
     ReflectionAbandonedError,
+    RefreshCASAbandonedError,
+    RefreshStaleReadError,
 )
 from memex_core.memory.reflect.models import ReflectionRequest
 from memex_core.memory.reflect.prompts import (
@@ -963,7 +964,7 @@ class ReflectionEngine:
                     current_live_ids = set(revalidate_result.all())
                     if current_live_ids != live_ids:
                         REFLECTION_CAS_ABANDONS_TOTAL.inc()
-                        raise AdvisoryLockTakenError(
+                        raise RefreshStaleReadError(
                             f'refresh live-evidence changed between Phase A and '
                             f'Phase C for entity {mm_entity_id}: phase_a='
                             f'{len(live_ids)}, current={len(current_live_ids)}; '
@@ -985,7 +986,7 @@ class ReflectionEngine:
                 rowcount = getattr(cas_result, 'rowcount', 0) or 0
                 if rowcount == 0:
                     REFLECTION_CAS_ABANDONS_TOTAL.inc()
-                    raise AdvisoryLockTakenError(
+                    raise RefreshCASAbandonedError(
                         f'refresh CAS abandoned for entity {mm_entity_id} '
                         f'(version {claimed_version} advanced concurrently); reclaim'
                     )

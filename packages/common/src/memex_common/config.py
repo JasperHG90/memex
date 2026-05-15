@@ -598,8 +598,14 @@ class ReflectionConfig(BaseModel):
         description=(
             'When True, refresh-observation tasks land on the priority lane and '
             'are claimed ahead of regular reflect tasks. Default True so the agent '
-            'sees its deprio signal honored quickly. Disable only if a noisy '
-            'deprio burst is pushing reflect work to starvation.'
+            'sees its deprio signal honored quickly. '
+            'STARVATION RISK: a large deprio burst (many MUs deprio`d in quick '
+            'succession, each citing many observations) can monopolize the '
+            'priority lane and delay regular reflect cycles. Empirically the '
+            'priority lane drains quickly because each refresh task is bounded '
+            'in work; if you observe reflect-lane staleness coinciding with '
+            'priority-lane queue depth >100, flip this to False and let refresh '
+            'compete on score with regular reflects.'
         ),
     )
     min_evidence_for_obs_retention: int = Field(
