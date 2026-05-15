@@ -939,18 +939,17 @@ suite.register(
     id='asset_lifecycle_detach',
     group='lifecycle',
     query=(
-        'I want to remove an attached image from a note. Which memex tool '
-        'would I use, and what arguments would it take?'
+        'Please detach the attached image from the architecture-overview note. '
+        'Invoke the appropriate memex tool to perform the detach (do not just '
+        'name it). If the call surfaces an error because no asset is present, '
+        'that is fine — the tool invocation itself is what matters.'
     ),
     max_duration_ms=_DUR_MS,
-    expected=LLMJudge(
-        type='llm_judge',
-        rubric=(
-            'The answer names memex_delete_assets as the tool that removes '
-            'an attached image from a note, and lists at least one argument '
-            '(note_id, note_key, or asset_id/filename).'
-        ),
-        threshold=0.5,
+    expected=ToolCallContains(
+        type='tool_call_contains',
+        expected_tools=['memex_delete_assets'],
+        min_count=1,
+        match_mode='any',
     ),
     expected_failure_modes=['hermes'],
     replicates_override=1,
