@@ -115,3 +115,16 @@ class ObservationReadOnlyError(MemexError):
             details={'source_memory_units': [str(u) for u in source_memory_units]},
         )
         self.source_memory_units = list(source_memory_units)
+
+    def to_http_detail(self) -> dict[str, Any]:
+        """Render the HTTP 400 ``detail`` payload for FastAPI / ASGI surfaces.
+
+        Single source of truth for the response shape — the route handler in
+        ``server/memories.py`` and the defensive clause in
+        ``server/common.py:_handle_error`` both call this, so a future
+        contract change updates one place.
+        """
+        return {
+            'error': 'observations are read-only',
+            'source_memory_units': [str(u) for u in self.source_memory_units],
+        }

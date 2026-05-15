@@ -185,13 +185,10 @@ async def deprioritize_memory_unit(
         # the underlying source MUs. Ordering: catch this BEFORE MemexError, since
         # ObservationReadOnlyError is a MemexError subclass and the generic catch
         # below would otherwise flatten the structured detail to a string.
-        raise HTTPException(
-            status_code=400,
-            detail={
-                'error': 'observations are read-only',
-                'source_memory_units': [str(u) for u in e.source_memory_units],
-            },
-        )
+        # Shape is owned by ``ObservationReadOnlyError.to_http_detail()`` — both
+        # this handler and the defensive clause in ``server/common.py`` use it,
+        # so a contract change updates one place.
+        raise HTTPException(status_code=400, detail=e.to_http_detail())
     except MemoryUnitNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:

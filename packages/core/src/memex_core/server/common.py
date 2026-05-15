@@ -67,13 +67,9 @@ def _handle_error(e: Exception, context: str) -> HTTPException:
     # closes the gap for any future call site that routes through
     # `_handle_error` directly.
     if isinstance(e, ObservationReadOnlyError):
-        return HTTPException(
-            status_code=400,
-            detail={
-                'error': 'observations are read-only',
-                'source_memory_units': [str(u) for u in e.source_memory_units],
-            },
-        )
+        # Shape owned by ObservationReadOnlyError.to_http_detail() — same
+        # SSOT as the explicit route handler in server/memories.py.
+        return HTTPException(status_code=400, detail=e.to_http_detail())
 
     if isinstance(e, VaultNotFoundError):
         return HTTPException(status_code=404, detail=str(e))

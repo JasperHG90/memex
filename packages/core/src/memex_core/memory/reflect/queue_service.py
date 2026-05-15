@@ -489,8 +489,14 @@ class ReflectionQueueService:
             .where(col(ReflectionQueue.vault_id) == vault_id)
             .where(col(ReflectionQueue.task_type) == task_type)
         )
-        if task_type == 'refresh_observation' and observation_id is not None:
-            stmt = stmt.where(col(ReflectionQueue.observation_id) == observation_id)
+        if task_type == 'refresh_observation':
+            # Hard-pin the refresh path to a specific observation_id and to
+            # rows that actually have one. Without ``is_not(None)`` a row
+            # somehow inserted with NULL observation_id would match the
+            # broad filter and have its retry_count incremented spuriously.
+            stmt = stmt.where(col(ReflectionQueue.observation_id).is_not(None))
+            if observation_id is not None:
+                stmt = stmt.where(col(ReflectionQueue.observation_id) == observation_id)
         # Prefer the currently-PROCESSING row (the one we just failed) over
         # any historical FAILED siblings; without ORDER BY, the planner may
         # return any matching row, leaving the PROCESSING one stuck.

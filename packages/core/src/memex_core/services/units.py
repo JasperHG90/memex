@@ -346,8 +346,12 @@ class UnitsService(BaseService):
     ) -> None:
         """Scan vault-scoped MentalModels for observations citing the deprio'd MU
         and bulk-insert one ``refresh_observation`` row per (mental_model, obs)
-        match. Uses ``with_for_update(of=MentalModel)`` to serialize against
-        concurrent Phase 5 commits. Idempotent dedupe via partial UNIQUE.
+        match. Uses ``with_for_update(of=MentalModel, skip_locked=True)`` —
+        mirroring the batch ``flush_deferred_observation_refresh`` path — so a
+        concurrent Phase 5 CAS write or another deprio on the same MentalModel
+        doesn't serialise the deprio path. Anything skipped is repaired by the
+        reconcile-tick pass (vault-partitioned). Idempotent dedupe via partial
+        UNIQUE on (entity, vault, observation_id) for pending+processing.
         """
         from memex_core.memory.sql_models import MentalModel, ReflectionQueue, ReflectionStatus
 
@@ -356,7 +360,7 @@ class UnitsService(BaseService):
             select(MentalModel.id, MentalModel.entity_id, MentalModel.observations)
             .where(col(MentalModel.vault_id) == vault_id)
             .where(col(MentalModel.observations).op('@>')(cast(probe, JSONB)))
-            .with_for_update(of=MentalModel)
+            .with_for_update(of=MentalModel, skip_locked=True)
         )
         result = await session.exec(stmt)
         rows = result.all()
