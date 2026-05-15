@@ -298,6 +298,35 @@ async def test_split_strips_embedded_nul_bytes() -> None:
     assert '\x00' not in paragraphs[0]
 
 
+async def test_stable_unit_id_rejects_nul_in_corpus_name() -> None:
+    """``corpus_name`` flows unchecked from operator-supplied params;
+    enforce the NUL-free invariant at the derivation site so the
+    collision-resistance guarantee holds."""
+    from memex_eval.suites.retrieval_stability._setup_actions import _stable_unit_id
+
+    with pytest.raises(ValueError, match='corpus_name'):
+        _stable_unit_id('corpus\x00name', 'note', 0, 'paragraph text')
+
+
+async def test_stable_unit_id_rejects_nul_in_note_key() -> None:
+    """``note_key`` is Path-stem-derived (POSIX forbids NUL in
+    filenames), but the validation is defensive — a future caller
+    feeding a hand-built key should fail loudly."""
+    from memex_eval.suites.retrieval_stability._setup_actions import _stable_unit_id
+
+    with pytest.raises(ValueError, match='note_key'):
+        _stable_unit_id('corpus', 'note\x00key', 0, 'paragraph text')
+
+
+async def test_stable_unit_id_rejects_nul_in_text() -> None:
+    """``_split_into_paragraphs`` strips NULs, but the derivation site
+    enforces the invariant for callers that bypass the splitter."""
+    from memex_eval.suites.retrieval_stability._setup_actions import _stable_unit_id
+
+    with pytest.raises(ValueError, match='NUL'):
+        _stable_unit_id('corpus', 'note', 0, 'paragraph\x00with-nul')
+
+
 async def test_split_strips_frontmatter_without_trailing_newline() -> None:
     """A closing ``---`` on the last line of frontmatter (no trailing
     newline) must still be recognised; otherwise the fence survives

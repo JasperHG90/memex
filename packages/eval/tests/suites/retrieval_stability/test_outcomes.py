@@ -530,6 +530,92 @@ def test_metric_keys_declared() -> None:
     assert outcome.metric_keys() == ['rbo', 'pass']
 
 
+class TestQueryScraper:
+    """The AST scraper determines which source-suite queries become
+    retrieval_stability scenarios. If a source suite refactors to a
+    different registration pattern, this scraper would silently drop
+    its queries — pin the supported call shapes."""
+
+    def test_extracts_kwarg_queries_from_register_and_scenario(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        import memex_eval.suites.retrieval_stability as suite_pkg
+
+        # Point _SOURCE_SUITES_ROOT at a tmp dir with a synthetic suite.
+        synthetic_root = tmp_path / 'suites'
+        corpus_dir = synthetic_root / 'fake_corpus'
+        corpus_dir.mkdir(parents=True)
+        (corpus_dir / '__init__.py').write_text(
+            'suite.register(id="s1", query="alpha query")\n'
+            'suite.scenario(id="s2", query="beta query")\n'
+            # Duplicate of "alpha query" should be deduped:
+            'suite.register(id="s3", query="alpha query")\n'
+        )
+        monkeypatch.setattr(suite_pkg, '_SOURCE_SUITES_ROOT', synthetic_root)
+
+        queries = suite_pkg._scrape_queries_from_suite('fake_corpus')
+        assert queries == ['alpha query', 'beta query']
+
+    def test_skips_non_literal_query_args(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        """f-string or variable queries should be ignored and warn."""
+        import logging
+
+        import memex_eval.suites.retrieval_stability as suite_pkg
+
+        synthetic_root = tmp_path / 'suites'
+        corpus_dir = synthetic_root / 'fake_corpus'
+        corpus_dir.mkdir(parents=True)
+        (corpus_dir / '__init__.py').write_text(
+            'q = "dyn"\n'
+            'suite.register(id="s1", query=q)\n'
+            'suite.register(id="s2", query=f"interpolated {q}")\n'
+            'suite.register(id="s3", query="literal kept")\n'
+        )
+        monkeypatch.setattr(suite_pkg, '_SOURCE_SUITES_ROOT', synthetic_root)
+
+        with caplog.at_level(logging.WARNING):
+            queries = suite_pkg._scrape_queries_from_suite('fake_corpus')
+
+        assert queries == ['literal kept']
+        assert any('not string literals' in rec.message for rec in caplog.records)
+
+    def test_warns_on_zero_literal_queries(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging
+
+        import memex_eval.suites.retrieval_stability as suite_pkg
+
+        synthetic_root = tmp_path / 'suites'
+        corpus_dir = synthetic_root / 'fake_corpus'
+        corpus_dir.mkdir(parents=True)
+        (corpus_dir / '__init__.py').write_text(
+            'suite.register(id="s1")  # no query kwarg at all\n'
+        )
+        monkeypatch.setattr(suite_pkg, '_SOURCE_SUITES_ROOT', synthetic_root)
+
+        with caplog.at_level(logging.WARNING):
+            queries = suite_pkg._scrape_queries_from_suite('fake_corpus')
+
+        assert queries == []
+        assert any('scraped 0 queries' in rec.message for rec in caplog.records)
+
+    def test_returns_empty_on_missing_source_suite(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+    ) -> None:
+        import logging
+
+        import memex_eval.suites.retrieval_stability as suite_pkg
+
+        monkeypatch.setattr(suite_pkg, '_SOURCE_SUITES_ROOT', tmp_path)
+        with caplog.at_level(logging.WARNING):
+            queries = suite_pkg._scrape_queries_from_suite('nonexistent_corpus')
+        assert queries == []
+        assert any('not found' in rec.message for rec in caplog.records)
+
+
 def test_p_kwarg_propagates_through_to_rbo() -> None:
     # At p=0.5 a top-1 swap hurts more than at p=0.99.
     ans = AgentAnswer(retrieved_unit_ids=['u2', 'u1', 'u3', 'u4', 'u5'])

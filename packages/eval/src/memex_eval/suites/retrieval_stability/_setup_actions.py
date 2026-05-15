@@ -109,7 +109,17 @@ def _stable_unit_id(corpus_name: str, note_key: str, paragraph_index: int, text:
 
     NUL byte separator: NUL is forbidden in every input field, so
     distinct field tuples cannot collide via an injected delimiter.
+    The invariant is enforced here on every field — ``text`` is also
+    NUL-stripped by ``_split_into_paragraphs`` upstream, but defensive
+    validation makes the collision-resistance guarantee explicit at
+    the derivation site.
     """
+    if '\x00' in corpus_name:
+        raise ValueError(f'corpus_name must not contain NUL: {corpus_name!r}')
+    if '\x00' in note_key:
+        raise ValueError(f'note_key must not contain NUL: {note_key!r}')
+    if '\x00' in text:
+        raise ValueError('paragraph text must not contain NUL (use _split_into_paragraphs)')
     name = f'{corpus_name}\x00{note_key}\x00{paragraph_index}\x00{text}'
     return uuid.uuid5(_RANKING_BASELINE_NAMESPACE, name)
 
