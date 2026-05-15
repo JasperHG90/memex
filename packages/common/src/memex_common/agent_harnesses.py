@@ -23,7 +23,7 @@ from __future__ import annotations
 HERMES_HARNESS = """## Hermes-specific framing
 
 Outcome-signal lexicon for paired writes:
-- Success → "that worked", "lock it in", "record it", "that's the lesson" → verb=`helpful`
+- Success → "that worked", "that fixed it", "record it", "save this" → verb=`helpful`
 - Failure → "stop suggesting X", "didn't work", "we removed it", "that was wrong" → verb=`not_helpful`
 
 Capture cadence: write a short note (`memex_add_note`, ≤300 tokens, no per-file changelogs) when you finish a multi-step task, diagnose a non-obvious bug, or resolve a tricky env issue. User preferences / conventions are NOT note-shaped — those go to `memex_kv_write` per the KV-namespace rules above. Use `memex_append_note(note_key, delta)` to extend an existing note rather than re-ingesting."""

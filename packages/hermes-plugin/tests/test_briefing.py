@@ -194,7 +194,7 @@ def test_hermes_harness_carries_outcome_lexicon():
     The universal block teaches the verb shape; this block teaches the lexicon."""
     assert 'helpful' in _HERMES_HARNESS
     assert 'not_helpful' in _HERMES_HARNESS
-    assert 'that worked' in _HERMES_HARNESS.lower() or 'lock it in' in _HERMES_HARNESS.lower()
+    assert 'that worked' in _HERMES_HARNESS.lower() or 'that fixed it' in _HERMES_HARNESS.lower()
 
 
 def test_hermes_harness_carries_capture_cadence():

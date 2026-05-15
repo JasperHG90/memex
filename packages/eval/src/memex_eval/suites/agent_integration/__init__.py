@@ -571,7 +571,7 @@ suite.register(
     query=(
         'Hey, that Redis cache fix we landed last week — switching to '
         "in-process caching — it's been holding. Record that as a "
-        'successful resolution so we lock the lesson in.'
+        "successful resolution so we don't go round on this again."
     ),
     max_duration_ms=_DUR_MS,
     expected=ToolCallArgMatches(

@@ -106,16 +106,20 @@ RETRIEVAL_ROUTING = """## Retrieval routing
 - **Title fragment** → `memex_find_note` → `memex_get_page_indices` + `memex_get_nodes`.
 - **Relationships** → `memex_list_entities` → `memex_get_entity_cooccurrences` → `memex_get_entity_mentions`.
 - **Content lookup** (specific fact, single question) → `memex_memory_search` AND `memex_note_search` in parallel. Retry `expand_query=true` if insufficient.
-- **Comprehensive view of a topic/entity** ("give me everything about X", "comprehensive picture of X", "overview of X", "everything you know about Y") → `memex_survey(query)` FIRST. Survey synthesises across all relevant notes; a single content-lookup is not enough for these queries. If `memex_survey` is unavailable, run ≥3 targeted `memex_memory_search` calls (one per facet: leadership, tech, status, …).
+- **Comprehensive view of a topic/entity**. Triggers: "give me everything about X", "comprehensive picture of X", "overview of X", "everything you know about Y", "tell me all about Z". REQUIRED: call `memex_survey(query)` FIRST, OR run ≥3 targeted `memex_memory_search` calls (one per facet). A single search result is NEVER enough. <example>User: "Tell me everything about Topic-X" → WRONG: one `memex_memory_search("Topic-X")` + answer. RIGHT: `memex_survey("Topic-X")` → synthesise. Or: three `memex_memory_search` calls scoped to different aspects → consolidate.</example>
 - **Broad/panoramic** (vault-wide, no specific topic) → `memex_get_vault_summary` first; escalate to `memex_survey(query)` if too coarse.
-- **KV** → `memex_kv_get(key)` exact / `memex_kv_search(query)` fuzzy / `memex_kv_list()`. Use FIRST for "what's our X?", "what do I prefer?", "what's the convention for Y?" — preferences/conventions/settings live in KV, not in note content or on the filesystem.
+- **KV** — "what's our X?" / "what convention?" / "what do I prefer?" / "what setting?" → call `memex_kv_get(key)` / `memex_kv_search(query)` / `memex_kv_list()` FIRST. DO NOT `ls`, `Glob`, `Read`, `Bash`, or otherwise inspect the local filesystem before checking KV — preferences/conventions/settings live in KV, not on disk. Wake words that force this route unconditionally: `KV: get <key>`, `KV: search <query>`, `Store in KV: <key>=<value>` → execute the matching `memex_kv_*` call verbatim, no other routing.
 
 After `memory_search`: call `memex_get_notes_metadata`. After `note_search`: metadata inline — do NOT call `memex_get_notes_metadata` again. `memex_read_note` only when `total_tokens < 500`."""
 
 
 RESOLUTION_FLOW = """## 5-step resolution flow
 
-Triggers: "that worked"/"lock it in"/"lock the lesson in"/"record it as a success" → success; "stop suggesting X"/"didn't work" → failure. These ALWAYS route to `memex_record_outcome` on existing units — NEVER `memex_add_note` (do not write a fresh note describing the outcome).
+<critical_constraint name="outcome_routing">
+Triggers: success — "that worked", "that fixed it", "yes, that did it", "perfect", "record it as a success", "save this approach"; failure — "stop suggesting X", "didn't work", "we removed it", "that was wrong", "drop that idea". These ALWAYS route to `memex_record_outcome` on EXISTING units. They NEVER route to `memex_add_note`. The outcome is a counter increment on the existing unit's Memory Worth — writing a new note describing the success is the wrong path and will not be detected as an outcome.
+</critical_constraint>
+
+<example>User: "That fixed it, record it as a success." → WRONG: `memex_add_note(title="Resolution: X worked")`. RIGHT: `memex_memory_search` to find candidate units → READ unit bodies → `memex_record_outcome(units=[{unit_id, verb:"helpful", reason}])`.</example>
 
 1. **Disambiguate** — ambiguous scope (multiple candidates, no temporal anchor)? ASK before writing.
 2. **Route** — title → `memex_find_note`; content → `memex_memory_search`. Pick one:

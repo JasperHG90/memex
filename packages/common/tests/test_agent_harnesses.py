@@ -33,7 +33,7 @@ def test_claude_code_harness_within_budget() -> None:
 def test_hermes_harness_carries_outcome_lexicon() -> None:
     assert 'helpful' in HERMES_HARNESS
     assert 'not_helpful' in HERMES_HARNESS
-    assert 'that worked' in HERMES_HARNESS or 'lock it in' in HERMES_HARNESS
+    assert 'that worked' in HERMES_HARNESS or 'that fixed it' in HERMES_HARNESS
 
 
 def test_claude_code_harness_carries_capture_cadence_and_slash_commands() -> None:
