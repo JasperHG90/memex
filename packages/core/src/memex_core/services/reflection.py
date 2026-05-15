@@ -502,6 +502,11 @@ class ReflectionService:
         async with self.metastore.session() as session:
             return await self.queue_service.recover_stale_processing(session)
 
+    async def queue_observability_snapshot(self) -> tuple[dict[str, int], float]:
+        """Cheap aggregates for the scheduler's Prometheus gauge refresh."""
+        async with self.metastore.session() as session:
+            return await self.queue_service.observability_snapshot(session)
+
     async def get_dead_letter_items(
         self,
         limit: int = 50,

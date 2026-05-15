@@ -594,6 +594,49 @@ class ReflectionQueueService:
         await session.refresh(item)
         return item
 
+    async def observability_snapshot(self, session: AsyncSession) -> tuple[dict[str, int], float]:
+        """Return (depth by task_type, oldest DEAD_LETTER refresh age in seconds).
+
+        Two cheap aggregate queries used by the scheduler to refresh Prometheus
+        gauges. Depth counts ``status IN ('pending', 'processing')`` rows
+        grouped by ``task_type``. Dead-letter age is the gap between now and
+        the oldest ``last_queued_at`` of a DEAD_LETTER row with
+        ``task_type='refresh_observation'`` — non-zero in steady state signals
+        operator action (DEAD_LETTER refresh rows accumulate without auto-expiry
+        because ``complete_reflection`` only deletes ``reflect``-type rows by
+        design).
+        """
+        depth_rows = (
+            await session.exec(
+                select(ReflectionQueue.task_type, func.count())  # type: ignore[call-overload]
+                .where(
+                    col(ReflectionQueue.status).in_(
+                        [ReflectionStatus.PENDING, ReflectionStatus.PROCESSING]
+                    )
+                )
+                .group_by(col(ReflectionQueue.task_type))
+            )
+        ).all()
+        depths = {str(row[0]): int(row[1]) for row in depth_rows}
+        for tt in ('reflect', 'refresh_observation'):
+            depths.setdefault(tt, 0)
+
+        oldest_dl_row = (
+            await session.exec(
+                select(ReflectionQueue.last_queued_at)
+                .where(col(ReflectionQueue.status) == ReflectionStatus.DEAD_LETTER)
+                .where(col(ReflectionQueue.task_type) == 'refresh_observation')
+                .order_by(col(ReflectionQueue.last_queued_at))
+                .limit(1)
+            )
+        ).first()
+        if oldest_dl_row is None:
+            oldest_age = 0.0
+        else:
+            now = datetime.now(timezone.utc)
+            oldest_age = max(0.0, (now - oldest_dl_row).total_seconds())
+        return depths, oldest_age
+
     async def recover_stale_processing(self, session: AsyncSession) -> int:
         """Reset PROCESSING items that have been stuck longer than the configured timeout.
 

@@ -1881,6 +1881,14 @@ class MemexAPI:
         """Reset PROCESSING items stuck longer than the configured timeout."""
         return await self._reflection.recover_stale_processing()
 
+    async def reflection_queue_observability_snapshot(self) -> tuple[dict[str, int], float]:
+        """Return (queue depth by task_type, age of oldest DEAD_LETTER refresh row).
+
+        Used by the scheduler to populate Prometheus gauges; not load-bearing
+        for correctness (gauge refresh failures are logged-and-ignored).
+        """
+        return await self._reflection.queue_observability_snapshot()
+
     async def get_dead_letter_items(
         self,
         limit: int = 50,

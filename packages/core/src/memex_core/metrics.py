@@ -41,6 +41,25 @@ REFLECTION_QUEUE_SIZE = Gauge(
     'Number of pending reflection tasks',
 )
 
+REFLECTION_QUEUE_DEPTH_BY_TASK_TYPE = Gauge(
+    'memex_reflection_queue_depth_by_task_type',
+    'Pending+processing reflection queue depth, labeled by task_type. '
+    'Operators monitor priority-lane starvation by watching the ratio of '
+    "task_type='refresh_observation' to task_type='reflect' under sustained "
+    'deprio bursts; sustained refresh-dominance is the trigger to flip '
+    '``ReflectionConfig.refresh_obs_priority_lane`` to False.',
+    ['task_type'],
+)
+
+REFLECTION_QUEUE_DEAD_LETTER_AGE_SECONDS = Gauge(
+    'memex_reflection_queue_dead_letter_age_seconds',
+    'Age (since last_queued_at) of the oldest DEAD_LETTER refresh-observation '
+    'row, in seconds. ``complete_reflection`` deletes only ``reflect``-type '
+    'rows; DEAD_LETTER refresh siblings persist as a diagnostic trail without '
+    'auto-expiry. Non-zero in steady state signals operator action — inspect '
+    'and clear via ``retry_dead_letter`` or manual DELETE.',
+)
+
 REFLECTION_CAS_ABANDONS_TOTAL = Counter(
     'memex_reflection_cas_abandons_total',
     'Number of Phase 5 mental-model writes abandoned because a concurrent '

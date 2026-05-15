@@ -72,6 +72,27 @@ async def _reconcile_one_vault_slice(api: 'MemexAPI') -> None:
         )
 
 
+async def _refresh_queue_depth_gauges(api: 'MemexAPI') -> None:
+    """Update queue-depth-by-task_type and dead-letter-age gauges.
+
+    Operators monitor refresh-vs-reflect ratio to spot priority-lane
+    starvation; dead-letter age surfaces stale DEAD_LETTER refresh
+    rows that ``complete_reflection`` intentionally does not delete.
+    """
+    try:
+        from memex_core.metrics import (
+            REFLECTION_QUEUE_DEAD_LETTER_AGE_SECONDS,
+            REFLECTION_QUEUE_DEPTH_BY_TASK_TYPE,
+        )
+
+        depths, oldest_dl_age = await api.reflection_queue_observability_snapshot()
+        for task_type, depth in depths.items():
+            REFLECTION_QUEUE_DEPTH_BY_TASK_TYPE.labels(task_type=task_type).set(depth)
+        REFLECTION_QUEUE_DEAD_LETTER_AGE_SECONDS.set(oldest_dl_age)
+    except Exception:
+        logger.debug('Scheduler: queue depth gauge refresh failed', exc_info=True)
+
+
 async def periodic_reflection_task(api: 'MemexAPI', batch_size: int):
     """
     The actual business logic to run periodically.
@@ -85,6 +106,9 @@ async def periodic_reflection_task(api: 'MemexAPI', batch_size: int):
             recovered = await api.recover_stale_processing()
             if recovered:
                 logger.info(f'Scheduler: Recovered {recovered} stale PROCESSING items.')
+
+            # 0b. Update observability gauges (cheap aggregate queries).
+            await _refresh_queue_depth_gauges(api)
 
             # 1. Claim items (priority lane first; refresh + reflect mixed in one batch).
             queue_items = await api.claim_reflection_queue_batch(limit=batch_size)

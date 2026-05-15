@@ -100,6 +100,14 @@ def upgrade() -> None:
 
     # Fresh-install baseline removed this index in the same commit, so it may
     # not exist on a clean DB. Use IF EXISTS so upgrade is safe in both cases.
+    #
+    # Trade-off: the three new partial indexes above cover the hot paths
+    # (claim_next_batch, mark_failed, dedupe upserts), all of which now filter
+    # by ``status`` and/or ``task_type``. A status-agnostic lookup by
+    # ``(entity_id, vault_id)`` alone — e.g. a future operator query against
+    # DEAD_LETTER history — will fall back to a seq scan. Acceptable for the
+    # current workload; add back a non-partial composite if such a query is
+    # introduced as a hot path.
     op.execute('DROP INDEX IF EXISTS idx_reflection_queue_entity_vault')
 
 
