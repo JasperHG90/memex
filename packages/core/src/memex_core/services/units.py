@@ -302,8 +302,10 @@ class UnitsService(BaseService):
         from memex_core.memory.sql_models import MentalModel
 
         probe = json.dumps([{'id': str(observation_id)}])
-        stmt = select(MentalModel.observations).where(
-            col(MentalModel.observations).op('@>')(cast(probe, JSONB))
+        stmt = (
+            select(MentalModel.observations)
+            .where(col(MentalModel.observations).op('@>')(cast(probe, JSONB)))
+            .order_by(col(MentalModel.id))
         )
         if vault_id is not None:
             stmt = stmt.where(col(MentalModel.vault_id) == vault_id)

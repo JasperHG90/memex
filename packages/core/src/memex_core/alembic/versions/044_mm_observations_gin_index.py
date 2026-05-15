@@ -21,9 +21,16 @@ The reasoning, per the V21 design memo:
     ``SELECT count(*), avg(jsonb_array_length(observations))
     FROM mental_models;``. The build cost scales with
     ``rows × avg_observations × avg_evidence_per_observation``. For a
-    total key count ≤ 100K, expect sub-second; for larger counts budget
-    5–30s and schedule a maintenance window. ``mental_models`` will
-    hold an ``AccessExclusiveLock`` for the build duration.
+    total key count ≤ 100K, expect sub-second; if ``count(*) > 50K`` or
+    the total key count > 500K, budget 5–30s and schedule a maintenance
+    window.
+  * **Lock type**: a non-concurrent ``CREATE INDEX`` on ``mental_models``
+    acquires a ``ShareLock`` on the table — concurrent reads continue,
+    but writes (INSERT/UPDATE/DELETE on ``mental_models``, including
+    Phase 5 reflection commits) block until the build completes. Pause
+    or rate-limit the Hermes write path during the maintenance window
+    above; reflection workers will queue their CAS commits and drain
+    once the index lands.
 
 If a future deployment needs zero-downtime, ship a follow-up migration
 that re-creates the index via ``CREATE INDEX CONCURRENTLY`` outside of

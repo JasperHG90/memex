@@ -109,6 +109,13 @@ REFRESH_OBSERVATION_TASK_DROPPED_BY_LLM_TOTAL = Counter(
     'LLM returned should_drop=True AND surviving_evidence_count below the retention threshold.',
 )
 
+REFRESH_OBSERVATION_EMPTY_CONTENT_COERCED_TOTAL = Counter(
+    'memex_refresh_observation_empty_content_coerced_total',
+    'LLM returned should_drop=False with blank content/title (validator bypassed); '
+    'observation was coerced to drop. Distinguished from honored should_drop so the '
+    'rate of validator-bypass coercions is monitorable separately from real drops.',
+)
+
 REFRESH_OBSERVATION_DROP_OVERRIDDEN_TOTAL = Counter(
     'memex_refresh_observation_drop_overridden_total',
     'Guardrail: LLM said should_drop=True but surviving_evidence_count >= retention threshold; override.',

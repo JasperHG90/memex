@@ -68,6 +68,7 @@ from memex_core.metrics import (
     PHASE4_PROVENANCE_MALFORMED_TOTAL,
     REFLECTION_CAS_ABANDONS_TOTAL,
     REFRESH_OBSERVATION_DROP_OVERRIDDEN_TOTAL,
+    REFRESH_OBSERVATION_EMPTY_CONTENT_COERCED_TOTAL,
     REFRESH_OBSERVATION_MERGED_PREDECESSOR_TOTAL,
     REFRESH_OBSERVATION_TASK_ALREADY_ABSORBED_TOTAL,
     REFRESH_OBSERVATION_TASK_COMPLETED_TOTAL,
@@ -944,12 +945,15 @@ class ReflectionEngine:
             zero_evidence_drop = should_drop
             llm_drop_honored = False
             llm_drop_overridden = False
+            empty_content_coerced = False
             if refreshed is not None:
                 llm_drop = bool(refreshed.should_drop)
                 # Defensive: if the validator was bypassed (DSPy adapter swallowed
                 # the ValueError) we still receive should_drop=False with empty
                 # content/title. Treat as a drop and skip the retention guardrail
                 # — empty payload is unrecoverable regardless of evidence count.
+                # Tracked under its own counter so operators can distinguish
+                # validator-bypass coercions from honored LLM drops.
                 content_empty = not (
                     (refreshed.content or '').strip() and (refreshed.title or '').strip()
                 )
@@ -959,6 +963,7 @@ class ReflectionEngine:
                         'but should_drop=False; coercing to drop'
                     )
                     llm_drop = True
+                    empty_content_coerced = True
                 if llm_drop and not content_empty and len(live_ids) >= min_retention:
                     logger.warning(
                         'refresh_observation: LLM should_drop=True overridden; '
@@ -973,7 +978,11 @@ class ReflectionEngine:
                     llm_drop = False
                 if llm_drop:
                     should_drop = True
-                    llm_drop_honored = True
+                    # Only attribute to LLM_drop_honored when the LLM actually
+                    # set should_drop=True. Empty-content coercion uses its
+                    # own counter (see EMPTY_CONTENT_COERCED below).
+                    if not empty_content_coerced:
+                        llm_drop_honored = True
 
             # Build the new observations list as a pure-Python operation.
             if should_drop:
@@ -1051,6 +1060,8 @@ class ReflectionEngine:
             # of these fire — the re-claim will re-decide and re-tick.
             if zero_evidence_drop:
                 REFRESH_OBSERVATION_TASK_ZERO_EVIDENCE_TOTAL.inc()
+            elif empty_content_coerced:
+                REFRESH_OBSERVATION_EMPTY_CONTENT_COERCED_TOTAL.inc()
             elif llm_drop_honored:
                 REFRESH_OBSERVATION_TASK_DROPPED_BY_LLM_TOTAL.inc()
             elif llm_drop_overridden:
