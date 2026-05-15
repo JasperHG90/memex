@@ -507,9 +507,11 @@ class RetrievalEngine:
         t_embed = _t() - t0
 
         # 3. Determine budget and limit
+        # token_budget is opt-in per-request only — request.limit is the
+        # default. A server-config fallback would silently override every
+        # caller's limit (the doc comment "Ignored when token_budget is set"
+        # is meant for explicit per-request token_budget).
         token_budget = request.token_budget
-        if token_budget is None and self.retrieval_config:
-            token_budget = self.retrieval_config.token_budget
         if token_budget is not None and token_budget <= 0:
             token_budget = None
 
