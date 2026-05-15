@@ -480,6 +480,25 @@ class TestBaselineFileIO:
         payload = json.loads(baseline_path.read_text())
         assert payload['ranking'] == ['n1', 'n2']
 
+    def test_write_cleans_up_tempfile_on_failure(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """If ``Path.replace`` raises (disk full, permissions), the
+        tempfile must be removed so the baselines directory does not
+        accumulate ``*.json.tmp`` litter on repeated failures."""
+        baseline_path = tmp_path / 's1-memory.json'
+        outcome = _outcome(baseline=['stale'], baseline_path=str(baseline_path))
+
+        def _boom(self: Path, target: Path) -> Path:
+            raise OSError('disk full')
+
+        monkeypatch.setattr(Path, 'replace', _boom)
+        with pytest.raises(OSError, match='disk full'):
+            outcome._write_baseline(_scenario(), ['n1', 'n2'])
+
+        assert not (tmp_path / 's1-memory.json.tmp').exists()
+        assert not baseline_path.exists()
+
     def test_load_baseline_round_trip(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:

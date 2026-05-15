@@ -233,13 +233,19 @@ class RankingBaselineRbo(ExpectedOutcomeBase):
             },
             'ranking': ranking,
         }
-        # Atomic write: tempfile in same directory + rename. Without this
-        # a parallelized runner could interleave partial writes and
-        # leave a truncated JSON on disk, which the next verify run
-        # would fail to parse.
+        # Atomic write: tempfile in same directory + rename. Without
+        # this a parallelized runner could interleave partial writes
+        # and leave a truncated JSON on disk, which the next verify
+        # run would fail to parse. Clean up the tempfile under any
+        # failure path so a disk-full / permission error doesn't
+        # litter the baselines directory.
         tmp = path.with_suffix(path.suffix + '.tmp')
-        tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n')
-        tmp.replace(path)
+        try:
+            tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n')
+            tmp.replace(path)
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            raise
         logger.info(
             'captured baseline for %s → %s (%d note_keys)',
             scenario.id,
