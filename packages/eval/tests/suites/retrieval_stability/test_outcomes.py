@@ -254,7 +254,9 @@ class TestMetaMismatchGuards:
     def test_wiring_error_search_type_raises(self) -> None:
         """Wiring-error guard: outcome expects 'memory' but scenario
         registered with 'note' — code bug in __init__.py. JSON meta
-        matches the scenario."""
+        matches the scenario. Pass note_key_to_unit_ids so the
+        memory-branch resolver doesn't raise the missing-mapping
+        guard before reaching the wiring guard."""
         outcome = _outcome(
             baseline=['n1'],
             expected_search_type='memory',
@@ -269,7 +271,7 @@ class TestMetaMismatchGuards:
             outcome.score(
                 ans,
                 _scenario(search_type='note'),
-                context={'_note_id_by_key': {'n1': 'note-id-1'}},
+                note_key_to_unit_ids={'n1': ['note-id-1']},
             )
 
 
@@ -372,6 +374,37 @@ class TestCaptureMode:
         # Meta reflects the live scenario.top_k, not the outcome's
         # stale expected_top_k.
         assert payload['meta']['top_k'] == 5
+
+
+class TestStrictMappingGuards:
+    """The runner injects ``note_key_to_unit_ids`` (memory) and
+    ``context['_note_id_by_key']`` (note) for every ingested suite.
+    Missing mapping → fail loudly so a runner regression doesn't
+    quietly score RBO=0."""
+
+    def test_memory_search_without_note_key_to_unit_ids_raises(self) -> None:
+        outcome = _outcome(baseline=['n1'], expected_search_type='memory')
+        ans = AgentAnswer(retrieved_unit_ids=['u1'])
+        with pytest.raises(RuntimeError, match='note_key_to_unit_ids'):
+            outcome.score(ans, _scenario(), note_key_to_unit_ids=None)
+
+    def test_memory_search_with_empty_mapping_raises(self) -> None:
+        outcome = _outcome(baseline=['n1'], expected_search_type='memory')
+        ans = AgentAnswer(retrieved_unit_ids=['u1'])
+        with pytest.raises(RuntimeError, match='note_key_to_unit_ids'):
+            outcome.score(ans, _scenario(), note_key_to_unit_ids={})
+
+    def test_note_search_without_context_raises(self) -> None:
+        outcome = _outcome(baseline=['n1'], expected_search_type='note')
+        ans = AgentAnswer(retrieved_unit_ids=['nid-1'])
+        with pytest.raises(RuntimeError, match='_note_id_by_key'):
+            outcome.score(ans, _scenario(search_type='note'), context=None)
+
+    def test_note_search_without_note_id_by_key_raises(self) -> None:
+        outcome = _outcome(baseline=['n1'], expected_search_type='note')
+        ans = AgentAnswer(retrieved_unit_ids=['nid-1'])
+        with pytest.raises(RuntimeError, match='_note_id_by_key'):
+            outcome.score(ans, _scenario(search_type='note'), context={})
 
 
 class TestBaselineFileIO:

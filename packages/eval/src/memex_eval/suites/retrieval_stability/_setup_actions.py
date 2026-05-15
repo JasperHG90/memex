@@ -78,13 +78,17 @@ def _split_into_paragraphs(content: str) -> list[str]:
     """Split a markdown body into paragraph strings.
 
     Strips an optional leading UTF-8 BOM (``removeprefix('\\ufeff')``),
-    normalises CRLF / CR → LF, collapses runs of >2 newlines to a
-    single blank line, and splits on blank-line boundaries. Paragraphs
-    shorter than :data:`_MIN_PARAGRAPH_CHARS` are dropped (eliminates
-    headings).
+    drops a leading YAML frontmatter block so ``title:``, ``tags:``,
+    etc. don't pollute the seeded corpus as a paragraph, normalises
+    CRLF / CR → LF, collapses runs of >2 newlines to a single blank
+    line, and splits on blank-line boundaries. Paragraphs shorter than
+    :data:`_MIN_PARAGRAPH_CHARS` are dropped (eliminates headings).
     """
     normalized = content.removeprefix('\ufeff')
     normalized = re.sub(r'\r\n?', '\n', normalized)
+    # Drop a leading YAML frontmatter block. ``count=1`` keeps any
+    # body-level ``---`` separator intact.
+    normalized = re.sub(r'\A---\n.*?\n---\n', '', normalized, count=1, flags=re.DOTALL)
     normalized = re.sub(r'\n{3,}', '\n\n', normalized.strip())
     blocks = [b.strip() for b in normalized.split('\n\n') if b.strip()]
     return [b for b in blocks if len(b) >= _MIN_PARAGRAPH_CHARS]

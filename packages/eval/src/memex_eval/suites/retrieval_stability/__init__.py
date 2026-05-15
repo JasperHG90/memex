@@ -127,7 +127,12 @@ def _load_baseline(scenario_id: str) -> tuple[list[str], dict[str, object]]:
         return [], {}
     try:
         payload = json.loads(path.read_text(encoding='utf-8'))
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, OSError) as exc:
+        # Catch both classes here. Raising would propagate up through
+        # scenario registration and break ``memex-eval suite list`` for
+        # every suite — not just this one. The outcome's ``score()``
+        # detects the corrupt sentinel and reports the error per
+        # scenario.
         return [], {'_corrupt': True, '_error': f'{path}: {exc}'}
     return list(payload.get('ranking', [])), dict(payload.get('meta', {}))
 

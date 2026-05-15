@@ -273,8 +273,21 @@ def _retrieved_note_keys(
     retrieved_ids = _aggregate_unit_ids(answer)
 
     if search_type == 'memory':
+        # The runner injects ``note_key_to_unit_ids`` for every
+        # memory-search scenario it ingested. ``None`` here means the
+        # runner contract broke — fail loudly so a regression in the
+        # runner shows as an explicit error rather than RBO=0.0
+        # masquerading as a retrieval regression.
+        if not note_key_to_unit_ids:
+            raise RuntimeError(
+                'memory-search scenario received no '
+                '``note_key_to_unit_ids`` mapping; the runner is '
+                'expected to inject this for every ingested suite. '
+                'An empty/None mapping would otherwise score RBO=0 '
+                'as a false regression.'
+            )
         unit_to_note: dict[str, str] = {}
-        for note_key, unit_ids in (note_key_to_unit_ids or {}).items():
+        for note_key, unit_ids in note_key_to_unit_ids.items():
             for uid in unit_ids:
                 unit_to_note[uid] = note_key
         out: list[str] = []
@@ -286,8 +299,18 @@ def _retrieved_note_keys(
                 seen.add(nk)
         return out
 
-    # search_type == 'note'
-    note_id_by_key: dict[str, str] = (context or {}).get('_note_id_by_key') or {}
+    # search_type == 'note': the runner injects ``_note_id_by_key``
+    # into scenario_context for every ingested suite. Missing context
+    # or missing key signals a runner-contract break.
+    if not context or '_note_id_by_key' not in context:
+        raise RuntimeError(
+            'note-search scenario received no '
+            "``context['_note_id_by_key']`` mapping; the runner is "
+            'expected to inject this for every ingested suite. '
+            'An empty/None mapping would otherwise score RBO=0 as '
+            'a false regression.'
+        )
+    note_id_by_key: dict[str, str] = context['_note_id_by_key'] or {}
     note_id_to_key: dict[str, str] = {nid: nk for nk, nid in note_id_by_key.items()}
     out = []
     seen = set()
