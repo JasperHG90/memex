@@ -161,6 +161,16 @@ class RankingBaselineRbo(ExpectedOutcomeBase):
             'Recapture with `MEMEX_EVAL_CAPTURE_BASELINES=1 '
             'memex-eval suite run retrieval_stability`.'
         )
+        # Empty baseline → "capture pending". Check this FIRST so a
+        # stale meta block on an otherwise-empty file does not fire a
+        # misleading "captured at top_k=5" error when the real problem
+        # is that there is nothing on disk to compare against.
+        if not self.baseline_ranking:
+            raise RuntimeError(
+                f'no baseline captured for {scenario.id}. '
+                f'Run `MEMEX_EVAL_CAPTURE_BASELINES=1 memex-eval suite '
+                f'run retrieval_stability` to seed.'
+            )
         # Defensive guard: a baseline file MAY exist with a complete
         # ranking but no meta block (manually crafted or written by an
         # older schema). Refuse to score against an unguarded baseline
@@ -168,9 +178,7 @@ class RankingBaselineRbo(ExpectedOutcomeBase):
         # ``is not None`` short-circuit and a stale baseline slips
         # through silently.
         required_meta_keys = {'top_k', 'search_type', 'schema_version'}
-        missing_meta_keys = (
-            required_meta_keys - set(self.baseline_meta) if self.baseline_ranking else set()
-        )
+        missing_meta_keys = required_meta_keys - set(self.baseline_meta)
         if missing_meta_keys:
             raise RuntimeError(
                 f'baseline for {scenario.id} has ranking but is missing '
@@ -198,12 +206,6 @@ class RankingBaselineRbo(ExpectedOutcomeBase):
                 f'baseline schema_version mismatch for {scenario.id}: '
                 f'outcome expects {self.schema_version} but baseline JSON '
                 f'is at version {captured_schema}. {recapture}'
-            )
-        if not self.baseline_ranking:
-            raise RuntimeError(
-                f'no baseline captured for {scenario.id}. '
-                f'Run `MEMEX_EVAL_CAPTURE_BASELINES=1 memex-eval suite '
-                f'run retrieval_stability` to seed.'
             )
 
         rbo = rank_biased_overlap(

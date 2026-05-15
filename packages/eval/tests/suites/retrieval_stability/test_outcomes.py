@@ -283,11 +283,26 @@ class TestEmptyBaselineGuard:
             outcome.score(ans, _scenario(), note_key_to_unit_ids={'n1': ['u1']})
 
     def test_empty_baseline_raises_under_meta_match(self) -> None:
-        # The empty-baseline guard fires AFTER the meta-mismatch guards
-        # — the error message should still point at recapture.
         outcome = _outcome(baseline=[], expected_top_k=10)
         ans = AgentAnswer(retrieved_unit_ids=['u1'])
         with pytest.raises(RuntimeError, match='MEMEX_EVAL_CAPTURE_BASELINES'):
+            outcome.score(
+                ans,
+                _scenario(top_k=10),
+                note_key_to_unit_ids={'n1': ['u1']},
+            )
+
+    def test_empty_baseline_with_stale_meta_reports_capture_pending(self) -> None:
+        """When baseline_ranking is empty AND baseline_meta has a stale
+        top_k, the operator's real problem is 'capture pending', not
+        'top_k mismatch'. The empty-baseline guard must fire first."""
+        outcome = _outcome(
+            baseline=[],
+            expected_top_k=10,
+            baseline_meta={'schema_version': 1, 'top_k': 5, 'search_type': 'memory'},
+        )
+        ans = AgentAnswer(retrieved_unit_ids=['u1'])
+        with pytest.raises(RuntimeError, match='no baseline captured'):
             outcome.score(
                 ans,
                 _scenario(top_k=10),
