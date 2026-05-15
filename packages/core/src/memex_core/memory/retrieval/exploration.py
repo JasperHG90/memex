@@ -32,6 +32,7 @@ from memex_core.memory.confidence import (
     mean_and_variance,
 )
 from memex_core.memory.sql_models import ContentStatus, MemoryUnit
+from memex_core.metrics import EXPLORATION_INJECTION_DURATION_SECONDS
 
 
 def _coerce_metadata_to_dict(value: Any) -> dict[str, Any]:
@@ -209,36 +210,37 @@ def inject_exploration_units(
     units already in ``results``), so the in-place attribute swap is
     safe at the documented call site only.
     """
-    exploration_units = select_exploration_candidates(
-        results,
-        all_candidates,
-        epsilon=epsilon,
-        max_injections=max_injections,
-        low_mw_threshold=low_mw_threshold,
-    )
+    with EXPLORATION_INJECTION_DURATION_SECONDS.labels(mode='epsilon_greedy').time():
+        exploration_units = select_exploration_candidates(
+            results,
+            all_candidates,
+            epsilon=epsilon,
+            max_injections=max_injections,
+            low_mw_threshold=low_mw_threshold,
+        )
 
-    if not exploration_units:
-        return list(results)
+        if not exploration_units:
+            return list(results)
 
-    for unit in exploration_units:
-        metadata = _coerce_metadata_to_dict(unit.unit_metadata)
-        metadata = {**metadata, 'exploration': True, 'exploration_mode': 'epsilon_greedy'}
-        # HAZARD: in-place attribute swap on a
-        # caller-owned ``MemoryUnit``. Caller-snapshot invariant: the
-        # retrieval engine MUST pass list-copy snapshots (not aliased
-        # references) so this annotation does not leak into a parallel
-        # scoring stage that expects pristine metadata. Avoid
-        # ``copy.deepcopy`` here — this is a hot per-request path.
-        unit.unit_metadata = metadata
+        for unit in exploration_units:
+            metadata = _coerce_metadata_to_dict(unit.unit_metadata)
+            metadata = {**metadata, 'exploration': True, 'exploration_mode': 'epsilon_greedy'}
+            # HAZARD: in-place attribute swap on a
+            # caller-owned ``MemoryUnit``. Caller-snapshot invariant: the
+            # retrieval engine MUST pass list-copy snapshots (not aliased
+            # references) so this annotation does not leak into a parallel
+            # scoring stage that expects pristine metadata. Avoid
+            # ``copy.deepcopy`` here — this is a hot per-request path.
+            unit.unit_metadata = metadata
 
-    logger.debug(
-        'exploration_injection',
-        count=len(exploration_units),
-        unit_ids=[str(u.id) for u in exploration_units],
-        mode='epsilon_greedy',
-    )
+        logger.debug(
+            'exploration_injection',
+            count=len(exploration_units),
+            unit_ids=[str(u.id) for u in exploration_units],
+            mode='epsilon_greedy',
+        )
 
-    return results + exploration_units
+        return results + exploration_units
 
 
 def select_thompson_candidates(
@@ -319,30 +321,31 @@ def inject_thompson_exploration(
         The θ values are surfaced for the observability histogram and
         for debug logging.
     """
-    thompson_units, thetas = select_thompson_candidates(
-        results,
-        all_candidates,
-        max_injections=max_injections,
-        rng=rng,
-    )
+    with EXPLORATION_INJECTION_DURATION_SECONDS.labels(mode='thompson').time():
+        thompson_units, thetas = select_thompson_candidates(
+            results,
+            all_candidates,
+            max_injections=max_injections,
+            rng=rng,
+        )
 
-    if not thompson_units:
-        return list(results), []
+        if not thompson_units:
+            return list(results), []
 
-    for unit in thompson_units:
-        metadata = _coerce_metadata_to_dict(unit.unit_metadata)
-        metadata = {**metadata, 'exploration': True, 'exploration_mode': 'thompson'}
-        unit.unit_metadata = metadata
+        for unit in thompson_units:
+            metadata = _coerce_metadata_to_dict(unit.unit_metadata)
+            metadata = {**metadata, 'exploration': True, 'exploration_mode': 'thompson'}
+            unit.unit_metadata = metadata
 
-    logger.debug(
-        'thompson_injection',
-        count=len(thompson_units),
-        unit_ids=[str(u.id) for u in thompson_units],
-        theta_values=thetas,
-        mode='thompson',
-    )
+        logger.debug(
+            'thompson_injection',
+            count=len(thompson_units),
+            unit_ids=[str(u.id) for u in thompson_units],
+            theta_values=thetas,
+            mode='thompson',
+        )
 
-    return results + thompson_units, thetas
+        return results + thompson_units, thetas
 
 
 def _unit_variance(unit: MemoryUnit) -> float:
@@ -451,35 +454,36 @@ def inject_edge_exploration(
     ``results``), so the in-place attribute swap is safe at the
     documented call site only.
     """
-    edges = select_edge_exploration_candidates(
-        results,
-        all_candidates,
-        epsilon=epsilon,
-        max_injections=max_injections,
-        high_variance_fraction=high_variance_fraction,
-    )
-    if not edges:
-        return list(results)
+    with EXPLORATION_INJECTION_DURATION_SECONDS.labels(mode='edge_exploration').time():
+        edges = select_edge_exploration_candidates(
+            results,
+            all_candidates,
+            epsilon=epsilon,
+            max_injections=max_injections,
+            high_variance_fraction=high_variance_fraction,
+        )
+        if not edges:
+            return list(results)
 
-    for unit in edges:
-        metadata = _coerce_metadata_to_dict(unit.unit_metadata)
-        metadata = {**metadata, 'edge_exploration': True}
-        # HAZARD: in-place attribute swap on a
-        # caller-owned ``MemoryUnit``. Caller-snapshot invariant: the
-        # The activation wiring (see TODO above) MUST pass list-copy
-        # snapshots so this annotation does not leak into a parallel
-        # scoring stage. Avoid ``copy.deepcopy`` here — this is a hot
-        # per-request path.
-        # TODO: when wiring this injector into
-        # ``RetrievalEngine._search``, audit the call site for
-        # snapshot-by-caller invariants alongside the
-        # ``inject_exploration_units`` site.
-        unit.unit_metadata = metadata
+        for unit in edges:
+            metadata = _coerce_metadata_to_dict(unit.unit_metadata)
+            metadata = {**metadata, 'edge_exploration': True}
+            # HAZARD: in-place attribute swap on a
+            # caller-owned ``MemoryUnit``. Caller-snapshot invariant: the
+            # The activation wiring (see TODO above) MUST pass list-copy
+            # snapshots so this annotation does not leak into a parallel
+            # scoring stage. Avoid ``copy.deepcopy`` here — this is a hot
+            # per-request path.
+            # TODO: when wiring this injector into
+            # ``RetrievalEngine._search``, audit the call site for
+            # snapshot-by-caller invariants alongside the
+            # ``inject_exploration_units`` site.
+            unit.unit_metadata = metadata
 
-    logger.debug(
-        'edge_exploration_injection',
-        count=len(edges),
-        unit_ids=[str(u.id) for u in edges],
-    )
+        logger.debug(
+            'edge_exploration_injection',
+            count=len(edges),
+            unit_ids=[str(u.id) for u in edges],
+        )
 
-    return results + edges
+        return results + edges

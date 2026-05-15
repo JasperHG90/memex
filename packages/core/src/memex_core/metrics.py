@@ -253,6 +253,17 @@ EXPLORATION_THOMPSON_THETA_DISTRIBUTION = Histogram(
     buckets=(0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0),
 )
 
+EXPLORATION_INJECTION_DURATION_SECONDS = Histogram(
+    'memex_exploration_injection_duration_seconds',
+    'Time spent in the post-MMR exploration-injection step (seconds). Labelled by '
+    'mode (``epsilon_greedy`` and ``thompson`` for the low-Memory-Worth path; '
+    '``edge_exploration`` for the high-variance-edge re-validation path). Covers the '
+    'eligibility scan + Beta draw + metadata annotation; intended to validate the '
+    '§2.4.2 latency claim that injection is well under 10ms at current pool sizes.',
+    ['mode'],
+    buckets=(0.001, 0.0025, 0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0),
+)
+
 # ---------------------------------------------------------------------------
 # Contradiction-derived confidence reranker composition metrics
 # ---------------------------------------------------------------------------
