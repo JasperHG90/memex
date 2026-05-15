@@ -58,7 +58,7 @@ from memex_core.memory.reflect.models import (
     ReflectionResult,
 )
 from memex_core.memory.reflect.queue_service import ReflectionQueueService
-from memex_core.memory.sql_models import MemoryUnit, Vault
+from memex_core.memory.sql_models import MemoryUnit, ReflectionQueue, Vault
 from memex_core.memory.models.protocols import EmbeddingsModel, RerankerModel
 from memex_core.memory.models.ner import FastNERModel
 from memex_core.memory.entity_resolver import EntityResolver
@@ -1859,15 +1859,15 @@ class MemexAPI:
         """Claim reflection queue batch. Delegates to ReflectionService."""
         return await self._reflection.claim_reflection_queue_batch(limit=limit, vault_id=vault_id)
 
-    async def refresh_observation(self, item: Any) -> None:
+    async def refresh_observation(self, item: 'ReflectionQueue') -> None:
         """Execute a single refresh-observation task. Delegates to ReflectionService."""
         return await self._reflection.refresh_observation(item)
 
-    async def reclaim_refresh_with_backoff(self, item: Any) -> None:
+    async def reclaim_refresh_with_backoff(self, item: 'ReflectionQueue') -> None:
         """Re-enqueue a refresh task whose advisory lock was held."""
         return await self._reflection.reclaim_refresh_with_backoff(item)
 
-    async def mark_queue_item_failed(self, item: Any, error: str) -> None:
+    async def mark_queue_item_failed(self, item: 'ReflectionQueue', error: str) -> None:
         """Mark a specific claimed queue item as failed."""
         return await self._reflection.mark_item_failed(item, error)
 

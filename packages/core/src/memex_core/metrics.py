@@ -53,6 +53,12 @@ DEPRIORITIZE_REJECTED_OBSERVATION_UUID_TOTAL = Counter(
     'Calls to memory_deprioritize where the unit_id resolved to an observation, '
     'not a memory unit; client received HTTP 400 with source_memory_units.',
 )
+DEPRIORITIZE_OBSERVATION_EMPTY_EVIDENCE_TOTAL = Counter(
+    'memex_deprioritize_observation_empty_evidence_total',
+    'Calls to memory_deprioritize where the unit_id resolved to an observation '
+    'with zero evidence MUs — invariant violation in mental_models JSONB; the '
+    'agent still receives the 400 contract but source_memory_units is empty.',
+)
 
 REFRESH_OBSERVATION_TASK_ENQUEUED_TOTAL = Counter(
     'memex_refresh_observation_task_enqueued_total',

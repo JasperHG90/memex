@@ -18,6 +18,7 @@ from memex_common.exceptions import MemoryUnitNotFoundError, ObservationReadOnly
 from memex_common.schemas import UnitHistoryNodeDTO
 from memex_core.context import get_actor, get_session_id
 from memex_core.metrics import (
+    DEPRIORITIZE_OBSERVATION_EMPTY_EVIDENCE_TOTAL,
     DEPRIORITIZE_REJECTED_OBSERVATION_UUID_TOTAL,
     REFRESH_OBSERVATION_TASK_ENQUEUED_TOTAL,
     RESTORE_OBSERVATION_NO_AFFECTED_ENTITIES_TOTAL,
@@ -224,6 +225,13 @@ class UnitsService(BaseService):
                 )
                 if source_mus is not None:
                     DEPRIORITIZE_REJECTED_OBSERVATION_UUID_TOTAL.inc()
+                    if not source_mus:
+                        # Observation exists but has zero evidence MUs — keep
+                        # the 400 contract so the caller knows this is an
+                        # observation (not a missing unit), but emit a
+                        # dedicated counter so the malformed-row state is
+                        # observable.
+                        DEPRIORITIZE_OBSERVATION_EMPTY_EVIDENCE_TOTAL.inc()
                     raise ObservationReadOnlyError(source_mus)
                 raise MemoryUnitNotFoundError(f'Memory unit {unit_id} not found.')
             if vault_id is not None and unit.vault_id != vault_id:
@@ -335,17 +343,13 @@ class UnitsService(BaseService):
                 observation_id,
                 len(matches),
             )
-        # An observation with no evidence MUs offers the caller nothing
-        # actionable. Return None so ``_flip_deprioritized`` falls through to
-        # the MemoryUnitNotFoundError 404 path rather than emitting an empty
-        # ObservationReadOnlyError 400. Bump a counter so this rare state
-        # (a malformed mental_model row) is observable.
-        if not matches[0]:
-            logger.warning(
-                'Observation %s exists but has no evidence MUs; treating as not-found.',
-                observation_id,
-            )
-            return None
+        # The agent contract for observation UUIDs is 400-with-source_memory_units
+        # regardless of how many MUs the observation cites. Returning None here
+        # would silently degrade the contract to a 404 on the zero-evidence
+        # edge case — the caller would think the unit doesn't exist at all
+        # rather than learning it's a read-only observation. Bump a dedicated
+        # counter so the rare malformed state (an observation row with no
+        # evidence MUs) is observable in metrics.
         return matches[0]
 
     async def _enqueue_refresh_tasks_for_mu(

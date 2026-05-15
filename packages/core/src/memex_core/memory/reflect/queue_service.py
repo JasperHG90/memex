@@ -429,8 +429,6 @@ class ReflectionQueueService:
         the worker doesn't busy-spin on a long-held lock. ``retry_count`` is
         NOT incremented — advisory-lock contention is benign, not a failure.
         """
-        from datetime import timedelta
-
         item.status = ReflectionStatus.PENDING
         item.last_queued_at = datetime.now(timezone.utc) + timedelta(seconds=jitter_seconds)
         session.add(item)

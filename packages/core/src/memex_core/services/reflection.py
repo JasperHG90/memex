@@ -20,7 +20,7 @@ from memex_core.memory.reflect.models import (
     ReflectionResult,
 )
 from memex_core.memory.reflect.queue_service import ReflectionQueueService
-from memex_core.memory.sql_models import Observation
+from memex_core.memory.sql_models import Observation, ReflectionQueue
 from memex_core.memory.models.protocols import EmbeddingsModel
 from memex_core.services.audit import AuditService, audit_event
 from memex_core.services.rate_limit import (
@@ -363,7 +363,7 @@ class ReflectionService:
                 session, limit=limit, vault_id=vault_id
             )
 
-    async def refresh_observation(self, item: Any) -> None:
+    async def refresh_observation(self, item: 'ReflectionQueue') -> None:
         """Execute a single refresh-observation task end-to-end.
 
         Constructs a per-call ``ReflectionEngine`` (mirrors the existing
@@ -398,7 +398,7 @@ class ReflectionService:
         async with self.metastore.session() as session:
             await self.queue_service.complete_refresh(session, item)
 
-    async def reclaim_refresh_with_backoff(self, item: Any) -> None:
+    async def reclaim_refresh_with_backoff(self, item: 'ReflectionQueue') -> None:
         """Reset a refresh task to PENDING with a jittered last_queued_at.
 
         Used by the scheduler when ``_refresh_observation`` raises
@@ -415,7 +415,7 @@ class ReflectionService:
         async with self.metastore.session() as session:
             await self.queue_service.reclaim_with_backoff(session, item, jitter)
 
-    async def mark_item_failed(self, item: Any, error: str) -> None:
+    async def mark_item_failed(self, item: 'ReflectionQueue', error: str) -> None:
         """Mark a specific claimed queue item as failed, filtered by task_type.
 
         Refresh-observation failures filter by ``observation_id`` so they
