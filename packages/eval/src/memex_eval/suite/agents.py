@@ -793,6 +793,20 @@ class ClaudeCodeBackend(AnswerBackend):
             child_env = os.environ.copy()
             if 'MEMEX_LOCAL_PATH' not in os.environ:
                 child_env['MEMEX_LOCAL_PATH'] = workspace_root
+            # Disable Claude Code's built-in auto-memory skill (undocumented
+            # env var per anthropics/claude-code#23750). Without this the
+            # agent's "remember X" intent is intercepted into
+            # ``~/.claude/projects/<id>/memory/MEMORY.md`` via the Write
+            # tool, and — worse for eval correctness — the auto-memory layer
+            # reads from the user's PRE-EXISTING auto-memory store and
+            # surfaces unrelated session content as if it came from the
+            # eval vault. Empirically this contaminated sonnet's pass rate
+            # by ≥30 percentage points (NVIDIA/Exxon/Google Finance content
+            # leaking into Acme-Corp scenarios). Disabling auto-memory
+            # forces every retrieval through the memex MCP, which is the
+            # eval's measurement target.
+            if 'CLAUDE_CODE_DISABLE_AUTO_MEMORY' not in os.environ:
+                child_env['CLAUDE_CODE_DISABLE_AUTO_MEMORY'] = '1'
             try:
                 proc = subprocess.run(
                     cmd,
