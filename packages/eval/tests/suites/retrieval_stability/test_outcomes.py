@@ -436,6 +436,18 @@ class TestStrictMappingGuards:
                 context={'_note_id_by_key': {}},
             )
 
+    def test_note_search_with_wrong_type_note_id_by_key_raises(self) -> None:
+        """A non-dict value in ``_note_id_by_key`` (e.g. legacy string)
+        raises rather than coercing silently."""
+        outcome = _outcome(baseline=['n1'], expected_search_type='note')
+        ans = AgentAnswer(retrieved_unit_ids=['nid-1'])
+        with pytest.raises(RuntimeError, match='_note_id_by_key'):
+            outcome.score(
+                ans,
+                _scenario(search_type='note'),
+                context={'_note_id_by_key': 'not-a-dict'},
+            )
+
 
 class TestBaselineFileIO:
     """The on-disk lifecycle: atomic capture write + corrupt-file

@@ -298,6 +298,24 @@ async def test_split_strips_embedded_nul_bytes() -> None:
     assert '\x00' not in paragraphs[0]
 
 
+async def test_split_strips_frontmatter_without_trailing_newline() -> None:
+    """A closing ``---`` on the last line of frontmatter (no trailing
+    newline) must still be recognised; otherwise the fence survives
+    as content."""
+    from memex_eval.suites.retrieval_stability._setup_actions import (
+        _split_into_paragraphs,
+    )
+
+    body = (
+        '---\n'
+        'title: No Trailing Newline\n'
+        '---\n\nBody paragraph that is long enough to clear the threshold.'
+    )
+    paragraphs = _split_into_paragraphs(body)
+    assert all('---' not in p for p in paragraphs)
+    assert all('title:' not in p for p in paragraphs)
+
+
 async def test_split_strips_yaml_frontmatter() -> None:
     """The source files carry YAML frontmatter; the splitter must drop
     it so ``title:``/``tags:`` don't seed as a paragraph."""

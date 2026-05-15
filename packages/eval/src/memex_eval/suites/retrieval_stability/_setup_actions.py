@@ -95,8 +95,10 @@ def _split_into_paragraphs(content: str) -> list[str]:
     # invariant to source-file content.
     normalized = normalized.replace('\x00', '')
     # Drop a leading YAML frontmatter block. ``count=1`` keeps any
-    # body-level ``---`` separator intact.
-    normalized = re.sub(r'\A---\n.*?\n---\n', '', normalized, count=1, flags=re.DOTALL)
+    # body-level ``---`` separator intact. The trailing ``\n?`` matches
+    # files where the closing ``---`` is the last line (no terminating
+    # newline) — without it the closing fence would survive as content.
+    normalized = re.sub(r'\A---\n.*?\n---\n?', '', normalized, count=1, flags=re.DOTALL)
     normalized = re.sub(r'\n{3,}', '\n\n', normalized.strip())
     blocks = [b.strip() for b in normalized.split('\n\n') if b.strip()]
     return [b for b in blocks if len(b) >= _MIN_PARAGRAPH_CHARS]
