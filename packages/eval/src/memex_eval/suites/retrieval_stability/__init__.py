@@ -83,6 +83,7 @@ def _scrape_queries_from_suite(corpus: str) -> list[str]:
     tree = ast.parse(src_path.read_text(encoding='utf-8'))
     seen: set[str] = set()
     ordered: list[str] = []
+    non_constant_query_count = 0
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -103,6 +104,28 @@ def _scrape_queries_from_suite(corpus: str) -> list[str]:
                 if v not in seen:
                     seen.add(v)
                     ordered.append(v)
+            else:
+                # Non-literal query expression (f-string, variable,
+                # concat) — flag for the operator so a refactor that
+                # switches to dynamic query construction doesn't
+                # silently shrink this suite.
+                non_constant_query_count += 1
+    if not ordered:
+        logger.warning(
+            'retrieval_stability: scraped 0 queries from %s — the '
+            'source suite parsed but contained no literal `query=` '
+            'kwargs. This suite will register no scenarios for that '
+            'corpus.',
+            src_path,
+        )
+    elif non_constant_query_count:
+        logger.warning(
+            'retrieval_stability: %s had %d `query=` arguments that '
+            'were not string literals; those scenarios are not '
+            'represented in this suite.',
+            src_path,
+            non_constant_query_count,
+        )
     return ordered
 
 

@@ -58,9 +58,12 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger('memex_eval.suites.retrieval_stability._setup_actions')
 
-# Stable UUIDv5 namespace. Pinning it here means the same paragraph
-# always maps to the same unit_id across runs, machines, and Python
-# versions.
+# Stable UUIDv5 namespace. Pinned random UUIDv4 picked once at the
+# creation of this handler — DO NOT change it. Changing the namespace
+# invalidates every previously-seeded unit_id and forces every
+# downstream baseline to re-capture. Pinning it here means the same
+# paragraph always maps to the same unit_id across runs, machines, and
+# Python versions.
 _RANKING_BASELINE_NAMESPACE = UUID('a8d2b9c4-1e7f-4d3a-9b6e-8c5d4a2f1e3b')
 
 # Minimum paragraph length to consider a paragraph "substantive" — short
@@ -176,19 +179,11 @@ class _SeedParagraphsFromSources(SetupActionHandler):
             )
             return {'note_key_to_unit_ids': {}}
 
-        # Batch-embed in one call — real ONNX models amortise their
-        # session-creation cost across the whole batch. The encode call
-        # is synchronous CPU-bound work, so offload to a worker thread
-        # to keep the runner's event loop responsive.
-        from memex_core.memory.models import get_embedding_model
-
-        embedder = await get_embedding_model()
-        texts = [text for _, _, text, _ in plan]
-        embeddings = await asyncio.to_thread(embedder.encode, texts)
-
-        # Build metastore against the same DSN the eval framework's
-        # teardown helper uses. Same pattern as record_outcome's DB-direct
-        # path — see suite/db_teardown.py.
+        # All heavy imports are deferred to method-body so that
+        # ``import memex_eval.suites.retrieval_stability`` (which fires
+        # at suite discovery and CLI startup) does not pull in
+        # ``memex_core`` and the ONNX embedder stack. Grouping them here
+        # keeps the deferred-import boundary explicit.
         from urllib.parse import urlparse
 
         from sqlalchemy.dialects.postgresql import insert as pg_insert
@@ -198,9 +193,18 @@ class _SeedParagraphsFromSources(SetupActionHandler):
             PostgresMetaStoreConfig,
             SecretStr,
         )
+        from memex_core.memory.models import get_embedding_model
         from memex_core.memory.sql_models import ContentStatus, FactTypes, MemoryUnit
         from memex_core.storage.metastore import AsyncPostgresMetaStoreEngine
         from memex_eval.suite.db_teardown import resolve_database_dsn
+
+        # Batch-embed in one call — real ONNX models amortise their
+        # session-creation cost across the whole batch. The encode call
+        # is synchronous CPU-bound work, so offload to a worker thread
+        # to keep the runner's event loop responsive.
+        embedder = await get_embedding_model()
+        texts = [text for _, _, text, _ in plan]
+        embeddings = await asyncio.to_thread(embedder.encode, texts)
 
         dsn = resolve_database_dsn()
         parsed = urlparse(dsn)
