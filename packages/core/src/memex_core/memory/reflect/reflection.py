@@ -841,6 +841,14 @@ class ReflectionEngine:
                 # FAILED/DEAD_LETTER/completed-but-not-deleted rows are
                 # filtered out — their source MUs may have been re-cited
                 # since and shouldn't make the absorption check too strict.
+                #
+                # Trade-off: if a prior refresh for this observation went to
+                # DEAD_LETTER and the deprio'd MU is still cited in
+                # ``obs.evidence``, this task will proceed through the LLM
+                # call to re-drop it. That's redundant work but self-
+                # correcting: the CAS write replaces the observation in-
+                # place. The alternative (include DEAD_LETTER rows) would
+                # over-absorb when source MUs have been legitimately re-cited.
                 from memex_core.memory.sql_models import ReflectionStatus
 
                 sibling_stmt = (
@@ -1049,6 +1057,11 @@ class ReflectionEngine:
                 REFRESH_OBSERVATION_DROP_OVERRIDDEN_TOTAL.inc()
             REFRESH_OBSERVATION_TASK_COMPLETED_TOTAL.inc()
         finally:
+            # Latency includes claim-to-outcome wall clock for ALL paths,
+            # including CAS abandons and ``AdvisoryLockTakenError`` raises.
+            # Intentional — operators care about end-to-end latency under
+            # contention, not just the happy path. Filter by counter ratios
+            # if a CAS-abandon-only or happy-path-only view is needed.
             REFRESH_OBSERVATION_TASK_LATENCY_SECONDS.observe(
                 (datetime.now(timezone.utc) - start).total_seconds()
             )
