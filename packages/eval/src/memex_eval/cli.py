@@ -1087,6 +1087,52 @@ def suite_backends() -> None:
         console.print(f'  • {n}')
 
 
+@suite_app.command('reset-db')
+def suite_reset_db(
+    force: bool = typer.Option(
+        False, '--force', '-f', help='Skip the confirmation prompt. Use in CI/scripts.'
+    ),
+) -> None:
+    """Wipe + recreate the suite DB schema.
+
+    Recovery path when a ``suite run`` was killed before its end-of-run
+    drop_all + create_all cleanup fired, leaving orphan vault/import rows
+    that block the next run with ``SnapshotImportRefused``.
+
+    Destructive: drops every SQLModel-managed table in the target Postgres
+    DB (whatever MEMEX_DATABASE_URL / MemexConfig resolves to). Do not run
+    against a production server.
+    """
+    import asyncio
+
+    from memex_eval.suite.db_reset import _resolve_db_dsn, drop_and_recreate_schema
+
+    dsn = _resolve_db_dsn()
+    redacted = dsn
+    if '@' in dsn:
+        redacted = dsn.split('@', 1)[1]
+    console.print()
+    console.print('[bold red]⚠  DESTRUCTIVE OPERATION[/bold red]')
+    console.print(
+        f'  Target: [cyan]{redacted}[/cyan]\n'
+        '  Action: DROP every SQLModel-managed table + alembic_version,\n'
+        '          then CREATE_ALL from current metadata.\n'
+        '  Effect: every vault, note, memory unit, KV entry, audit log\n'
+        '          row in this database is permanently deleted.\n'
+        '  Use when: a previous `suite run` was killed before its\n'
+        '            end-of-run cleanup and a re-run reports\n'
+        '            `SnapshotImportRefused`.'
+    )
+    console.print()
+    if not force:
+        confirm = typer.confirm('Type y to proceed', default=False)
+        if not confirm:
+            console.print('Aborted.')
+            raise typer.Exit(code=1)
+    asyncio.run(drop_and_recreate_schema(dsn))
+    console.print('[green]✓[/green] Suite DB schema reset.')
+
+
 @suite_app.command('history')
 def suite_history(
     name: str = typer.Argument(..., help='Suite name.'),

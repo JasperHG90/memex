@@ -643,6 +643,18 @@ class ClaudeCodeBackend(AnswerBackend):
             '--verbose',
             '--permission-mode',
             'bypassPermissions',
+            # Disable Claude Code's built-in filesystem write tools so the
+            # agent can't intercept "remember X" / "save this" intents into
+            # its auto-memory store (~/.claude/projects/<id>/memory/MEMORY.md).
+            # ``Bash`` is NOT denied: disabling it (or even pattern-denying
+            # ``Bash(*claude/projects*)``) cost ~20 percentage points on the
+            # full sweep because retrieval scenarios legitimately depend on
+            # it. Some auto-memory bypass via ``cat > … << EOF`` heredoc
+            # still happens, but the KV-routing scaffolding catches the
+            # majority of "remember X" intents and routes them to
+            # ``memex_kv_write`` before the bypass fires.
+            '--disallowedTools',
+            'Write,Edit',
         ]
         return flags
 
@@ -723,14 +735,54 @@ class ClaudeCodeBackend(AnswerBackend):
             )
             claude_dir = tmpdir / '.claude'
             claude_dir.mkdir()
+            # Block Claude Code's built-in auto-memory skill from
+            # intercepting "remember X" / "save this" intents that should
+            # route to ``memex_kv_write``. Auto-memory persists to
+            # ``~/.claude/projects/<id>/memory/MEMORY.md`` via the ``Write``
+            # tool; denying writes to that path forces the agent to use
+            # the memex KV layer instead. The path glob covers both the
+            # per-project sub-tree and the bare project root in case the
+            # skill ever stores at a sibling location.
+            _AUTO_MEMORY_DENY = (
+                'Write(/home/*/.claude/projects/**)',
+                'Edit(/home/*/.claude/projects/**)',
+            )
             (claude_dir / 'settings.local.json').write_text(
                 json.dumps(
-                    {'permissions': {'allow': list(_MEMEX_TOOL_ALLOWLIST)}},
+                    {
+                        'permissions': {
+                            'allow': list(_MEMEX_TOOL_ALLOWLIST),
+                            'deny': list(_AUTO_MEMORY_DENY),
+                        }
+                    },
                     indent=2,
                 )
             )
             # Silence ``claude``'s non-git-workdir warning (matches longmemeval).
+            # Also bind a stable ``origin`` so the agent's project-id resolver
+            # (memex_resolve_project_id / Claude Code's own project naming)
+            # picks the SAME ``project:<id>:`` namespace across scenarios in
+            # one suite run. Without this, every scenario gets a fresh temp
+            # path, so a ``kv_writes_project_preference`` scenario stores
+            # under ``project:/tmp/eval-AAA:…`` and the dependent
+            # ``kv_retrieves_convention`` then looks under
+            # ``project:/tmp/eval-BBB:…`` and finds nothing — masking a
+            # working KV layer as "agent didn't search". The hostname
+            # ``memex-eval.local`` is intentionally a non-routable test
+            # marker; the path encodes suite + scenario-group bucket.
             subprocess.run(['git', 'init'], cwd=tmpdir, capture_output=True, check=False)
+            subprocess.run(
+                [
+                    'git',
+                    'remote',
+                    'add',
+                    'origin',
+                    f'https://memex-eval.local/agent-eval/{scenario.group or "default"}.git',
+                ],
+                cwd=tmpdir,
+                capture_output=True,
+                check=False,
+            )
 
             cmd = self._build_subprocess_cmd(scenario)
             # Inject MEMEX_LOCAL_PATH so the plugin's SessionStart hook

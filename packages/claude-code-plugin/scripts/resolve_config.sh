@@ -37,6 +37,12 @@ EOF
         return 0 2>/dev/null || exit 0
     fi
     if [ ! -d "$MEMEX_LOCAL_PATH" ]; then
+        if [ "${MEMEX_RESOLVE_VERBOSE:-0}" = "1" ] && command -v jq >/dev/null 2>&1; then
+            _diag_msg=$(printf "❌ MEMEX_LOCAL_PATH='%s' is not a directory." "$MEMEX_LOCAL_PATH")
+            jq -n --arg msg "$_diag_msg" '{systemMessage: $msg}'
+            unset _diag_msg
+            export MEMEX_HOOK_ALREADY_EMITTED=1
+        fi
         memex() { return 1; }
         return 0 2>/dev/null || exit 0
     fi

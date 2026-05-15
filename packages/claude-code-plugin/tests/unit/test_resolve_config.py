@@ -335,6 +335,126 @@ def test_memex_timeout_validation(
     )
 
 
+def test_local_path_dispatches_uv_run_with_workspace_project(
+    mock_memex: MockMemex, tmp_path: Path
+) -> None:
+    """When MEMEX_LOCAL_PATH is set, `memex` must dispatch via
+    `uv run --project <local-path> --package memex-cli memex …`, bypassing
+    the `uvx --from git+…` plugin-distribution path.
+
+    The eval suite uses this so ollama-claude (which would otherwise pull
+    `memex-cli @ git+…@latest` from GitHub) runs against the workspace's
+    refactored code — without it, the local branch's agent-surface
+    composition is invisible to anything that goes through this hook.
+    """
+    # Shim `uv` so we can record what gets invoked. The shim does NOT need
+    # to be functional — we only care that the wrapper picked the right
+    # argv shape for the local-path branch.
+    probe_bin = tmp_path / 'probe_bin'
+    probe_bin.mkdir()
+    record_file = tmp_path / 'uv_argv.txt'
+    uv_shim = probe_bin / 'uv'
+    uv_shim.write_text(f'#!/usr/bin/env bash\nprintf "%s\\n" "$@" > {record_file}\nexit 0\n')
+    uv_shim.chmod(0o755)
+    # Also place a `uvx` shim that records its own (separate) file; if the
+    # local-path branch is broken and we fall through to the git path, the
+    # uvx file will be written and we can fail with a clearer message.
+    uvx_record = tmp_path / 'uvx_argv.txt'
+    uvx_shim = probe_bin / 'uvx'
+    uvx_shim.write_text(f'#!/usr/bin/env bash\nprintf "%s\\n" "$@" > {uvx_record}\nexit 0\n')
+    uvx_shim.chmod(0o755)
+
+    workspace = tmp_path / 'fake_workspace'
+    workspace.mkdir()
+
+    env = {
+        **mock_memex.env,
+        'MEMEX_LOCAL_PATH': str(workspace),
+        'PATH': f'{probe_bin}:{mock_memex.env["PATH"]}',
+    }
+    result = _run_resolver(
+        'memex --version >/dev/null 2>&1 || true\n',
+        env=env,
+    )
+    assert result.returncode == 0, result.stderr
+    assert record_file.exists(), (
+        f'uv shim was never invoked — local-path branch did not dispatch. '
+        f'uvx_record_exists={uvx_record.exists()}, stderr={result.stderr!r}'
+    )
+    assert not uvx_record.exists(), (
+        f'uvx was invoked despite MEMEX_LOCAL_PATH being set — the git+'
+        f'https fallback fired instead of the local-path branch. '
+        f'uvx argv was: {uvx_record.read_text()!r}'
+    )
+    lines = record_file.read_text().splitlines()
+    # Expect: ['run', '--project', '<workspace>', '--package', 'memex-cli',
+    #          'memex', '--version'] — preserved order matters for `uv run`.
+    assert lines[0] == 'run', f'Expected first arg "run", got {lines[0]!r}'
+    assert '--project' in lines, f'Missing --project flag in {lines!r}'
+    assert str(workspace) in lines, f'Workspace path {str(workspace)!r} not in uv argv: {lines!r}'
+    assert '--package' in lines, f'Missing --package flag in {lines!r}'
+    assert 'memex-cli' in lines, f'Missing memex-cli package name in {lines!r}'
+    # The CLI subcommand must come AFTER `memex` (the entrypoint), not
+    # before it — if --version arrives before `memex`, uv treats it as a
+    # `uv run` flag instead of a CLI arg.
+    memex_idx = lines.index('memex')
+    assert lines[memex_idx + 1 :] == ['--version'], (
+        f'Expected ["--version"] after "memex" entrypoint, got {lines[memex_idx + 1 :]!r}'
+    )
+
+
+def test_local_path_skips_ref_validation(mock_memex: MockMemex, tmp_path: Path) -> None:
+    """A bad MEMEX_PLUGIN_VERSION must not cause sourcing to fail when
+    MEMEX_LOCAL_PATH is set — local paths don't have remote refs.
+
+    Without this skip, a contributor with `MEMEX_PLUGIN_VERSION=branch-name`
+    + `MEMEX_LOCAL_PATH=…` would hit an unnecessary ls-remote on every hook.
+    """
+    workspace = tmp_path / 'fake_workspace'
+    workspace.mkdir()
+    env = {
+        **mock_memex.env,
+        'MEMEX_LOCAL_PATH': str(workspace),
+        # A ref that almost certainly does not exist on the remote. With
+        # the local-path branch active, this must be ignored entirely.
+        'MEMEX_PLUGIN_VERSION': 'definitely-not-a-real-branch-xyz-9999',
+        'MEMEX_RESOLVE_VERBOSE': '1',
+    }
+    result = subprocess.run(
+        ['bash', '-c', f'source "{PLUGIN_ROOT}/scripts/resolve_config.sh" && echo OK'],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15.0,
+    )
+    assert result.returncode == 0, result.stderr
+    assert 'OK' in result.stdout, f'Sourcing failed: stdout={result.stdout!r}'
+    # No "does not exist" diagnostic should have been emitted.
+    assert 'does not exist as a tag or branch' not in result.stdout
+
+
+def test_local_path_missing_directory_emits_diagnostic(
+    mock_memex: MockMemex, tmp_path: Path
+) -> None:
+    """MEMEX_LOCAL_PATH pointing at a non-existent directory must fail loudly
+    (with verbose) rather than silently falling through to git."""
+    env = {
+        **mock_memex.env,
+        'MEMEX_LOCAL_PATH': str(tmp_path / 'does_not_exist'),
+        'MEMEX_RESOLVE_VERBOSE': '1',
+    }
+    result = subprocess.run(
+        ['bash', '-c', f'source "{PLUGIN_ROOT}/scripts/resolve_config.sh"'],
+        env=env,
+        capture_output=True,
+        text=True,
+        timeout=15.0,
+    )
+    assert result.returncode == 0  # sourcing returns cleanly with a stub memex()
+    assert 'MEMEX_LOCAL_PATH' in result.stdout
+    assert 'not a directory' in result.stdout
+
+
 def test_resolved_vault_caches_within_invocation(
     mock_memex: MockMemex, temp_git_repo: Path
 ) -> None:

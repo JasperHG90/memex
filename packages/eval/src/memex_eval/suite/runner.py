@@ -2507,13 +2507,21 @@ def _log_to_recorder(
             # ``default=`` is a json.dumps kwarg, not model_dump_json's.
             run_result_path.write_text(result.model_dump_json(indent=2))
             recorder.log_artifact(run_result_path)
-            _dd = os.environ.get('MEMEX_EVAL_DUMP_DIR')
-            if _dd:
-                _ddp = Path(_dd)
-                _ddp.mkdir(parents=True, exist_ok=True)
-                (_ddp / f'{suite.name}-{int(time.time())}.json').write_text(
-                    result.model_dump_json(indent=2)
-                )
+            # MLflow-independent dump for local debugging. When MLflow is
+            # not configured (no MLFLOW_TRACKING_URI), the MLflow recorder
+            # no-ops on every artifact — making it impossible to inspect
+            # tool_calls / session_log_text without re-running. Honor
+            # MEMEX_EVAL_DUMP_DIR so failure analysis doesn't depend on
+            # the MLflow code path.
+            _dump_dir = os.environ.get('MEMEX_EVAL_DUMP_DIR')
+            if _dump_dir:
+                _dump_root = Path(_dump_dir)
+                _dump_root.mkdir(parents=True, exist_ok=True)
+                _safe_suite = ''.join(c if c.isalnum() or c in '._-' else '_' for c in suite.name)
+                _ts = int(time.time())
+                _out = _dump_root / f'{_safe_suite}-{_ts}.json'
+                _out.write_text(result.model_dump_json(indent=2))
+                logger.info('Dumped run_result to %s', _out)
 
             # Defense-in-depth: re-redact even though the server already did.
             # If a self-hosted memex is older / lacks redaction, we still avoid leaking secrets.

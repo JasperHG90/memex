@@ -107,14 +107,14 @@ RETRIEVAL_ROUTING = """## Retrieval routing
 - **Relationships** → `memex_list_entities` → `memex_get_entity_cooccurrences` → `memex_get_entity_mentions`.
 - **Content lookup** → `memex_memory_search` AND `memex_note_search` in parallel. Retry `expand_query=true` if insufficient.
 - **Broad/panoramic** → `memex_get_vault_summary` first; escalate to `memex_survey(query)` if too coarse.
-- **KV** → `memex_kv_get(key)` exact / `memex_kv_search(query)` fuzzy / `memex_kv_list()`.
+- **KV** → `memex_kv_get(key)` exact / `memex_kv_search(query)` fuzzy / `memex_kv_list()`. Use FIRST for "what's our X?", "what do I prefer?", "what's the convention for Y?" — preferences/conventions/settings live in KV, not in note content or on the filesystem.
 
 After `memory_search`: call `memex_get_notes_metadata`. After `note_search`: metadata inline — do NOT call `memex_get_notes_metadata` again. `memex_read_note` only when `total_tokens < 500`."""
 
 
 RESOLUTION_FLOW = """## 5-step resolution flow
 
-Triggers: "that worked"/"lock it in" (success); "stop suggesting X"/"didn't work" (failure).
+Triggers: "that worked"/"lock it in"/"lock the lesson in"/"record it as a success" → success; "stop suggesting X"/"didn't work" → failure. These ALWAYS route to `memex_record_outcome` on existing units — NEVER `memex_add_note` (do not write a fresh note describing the outcome).
 
 1. **Disambiguate** — ambiguous scope (multiple candidates, no temporal anchor)? ASK before writing.
 2. **Route** — title → `memex_find_note`; content → `memex_memory_search`. Pick one:
@@ -158,14 +158,14 @@ KV_NAMESPACE = """## Preferences / conventions → `memex_kv_write`, NOT local f
 "remember"/"save"/"for future sessions"/"going forward" directives conveying a preference, convention, or setting → `memex_kv_write`. Do NOT write to local files (CLAUDE.md, AGENTS.md, .memex/), do NOT use `memex_add_note`, do NOT just acknowledge.
 </critical_constraint>
 
-Namespace by scope cue (NOT grammatical person). Narrower wins (project beats user; app beats user):
+Namespace by scope cue (NOT grammatical person). `app:`/`project:`/`global:` ALL override `user:` when their cue is present. Default to `user:` only when NO other cue applies.
 
 | Scope cue | Namespace |
 |---|---|
-| identity-shaped, no scope ("about me", "I prefer X") | `user:` |
+| no scope, identity-shaped ("about me", "I prefer X" with no other qualifier) | `user:` |
 | "this repo/project", "in this codebase", "on <project>" | `project:<id>:` |
 | "across our projects", "company-wide", "we standardise on" | `global:` |
-| "when I use <app>", "in Claude Code", "in Hermes" | `app:<app-id>:` |
+| "when I use <app>", "in Claude Code/Hermes", "for <app> sessions" | `app:<app-id>:` |
 | learned procedure | `procedure:<verb>:<context-tag>` (pair with `memex_record_outcome(target_type="kv_key", kv_key=…)`) |
 
 Ambiguous? ASK before writing.
@@ -174,7 +174,7 @@ Ambiguous? ASK before writing.
 <example>"For this project, Python 3.10" → key=`project:<id>:lang:python` (NOT `user:`)</example>
 <example>"7-character indent in this repo" → key=`project:<id>:style:indent`</example>
 <example>"Company-wide: Python 3.12 minimum" → key=`global:lang:python:min`</example>
-<example>"When I use Claude Code: dark theme" → key=`app:claude-code:ui` (NOT `user:`)</example>"""
+<example>"When I use Claude Code: dark theme" / "For Claude Code sessions: line numbers" → key=`app:claude-code:*` (NOT `user:claude-code:*`, NOT `user:ui` — "<app>" cue wins over "I"/"my")</example>"""
 
 
 CITATIONS = """## Citations
