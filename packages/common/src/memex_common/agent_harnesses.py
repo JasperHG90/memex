@@ -26,12 +26,12 @@ Outcome-signal lexicon for paired writes:
 - Success → "that worked", "lock it in", "record it", "that's the lesson" → verb=`helpful`
 - Failure → "stop suggesting X", "didn't work", "we removed it", "that was wrong" → verb=`not_helpful`
 
-Capture cadence: write a short note (`memex_add_note`, ≤300 tokens, no per-file changelogs) when you finish a multi-step task, diagnose a non-obvious bug, learn a user preference, or resolve a tricky env issue. Use `memex_append_note(note_key, delta)` to extend an existing note rather than re-ingesting."""
+Capture cadence: write a short note (`memex_add_note`, ≤300 tokens, no per-file changelogs) when you finish a multi-step task, diagnose a non-obvious bug, or resolve a tricky env issue. User preferences / conventions are NOT note-shaped — those go to `memex_kv_write` per the KV-namespace rules above. Use `memex_append_note(note_key, delta)` to extend an existing note rather than re-ingesting."""
 
 
 CLAUDE_CODE_HARNESS = """## Claude Code-specific framing
 
-Capture cadence: call `memex_add_note(background=true, author="claude-code")` when you (1) complete a multi-step task, (2) diagnose a bug root cause, (3) make/discover an architectural decision, (4) learn a user preference, or (5) resolve a tricky env issue. Hard max 300 tokens; no per-file changelogs.
+Capture cadence: call `memex_add_note(background=true, author="claude-code")` when you (1) complete a multi-step task, (2) diagnose a bug root cause, (3) make/discover an architectural decision, or (4) resolve a tricky env issue. Hard max 300 tokens; no per-file changelogs. User preferences / conventions are NOT note-shaped — those go to `memex_kv_write` per the KV-namespace rules above.
 
 <critical_constraint name="preference_routing">
 "Remember"/"save this"/"for future sessions" directives for preferences or conventions go to `memex_kv_write` — see KV namespace rules above. Do NOT use the built-in `Write` tool to save them into CLAUDE.md / AGENTS.md / .memex/ / any local file. Local files are for project code; KV is for durable settings.
