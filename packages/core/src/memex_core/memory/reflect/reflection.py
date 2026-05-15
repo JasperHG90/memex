@@ -938,7 +938,20 @@ class ReflectionEngine:
             llm_drop_overridden = False
             if refreshed is not None:
                 llm_drop = bool(refreshed.should_drop)
-                if llm_drop and len(live_ids) >= min_retention:
+                # Defensive: if the validator was bypassed (DSPy adapter swallowed
+                # the ValueError) we still receive should_drop=False with empty
+                # content/title. Treat as a drop and skip the retention guardrail
+                # — empty payload is unrecoverable regardless of evidence count.
+                content_empty = not (
+                    (refreshed.content or '').strip() and (refreshed.title or '').strip()
+                )
+                if not llm_drop and content_empty:
+                    logger.warning(
+                        'refresh_observation: refreshed payload had empty content/title '
+                        'but should_drop=False; coercing to drop'
+                    )
+                    llm_drop = True
+                if llm_drop and not content_empty and len(live_ids) >= min_retention:
                     logger.warning(
                         'refresh_observation: LLM should_drop=True overridden; '
                         'live_ids=%d, reason=%r',

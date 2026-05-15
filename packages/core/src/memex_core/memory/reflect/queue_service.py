@@ -491,6 +491,19 @@ class ReflectionQueueService:
         reflect failure on an entity does NOT bump retry_count on a co-pending
         refresh task for the same entity.
         """
+        if task_type == 'refresh_observation' and observation_id is None:
+            # A refresh failure with no observation_id cannot be safely
+            # attributed to any row — bumping retry_count on a random sibling
+            # would dead-letter the wrong task. Log and abort; the orphan
+            # PROCESSING row (if any) is recovered by ``recover_stale_processing``.
+            logger.warning(
+                'mark_failed called with task_type=refresh_observation and '
+                'observation_id=None for entity %s vault %s — aborting to avoid '
+                'incrementing retry_count on the wrong row',
+                entity_id,
+                vault_id,
+            )
+            return
         stmt = (
             select(ReflectionQueue)
             .where(col(ReflectionQueue.entity_id) == entity_id)
@@ -498,13 +511,7 @@ class ReflectionQueueService:
             .where(col(ReflectionQueue.task_type) == task_type)
         )
         if task_type == 'refresh_observation':
-            # Hard-pin the refresh path to a specific observation_id and to
-            # rows that actually have one. Without ``is_not(None)`` a row
-            # somehow inserted with NULL observation_id would match the
-            # broad filter and have its retry_count incremented spuriously.
-            stmt = stmt.where(col(ReflectionQueue.observation_id).is_not(None))
-            if observation_id is not None:
-                stmt = stmt.where(col(ReflectionQueue.observation_id) == observation_id)
+            stmt = stmt.where(col(ReflectionQueue.observation_id) == observation_id)
         # Prefer the currently-PROCESSING row (the one we just failed) over
         # any historical FAILED siblings; without ORDER BY, the planner may
         # return any matching row, leaving the PROCESSING one stuck.
@@ -589,6 +596,12 @@ class ReflectionQueueService:
 
     async def recover_stale_processing(self, session: AsyncSession) -> int:
         """Reset PROCESSING items that have been stuck longer than the configured timeout.
+
+        Covers BOTH ``task_type='reflect'`` and ``task_type='refresh_observation'``
+        — the WHERE clause filters by status only. If a refresh worker crashes
+        between Phase C CAS abandon and the scheduler's
+        ``reclaim_refresh_with_backoff`` call, the orphan PROCESSING row is
+        recovered here on the next stale-recovery tick.
 
         Returns the number of recovered items.
         """
