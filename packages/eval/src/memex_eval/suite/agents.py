@@ -643,18 +643,22 @@ class ClaudeCodeBackend(AnswerBackend):
             '--verbose',
             '--permission-mode',
             'bypassPermissions',
-            # Disable Claude Code's built-in filesystem write tools so the
-            # agent can't intercept "remember X" / "save this" intents into
-            # its auto-memory store (~/.claude/projects/<id>/memory/MEMORY.md).
-            # ``Bash`` is NOT denied: disabling it (or even pattern-denying
-            # ``Bash(*claude/projects*)``) cost ~20 percentage points on the
-            # full sweep because retrieval scenarios legitimately depend on
-            # it. Some auto-memory bypass via ``cat > … << EOF`` heredoc
-            # still happens, but the KV-routing scaffolding catches the
-            # majority of "remember X" intents and routes them to
-            # ``memex_kv_write`` before the bypass fires.
-            '--disallowedTools',
-            'Write,Edit',
+            # Isolate from the operator's global MCP config. Without this
+            # the subprocess also loads the operator's globally-configured
+            # ``memex`` MCP server (alongside the suite-provided plugin
+            # memex), which typically points at a different vault — the
+            # agent then sees two ``memex_*`` tool surfaces and picks
+            # whichever, returning empty results from the wrong store.
+            # This is a test-rig requirement (the eval must point at the
+            # eval server, not whatever else the operator has running);
+            # all other built-in tools (Bash, Read, Grep, Glob, Write,
+            # Edit, Task, etc.) remain enabled because real plugin users
+            # have them and the plugin's agent_surface / harnesses are
+            # responsible for keeping the agent focused on memex tools
+            # for content.
+            '--strict-mcp-config',
+            '--mcp-config',
+            '.mcp.json',
         ]
         return flags
 
