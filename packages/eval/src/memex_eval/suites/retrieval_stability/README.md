@@ -106,6 +106,8 @@ The outcome's `score()` reads the env var `MEMEX_EVAL_CAPTURE_BASELINES`; in cap
 
 `config_pins` carries the retrieval-pipeline knob values pinned by the suite author (memory-rerank `composite_boost_log_clip`, the three reranker alphas). The eval client cannot introspect server-side config (out of scope for this PR), so the contract is: when a knob changes in production server config, the suite author updates `_CONFIG_PINS` in `__init__.py` AND runs `MEMEX_EVAL_CAPTURE_BASELINES=1` to refresh baselines. A change to either side without the other is a hard verify-time error with a recapture hint.
 
+**A pure knob change does NOT require `refresh-snapshot`** — the snapshot pins extraction state (units, notes, chunks), not retrieval-pipeline configuration. After a knob change, the workflow is: edit `_CONFIG_PINS` → `MEMEX_EVAL_CAPTURE_BASELINES=1 memex-eval suite run retrieval_stability` → commit the updated baselines. Only changes that affect extraction (alembic migration touching exported tables, extractor logic, embedder, corpus) require `refresh-snapshot`.
+
 What is **not** pinned (silent-drift surface; refresh-snapshot on change is operator discipline):
 
 - Cross-encoder reranker model identity (manifest pins embedder only). A reranker swap would still produce ranking drift caught by the RBO floor, so an actual regression surfaces as gate failure, not silent pass.

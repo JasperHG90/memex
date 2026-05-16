@@ -158,7 +158,31 @@ def _load_baseline(scenario_id: str) -> tuple[list[str], dict[str, object]]:
         # detects the corrupt sentinel and reports the error per
         # scenario.
         return [], {'_corrupt': True, '_error': f'{path}: {exc}'}
-    return list(payload.get('ranking', [])), dict(payload.get('meta', {}))
+    # Shape-validate before unpacking — a top-level JSON null/list or a
+    # ``meta: null`` / ``ranking: null`` would crash ``dict(...)`` /
+    # ``list(...)`` with a TypeError and propagate through scenario
+    # registration, breaking ``memex-eval suite list`` for every suite.
+    # That's the exact failure class the corrupt-sentinel path was
+    # designed to prevent; the type-narrowing here closes the remaining
+    # narrow shape-corruption gaps.
+    if not isinstance(payload, dict):
+        return [], {
+            '_corrupt': True,
+            '_error': f'{path}: top-level JSON is {type(payload).__name__}, expected object',
+        }
+    raw_meta = payload.get('meta', {})
+    raw_ranking = payload.get('ranking', [])
+    if not isinstance(raw_meta, dict):
+        return [], {
+            '_corrupt': True,
+            '_error': f'{path}: meta is {type(raw_meta).__name__}, expected object',
+        }
+    if not isinstance(raw_ranking, list):
+        return [], {
+            '_corrupt': True,
+            '_error': f'{path}: ranking is {type(raw_ranking).__name__}, expected list',
+        }
+    return list(raw_ranking), dict(raw_meta)
 
 
 METADATA = SuiteMetadata(
@@ -220,13 +244,37 @@ _OMITTED_QUERIES: frozenset[tuple[str, str]] = frozenset(
 
 # Retrieval-pipeline knobs whose values are pinned into every captured
 # baseline's meta block. Mismatch between this dict and a captured
-# baseline raises at verify time with a recapture hint, so changing a
-# knob without recapturing is a loud failure, not a silent re-baseline.
-# The eval client cannot introspect server-side config (out of scope
-# for this PR), so this dict is the authoritative-by-convention pin
-# the suite author updates when they change a knob in production
-# server config. ``'inf'`` is the JSON-safe rendering of ``math.inf``
-# (the default for ``composite_boost_log_clip``).
+# baseline raises at verify time with a recapture hint, so changing
+# either side without the other is a loud verify-time failure.
+#
+# CONTRACT (operator-discipline; the eval client cannot introspect
+# server-side config — out of scope for this PR):
+#
+#   * The string values below ARE NOT auto-derived from server config.
+#     They are author-maintained sentinels representing the live
+#     knob values at the time the baselines were last captured.
+#   * When you change a knob in production server config, you MUST:
+#       1. Update the corresponding value here to match the new
+#          production value (stringified).
+#       2. Recapture baselines:
+#          ``MEMEX_EVAL_CAPTURE_BASELINES=1 memex-eval suite run retrieval_stability``
+#     Doing only step 1 means baselines mismatch and the gate refuses
+#     to score; doing only step 2 silently re-baselines against the
+#     new knob (the failure mode the contract is designed to prevent).
+#   * A knob change with NO author update to this dict means the gate
+#     verifies against stale knobs without complaining. There is no
+#     in-band mechanism to detect that; CI cadence + code review on
+#     server-config changes are the out-of-band controls.
+#
+# Current pinned values reflect the defaults at capture time:
+#   * ``composite_boost_log_clip``: ``math.inf`` (memory-rerank
+#     log-additive clip; serialized as ``'inf'`` since ``math.inf`` is
+#     not strict-JSON-safe).
+#   * ``reranking_{mw,recency,temporal}_alpha``: server defaults at
+#     capture; recorded as the sentinel ``'default'`` because the
+#     three alphas have not been overridden in any deployment this
+#     gate runs against. Replace ``'default'`` with the literal
+#     stringified value if your deployment overrides any of them.
 _CONFIG_PINS: dict[str, object] = {
     'composite_boost_log_clip': 'inf',
     'reranking_mw_alpha': 'default',

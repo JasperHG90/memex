@@ -110,11 +110,22 @@ class RankingBaselineRbo(ExpectedOutcomeBase):
     # Knob values pinned into the baseline meta. The suite author
     # updates this dict when they intentionally change a knob; a stale
     # ``config_pins`` vs. the captured baseline raises at verify time
-    # with a recapture hint. This pins operator discipline: changing a
-    # retrieval knob in production server config without updating
-    # ``config_pins`` here would still pass (the eval client cannot
-    # introspect server-side state without scope creep), so the
-    # contract is: knob change ⇒ update ``config_pins`` + recapture.
+    # with a recapture hint.
+    #
+    # SCOPE OF THE PIN (operator-discipline contract):
+    #   * Mismatch between this in-memory dict and the persisted meta
+    #     block is detected ⇒ gate refuses to score until recapture.
+    #   * A knob change in production server config WITHOUT a paired
+    #     edit to this dict is NOT detected — the eval client does not
+    #     introspect server-side state. The pin therefore catches
+    #     author intent drift, not server-state drift. CI cadence +
+    #     code-review of server-config edits are the out-of-band
+    #     guards for the latter. Suite README documents the workflow.
+    #   * Values are JSON-safe primitives. Non-JSON values (tuples,
+    #     callables, ``math.inf``, sets) are accepted by the type
+    #     declaration but break ``json.dumps`` on capture or compare
+    #     unequal after JSON round-trip. Use stringified values for
+    #     anything non-primitive (``'inf'`` for ``math.inf``, etc.).
     config_pins: dict[str, Any] = Field(default_factory=dict)
 
     def score(
@@ -194,7 +205,13 @@ class RankingBaselineRbo(ExpectedOutcomeBase):
         # — otherwise the three checks below all skip via the
         # ``is not None`` short-circuit and a stale baseline slips
         # through silently.
-        required_meta_keys = {'top_k', 'search_type', 'schema_version'}
+        # ``config_pins`` is required at schema_version >= 3. A
+        # missing key would otherwise short-circuit the ``is not None``
+        # guard below and score against stale knobs silently. Listing
+        # it here forces the suite author to either (a) include the
+        # block (even as an explicit ``{}``) or (b) bump
+        # ``schema_version`` so the prior verify path refuses.
+        required_meta_keys = {'top_k', 'search_type', 'schema_version', 'config_pins'}
         missing_meta_keys = required_meta_keys - set(self.baseline_meta)
         if missing_meta_keys:
             raise RuntimeError(

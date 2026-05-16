@@ -63,10 +63,14 @@ def _outcome(
     rbo_floor: float = 0.92,
 ) -> RankingBaselineRbo:
     if baseline_meta is None:
+        # Default test fixture provides the full required meta block,
+        # including ``config_pins: {}``. Tests that probe the
+        # missing-key path pass an explicit ``baseline_meta`` instead.
         baseline_meta = {
             'schema_version': _SCHEMA,
             'top_k': expected_top_k,
             'search_type': expected_search_type,
+            'config_pins': {},
         }
     return RankingBaselineRbo(
         type='ranking_baseline_rbo',
@@ -186,10 +190,29 @@ class TestBaselineGuards:
     def test_missing_meta_keys_raises(self) -> None:
         outcome = _outcome(
             baseline=['u1'],
-            baseline_meta={},  # no top_k / search_type / schema_version
+            baseline_meta={},  # no top_k / search_type / schema_version / config_pins
         )
         ans = AgentAnswer(retrieved_unit_ids=['u1'])
         with pytest.raises(RuntimeError, match='missing required meta keys'):
+            outcome.score(ans, _scenario())
+
+    def test_missing_only_config_pins_key_raises(self) -> None:
+        """Round-6 regression guard. A schema_version=3 baseline that
+        forgets ``config_pins`` (hand-authored, truncated, future
+        corruption) must NOT short-circuit the pin check via the
+        ``is not None`` guard. The key must be in ``required_meta_keys``.
+        """
+        outcome = _outcome(
+            baseline=['u1'],
+            baseline_meta={
+                'schema_version': _SCHEMA,
+                'top_k': 10,
+                'search_type': 'memory',
+                # config_pins absent
+            },
+        )
+        ans = AgentAnswer(retrieved_unit_ids=['u1'])
+        with pytest.raises(RuntimeError, match='config_pins'):
             outcome.score(ans, _scenario())
 
     def test_baseline_top_k_mismatch_raises(self) -> None:
@@ -199,6 +222,7 @@ class TestBaselineGuards:
                 'schema_version': _SCHEMA,
                 'top_k': 5,  # baseline captured at 5
                 'search_type': 'memory',
+                'config_pins': {},
             },
             expected_top_k=10,
         )
@@ -213,6 +237,7 @@ class TestBaselineGuards:
                 'schema_version': _SCHEMA,
                 'top_k': 10,
                 'search_type': 'note',  # baseline captured for note
+                'config_pins': {},
             },
             expected_search_type='memory',
         )
@@ -227,6 +252,7 @@ class TestBaselineGuards:
                 'schema_version': 1,  # old schema
                 'top_k': 10,
                 'search_type': 'memory',
+                'config_pins': {},
             },
         )
         ans = AgentAnswer(retrieved_unit_ids=['u1'])
@@ -346,3 +372,73 @@ class TestCaptureMode:
         assert payload['meta']['top_k'] == 10
         assert payload['meta']['schema_version'] == _SCHEMA
         assert payload['ranking'] == ['u1', 'u2']
+
+
+# ---------------------------------------------------------------------------
+# _load_baseline shape-validation (round-6 hardening)
+# ---------------------------------------------------------------------------
+
+
+class TestLoadBaselineShape:
+    """``_load_baseline`` must NEVER raise; corrupt-shape inputs map to
+    the corrupt-sentinel meta and the outcome's ``score()`` raises with
+    a recapture hint.
+
+    The shape-corruption modes covered:
+      * Top-level JSON is not an object (null, list, scalar).
+      * ``meta`` field is ``null`` or non-object.
+      * ``ranking`` field is ``null`` or non-list.
+
+    Raising at suite-discovery time would crash ``memex-eval suite list``
+    for every suite — the round-3 corruption sentinel was designed to
+    prevent that, but earlier versions missed these narrow shape cases.
+    """
+
+    def _baselines_dir(self, monkeypatch, tmp_path):
+        import memex_eval.suites.retrieval_stability as suite_mod
+
+        monkeypatch.setattr(suite_mod, '_BASELINES_DIR', tmp_path)
+        return suite_mod._load_baseline
+
+    def test_top_level_null_returns_corrupt_sentinel(self, monkeypatch, tmp_path) -> None:
+        (tmp_path / 's1.json').write_text('null')
+        load = self._baselines_dir(monkeypatch, tmp_path)
+        ranking, meta = load('s1')
+        assert ranking == []
+        assert meta.get('_corrupt') is True
+
+    def test_top_level_list_returns_corrupt_sentinel(self, monkeypatch, tmp_path) -> None:
+        (tmp_path / 's1.json').write_text('[1, 2, 3]')
+        load = self._baselines_dir(monkeypatch, tmp_path)
+        ranking, meta = load('s1')
+        assert ranking == []
+        assert meta.get('_corrupt') is True
+
+    def test_meta_null_returns_corrupt_sentinel(self, monkeypatch, tmp_path) -> None:
+        (tmp_path / 's1.json').write_text('{"meta": null, "ranking": ["u1"]}')
+        load = self._baselines_dir(monkeypatch, tmp_path)
+        ranking, meta = load('s1')
+        assert ranking == []
+        assert meta.get('_corrupt') is True
+
+    def test_ranking_null_returns_corrupt_sentinel(self, monkeypatch, tmp_path) -> None:
+        (tmp_path / 's1.json').write_text('{"meta": {}, "ranking": null}')
+        load = self._baselines_dir(monkeypatch, tmp_path)
+        ranking, meta = load('s1')
+        assert ranking == []
+        assert meta.get('_corrupt') is True
+
+    def test_meta_non_object_returns_corrupt_sentinel(self, monkeypatch, tmp_path) -> None:
+        (tmp_path / 's1.json').write_text('{"meta": "not-an-object", "ranking": []}')
+        load = self._baselines_dir(monkeypatch, tmp_path)
+        ranking, meta = load('s1')
+        assert ranking == []
+        assert meta.get('_corrupt') is True
+
+    def test_missing_file_returns_empty_not_sentinel(self, monkeypatch, tmp_path) -> None:
+        load = self._baselines_dir(monkeypatch, tmp_path)
+        ranking, meta = load('s1-absent')
+        # Missing file is "capture pending", not "corrupt"; the score()
+        # path distinguishes the two by sentinel presence.
+        assert ranking == []
+        assert meta == {}
