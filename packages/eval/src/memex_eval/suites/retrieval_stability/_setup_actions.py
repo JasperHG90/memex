@@ -44,6 +44,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
 import uuid
 from datetime import datetime, timezone
@@ -227,15 +228,35 @@ class _SeedParagraphsFromSources(SetupActionHandler):
         parsed = urlparse(dsn)
         # The ``'postgres'`` fallbacks below are testcontainer-convention
         # defaults so the handler stays usable from its own integration
-        # tests without explicit env wiring. Outside a testcontainer this
-        # would silently authenticate with a hardcoded password if the
-        # DSN is missing one — log a warning so a misconfigured CI
-        # environment is loud, not silent.
+        # tests without explicit env wiring. Outside a testcontainer
+        # context (where ``PostgresContainer`` injects the password
+        # into the DSN), the fallback silently authenticates with a
+        # hardcoded password — the kind of silent CI misconfig that
+        # hides until production. Use ERROR-level (not WARNING) so
+        # the line lands in default-configured log streams, and refuse
+        # to proceed unless the operator explicitly opts into the
+        # fallback via ``MEMEX_EVAL_ALLOW_DEFAULT_POSTGRES_PASSWORD``.
+        # Tests using ``testcontainers.postgres.PostgresContainer``
+        # ship a DSN with a real password and never hit this branch.
         if not parsed.password:
-            logger.warning(
+            allow_default = os.environ.get(
+                'MEMEX_EVAL_ALLOW_DEFAULT_POSTGRES_PASSWORD', ''
+            ).strip().lower() in {'1', 'true', 'yes', 'on'}
+            if not allow_default:
+                raise RuntimeError(
+                    f'seed_paragraphs_from_sources: DSN for host '
+                    f'{parsed.hostname or "<unknown>"!r} has no password and '
+                    f'MEMEX_EVAL_ALLOW_DEFAULT_POSTGRES_PASSWORD is not set. '
+                    f'Refusing to fall back to the testcontainer default '
+                    f"'postgres' password. Either fix the DSN or set the "
+                    f'env var to opt in explicitly (testcontainer runs only).'
+                )
+            logger.error(
                 'seed_paragraphs_from_sources: DSN at %s has no password; '
-                "falling back to the testcontainer default 'postgres'. "
-                'If this is not a testcontainer run, fix the DSN.',
+                "falling back to testcontainer default 'postgres' because "
+                'MEMEX_EVAL_ALLOW_DEFAULT_POSTGRES_PASSWORD is set. This is '
+                'a development-only escape hatch; production eval contexts '
+                'should pass an authenticated DSN.',
                 parsed.hostname or '<unknown host>',
             )
         meta_config = PostgresMetaStoreConfig(
