@@ -400,19 +400,22 @@ def _aggregate_text(answer: AgentAnswer) -> str:
 def _aggregate_unit_ids(answer: AgentAnswer) -> list[str]:
     """Return the retrieved unit IDs, preferring the explicit list.
 
-    Fallback iterates ``answer.units`` and reads ``note_id`` (the
-    ``NoteSearchResult`` field for note-search) OR ``id`` (the
-    ``MemoryUnitDTO`` field for memory-search). Reading ``id`` only
-    would silently return empty strings for every note-search result
-    — the exact latent bug ``agents.py:419`` closed by populating
-    ``retrieved_unit_ids`` directly. The fallback now matches.
+    Fallback iterates ``answer.units`` and prefers ``id`` (the
+    ``MemoryUnitDTO`` field — the actual UNIT UUID, what every
+    unit-id-keyed baseline matches) over ``note_id`` (only present on
+    ``NoteSearchResult``, where ``id`` is absent so we fall through).
+    Earlier priority order returned the SOURCE-NOTE UUID instead of
+    the unit UUID for memory units, silently invalidating the gate's
+    unit-id matching. ``agents.py:419`` already populates
+    ``retrieved_unit_ids`` directly for both search types, so this
+    fallback is the safety net.
     """
     if answer.retrieved_unit_ids:
         return list(answer.retrieved_unit_ids)
     return [
-        str(getattr(u, 'note_id', None) or getattr(u, 'id', ''))
+        str(getattr(u, 'id', None) or getattr(u, 'note_id', ''))
         for u in answer.units
-        if getattr(u, 'note_id', None) or getattr(u, 'id', None)
+        if getattr(u, 'id', None) or getattr(u, 'note_id', None)
     ]
 
 

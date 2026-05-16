@@ -1242,26 +1242,20 @@ def suite_refresh_snapshot(
     # Earlier ordering wiped the DB BEFORE stashing; if the stash then
     # failed (ENOSPC, EACCES), the operator was left with no DB AND no
     # snapshot. Stashing first means a stash failure is recoverable.
-    # Backup name uses pid+timestamp so a stale .bak.<pid> from a
-    # crashed prior run with a reused pid doesn't get silently nuked.
-    backup: Path | None
-    if shipped.is_dir():
-        backup_name = f'{shipped.name}.bak.{_os.getpid()}-{int(_time.time())}'
-        _backup_candidate = shipped.with_name(backup_name)
-        if _backup_candidate.exists():
-            shutil.rmtree(_backup_candidate)
-        shutil.move(str(shipped), str(_backup_candidate))
-        backup = _backup_candidate
-        console.print(f'[green]✓[/green] Stashed existing snapshot to {_backup_candidate.name}.')
-    else:
-        backup = None
+    # Initialize backup tracker BEFORE the try block so a stash-itself
+    # failure can't leave ``backup`` unbound. The stash is performed
+    # inside the wide try so any stash-failure path (filesystem error,
+    # SIGINT mid-rename) also routes through the restore handler.
+    backup: Path | None = None
 
     def _restore_if_backup() -> None:
-        """Restore the stashed snapshot. ``shutil.move`` into an existing
-        directory would put the backup INSIDE it; rmtree the (possibly
-        partial) shipped dir first so move replaces atomically.
+        """Restore the stashed snapshot.
+
+        ``shutil.move`` into an existing directory would put the backup
+        INSIDE it; rmtree the (possibly partial) shipped dir first so
+        move replaces atomically. Mypy can't narrow ``backup`` through
+        a closure, so re-bind locally.
         """
-        # Mypy can't narrow ``backup`` through a closure, so re-bind locally.
         b = backup
         if b is not None and b.is_dir():
             if shipped.is_dir():
@@ -1269,13 +1263,28 @@ def suite_refresh_snapshot(
             shutil.move(str(b), str(shipped))
             console.print(f'[yellow]Restored prior snapshot from {b.name}.[/yellow]')
 
-    # Single wide try/except wrapping every destructive step from here
-    # to the end. Any exception — KeyboardInterrupt, subprocess crash,
-    # filesystem error, anything — triggers the restore path. The
-    # narrow per-step try blocks the previous round had left windows
-    # where a SIGINT between steps would orphan the backup.
+    # Single wide try/except wrapping every destructive step: stash,
+    # wipe, subprocess, copy. Any exception — KeyboardInterrupt,
+    # subprocess crash, filesystem error, anything — triggers the
+    # restore path. A failing restore itself does NOT mask the
+    # original exception: it logs and re-raises the original.
     try:
-        # Phase 2: wipe DB.
+        # Phase 2: stash the existing snapshot (inside the try so a
+        # rename failure here also routes through the restore handler).
+        # Backup name uses pid+timestamp so a stale .bak.<pid> from a
+        # crashed prior run with a reused pid doesn't get silently nuked.
+        if shipped.is_dir():
+            backup_name = f'{shipped.name}.bak.{_os.getpid()}-{int(_time.time())}'
+            _backup_candidate = shipped.with_name(backup_name)
+            if _backup_candidate.exists():
+                shutil.rmtree(_backup_candidate)
+            shutil.move(str(shipped), str(_backup_candidate))
+            backup = _backup_candidate
+            console.print(
+                f'[green]✓[/green] Stashed existing snapshot to {_backup_candidate.name}.'
+            )
+
+        # Phase 3: wipe DB.
         asyncio.run(drop_and_recreate_schema(dsn))
         console.print('[green]✓[/green] DB reset.')
 
@@ -1321,8 +1330,13 @@ def suite_refresh_snapshot(
         shutil.copytree(lookup_info.cache_path, shipped)
     except BaseException:
         # KeyboardInterrupt, typer.Exit, subprocess failure, copytree
-        # failure — all funnel through here. Restore stashed snapshot.
-        _restore_if_backup()
+        # failure — all funnel through here. Wrap restore so a
+        # secondary failure (e.g. FS full mid-restore) does NOT mask
+        # the original exception — log and re-raise the original.
+        try:
+            _restore_if_backup()
+        except Exception:
+            logging.getLogger(__name__).exception('restore failed; original error follows')
         raise
 
     # Success: snapshot is in place; drop the backup.
