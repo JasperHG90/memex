@@ -309,6 +309,42 @@ This PR mutates files under `packages/eval/src/memex_eval/suite/*`:
 
 4. `cli.py` — added `memex-eval suite refresh-snapshot <name>` subcommand. Drops the eval DB, runs the suite once with `--from-snapshot auto --reingest` (cache miss → ingest+extract+populate cache), then copies the populated cache slot into `<suite_pkg>/snapshot/`.
 
+## Sweeping `composite_boost_log_clip` (L)
+
+The framework's `memex-eval suite sweep` runs the suite once per knob value, spawning a fresh local Memex server per point with the override applied at startup. The retrieval-stability gate is the natural target for an L-sweep: the captured baselines were committed at `L=math.inf` (a mathematical no-op), so each sweep point measures the RBO drift of the live reranker at a smaller `L` against the `L=inf` reference rankings.
+
+```bash
+# Defaults: L ∈ {inf, 2.0, 1.0, 0.5, 0.1, 0.01}
+# Output: .temp/sweep-clip-l.json (SweepResult JSON with per-point pass_rate)
+just sweep-clip-l
+
+# Custom grid:
+just sweep-clip-l grid='inf,1.5,0.7,0.3,0.05,0.005'
+
+# Or invoke the framework directly:
+memex-eval suite sweep retrieval_stability \
+  --server http://127.0.0.1:18080/api/v1/ \
+  --param 'server.memory.retrieval.composite_boost_log_clip=inf,2.0,1.0,0.5,0.1,0.01' \
+  --output sweep_results.json
+```
+
+**Expected outcome with the current corpus**: the per-unit boost product stays inside `[exp(-L), exp(+L)]` for any L ≥ ~0.1 (verified empirically — see "Limits" below: clip is dormant under the current snapshot's neutral metadata). The sweep should therefore report:
+
+| L | Expected pass_rate | Why |
+|---|---|---|
+| `inf` | 1.0 | Baseline, no-op |
+| `2.0` | 1.0 | Clip window contains every boost product |
+| `1.0` | 1.0 | Still dormant |
+| `0.5` | 1.0 | Still dormant |
+| `0.1` | 1.0 (likely) | Boundary; near-tie reorderings possible |
+| `0.01` | < 1.0 | Clip engages; rankings shift; RBO drops below the 0.92 floor |
+
+A pass_rate of 1.0 across **all** L values confirms the design-doc claim that the clip is dormant under neutral metadata. A drop at higher L than expected is real signal: it means the clip is engaging earlier than predicted, which warrants investigating the underlying boost factors.
+
+The sweep does **not** trip the `config_pins` mismatch guard: the outcome's `config_pins` and the baseline meta's `config_pins` are both `'inf'` (the suite-author pin), regardless of the live server's runtime knob. The guard is for "the suite author intentionally changed the pin without recapturing"; the sweep is for "the server runtime knob varies and we measure ranking sensitivity to that change." Different concerns, different surfaces.
+
+To exercise the clip arithmetic at low L, the suite would need a **skewed-metadata corpus** (one note with ~100× the mention count of others, or extreme `event_date` differences) so per-unit boost products exit the clip window earlier. That's deferred to a follow-up suite (`retrieval_clip_sensitivity`) — see "Limits" below.
+
 ## RBO floor and the omitted query
 
 - `rbo_floor=0.92`. With the snapshot import eliminating LLM-extraction variance, the bulk of scenarios produce identical rankings across runs (RBO=1.0 exactly). A small number flicker between 0.92 and 1.0 due to residual float non-determinism (cross-encoder kernel + embedding-regeneration; see "Shipped snapshot" section above). 0.92 catches a meaningful regression while absorbing this kernel-level noise.
