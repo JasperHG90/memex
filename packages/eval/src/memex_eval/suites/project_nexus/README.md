@@ -49,3 +49,11 @@ pre-existing GitHub-Actions / Python-3.12 assertions.
 The lint scenarios mark `expected_failure_modes=['claude-code', 'hermes']`
 because the lint outcomes inspect server-side findings, which agent
 backends cannot reproduce from text-only tool output.
+
+## Recent baseline
+
+Single replicate, fresh DB + freshly-built snapshot, 2026-05-16:
+
+| Pass rate | Failed | Cost |
+|---|---|---|
+| **1.0000** (11/11) | — | $0.0005 (judge only — api backend, no agent cost) |

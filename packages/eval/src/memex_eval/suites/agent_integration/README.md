@@ -194,16 +194,26 @@ replicates × 22 non-mutating scenarios are still ~±15pp on per-scenario
 binary outcomes — pair with a baseline-model comparison for
 confident calls.
 
-Recent baseline (single replicate, post agent-surface compression +
-procedure-MW rip-out, 2026-05-15, 31-scenario pre-wake-word suite):
+Recent baseline (single replicate, 38-scenario suite, 2026-05-16,
+post procedure-MW rip-out + wake-word/TTL scenarios + fresh DB):
 
-| Backend | pass_rate | Failed |
-|---|---|---|
-| `hermes` (`glm-5.1:cloud`) | 1.0000 (31/31) | — |
-| `claude-code` (`claude-sonnet-4-6`) | 0.9355 (29/31) | `survey_broad_topic`, `survey_vault_overview` |
-| `ollama-claude` (GLM via Claude CLI) | 0.9677 (30/31) | `agent_finds_alpha_lead` |
+| Backend | pass_rate | Failed scenarios | Cost |
+|---|---|---|---|
+| `hermes` (`glm-5.1:cloud`) | **1.0000** (37/37 + 1 xfail) | — | $0.01 (judge only; agent tokens uncosted) |
+| `claude-code` (`claude-sonnet-4-6`) | **0.8421** (32/38) | `agent_keywords_in_answer`, `entity_mentions_enumeration`, `feedback_clarifies_under_ambiguity`, `kv_retrieves_convention`, `temporal_superseded_handling`, `triage_picks_relevant_from_many` | $4.16 |
+| `ollama-claude` (GLM via Claude CLI) | **0.9474** (36/38) | `kv_writes_app_setting`, `kv_writes_user_preference` (both **loose** KV variants — hard wake-word variants all pass) | $27.40 |
 
-The 7 wake-word + TTL scenarios land in the next sweep.
+Observations:
+- All 7 hard wake-word + TTL scenarios pass on hermes and ollama-claude.
+  Claude-code passes all 7 too — the wake words are sticky.
+- Loose KV variants are the only failures on ollama-claude. Claude-code's
+  failures spread across smoke / entity / feedback / kv / temporal /
+  triage — single-replicate noise on borderline LLM-judge thresholds,
+  not a systemic gap.
+- Claude-code drift between adjacent runs (0.94 → 0.84 on the same
+  build) is the CI band at single-replicate × 38 scenarios. Use
+  `--replicates 5` minimum for ranking calls; pre-wake-word the
+  per-scenario CI band was ±20pp.
 
 ## Cost (Hermes + GLM-5.1, 5 replicates × 38 scenarios)
 

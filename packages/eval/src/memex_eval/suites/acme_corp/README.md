@@ -64,3 +64,11 @@ backends.
 - `deprioritize` (Widget Lite EOL facts)
 - `kv_write` (procedural KV roundtrip)
 - `trigger_reflections` (mental-model retrieval)
+
+## Recent baseline
+
+Single replicate, fresh DB + freshly-built snapshot, 2026-05-16:
+
+| Pass rate | Failed | Cost |
+|---|---|---|
+| **1.0000** (40/40) | — | $0.004 (judge only — api backend, no agent cost) |

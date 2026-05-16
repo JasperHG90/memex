@@ -46,3 +46,11 @@ The cooccurrence-only scenario marks
 `expected_failure_modes=['claude-code', 'hermes']` because graph
 cooccurrence inspects server-side relations that agent backends cannot
 reproduce from text-only tool output.
+
+## Recent baseline
+
+Single replicate, fresh DB + freshly-built snapshot, 2026-05-16:
+
+| Pass rate | Failed | Cost |
+|---|---|---|
+| **1.0000** (9/9) | — | $0 (deterministic, no judge or agent calls) |
