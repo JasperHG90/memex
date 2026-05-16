@@ -94,10 +94,15 @@ def _split_into_paragraphs(content: str) -> list[str]:
     # and the docstring of ``_split_into_paragraphs`` upstreams that
     # invariant to source-file content.
     normalized = normalized.replace('\x00', '')
-    # Drop a leading YAML frontmatter block. ``count=1`` keeps any
-    # body-level ``---`` separator intact. The trailing ``\n?`` matches
-    # files where the closing ``---`` is the last line (no terminating
-    # newline) — without it the closing fence would survive as content.
+    # Drop a leading YAML frontmatter block. ``\A`` + ``count=1``
+    # anchor at the start of the file, so a body-level ``---``
+    # horizontal-rule separator inside the markdown is preserved. The
+    # trailing ``\n?`` matches files where the closing ``---`` is the
+    # last line (no terminating newline) — without it the closing
+    # fence would survive as content. Convention: source files MUST
+    # NOT open with ``---\n`` unless they are YAML frontmatter; a
+    # markdown file that opens with a horizontal rule would have its
+    # opening rule + the next ``---`` block stripped.
     normalized = re.sub(r'\A---\n.*?\n---\n?', '', normalized, count=1, flags=re.DOTALL)
     normalized = re.sub(r'\n{3,}', '\n\n', normalized.strip())
     blocks = [b.strip() for b in normalized.split('\n\n') if b.strip()]

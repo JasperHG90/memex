@@ -60,6 +60,21 @@ def _capture_mode_enabled() -> bool:
     return val in {'1', 'true', 'yes', 'on'}
 
 
+# Surface capture mode at module-load time so an operator who set the
+# env var sees one explicit log line instead of inferring mode from
+# the absence of failures. Kept at module scope (not per-score) to
+# match the env-read frequency under normal use (env is set once
+# before invocation); per-scenario re-reads remain in score() so
+# tests using ``monkeypatch.setenv(...)`` still observe their flips.
+if _capture_mode_enabled():
+    logger.info(
+        '%s is set; retrieval_stability outcomes are in CAPTURE mode — '
+        'baselines will be (re)written on every score() call. '
+        'Unset the env var to return to verify mode.',
+        _CAPTURE_ENV_VAR,
+    )
+
+
 @register_outcome('ranking_baseline_rbo')
 class RankingBaselineRbo(ExpectedOutcomeBase):
     """Rank-Biased Overlap of retrieved IDs against a captured baseline.
