@@ -852,6 +852,17 @@ class ReflectionEngine:
                 # over-absorb when source MUs have been legitimately re-cited.
                 from memex_core.memory.sql_models import ReflectionStatus
 
+                # ``source_unit_id IS NOT NULL`` is intentional: rows with
+                # NULL ``source_unit_id`` carry no signal for the "already
+                # absorbed" check — they didn't originate from a specific
+                # deprio'd MU we can probe against. The current production
+                # paths (``_flip_deprioritized``, ``flush_deferred_observation_refresh``)
+                # ALWAYS set ``source_unit_id`` before enqueuing, so a NULL
+                # row would be an invariant violation. Excluding them keeps
+                # the absorption check from being relaxed by malformed rows
+                # rather than tightened; the explicit fallback on the next
+                # lines covers the legitimate "this is the only triggering
+                # row" case via ``item.source_unit_id``.
                 sibling_stmt = (
                     select(ReflectionQueue.source_unit_id)
                     .where(col(ReflectionQueue.entity_id) == item.entity_id)
@@ -1149,8 +1160,15 @@ class ReflectionEngine:
             return
 
         async with self._entity_session() as ph6_session:
-            # 2. Build unit map from recent_memories, load any missing from DB
-            unit_map: dict[UUID, MemoryUnit] = {m.id: m for m in recent_memories}
+            # 2. Build unit map from recent_memories, load any missing from DB.
+            # Exclude deprio'd MUs from both arms: the secondary fetch filters
+            # ``is_deprioritized=False`` and the pre-existing map drops any
+            # deprio'd unit ALREADY present in ``recent_memories`` — without
+            # this, an in-memory MU flipped to deprio'd between Phase 0 and
+            # Phase 6 would still get its tsvector/tags strengthened here.
+            unit_map: dict[UUID, MemoryUnit] = {
+                m.id: m for m in recent_memories if not m.is_deprioritized
+            }
             missing_ids = set(evidence_ids.keys()) - set(unit_map.keys())
 
             if missing_ids:

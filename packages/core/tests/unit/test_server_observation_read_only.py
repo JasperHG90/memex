@@ -60,3 +60,41 @@ def test_handle_error_still_returns_404_for_memory_unit_not_found():
     exc = MemoryUnitNotFoundError('Memory unit not found.')
     response = _handle_error(exc, 'context')
     assert response.status_code == 404
+
+
+def test_observation_read_only_is_memex_error_subclass():
+    """MRO invariant: ObservationReadOnlyError MUST subclass MemexError.
+
+    The dispatch ordering in _handle_error and the route handler is built
+    on this relationship — both check the specific class FIRST so the
+    structured-detail branch wins over the generic ``MemexError`` branch
+    that flattens detail to ``str(e)``. A future refactor that breaks the
+    subclass relationship (or reorders the ``except`` branches) would
+    silently regress the 400 contract to a string detail.
+    """
+    assert issubclass(ObservationReadOnlyError, MemexError), (
+        'ObservationReadOnlyError must subclass MemexError; the route handler '
+        'and _handle_error depend on this for dispatch.'
+    )
+    assert MemexError in ObservationReadOnlyError.__mro__
+
+
+def test_handle_error_specific_branch_wins_over_generic_memex_error():
+    """Dispatch-order invariant: a generic ``MemexError`` flattens to a string
+    detail, while ``ObservationReadOnlyError`` (subclass) returns a dict.
+
+    If a future refactor reorders ``_handle_error`` so that
+    ``isinstance(e, MemexError)`` is checked BEFORE
+    ``isinstance(e, ObservationReadOnlyError)``, this test fails — the
+    subclass would be swallowed by the broader branch and the dict detail
+    would be replaced with ``str(e)``.
+    """
+    generic_response = _handle_error(MemexError('generic'), 'ctx')
+    assert isinstance(generic_response.detail, str), (
+        'baseline: generic MemexError should flatten to string detail'
+    )
+    specific_response = _handle_error(ObservationReadOnlyError([uuid4()]), 'ctx')
+    assert isinstance(specific_response.detail, dict), (
+        'ObservationReadOnlyError must NOT be swallowed by the generic '
+        'MemexError branch — dispatch order must check the specific class first.'
+    )

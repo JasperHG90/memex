@@ -116,6 +116,14 @@ REFRESH_OBSERVATION_EMPTY_CONTENT_COERCED_TOTAL = Counter(
     'rate of validator-bypass coercions is monitorable separately from real drops.',
 )
 
+DEPRIORITIZE_BATCH_UNFLUSHED_NO_VAULT_TOTAL = Counter(
+    'memex_deprioritize_batch_unflushed_no_vault_total',
+    'batch_set_unit_deprioritized called without vault_id (legacy path); MUs were '
+    'flipped to deprioritized but observation refresh was skipped because the '
+    'vault-scoped JSONB scan cannot run. Observations citing these MUs will only '
+    'refresh on the next routine reflection cycle or the reconcile-tick pass.',
+)
+
 REFRESH_OBSERVATION_DROP_OVERRIDDEN_TOTAL = Counter(
     'memex_refresh_observation_drop_overridden_total',
     'Guardrail: LLM said should_drop=True but surviving_evidence_count >= retention threshold; override.',

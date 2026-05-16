@@ -18,6 +18,7 @@ from memex_common.exceptions import MemoryUnitNotFoundError, ObservationReadOnly
 from memex_common.schemas import UnitHistoryNodeDTO
 from memex_core.context import get_actor, get_session_id
 from memex_core.metrics import (
+    DEPRIORITIZE_BATCH_UNFLUSHED_NO_VAULT_TOTAL,
     DEPRIORITIZE_OBSERVATION_EMPTY_EVIDENCE_TOTAL,
     DEPRIORITIZE_REJECTED_OBSERVATION_UUID_TOTAL,
     REFRESH_OBSERVATION_TASK_ENQUEUED_TOTAL,
@@ -152,6 +153,7 @@ class UnitsService(BaseService):
             # Legacy callers without a vault scope cannot trigger the vault-scoped
             # LATERAL scan; observations stay stale until the next routine reflect
             # or the reconcile-tick (vault-partitioned, opt-in for historical).
+            DEPRIORITIZE_BATCH_UNFLUSHED_NO_VAULT_TOTAL.inc(len(updated_ids))
             logger.warning(
                 'batch_set_unit_deprioritized: vault_id missing; %d MUs deprio`d '
                 'but observation-refresh flush skipped. Observations citing these '
