@@ -1,17 +1,19 @@
 {
   "meta": {
-    "schema_version": 1,
+    "schema_version": 2,
     "search_type": "memory",
     "top_k": 10
   },
   "ranking": [
-    "dept-security",
-    "dept-customer-success",
-    "dept-product",
-    "dept-sales",
-    "dept-legal",
-    "dept-marketing",
-    "dept-finance",
-    "dept-hr"
+    "406a4a92-e5c1-4095-bcd3-4c5da108858d",
+    "a643f689-326e-40c5-a655-b9f2e396827b",
+    "ccd9e0b5-6989-4849-b643-c82d0c166044",
+    "e02b0ce4-296a-460f-a7a7-c605595701be",
+    "917ea353-72f0-4d0b-9dfc-542ba0f79c2e",
+    "5da90f5c-3ebf-49ec-8f52-1a8d5c57bc59",
+    "73b785cc-e205-479f-bc51-e9dbc0ac3e51",
+    "6e282eb1-96b0-4a38-b6f7-b947921689f3",
+    "32f5ac33-9b01-49da-bd01-278d65aa3410",
+    "276defaf-1bdf-4211-91c0-582b343a080b"
   ]
 }

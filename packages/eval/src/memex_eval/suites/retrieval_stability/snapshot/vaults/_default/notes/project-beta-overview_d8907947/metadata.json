@@ -1,0 +1,161 @@
+{
+  "appended_to": null,
+  "archived_at": null,
+  "assets": [],
+  "content_hash": "0bed91580f1e78ce3744821287b2d5a5",
+  "created_at": "2026-05-16T06:46:01.698151+00:00",
+  "description": "Acme Corp Project Beta: Machine Learning Infrastructure and Team Overview",
+  "doc_metadata": {
+    "retain_params": {
+      "assets": [],
+      "author": null,
+      "content_fingerprint": "0bed91580f1e78ce3744821287b2d5a5",
+      "filestore_path": null,
+      "note_description": "Overview of Project Beta ML initiative at Acme Corp.",
+      "note_name": "Project Beta Overview",
+      "source": "note",
+      "source_uri": null,
+      "tags": [
+        "project",
+        "ml",
+        "acme-corp"
+      ],
+      "template": null,
+      "uuid": "d89079474033c9bdea22ae670c69c758"
+    },
+    "tags": [
+      "project",
+      "ml",
+      "acme-corp"
+    ]
+  },
+  "filestore_path": null,
+  "id": "d8907947-4033-c9bd-ea22-ae670c69c758",
+  "page_index": {
+    "metadata": {
+      "description": "Acme Corp Project Beta: Machine Learning Infrastructure and Team Overview",
+      "publish_date": "2025-08-01 00:00:00+00:00",
+      "source_uri": null,
+      "tags": [
+        "project",
+        "ml",
+        "acme-corp",
+        "machine learning",
+        "predictive analytics",
+        "pytorch",
+        "duckdb",
+        "system architecture",
+        "recommendation system",
+        "mlops"
+      ],
+      "title": "Project Beta Overview",
+      "total_tokens": 181
+    },
+    "toc": [
+      {
+        "block_id": "be20de4050ca1edb8c32df1db845ff7d",
+        "children": [
+          {
+            "block_id": "be20de4050ca1edb8c32df1db845ff7d",
+            "children": [],
+            "end_index": 333,
+            "id": "d897a6c26e1155eabd5a906ae0534fe2",
+            "level": 2,
+            "original_header_id": 1,
+            "start_index": 103,
+            "subtree_tokens": 43,
+            "summary": {
+              "how": "By leveraging PyTorch for model training and DuckDB for fast analytical queries.",
+              "what": "Project Beta, a machine learning initiative for predictive analytics.",
+              "when": null,
+              "where": "Within Acme Corp's technical infrastructure.",
+              "who": "Acme Corp"
+            },
+            "title": "Overview",
+            "token_estimate": 43
+          },
+          {
+            "block_id": "be20de4050ca1edb8c32df1db845ff7d",
+            "children": [],
+            "end_index": 534,
+            "id": "84d87512ec2ccd73e479dbc29b9b8774",
+            "level": 2,
+            "original_header_id": 2,
+            "start_index": 333,
+            "subtree_tokens": 43,
+            "summary": {
+              "how": "By training models on behavior data, using DuckDB for a feature store, and deploying via FastAPI with GPU support",
+              "what": "Key objectives for building a recommendation system",
+              "when": null,
+              "where": "In a machine learning production environment",
+              "who": "The development team or system architecture"
+            },
+            "title": "Objectives",
+            "token_estimate": 43
+          },
+          {
+            "block_id": "be20de4050ca1edb8c32df1db845ff7d",
+            "children": [],
+            "end_index": 636,
+            "id": "7f76b56035a64520800594f880c2b6d4",
+            "level": 2,
+            "original_header_id": 3,
+            "start_index": 534,
+            "subtree_tokens": 26,
+            "summary": {
+              "how": "By assigning specific roles including ML Lead, ML Engineer, and Data Platform Engineer.",
+              "what": "The composition and roles of the project team.",
+              "when": null,
+              "where": "Within the project organization.",
+              "who": "Marcus Rivera, Priya Patel, and Tom Wilson."
+            },
+            "title": "Team",
+            "token_estimate": 26
+          },
+          {
+            "block_id": "be20de4050ca1edb8c32df1db845ff7d",
+            "children": [],
+            "end_index": 766,
+            "id": "026bcfe04cb323b22de023ed99bc0d4e",
+            "level": 2,
+            "original_header_id": 4,
+            "start_index": 636,
+            "subtree_tokens": 40,
+            "summary": {
+              "how": "By integrating PyTorch for modeling, DuckDB for features, FastAPI/Triton for serving, and Airflow for orchestration.",
+              "what": "A specific machine learning technical stack and architecture.",
+              "when": "Current system configuration (Version 2.1 PyTorch).",
+              "where": "Infrastructure and serving environment.",
+              "who": "Engineering and DevOps teams."
+            },
+            "title": "Tech Stack",
+            "token_estimate": 40
+          }
+        ],
+        "end_index": 766,
+        "id": "42f23aea072bead1d3bfcdba4f3b3a1d",
+        "level": 1,
+        "original_header_id": 0,
+        "start_index": 0,
+        "subtree_tokens": 181,
+        "summary": {
+          "how": "By detailing project goals, team structure, and the selected technology stack",
+          "what": "Comprehensive project overview including objectives and technical specifications",
+          "when": null,
+          "where": "Project Beta environment",
+          "who": "Project Beta team"
+        },
+        "title": "Project Beta Overview",
+        "token_estimate": 29
+      }
+    ]
+  },
+  "publish_date": "2025-08-01T00:00:00+00:00",
+  "session_id": "e2cf8010-d928-480e-997f-6ad27fc780bb",
+  "status": "active",
+  "summary_version_incorporated": null,
+  "superseded_by": null,
+  "title": "Project Beta Overview",
+  "updated_at": "2026-05-16T06:46:01.698151+00:00",
+  "vault_id": "77230e2b-dd50-4ad4-9e2e-42d4223d0f29"
+}

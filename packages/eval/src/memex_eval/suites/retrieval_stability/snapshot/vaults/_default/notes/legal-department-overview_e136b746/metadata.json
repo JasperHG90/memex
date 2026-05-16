@@ -1,0 +1,123 @@
+{
+  "appended_to": null,
+  "archived_at": null,
+  "assets": [],
+  "content_hash": "2b3123856233f98a867c8f59b6408cd9",
+  "created_at": "2026-05-16T06:45:48.164226+00:00",
+  "description": "TechCo Global Legal Operations and Compliance Strategy",
+  "doc_metadata": {
+    "retain_params": {
+      "assets": [],
+      "author": null,
+      "content_fingerprint": "2b3123856233f98a867c8f59b6408cd9",
+      "filestore_path": null,
+      "note_description": "Overview of the Legal department at TechCo Global.",
+      "note_name": "Legal Department Overview",
+      "source": "note",
+      "source_uri": null,
+      "tags": [
+        "department",
+        "legal",
+        "techco"
+      ],
+      "template": null,
+      "uuid": "e136b7463137050a7e23e6774dbe0070"
+    },
+    "tags": [
+      "department",
+      "legal",
+      "techco"
+    ]
+  },
+  "filestore_path": null,
+  "id": "e136b746-3137-050a-7e23-e6774dbe0070",
+  "page_index": {
+    "metadata": {
+      "description": "TechCo Global Legal Operations and Compliance Strategy",
+      "publish_date": "2026-05-16 06:45:48.163703+00:00",
+      "source_uri": null,
+      "tags": [
+        "department",
+        "legal",
+        "techco",
+        "legal department",
+        "compliance",
+        "gdpr",
+        "ccpa",
+        "regulatory strategy",
+        "legal tech",
+        "corporate structure"
+      ],
+      "title": "Legal Department Overview",
+      "total_tokens": 95
+    },
+    "toc": [
+      {
+        "block_id": "feccf36ca17934e0cd51ecd1df1cc58d",
+        "children": [
+          {
+            "block_id": "feccf36ca17934e0cd51ecd1df1cc58d",
+            "children": [],
+            "end_index": 245,
+            "id": "747bcbddb307d4163a8b9cf0ec254b00",
+            "level": 2,
+            "original_header_id": 1,
+            "start_index": 143,
+            "subtree_tokens": 18,
+            "summary": {
+              "how": "By drafting compliance frameworks for GDPR and CCPA.",
+              "what": "Preparation for regulatory compliance and regional expansion.",
+              "when": "Currently / during the initiative phase.",
+              "where": "European Union and California.",
+              "who": "The organization's legal/compliance team."
+            },
+            "title": "Current Initiative",
+            "token_estimate": 18
+          },
+          {
+            "block_id": "feccf36ca17934e0cd51ecd1df1cc58d",
+            "children": [],
+            "end_index": 434,
+            "id": "ad11fabca2b27334269a094c042fc292",
+            "level": 2,
+            "original_header_id": 2,
+            "start_index": 245,
+            "subtree_tokens": 39,
+            "summary": {
+              "how": "By conducting all legal-related activities and reporting to the department head.",
+              "what": "Legal department responsibilities and reporting structure.",
+              "when": "Currently.",
+              "where": "TechCo Global.",
+              "who": "Legal department team of 6 and Catherine Wu."
+            },
+            "title": "Responsibilities",
+            "token_estimate": 39
+          }
+        ],
+        "end_index": 434,
+        "id": "548c9725b7e4accee0c6021b96546517",
+        "level": 1,
+        "original_header_id": 0,
+        "start_index": 0,
+        "subtree_tokens": 95,
+        "summary": {
+          "how": "By utilizing core tools including DocuSign, Ironclad, and OneTrust.",
+          "what": "Overview of the department's structure, headcount, and software tools.",
+          "when": null,
+          "where": "TechCo Global Legal Department.",
+          "who": "Department Head Catherine Wu and 6 employees."
+        },
+        "title": "Legal Department — TechCo Global",
+        "token_estimate": 38
+      }
+    ]
+  },
+  "publish_date": "2026-05-16T06:45:48.163703+00:00",
+  "session_id": "192e970f-7f73-4ea8-91fd-998b660cd34a",
+  "status": "active",
+  "summary_version_incorporated": null,
+  "superseded_by": null,
+  "title": "Legal Department Overview",
+  "updated_at": "2026-05-16T06:45:48.164226+00:00",
+  "vault_id": "77230e2b-dd50-4ad4-9e2e-42d4223d0f29"
+}

@@ -1,0 +1,126 @@
+{
+  "appended_to": null,
+  "archived_at": null,
+  "assets": [],
+  "content_hash": "073fee26ebc8136ccba7f7dfd3d5c8ed",
+  "created_at": "2026-05-16T06:46:23.398756+00:00",
+  "description": "Project Nexus Infrastructure and Tech Stack Migration",
+  "doc_metadata": {
+    "retain_params": {
+      "assets": [],
+      "author": null,
+      "content_fingerprint": "073fee26ebc8136ccba7f7dfd3d5c8ed",
+      "filestore_path": null,
+      "note_description": "Project Nexus technology stack after the July 2025 migration.",
+      "note_name": "tech-stack-v2",
+      "source": "note",
+      "source_uri": null,
+      "tags": [
+        "tech-stack",
+        "project-nexus",
+        "infrastructure",
+        "migration"
+      ],
+      "template": null,
+      "uuid": "24c925147509d3ec3b2ba0b6e62083ad"
+    },
+    "tags": [
+      "tech-stack",
+      "project-nexus",
+      "infrastructure",
+      "migration"
+    ]
+  },
+  "filestore_path": null,
+  "id": "24c92514-7509-d3ec-3b2b-a0b6e62083ad",
+  "page_index": {
+    "metadata": {
+      "description": "Project Nexus Infrastructure and Tech Stack Migration",
+      "publish_date": "2025-07-01 00:00:00+00:00",
+      "source_uri": null,
+      "tags": [
+        "tech-stack",
+        "project-nexus",
+        "infrastructure",
+        "migration",
+        "project nexus",
+        "tech stack",
+        "fastapi",
+        "postgresql",
+        "github actions",
+        "aws eks",
+        "python 3.12"
+      ],
+      "title": "tech-stack-v2",
+      "total_tokens": 197
+    },
+    "toc": [
+      {
+        "block_id": "e91f5f1be5276cc51cb8332106ae4ce7",
+        "children": [
+          {
+            "block_id": "e91f5f1be5276cc51cb8332106ae4ce7",
+            "children": [],
+            "end_index": 444,
+            "id": "e2733260d5c3a4fb882218b3b8a5e415",
+            "level": 2,
+            "original_header_id": 1,
+            "start_index": 42,
+            "subtree_tokens": 112,
+            "summary": {
+              "how": "By migrating from Django, MySQL, and Jenkins to FastAPI, PostgreSQL, and GitHub Actions while upgrading Python to 3.12.",
+              "what": "A technical stack update and infrastructure migration.",
+              "when": "Following the Q2 2025 migration.",
+              "where": "AWS EKS (deployment environment).",
+              "who": "Project Nexus"
+            },
+            "title": "Updated Stack",
+            "token_estimate": 112
+          },
+          {
+            "block_id": "e91f5f1be5276cc51cb8332106ae4ce7",
+            "children": [],
+            "end_index": 816,
+            "id": "69d6d88d3753aef4bd18f13fbb48e8af",
+            "level": 2,
+            "original_header_id": 2,
+            "start_index": 444,
+            "subtree_tokens": 73,
+            "summary": {
+              "how": "By leveraging async support, vector databases, native CI/CD integration, and language performance improvements",
+              "what": "Migration to a new tech stack (FastAPI, PostgreSQL 16, GitHub Actions, Python 3.12)",
+              "when": "Future implementation phase",
+              "where": "Internal development and API-first infrastructure",
+              "who": "The engineering team and system architecture"
+            },
+            "title": "Migration Rationale",
+            "token_estimate": 73
+          }
+        ],
+        "end_index": 816,
+        "id": "e948c2acfdbb93b1a8d49ff3fb561321",
+        "level": 1,
+        "original_header_id": 0,
+        "start_index": 0,
+        "subtree_tokens": 197,
+        "summary": {
+          "how": "By detailing an updated technology stack and migration rationale.",
+          "what": "Technical documentation for Project Nexus.",
+          "when": "July 2025",
+          "where": "Project Nexus technical environment",
+          "who": "Project Nexus development team"
+        },
+        "title": "Project Nexus — Tech Stack (July 2025)",
+        "token_estimate": 12
+      }
+    ]
+  },
+  "publish_date": "2025-07-01T00:00:00+00:00",
+  "session_id": "07b0ff00-f83e-480b-a051-edcc1ec3ba72",
+  "status": "active",
+  "summary_version_incorporated": null,
+  "superseded_by": null,
+  "title": "tech-stack-v2",
+  "updated_at": "2026-05-16T06:46:23.398756+00:00",
+  "vault_id": "77230e2b-dd50-4ad4-9e2e-42d4223d0f29"
+}

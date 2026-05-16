@@ -62,18 +62,25 @@ def _capture_mode_enabled() -> bool:
 
 @register_outcome('ranking_baseline_rbo')
 class RankingBaselineRbo(ExpectedOutcomeBase):
-    """Rank-Biased Overlap of retrieved note_keys against a captured baseline.
+    """Rank-Biased Overlap of retrieved IDs against a captured baseline.
+
+    Compares ``answer.retrieved_unit_ids`` (MemoryUnit UUIDs for
+    memory-search, Note UUIDs for note-search) directly against a
+    captured ID list. The suite ships a snapshot (``snapshot/`` dir
+    in the suite package) that the runner imports verbatim instead of
+    re-extracting; every run therefore sees the same UUIDs, and RBO
+    measures actual ranking stability — not laundered note-key
+    agreement.
 
     Two modes, gated by the ``MEMEX_EVAL_CAPTURE_BASELINES`` env var:
 
     * **Verify (default)**: read ``baseline_ranking``; compute RBO of
-      ``retrieved_note_keys`` against it at ``p`` persistence; pass
-      when RBO ≥ ``rbo_floor``.
-    * **Capture (``MEMEX_EVAL_CAPTURE_BASELINES=1``)**: resolve the
-      retrieved IDs back to note_keys, write ``baseline_path`` with a
-      meta block + the ranking list, and return ``pass=1.0`` so the
-      runner records a successful scenario. The verify run on a
-      subsequent invocation reads that baseline and asserts RBO.
+      retrieved IDs against it at ``p`` persistence; pass when
+      RBO ≥ ``rbo_floor``.
+    * **Capture (``MEMEX_EVAL_CAPTURE_BASELINES=1``)**: write the
+      current retrieved-ID ranking to ``baseline_path`` with a meta
+      block, return ``pass=1.0``. A subsequent verify run reads it
+      back and asserts RBO.
 
     Empty ``baseline_ranking`` in verify mode → ``RuntimeError`` →
     ``status='error'`` with a clear recapture hint. Distinguishable
@@ -90,11 +97,11 @@ class RankingBaselineRbo(ExpectedOutcomeBase):
     baseline_path: str
     baseline_ranking: list[str]
     baseline_meta: dict[str, Any] = Field(default_factory=dict)
-    schema_version: int = 1
+    schema_version: int = 2  # bumped: ranking now stores raw UUIDs, not note_keys
     expected_top_k: int = 10
     expected_search_type: Literal['memory', 'note']
     p: float = 0.9
-    rbo_floor: float = 0.85
+    rbo_floor: float = 0.92
 
     def score(
         self,
@@ -108,9 +115,7 @@ class RankingBaselineRbo(ExpectedOutcomeBase):
         # Wiring guards run FIRST — they catch a code bug in
         # ``__init__.py`` (scenario and outcome constructed with
         # divergent parameters) and apply equally in verify and
-        # capture modes. Running them before ``_retrieved_note_keys``
-        # avoids resolving against the wrong search-type branch and
-        # then discarding the result.
+        # capture modes.
         if scenario.top_k != self.expected_top_k:
             raise RuntimeError(
                 f'scenario/outcome wiring error for {scenario.id}: '
@@ -125,20 +130,18 @@ class RankingBaselineRbo(ExpectedOutcomeBase):
                 f'expected_search_type={self.expected_search_type!r}.'
             )
 
-        # Resolve current retrieved note_keys for the (now-confirmed)
-        # search_type. Truncate to the scenario's declared top_k. Both
-        # capture and verify modes consume the result.
-        retrieved_note_keys = _retrieved_note_keys(
-            answer=answer,
-            search_type=self.expected_search_type,
-            note_key_to_unit_ids=note_key_to_unit_ids,
-            context=context,
-        )[: scenario.top_k]
+        # Both search modes populate retrieved_unit_ids with stable IDs:
+        #   memory search → MemoryUnit UUIDs
+        #   note search   → Note UUIDs (after agents.py:419 fix)
+        # The suite-shipped snapshot pins these UUIDs across runs so the
+        # comparison measures actual ranking stability, not laundered
+        # note-key agreement.
+        retrieved_ids = list(_aggregate_unit_ids(answer))[: scenario.top_k]
 
         # Capture mode: skip verification and rewrite the baseline from
         # the current scenario state. Meta-mismatch self-heals.
         if _capture_mode_enabled():
-            self._write_baseline(scenario, retrieved_note_keys)
+            self._write_baseline(scenario, retrieved_ids)
             return {'rbo': 1.0, 'pass': 1.0}
 
         # Surface a corrupt-baseline sentinel from _load_baseline as a
@@ -210,7 +213,7 @@ class RankingBaselineRbo(ExpectedOutcomeBase):
 
         rbo = rank_biased_overlap(
             self.baseline_ranking,
-            retrieved_note_keys,
+            retrieved_ids,
             p=self.p,
         )
         return {'rbo': rbo, 'pass': 1.0 if rbo >= self.rbo_floor else 0.0}
@@ -247,91 +250,8 @@ class RankingBaselineRbo(ExpectedOutcomeBase):
             tmp.unlink(missing_ok=True)
             raise
         logger.info(
-            'captured baseline for %s → %s (%d note_keys)',
+            'captured baseline for %s → %s (%d ids)',
             scenario.id,
             path,
             len(ranking),
         )
-
-
-def _retrieved_note_keys(
-    *,
-    answer: AgentAnswer,
-    search_type: Literal['memory', 'note'],
-    note_key_to_unit_ids: dict[str, list[str]] | None,
-    context: dict[str, Any] | None,
-) -> list[str]:
-    """Resolve the retrieved IDs back to note_keys, deduped by first occurrence.
-
-    Memory search: ``answer.retrieved_unit_ids`` are MemoryUnit ids;
-    invert ``note_key_to_unit_ids: {note_key: [unit_ids]}``.
-
-    Note search: ``answer.retrieved_unit_ids`` are Note ids (the
-    framework's ``DirectApiBackend`` populates that field with note
-    IDs whenever the scenario's ``search_type='note'``); invert
-    ``context['_note_id_by_key']: {note_key: note_id}``.
-
-    Dedupe semantics: when several retrieved units resolve to the same
-    note_key (common in memory search — two paragraphs of one note
-    co-ranking), the note_key appears once at its **first** rank
-    position. RBO's set-based agreement-at-depth-d would otherwise
-    treat the repeated entries as low-agreement positions, which is
-    not what the baseline pins.
-
-    Unknown ids (not present in either inversion map) are dropped
-    silently — happens when ingest produced units the suite's baseline
-    didn't observe (e.g. inline-note seeding from a different scenario).
-    """
-    retrieved_ids = _aggregate_unit_ids(answer)
-
-    if search_type == 'memory':
-        # The runner injects ``note_key_to_unit_ids`` for every
-        # memory-search scenario it ingested. ``None`` here means the
-        # runner contract broke — fail loudly so a regression in the
-        # runner shows as an explicit error rather than RBO=0.0
-        # masquerading as a retrieval regression.
-        if not note_key_to_unit_ids:
-            raise RuntimeError(
-                'memory-search scenario received no '
-                '``note_key_to_unit_ids`` mapping; the runner is '
-                'expected to inject this for every ingested suite. '
-                'An empty/None mapping would otherwise score RBO=0 '
-                'as a false regression.'
-            )
-        unit_to_note: dict[str, str] = {}
-        for note_key, unit_ids in note_key_to_unit_ids.items():
-            for uid in unit_ids:
-                unit_to_note[uid] = note_key
-        out: list[str] = []
-        seen: set[str] = set()
-        for uid in retrieved_ids:
-            nk = unit_to_note.get(uid)
-            if nk is not None and nk not in seen:
-                out.append(nk)
-                seen.add(nk)
-        return out
-
-    # search_type == 'note': the runner injects ``_note_id_by_key``
-    # into scenario_context for every ingested suite. Missing context,
-    # missing key, empty mapping, or wrong type all signal a runner-
-    # contract break — fail loudly so a runner regression doesn't
-    # quietly score RBO=0 as a false retrieval regression.
-    raw = (context or {}).get('_note_id_by_key')
-    if not isinstance(raw, dict) or not raw:
-        raise RuntimeError(
-            'note-search scenario received no '
-            "``context['_note_id_by_key']`` dict mapping; the runner "
-            'is expected to inject this for every ingested suite. '
-            'An empty/None/non-dict value would otherwise score '
-            'RBO=0 as a false regression.'
-        )
-    note_id_by_key: dict[str, str] = raw
-    note_id_to_key: dict[str, str] = {nid: nk for nk, nid in note_id_by_key.items()}
-    out = []
-    seen = set()
-    for nid in retrieved_ids:
-        nk = note_id_to_key.get(nid)
-        if nk is not None and nk not in seen:
-            out.append(nk)
-            seen.add(nk)
-    return out

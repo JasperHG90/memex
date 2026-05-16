@@ -1,15 +1,19 @@
 {
   "meta": {
-    "schema_version": 1,
+    "schema_version": 2,
     "search_type": "memory",
     "top_k": 10
   },
   "ranking": [
-    "dept-data-science",
-    "osei-profile",
-    "dept-security",
-    "dept-ai-research",
-    "dept-sales",
-    "dept-product"
+    "84c7893c-2936-4688-a293-bc8b7b3a33f8",
+    "8130d20f-1b39-4290-b37e-0b614b8f5e43",
+    "537e56a3-48a1-43df-94ae-a6b25faddc9b",
+    "1805ba3c-2488-4cdc-8325-bc142d39149f",
+    "73b785cc-e205-479f-bc51-e9dbc0ac3e51",
+    "37d79859-0aba-4d80-99d1-e5db9f24678c",
+    "917ea353-72f0-4d0b-9dfc-542ba0f79c2e",
+    "276defaf-1bdf-4211-91c0-582b343a080b",
+    "83ef98fc-d962-4de9-aabd-117a5a484aa8",
+    "c86ac617-d917-420e-840f-f4e3e08118a1"
   ]
 }

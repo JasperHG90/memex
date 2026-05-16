@@ -1,19 +1,19 @@
 {
   "meta": {
-    "schema_version": 1,
+    "schema_version": 2,
     "search_type": "note",
     "top_k": 10
   },
   "ranking": [
-    "data-platform-architecture",
-    "architecture-overview",
-    "project-alpha-kickoff",
-    "dept-data-science",
-    "project-beta-overview",
-    "sarah-chen-profile",
-    "osei-profile",
-    "dept-security",
-    "dept-sales",
-    "dept-customer-success"
+    "742eb272-0ad7-46d8-e5a1-c7f2ecd353ab",
+    "c53136d9-48df-4970-0a18-d1f87127d988",
+    "b496f6d0-3187-5c07-ccd2-f5b4eaddc8b0",
+    "a7655b3f-b273-0d9a-4a36-d57470a9dbdb",
+    "d8907947-4033-c9bd-ea22-ae670c69c758",
+    "40173643-91e7-c01b-e8ea-401293b64674",
+    "176ed498-e7ee-aa0c-b3b8-bacb19827fbe",
+    "a563c526-0572-007d-9f11-50903431bfe9",
+    "28733f61-bb0d-6d6f-c380-02116c114929",
+    "b1c7227f-77af-913a-591b-9e04b16847a9"
   ]
 }

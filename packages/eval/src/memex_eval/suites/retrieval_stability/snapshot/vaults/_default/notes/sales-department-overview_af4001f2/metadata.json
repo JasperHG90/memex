@@ -1,0 +1,122 @@
+{
+  "appended_to": null,
+  "archived_at": null,
+  "assets": [],
+  "content_hash": "cb9bdf6ae7a238c17a8165f66ebd2da4",
+  "created_at": "2026-05-16T06:45:53.722137+00:00",
+  "description": "Sales Department Operations and Asia-Pacific Expansion",
+  "doc_metadata": {
+    "retain_params": {
+      "assets": [],
+      "author": null,
+      "content_fingerprint": "cb9bdf6ae7a238c17a8165f66ebd2da4",
+      "filestore_path": null,
+      "note_description": "Overview of the Sales department at TechCo Global.",
+      "note_name": "Sales Department Overview",
+      "source": "note",
+      "source_uri": null,
+      "tags": [
+        "department",
+        "sales",
+        "techco"
+      ],
+      "template": null,
+      "uuid": "af4001f263441ba5f1245c70148a0b85"
+    },
+    "tags": [
+      "department",
+      "sales",
+      "techco"
+    ]
+  },
+  "filestore_path": null,
+  "id": "af4001f2-6344-1ba5-f124-5c70148a0b85",
+  "page_index": {
+    "metadata": {
+      "description": "Sales Department Operations and Asia-Pacific Expansion",
+      "publish_date": "2026-05-16 06:45:53.721462+00:00",
+      "source_uri": null,
+      "tags": [
+        "department",
+        "sales",
+        "techco",
+        "sales operations",
+        "regional expansion",
+        "asia-pacific",
+        "crm tools",
+        "departmental structure",
+        "business development"
+      ],
+      "title": "Sales Department Overview",
+      "total_tokens": 90
+    },
+    "toc": [
+      {
+        "block_id": "2487da7c150b9d561534f81f95a048d3",
+        "children": [
+          {
+            "block_id": "2487da7c150b9d561534f81f95a048d3",
+            "children": [],
+            "end_index": 233,
+            "id": "b4e170e9426994a856ecb3bd690df1b5",
+            "level": 2,
+            "original_header_id": 1,
+            "start_index": 140,
+            "subtree_tokens": 18,
+            "summary": {
+              "how": "By opening 5 new satellite offices",
+              "what": "Regional business expansion",
+              "when": "Current initiative",
+              "where": "Asia-Pacific region",
+              "who": "The organization/company"
+            },
+            "title": "Current Initiative",
+            "token_estimate": 18
+          },
+          {
+            "block_id": "2487da7c150b9d561534f81f95a048d3",
+            "children": [],
+            "end_index": 421,
+            "id": "5ad51368b333c25f9bfe0da09ffe6239",
+            "level": 2,
+            "original_header_id": 2,
+            "start_index": 233,
+            "subtree_tokens": 39,
+            "summary": {
+              "how": "By conducting and managing all sales-related activities",
+              "what": "Departmental responsibilities and leadership structure",
+              "when": "Currently",
+              "where": "TechCo Global",
+              "who": "Nina Patel and the 38-member Sales department team"
+            },
+            "title": "Responsibilities",
+            "token_estimate": 39
+          }
+        ],
+        "end_index": 421,
+        "id": "63afda688506b4c86553efa4d570bfe0",
+        "level": 1,
+        "original_header_id": 0,
+        "start_index": 0,
+        "subtree_tokens": 90,
+        "summary": {
+          "how": "Utilizing Salesforce, Gong, and Outreach",
+          "what": "Overview of the Sales Department and its operational tools",
+          "when": null,
+          "where": "TechCo Global",
+          "who": "Nina Patel (Department Head) and 38 employees"
+        },
+        "title": "Sales Department — TechCo Global",
+        "token_estimate": 33
+      }
+    ]
+  },
+  "publish_date": "2026-05-16T06:45:53.721462+00:00",
+  "session_id": "1acd2b0f-9aef-4ae3-b3f3-3b46e5e4403a",
+  "status": "active",
+  "summary_version_incorporated": null,
+  "superseded_by": null,
+  "title": "Sales Department Overview",
+  "updated_at": "2026-05-16T06:45:53.722137+00:00",
+  "vault_id": "77230e2b-dd50-4ad4-9e2e-42d4223d0f29"
+}

@@ -1,19 +1,19 @@
 {
   "meta": {
-    "schema_version": 1,
+    "schema_version": 2,
     "search_type": "note",
     "top_k": 10
   },
   "ranking": [
-    "widget-pro",
-    "widget-lite-discontinued",
-    "annual-roadmap-2025",
-    "architecture-overview",
-    "dept-product",
-    "team-meeting-notes",
-    "project-zeta-incident",
-    "quarterly-review-q1",
-    "osei-profile",
-    "company-core-values"
+    "9bdbfbac-d88f-dd5e-ccbc-725c05a88536",
+    "7ec3680c-0258-aa17-b1be-49e0160f3006",
+    "8d35d622-5781-f849-7aa9-7db786113fa3",
+    "d7c0c645-38c9-bcc4-af8a-13154b1d1abf",
+    "2fdc1c83-9933-87e9-fce0-19ce8fa79910",
+    "3d7346fd-afde-48ba-1d2d-0a86099d4f65",
+    "81f6a3af-dc31-425e-eb07-40ff40b2172d",
+    "03f7c13e-2335-aaa4-7ff0-3f587600c75f",
+    "176ed498-e7ee-aa0c-b3b8-bacb19827fbe",
+    "29c092fd-fdb4-4cc2-e4ab-47aeb219f199"
   ]
 }

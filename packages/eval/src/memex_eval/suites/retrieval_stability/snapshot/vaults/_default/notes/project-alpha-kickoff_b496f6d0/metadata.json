@@ -1,0 +1,159 @@
+{
+  "appended_to": null,
+  "archived_at": null,
+  "assets": [],
+  "content_hash": "23bbc84921c7eaf82d36d908aeb59e27",
+  "created_at": "2026-05-16T06:45:59.390841+00:00",
+  "description": "Project Alpha Inception and Technical Strategy",
+  "doc_metadata": {
+    "retain_params": {
+      "assets": [],
+      "author": null,
+      "content_fingerprint": "23bbc84921c7eaf82d36d908aeb59e27",
+      "filestore_path": null,
+      "note_description": "Kickoff meeting notes for Project Alpha at Acme Corp.",
+      "note_name": "Project Alpha Kickoff",
+      "source": "note",
+      "source_uri": null,
+      "tags": [
+        "project",
+        "kickoff",
+        "acme-corp"
+      ],
+      "template": null,
+      "uuid": "b496f6d031875c07ccd2f5b4eaddc8b0"
+    },
+    "tags": [
+      "project",
+      "kickoff",
+      "acme-corp"
+    ]
+  },
+  "filestore_path": null,
+  "id": "b496f6d0-3187-5c07-ccd2-f5b4eaddc8b0",
+  "page_index": {
+    "metadata": {
+      "description": "Project Alpha Inception and Technical Strategy",
+      "publish_date": "2025-03-15 00:00:00+00:00",
+      "source_uri": null,
+      "tags": [
+        "project",
+        "kickoff",
+        "acme-corp",
+        "project kickoff",
+        "data platform",
+        "software architecture",
+        "team management",
+        "milestone planning"
+      ],
+      "title": "Project Alpha Kickoff",
+      "total_tokens": 213
+    },
+    "toc": [
+      {
+        "block_id": "bf97f1de451c2fe33404c648ef9f25c2",
+        "children": [
+          {
+            "block_id": "bf97f1de451c2fe33404c648ef9f25c2",
+            "children": [],
+            "end_index": 377,
+            "id": "7c7e244b67c3a0521e71f06f52943f42",
+            "level": 2,
+            "original_header_id": 1,
+            "start_index": 119,
+            "subtree_tokens": 56,
+            "summary": {
+              "how": "By utilizing Python 3.12 and PostgreSQL 16 technologies.",
+              "what": "Initiation of Project Alpha, a next-generation data platform.",
+              "when": "New initiative status.",
+              "where": "Acme Corp.",
+              "who": "Sarah Chen (Project Lead) and the CTO."
+            },
+            "title": "Overview",
+            "token_estimate": 56
+          },
+          {
+            "block_id": "bf97f1de451c2fe33404c648ef9f25c2",
+            "children": [],
+            "end_index": 608,
+            "id": "2adf80f69f9ccaebc10e832a62b92751",
+            "level": 2,
+            "original_header_id": 2,
+            "start_index": 377,
+            "subtree_tokens": 56,
+            "summary": {
+              "how": "By building a unified ingestion pipeline and a React/D3.js dashboard.",
+              "what": "Development goals for a data ingestion pipeline and real-time analytics dashboard.",
+              "when": "Phase 1 completion by June 2025.",
+              "where": "API layer and system infrastructure.",
+              "who": "Development team"
+            },
+            "title": "Goals",
+            "token_estimate": 56
+          },
+          {
+            "block_id": "bf97f1de451c2fe33404c648ef9f25c2",
+            "children": [],
+            "end_index": 741,
+            "id": "d5b47d47b32d2c473ecc05d8af574dda",
+            "level": 2,
+            "original_header_id": 3,
+            "start_index": 608,
+            "subtree_tokens": 32,
+            "summary": {
+              "how": "By listing names and job titles",
+              "what": "A project team roster and role assignments",
+              "when": "Current project phase",
+              "where": "Within the project organization",
+              "who": "Sarah Chen, David Park, Maria Santos, and James Liu"
+            },
+            "title": "Team",
+            "token_estimate": 32
+          },
+          {
+            "block_id": "bf97f1de451c2fe33404c648ef9f25c2",
+            "children": [],
+            "end_index": 866,
+            "id": "36a859beb7630bfec36a60fa6999ee41",
+            "level": 2,
+            "original_header_id": 4,
+            "start_index": 741,
+            "subtree_tokens": 34,
+            "summary": {
+              "how": "By utilizing a modern software suite including Python, PostgreSQL, Kafka, and React.",
+              "what": "Technical stack and infrastructure specifications.",
+              "when": null,
+              "where": "Project development and deployment environment.",
+              "who": "The development team or the software system."
+            },
+            "title": "Tech Stack",
+            "token_estimate": 34
+          }
+        ],
+        "end_index": 866,
+        "id": "fd2cd27f3b81bcbc8f6e9a184dbefd92",
+        "level": 1,
+        "original_header_id": 0,
+        "start_index": 0,
+        "subtree_tokens": 213,
+        "summary": {
+          "how": "By initiating a kickoff meeting and project documentation.",
+          "what": "The formal commencement and status declaration of Project Alpha.",
+          "when": "March 15, 2025",
+          "where": "Acme Corp",
+          "who": "Sarah Chen (Lead) and Acme Corp"
+        },
+        "title": "Project Alpha Kickoff",
+        "token_estimate": 35
+      }
+    ]
+  },
+  "publish_date": "2025-03-15T00:00:00+00:00",
+  "session_id": "7723b812-1074-4ad5-88a0-756d0c2e0631",
+  "status": "active",
+  "summary_version_incorporated": null,
+  "superseded_by": null,
+  "title": "Project Alpha Kickoff",
+  "updated_at": "2026-05-16T06:45:59.390841+00:00",
+  "vault_id": "77230e2b-dd50-4ad4-9e2e-42d4223d0f29"
+}

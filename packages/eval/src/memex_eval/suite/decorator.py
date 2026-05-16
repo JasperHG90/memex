@@ -513,10 +513,12 @@ class Suite:
         metadata: SuiteMetadata,
         sources: SuiteSources | None = None,
         readme_path: Path | None = None,
+        shipped_snapshot_path: Path | None = None,
     ) -> None:
         self.metadata = metadata
         self.sources = sources or SuiteSources(notes=[])
         self.readme_path = readme_path
+        self.shipped_snapshot_path = shipped_snapshot_path
         self._scenarios: list[Scenario] = []
         self._seen_ids: set[str] = set()
         # Sidecar mapping survives Pydantic revalidation: the runner
@@ -777,6 +779,7 @@ class Suite:
             sources=self.sources,
             scenarios=list(self._scenarios),
             readme_path=self.readme_path,
+            shipped_snapshot_path=self.shipped_snapshot_path,
         )
         # Mirror the BaseScenario instance map onto the legacy Suite so
         # the runner can recover dispatch instances even when ``Scenario``

@@ -1,0 +1,141 @@
+{
+  "appended_to": null,
+  "archived_at": null,
+  "assets": [],
+  "content_hash": "9186e3dc6aaa657116669065fd1446ea",
+  "created_at": "2026-05-16T06:46:11.771059+00:00",
+  "description": "Breakthrough in Topological Quantum Error Correction at IEEE 2025",
+  "doc_metadata": {
+    "retain_params": {
+      "assets": [],
+      "author": null,
+      "content_fingerprint": "9186e3dc6aaa657116669065fd1446ea",
+      "filestore_path": null,
+      "note_description": "Dr. J. Rodriguez presents at IEEE symposium on quantum error correction.",
+      "note_name": "IEEE Quantum Symposium 2025 — J. Rodriguez",
+      "source": "note",
+      "source_uri": null,
+      "tags": [
+        "quantum",
+        "conference",
+        "research"
+      ],
+      "template": null,
+      "uuid": "3d25fc52058050b55c6228a29458c0cb"
+    },
+    "tags": [
+      "quantum",
+      "conference",
+      "research"
+    ]
+  },
+  "filestore_path": null,
+  "id": "3d25fc52-0580-50b5-5c62-28a29458c0cb",
+  "page_index": {
+    "metadata": {
+      "description": "Breakthrough in Topological Quantum Error Correction at IEEE 2025",
+      "publish_date": "2025-01-01 00:00:00+00:00",
+      "source_uri": null,
+      "tags": [
+        "quantum",
+        "conference",
+        "research",
+        "quantum computing",
+        "topological qubits",
+        "error correction",
+        "gate fidelity",
+        "quantumtech labs",
+        "ieee symposium"
+      ],
+      "title": "IEEE Quantum Symposium 2025 — J. Rodriguez",
+      "total_tokens": 185
+    },
+    "toc": [
+      {
+        "block_id": "71a009bc2797ab2f82838238c194cd94",
+        "children": [
+          {
+            "block_id": "71a009bc2797ab2f82838238c194cd94",
+            "children": [],
+            "end_index": 438,
+            "id": "1c8036814834011888069c04365180da",
+            "level": 2,
+            "original_header_id": 1,
+            "start_index": 151,
+            "subtree_tokens": 60,
+            "summary": {
+              "how": "Through research on topological qubits",
+              "what": "A breakthrough in topological quantum error correction achieving 99.7% gate fidelity",
+              "when": null,
+              "where": "QuantumTech Labs",
+              "who": "Dr. J. Rodriguez of QuantumTech Labs"
+            },
+            "title": "Presentation Summary",
+            "token_estimate": 60
+          },
+          {
+            "block_id": "71a009bc2797ab2f82838238c194cd94",
+            "children": [],
+            "end_index": 650,
+            "id": "cc5ee8aa6415f65e3b2e81556ce90a38",
+            "level": 2,
+            "original_header_id": 2,
+            "start_index": 438,
+            "subtree_tokens": 55,
+            "summary": {
+              "how": "By utilizing a topological processor and optimizing error correction overhead compared to surface codes.",
+              "what": "Achieving 99.7% gate fidelity and established a roadmap for scaling qubits.",
+              "when": "By 2026.",
+              "where": "Within a 12-qubit topological quantum computing environment.",
+              "who": "The research team and DARPA."
+            },
+            "title": "Key Results",
+            "token_estimate": 55
+          },
+          {
+            "block_id": "71a009bc2797ab2f82838238c194cd94",
+            "children": [],
+            "end_index": 824,
+            "id": "8f9d59b59d74341353a3a3ff1a0cf25f",
+            "level": 2,
+            "original_header_id": 3,
+            "start_index": 650,
+            "subtree_tokens": 36,
+            "summary": {
+              "how": "By developing quantum control systems for high-fidelity measurements",
+              "what": "Acknowledgment of research collaboration and technical contributions",
+              "when": null,
+              "where": "QuantumTech Labs",
+              "who": "Rodriguez and Dr. Amara Osei"
+            },
+            "title": "Collaborators",
+            "token_estimate": 36
+          }
+        ],
+        "end_index": 824,
+        "id": "6d7aabdcd9ff8c6ffa6754dd8fc1a582",
+        "level": 1,
+        "original_header_id": 0,
+        "start_index": 0,
+        "subtree_tokens": 185,
+        "summary": {
+          "how": "By presenting advances in topological quantum error correction.",
+          "what": "IEEE Quantum Computing Symposium 2025 presentation.",
+          "when": "2025",
+          "where": "IEEE Quantum Computing Symposium",
+          "who": "Dr. J. Rodriguez from QuantumTech Labs"
+        },
+        "title": "IEEE Quantum Computing Symposium 2025",
+        "token_estimate": 34
+      }
+    ]
+  },
+  "publish_date": "2025-01-01T00:00:00+00:00",
+  "session_id": "35d28c87-4394-4e5b-9636-5746b38e7c80",
+  "status": "active",
+  "summary_version_incorporated": null,
+  "superseded_by": null,
+  "title": "IEEE Quantum Symposium 2025 — J. Rodriguez",
+  "updated_at": "2026-05-16T06:46:11.771059+00:00",
+  "vault_id": "77230e2b-dd50-4ad4-9e2e-42d4223d0f29"
+}

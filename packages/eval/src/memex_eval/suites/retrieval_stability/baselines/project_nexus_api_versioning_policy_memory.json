@@ -1,13 +1,19 @@
 {
   "meta": {
-    "schema_version": 1,
+    "schema_version": 2,
     "search_type": "memory",
     "top_k": 10
   },
   "ranking": [
-    "api-version-alpha",
-    "api-version-beta",
-    "architecture-overview",
-    "standup-jan-15"
+    "5def1bf8-67a8-409d-ac81-a0354496eea2",
+    "5bec1b1f-df97-4b2a-938e-b7633e35547d",
+    "d4960cfe-1013-43df-9e91-127c4dad17f3",
+    "3e810b26-aa1d-45a7-b475-996163494fb3",
+    "fd709edd-4915-40b6-b9d7-5db8bb4267b4",
+    "e548bf2d-ced4-48ee-a44b-c306dad5d58b",
+    "02322a21-5f14-4009-b026-d293ed51cb2e",
+    "f26e015e-c609-48cc-a6d9-85af4eeeca0a",
+    "108627b9-aca0-4931-bab0-800758e7a9b2",
+    "3ad65339-899d-4ee0-a6c1-ca7733623e8d"
   ]
 }

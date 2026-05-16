@@ -1,14 +1,19 @@
 {
   "meta": {
-    "schema_version": 1,
+    "schema_version": 2,
     "search_type": "memory",
     "top_k": 10
   },
   "ranking": [
-    "team-meeting-notes",
-    "conference-talk",
-    "rodriguez-symposium",
-    "dept-marketing",
-    "osei-profile"
+    "ce173a64-b285-4780-b54d-3673462c0802",
+    "5bb39b52-7848-4f98-9911-3e14c2dce647",
+    "5a26ad65-4782-43c3-9a77-8be4efa173b2",
+    "cbb28206-aa26-4454-9b3c-7bad60e28a35",
+    "54a0726c-910f-42ad-bdd8-2c926a66104d",
+    "74cc942b-3685-47ca-a5bb-86fad2878570",
+    "5ee6e4f9-96b0-42e4-95e3-3b3d9a190056",
+    "c31af46c-5957-4884-9789-cacd7d35f98a",
+    "1a97dbeb-1fe4-4d07-8bf1-355eeedb8f9c",
+    "8130d20f-1b39-4290-b37e-0b614b8f5e43"
   ]
 }

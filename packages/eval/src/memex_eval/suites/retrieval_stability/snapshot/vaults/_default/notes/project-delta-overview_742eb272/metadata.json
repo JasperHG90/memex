@@ -1,0 +1,119 @@
+{
+  "appended_to": null,
+  "archived_at": null,
+  "assets": [],
+  "content_hash": "aeaf653a24d004cb2bfc2e0af228df6c",
+  "created_at": "2026-05-16T06:46:02.639120+00:00",
+  "description": "Project Delta Distributed Data Engine",
+  "doc_metadata": {
+    "retain_params": {
+      "assets": [],
+      "author": null,
+      "content_fingerprint": "aeaf653a24d004cb2bfc2e0af228df6c",
+      "filestore_path": null,
+      "note_description": "Project Delta uses Scala and Akka for distributed processing.",
+      "note_name": "Project Delta Overview",
+      "source": "note",
+      "source_uri": null,
+      "tags": [
+        "project",
+        "scala"
+      ],
+      "template": null,
+      "uuid": "742eb2720ad746d8e5a1c7f2ecd353ab"
+    },
+    "tags": [
+      "project",
+      "scala"
+    ]
+  },
+  "filestore_path": null,
+  "id": "742eb272-0ad7-46d8-e5a1-c7f2ecd353ab",
+  "page_index": {
+    "metadata": {
+      "description": "Project Delta Distributed Data Engine",
+      "publish_date": "2026-05-16 06:46:02.638375+00:00",
+      "source_uri": null,
+      "tags": [
+        "project",
+        "scala",
+        "distributed computing",
+        "akka framework",
+        "big data",
+        "apache flink",
+        "concurrency",
+        "data processing"
+      ],
+      "title": "Project Delta Overview",
+      "total_tokens": 106
+    },
+    "toc": [
+      {
+        "block_id": "fd994ede956c7eba2b17190986c4c978",
+        "children": [
+          {
+            "block_id": "fd994ede956c7eba2b17190986c4c978",
+            "children": [],
+            "end_index": 351,
+            "id": "92d0e6db8d2d7931b41d8afacffc1c54",
+            "level": 2,
+            "original_header_id": 1,
+            "start_index": 114,
+            "subtree_tokens": 46,
+            "summary": {
+              "how": "Scala and the Akka framework for actor-based concurrency across a 200-node cluster",
+              "what": "Project Delta, a distributed data processing engine",
+              "when": "Daily (processing 2 billion events)",
+              "where": "Within a distributed cluster environment",
+              "who": "Nordic Data Systems"
+            },
+            "title": "Overview",
+            "token_estimate": 46
+          },
+          {
+            "block_id": "fd994ede956c7eba2b17190986c4c978",
+            "children": [],
+            "end_index": 487,
+            "id": "48ae7562e198ba2fb686c77ee99d9e6f",
+            "level": 2,
+            "original_header_id": 2,
+            "start_index": 351,
+            "subtree_tokens": 38,
+            "summary": {
+              "how": "By utilizing a modern distributed systems stack including Akka Cluster, Akka Streams, and Apache Flink.",
+              "what": "Selection of the core technology stack for the project.",
+              "when": null,
+              "where": "Project architecture and development environment.",
+              "who": "Development team and software systems."
+            },
+            "title": "Tech Stack",
+            "token_estimate": 38
+          }
+        ],
+        "end_index": 487,
+        "id": "9b0f6dac3f17cb6c650b2084c5b54d04",
+        "level": 1,
+        "original_header_id": 0,
+        "start_index": 0,
+        "subtree_tokens": 106,
+        "summary": {
+          "how": "Through distributed processing architecture",
+          "what": "Introduction to Project Delta, including its overview and technical stack",
+          "when": null,
+          "where": "Distributed computing environment",
+          "who": "Project Delta"
+        },
+        "title": "Project Delta — Distributed Processing Engine",
+        "token_estimate": 22
+      }
+    ]
+  },
+  "publish_date": "2026-05-16T06:46:02.638375+00:00",
+  "session_id": "01f14ced-cfe7-447a-a074-f53f84672312",
+  "status": "active",
+  "summary_version_incorporated": null,
+  "superseded_by": null,
+  "title": "Project Delta Overview",
+  "updated_at": "2026-05-16T06:46:02.639120+00:00",
+  "vault_id": "77230e2b-dd50-4ad4-9e2e-42d4223d0f29"
+}

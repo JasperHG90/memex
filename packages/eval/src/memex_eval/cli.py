@@ -1133,6 +1133,140 @@ def suite_reset_db(
     console.print('[green]✓[/green] Suite DB schema reset.')
 
 
+@suite_app.command('refresh-snapshot')
+def suite_refresh_snapshot(
+    name: str = typer.Argument(..., help='Suite name.'),
+    server: str = typer.Option(
+        DEFAULT_SERVER, '--server', '-s', envvar='MEMEX_EVAL_DEFAULT_SERVER'
+    ),
+    force: bool = typer.Option(False, '--force', '-f', help='Skip the confirmation prompt.'),
+) -> None:
+    """Regenerate the suite's shipped snapshot from current code.
+
+    Runs the suite's ingest+extract pipeline against a fresh eval DB,
+    then captures the post-extraction state into ``<suite_pkg>/snapshot/``.
+    Subsequent ``memex-eval suite run <name>`` invocations import this
+    snapshot instead of re-extracting, giving every run identical
+    MemoryUnit / Note / Chunk UUIDs.
+
+    Run this when any of the following change:
+
+    * Alembic schema (snapshot's ``alembic_head`` no longer matches HEAD)
+    * Extractor logic (LLM prompts, DSPy signatures, page-index code)
+    * Embedder model identity
+    * Corpus markdown in ``<suite_pkg>/sources/``
+
+    Requires an already-running Memex server reachable at ``--server``.
+    Destructive: drops every SQLModel table in the eval DB before
+    populating; do NOT run against a production server.
+    """
+    import asyncio
+    import shutil
+    import subprocess as _sp
+
+    from memex_eval.suite import load_suite
+    from memex_eval.suite.db_reset import _resolve_db_dsn, drop_and_recreate_schema
+    from memex_eval.suite.snapshot_cache import (
+        resolve_cache_root,
+    )
+
+    suite = load_suite(name)
+    shipped = suite.shipped_snapshot_path
+    if shipped is None:
+        console.print(
+            f'[red]Suite {name!r} does not declare shipped_snapshot_path.[/red] '
+            'Set it on the Suite(...) constructor (Path next to __init__.py).'
+        )
+        raise typer.Exit(code=1)
+
+    dsn = _resolve_db_dsn()
+    redacted = dsn.split('@', 1)[1] if '@' in dsn else dsn
+    console.print()
+    console.print('[bold red]⚠  DESTRUCTIVE OPERATION[/bold red]')
+    console.print(
+        f'  Target DB:      [cyan]{redacted}[/cyan]\n'
+        f'  Target server:  [cyan]{server}[/cyan]\n'
+        f'  Snapshot dest:  [cyan]{shipped}[/cyan]\n'
+        '  Action: drop+recreate every SQLModel table; ingest the suite\n'
+        '          corpus via the live server; wait for extraction;\n'
+        '          export the resulting state to the snapshot dir.\n'
+        '          Existing snapshot dir contents are replaced.'
+    )
+    console.print()
+    if not force:
+        confirm = typer.confirm('Type y to proceed', default=False)
+        if not confirm:
+            console.print('Aborted.')
+            raise typer.Exit(code=1)
+
+    # Phase 1: wipe DB
+    asyncio.run(drop_and_recreate_schema(dsn))
+    console.print('[green]✓[/green] DB reset.')
+
+    # Phase 2: run the suite with --from-snapshot auto --reingest. The
+    # runner uses the cache slot at <cache_root>/<suite_name>-<hash>/
+    # to materialise the snapshot via SnapshotExporter after extraction.
+    # --reingest forces re-extract even on a stale cache hit.
+    cache_root = resolve_cache_root(None)
+    # Wipe any prior shipped snapshot so the runner can't load it
+    # instead of populating the cache (shipped_snapshot_path takes
+    # precedence over --from-snapshot auto when it points at a real
+    # dir; we deliberately empty it for the duration of the refresh).
+    if shipped.is_dir():
+        shutil.rmtree(shipped)
+
+    cmd = [
+        'memex-eval',
+        'suite',
+        'run',
+        name,
+        '--from-snapshot',
+        'auto',
+        '--reingest',
+        '--server',
+        server,
+        '--snapshot-cache-dir',
+        str(cache_root),
+    ]
+    console.print(f'[dim]Running: {" ".join(cmd)}[/dim]')
+    result = _sp.run(cmd, env=None)
+    if result.returncode != 0:
+        console.print(f'[red]suite run failed (exit {result.returncode}).[/red]')
+        raise typer.Exit(code=result.returncode)
+
+    # Phase 3: copy the populated cache slot to the shipped path.
+    # Recompute sources_hash exactly as the runner does (runner.py:1641-
+    # 1647) so the cache_key matches what `--from-snapshot auto` wrote.
+    import hashlib as _hashlib
+
+    from memex_eval.suite.snapshot_cache import lookup as _cache_lookup
+
+    suite_obj = load_suite(name)
+    _routing = _hashlib.sha256()
+    for _sc in sorted(suite_obj.scenarios, key=lambda s: s.id):
+        _routing.update(f'{_sc.id}:{_sc.vault_name or ""}\n'.encode())
+    sources_hash = _hashlib.sha256(
+        f'{suite_obj.sources.content_hash()}:{_routing.hexdigest()}'.encode()
+    ).hexdigest()
+    lookup_info = _cache_lookup(cache_root, name, sources_hash)
+    if not lookup_info.hit:
+        console.print(
+            f'[red]Cache populate did not complete: no slot at {lookup_info.cache_path}.[/red]'
+        )
+        raise typer.Exit(code=1)
+
+    shipped.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(lookup_info.cache_path, shipped)
+    console.print(
+        f'[green]✓[/green] Snapshot refreshed at [cyan]{shipped}[/cyan] '
+        f'(source slot: {lookup_info.cache_path}).'
+    )
+    console.print(
+        '[dim]Tip: commit the snapshot directory + force-add files '
+        'under baselines/ before pushing.[/dim]'
+    )
+
+
 @suite_app.command('history')
 def suite_history(
     name: str = typer.Argument(..., help='Suite name.'),

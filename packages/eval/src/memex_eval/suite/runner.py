@@ -1713,6 +1713,25 @@ async def run_suite(
             vault_map: dict[str | None, UUID] = {}
             note_id_by_key: dict[str, str] = {}
 
+            # Suite-shipped snapshot: when the suite package contains its
+            # own snapshot directory (refreshed via
+            # ``memex-eval suite refresh-snapshot <name>``) and the
+            # operator did not pass ``--from-snapshot`` explicitly, use
+            # the shipped path as the default. Lets ranking-stability
+            # suites pin baselines on deterministic unit IDs without
+            # making every operator remember the flag.
+            if (
+                from_snapshot is None
+                and reuse_vault is None
+                and suite.shipped_snapshot_path is not None
+                and suite.shipped_snapshot_path.is_dir()
+            ):
+                from_snapshot = str(suite.shipped_snapshot_path)
+                logger.info(
+                    'Suite ships snapshot at %s; using as --from-snapshot default.',
+                    suite.shipped_snapshot_path,
+                )
+
             # Resolve auto cache lookup before deciding the path.
             cache_lookup: '_snapshot_cache.CacheLookup | None' = None
             if from_snapshot == 'auto' and reuse_vault is None:

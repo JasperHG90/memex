@@ -1,14 +1,19 @@
 {
   "meta": {
-    "schema_version": 1,
+    "schema_version": 2,
     "search_type": "memory",
     "top_k": 10
   },
   "ranking": [
-    "project-zeta-achievement",
-    "project-zeta-incident",
-    "project-beta-overview",
-    "sarah-chen-tech-decisions",
-    "project-alpha-kickoff"
+    "02cacafc-d0ab-40b0-9f63-c651e4ed99fb",
+    "d246c7e5-40f9-4066-ac62-3f447b549c42",
+    "28f247cd-706d-485c-ac9f-ebded8d1ead5",
+    "7ec3ed45-9a9f-4cec-9b38-af6179a0549d",
+    "d27ecd1a-8fb4-437c-9c42-6f49c1791c2f",
+    "ef399625-7118-4443-8ad2-3cdb75e7ade5",
+    "eb2b7d47-c0ee-4de4-9689-6649b0f7708d",
+    "7a9440fc-f274-47e8-b9d5-0438bfd44128",
+    "96d2efa6-5b0b-4946-8d80-55abbef20b35",
+    "89c5a74b-b3a0-4c94-919e-bfd7711c2f28"
   ]
 }

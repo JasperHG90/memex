@@ -1,19 +1,19 @@
 {
   "meta": {
-    "schema_version": 1,
+    "schema_version": 2,
     "search_type": "note",
     "top_k": 10
   },
   "ranking": [
-    "sarah-chen-profile",
-    "sarah-chen-tech-decisions",
-    "project-alpha-kickoff",
-    "project-alpha-update",
-    "dept-engineering-history",
-    "rodriguez-award",
-    "project-beta-overview",
-    "project-zeta-incident",
-    "company-core-values",
-    "widget-lite-discontinued"
+    "40173643-91e7-c01b-e8ea-401293b64674",
+    "a500f347-4331-5727-4adb-b8bb341e6771",
+    "b496f6d0-3187-5c07-ccd2-f5b4eaddc8b0",
+    "d30f4fcd-1e0a-df8f-7c4a-b68bf5b219c8",
+    "2512b2ce-1774-4fab-7b79-8d945fc7bdda",
+    "f01f4cd9-4b39-e7a3-f463-cd32c11fe014",
+    "707c7451-07aa-8f71-8e3a-02b6def8f3d7",
+    "d8907947-4033-c9bd-ea22-ae670c69c758",
+    "29c092fd-fdb4-4cc2-e4ab-47aeb219f199",
+    "7ec3680c-0258-aa17-b1be-49e0160f3006"
   ]
 }

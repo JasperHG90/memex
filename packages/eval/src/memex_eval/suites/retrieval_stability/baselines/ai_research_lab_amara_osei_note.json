@@ -1,19 +1,19 @@
 {
   "meta": {
-    "schema_version": 1,
+    "schema_version": 2,
     "search_type": "note",
     "top_k": 10
   },
   "ranking": [
-    "osei-profile",
-    "rodriguez-symposium",
-    "team-meeting-notes",
-    "architecture-overview",
-    "project-zeta-incident",
-    "rodriguez-award",
-    "dept-sales",
-    "widget-lite-discontinued",
-    "api-version-beta",
-    "company-core-values"
+    "176ed498-e7ee-aa0c-b3b8-bacb19827fbe",
+    "36d99df3-1a33-71bc-36a2-c8ea3ada4527",
+    "28733f61-bb0d-6d6f-c380-02116c114929",
+    "af4001f2-6344-1ba5-f124-5c70148a0b85",
+    "742eb272-0ad7-46d8-e5a1-c7f2ecd353ab",
+    "7ec3680c-0258-aa17-b1be-49e0160f3006",
+    "0e8179f6-c264-4be0-5b72-b84b9b13b37c",
+    "e136b746-3137-050a-7e23-e6774dbe0070",
+    "b1c7227f-77af-913a-591b-9e04b16847a9",
+    "a563c526-0572-007d-9f11-50903431bfe9"
   ]
 }

@@ -1,16 +1,19 @@
 {
   "meta": {
-    "schema_version": 1,
+    "schema_version": 2,
     "search_type": "memory",
     "top_k": 10
   },
   "ranking": [
-    "annual-roadmap-2025",
-    "dept-product",
-    "dept-finance",
-    "dept-engineering",
-    "dept-marketing",
-    "dept-sales",
-    "dept-hr"
+    "a4021504-672a-4bf0-ac47-d9a0bf82ac36",
+    "5178fd25-30ae-46d8-a133-3b9a411bf459",
+    "1034bcaf-622d-4379-9a02-c6ad65e26534",
+    "869e77bf-4472-4474-a58c-9e9cb59c078c",
+    "39bf9384-c8ca-4506-a99f-20c9c62b5481",
+    "a643f689-326e-40c5-a655-b9f2e396827b",
+    "b5f93695-259b-4a1a-9cde-d7b4e7ff37f1",
+    "2025399e-b7ab-4ff7-93e7-e1f50137f4ac",
+    "37d79859-0aba-4d80-99d1-e5db9f24678c",
+    "3a737c7f-a2f2-4c6d-98c1-c24f969ff9fa"
   ]
 }

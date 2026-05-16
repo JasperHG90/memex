@@ -1,19 +1,19 @@
 {
   "meta": {
-    "schema_version": 1,
+    "schema_version": 2,
     "search_type": "note",
     "top_k": 10
   },
   "ranking": [
-    "widget-lite-discontinued",
-    "widget-pro",
-    "annual-roadmap-2025",
-    "api-version-alpha",
-    "project-zeta-incident",
-    "conference-talk",
-    "tech-stack-v1",
-    "company-core-values",
-    "dept-hr",
-    "osei-profile"
+    "7ec3680c-0258-aa17-b1be-49e0160f3006",
+    "9bdbfbac-d88f-dd5e-ccbc-725c05a88536",
+    "8d35d622-5781-f849-7aa9-7db786113fa3",
+    "aff42a6e-bc80-3e05-5857-cb2cf825dd3e",
+    "c915b12f-1434-fc05-b11c-07eb2f434b4f",
+    "c4cbc10b-0239-1c05-c889-7fc9c78b5638",
+    "00c6582a-50d0-dcea-66f0-9e6285e26f81",
+    "29c092fd-fdb4-4cc2-e4ab-47aeb219f199",
+    "af4001f2-6344-1ba5-f124-5c70148a0b85",
+    "176ed498-e7ee-aa0c-b3b8-bacb19827fbe"
   ]
 }

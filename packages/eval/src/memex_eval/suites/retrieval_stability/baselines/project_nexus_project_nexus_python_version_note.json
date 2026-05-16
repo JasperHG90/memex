@@ -1,19 +1,19 @@
 {
   "meta": {
-    "schema_version": 1,
+    "schema_version": 2,
     "search_type": "note",
     "top_k": 10
   },
   "ranking": [
-    "tech-stack-v2",
-    "tech-stack-v1",
-    "project-alpha-kickoff",
-    "sarah-chen-tech-decisions",
-    "project-alpha-update",
-    "project-beta-overview",
-    "project-zeta-achievement",
-    "project-zeta-incident",
-    "dept-engineering",
-    "sarah-chen-profile"
+    "24c92514-7509-d3ec-3b2b-a0b6e62083ad",
+    "00c6582a-50d0-dcea-66f0-9e6285e26f81",
+    "b496f6d0-3187-5c07-ccd2-f5b4eaddc8b0",
+    "a500f347-4331-5727-4adb-b8bb341e6771",
+    "d30f4fcd-1e0a-df8f-7c4a-b68bf5b219c8",
+    "707c7451-07aa-8f71-8e3a-02b6def8f3d7",
+    "d8907947-4033-c9bd-ea22-ae670c69c758",
+    "742eb272-0ad7-46d8-e5a1-c7f2ecd353ab",
+    "8afe7d5a-fe3c-a7c8-639f-1057175b899a",
+    "40173643-91e7-c01b-e8ea-401293b64674"
   ]
 }

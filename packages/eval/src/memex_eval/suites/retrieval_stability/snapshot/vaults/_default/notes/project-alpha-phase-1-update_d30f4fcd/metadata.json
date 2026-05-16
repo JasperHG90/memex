@@ -1,0 +1,141 @@
+{
+  "appended_to": null,
+  "archived_at": null,
+  "assets": [],
+  "content_hash": "5e664cb9012d0839b1ffb9f83f26c5c4",
+  "created_at": "2026-05-16T06:46:00.550209+00:00",
+  "description": "Project Alpha Phase 1 Completion and Transition to Phase 2",
+  "doc_metadata": {
+    "retain_params": {
+      "assets": [],
+      "author": null,
+      "content_fingerprint": "5e664cb9012d0839b1ffb9f83f26c5c4",
+      "filestore_path": null,
+      "note_description": "Status update on Project Alpha Phase 1 completion.",
+      "note_name": "Project Alpha Phase 1 Update",
+      "source": "note",
+      "source_uri": null,
+      "tags": [
+        "project",
+        "update",
+        "acme-corp"
+      ],
+      "template": null,
+      "uuid": "d30f4fcd1e0adf8f7c4ab68bf5b219c8"
+    },
+    "tags": [
+      "project",
+      "update",
+      "acme-corp"
+    ]
+  },
+  "filestore_path": null,
+  "id": "d30f4fcd-1e0a-df8f-7c4a-b68bf5b219c8",
+  "page_index": {
+    "metadata": {
+      "description": "Project Alpha Phase 1 Completion and Transition to Phase 2",
+      "publish_date": "2025-06-20 00:00:00+00:00",
+      "source_uri": null,
+      "tags": [
+        "project",
+        "update",
+        "acme-corp",
+        "project management",
+        "api development",
+        "data pipeline",
+        "infrastructure",
+        "software engineering",
+        "roadmap"
+      ],
+      "title": "Project Alpha Phase 1 Update",
+      "total_tokens": 172
+    },
+    "toc": [
+      {
+        "block_id": "67117f0a9102868a93ff586bae5d1db2",
+        "children": [
+          {
+            "block_id": "67117f0a9102868a93ff586bae5d1db2",
+            "children": [],
+            "end_index": 233,
+            "id": "dc0ce7addfae46333985399a5a5a763c",
+            "level": 2,
+            "original_header_id": 1,
+            "start_index": 82,
+            "subtree_tokens": 29,
+            "summary": {
+              "how": "By completing the development of the API layer and data pipeline.",
+              "what": "Successful completion of Phase 1.",
+              "when": "Current/Present status.",
+              "where": "The staging environment.",
+              "who": "Project Alpha team/system."
+            },
+            "title": "Summary",
+            "token_estimate": 29
+          },
+          {
+            "block_id": "67117f0a9102868a93ff586bae5d1db2",
+            "children": [],
+            "end_index": 525,
+            "id": "8610d74e20ca6efd8d939a207c45071d",
+            "level": 2,
+            "original_header_id": 2,
+            "start_index": 233,
+            "subtree_tokens": 66,
+            "summary": {
+              "how": "By delivering 47 API endpoints, achieving high code coverage, and deploying a PostgreSQL cluster.",
+              "what": "Successful delivery of technical milestones and performance targets.",
+              "when": "End of the current development phase/reporting period.",
+              "where": "Production and development environments.",
+              "who": "Engineering and DevOps teams."
+            },
+            "title": "Key Results",
+            "token_estimate": 66
+          },
+          {
+            "block_id": "67117f0a9102868a93ff586bae5d1db2",
+            "children": [],
+            "end_index": 713,
+            "id": "a7e33c424069a93232e387892dd06c49",
+            "level": 2,
+            "original_header_id": 3,
+            "start_index": 525,
+            "subtree_tokens": 51,
+            "summary": {
+              "how": "By planning Phase 2 and presenting existing results to the board.",
+              "what": "Phase 2 planning and real-time analytics dashboard development using React and D3.js.",
+              "when": "July 2025, with a board presentation on July 10.",
+              "where": "Acme Corp.",
+              "who": "Sarah Chen and the project team."
+            },
+            "title": "Next Steps",
+            "token_estimate": 51
+          }
+        ],
+        "end_index": 713,
+        "id": "841486c6cdc158ca11096fc27ea4dfa6",
+        "level": 1,
+        "original_header_id": 0,
+        "start_index": 0,
+        "subtree_tokens": 172,
+        "summary": {
+          "how": "By synthesizing upcoming summaries, key results, and next steps.",
+          "what": "Initial progress update and reporting for Project Alpha Phase 1.",
+          "when": "Phase 1 completion/update cycle.",
+          "where": "Project Alpha management environment.",
+          "who": "Project Alpha team and stakeholders."
+        },
+        "title": "Project Alpha — Phase 1 Update",
+        "token_estimate": 26
+      }
+    ]
+  },
+  "publish_date": "2025-06-20T00:00:00+00:00",
+  "session_id": "e968d3c1-12fc-4ef1-9d66-f663904066dd",
+  "status": "active",
+  "summary_version_incorporated": null,
+  "superseded_by": null,
+  "title": "Project Alpha Phase 1 Update",
+  "updated_at": "2026-05-16T06:46:00.550209+00:00",
+  "vault_id": "77230e2b-dd50-4ad4-9e2e-42d4223d0f29"
+}

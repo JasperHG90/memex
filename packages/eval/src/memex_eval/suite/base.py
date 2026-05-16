@@ -1560,6 +1560,15 @@ class Suite(BaseModel):
     sources: SuiteSources
     scenarios: list[Scenario]
     readme_path: Path | None = None
+    # Path to a snapshot directory shipped *with the suite package* (not
+    # the per-machine snapshot cache). When set and the directory exists,
+    # the runner treats it as the default value of ``--from-snapshot``:
+    # ingest+extraction is skipped and the shipped state is imported,
+    # giving every run identical MemoryUnit / Note / Chunk UUIDs. This is
+    # the mechanism that lets ranking-stability suites pin baselines on
+    # unit IDs instead of laundered note_keys. Refresh via the
+    # ``memex-eval suite refresh-snapshot`` subcommand.
+    shipped_snapshot_path: Path | None = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 

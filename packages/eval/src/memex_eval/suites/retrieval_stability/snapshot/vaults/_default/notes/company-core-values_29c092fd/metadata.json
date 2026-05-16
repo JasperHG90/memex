@@ -1,0 +1,102 @@
+{
+  "appended_to": null,
+  "archived_at": null,
+  "assets": [],
+  "content_hash": "3df2312337f4040bc0878271b9f5569f",
+  "created_at": "2026-05-16T06:45:27.525040+00:00",
+  "description": "Corporate Core Values and Guiding Principles",
+  "doc_metadata": {
+    "retain_params": {
+      "assets": [],
+      "author": null,
+      "content_fingerprint": "3df2312337f4040bc0878271b9f5569f",
+      "filestore_path": null,
+      "note_description": "Permanent company principles and values.",
+      "note_name": "Company Core Values",
+      "source": "note",
+      "source_uri": null,
+      "tags": [
+        "company",
+        "values",
+        "permanent"
+      ],
+      "template": null,
+      "uuid": "29c092fdfdb44cc2e4ab47aeb219f199"
+    },
+    "tags": [
+      "company",
+      "values",
+      "permanent"
+    ]
+  },
+  "filestore_path": null,
+  "id": "29c092fd-fdb4-4cc2-e4ab-47aeb219f199",
+  "page_index": {
+    "metadata": {
+      "description": "Corporate Core Values and Guiding Principles",
+      "publish_date": "2018-01-01 00:00:00+00:00",
+      "source_uri": null,
+      "tags": [
+        "company",
+        "values",
+        "permanent",
+        "corporate culture",
+        "core values",
+        "strategic planning",
+        "internal operations",
+        "organizational principles"
+      ],
+      "title": "Company Core Values",
+      "total_tokens": 113
+    },
+    "toc": [
+      {
+        "block_id": "1c3504a04101a70b91494fe051b4341b",
+        "children": [
+          {
+            "block_id": "1c3504a04101a70b91494fe051b4341b",
+            "children": [],
+            "end_index": 565,
+            "id": "7993a752019471b7467f372b4b7989f0",
+            "level": 2,
+            "original_header_id": 1,
+            "start_index": 79,
+            "subtree_tokens": 93,
+            "summary": {
+              "how": "By prioritizing customer impact, investing in quality, and defaulting to open communication.",
+              "what": "Three permanent core principles guiding product, hiring, and strategy.",
+              "when": "From the company's founding through the present and future.",
+              "where": "Across all internal operations and strategic directions within the company.",
+              "who": "The company and its employees."
+            },
+            "title": "Principles",
+            "token_estimate": 93
+          }
+        ],
+        "end_index": 565,
+        "id": "3b9b35b3e1fbdd57a3232f0e68453607",
+        "level": 1,
+        "original_header_id": 0,
+        "start_index": 0,
+        "subtree_tokens": 113,
+        "summary": {
+          "how": "Through the establishment of a formal set of principles.",
+          "what": "Definition of corporate core values and foundational principles.",
+          "when": null,
+          "where": "Internal organizational framework.",
+          "who": "The Company"
+        },
+        "title": "Company Core Values",
+        "token_estimate": 20
+      }
+    ]
+  },
+  "publish_date": "2018-01-01T00:00:00+00:00",
+  "session_id": "a2b8e78c-d4ea-4d71-9c5a-2bc22bdc3ebe",
+  "status": "active",
+  "summary_version_incorporated": null,
+  "superseded_by": null,
+  "title": "Company Core Values",
+  "updated_at": "2026-05-16T06:45:27.525040+00:00",
+  "vault_id": "77230e2b-dd50-4ad4-9e2e-42d4223d0f29"
+}

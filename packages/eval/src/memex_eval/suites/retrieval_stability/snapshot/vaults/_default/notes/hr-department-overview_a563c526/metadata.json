@@ -1,0 +1,121 @@
+{
+  "appended_to": null,
+  "archived_at": null,
+  "assets": [],
+  "content_hash": "5cac3879aed6321b6cc7503a72e8c44b",
+  "created_at": "2026-05-16T06:45:47.243846+00:00",
+  "description": "HR Department Operations and Performance Review Initiative",
+  "doc_metadata": {
+    "retain_params": {
+      "assets": [],
+      "author": null,
+      "content_fingerprint": "5cac3879aed6321b6cc7503a72e8c44b",
+      "filestore_path": null,
+      "note_description": "Overview of the HR department at TechCo Global.",
+      "note_name": "HR Department Overview",
+      "source": "note",
+      "source_uri": null,
+      "tags": [
+        "department",
+        "hr",
+        "techco"
+      ],
+      "template": null,
+      "uuid": "a563c5260572007d9f1150903431bfe9"
+    },
+    "tags": [
+      "department",
+      "hr",
+      "techco"
+    ]
+  },
+  "filestore_path": null,
+  "id": "a563c526-0572-007d-9f11-50903431bfe9",
+  "page_index": {
+    "metadata": {
+      "description": "HR Department Operations and Performance Review Initiative",
+      "publish_date": "2026-05-16 06:45:47.243288+00:00",
+      "source_uri": null,
+      "tags": [
+        "department",
+        "hr",
+        "techco",
+        "human resources",
+        "organizational structure",
+        "performance management",
+        "hr tech stack",
+        "workforce management"
+      ],
+      "title": "HR Department Overview",
+      "total_tokens": 97
+    },
+    "toc": [
+      {
+        "block_id": "f863e08e177b20e8e60e7068388ad9bf",
+        "children": [
+          {
+            "block_id": "f863e08e177b20e8e60e7068388ad9bf",
+            "children": [],
+            "end_index": 241,
+            "id": "46f149618fa07dcf733aead9b4099b68",
+            "level": 2,
+            "original_header_id": 1,
+            "start_index": 145,
+            "subtree_tokens": 18,
+            "summary": {
+              "how": "By rolling out the framework company-wide.",
+              "what": "A new 360-degree performance review framework.",
+              "when": "Currently",
+              "where": "Company-wide",
+              "who": "The organization/company"
+            },
+            "title": "Current Initiative",
+            "token_estimate": 18
+          },
+          {
+            "block_id": "f863e08e177b20e8e60e7068388ad9bf",
+            "children": [],
+            "end_index": 425,
+            "id": "e8025016a81c280eb8ba5ec69b98f3d4",
+            "level": 2,
+            "original_header_id": 2,
+            "start_index": 241,
+            "subtree_tokens": 41,
+            "summary": {
+              "how": "Reporting to the department head",
+              "what": "Management of all HR-related activities",
+              "when": "Currently",
+              "where": "TechCo Global",
+              "who": "TechCo Global HR department (14 members) and David Okafor"
+            },
+            "title": "Responsibilities",
+            "token_estimate": 41
+          }
+        ],
+        "end_index": 425,
+        "id": "18ae5e014a47f7723b0ff1230384c8da",
+        "level": 1,
+        "original_header_id": 0,
+        "start_index": 0,
+        "subtree_tokens": 97,
+        "summary": {
+          "how": "By utilizing core tools including Workday, Greenhouse, and Culture Amp.",
+          "what": "Overview of the HR Department's structure, leadership, and technological stack.",
+          "when": null,
+          "where": "TechCo Global",
+          "who": "David Okafor (Department Head) and 14 employees."
+        },
+        "title": "HR Department — TechCo Global",
+        "token_estimate": 38
+      }
+    ]
+  },
+  "publish_date": "2026-05-16T06:45:47.243288+00:00",
+  "session_id": "701da0c3-8952-4252-af2c-003777d80add",
+  "status": "active",
+  "summary_version_incorporated": null,
+  "superseded_by": null,
+  "title": "HR Department Overview",
+  "updated_at": "2026-05-16T06:45:47.243846+00:00",
+  "vault_id": "77230e2b-dd50-4ad4-9e2e-42d4223d0f29"
+}

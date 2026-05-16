@@ -1,15 +1,19 @@
 {
   "meta": {
-    "schema_version": 1,
+    "schema_version": 2,
     "search_type": "memory",
     "top_k": 10
   },
   "ranking": [
-    "dept-ai-research",
-    "dept-data-science",
-    "dept-customer-success",
-    "dept-hr",
-    "dept-marketing",
-    "dept-product"
+    "4ee18aa5-5671-4561-b8ae-de13bcbc35f4",
+    "e3c66c85-3f8b-4f97-98d1-c0561346d1fc",
+    "ba4afee4-3054-4ff9-9a3a-91dadbfba8e1",
+    "83ef98fc-d962-4de9-aabd-117a5a484aa8",
+    "84c7893c-2936-4688-a293-bc8b7b3a33f8",
+    "462e5e7f-6151-4632-aeb3-6795e0659ecb",
+    "e02b0ce4-296a-460f-a7a7-c605595701be",
+    "32f5ac33-9b01-49da-bd01-278d65aa3410",
+    "c919c499-4dd0-4452-9564-861a78573c4e",
+    "276defaf-1bdf-4211-91c0-582b343a080b"
   ]
 }

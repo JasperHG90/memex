@@ -1,13 +1,19 @@
 {
   "meta": {
-    "schema_version": 1,
+    "schema_version": 2,
     "search_type": "memory",
     "top_k": 10
   },
   "ranking": [
-    "data-platform-architecture",
-    "architecture-overview",
-    "quarterly-review-q2",
-    "sarah-chen-profile"
+    "d0812691-fd2d-4e65-badd-3f48caeed005",
+    "d470af21-89b3-4163-aff1-d56ee05aebdb",
+    "d609f5af-93e8-4bbe-8b79-f6481465bb35",
+    "19e5be34-5272-47f8-8588-d95f055d2727",
+    "6498e057-d0fa-4499-af73-3acb65a3fb13",
+    "89c5a74b-b3a0-4c94-919e-bfd7711c2f28",
+    "a32ef67e-7d67-4d22-bc0f-6812d675c7a8",
+    "d1c5c274-c404-46d1-9494-9a61bc235c2c",
+    "8a0850c6-e2bc-45a0-bbef-0298a4dbc7c1",
+    "d3cdf41b-671b-4408-963b-75a5300f7f45"
   ]
 }

@@ -1,19 +1,19 @@
 {
   "meta": {
-    "schema_version": 1,
+    "schema_version": 2,
     "search_type": "note",
     "top_k": 10
   },
   "ranking": [
-    "sarah-chen-tech-decisions",
-    "tech-stack-v2",
-    "project-alpha-update",
-    "data-platform-architecture",
-    "project-alpha-kickoff",
-    "sarah-chen-profile",
-    "project-beta-overview",
-    "company-core-values",
-    "dept-finance",
-    "osei-profile"
+    "a500f347-4331-5727-4adb-b8bb341e6771",
+    "24c92514-7509-d3ec-3b2b-a0b6e62083ad",
+    "d30f4fcd-1e0a-df8f-7c4a-b68bf5b219c8",
+    "c53136d9-48df-4970-0a18-d1f87127d988",
+    "b496f6d0-3187-5c07-ccd2-f5b4eaddc8b0",
+    "40173643-91e7-c01b-e8ea-401293b64674",
+    "d8907947-4033-c9bd-ea22-ae670c69c758",
+    "29c092fd-fdb4-4cc2-e4ab-47aeb219f199",
+    "b1c7227f-77af-913a-591b-9e04b16847a9",
+    "176ed498-e7ee-aa0c-b3b8-bacb19827fbe"
   ]
 }

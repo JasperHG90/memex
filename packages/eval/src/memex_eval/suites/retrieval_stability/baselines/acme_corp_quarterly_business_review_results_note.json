@@ -1,19 +1,19 @@
 {
   "meta": {
-    "schema_version": 1,
+    "schema_version": 2,
     "search_type": "note",
     "top_k": 10
   },
   "ranking": [
-    "quarterly-review-q1",
-    "project-alpha-update",
-    "dept-hr",
-    "dept-product",
-    "dept-finance",
-    "dept-customer-success",
-    "dept-sales",
-    "dept-security",
-    "dept-marketing",
-    "dept-engineering"
+    "81f6a3af-dc31-425e-eb07-40ff40b2172d",
+    "d30f4fcd-1e0a-df8f-7c4a-b68bf5b219c8",
+    "3d25fc52-0580-50b5-5c62-28a29458c0cb",
+    "a563c526-0572-007d-9f11-50903431bfe9",
+    "0349bd1b-885f-a83b-e53b-22b3a03cde8e",
+    "b1c7227f-77af-913a-591b-9e04b16847a9",
+    "28733f61-bb0d-6d6f-c380-02116c114929",
+    "af4001f2-6344-1ba5-f124-5c70148a0b85",
+    "36d99df3-1a33-71bc-36a2-c8ea3ada4527",
+    "e136b746-3137-050a-7e23-e6774dbe0070"
   ]
 }

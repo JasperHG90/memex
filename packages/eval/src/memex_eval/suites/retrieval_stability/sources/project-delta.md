@@ -2,7 +2,6 @@
 title: Project Delta Overview
 description: Project Delta uses Scala and Akka for distributed processing.
 tags: [project, scala]
-vault_name: bench-vault-b
 ---
 
 # Project Delta — Distributed Processing Engine

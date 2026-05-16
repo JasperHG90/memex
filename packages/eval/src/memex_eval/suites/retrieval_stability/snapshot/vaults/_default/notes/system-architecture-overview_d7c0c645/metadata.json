@@ -1,0 +1,142 @@
+{
+  "appended_to": null,
+  "archived_at": null,
+  "assets": [],
+  "content_hash": "b64ebcfab66e21fe3b5fdf396dafeb69",
+  "created_at": "2026-05-16T06:45:26.178434+00:00",
+  "description": "Microservices System Architecture and Infrastructure",
+  "doc_metadata": {
+    "retain_params": {
+      "assets": [],
+      "author": null,
+      "content_fingerprint": "b64ebcfab66e21fe3b5fdf396dafeb69",
+      "filestore_path": null,
+      "note_description": "Architecture document with a system diagram asset.",
+      "note_name": "System Architecture Overview",
+      "source": "note",
+      "source_uri": null,
+      "tags": [
+        "architecture",
+        "diagram",
+        "infrastructure"
+      ],
+      "template": null,
+      "uuid": "d7c0c64538c9bcc4af8a13154b1d1abf"
+    },
+    "tags": [
+      "architecture",
+      "diagram",
+      "infrastructure"
+    ]
+  },
+  "filestore_path": null,
+  "id": "d7c0c645-38c9-bcc4-af8a-13154b1d1abf",
+  "page_index": {
+    "metadata": {
+      "description": "Microservices System Architecture and Infrastructure",
+      "publish_date": "2026-05-16 06:45:26.177896+00:00",
+      "source_uri": null,
+      "tags": [
+        "architecture",
+        "diagram",
+        "infrastructure",
+        "microservices",
+        "kubernetes",
+        "event-driven architecture",
+        "devops",
+        "grpc",
+        "apache kafka",
+        "infrastructure as code"
+      ],
+      "title": "System Architecture Overview",
+      "total_tokens": 185
+    },
+    "toc": [
+      {
+        "block_id": "38547b35aaf21ea084d1c6d735edac81",
+        "children": [
+          {
+            "block_id": "38547b35aaf21ea084d1c6d735edac81",
+            "children": [],
+            "end_index": 572,
+            "id": "defc271ba845e594df0cf576715f009c",
+            "level": 2,
+            "original_header_id": 1,
+            "start_index": 71,
+            "subtree_tokens": 108,
+            "summary": {
+              "how": "By utilizing specialized tools like Kong, OAuth2, CQRS, AWS SES, and OpenTelemetry.",
+              "what": "A microservices architecture consisting of five core services for routing, auth, orders, notifications, and analytics.",
+              "when": null,
+              "where": "Within the platform's backend infrastructure.",
+              "who": "Kong, AWS SES, FCM, Grafana, and the platform's core services."
+            },
+            "title": "Microservices Architecture",
+            "token_estimate": 108
+          },
+          {
+            "block_id": "38547b35aaf21ea084d1c6d735edac81",
+            "children": [],
+            "end_index": 751,
+            "id": "9806d145197d120623190ec18d9bcbb1",
+            "level": 2,
+            "original_header_id": 2,
+            "start_index": 572,
+            "subtree_tokens": 31,
+            "summary": {
+              "how": "Via gRPC for synchronous calls and Apache Kafka with Protobuf for asynchronous events.",
+              "what": "Service-to-service communication and event schema management.",
+              "when": null,
+              "where": "Internal service architecture.",
+              "who": "Services and the event schema registry."
+            },
+            "title": "Communication",
+            "token_estimate": 31
+          },
+          {
+            "block_id": "38547b35aaf21ea084d1c6d735edac81",
+            "children": [],
+            "end_index": 924,
+            "id": "260c2f45058e1b486d21cbed3f94ebb5",
+            "level": 2,
+            "original_header_id": 3,
+            "start_index": 751,
+            "subtree_tokens": 32,
+            "summary": {
+              "how": "By containerizing services with Docker, deploying to EKS, managing infrastructure via Terraform, and monitoring with Prometheus and Grafana.",
+              "what": "Service deployment and infrastructure management.",
+              "when": null,
+              "where": "Kubernetes (EKS).",
+              "who": "All services."
+            },
+            "title": "Deployment",
+            "token_estimate": 32
+          }
+        ],
+        "end_index": 924,
+        "id": "590d4a248971fe8e7e04763e4019a00d",
+        "level": 1,
+        "original_header_id": 0,
+        "start_index": 0,
+        "subtree_tokens": 185,
+        "summary": {
+          "how": "By organizing into microservices, establishing communication protocols, and defining deployment strategies.",
+          "what": "A high-level system architecture overview.",
+          "when": null,
+          "where": "Within the system's technical documentation.",
+          "who": "The system's architectural components and infrastructure."
+        },
+        "title": "System Architecture Overview",
+        "token_estimate": 14
+      }
+    ]
+  },
+  "publish_date": "2026-05-16T06:45:26.177896+00:00",
+  "session_id": "e22a10c1-f93c-4059-9e3a-cdf2c52d5958",
+  "status": "active",
+  "summary_version_incorporated": null,
+  "superseded_by": null,
+  "title": "System Architecture Overview",
+  "updated_at": "2026-05-16T06:45:26.178434+00:00",
+  "vault_id": "77230e2b-dd50-4ad4-9e2e-42d4223d0f29"
+}

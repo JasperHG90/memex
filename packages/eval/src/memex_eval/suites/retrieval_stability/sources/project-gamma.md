@@ -2,7 +2,6 @@
 title: Project Gamma Overview
 description: Project Gamma uses Elixir and Phoenix for real-time features.
 tags: [project, elixir]
-vault_name: bench-vault-a
 ---
 
 # Project Gamma — Real-Time Platform

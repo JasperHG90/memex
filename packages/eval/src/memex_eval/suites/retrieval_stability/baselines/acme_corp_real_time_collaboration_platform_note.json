@@ -1,19 +1,19 @@
 {
   "meta": {
-    "schema_version": 1,
+    "schema_version": 2,
     "search_type": "note",
     "top_k": 10
   },
   "ranking": [
-    "project-alpha-kickoff",
-    "widget-pro",
-    "project-alpha-update",
-    "conference-talk",
-    "architecture-overview",
-    "data-platform-architecture",
-    "sarah-chen-tech-decisions",
-    "project-beta-overview",
-    "sarah-chen-profile",
-    "osei-profile"
+    "707c7451-07aa-8f71-8e3a-02b6def8f3d7",
+    "b496f6d0-3187-5c07-ccd2-f5b4eaddc8b0",
+    "9bdbfbac-d88f-dd5e-ccbc-725c05a88536",
+    "d30f4fcd-1e0a-df8f-7c4a-b68bf5b219c8",
+    "c4cbc10b-0239-1c05-c889-7fc9c78b5638",
+    "c53136d9-48df-4970-0a18-d1f87127d988",
+    "a500f347-4331-5727-4adb-b8bb341e6771",
+    "d8907947-4033-c9bd-ea22-ae670c69c758",
+    "40173643-91e7-c01b-e8ea-401293b64674",
+    "176ed498-e7ee-aa0c-b3b8-bacb19827fbe"
   ]
 }

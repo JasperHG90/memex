@@ -1,0 +1,30 @@
+{
+  "alembic_head": "042_drop_note_status_appended",
+  "embedding_model": {
+    "dim": 384,
+    "hash": "main",
+    "name": "JasperHG90/minilm-l12-v2-hindsight-embeddings"
+  },
+  "exported_at": "2026-05-16T06:46:39.598119+00:00",
+  "observation_schema_version": "1",
+  "snapshot_version": "1.2.0",
+  "source_vault_id": "77230e2b-dd50-4ad4-9e2e-42d4223d0f29",
+  "source_vault_name": "eval-suite-retrieval_stability-091cb767",
+  "table_counts": {
+    "chunks": 39,
+    "entities": 404,
+    "entity_aliases": 53,
+    "entity_cooccurrences": 1431,
+    "maintenance_proposals": 0,
+    "memory_links": 460,
+    "memory_units": 168,
+    "mental_models": 0,
+    "nodes": 132,
+    "note_appends": 0,
+    "notes": 39,
+    "procedure_outcomes": 0,
+    "unit_entities": 809,
+    "vault_summaries": 0,
+    "vaults": 1
+  }
+}
