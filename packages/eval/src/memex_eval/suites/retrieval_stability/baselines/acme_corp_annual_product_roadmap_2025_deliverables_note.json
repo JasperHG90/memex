@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "search_type": "note",
+    "top_k": 10
+  },
+  "ranking": [
+    "annual-roadmap-2025",
+    "project-alpha-update",
+    "rodriguez-award",
+    "sarah-chen-profile",
+    "dept-product",
+    "dept-finance",
+    "dept-sales",
+    "dept-customer-success",
+    "dept-security",
+    "dept-engineering"
+  ]
+}

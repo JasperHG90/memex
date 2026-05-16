@@ -1,0 +1,15 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "search_type": "memory",
+    "top_k": 10
+  },
+  "ranking": [
+    "data-platform-architecture",
+    "architecture-overview",
+    "quarterly-review-q2",
+    "project-alpha-kickoff",
+    "sarah-chen-tech-decisions",
+    "project-alpha-update"
+  ]
+}

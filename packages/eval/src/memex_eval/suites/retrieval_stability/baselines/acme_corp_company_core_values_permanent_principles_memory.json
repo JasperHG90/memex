@@ -1,0 +1,18 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "search_type": "memory",
+    "top_k": 10
+  },
+  "ranking": [
+    "dept-data-science",
+    "dept-legal",
+    "dept-engineering",
+    "dept-security",
+    "dept-ai-research",
+    "dept-hr",
+    "dept-finance",
+    "dept-sales",
+    "dept-customer-success"
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "search_type": "note",
+    "top_k": 10
+  },
+  "ranking": [
+    "rodriguez-award",
+    "rodriguez-symposium",
+    "osei-profile",
+    "project-alpha-kickoff",
+    "dept-finance",
+    "team-meeting-notes",
+    "sarah-chen-profile",
+    "project-zeta-incident",
+    "company-core-values",
+    "widget-lite-discontinued"
+  ]
+}

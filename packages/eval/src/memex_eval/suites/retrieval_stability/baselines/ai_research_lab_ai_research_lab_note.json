@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "search_type": "note",
+    "top_k": 10
+  },
+  "ranking": [
+    "conference-talk",
+    "team-meeting-notes",
+    "dept-ai-research",
+    "rodriguez-symposium",
+    "osei-profile",
+    "rodriguez-award",
+    "data-platform-architecture",
+    "dept-security",
+    "dept-product",
+    "dept-sales"
+  ]
+}

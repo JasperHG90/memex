@@ -1,0 +1,14 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "search_type": "memory",
+    "top_k": 10
+  },
+  "ranking": [
+    "project-zeta-achievement",
+    "project-zeta-incident",
+    "project-beta-overview",
+    "sarah-chen-tech-decisions",
+    "project-alpha-kickoff"
+  ]
+}

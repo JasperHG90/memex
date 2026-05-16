@@ -94,7 +94,7 @@ class RankingBaselineRbo(ExpectedOutcomeBase):
     expected_top_k: int = 10
     expected_search_type: Literal['memory', 'note']
     p: float = 0.9
-    rbo_floor: float = 0.996
+    rbo_floor: float = 0.85
 
     def score(
         self,

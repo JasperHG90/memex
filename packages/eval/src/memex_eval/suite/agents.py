@@ -416,7 +416,7 @@ class DirectApiBackend(AnswerBackend):
                         vault_ids=[vault_id],
                     )
                     out.units = list(notes)
-                    out.retrieved_unit_ids = [str(getattr(n, 'id', '')) for n in out.units]
+                    out.retrieved_unit_ids = [str(getattr(n, 'note_id', '')) for n in out.units]
                 else:
                     kwargs: dict[str, Any] = {
                         'query': scenario.query,

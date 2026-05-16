@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "search_type": "note",
+    "top_k": 10
+  },
+  "ranking": [
+    "conference-talk",
+    "team-meeting-notes",
+    "rodriguez-symposium",
+    "sarah-chen-profile",
+    "osei-profile",
+    "rodriguez-award",
+    "project-alpha-kickoff",
+    "project-alpha-update",
+    "standup-jan-15",
+    "dept-ai-research"
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "search_type": "note",
+    "top_k": 10
+  },
+  "ranking": [
+    "project-beta-overview",
+    "sarah-chen-profile",
+    "project-alpha-kickoff",
+    "project-alpha-update",
+    "company-core-values",
+    "project-zeta-incident",
+    "sarah-chen-tech-decisions",
+    "dept-finance",
+    "osei-profile",
+    "widget-lite-discontinued"
+  ]
+}

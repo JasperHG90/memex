@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "search_type": "note",
+    "top_k": 10
+  },
+  "ranking": [
+    "rodriguez-award",
+    "rodriguez-symposium",
+    "osei-profile",
+    "project-zeta-achievement",
+    "team-meeting-notes",
+    "sarah-chen-profile",
+    "dept-security",
+    "annual-roadmap-2025",
+    "widget-lite-discontinued",
+    "company-core-values"
+  ]
+}

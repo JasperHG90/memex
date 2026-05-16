@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "search_type": "note",
+    "top_k": 10
+  },
+  "ranking": [
+    "project-alpha-kickoff",
+    "widget-pro",
+    "project-alpha-update",
+    "data-platform-architecture",
+    "project-zeta-achievement",
+    "architecture-overview",
+    "api-version-beta",
+    "dept-engineering",
+    "sarah-chen-profile",
+    "osei-profile"
+  ]
+}

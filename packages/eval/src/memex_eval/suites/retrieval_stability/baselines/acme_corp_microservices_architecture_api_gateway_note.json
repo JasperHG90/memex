@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "search_type": "note",
+    "top_k": 10
+  },
+  "ranking": [
+    "architecture-overview",
+    "data-platform-architecture",
+    "tech-stack-v2",
+    "sarah-chen-tech-decisions",
+    "project-alpha-update",
+    "project-alpha-kickoff",
+    "sarah-chen-profile",
+    "api-version-beta",
+    "standup-jan-15",
+    "rodriguez-award"
+  ]
+}

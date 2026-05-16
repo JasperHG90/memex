@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "search_type": "note",
+    "top_k": 10
+  },
+  "ranking": [
+    "data-platform-architecture",
+    "dept-data-science",
+    "dept-security",
+    "dept-product",
+    "dept-engineering",
+    "dept-sales",
+    "dept-finance",
+    "dept-hr",
+    "dept-customer-success",
+    "dept-marketing"
+  ]
+}

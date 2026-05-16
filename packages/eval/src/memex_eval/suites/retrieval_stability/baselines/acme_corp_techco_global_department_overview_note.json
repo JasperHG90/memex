@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "search_type": "note",
+    "top_k": 10
+  },
+  "ranking": [
+    "dept-data-science",
+    "dept-marketing",
+    "dept-sales",
+    "dept-product",
+    "dept-hr",
+    "dept-security",
+    "dept-customer-success",
+    "dept-engineering",
+    "dept-finance",
+    "dept-ai-research"
+  ]
+}

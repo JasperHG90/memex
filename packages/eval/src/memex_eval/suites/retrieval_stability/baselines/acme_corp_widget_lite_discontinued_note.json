@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "search_type": "note",
+    "top_k": 10
+  },
+  "ranking": [
+    "widget-lite-discontinued",
+    "widget-pro",
+    "annual-roadmap-2025",
+    "api-version-alpha",
+    "project-zeta-incident",
+    "conference-talk",
+    "tech-stack-v1",
+    "company-core-values",
+    "dept-hr",
+    "osei-profile"
+  ]
+}

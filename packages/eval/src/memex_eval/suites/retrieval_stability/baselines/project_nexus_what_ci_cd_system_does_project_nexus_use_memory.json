@@ -1,0 +1,13 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "search_type": "memory",
+    "top_k": 10
+  },
+  "ranking": [
+    "tech-stack-v2",
+    "tech-stack-v1",
+    "dept-engineering",
+    "sarah-chen-tech-decisions"
+  ]
+}

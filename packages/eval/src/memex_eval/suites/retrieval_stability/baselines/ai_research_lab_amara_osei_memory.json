@@ -1,0 +1,14 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "search_type": "memory",
+    "top_k": 10
+  },
+  "ranking": [
+    "osei-profile",
+    "team-meeting-notes",
+    "rodriguez-symposium",
+    "dept-engineering",
+    "architecture-overview"
+  ]
+}

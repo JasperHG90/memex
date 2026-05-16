@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "search_type": "note",
+    "top_k": 10
+  },
+  "ranking": [
+    "tech-stack-v1",
+    "tech-stack-v2",
+    "project-alpha-kickoff",
+    "project-beta-overview",
+    "architecture-overview",
+    "sarah-chen-tech-decisions",
+    "data-platform-architecture",
+    "project-alpha-update",
+    "project-zeta-achievement",
+    "sarah-chen-profile"
+  ]
+}

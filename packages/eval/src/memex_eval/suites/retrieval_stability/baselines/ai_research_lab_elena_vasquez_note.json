@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "search_type": "note",
+    "top_k": 10
+  },
+  "ranking": [
+    "conference-talk",
+    "team-meeting-notes",
+    "osei-profile",
+    "rodriguez-symposium",
+    "rodriguez-award",
+    "project-zeta-incident",
+    "dept-ai-research",
+    "company-core-values",
+    "widget-lite-discontinued",
+    "api-version-beta"
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "search_type": "note",
+    "top_k": 10
+  },
+  "ranking": [
+    "data-platform-architecture",
+    "architecture-overview",
+    "sarah-chen-profile",
+    "project-alpha-update",
+    "project-alpha-kickoff",
+    "sarah-chen-tech-decisions",
+    "quarterly-review-q2",
+    "project-beta-overview",
+    "dept-engineering",
+    "company-core-values"
+  ]
+}

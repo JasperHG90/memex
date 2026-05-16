@@ -1,0 +1,15 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "search_type": "memory",
+    "top_k": 10
+  },
+  "ranking": [
+    "dept-ai-research",
+    "dept-data-science",
+    "dept-customer-success",
+    "dept-hr",
+    "dept-marketing",
+    "dept-product"
+  ]
+}

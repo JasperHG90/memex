@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "search_type": "note",
+    "top_k": 10
+  },
+  "ranking": [
+    "sarah-chen-profile",
+    "sarah-chen-tech-decisions",
+    "project-alpha-kickoff",
+    "project-alpha-update",
+    "dept-engineering-history",
+    "rodriguez-award",
+    "project-beta-overview",
+    "project-zeta-incident",
+    "company-core-values",
+    "widget-lite-discontinued"
+  ]
+}

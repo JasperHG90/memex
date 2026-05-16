@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "search_type": "memory",
+    "top_k": 10
+  },
+  "ranking": [
+    "dept-engineering",
+    "dept-customer-success",
+    "osei-profile",
+    "dept-sales",
+    "dept-legal",
+    "dept-data-science",
+    "dept-hr",
+    "dept-security",
+    "dept-product",
+    "dept-ai-research"
+  ]
+}

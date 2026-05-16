@@ -1,0 +1,13 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "search_type": "memory",
+    "top_k": 10
+  },
+  "ranking": [
+    "project-beta-overview",
+    "sarah-chen-profile",
+    "project-alpha-kickoff",
+    "project-alpha-update"
+  ]
+}

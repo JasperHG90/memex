@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "search_type": "note",
+    "top_k": 10
+  },
+  "ranking": [
+    "standup-jan-15",
+    "tech-stack-v2",
+    "dept-product",
+    "data-platform-architecture",
+    "dept-customer-success",
+    "dept-engineering-history",
+    "dept-security",
+    "dept-finance",
+    "dept-sales",
+    "dept-engineering"
+  ]
+}

@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "search_type": "note",
+    "top_k": 10
+  },
+  "ranking": [
+    "api-version-alpha",
+    "api-version-beta",
+    "architecture-overview",
+    "tech-stack-v2",
+    "project-alpha-update",
+    "standup-jan-15",
+    "widget-lite-discontinued",
+    "osei-profile",
+    "company-core-values",
+    "dept-legal"
+  ]
+}

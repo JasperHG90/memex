@@ -1,0 +1,19 @@
+{
+  "meta": {
+    "schema_version": 1,
+    "search_type": "note",
+    "top_k": 10
+  },
+  "ranking": [
+    "quarterly-review-q1",
+    "conference-talk",
+    "dept-finance",
+    "dept-product",
+    "dept-sales",
+    "dept-customer-success",
+    "dept-hr",
+    "dept-security",
+    "dept-marketing",
+    "dept-engineering"
+  ]
+}
