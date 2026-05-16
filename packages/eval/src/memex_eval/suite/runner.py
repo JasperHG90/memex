@@ -1775,6 +1775,25 @@ async def run_suite(
                     suite.shipped_snapshot_path,
                     from_snapshot,
                 )
+            elif (
+                reuse_vault is not None
+                and suite.shipped_snapshot_path is not None
+                and suite.shipped_snapshot_path.is_dir()
+            ):
+                # --reuse-vault skips the snapshot-import path entirely
+                # because the reused vault carries its own state. The
+                # gate's baselines were captured against the shipped
+                # snapshot's UUIDs; a reused vault will have different
+                # UUIDs and verify will fail. Surface this so the
+                # operator doesn't waste a full run figuring out why.
+                logger.info(
+                    'Suite %r ships a snapshot at %s but --reuse-vault is '
+                    'set, so the shipped snapshot is bypassed. Baselines '
+                    'captured against the shipped snapshot will NOT match '
+                    "the reused vault's UUIDs; expect verify failures.",
+                    suite.name,
+                    suite.shipped_snapshot_path,
+                )
 
             # Resolve auto cache lookup before deciding the path.
             cache_lookup: '_snapshot_cache.CacheLookup | None' = None

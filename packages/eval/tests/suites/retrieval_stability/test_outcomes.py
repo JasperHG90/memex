@@ -215,6 +215,28 @@ class TestBaselineGuards:
         with pytest.raises(RuntimeError, match='config_pins'):
             outcome.score(ans, _scenario())
 
+    @pytest.mark.parametrize(
+        'null_key',
+        ['top_k', 'search_type', 'schema_version', 'config_pins'],
+    )
+    def test_null_value_on_required_meta_key_raises(self, null_key: str) -> None:
+        """A baseline JSON with ``"top_k": null`` (or any required
+        meta key set to None) bypasses the existing ``is not None``
+        short-circuit guards on the value-comparison checks. The
+        null-value validator must reject these alongside missing keys.
+        """
+        meta: dict[str, object] = {
+            'schema_version': _SCHEMA,
+            'top_k': 10,
+            'search_type': 'memory',
+            'config_pins': {},
+        }
+        meta[null_key] = None
+        outcome = _outcome(baseline=['u1'], baseline_meta=meta)
+        ans = AgentAnswer(retrieved_unit_ids=['u1'])
+        with pytest.raises(RuntimeError, match='null values for required meta keys'):
+            outcome.score(ans, _scenario())
+
     def test_baseline_top_k_mismatch_raises(self) -> None:
         outcome = _outcome(
             baseline=['u1'],

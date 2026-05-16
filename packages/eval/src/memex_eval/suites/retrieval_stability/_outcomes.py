@@ -234,6 +234,17 @@ class RankingBaselineRbo(ExpectedOutcomeBase):
                 f'required meta keys {sorted(missing_meta_keys)}. '
                 f'{recapture}'
             )
+        # Reject ``null`` values on required keys: the value-comparison
+        # guards below use ``is not None`` short-circuit, so a baseline
+        # JSON with ``"top_k": null`` would skip the value check and
+        # score against a meaningless baseline. Treat null-valued meta
+        # the same as missing meta — refuse to score.
+        null_meta_keys = {k for k in required_meta_keys if self.baseline_meta.get(k) is None}
+        if null_meta_keys:
+            raise RuntimeError(
+                f'baseline for {scenario.id} has null values for required '
+                f'meta keys {sorted(null_meta_keys)}. {recapture}'
+            )
         captured_top_k = self.baseline_meta.get('top_k')
         if captured_top_k is not None and captured_top_k != scenario.top_k:
             raise RuntimeError(

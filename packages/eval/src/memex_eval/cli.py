@@ -1252,14 +1252,20 @@ def suite_refresh_snapshot(
         """Restore the stashed snapshot.
 
         ``shutil.move`` into an existing directory would put the backup
-        INSIDE it; rmtree the (possibly partial) shipped dir first so
-        move replaces atomically. Mypy can't narrow ``backup`` through
-        a closure, so re-bind locally.
+        INSIDE it as a subdir; rmtree the (possibly partial) shipped
+        path first so move replaces atomically. Use ``exists()`` (not
+        ``is_dir()``) so the cleanup handles every prior shape — a
+        partial copytree that produced a directory, a stray file, or
+        a symlink. Mypy can't narrow ``backup`` through a closure, so
+        re-bind locally.
         """
         b = backup
         if b is not None and b.is_dir():
-            if shipped.is_dir():
-                shutil.rmtree(shipped)
+            if shipped.exists():
+                if shipped.is_dir() and not shipped.is_symlink():
+                    shutil.rmtree(shipped)
+                else:
+                    shipped.unlink()
             shutil.move(str(b), str(shipped))
             console.print(f'[yellow]Restored prior snapshot from {b.name}.[/yellow]')
 

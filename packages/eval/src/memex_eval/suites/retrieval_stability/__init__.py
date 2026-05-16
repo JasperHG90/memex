@@ -59,9 +59,18 @@ _SOURCE_SUITES_ROOT = _ROOT.parent  # packages/eval/src/memex_eval/suites/
 
 
 def _slugify(text: str, max_len: int = 60) -> str:
-    """Lowercase, collapse non-alphanumeric runs to underscores, truncate."""
+    """Lowercase, collapse non-alphanumeric runs to underscores, truncate.
+
+    Falls back to ``'_unknown'`` for inputs whose slugged form is empty
+    (a query consisting entirely of non-alphanumeric characters, or a
+    truncation that drops every alphanumeric character). Empty slugs
+    would produce scenario ids like ``acme_corp__memory`` with a
+    double underscore and could collide across queries, masking real
+    coverage.
+    """
     slug = re.sub(r'[^a-z0-9]+', '_', text.lower()).strip('_')
-    return slug[:max_len].rstrip('_')
+    slug = slug[:max_len].rstrip('_')
+    return slug or '_unknown'
 
 
 def _scrape_queries_from_suite(corpus: str) -> list[str]:

@@ -225,6 +225,19 @@ class _SeedParagraphsFromSources(SetupActionHandler):
 
         dsn = resolve_database_dsn()
         parsed = urlparse(dsn)
+        # The ``'postgres'`` fallbacks below are testcontainer-convention
+        # defaults so the handler stays usable from its own integration
+        # tests without explicit env wiring. Outside a testcontainer this
+        # would silently authenticate with a hardcoded password if the
+        # DSN is missing one — log a warning so a misconfigured CI
+        # environment is loud, not silent.
+        if not parsed.password:
+            logger.warning(
+                'seed_paragraphs_from_sources: DSN at %s has no password; '
+                "falling back to the testcontainer default 'postgres'. "
+                'If this is not a testcontainer run, fix the DSN.',
+                parsed.hostname or '<unknown host>',
+            )
         meta_config = PostgresMetaStoreConfig(
             instance=PostgresInstanceConfig(
                 host=parsed.hostname or 'localhost',
@@ -235,7 +248,6 @@ class _SeedParagraphsFromSources(SetupActionHandler):
             ),
         )
         metastore = AsyncPostgresMetaStoreEngine(config=meta_config)
-        await metastore.connect()
 
         note_key_to_unit_ids: dict[str, list[str]] = {}
         # INSERT ... ON CONFLICT (id) DO NOTHING honours the
@@ -245,7 +257,12 @@ class _SeedParagraphsFromSources(SetupActionHandler):
         # ``engine.begin()`` rather than ``metastore.session()`` — the
         # SQLModel-wrapped session emits a deprecation warning for
         # non-SELECT statements, which is a false positive for INSERT.
+        # ``connect()`` lives inside the try so a connect-time failure
+        # still routes through ``finally`` to a clean close — the
+        # AsyncPostgresMetaStoreEngine.close() path is idempotent on
+        # an un-connected engine.
         try:
+            await metastore.connect()
             rows = [
                 {
                     'id': unit_id,
