@@ -218,6 +218,23 @@ _OMITTED_QUERIES: frozenset[tuple[str, str]] = frozenset(
 )
 
 
+# Retrieval-pipeline knobs whose values are pinned into every captured
+# baseline's meta block. Mismatch between this dict and a captured
+# baseline raises at verify time with a recapture hint, so changing a
+# knob without recapturing is a loud failure, not a silent re-baseline.
+# The eval client cannot introspect server-side config (out of scope
+# for this PR), so this dict is the authoritative-by-convention pin
+# the suite author updates when they change a knob in production
+# server config. ``'inf'`` is the JSON-safe rendering of ``math.inf``
+# (the default for ``composite_boost_log_clip``).
+_CONFIG_PINS: dict[str, object] = {
+    'composite_boost_log_clip': 'inf',
+    'reranking_mw_alpha': 'default',
+    'reranking_recency_alpha': 'default',
+    'reranking_temporal_alpha': 'default',
+}
+
+
 def _register_query(corpus: str, query: str) -> None:
     """Register a memory + note pair for one (corpus, query)."""
     if (corpus, query) in _OMITTED_QUERIES:
@@ -246,6 +263,7 @@ def _register_query(corpus: str, query: str) -> None:
                 expected_search_type=search_type,  # type: ignore[arg-type]
                 p=0.9,
                 rbo_floor=0.92,
+                config_pins=dict(_CONFIG_PINS),
             ),
         )
 

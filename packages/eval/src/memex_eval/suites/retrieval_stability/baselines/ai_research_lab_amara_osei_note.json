@@ -1,6 +1,12 @@
 {
   "meta": {
-    "schema_version": 2,
+    "config_pins": {
+      "composite_boost_log_clip": "inf",
+      "reranking_mw_alpha": "default",
+      "reranking_recency_alpha": "default",
+      "reranking_temporal_alpha": "default"
+    },
+    "schema_version": 3,
     "search_type": "note",
     "top_k": 10
   },

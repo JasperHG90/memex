@@ -97,11 +97,25 @@ class RankingBaselineRbo(ExpectedOutcomeBase):
     baseline_path: str
     baseline_ranking: list[str]
     baseline_meta: dict[str, Any] = Field(default_factory=dict)
-    schema_version: int = 2  # bumped: ranking now stores raw UUIDs, not note_keys
+    # schema_version 3: meta now carries ``config_pins`` for any
+    # retrieval-pipeline knob whose change should force recapture.
+    # A bump invalidates every prior-version baseline (verify raises
+    # with a clear recapture hint), which is the right behaviour when
+    # the meta contract changes.
+    schema_version: int = 3
     expected_top_k: int = 10
     expected_search_type: Literal['memory', 'note']
     p: float = 0.9
     rbo_floor: float = 0.92
+    # Knob values pinned into the baseline meta. The suite author
+    # updates this dict when they intentionally change a knob; a stale
+    # ``config_pins`` vs. the captured baseline raises at verify time
+    # with a recapture hint. This pins operator discipline: changing a
+    # retrieval knob in production server config without updating
+    # ``config_pins`` here would still pass (the eval client cannot
+    # introspect server-side state without scope creep), so the
+    # contract is: knob change ⇒ update ``config_pins`` + recapture.
+    config_pins: dict[str, Any] = Field(default_factory=dict)
 
     def score(
         self,
@@ -210,6 +224,19 @@ class RankingBaselineRbo(ExpectedOutcomeBase):
                 f'outcome expects {self.schema_version} but baseline JSON '
                 f'is at version {captured_schema}. {recapture}'
             )
+        # Config-knob pinning. The suite author updates ``config_pins``
+        # in __init__.py when a retrieval knob changes; mismatch here
+        # refuses to score until the operator runs the recapture
+        # workflow. ``{}`` on either side is treated as "no pins", not
+        # a wildcard, so schema_version bump is the lever to require
+        # pins on every baseline going forward.
+        captured_pins = self.baseline_meta.get('config_pins')
+        if captured_pins is not None and captured_pins != self.config_pins:
+            raise RuntimeError(
+                f'baseline config_pins mismatch for {scenario.id}: '
+                f'outcome expects {self.config_pins!r} but baseline JSON '
+                f'was captured at {captured_pins!r}. {recapture}'
+            )
 
         rbo = rank_biased_overlap(
             self.baseline_ranking,
@@ -233,6 +260,7 @@ class RankingBaselineRbo(ExpectedOutcomeBase):
                 'schema_version': self.schema_version,
                 'top_k': scenario.top_k,
                 'search_type': scenario.search_type,
+                'config_pins': dict(self.config_pins),
             },
             'ranking': ranking,
         }

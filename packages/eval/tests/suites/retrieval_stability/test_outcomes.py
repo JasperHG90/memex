@@ -30,7 +30,7 @@ from memex_eval.suites.retrieval_stability._outcomes import (
     RankingBaselineRbo,
 )
 
-_SCHEMA = 2
+_SCHEMA = 3
 
 
 def _scenario(
@@ -233,6 +233,54 @@ class TestBaselineGuards:
         with pytest.raises(RuntimeError, match='schema_version mismatch'):
             outcome.score(ans, _scenario())
 
+    def test_config_pins_mismatch_raises(self) -> None:
+        """A baseline captured at one set of knob values must NOT
+        verify against an outcome configured with different knob
+        values — the suite author either restored the prior pins or
+        recaptures. Either way, scoring a stale knob against a new
+        ranking is a silent invalidation we must prevent.
+        """
+        outcome = RankingBaselineRbo(
+            type='ranking_baseline_rbo',
+            baseline_path='/tmp/test-baseline.json',
+            baseline_ranking=['u1'],
+            baseline_meta={
+                'schema_version': _SCHEMA,
+                'top_k': 10,
+                'search_type': 'memory',
+                'config_pins': {'composite_boost_log_clip': '5.0'},
+            },
+            expected_top_k=10,
+            expected_search_type='memory',
+            config_pins={'composite_boost_log_clip': 'inf'},
+        )
+        ans = AgentAnswer(retrieved_unit_ids=['u1'])
+        with pytest.raises(RuntimeError, match='config_pins mismatch'):
+            outcome.score(ans, _scenario())
+
+    def test_config_pins_match_passes(self) -> None:
+        """Matching pins must not raise. Sanity-check the comparison
+        is structural-equality not identity.
+        """
+        pins = {'composite_boost_log_clip': 'inf'}
+        outcome = RankingBaselineRbo(
+            type='ranking_baseline_rbo',
+            baseline_path='/tmp/test-baseline.json',
+            baseline_ranking=['u1'],
+            baseline_meta={
+                'schema_version': _SCHEMA,
+                'top_k': 10,
+                'search_type': 'memory',
+                'config_pins': dict(pins),
+            },
+            expected_top_k=10,
+            expected_search_type='memory',
+            config_pins=dict(pins),
+        )
+        ans = AgentAnswer(retrieved_unit_ids=['u1'])
+        result = outcome.score(ans, _scenario())
+        assert result['pass'] == 1.0
+
 
 # ---------------------------------------------------------------------------
 # Capture mode
@@ -254,6 +302,9 @@ class TestCaptureMode:
         assert payload['meta']['schema_version'] == _SCHEMA
         assert payload['meta']['top_k'] == 10
         assert payload['meta']['search_type'] == 'memory'
+        # ``config_pins`` must round-trip into the persisted meta so a
+        # later verify-against-stale-knobs run can detect mismatch.
+        assert payload['meta']['config_pins'] == {}
 
     def test_truncates_to_top_k_on_capture(self, monkeypatch, tmp_path) -> None:
         monkeypatch.setenv(_CAPTURE_ENV_VAR, '1')

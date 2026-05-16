@@ -1331,12 +1331,22 @@ def suite_refresh_snapshot(
     except BaseException:
         # KeyboardInterrupt, typer.Exit, subprocess failure, copytree
         # failure — all funnel through here. Wrap restore so a
-        # secondary failure (e.g. FS full mid-restore) does NOT mask
-        # the original exception — log and re-raise the original.
+        # secondary failure (e.g. FS full mid-restore, a second SIGINT
+        # while restore is running) does NOT mask the original
+        # exception. Catch BaseException symmetrically with the outer
+        # handler — a narrower ``Exception`` would let SIGINT during
+        # restore swallow the original traceback. Surface restore
+        # failures via the same ``console`` channel the operator is
+        # already watching; ``refresh-snapshot`` doesn't initialize
+        # the stdlib root logger so a bare ``logging.exception(...)``
+        # would land on the lastResort handler and likely be invisible.
         try:
             _restore_if_backup()
-        except Exception:
-            logging.getLogger(__name__).exception('restore failed; original error follows')
+        except BaseException as restore_exc:
+            console.print(
+                f'[red]Restore failed: {type(restore_exc).__name__}: '
+                f'{restore_exc}.[/red] Original error follows.'
+            )
         raise
 
     # Success: snapshot is in place; drop the backup.

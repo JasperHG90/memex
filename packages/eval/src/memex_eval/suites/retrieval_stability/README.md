@@ -97,7 +97,20 @@ MEMEX_EVAL_CAPTURE_BASELINES=1 memex-eval suite run retrieval_stability
 
 The runner auto-imports the shipped snapshot when no explicit `--from-snapshot` is passed (via `Suite.shipped_snapshot_path` set in `__init__.py`). No flag needed for the everyday case.
 
-The outcome's `score()` reads the env var `MEMEX_EVAL_CAPTURE_BASELINES`; in capture mode it persists the current top-k retrieved IDs to `baselines/<scenario_id>.json` (with a `meta` block carrying `schema_version`, `top_k`, `search_type`) and returns `pass=1.0`. In verify mode it loads the baseline, validates the meta against the live scenario+config, then computes RBO. Meta mismatch raises a clear error pointing at recapture.
+The outcome's `score()` reads the env var `MEMEX_EVAL_CAPTURE_BASELINES`; in capture mode it persists the current top-k retrieved IDs to `baselines/<scenario_id>.json` (with a `meta` block carrying `schema_version`, `top_k`, `search_type`, and `config_pins`) and returns `pass=1.0`. In verify mode it loads the baseline and refuses to score on any of these mismatches:
+
+- `top_k` ≠ `scenario.top_k`
+- `search_type` ≠ `scenario.search_type`
+- `schema_version` ≠ outcome's `schema_version`
+- `config_pins` ≠ outcome's `config_pins`
+
+`config_pins` carries the retrieval-pipeline knob values pinned by the suite author (memory-rerank `composite_boost_log_clip`, the three reranker alphas). The eval client cannot introspect server-side config (out of scope for this PR), so the contract is: when a knob changes in production server config, the suite author updates `_CONFIG_PINS` in `__init__.py` AND runs `MEMEX_EVAL_CAPTURE_BASELINES=1` to refresh baselines. A change to either side without the other is a hard verify-time error with a recapture hint.
+
+What is **not** pinned (silent-drift surface; refresh-snapshot on change is operator discipline):
+
+- Cross-encoder reranker model identity (manifest pins embedder only). A reranker swap would still produce ranking drift caught by the RBO floor, so an actual regression surfaces as gate failure, not silent pass.
+- DSPy signature / extraction prompt hash. The snapshot mechanism bypasses re-extraction entirely, so extractor changes do not affect verify runs until the operator runs `refresh-snapshot`.
+- NER model identity. Same reasoning as extraction prompts.
 
 ## Anatomy
 

@@ -95,6 +95,39 @@ class TestGoldUnitIds:
         result = outcome.score(ans, _scenario(), note_key_to_unit_ids={'note-a': ['u1']})
         assert result['recall_at_5'] == 1.0
 
+    def test_fallback_prefers_unit_id_over_source_note_id(self) -> None:
+        """``MemoryUnitDTO`` carries BOTH ``id`` (unit UUID) and
+        ``note_id`` (source-note UUID). The fallback in
+        ``_aggregate_unit_ids`` must return the unit UUID — returning
+        the source-note UUID would silently invalidate every unit-id-
+        keyed baseline. Round-4 swapped the priority; this test pins
+        the contract so a future revert is caught.
+        """
+        from memex_eval.suite.base import _aggregate_unit_ids
+
+        ans = AgentAnswer(
+            units=[
+                SimpleNamespace(text='x', id='unit-uuid-1', note_id='source-note-uuid-A'),
+                SimpleNamespace(text='y', id='unit-uuid-2', note_id='source-note-uuid-A'),
+            ]
+        )
+        assert _aggregate_unit_ids(ans) == ['unit-uuid-1', 'unit-uuid-2']
+
+    def test_fallback_falls_through_to_note_id_when_id_absent(self) -> None:
+        """``NoteSearchResult`` has only ``note_id`` (no ``id``).
+        The fallback must still return that ID so note-search outcomes
+        keep working when ``retrieved_unit_ids`` happens to be empty.
+        """
+        from memex_eval.suite.base import _aggregate_unit_ids
+
+        ans = AgentAnswer(
+            units=[
+                SimpleNamespace(text='', note_id='note-uuid-1'),
+                SimpleNamespace(text='', note_id='note-uuid-2'),
+            ]
+        )
+        assert _aggregate_unit_ids(ans) == ['note-uuid-1', 'note-uuid-2']
+
 
 class TestRankingOrder:
     def test_correct_order_via_units(self) -> None:
