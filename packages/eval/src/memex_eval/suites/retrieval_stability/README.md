@@ -97,7 +97,7 @@ MEMEX_EVAL_CAPTURE_BASELINES=1 memex-eval suite run retrieval_stability
 
 The runner auto-imports the shipped snapshot when no explicit `--from-snapshot` is passed (via `Suite.shipped_snapshot_path` set in `__init__.py`). No flag needed for the everyday case.
 
-The outcome's `score()` reads the env var `MEMEX_EVAL_CAPTURE_BASELINES`; in capture mode it persists the current top-k retrieved IDs to `baselines/<scenario_id>.json` (with a `meta` block carrying `schema_version`, `top_k`, `search_type`, and `config_pins`) and returns `pass=1.0`. In verify mode it loads the baseline and refuses to score on any of these mismatches:
+The outcome's `score()` reads the env var `MEMEX_EVAL_CAPTURE_BASELINES`; in capture mode it persists the current top-k retrieved IDs to `baselines/<scenario_id>.json` (with a `meta` block carrying `schema_version`, `top_k`, `search_type`, and `config_pins`) and returns `pass=1.0`. **Capture mode writes inside the installed suite package** (`<suite_pkg>/baselines/`), so it requires an editable install (`uv sync` from a clone). A wheel install would either silently no-op (read-only directory) or fail with an `OSError`; treat verify as the only safe mode in that environment. In verify mode it loads the baseline and refuses to score on any of these mismatches:
 
 - `top_k` ≠ `scenario.top_k`
 - `search_type` ≠ `scenario.search_type`

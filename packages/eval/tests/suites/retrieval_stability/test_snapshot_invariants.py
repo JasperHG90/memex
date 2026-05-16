@@ -106,6 +106,45 @@ class TestShippedSnapshotPath:
         assert other.shipped_snapshot_path is None
 
 
+class TestScrapedQueryFloor:
+    """Guard against silent-omission regressions in ``_scrape_queries_from_suite``.
+
+    The AST scraper at suite-import time emits a logger.warning when a
+    source suite uses non-literal queries (f-strings, variables), but
+    the warning is invisible if logging is unconfigured. If a refactor
+    in one of the upstream corpora switches a literal ``query='...'``
+    to a dynamic expression, the corresponding scenarios silently
+    vanish from this suite. A hard-floor count test catches this
+    failure mode at CI time rather than at next-capture time.
+    """
+
+    # Floor values reflect the corpus state at PR-merge time. Bump
+    # these when intentionally adding queries to a source suite;
+    # decrease only after explicit operator review of what was lost.
+    _EXPECTED_QUERY_FLOOR: dict[str, int] = {
+        'acme_corp': 36,
+        'ai_research_lab': 7,
+        'project_nexus': 8,
+    }
+
+    @pytest.mark.parametrize(
+        'corpus,floor',
+        sorted(_EXPECTED_QUERY_FLOOR.items()),
+    )
+    def test_scraped_queries_meet_floor(self, corpus: str, floor: int) -> None:
+        from memex_eval.suites.retrieval_stability import _scrape_queries_from_suite
+
+        queries = _scrape_queries_from_suite(corpus)
+        assert len(queries) >= floor, (
+            f'retrieval_stability scraped {len(queries)} queries from '
+            f'corpus {corpus!r}, below the floor of {floor}. Either a '
+            f"source suite refactored a literal `query='...'` into a "
+            f'non-literal expression (silently dropped from the gate), '
+            f'or queries were intentionally removed. Investigate before '
+            f'lowering the floor in this test.'
+        )
+
+
 class TestShippedSnapshotManifest:
     """The shipped snapshot's manifest must match the live alembic head.
 
