@@ -487,6 +487,17 @@ class UnitsService(BaseService):
         joins ergonomically, so this single query stays as ``text(...)``; the
         rest of the path (insert, dedupe) uses SQLModel constructs.
 
+        Lock-hold trade-off: ``FOR UPDATE OF mm SKIP LOCKED`` is held until
+        ``session.commit()`` after the INSERT. This is INTENTIONAL — the row
+        lock blocks concurrent Phase 5 CAS writes from advancing
+        ``mental_models.version`` between our scan and the refresh enqueue,
+        preventing a missed refresh in the race window. The trade-off is that
+        large ``unit_ids`` batches keep the lock for the INSERT's duration;
+        callers should page batches (>100 MUs) to bound the hold. ``SKIP
+        LOCKED`` ensures concurrent flushes don't serialize on the same MMs
+        — whichever flush gets there first wins, the other moves on, and
+        the reconcile-tick pass repairs any missed enqueue.
+
         Returns the number of refresh rows enqueued (after dedupe).
         """
         from memex_core.memory.sql_models import ReflectionQueue, ReflectionStatus

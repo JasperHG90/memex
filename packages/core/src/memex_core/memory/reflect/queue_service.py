@@ -371,6 +371,15 @@ class ReflectionQueueService:
         ``index_where`` uses SQLAlchemy column expressions so the rendered
         predicate matches the migration DDL form character-for-character —
         partial-UNIQUE arbiter inference is text-normalized and finicky.
+
+        Insert-vs-update detection via ``RETURNING (xmax = 0) AS was_insert``:
+        Postgres exposes the row's ``xmax`` system column on a successful
+        DML — for a fresh INSERT, ``xmax`` is 0 (no deleting transaction);
+        for an ON CONFLICT UPDATE, ``xmax`` is the updating xid. This gives
+        a per-row insert/update label without a second query and is the
+        canonical Postgres idiom. Wrapped in ``sql_text(...)`` because the
+        bare ``column('xmax') == 0`` form depends on Postgres-version-
+        sensitive integer-literal coercion.
         """
         if not entity_ids:
             return 0

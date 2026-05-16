@@ -123,13 +123,9 @@ async def periodic_reflection_task(api: 'MemexAPI', batch_size: int):
 
             # 2. Partition by task_type and dispatch refresh BEFORE reflect.
             refresh_items = [
-                item
-                for item in queue_items
-                if getattr(item, 'task_type', 'reflect') == 'refresh_observation'
+                item for item in queue_items if item.task_type == 'refresh_observation'
             ]
-            reflect_items = [
-                item for item in queue_items if getattr(item, 'task_type', 'reflect') == 'reflect'
-            ]
+            reflect_items = [item for item in queue_items if item.task_type == 'reflect']
 
             for item in refresh_items:
                 try:
@@ -150,7 +146,7 @@ async def periodic_reflection_task(api: 'MemexAPI', batch_size: int):
                     # at threshold) and continue to the next refresh item.
                     logger.warning(
                         'Scheduler: refresh_observation failed for obs %s: %s',
-                        getattr(item, 'observation_id', None),
+                        item.observation_id,
                         exc,
                     )
                     await api.mark_queue_item_failed(item, error=str(exc))
