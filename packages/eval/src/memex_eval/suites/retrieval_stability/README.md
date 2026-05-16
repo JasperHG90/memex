@@ -129,6 +129,172 @@ retrieval_stability/
 
 The setup action `seed_paragraphs_from_sources` is shipped as a documented framework-extension example (deterministic paragraph-precision seeding without LLM extraction). The `retrieval_stability` suite does NOT use it — the snapshot import is the determinism mechanism here. The handler is exercised only by its own unit test against a testcontainer Postgres so it stays warm-tested.
 
+## Custom suite elements
+
+Two suite-private framework extensions live alongside the suite definition. Both register at import time via decorators in `__init__.py` (before `suite.register(...)` calls so the decorators fire first):
+
+```python
+from . import _outcomes        # @register_outcome('ranking_baseline_rbo')
+from . import _setup_actions   # @register_setup_action('seed_paragraphs_from_sources')
+```
+
+### `RankingBaselineRbo` (outcome) — `_outcomes.py`
+
+The verification primitive. Compares `answer.retrieved_unit_ids` against a captured baseline ID list via Rank-Biased Overlap (Webber/Moffat/Zobel 2010, `p=0.9`); passes when `RBO ≥ rbo_floor`. Two modes, gated by env:
+
+| Mode | Trigger | Behaviour |
+|---|---|---|
+| Verify (default) | `MEMEX_EVAL_CAPTURE_BASELINES` unset | Load baseline + meta; refuse to score on meta mismatch (`top_k` / `search_type` / `schema_version` / `config_pins` or null-valued required keys); else compute RBO and return `{'rbo': float, 'pass': 0.0 \| 1.0}`. |
+| Capture | `MEMEX_EVAL_CAPTURE_BASELINES=1` | Write the current top-k retrieved IDs to `baseline_path` with a fresh meta block; return `{'rbo': 1.0, 'pass': 1.0}` so the run "passes" while persisting. |
+
+Field summary (Pydantic; see `_outcomes.py` for the full set):
+
+| Field | Type | Purpose |
+|---|---|---|
+| `baseline_path` | `str` | Per-scenario baseline JSON path (suite-local, under `baselines/`). |
+| `baseline_ranking` | `list[str]` | Captured top-k IDs (raw unit/note UUIDs). Empty ⇒ status=error with capture-pending hint. |
+| `baseline_meta` | `dict[str, Any]` | Captured-time meta. Must carry non-null `top_k`, `search_type`, `schema_version`, `config_pins`. |
+| `schema_version` | `int = 3` | Bump when the baseline contract changes (forces recapture across the suite). |
+| `expected_top_k` | `int = 10` | Wiring guard — must equal `scenario.top_k`. |
+| `expected_search_type` | `Literal['memory', 'note']` | Wiring guard — must equal `scenario.search_type`. |
+| `p` | `float = 0.9` | RBO persistence parameter. |
+| `rbo_floor` | `float = 0.92` | Pass threshold. |
+| `config_pins` | `dict[str, Any]` | Author-maintained knob-value pins; mismatch → recapture required. |
+
+Failure modes (verify mode): empty baseline, corrupt JSON, missing required meta keys, null-valued required meta keys, meta-vs-scenario divergence, meta-vs-outcome divergence — all raise `RuntimeError` with a `Recapture with MEMEX_EVAL_CAPTURE_BASELINES=1 ...` hint, surfaced by the runner as `status='error'` rather than `pass=0.0`.
+
+### `seed_paragraphs_from_sources` (setup action) — `_setup_actions.py`
+
+Direct paragraph-precision seeding into `MemoryUnit` rows, bypassing LLM extraction. Shipped as a documented framework-extension example; **`retrieval_stability` itself does NOT use it** (the snapshot import is this suite's determinism mechanism). Reach for it when:
+
+- You need deterministic units across machines without shipping a snapshot fixture.
+- The corpus is short enough that paragraph-precision is the right granularity.
+- Extraction is a feature you want to bypass for the gate (e.g. you're testing a retrieval-only change).
+
+Wire it in from a sibling suite's `__init__.py`:
+
+```python
+from memex_eval.suite import SetupAction
+import memex_eval.suites.retrieval_stability._setup_actions  # noqa: F401 — decorator side-effect
+
+suite.register(
+    id='example',
+    ...,
+    setup_actions=[
+        SetupAction(
+            kind='seed_paragraphs_from_sources',
+            params={
+                'corpus_name': 'my_corpus',         # NUL-free string; mixed into the UUIDv5 namespace
+                'sources_dir': str(_ROOT / 'sources'),
+            },
+        ),
+    ],
+)
+```
+
+Contract:
+
+| Param | Type | Notes |
+|---|---|---|
+| `corpus_name` | `str` (required, NUL-free) | Mixed into the deterministic `uuid5` so two corpora with identical paragraph text get distinct unit IDs. |
+| `sources_dir` | `str` (required, must exist) | Directory of `*.md` files. Non-recursive. Files starting with `_` are skipped (framework convention). |
+
+Returns `{'note_key_to_unit_ids': {<note_key>: [<unit_id_str>, ...], ...}}`. The runner auto-prefixes the publish so downstream outcomes read it from the scenario context as `'seed_paragraphs_from_sources.note_key_to_unit_ids'`.
+
+Determinism guarantees:
+
+- **Unit IDs** are `uuid5(_RANKING_BASELINE_NAMESPACE, f'{corpus}\x00{note_key}\x00{idx}\x00{text}')`. NUL bytes are forbidden in every input field; the namespace is a fixed pinned UUIDv4 (in `_setup_actions.py:_RANKING_BASELINE_NAMESPACE`). Changing the namespace invalidates every seeded unit.
+- **Event date** is pinned at `2020-01-01` so the reranker's recency boost saturates to a constant for every seeded unit.
+- **`required=True`** + **`reusable_under_reuse_vault=True`**: re-running against an already-seeded vault is a no-op via `INSERT ... ON CONFLICT DO NOTHING` on the deterministic IDs.
+
+The handler raises before connecting to Postgres when the DSN has no password unless `MEMEX_EVAL_ALLOW_DEFAULT_POSTGRES_PASSWORD=1` is set (escape hatch for testcontainer setups whose injected DSN format ever changes).
+
+## Bootstrapping the corpus from scratch
+
+The everyday case is verify-against-shipped-baselines (just `memex-eval suite run retrieval_stability`). The from-scratch bootstrap — when you've forked the suite for a new corpus, or the shipped `snapshot/` and `baselines/` are missing — runs once and produces both fixtures.
+
+Prerequisites:
+
+- Editable install from a clone (`uv sync` at repo root). Capture writes inside the installed suite package; a wheel install is read-only.
+- A live Memex server reachable at `MEMEX_EVAL_DEFAULT_SERVER` (or pass `--server`). The server's `MEMEX_SERVER__META_STORE__INSTANCE__*` env must point at the same DSN the eval client resolves (the `refresh-snapshot` command does NOT verify this; misconfiguration silently extracts against the wrong DB).
+- `MEMEX_EVAL_DATABASE_URL` set to the eval Postgres DSN (the snapshot writer drops + recreates this database).
+
+### Step 1 — corpus markdown
+
+```bash
+# Put .md files under sources/ — one note per file, filename stem is the note_key.
+# Frontmatter (YAML between leading --- fences) is supported; body-level horizontal
+# rules MUST NOT start the file (the frontmatter regex would strip them — see
+# _split_into_paragraphs comments).
+ls packages/eval/src/memex_eval/suites/retrieval_stability/sources/*.md | head
+```
+
+### Step 2 — run extraction once, dump the post-state
+
+`refresh-snapshot` is the dump-and-import pipeline as a single subcommand. It:
+
+1. Stashes any existing `snapshot/` to `snapshot.bak.<pid>-<ts>/` (restored on any failure).
+2. Drops + recreates every SQLModel table in the eval DB.
+3. Spawns `python -m memex_eval suite run <name> --from-snapshot auto --reingest` against the live server. Cache miss → ingest + extract + populate the per-machine snapshot cache.
+4. Copies the populated cache slot into `<suite_pkg>/snapshot/` and marks it complete via `_complete.marker`.
+5. Discards the backup on success.
+
+```bash
+memex-eval suite refresh-snapshot retrieval_stability
+# ⚠ DESTRUCTIVE: drops the eval DB. Confirms before proceeding (use --force to skip).
+```
+
+The resulting `snapshot/vaults/_default/manifest.json` pins `alembic_head`, `embedding_model.{name, hash, dim}`, `snapshot_version`, and per-table row counts. The shipped runner verifies the alembic head on import and refuses on mismatch.
+
+### Step 3 — capture baselines against the shipped snapshot
+
+With `snapshot/` populated, the runner auto-imports it before every run (no `--from-snapshot` flag needed). One capture run records the per-scenario top-k retrieved IDs:
+
+```bash
+# Wipe stale baselines if any (a missing file is "capture pending" — no error):
+rm -f packages/eval/src/memex_eval/suites/retrieval_stability/baselines/*.json
+
+# Capture: for every scenario, write the current top-k unit/note IDs to baselines/<scenario_id>.json.
+# Capture-mode scoring is unconditionally pass=1.0, so the run finishes green.
+MEMEX_EVAL_CAPTURE_BASELINES=1 memex-eval suite run retrieval_stability
+```
+
+### Step 4 — verify
+
+```bash
+# Drop the env var to switch back to verify mode. RBO ≥ rbo_floor (0.92) per scenario.
+memex-eval suite run retrieval_stability
+# Expected: 100/100 scenarios pass on the capture machine and reference-architecture clones.
+```
+
+### Step 5 — commit
+
+Snapshot + baselines are a matched pair; commit them together:
+
+```bash
+git add packages/eval/src/memex_eval/suites/retrieval_stability/snapshot/
+git add packages/eval/src/memex_eval/suites/retrieval_stability/baselines/
+git commit -m "feat(eval/retrieval_stability): refresh snapshot + capture baselines"
+```
+
+**Sanity checks before pushing**:
+
+- `git status` shows no `snapshot.bak.*` directory (refresh-snapshot should have cleaned it up).
+- `vaults/_default/manifest.json` `alembic_head` matches the output of `uv run alembic -c packages/core/src/memex_core/alembic.ini heads`.
+- All 100 scenario baselines exist (`ls baselines/*.json | wc -l` reports 100, modulo `_OMITTED_QUERIES`).
+- `uv run pytest packages/eval/tests/suites/retrieval_stability/` is green (snapshot invariants + outcome tests).
+
+### When to repeat which step
+
+| Change | Step 1 | Step 2 (refresh-snapshot) | Step 3 (capture baselines) |
+|---|---|---|---|
+| Edit `sources/*.md` | ✓ | ✓ | ✓ |
+| Alembic migration on exported tables | — | ✓ | ✓ |
+| Extractor / DSPy / page-index change | — | ✓ | ✓ |
+| Embedder model swap | — | ✓ | ✓ |
+| Pure retrieval-knob change (e.g. `composite_boost_log_clip`) | — | — | ✓ (+ update `_CONFIG_PINS`) |
+| Reranker-only code change you want to gate against | — | — | ✓ (against the existing snapshot) |
+
 ## Framework-file edits
 
 This PR mutates files under `packages/eval/src/memex_eval/suite/*`:
