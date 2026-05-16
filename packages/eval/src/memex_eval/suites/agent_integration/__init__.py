@@ -821,6 +821,227 @@ suite.register(
 )
 
 
+# --- KV / hard wake-word triggers (must pass) ---
+# These scenarios test the explicit imperative triggers documented in
+# agent_surface.RETRIEVAL_ROUTING: "Store in KV: <key>=<value>", "KV: get
+# <key>", "KV: search <query>". The agent should execute the matching
+# memex_kv_* call verbatim — bypassing any routing reasoning.
+
+suite.register(
+    id='kv_wakeword_store_user',
+    group='kv',
+    description=(
+        'Hard wake-word write — user: namespace. The agent must call '
+        'memex_kv_write with the exact key the user typed (no namespace '
+        'rewriting, no scope-cue reinterpretation).'
+    ),
+    query='Store in KV: user:editor=Neovim',
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_kv_write'],
+                min_count=1,
+                match_mode='any',
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_kv_write',
+                arg_name='key',
+                regex=r'^user:editor$',
+                min_count=1,
+            ),
+        ],
+    ),
+    replicates_override=1,
+    mutating_scenario=True,
+)
+
+suite.register(
+    id='kv_wakeword_store_project',
+    group='kv',
+    description=(
+        'Hard wake-word write — project:<id>: namespace. Verbatim key '
+        'including the project segment.'
+    ),
+    query='Store in KV: project:eval-suite:lang=Python 3.12',
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_kv_write'],
+                min_count=1,
+                match_mode='any',
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_kv_write',
+                arg_name='key',
+                regex=r'^project:eval-suite:lang$',
+                min_count=1,
+            ),
+        ],
+    ),
+    replicates_override=1,
+    mutating_scenario=True,
+)
+
+suite.register(
+    id='kv_wakeword_store_global',
+    group='kv',
+    description=(
+        'Hard wake-word write — global: namespace. Verbatim key, no demotion to user: or project:.'
+    ),
+    query='Store in KV: global:lang_min=Python 3.12',
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_kv_write'],
+                min_count=1,
+                match_mode='any',
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_kv_write',
+                arg_name='key',
+                regex=r'^global:lang_min$',
+                min_count=1,
+            ),
+        ],
+    ),
+    replicates_override=1,
+    mutating_scenario=True,
+)
+
+suite.register(
+    id='kv_wakeword_store_app',
+    group='kv',
+    description=(
+        'Hard wake-word write — app:<app-id>: namespace. Verbatim key including the app segment.'
+    ),
+    query='Store in KV: app:claude-code:theme=dark',
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_kv_write'],
+                min_count=1,
+                match_mode='any',
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_kv_write',
+                arg_name='key',
+                regex=r'^app:claude-code:theme$',
+                min_count=1,
+            ),
+        ],
+    ),
+    replicates_override=1,
+    mutating_scenario=True,
+)
+
+suite.register(
+    id='kv_wakeword_kv_get',
+    group='kv',
+    description=(
+        'Hard wake-word read: "KV: get <key>" must route to memex_kv_get '
+        'with the exact key the user typed — no fuzzy search, no '
+        'note-search fallback.'
+    ),
+    query='KV: get user:editor',
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_kv_get'],
+                min_count=1,
+                match_mode='any',
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_kv_get',
+                arg_name='key',
+                regex=r'^user:editor$',
+                min_count=1,
+            ),
+        ],
+    ),
+    replicates_override=1,
+    depends_on_prior_scenarios=['kv_wakeword_store_user'],
+)
+
+suite.register(
+    id='kv_wakeword_kv_search',
+    group='kv',
+    description=(
+        'Hard wake-word fuzzy lookup: "KV: search <query>" must route to '
+        'memex_kv_search — not memex_kv_get, not memex_memory_search, not '
+        'memex_note_search.'
+    ),
+    query='KV: search editor preference',
+    max_duration_ms=_DUR_MS,
+    expected=ToolCallContains(
+        type='tool_call_contains',
+        expected_tools=['memex_kv_search'],
+        min_count=1,
+        match_mode='any',
+    ),
+    replicates_override=1,
+    depends_on_prior_scenarios=['kv_wakeword_store_user'],
+)
+
+suite.register(
+    id='kv_wakeword_store_with_ttl',
+    group='kv',
+    description=(
+        'Hard wake-word write with TTL: when the user specifies an '
+        'expiration, the agent must pass ttl_seconds (positive integer) '
+        'to memex_kv_write — not store unexpiring.'
+    ),
+    query='Store in KV: user:current_focus=ticket-456 (expires in 1 hour, ttl_seconds=3600)',
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_kv_write'],
+                min_count=1,
+                match_mode='any',
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_kv_write',
+                arg_name='key',
+                regex=r'^user:current_focus$',
+                min_count=1,
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_kv_write',
+                arg_name='ttl_seconds',
+                regex=r'^[1-9]\d*$',
+                min_count=1,
+            ),
+        ],
+    ),
+    replicates_override=1,
+    mutating_scenario=True,
+)
+
+
 # --- Lifecycle ---
 
 suite.register(
