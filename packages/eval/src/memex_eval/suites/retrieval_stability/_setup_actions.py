@@ -98,12 +98,19 @@ def _split_into_paragraphs(content: str) -> list[str]:
     # Drop a leading YAML frontmatter block. ``\A`` + ``count=1``
     # anchor at the start of the file, so a body-level ``---``
     # horizontal-rule separator inside the markdown is preserved. The
-    # trailing ``\n?`` matches files where the closing ``---`` is the
-    # last line (no terminating newline) — without it the closing
-    # fence would survive as content. Convention: source files MUST
-    # NOT open with ``---\n`` unless they are YAML frontmatter; a
-    # markdown file that opens with a horizontal rule would have its
-    # opening rule + the next ``---`` block stripped.
+    # trailing ``\n?`` is the subtle bit — it makes the closing
+    # newline optional:
+    #   ``---\nkey: v\n---\n<body>``  → strips through the ``\n``
+    #     after the closing fence; ``<body>`` starts cleanly at column
+    #     zero of what was the line after the fence.
+    #   ``---\nkey: v\n---``  (file ends at the fence, no terminating
+    #     newline) → the regex still matches because ``\n?`` accepts
+    #     zero newlines; without the ``?`` the unterminated fence
+    #     would survive into the seeded body as literal ``---``.
+    # Convention: source files MUST NOT open with ``---\n`` unless
+    # they are YAML frontmatter; a markdown file that opens with a
+    # horizontal rule would have its opening rule + the next ``---``
+    # block stripped.
     normalized = re.sub(r'\A---\n.*?\n---\n?', '', normalized, count=1, flags=re.DOTALL)
     normalized = re.sub(r'\n{3,}', '\n\n', normalized.strip())
     blocks = [b.strip() for b in normalized.split('\n\n') if b.strip()]

@@ -108,6 +108,8 @@ The outcome's `score()` reads the env var `MEMEX_EVAL_CAPTURE_BASELINES`; in cap
 
 **A pure knob change does NOT require `refresh-snapshot`** — the snapshot pins extraction state (units, notes, chunks), not retrieval-pipeline configuration. After a knob change, the workflow is: edit `_CONFIG_PINS` → `MEMEX_EVAL_CAPTURE_BASELINES=1 memex-eval suite run retrieval_stability` → commit the updated baselines. Only changes that affect extraction (alembic migration touching exported tables, extractor logic, embedder, corpus) require `refresh-snapshot`.
 
+**Capture mode is single-writer by contract.** Running `MEMEX_EVAL_CAPTURE_BASELINES=1` with `--replicates > 1` (or the framework's parallel-scenario mode if invoked) has two writers racing on the same `baselines/<scenario_id>.json`. `_write_baseline` defends with a PID-suffixed tempfile + an advisory `flock` on the destination (POSIX only — fcntl is a no-op on Windows; not a target for capture). Even so, conceptually only the last successful writer's data lands. Treat capture as a one-shot manual workflow: invoke it once with `--replicates 1` (the default) and let the writer finish before re-running.
+
 What is **not** pinned (silent-drift surface; refresh-snapshot on change is operator discipline):
 
 - Cross-encoder reranker model identity (manifest pins embedder only). A reranker swap would still produce ranking drift caught by the RBO floor, so an actual regression surfaces as gate failure, not silent pass.

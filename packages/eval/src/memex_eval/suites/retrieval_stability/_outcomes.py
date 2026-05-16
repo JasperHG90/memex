@@ -307,19 +307,49 @@ class RankingBaselineRbo(ExpectedOutcomeBase):
             },
             'ranking': ranking,
         }
-        # Atomic write: tempfile in same directory + rename. Without
-        # this a parallelized runner could interleave partial writes
-        # and leave a truncated JSON on disk, which the next verify
-        # run would fail to parse. Clean up the tempfile under any
-        # failure path so a disk-full / permission error doesn't
-        # litter the baselines directory.
-        tmp = path.with_suffix(path.suffix + '.tmp')
+        # Capture-mode race guard. Two concurrent score() calls writing
+        # the same baseline_path (e.g. ``--replicates > 1`` in capture
+        # mode, or the parallel-scenarios runner mode) would both
+        # succeed via the atomic rename, with last-writer-wins
+        # semantics — and the loser's data is silently lost. Per-path
+        # PID-suffixed tempfile + an advisory flock on the destination
+        # serialises writers within a single host so the visible state
+        # is "one consistent run captured this". Capture mode is
+        # operator-driven (env-gated) and runs rarely; the lock
+        # overhead is negligible.
+        import os as _os
+
         try:
+            import fcntl as _fcntl
+        except ImportError:
+            _fcntl = None  # type: ignore[assignment]
+
+        # PID + getpid()-suffixed tempfile makes two concurrent writers
+        # use distinct temp paths, so neither's tempfile clobbers the
+        # other before the rename. Earlier ``.json.tmp`` shared name
+        # was a single-writer assumption; this lifts that.
+        tmp = path.with_suffix(f'{path.suffix}.tmp.{_os.getpid()}')
+        # Lock on the destination path so cross-process writers
+        # serialise on the same lockfile (one path → one lock). Open
+        # the lock file with O_CREAT so the first writer creates it
+        # and subsequent writers reuse it. On Windows fcntl is absent;
+        # the lock is a no-op there (Memex is Linux-first; capture is
+        # not exercised on Windows).
+        lock_path = path.with_suffix(path.suffix + '.lock')
+        lock_fd: int | None = None
+        try:
+            if _fcntl is not None:
+                lock_fd = _os.open(str(lock_path), _os.O_CREAT | _os.O_RDWR, 0o600)
+                _fcntl.flock(lock_fd, _fcntl.LOCK_EX)
             tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n')
             tmp.replace(path)
         except Exception:
             tmp.unlink(missing_ok=True)
             raise
+        finally:
+            if lock_fd is not None:
+                _fcntl.flock(lock_fd, _fcntl.LOCK_UN)  # type: ignore[union-attr]
+                _os.close(lock_fd)
         logger.info(
             'captured baseline for %s → %s (%d ids)',
             scenario.id,

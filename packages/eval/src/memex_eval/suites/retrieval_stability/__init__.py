@@ -94,6 +94,7 @@ def _scrape_queries_from_suite(corpus: str) -> list[str]:
     seen: set[str] = set()
     ordered: list[str] = []
     non_constant_query_count = 0
+    positional_arg_count = 0
     for node in ast.walk(tree):
         if not isinstance(node, ast.Call):
             continue
@@ -106,6 +107,17 @@ def _scrape_queries_from_suite(corpus: str) -> list[str]:
             continue
         if call_name not in {'register', 'scenario'}:
             continue
+        # Positional-arg detection: ``suite.register(id, desc, query, ...)``
+        # would pass ``query`` positionally and bypass the keyword
+        # scraper below. None of the current source suites use this
+        # form (verified by grep), but a future refactor that flips
+        # query from kwarg to positional would silently drop those
+        # scenarios from this gate. Flag positional args on register/
+        # scenario calls so the operator sees a loud warning rather
+        # than a silent shrink. The floor-count test in
+        # ``test_snapshot_invariants.py`` is the second safety net.
+        if node.args:
+            positional_arg_count += 1
         for kw in node.keywords:
             if kw.arg != 'query':
                 continue
@@ -120,6 +132,17 @@ def _scrape_queries_from_suite(corpus: str) -> list[str]:
                 # switches to dynamic query construction doesn't
                 # silently shrink this suite.
                 non_constant_query_count += 1
+    if positional_arg_count:
+        logger.warning(
+            'retrieval_stability: %s had %d `register(...)` or '
+            '`scenario(...)` calls with positional arguments. The '
+            'scraper only walks keyword arguments, so a `query` passed '
+            'positionally is invisible to this gate. Convert to '
+            '`query=...` keyword form, or update the scraper to '
+            'inspect positional args.',
+            src_path,
+            positional_arg_count,
+        )
     if not ordered:
         logger.warning(
             'retrieval_stability: scraped 0 queries from %s — the '

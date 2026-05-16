@@ -327,6 +327,28 @@ async def test_stable_unit_id_rejects_nul_in_text() -> None:
         _stable_unit_id('corpus', 'note', 0, 'paragraph\x00with-nul')
 
 
+async def test_namespace_uuid_is_pinned_to_committed_value() -> None:
+    """Regression guard against accidental namespace UUID regeneration.
+
+    ``_RANKING_BASELINE_NAMESPACE`` is the fixed UUIDv4 used as the
+    namespace for every ``uuid5(NS, ...)`` derivation in this handler.
+    The module-level comment says "DO NOT change it", but a refactor
+    that swaps the literal for ``uuid.uuid4()`` would silently
+    invalidate every baseline across every consumer suite without any
+    other test failing (the UUIDs would still be deterministic per
+    run, just different from the committed ones). This test pins the
+    exact namespace so such a refactor fails at CI rather than at
+    next-capture time.
+    """
+    from uuid import UUID
+
+    from memex_eval.suites.retrieval_stability._setup_actions import (
+        _RANKING_BASELINE_NAMESPACE,
+    )
+
+    assert _RANKING_BASELINE_NAMESPACE == UUID('a8d2b9c4-1e7f-4d3a-9b6e-8c5d4a2f1e3b')
+
+
 async def test_split_strips_frontmatter_without_trailing_newline() -> None:
     """A closing ``---`` on the last line of frontmatter (no trailing
     newline) must still be recognised; otherwise the fence survives
