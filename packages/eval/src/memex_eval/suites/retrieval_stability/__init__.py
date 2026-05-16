@@ -61,16 +61,22 @@ _SOURCE_SUITES_ROOT = _ROOT.parent  # packages/eval/src/memex_eval/suites/
 def _slugify(text: str, max_len: int = 60) -> str:
     """Lowercase, collapse non-alphanumeric runs to underscores, truncate.
 
-    Falls back to ``'_unknown'`` for inputs whose slugged form is empty
-    (a query consisting entirely of non-alphanumeric characters, or a
-    truncation that drops every alphanumeric character). Empty slugs
-    would produce scenario ids like ``acme_corp__memory`` with a
-    double underscore and could collide across queries, masking real
-    coverage.
+    Falls back to ``'_unknown_<sha-prefix>'`` for inputs whose slugged
+    form is empty (queries that are 100% punctuation, or truncations
+    that drop every alphanumeric character). The 8-char SHA-256 prefix
+    disambiguates two empty-slug queries inside the same corpus —
+    without it ``acme_corp / "???"`` and ``acme_corp / "..."`` would
+    both produce ``acme_corp__unknown_memory`` and silently collide,
+    overwriting one scenario's baseline with the other's.
     """
+    import hashlib
+
     slug = re.sub(r'[^a-z0-9]+', '_', text.lower()).strip('_')
     slug = slug[:max_len].rstrip('_')
-    return slug or '_unknown'
+    if not slug:
+        digest = hashlib.sha256(text.encode('utf-8')).hexdigest()[:8]
+        return f'_unknown_{digest}'
+    return slug
 
 
 def _scrape_queries_from_suite(corpus: str) -> list[str]:

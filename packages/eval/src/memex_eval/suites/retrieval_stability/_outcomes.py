@@ -245,23 +245,27 @@ class RankingBaselineRbo(ExpectedOutcomeBase):
                 f'baseline for {scenario.id} has null values for required '
                 f'meta keys {sorted(null_meta_keys)}. {recapture}'
             )
-        captured_top_k = self.baseline_meta.get('top_k')
-        if captured_top_k is not None and captured_top_k != scenario.top_k:
+        # The ``null_meta_keys`` check above ensures every required key
+        # has a non-None value at this point. The ``is not None`` guards
+        # on the comparisons below are therefore redundant; direct
+        # value comparison is sufficient.
+        captured_top_k = self.baseline_meta['top_k']
+        if captured_top_k != scenario.top_k:
             raise RuntimeError(
                 f'baseline meta mismatch for {scenario.id}: '
                 f'scenario.top_k={scenario.top_k} but baseline JSON was '
                 f'captured at top_k={captured_top_k}. {recapture}'
             )
-        captured_search_type = self.baseline_meta.get('search_type')
-        if captured_search_type is not None and captured_search_type != scenario.search_type:
+        captured_search_type = self.baseline_meta['search_type']
+        if captured_search_type != scenario.search_type:
             raise RuntimeError(
                 f'baseline meta mismatch for {scenario.id}: '
                 f'scenario.search_type={scenario.search_type!r} but '
                 f'baseline JSON was captured for '
                 f'{captured_search_type!r}. {recapture}'
             )
-        captured_schema = self.baseline_meta.get('schema_version')
-        if captured_schema is not None and captured_schema != self.schema_version:
+        captured_schema = self.baseline_meta['schema_version']
+        if captured_schema != self.schema_version:
             raise RuntimeError(
                 f'baseline schema_version mismatch for {scenario.id}: '
                 f'outcome expects {self.schema_version} but baseline JSON '
@@ -273,8 +277,8 @@ class RankingBaselineRbo(ExpectedOutcomeBase):
         # workflow. ``{}`` on either side is treated as "no pins", not
         # a wildcard, so schema_version bump is the lever to require
         # pins on every baseline going forward.
-        captured_pins = self.baseline_meta.get('config_pins')
-        if captured_pins is not None and captured_pins != self.config_pins:
+        captured_pins = self.baseline_meta['config_pins']
+        if captured_pins != self.config_pins:
             raise RuntimeError(
                 f'baseline config_pins mismatch for {scenario.id}: '
                 f'outcome expects {self.config_pins!r} but baseline JSON '
