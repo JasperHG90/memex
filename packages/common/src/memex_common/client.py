@@ -41,7 +41,6 @@ from memex_common.schemas import (
     KVProcedureEntryDTO,
     KVPutRequest,
     KVSearchRequest,
-    ProcedureOutcomeDTO,
     LineageResponse,
     LineageDirection,
     SystemStatsCountsDTO,
@@ -661,8 +660,6 @@ class RemoteMemexAPI:
         outcome_confidence: float = 1.0,
         reason: str | None = None,
         *,
-        target_type: str = 'memory_unit',
-        kv_key: str | None = None,
         units: list[dict[str, Any]] | None = None,
         caller_id: str | None = None,
         turn_outcome: str | None = None,
@@ -677,7 +674,6 @@ class RemoteMemexAPI:
         """
         body: dict[str, Any] = {
             'outcome_confidence': outcome_confidence,
-            'target_type': target_type,
         }
         if success is not None:
             body['success'] = success
@@ -689,8 +685,6 @@ class RemoteMemexAPI:
             body['vault_id'] = vault_id
         if reason is not None:
             body['reason'] = reason
-        if kv_key is not None:
-            body['kv_key'] = kv_key
         if caller_id is not None:
             body['caller_id'] = caller_id
         if turn_outcome is not None:
@@ -1299,24 +1293,6 @@ class RemoteMemexAPI:
             if e.response.status_code == 404:
                 return None
             raise
-
-    async def list_top_procedure_outcomes(
-        self,
-        vault_id: str,
-        *,
-        context: str | None = None,
-        limit: int = 5,
-    ) -> list[ProcedureOutcomeDTO]:
-        """Fetch top procedure outcomes for ``vault_id``.
-
-        Rows ranked by Memory Worth score
-        ``(s+1)/(s+f+2)`` descending; tie-broken by ``last_outcome_at``.
-        """
-        params: dict[str, Any] = {'vault_id': vault_id, 'limit': limit}
-        if context is not None:
-            params['context'] = context
-        result = await self._get('kv/procedure-observations', params=params)
-        return [ProcedureOutcomeDTO(**r) for r in result]
 
     async def kv_search(
         self,

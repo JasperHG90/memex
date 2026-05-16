@@ -35,9 +35,6 @@ def test_remember_documents_procedure_namespace_and_kv_write_path():
     assert 'procedure:<verb>:<context-tag>' in text
     # Write side: kv_write is the path for capturing a learned procedure.
     assert 'memex_kv_write' in text
-    # Outcome pairing must close the loop (RFC-007 §155-185).
-    assert 'memex_record_outcome' in text
-    assert 'target_type="kv_key"' in text
 
 
 def test_remember_does_not_advertise_kv_get_include_history():

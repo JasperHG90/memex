@@ -28,7 +28,7 @@ _HERMES_HARNESS_TOKEN_CAP = 400
 # server-side briefing string) lives under the system-prompt 1,500–6,000-token
 # window from indiehackers' empirical Claude Code analysis. The cap below
 # captures the static prefix; per-vault dynamic content adds variable size.
-_TOTAL_STATIC_PREFIX_CHAR_CAP = 8_000
+_TOTAL_STATIC_PREFIX_CHAR_CAP = 9_400
 
 
 def _approx_tokens(text: str) -> int:

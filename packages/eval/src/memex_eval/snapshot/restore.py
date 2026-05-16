@@ -64,7 +64,6 @@ from memex_core.memory.sql_models import (
     Node,
     Note,
     NoteAppend,
-    ProcedureOutcome,
     UnitEntity,
     Vault,
     VaultSummary,
@@ -84,7 +83,6 @@ from memex_eval.snapshot.import_models import (
     NoteAppendImport,
     NoteImport,
     ObservationV1,
-    ProcedureOutcomeImport,
     SnapshotManifestImport,
     UnitEntityImport,
     VaultImport,
@@ -1037,20 +1035,6 @@ class SnapshotImporter:
                     created_at=mp.created_at,
                     resolved_at=mp.resolved_at,
                     resolved_by=mp.resolved_by,
-                )
-            )
-        for raw in _read_jsonl_lines(gov / 'procedure_outcomes.jsonl'):
-            po = ProcedureOutcomeImport.model_validate(raw)
-            await self._session.execute(
-                sa_insert(ProcedureOutcome.__table__).values(  # type: ignore[arg-type]
-                    id=po.id,
-                    vault_id=self._target_vault_id,
-                    kv_key=po.kv_key,
-                    success_co_count=po.success_co_count,
-                    failure_co_count=po.failure_co_count,
-                    last_outcome_at=po.last_outcome_at,
-                    created_at=po.created_at,
-                    updated_at=po.updated_at,
                 )
             )
 

@@ -22,7 +22,7 @@ from memex_common import agent_surface as ags
 # ---------------------------------------------------------------------------
 
 
-_UNIVERSAL_CHAR_CAP = 7_200  # ~2,057 tokens at 3.5 chars/token (empirical cl100k)
+_UNIVERSAL_CHAR_CAP = 8_800  # ~2,514 tokens at 3.5 chars/token (empirical cl100k)
 # Bumped 5,500 → 6,000 when CRITICAL_HEADER / VIRTUAL_UNIT / CRITICAL_FOOTER
 # adopted `<critical_constraint name="…">` XML tags (Anthropic best practice:
 # XML disambiguates load-bearing constraints; the model attends more reliably
@@ -31,14 +31,16 @@ _UNIVERSAL_CHAR_CAP = 7_200  # ~2,057 tokens at 3.5 chars/token (empirical cl100
 # / global / project examples — 4 of 5 KV scenarios failed in the post-fix
 # eval because sonnet was using `Write` to local files instead of
 # `memex_kv_write` and (when it did use KV) picking `user:` for app-scoped
-# settings. The added prose costs ~400 chars; the empirical lift from
-# closing the 4-of-29-scenario gap justifies the cache cost.
-# Bumped 6,500 → 6,800 to strengthen two further triggers that dump
-# inspection showed agents still missed: (a) "<app>" cue overrides "I"/"my"
-# in KV namespace picking (app: was losing to user: in eval); (b) "lock the
-# lesson in" / "record it as a success" → ``memex_record_outcome`` on
-# existing units, NEVER a fresh ``memex_add_note``. Worth the cache cost.
-# Bumped 6,800 → 7,200 when the deprio-leak fix expanded VIRTUAL_UNIT to
+# settings.
+# Bumped 6,500 → 6,800 to strengthen two further triggers: "<app>" cue
+# overrides "I"/"my" in KV namespace picking; "record it as a success" →
+# ``memex_record_outcome`` on existing units, NEVER a fresh ``memex_add_note``.
+# Bumped 6,800 → 8,200 when retrieval-routing and resolution-flow added
+# explicit examples + wake words (KV: get / KV: search / Store in KV:),
+# vault-survey examples, and the outcome-routing constraint with example +
+# wrong-path counterexample. The 4 sections drove the claude-code eval from
+# 0.36 → 0.94 pass rate; the +1.4K chars (cache hit) is justified.
+# Bumped 8,200 → 8,800 when the deprio-leak fix expanded VIRTUAL_UNIT to
 # describe the new HTTP 400 + ``source_memory_units`` contract (observations
 # are read-only projections of MUs; deprio on an observation UUID is
 # redirected to the underlying MU IDs). The expanded prose lands the

@@ -10,7 +10,7 @@ argument-hint: "[what to remember]"
 
 2. **Route by shape, NOT by trigger word** — this is the most important step. Pick the storage layer first:
    - **Preferences / conventions / settings** ("I prefer X", "we use Y in this repo", "for Claude Code: dark theme", "company-wide: Python 3.12") → `memex_kv_write` with the scope-qualifier-derived namespace (`user:`, `project:<id>:`, `app:<app-id>:`, `global:`). See KV-namespace rules in the system prompt. **Do NOT save these as notes.**
-   - **Learned how-tos / procedures** → `memex_kv_write` with `procedure:<verb>:<context-tag>` key, paired with `memex_record_outcome(target_type="kv_key", kv_key=…)`.
+   - **Learned how-tos / procedures** → `memex_kv_write` with `procedure:<verb>:<context-tag>` key. Each write appends a new version; prior versions remain queryable via `memex_kv_get(key, include_history=true)`.
    - **Facts / decisions / context / observations** that belong as a paragraph → `memex_add_note` (or `memex_append_note` to extend an existing note). Use the note-format guidance below.
 
 3. **Note format** (only when step 2 picked `memex_add_note`):
@@ -60,9 +60,8 @@ Bare `success=true`/`success=false` without `units` returns HTTP 400.
 ## Procedure KV
 
 For how-tos, write to `procedure:<verb>:<context-tag>`:
-- Save: `memex_kv_write(value=..., key="procedure:<verb>:<context-tag>")`
-- Read: `memex_kv_get(key)`; history: `memex_kv_get(key, include_history=true)`
-- After USE: `memex_record_outcome(target_type="kv_key", kv_key=..., success=...)`
+- Save: `memex_kv_write(value=..., key="procedure:<verb>:<context-tag>")` — each write appends a new version; prior versions remain in the history envelope.
+- Read: `memex_kv_get(key)` for the active value; `memex_kv_get(key, include_history=true)` for the full envelope.
 
 ## Consolidation
 

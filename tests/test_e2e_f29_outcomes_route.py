@@ -55,29 +55,6 @@ def _seed_unit(postgres_url: str) -> tuple[UUID, UUID]:
         loop.close()
 
 
-def _seed_kv_entry(postgres_url: str, key: str) -> None:
-    """Insert a kv_entries row so procedure_outcomes' FK to kv_entries.key is satisfied."""
-    dsn = postgres_url.replace('postgresql+asyncpg://', 'postgresql://')
-
-    async def _seed() -> None:
-        conn = await asyncpg.connect(dsn)
-        try:
-            await conn.execute(
-                'INSERT INTO kv_entries (id, key, value, created_at, updated_at) '
-                'VALUES (gen_random_uuid(), $1, $2, NOW(), NOW())',
-                key,
-                '{"description": "f29 test"}',
-            )
-        finally:
-            await conn.close()
-
-    loop = asyncio.new_event_loop()
-    try:
-        loop.run_until_complete(_seed())
-    finally:
-        loop.close()
-
-
 def _read_unit_counters(postgres_url: str, unit_id: UUID) -> tuple[int, int]:
     dsn = postgres_url.replace('postgresql+asyncpg://', 'postgresql://')
 
@@ -118,7 +95,6 @@ def test_memory_unit_success_increments_counter(client: TestClient, postgres_url
             'success': True,
             'unit_ids': [str(unit_id)],
             'vault_id': str(vault_id),
-            'target_type': 'memory_unit',
         },
     )
     assert resp.status_code == 200, resp.text
@@ -148,36 +124,6 @@ def test_memory_unit_failure_increments_failure_counter(client: TestClient, post
 
 
 # ---------------------------------------------------------------------------
-# kv_key happy path (F14)
-# ---------------------------------------------------------------------------
-
-
-@pytest.mark.integration
-def test_kv_key_mode_writes_procedure_outcomes_row(client: TestClient, postgres_url: str):
-    """kv_key mode: increments procedure_outcomes counters and returns the row."""
-    _, vault_id = _seed_unit(postgres_url)
-    kv_key = f'procedure:test-verb:f29-{uuid4().hex[:8]}'
-    _seed_kv_entry(postgres_url, kv_key)
-
-    resp = client.post(
-        '/api/v1/outcomes/record',
-        json={
-            'success': True,
-            'kv_key': kv_key,
-            'vault_id': str(vault_id),
-            'target_type': 'kv_key',
-        },
-    )
-    assert resp.status_code == 200, resp.text
-    body = resp.json()
-    assert body['kv_key'] == kv_key
-    assert body['vault_id'] == str(vault_id)
-    assert body['success_co_count'] == 1
-    assert body['failure_co_count'] == 0
-    assert body.get('last_outcome_at') is not None
-
-
-# ---------------------------------------------------------------------------
 # Bad inputs
 # ---------------------------------------------------------------------------
 
@@ -198,36 +144,43 @@ def test_unknown_vault_returns_400(client: TestClient):
 
 
 @pytest.mark.integration
-def test_memory_unit_mode_without_unit_ids_returns_400(client: TestClient, postgres_url: str):
-    """memory_unit mode without unit_ids → 400 (caller error, not 500)."""
+def test_record_outcome_without_unit_ids_returns_400(client: TestClient, postgres_url: str):
+    """Without unit_ids → 400 (caller error, not 500)."""
     _, vault_id = _seed_unit(postgres_url)
     resp = client.post(
         '/api/v1/outcomes/record',
         json={
             'success': True,
             'vault_id': str(vault_id),
-            'target_type': 'memory_unit',
         },
     )
     assert resp.status_code == 400
-    assert 'memory_unit' in resp.json()['detail']
 
 
 @pytest.mark.integration
-def test_kv_key_mode_with_unit_ids_returns_400(client: TestClient, postgres_url: str):
-    """Mixing modes (kv_key + unit_ids) is rejected — silent counter divergence guard."""
+@pytest.mark.parametrize(
+    'extras',
+    [
+        {'target_type': 'kv_key'},
+        {'kv_key': 'procedure:foo:bar'},
+        {'target_type': 'kv_key', 'kv_key': 'procedure:foo:bar'},
+    ],
+    ids=['target_type_only', 'kv_key_only', 'both'],
+)
+def test_legacy_target_type_kv_key_rejected(client: TestClient, postgres_url: str, extras: dict):
+    """Stale clients sending the removed target_type='kv_key' or kv_key= fields
+    must be rejected (422) — not silently passed through as a memory_unit call."""
     unit_id, vault_id = _seed_unit(postgres_url)
     resp = client.post(
         '/api/v1/outcomes/record',
         json={
             'success': True,
             'unit_ids': [str(unit_id)],
-            'kv_key': 'procedure:foo:bar',
             'vault_id': str(vault_id),
-            'target_type': 'kv_key',
+            **extras,
         },
     )
-    assert resp.status_code == 400
+    assert resp.status_code == 422, resp.text
 
 
 @pytest.mark.integration

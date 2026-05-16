@@ -42,7 +42,6 @@ from memex_core.memory.sql_models import (
     Node,
     Note,
     NoteAppend,
-    ProcedureOutcome,
     UnitEntity,
     Vault,
     VaultSummary,
@@ -61,7 +60,6 @@ from memex_core.services.snapshot.export_models import (
     NodeExport,
     NoteAppendExport,
     NoteExport,
-    ProcedureOutcomeExport,
     UnitEntityExport,
     VaultExport,
     VaultSummaryExport,
@@ -673,12 +671,6 @@ class SnapshotExporter:
             'maintenance_proposals',
             self._proposal_to_export,
         )
-        await self._dump_jsonl(
-            gov / 'procedure_outcomes.jsonl',
-            select(ProcedureOutcome).where(ProcedureOutcome.vault_id == vid),
-            'procedure_outcomes',
-            self._outcome_to_export,
-        )
 
     # ------------------------------------------------------------------
     # Per-row converters (kept tiny — Pydantic does the heavy lifting)
@@ -819,19 +811,6 @@ class SnapshotExporter:
             created_at=row.created_at,
             resolved_at=row.resolved_at,
             resolved_by=row.resolved_by,
-        )
-
-    @staticmethod
-    def _outcome_to_export(row: ProcedureOutcome) -> ProcedureOutcomeExport:
-        return ProcedureOutcomeExport(
-            id=row.id,
-            vault_id=row.vault_id,
-            kv_key=row.kv_key,
-            success_co_count=row.success_co_count,
-            failure_co_count=row.failure_co_count,
-            last_outcome_at=row.last_outcome_at,
-            created_at=row.created_at,
-            updated_at=row.updated_at,
         )
 
     # ------------------------------------------------------------------

@@ -1,13 +1,12 @@
 """Outcome recording endpoint.
 
-HTTP wire surface for ``MemexAPI.record_outcome`` (ADD-2). Required so
-remote clients (the Hermes plugin via ``RemoteMemexAPI``) can train Memory Worth
-scoring on memory units or procedure KV keys. The MCP tool calls
-``api.record_outcome`` in-process; this route gives non-in-process clients
-the same surface.
+HTTP wire surface for ``MemexAPI.record_outcome``. Required so remote
+clients (the Hermes plugin via ``RemoteMemexAPI``) can train Memory Worth
+scoring on memory units. The MCP tool calls ``api.record_outcome``
+in-process; this route gives non-in-process clients the same surface.
 
 Routes:
-- POST /api/v1/outcomes/record  — record an outcome (memory_unit or kv_key mode)
+- POST /api/v1/outcomes/record  — record an outcome against memory units
 """
 
 from __future__ import annotations
@@ -16,7 +15,7 @@ import logging
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from memex_common.config import Permission
 from memex_common.exceptions import MemexError
@@ -49,26 +48,30 @@ class UnitOutcomePayload(BaseModel):
 
 
 class RecordOutcomeRequest(BaseModel):
+    # Reject unknown fields. Procedure-MW had `target_type` / `kv_key` here;
+    # they were dropped, and stale clients passing them must get 422 rather
+    # than have the values silently ignored.
+    model_config = ConfigDict(extra='forbid')
+
     success: bool | None = Field(
         default=None,
         description=(
-            'kv_key mode only or legacy memory_unit shape (FutureWarning). '
-            'True if the task succeeded using these memories or this procedure.'
+            'Legacy shape (FutureWarning). True if the task succeeded using these memories.'
         ),
     )
     units: list[UnitOutcomePayload] | None = Field(
         default=None,
         description=(
-            'Preferred memory_unit shape. Per-unit verb classifications '
+            'Preferred shape. Per-unit verb classifications '
             '(helpful / not_helpful / not_used) with a reason.'
         ),
     )
     unit_ids: list[str] | None = Field(
         default=None,
         description=(
-            'Legacy memory_unit shape (FutureWarning). UUIDs of memory units '
-            'that were load-bearing in the reasoning. Required only when '
-            "target_type='memory_unit' and `units` is not supplied."
+            'Legacy shape (FutureWarning). UUIDs of memory units that were '
+            'load-bearing in the reasoning. Required only when `units` is '
+            'not supplied.'
         ),
     )
     vault_id: str | None = Field(
@@ -84,21 +87,6 @@ class RecordOutcomeRequest(BaseModel):
     reason: str | None = Field(
         default=None,
         description='Optional free-text reason (logged, not stored on units).',
-    )
-    target_type: str = Field(
-        default='memory_unit',
-        description=(
-            "What the outcome scores. 'memory_unit' increments Memory Worth counters on "
-            "the memory units in unit_ids. 'kv_key' increments counters "
-            'on the procedure_outcomes row for kv_key.'
-        ),
-    )
-    kv_key: str | None = Field(
-        default=None,
-        description=(
-            'kv_key mode only. Procedure KV key (procedure:<verb>:<context-tag>). '
-            "Required when target_type='kv_key'."
-        ),
     )
     caller_id: str | None = Field(
         default=None,
@@ -125,7 +113,7 @@ async def post_record_outcome(
     api: Annotated[MemexAPI, Depends(get_api)],
     auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ) -> dict[str, Any]:
-    """Record an outcome for memory units or a procedure key.
+    """Record an outcome for memory units.
 
     Mirrors :meth:`MemexAPI.record_outcome`; preserves the ADD-2 contract
     (positional ``unit_ids``, ``success`` at the in-process call site).
@@ -156,8 +144,6 @@ async def post_record_outcome(
             resolved_vault,
             body.outcome_confidence,
             body.reason,
-            target_type=body.target_type,
-            kv_key=body.kv_key,
             units=units_payload,
             caller_id=body.caller_id,
             turn_outcome=body.turn_outcome,
@@ -165,8 +151,8 @@ async def post_record_outcome(
             exploration_tagged=body.exploration_tagged,
         )
     except ValueError as exc:
-        # OutcomeService raises ValueError for missing unit_ids / kv_key /
-        # vault_id and for invalid target_type. These are caller errors.
+        # OutcomeService raises ValueError for missing unit_ids / vault_id.
+        # These are caller errors.
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except (MemexError, KeyError, RuntimeError, OSError) as exc:
         raise _handle_error(exc, 'Failed to record outcome')

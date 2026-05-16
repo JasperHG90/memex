@@ -257,14 +257,3 @@ class MaintenanceProposalExport(_ExportBase):
     created_at: datetime
     resolved_at: datetime | None = None
     resolved_by: str | None = None
-
-
-class ProcedureOutcomeExport(_ExportBase):
-    id: UUID
-    vault_id: UUID
-    kv_key: str
-    success_co_count: int
-    failure_co_count: int
-    last_outcome_at: datetime | None = None
-    created_at: datetime
-    updated_at: datetime

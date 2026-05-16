@@ -3405,7 +3405,7 @@ __all__ = [
     # --- F4 (WS-quick-wins) ---
     'MEMORY_DEPRIORITIZE_SCHEMA',
     'MEMORY_RESTORE_SCHEMA',
-    # --- F14 / F29 record_outcome (WS-quick-wins) ---
+    # --- record_outcome ---
     'RECORD_OUTCOME_SCHEMA',
     # --- F49 contradiction-graph timeline ---
     'GET_UNIT_HISTORY_SCHEMA',
@@ -3693,7 +3693,7 @@ HANDLERS['memex_memory_summarize_node'] = handle_memory_summarize_node
 ALL_SCHEMAS.append(MEMORY_SUMMARIZE_NODE_SCHEMA)
 
 
-# --- F14 / F29 record_outcome --- (WS-quick-wins; fills the F14 ADD-2 Hermes gap)
+# --- record_outcome ---
 
 RECORD_OUTCOME_SCHEMA: dict[str, Any] = {
     'name': 'memex_record_outcome',
@@ -3704,9 +3704,8 @@ RECORD_OUTCOME_SCHEMA: dict[str, Any] = {
             'success': {
                 'type': 'boolean',
                 'description': (
-                    'kv_key mode only or legacy memory_unit shape '
-                    '(FutureWarning). True/false. Prefer the per-unit `units` '
-                    'parameter for memory_unit mode.'
+                    'Legacy shape (FutureWarning). True/false. Prefer the '
+                    'per-unit `units` parameter.'
                 ),
             },
             'units': {
@@ -3724,15 +3723,14 @@ RECORD_OUTCOME_SCHEMA: dict[str, Any] = {
                     'required': ['unit_id', 'verb'],
                 },
                 'description': (
-                    'memory_unit mode. Per-unit verb classifications. `reason` '
-                    'is required for helpful and not_helpful, optional for '
-                    'not_used.'
+                    'Per-unit verb classifications. `reason` is required for '
+                    'helpful and not_helpful, optional for not_used.'
                 ),
             },
             'unit_ids': {
                 'type': 'array',
                 'items': {'type': 'string'},
-                'description': ('Legacy memory_unit shape (FutureWarning). Prefer `units`.'),
+                'description': ('Legacy shape (FutureWarning). Prefer `units`.'),
             },
             'vault_id': {
                 'type': 'string',
@@ -3747,22 +3745,6 @@ RECORD_OUTCOME_SCHEMA: dict[str, Any] = {
             'reason': {
                 'type': 'string',
                 'description': 'Optional free-text reason (logged, not stored on units).',
-            },
-            'target_type': {
-                'type': 'string',
-                'enum': ['memory_unit', 'kv_key'],
-                'description': (
-                    "What the outcome scores. 'memory_unit' (default) increments "
-                    "MW counters on memory units in units/unit_ids. 'kv_key' "
-                    'increments counters on the procedure_outcomes row for kv_key.'
-                ),
-            },
-            'kv_key': {
-                'type': 'string',
-                'description': (
-                    'kv_key mode only. Procedure KV key '
-                    "(procedure:<verb>:<context-tag>). Required when target_type='kv_key'."
-                ),
             },
             'retrieved_set_size': {
                 'type': 'integer',
@@ -3791,21 +3773,36 @@ RECORD_OUTCOME_SCHEMA: dict[str, Any] = {
 }
 
 
+_RECORD_OUTCOME_ALLOWED_KEYS: frozenset[str] = frozenset(
+    {
+        'success',
+        'units',
+        'unit_ids',
+        'vault_id',
+        'outcome_confidence',
+        'reason',
+        'retrieved_set_size',
+        'caller_id',
+        'turn_outcome',
+        'exploration_tagged',
+    }
+)
+
+
 def handle_record_outcome(
     api: MemexAPIProtocol,
     config: HermesMemexConfig,
     vault_id: UUID | None,
     args: dict[str, Any],
 ) -> str:
-    """Dual-mode dispatcher (memory_unit / kv_key).
+    """Record outcome on memory units.
 
     Accepts the per-unit ``units`` shape (preferred) or the legacy
-    ``(unit_ids, success)`` shape (FutureWarning) for memory_unit mode.
-    kv_key mode still uses ``success``.
+    ``(unit_ids, success)`` shape (FutureWarning).
     """
-    target_type = args.get('target_type', 'memory_unit')
-    if target_type not in ('memory_unit', 'kv_key'):
-        return tool_error(f"target_type must be 'memory_unit' or 'kv_key', got {target_type!r}")
+    unknown = set(args) - _RECORD_OUTCOME_ALLOWED_KEYS
+    if unknown:
+        return tool_error(f'unknown args: {sorted(unknown)}')
 
     units = args.get('units')
     if units is not None and not isinstance(units, list):
@@ -3824,17 +3821,10 @@ def handle_record_outcome(
     else:
         return tool_error(f"'success' must be a boolean, got {type(success_raw).__name__}")
 
-    if target_type == 'memory_unit' and units is None and unit_ids is None:
+    if units is None and unit_ids is None:
         return tool_error(
-            "memory_unit mode requires either 'units' (preferred) or "
-            "legacy ('unit_ids' + 'success')."
+            "record_outcome requires either 'units' (preferred) or legacy ('unit_ids' + 'success')."
         )
-    if target_type == 'kv_key' and success is None:
-        return tool_error("kv_key mode requires the 'success' boolean.")
-
-    kv_key = args.get('kv_key')
-    if kv_key is not None and not isinstance(kv_key, str):
-        return tool_error("'kv_key' must be a string")
 
     raw_vault = args.get('vault_id')
     target_vault: str | None
@@ -3868,8 +3858,6 @@ def handle_record_outcome(
                 target_vault,
                 outcome_confidence,
                 reason,
-                target_type=target_type,
-                kv_key=kv_key,
                 units=units,
                 caller_id=caller_id,
                 turn_outcome=turn_outcome,

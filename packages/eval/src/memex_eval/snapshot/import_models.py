@@ -224,17 +224,6 @@ class MaintenanceProposalImport(_ImportBase):
     resolved_by: str | None = None
 
 
-class ProcedureOutcomeImport(_ImportBase):
-    id: UUID
-    vault_id: UUID
-    kv_key: str
-    success_co_count: int
-    failure_co_count: int
-    last_outcome_at: datetime | None = None
-    created_at: datetime
-    updated_at: datetime
-
-
 class EmbeddingModelIdentityImport(_ImportBase):
     """Mirror of ``EmbeddingModelIdentity`` with forward-compat."""
 

@@ -1619,15 +1619,13 @@ class MemexAPI:
         outcome_confidence: float = 1.0,
         reason: str | None = None,
         *,
-        target_type: str = 'memory_unit',
-        kv_key: str | None = None,
         units: list[UnitOutcome] | list[dict[str, Any]] | None = None,
         caller_id: str | None = None,
         turn_outcome: str | None = None,
         retrieved_set_size: int | None = None,
         exploration_tagged: bool = False,
     ) -> dict[str, Any]:
-        """Record an outcome. Delegates to OutcomeService.
+        """Record an outcome against memory units. Delegates to OutcomeService.
 
         Two accepted shapes for ``units``:
 
@@ -1638,10 +1636,6 @@ class MemexAPI:
 
         Legacy ``(unit_ids, success)`` shape still accepted with a
         FutureWarning.
-
-        For ``target_type='kv_key'``, increments the vault-scoped
-        success/failure counters on ``procedure_outcomes`` for ``kv_key``
-        instead of memory units.
         """
         half_life = self.config.server.memory.retrieval.mw_ema_half_life_days
         coverage_mode = self.config.server.memory.outcomes.coverage_check_mode
@@ -1653,8 +1647,6 @@ class MemexAPI:
                 vault_id=vault_id,
                 outcome_confidence=outcome_confidence,
                 reason=reason,
-                target_type=target_type,
-                kv_key=kv_key,
                 mw_ema_half_life_days=half_life,
                 units=units,
                 caller_id=caller_id,
@@ -2011,18 +2003,6 @@ class MemexAPI:
         """Semantic search over KV entries. Delegates to KVService."""
         return await self._kv.search(
             query_embedding=query_embedding, namespaces=namespaces, limit=limit
-        )
-
-    async def list_top_procedure_outcomes(
-        self,
-        vault_id: str | UUID,
-        *,
-        context: str | None = None,
-        limit: int = 5,
-    ) -> list[dict[str, Any]]:
-        """Top procedure outcomes for a vault, ranked by Memory Worth score."""
-        return await self._kv.list_top_procedure_outcomes(
-            vault_id=vault_id, context=context, limit=limit
         )
 
     async def kv_delete(self, key: str) -> bool:

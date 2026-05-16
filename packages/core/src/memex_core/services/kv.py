@@ -30,7 +30,6 @@ import logging
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from uuid import UUID
 
 from sqlalchemy import text
 from sqlmodel import col, or_, select
@@ -335,76 +334,6 @@ class KVService(BaseService):
                     entry.value = parsed['value']
 
             return entry
-
-    async def list_top_procedure_outcomes(
-        self,
-        vault_id: str | UUID,
-        *,
-        context: str | None = None,
-        limit: int = 5,
-    ) -> list[dict[str, Any]]:
-        """Top procedure outcomes for a vault, ranked by Memory Worth.
-
-        Returns up to ``limit`` rows from ``procedure_outcomes`` joined to
-        ``kv_entries`` for the given ``vault_id``, ordered by
-        ``compute_mw_score(success_co_count, failure_co_count) DESC`` and
-        tie-broken by ``last_outcome_at DESC NULLS LAST``. The Memory Worth score is
-        computed in-database with the SAME Beta-Bernoulli formula as
-        :func:`memex_core.services.outcomes.compute_mw_score`
-        (``(s + 1) / (s + f + 2)``).
-
-        If ``context`` is provided, narrow results to procedure keys whose
-        context-tag contains it (substring match on the third
-        ``procedure:<verb>:<context-tag>`` segment).
-        """
-        if limit <= 0:
-            return []
-        if not isinstance(vault_id, UUID):
-            try:
-                vault_uuid: UUID = UUID(str(vault_id))
-            except ValueError as exc:
-                raise ValueError(f'Invalid vault_id: {vault_id}') from exc
-        else:
-            vault_uuid = vault_id
-
-        # Memory Worth score formula MUST match compute_mw_score: (s+1)/(s+f+2).
-        sql = (
-            'SELECT '
-            '  po.kv_key, '
-            '  po.success_co_count, '
-            '  po.failure_co_count, '
-            '  ((po.success_co_count + 1)::float / '
-            '   (po.success_co_count + po.failure_co_count + 2)::float) AS mw_score, '
-            '  po.last_outcome_at '
-            'FROM procedure_outcomes po '
-            'JOIN kv_entries kv ON kv.key = po.kv_key '
-            'WHERE po.vault_id = :vid '
-        )
-        params: dict[str, Any] = {'vid': vault_uuid, 'lim': limit}
-        if context:
-            # context-tag is the segment after the last colon. Escape ILIKE
-            # metacharacters in the user-supplied value so '%' / '_' are
-            # treated literally; the ESCAPE clause uses '\' as the escape
-            # character (doubled in the Python string for SQL literal '\\').
-            escaped_context = context.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
-            sql += "AND split_part(po.kv_key, ':', 3) ILIKE :ctx ESCAPE '\\' "
-            params['ctx'] = f'%{escaped_context}%'
-        sql += 'ORDER BY mw_score DESC, po.last_outcome_at DESC NULLS LAST, po.kv_key LIMIT :lim'
-
-        async with self.metastore.session() as session:
-            result = await session.execute(text(sql), params)
-            rows = result.all()
-
-        return [
-            {
-                'kv_key': r[0],
-                'success_co_count': int(r[1]),
-                'failure_co_count': int(r[2]),
-                'mw_score': float(r[3]),
-                'last_outcome_at': r[4],
-            }
-            for r in rows
-        ]
 
     async def search(
         self,

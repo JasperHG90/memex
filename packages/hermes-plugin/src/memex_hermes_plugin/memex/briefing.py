@@ -103,7 +103,6 @@ def format_briefing_block(
     session_note_key: str,
     kv_instructions_if_no_vault: bool,
     diagnostics_summary: dict[str, Any] | None = None,
-    procedural_observations: list[dict[str, Any]] | None = None,
     lint_pending_count: int | None = None,
     lint_pending_winner_proposals: int | None = None,
 ) -> str:
@@ -131,9 +130,6 @@ def format_briefing_block(
         lines.append(
             f'\nTo bind this project to a vault, set `{project_vault_kv_key(project_id)}` to the vault name. Ask the user which vault to use.'
         )
-
-    if procedural_observations:
-        lines.append('\n' + _render_procedural_block(procedural_observations))
 
     if lint_pending_count is not None and lint_pending_count > 0:
         lines.append(
@@ -176,31 +172,6 @@ def _render_lint_block(
             f'- {pending_winner_proposals} have proposed winners. '
             'Apply with `memex_lint_apply_winner` after surfacing to the user.'
         )
-    return '\n'.join(lines)
-
-
-def _render_procedural_block(observations: list[dict[str, Any]]) -> str:
-    lines = ['### Learned procedures (recent)']
-    if not observations:
-        lines.append(
-            '- No procedure keys recorded yet. Write to `procedure:<verb>:<context-tag>` '
-            'keys and record outcomes.'
-        )
-        return '\n'.join(lines)
-
-    for obs in observations[:5]:
-        key = obs.get('kv_key', '?')
-        succ = int(obs.get('success_co_count', 0))
-        fail = int(obs.get('failure_co_count', 0))
-        last = obs.get('last_outcome_at')
-        last_str = f' · last: {last}' if last else ''
-        lines.append(f'- `{key}` — {succ} success / {fail} failure{last_str}')
-
-    lines.append(
-        'Read active value with `memex_kv_get(key)`; pair every use with '
-        '`memex_record_outcome(target_type="kv_key", kv_key=..., success=...)`. '
-        'Inspect envelope with `memex_kv_get(key, include_history=true)`.'
-    )
     return '\n'.join(lines)
 
 

@@ -21,7 +21,6 @@ from uuid import UUID
 
 import structlog
 from pydantic import BaseModel, Field, ValidationError, model_validator
-from sqlalchemy.exc import IntegrityError
 from sqlmodel import select, update
 from sqlmodel.ext.asyncio.session import AsyncSession
 
@@ -131,8 +130,6 @@ class OutcomeService:
         outcome_confidence: float = 1.0,
         reason: str | None = None,
         *,
-        target_type: str = 'memory_unit',
-        kv_key: str | None = None,
         mw_ema_half_life_days: float = 60.0,
         units: list[UnitOutcome] | list[dict[str, Any]] | None = None,
         caller_id: str | None = None,
@@ -141,25 +138,18 @@ class OutcomeService:
         exploration_tagged: bool = False,
         coverage_check_mode: Literal['strict', 'permissive'] = 'permissive',
     ) -> dict[str, Any]:
-        """Record an outcome.
+        """Record an outcome against memory units.
 
-        Two target modes (selected by keyword-only ``target_type``):
-
-        * ``target_type='memory_unit'`` (default): increments
-          success/failure/unused co-counters on each MemoryUnit and propagates
-          success/failure to linked UnitEntity + MentalModel rows. Accepts
-          either the per-unit ``units=[UnitOutcome, ...]`` shape (preferred)
-          or the legacy ``(unit_ids, success)`` shape (FutureWarning).
-        * ``target_type='kv_key'`` (procedure outcomes): increments
-          success/failure co-counters on the vault-scoped
-          ``procedure_outcomes`` row matching ``(vault_id, kv_key)``. KV mode
-          still uses the binary ``success`` parameter.
+        Increments success/failure/unused co-counters on each MemoryUnit and
+        propagates success/failure to linked UnitEntity + MentalModel rows.
+        Accepts either the per-unit ``units=[UnitOutcome, ...]`` shape
+        (preferred) or the legacy ``(unit_ids, success)`` shape
+        (FutureWarning).
 
         Returns:
-            Dict with counts of updated rows. For ``memory_unit``:
-            ``{units_updated, entities_updated, models_updated, audit_log_id,
-            verb_counts, coverage_ratio}``. For ``kv_key``: ``{kv_key,
-            vault_id, success_co_count, failure_co_count, last_outcome_at}``.
+            Dict with counts of updated rows: ``{units_updated,
+            entities_updated, models_updated, audit_log_id, verb_counts,
+            coverage_ratio}``.
         """
         if outcome_confidence is not None and outcome_confidence != 1.0:
             warnings.warn(
@@ -171,25 +161,8 @@ class OutcomeService:
                 FutureWarning,
                 stacklevel=2,
             )
-        if target_type == 'kv_key':
-            if units or unit_ids:
-                raise ValueError(
-                    'kv_key mode does not accept unit_ids or units; pass them only '
-                    'with target_type="memory_unit"'
-                )
-            if success is None:
-                raise ValueError("kv_key mode requires the 'success' boolean.")
-            return await self._record_outcome_kv_key(
-                session=session,
-                kv_key=kv_key,
-                success=success,
-                vault_id=vault_id,
-                reason=reason,
-            )
-        if target_type != 'memory_unit':
-            raise ValueError(f"target_type must be 'memory_unit' or 'kv_key', got {target_type!r}")
         if vault_id is None:
-            raise ValueError("memory_unit mode requires 'vault_id'.")
+            raise ValueError("record_outcome requires 'vault_id'.")
 
         resolved_units = self._resolve_unit_outcomes(
             units=units,
@@ -509,104 +482,3 @@ class OutcomeService:
                 continue
             resolved.append(UnitOutcome(unit_id=parsed, verb=verb, reason=legacy_reason))
         return resolved
-
-    async def _record_outcome_kv_key(
-        self,
-        session: AsyncSession,
-        kv_key: str | None,
-        success: bool,
-        vault_id: str | None,
-        reason: str | None,
-    ) -> dict[str, Any]:
-        """Vault-scoped Memory Worth counter increment for a procedure KV key.
-
-        Upserts into ``procedure_outcomes`` keyed on ``(vault_id, kv_key)``,
-        atomically incrementing ``success_co_count`` (success=True) or
-        ``failure_co_count`` (success=False) and stamping
-        ``last_outcome_at = now()``.
-
-        Validates that ``kv_key`` matches the
-        ``procedure:<verb>:<context-tag>`` shape before touching the DB.
-        """
-        from memex_core.services.kv import validate_procedure_key
-
-        if kv_key is None or vault_id is None:
-            raise ValueError("kv_key mode requires 'kv_key' and 'vault_id'.")
-        validate_procedure_key(kv_key)
-        try:
-            vault_uuid = UUID(vault_id)
-        except ValueError as exc:
-            raise ValueError(f'Invalid vault_id: {vault_id}') from exc
-
-        log = logger.bind(
-            kv_key=kv_key,
-            vault_id=str(vault_id),
-            outcome='success' if success else 'failure',
-        )
-        log.info('outcome.kv_key.record', reason=reason)
-
-        from sqlalchemy import text as sql_text
-
-        success_inc = 1 if success else 0
-        failure_inc = 0 if success else 1
-        # Upsert: INSERT ... ON CONFLICT (vault_id, kv_key) DO UPDATE.
-        # Atomic at the row level — no read-modify-write window.
-        # Rely on the FK constraint to ``kv_entries.key`` to validate that
-        # the referenced procedure exists; catching the raw IntegrityError
-        # here avoids the TOCTOU race a SELECT 1 pre-check would introduce.
-        upsert = sql_text(
-            'INSERT INTO procedure_outcomes '
-            '(vault_id, kv_key, success_co_count, failure_co_count, last_outcome_at) '
-            'VALUES (:vid, :k, :sinc, :finc, now()) '
-            'ON CONFLICT ON CONSTRAINT uq_procedure_outcomes_vault_key DO UPDATE SET '
-            '  success_co_count = procedure_outcomes.success_co_count + EXCLUDED.success_co_count, '
-            '  failure_co_count = procedure_outcomes.failure_co_count + EXCLUDED.failure_co_count, '
-            '  last_outcome_at = EXCLUDED.last_outcome_at, '
-            '  updated_at = now() '
-            'RETURNING success_co_count, failure_co_count, last_outcome_at'
-        )
-        try:
-            result = await session.execute(
-                upsert,
-                {
-                    'vid': vault_uuid,
-                    'k': kv_key,
-                    'sinc': success_inc,
-                    'finc': failure_inc,
-                },
-            )
-            row = result.first()
-            await session.commit()
-        except IntegrityError as exc:
-            await session.rollback()
-            err_text = str(exc).lower()
-            if 'foreign key' in err_text or 'fk_' in err_text:
-                raise ValueError(f'Cannot record outcome for unknown kv_key: {kv_key!r}') from exc
-            raise
-
-        OUTCOME_RECORDED_TOTAL.labels(
-            vault_id=str(vault_id), outcome='success' if success else 'failure'
-        ).inc(1)
-
-        if row is None:
-            log.warning('outcome.kv_key.no_row_returned')
-            return {
-                'kv_key': kv_key,
-                'vault_id': str(vault_uuid),
-                'success_co_count': 0,
-                'failure_co_count': 0,
-                'last_outcome_at': None,
-            }
-        last_outcome_at = row[2]
-        log.info(
-            'outcome.kv_key.recorded',
-            success_co_count=row[0],
-            failure_co_count=row[1],
-        )
-        return {
-            'kv_key': kv_key,
-            'vault_id': str(vault_uuid),
-            'success_co_count': row[0],
-            'failure_co_count': row[1],
-            'last_outcome_at': last_outcome_at.isoformat() if last_outcome_at else None,
-        }

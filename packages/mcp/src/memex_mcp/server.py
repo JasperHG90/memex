@@ -3599,9 +3599,8 @@ async def memex_record_outcome(
         Field(
             default=None,
             description=(
-                'kv_key mode only or legacy memory_unit shape. True if the task '
-                'succeeded, false if it failed. For memory_unit mode prefer the '
-                '`units` parameter with per-unit verbs.'
+                'Legacy shape (FutureWarning). True if the task succeeded, false '
+                'if it failed. Prefer the `units` parameter with per-unit verbs.'
             ),
         ),
     ] = None,
@@ -3611,7 +3610,7 @@ async def memex_record_outcome(
         Field(
             default=None,
             description=(
-                'memory_unit mode only. Per-unit verb classifications. Each entry: '
+                'Per-unit verb classifications. Each entry: '
                 '{unit_id: UUID, verb: "helpful"|"not_helpful"|"not_used", '
                 'reason: str}. `reason` is required for helpful and not_helpful. '
                 'Examples — good: [{"unit_id": "...", "verb": "helpful", '
@@ -3627,7 +3626,7 @@ async def memex_record_outcome(
         Field(
             default=None,
             description=(
-                'Legacy memory_unit shape (FutureWarning). UUIDs of memory units '
+                'Legacy shape (FutureWarning). UUIDs of memory units '
                 'you actually used. Prefer the `units` parameter.'
             ),
         ),
@@ -3653,29 +3652,6 @@ async def memex_record_outcome(
             description='Optional free-text reason for the outcome (logged, not stored on units).',
         ),
     ] = None,
-    target_type: Annotated[
-        str,
-        Field(
-            default='memory_unit',
-            description=(
-                'What the outcome scores. "memory_unit" (default) increments '
-                'Memory Worth counters on the memory units in `units` or `unit_ids`. '
-                '"kv_key" increments vault-scoped counters on the procedure_outcomes '
-                'row for kv_key.'
-            ),
-        ),
-    ] = 'memory_unit',
-    kv_key: Annotated[
-        str | None,
-        Field(
-            default=None,
-            description=(
-                'kv_key mode only. Procedure KV key (procedure:<verb>:<context-tag>) '
-                'whose Memory Worth counters should be incremented. '
-                'Required when target_type="kv_key".'
-            ),
-        ),
-    ] = None,
     retrieved_set_size: Annotated[
         int | None,
         Field(
@@ -3689,7 +3665,7 @@ async def memex_record_outcome(
         ),
     ] = None,
 ) -> dict:
-    """Record an outcome for memory units or a procedure key to train Memory Worth scoring."""
+    """Record an outcome for memory units to train Memory Worth scoring."""
     try:
         api = get_api(ctx)
         vault_id = vault_id or _default_write_vault(ctx)
@@ -3701,8 +3677,6 @@ async def memex_record_outcome(
             vault_id=str(resolved_vid),
             outcome_confidence=outcome_confidence,
             reason=reason,
-            target_type=target_type,
-            kv_key=kv_key,
             units=units,
             retrieved_set_size=retrieved_set_size,
         )

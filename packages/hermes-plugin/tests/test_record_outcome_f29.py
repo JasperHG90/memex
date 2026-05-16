@@ -1,14 +1,13 @@
-"""Hermes-side tests for F29 — memex_record_outcome schema + handler.
+"""Hermes-side tests for ``memex_record_outcome`` schema + handler.
 
-Pairs with packages/common/tests/test_client_record_outcome.py (HTTP wrapper)
-and tests/test_e2e_f29_outcomes_route.py (HTTP route). This file covers the
-agent-facing surface: schema registration, dispatch routing, dual-mode
-parameter handling, and the F14 ADD-2 invariant (success has no default).
+Covers the agent-facing surface: schema registration, dispatch routing,
+dual-shape parameter handling (per-unit ``units`` + legacy
+``unit_ids``+``success``), and the ADD-2 invariant (``success`` has no
+default).
 """
 
 from __future__ import annotations
 
-import inspect
 import json
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
@@ -36,11 +35,6 @@ def vault_id():
     return uuid4()
 
 
-# ---------------------------------------------------------------------------
-# Registration
-# ---------------------------------------------------------------------------
-
-
 def test_schema_registered_in_all_schemas():
     """memex_record_outcome must appear in ALL_SCHEMAS exactly once."""
     matches = [s for s in ALL_SCHEMAS if s['name'] == 'memex_record_outcome']
@@ -54,29 +48,24 @@ def test_handler_dispatchable():
 
 
 def test_schema_shape():
-    """Schema covers both shapes (per-unit `units` + legacy `unit_ids`/`success`)
-    and both modes (memory_unit / kv_key). Mode-specific requirements are
-    validated in the handler since they depend on target_type — the JSON-schema
-    `required` array can't express that conditionally without oneOf bloat."""
+    """Schema covers both shapes (per-unit `units` + legacy `unit_ids`/`success`)."""
     props = RECORD_OUTCOME_SCHEMA['parameters']['properties']
     assert {
         'success',
         'units',
         'unit_ids',
-        'kv_key',
-        'target_type',
         'vault_id',
         'caller_id',
         'turn_outcome',
         'exploration_tagged',
     } <= set(props)
-    assert props['target_type']['enum'] == ['memory_unit', 'kv_key']
+    assert 'target_type' not in props, 'target_type was removed with procedure MW'
+    assert 'kv_key' not in props, 'kv_key was removed with procedure MW'
     assert props['outcome_confidence']['minimum'] == 0.0
     assert props['outcome_confidence']['maximum'] == 1.0
     assert props['caller_id']['type'] == 'string'
     assert props['turn_outcome']['type'] == 'string'
     assert props['exploration_tagged']['type'] == 'boolean'
-    # Per-unit shape carries verb enum.
     units_items = props['units']['items']
     assert units_items['properties']['verb']['enum'] == [
         'helpful',
@@ -91,15 +80,9 @@ def test_protocol_method_present():
     assert hasattr(MemexAPIProtocol, 'record_outcome')
 
 
-# ---------------------------------------------------------------------------
-# Dispatch — memory_unit mode
-# ---------------------------------------------------------------------------
-
-
 def test_dispatch_memory_unit_passthrough(config, vault_id):
     """dispatch routes memex_record_outcome through handle_record_outcome,
-    which calls api.record_outcome with positional unit_ids/success and the
-    keyword-only target_type/kv_key."""
+    which calls api.record_outcome with positional unit_ids/success."""
     api = Mock()
     api.record_outcome = AsyncMock(
         return_value={'units_updated': 2, 'entities_updated': 0, 'models_updated': 0}
@@ -107,7 +90,7 @@ def test_dispatch_memory_unit_passthrough(config, vault_id):
 
     out = dispatch(
         'memex_record_outcome',
-        {'success': True, 'unit_ids': ['u1', 'u2'], 'target_type': 'memory_unit'},
+        {'success': True, 'unit_ids': ['u1', 'u2']},
         api=api,
         config=config,
         vault_id=vault_id,
@@ -117,57 +100,20 @@ def test_dispatch_memory_unit_passthrough(config, vault_id):
     api.record_outcome.assert_awaited_once()
     call = api.record_outcome.await_args
     assert call is not None
-    # ADD-2: unit_ids + success are positional, target_type + kv_key kwargs.
     assert call.args == (
-        ['u1', 'u2'],  # unit_ids
-        True,  # success
-        str(vault_id),  # vault_id (defaulted from session-bound)
-        1.0,  # outcome_confidence
-        None,  # reason
+        ['u1', 'u2'],
+        True,
+        str(vault_id),
+        1.0,
+        None,
     )
     assert call.kwargs == {
-        'target_type': 'memory_unit',
-        'kv_key': None,
         'units': None,
         'caller_id': None,
         'turn_outcome': None,
         'retrieved_set_size': None,
         'exploration_tagged': False,
     }
-
-
-def test_dispatch_kv_key_mode(config, vault_id):
-    """kv_key mode: unit_ids omitted, kv_key passed via kwargs."""
-    api = Mock()
-    api.record_outcome = AsyncMock(
-        return_value={
-            'kv_key': 'procedure:run-tests:default',
-            'vault_id': str(vault_id),
-            'success_co_count': 1,
-            'failure_co_count': 0,
-            'last_outcome_at': '2026-05-01T05:59:00Z',
-        }
-    )
-
-    out = dispatch(
-        'memex_record_outcome',
-        {
-            'success': False,
-            'kv_key': 'procedure:run-tests:default',
-            'target_type': 'kv_key',
-        },
-        api=api,
-        config=config,
-        vault_id=vault_id,
-    )
-    data = json.loads(out)
-    assert data['kv_key'] == 'procedure:run-tests:default'
-    call = api.record_outcome.await_args
-    assert call is not None
-    assert call.args[0] is None  # unit_ids
-    assert call.args[1] is False  # success
-    assert call.kwargs['target_type'] == 'kv_key'
-    assert call.kwargs['kv_key'] == 'procedure:run-tests:default'
 
 
 def test_dispatch_audit_fields_passthrough(config, vault_id):
@@ -196,7 +142,7 @@ def test_dispatch_audit_fields_passthrough(config, vault_id):
 
 
 def test_dispatch_audit_fields_type_validation(config, vault_id):
-    """Invalid types for the new audit fields must error before the api call."""
+    """Invalid types for the audit fields must error before the api call."""
     api = Mock(spec=[])
     for bad in (
         {'success': True, 'unit_ids': ['u1'], 'caller_id': 123},
@@ -230,34 +176,12 @@ def test_dispatch_explicit_vault_overrides_session(config, vault_id):
     assert call.args[2] == str(explicit)
 
 
-# ---------------------------------------------------------------------------
-# Bad inputs (handler-level validation)
-# ---------------------------------------------------------------------------
-
-
 def test_missing_required_fields_returns_tool_error(config, vault_id):
-    """Memory_unit mode requires either `units` or legacy `unit_ids`+`success`.
-
-    A kwargless call must reject before calling api.record_outcome — silently
-    defaulting would train MW counters with phantom signal.
-    """
-    api = Mock(spec=[])  # spec=[] means no attributes; any access raises.
+    """record_outcome requires either `units` or legacy `unit_ids`+`success`."""
+    api = Mock(spec=[])
     out = dispatch(
         'memex_record_outcome',
         {},
-        api=api,
-        config=config,
-        vault_id=vault_id,
-    )
-    assert 'error' in json.loads(out)
-
-
-def test_invalid_target_type_returns_tool_error(config, vault_id):
-    """target_type must be 'memory_unit' or 'kv_key'."""
-    api = Mock()
-    out = dispatch(
-        'memex_record_outcome',
-        {'success': True, 'target_type': 'something-else'},
         api=api,
         config=config,
         vault_id=vault_id,
@@ -278,6 +202,32 @@ def test_non_bool_success_returns_tool_error(config, vault_id):
     assert 'error' in json.loads(out)
 
 
+@pytest.mark.parametrize(
+    'extras',
+    [
+        {'target_type': 'kv_key'},
+        {'kv_key': 'procedure:foo:bar'},
+        {'target_type': 'kv_key', 'kv_key': 'procedure:foo:bar'},
+    ],
+    ids=['target_type_only', 'kv_key_only', 'both'],
+)
+def test_legacy_kv_key_args_rejected(config, vault_id, extras):
+    """Stale agents passing the removed target_type='kv_key' / kv_key must be
+    rejected with a tool_error, not silently routed as a memory_unit call."""
+    api = Mock(spec=[])
+    out = dispatch(
+        'memex_record_outcome',
+        {'success': True, 'unit_ids': ['u1'], **extras},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    payload = json.loads(out)
+    assert 'error' in payload
+    msg = payload.get('message', payload.get('error', ''))
+    assert 'target_type' in msg or 'kv_key' in msg or 'unknown' in msg
+
+
 def test_api_error_surfaces_as_tool_error(config, vault_id):
     """Underlying api.record_outcome RuntimeError → tool_error envelope, not crash."""
     api = Mock()
@@ -292,24 +242,3 @@ def test_api_error_surfaces_as_tool_error(config, vault_id):
     payload = json.loads(out)
     assert 'error' in payload
     assert 'vault not found' in payload.get('message', payload.get('error', ''))
-
-
-# ---------------------------------------------------------------------------
-# F14 ADD-2 contract — handler signature lock
-# ---------------------------------------------------------------------------
-
-
-def test_handler_passes_keyword_only_args_as_kwargs():
-    """Source-level lock: handle_record_outcome must call api.record_outcome
-    with target_type and kv_key as keyword arguments, not positional.
-
-    The api signature has those as keyword-only (per the in-process MemexAPI
-    contract); a regression that passed them positionally would only fail
-    against a real RemoteMemexAPI, not against AsyncMock — so we lock the
-    call shape here."""
-    src = inspect.getsource(handle_record_outcome)
-    # The api call must use target_type=... and kv_key=... — never the
-    # positional 6th/7th arg form. Line breaks accepted; rely on the keyword
-    # token presence.
-    assert 'target_type=target_type' in src, 'target_type must be passed as kwarg'
-    assert 'kv_key=kv_key' in src, 'kv_key must be passed as kwarg'

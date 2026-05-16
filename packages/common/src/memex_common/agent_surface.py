@@ -171,7 +171,7 @@ Namespace by scope cue (NOT grammatical person). `app:`/`project:`/`global:` ALL
 | "this repo/project", "in this codebase", "on <project>" | `project:<id>:` |
 | "across our projects", "company-wide", "we standardise on" | `global:` |
 | "when I use <app>", "in Claude Code/Hermes", "for <app> sessions" | `app:<app-id>:` |
-| learned procedure | `procedure:<verb>:<context-tag>` (pair with `memex_record_outcome(target_type="kv_key", kv_key=…)`) |
+| learned procedure | `procedure:<verb>:<context-tag>` |
 
 Ambiguous? ASK before writing.
 

@@ -28,8 +28,7 @@ _TIER_A_STUBS: list[tuple[str, str, str]] = [
     # Integration coverage in tests/integration/test_int_alembic_026.py.
     # 027_consolidation_ticks (F38) is no longer a stub — see PR #19
     # (real consolidation_ticks table + per-tick summary rows).
-    # 028_procedure_outcomes (F14) is no longer a stub — see PR #18
-    # (real procedure_outcomes table + vault-scoped MW counters).
+    # 028 created procedure_outcomes (F14); 043 drops it. Both are in the chain.
     # 029_lint_llm_quota (F10) is no longer a stub — see PR #35
     # (real lint_llm_quota table + rolling-24h cost cap).
     # 030_revisit_last_reviewed_at (F20) ships real in PR #101 with the
@@ -56,13 +55,16 @@ def test_seed_chain_is_linear_and_correct() -> None:
     sd = ScriptDirectory.from_config(cfg)
 
     heads = sd.get_heads()
-    assert heads == ['040_outcome_per_unit_schema'], (
-        f'Expected single head 040_outcome_per_unit_schema, got {heads}'
+    assert heads == ['043_drop_procedure_outcomes'], (
+        f'Expected single head 043_drop_procedure_outcomes, got {heads}'
     )
 
     walk = list(sd.walk_revisions())
     top10 = [(r.revision, r.down_revision) for r in walk[:10]]
     expected_top10 = [
+        ('043_drop_procedure_outcomes', '042_drop_note_status_appended'),
+        ('042_drop_note_status_appended', '041_archived_fsfm'),
+        ('041_archived_fsfm', '040_outcome_per_unit_schema'),
         ('040_outcome_per_unit_schema', '039_memory_unit_claim_type'),
         ('039_memory_unit_claim_type', '038_link_type_refines'),
         ('038_link_type_refines', '037_entity_last_merge_scan_at'),
@@ -70,9 +72,6 @@ def test_seed_chain_is_linear_and_correct() -> None:
         ('036_fsfm_cooldown_index', '035_drop_fsrs_revisit_columns'),
         ('035_drop_fsrs_revisit_columns', '034_add_mw_mode'),
         ('034_add_mw_mode', '033_confidence_evidence_count'),
-        ('033_confidence_evidence_count', '032_fsfm_decay_columns'),
-        ('032_fsfm_decay_columns', '031_proposal_resolved_by'),
-        ('031_proposal_resolved_by', '030_revisit_last_reviewed_at'),
     ]
     assert top10 == expected_top10, f'Tier A chain mismatch: got {top10}'
 

@@ -32,20 +32,17 @@ from __future__ import annotations
 # ---------------------------------------------------------------------------
 
 MEMEX_RECORD_OUTCOME_DESC = (
-    'Record how previously retrieved memories contributed to the outcome.\n'
+    'Record how previously retrieved memory units contributed to the outcome.\n'
     '\n'
     'Shape: units=[{unit_id: UUID, verb: "helpful"|"not_helpful"|"not_used", '
     'reason: str|null}].\n'
     'Required: `reason` for helpful and not_helpful; optional for not_used.\n'
-    'Invalid: bare `success=True` (or any bare flag) without `units` for '
-    'target_type="memory_unit". Server returns HTTP 400.\n'
+    'Invalid: bare `success=True` (or any bare flag) without `units`. Server '
+    'returns HTTP 400.\n'
     '\n'
-    'Alternate target: target_type="kv_key" + kv_key="procedure:<verb>:<context-tag>" '
-    'to score a stored procedure rather than memory units.\n'
-    '\n'
-    'When to call: after you actually used the retrieved memory (or procedure) '
-    'in your answer. Stamp the units you cited; do not bulk-write across the '
-    'unfiltered candidate set.\n'
+    'When to call: after you actually used the retrieved memory in your answer. '
+    'Stamp the units you cited; do not bulk-write across the unfiltered '
+    'candidate set.\n'
     '\n'
     '<example>units=[{"unit_id": "...", "verb": "helpful", "reason": '
     '"named the failing module"}, {"unit_id": "...", "verb": "not_used", '
@@ -158,7 +155,7 @@ MEMEX_MEMORY_CONSOLIDATE_DESC = (
 
 MEMEX_KV_WRITE_DESC = (
     'Write a namespaced operational pointer to the KV store — a preference, '
-    'project binding, convention, or learned procedure observation.\n'
+    'project binding, convention, or learned procedure.\n'
     '\n'
     'NOT for content facts (events, observations, claims learned from notes) — '
     'those become memory units when you call memex_add_note. KV is for '
@@ -175,9 +172,9 @@ MEMEX_KV_WRITE_DESC = (
     'Optional: ttl_seconds (entry auto-expires; omit for no expiration). '
     'Generates a semantic embedding for fuzzy lookup via memex_kv_search.\n'
     '\n'
-    'Procedure pairing: for `procedure:<verb>:<context-tag>` keys, pair every '
-    'use with memex_record_outcome(target_type="kv_key", kv_key=...) so the '
-    'procedure carries an MW trail.\n'
+    'Procedure keys (`procedure:<verb>:<context-tag>`) maintain a versioned '
+    'history envelope — each write appends a new version; prior versions remain '
+    'queryable via memex_kv_get(include_history=true).\n'
     '\n'
     'Deletion is CLI-only (`memex kv delete`); do NOT attempt to delete entries.'
 )
