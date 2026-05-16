@@ -1163,10 +1163,15 @@ def suite_refresh_snapshot(
     import asyncio
     import shutil
     import subprocess as _sp
+    import sys
+
+    import httpx
 
     from memex_eval.suite import load_suite
     from memex_eval.suite.db_reset import _resolve_db_dsn, drop_and_recreate_schema
     from memex_eval.suite.snapshot_cache import (
+        compute_sources_hash,
+        lookup as _cache_lookup,
         resolve_cache_root,
     )
 
@@ -1181,6 +1186,29 @@ def suite_refresh_snapshot(
 
     dsn = _resolve_db_dsn()
     redacted = dsn.split('@', 1)[1] if '@' in dsn else dsn
+
+    # Probe the server BEFORE any destructive action. A down server
+    # used to mean the DB got wiped + the snapshot got rmtree'd and
+    # then we'd discover the failure on subprocess connect-refused —
+    # leaving the operator with no DB and no snapshot. The lightweight
+    # ``GET /vaults`` doubles as auth + reachability check; 401 is
+    # acceptable (the suite-run subprocess uses unauthenticated reads
+    # against the same server in dev configurations).
+    try:
+        probe = httpx.get(f'{server.rstrip("/")}/vaults', timeout=5.0)
+    except (httpx.ConnectError, httpx.TimeoutException) as e:
+        console.print(
+            f'[red]Server probe at {server!r} failed: {type(e).__name__}: {e}.[/red] '
+            'Refusing to proceed (DB + snapshot would be destroyed before '
+            'the subprocess could detect the issue).'
+        )
+        raise typer.Exit(code=1) from None
+    if probe.status_code >= 500:
+        console.print(
+            f'[red]Server at {server!r} returned {probe.status_code}.[/red] Refusing to proceed.'
+        )
+        raise typer.Exit(code=1)
+
     console.print()
     console.print('[bold red]⚠  DESTRUCTIVE OPERATION[/bold red]')
     console.print(
@@ -1190,7 +1218,8 @@ def suite_refresh_snapshot(
         '  Action: drop+recreate every SQLModel table; ingest the suite\n'
         '          corpus via the live server; wait for extraction;\n'
         '          export the resulting state to the snapshot dir.\n'
-        '          Existing snapshot dir contents are replaced.'
+        '          Existing snapshot is moved aside to <dest>.bak.<pid>\n'
+        '          and restored on subprocess failure.'
     )
     console.print()
     if not force:
@@ -1203,20 +1232,33 @@ def suite_refresh_snapshot(
     asyncio.run(drop_and_recreate_schema(dsn))
     console.print('[green]✓[/green] DB reset.')
 
-    # Phase 2: run the suite with --from-snapshot auto --reingest. The
-    # runner uses the cache slot at <cache_root>/<suite_name>-<hash>/
-    # to materialise the snapshot via SnapshotExporter after extraction.
-    # --reingest forces re-extract even on a stale cache hit.
+    # Phase 2: stash the existing snapshot to a sibling .bak path
+    # BEFORE invoking the subprocess. The shipped path must be absent
+    # so the runner doesn't auto-import it (which would skip the
+    # cache-populate that this command depends on). If the subprocess
+    # fails, restore from .bak; only delete .bak on subprocess success.
     cache_root = resolve_cache_root(None)
-    # Wipe any prior shipped snapshot so the runner can't load it
-    # instead of populating the cache (shipped_snapshot_path takes
-    # precedence over --from-snapshot auto when it points at a real
-    # dir; we deliberately empty it for the duration of the refresh).
-    if shipped.is_dir():
-        shutil.rmtree(shipped)
+    import os as _os
 
+    backup: Path | None
+    if shipped.is_dir():
+        _backup_candidate = shipped.with_name(f'{shipped.name}.bak.{_os.getpid()}')
+        if _backup_candidate.exists():
+            shutil.rmtree(_backup_candidate)
+        shutil.move(str(shipped), str(_backup_candidate))
+        backup = _backup_candidate
+    else:
+        backup = None
+
+    # Phase 3: run the suite via the SAME Python interpreter that's
+    # executing this command. Using a PATH-based ``memex-eval`` binary
+    # can resolve to a different venv (system-installed, sibling
+    # worktree's .venv earlier on PATH) and silently produce a
+    # snapshot that doesn't match the local checkout.
     cmd = [
-        'memex-eval',
+        sys.executable,
+        '-m',
+        'memex_eval.cli',
         'suite',
         'run',
         name,
@@ -1229,34 +1271,43 @@ def suite_refresh_snapshot(
         str(cache_root),
     ]
     console.print(f'[dim]Running: {" ".join(cmd)}[/dim]')
-    result = _sp.run(cmd, env=None)
+    try:
+        result = _sp.run(cmd)
+    except BaseException:
+        if backup is not None and backup.is_dir():
+            shutil.move(str(backup), str(shipped))
+        raise
     if result.returncode != 0:
         console.print(f'[red]suite run failed (exit {result.returncode}).[/red]')
+        if backup is not None and backup.is_dir():
+            shutil.move(str(backup), str(shipped))
+            console.print(f'[yellow]Restored prior snapshot from {backup}.[/yellow]')
         raise typer.Exit(code=result.returncode)
 
-    # Phase 3: copy the populated cache slot to the shipped path.
-    # Recompute sources_hash exactly as the runner does (runner.py:1641-
-    # 1647) so the cache_key matches what `--from-snapshot auto` wrote.
-    import hashlib as _hashlib
-
-    from memex_eval.suite.snapshot_cache import lookup as _cache_lookup
-
-    suite_obj = load_suite(name)
-    _routing = _hashlib.sha256()
-    for _sc in sorted(suite_obj.scenarios, key=lambda s: s.id):
-        _routing.update(f'{_sc.id}:{_sc.vault_name or ""}\n'.encode())
-    sources_hash = _hashlib.sha256(
-        f'{suite_obj.sources.content_hash()}:{_routing.hexdigest()}'.encode()
-    ).hexdigest()
+    # Phase 4: copy the populated cache slot to the shipped path.
+    sources_hash = compute_sources_hash(suite)
     lookup_info = _cache_lookup(cache_root, name, sources_hash)
     if not lookup_info.hit:
         console.print(
             f'[red]Cache populate did not complete: no slot at {lookup_info.cache_path}.[/red]'
         )
+        if backup is not None and backup.is_dir():
+            shutil.move(str(backup), str(shipped))
+            console.print(f'[yellow]Restored prior snapshot from {backup}.[/yellow]')
         raise typer.Exit(code=1)
 
     shipped.parent.mkdir(parents=True, exist_ok=True)
-    shutil.copytree(lookup_info.cache_path, shipped)
+    try:
+        shutil.copytree(lookup_info.cache_path, shipped)
+    except BaseException:
+        if backup is not None and backup.is_dir():
+            shutil.move(str(backup), str(shipped))
+            console.print(f'[yellow]Restored prior snapshot from {backup}.[/yellow]')
+        raise
+
+    # Snapshot is in place; drop the backup.
+    if backup is not None and backup.is_dir():
+        shutil.rmtree(backup)
     console.print(
         f'[green]✓[/green] Snapshot refreshed at [cyan]{shipped}[/cyan] '
         f'(source slot: {lookup_info.cache_path}).'

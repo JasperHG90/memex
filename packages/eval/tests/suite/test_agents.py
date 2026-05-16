@@ -101,7 +101,11 @@ async def test_direct_api_backend_routes_search_type_note() -> None:
         search_type='note',
     )
     api = SimpleNamespace()
-    api.search_notes = AsyncMock(return_value=[SimpleNamespace(id='n1', text='note body')])
+    # NoteSearchResult uses ``note_id``, not ``id``; the backend reads
+    # ``getattr(n, 'note_id', '')`` (agents.py). Test fixtures that
+    # mock ``id`` produce empty retrieved_unit_ids silently — the
+    # latent bug RankingBaselineRbo surfaced.
+    api.search_notes = AsyncMock(return_value=[SimpleNamespace(note_id='n1', text='note body')])
     api.search = AsyncMock()  # should NOT be called
 
     backend = DirectApiBackend()

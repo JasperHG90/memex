@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import datetime as dt
-import hashlib
 import inspect
 import json
 import logging
@@ -1637,14 +1636,10 @@ async def run_suite(
 
     # Fold scenario vault routing into the cache key so a suite that
     # adds a per-scenario vault_name without touching source content
-    # doesn't silently hit a stale single-vault cache slot.
-    sources_hash = suite.sources.content_hash()
-    _scenario_routing = hashlib.sha256()
-    for sc in sorted(suite.scenarios, key=lambda s: s.id):
-        _scenario_routing.update(f'{sc.id}:{sc.vault_name or ""}\n'.encode())
-    sources_hash = hashlib.sha256(
-        f'{sources_hash}:{_scenario_routing.hexdigest()}'.encode()
-    ).hexdigest()
+    # doesn't silently hit a stale single-vault cache slot. Computation
+    # lives in ``snapshot_cache.compute_sources_hash`` so the
+    # ``refresh-snapshot`` CLI can locate the same slot.
+    sources_hash = _snapshot_cache.compute_sources_hash(suite)
     git_sha = _git_capture(['rev-parse', 'HEAD'])
     git_branch = _git_capture(['rev-parse', '--abbrev-ref', 'HEAD'])
     memex_v = _memex_version()
@@ -1730,6 +1725,33 @@ async def run_suite(
                 logger.info(
                     'Suite ships snapshot at %s; using as --from-snapshot default.',
                     suite.shipped_snapshot_path,
+                )
+            elif (
+                from_snapshot == 'auto'
+                and reuse_vault is None
+                and suite.shipped_snapshot_path is not None
+                and suite.shipped_snapshot_path.is_dir()
+            ):
+                # Operator passed --from-snapshot auto explicitly while
+                # the suite ships its own snapshot. The shipped snapshot
+                # is the gate's reference state; ``auto`` means "use the
+                # per-machine cache" which on a fresh machine is empty,
+                # forcing ingest+extract and producing fresh UUIDs that
+                # invalidate every baseline. Warn loudly so the
+                # operator can switch to the shipped path or run
+                # ``memex-eval suite refresh-snapshot`` first.
+                logger.warning(
+                    'Suite %r ships a snapshot at %s but --from-snapshot=auto '
+                    "is explicitly set. The shipped snapshot is the gate's "
+                    'reference state; auto mode bypasses it and uses the per-'
+                    'machine cache. On a cache miss this triggers ingest+'
+                    'extract, producing fresh UUIDs that invalidate every '
+                    'baseline. To use the shipped snapshot, drop the '
+                    '--from-snapshot flag; to refresh the shipped snapshot, '
+                    'run ``memex-eval suite refresh-snapshot %r``.',
+                    suite.name,
+                    suite.shipped_snapshot_path,
+                    suite.name,
                 )
 
             # Resolve auto cache lookup before deciding the path.
