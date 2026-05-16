@@ -1,4 +1,5 @@
 import asyncio
+import itertools
 import logging
 import asyncpg
 from typing import TYPE_CHECKING
@@ -21,7 +22,12 @@ MEMEX_LEADER_LOCK_ID = 5432789123456789
 # Reconcile-tick cursor — partitioned across vaults so one tenant's backlog
 # can't starve another. Sorted by ``vault.id`` so churn (vaults
 # added/removed mid-runtime) cannot permanently skip a slot.
-_RECONCILE_TICK_COUNTER = 0
+# ``itertools.count`` is GIL-atomic on ``next()``, so concurrent scheduler
+# coroutines cannot interleave a read-increment-write and skip/duplicate a
+# slot. Across processes the counter still drifts (each worker has its own),
+# but vault-skew across workers is acceptable — reconciliation is idempotent
+# via ON CONFLICT DO NOTHING.
+_RECONCILE_TICK_COUNTER = itertools.count()
 
 
 async def _reconcile_one_vault_slice(api: 'MemexAPI') -> None:
@@ -33,8 +39,6 @@ async def _reconcile_one_vault_slice(api: 'MemexAPI') -> None:
     and a global tick cursor; ``GLOBAL_VAULT_ID`` is included as a normal
     slot in the rotation.
     """
-    global _RECONCILE_TICK_COUNTER
-
     cfg = getattr(api, 'config', None)
     if cfg is None:
         return
@@ -52,8 +56,7 @@ async def _reconcile_one_vault_slice(api: 'MemexAPI') -> None:
     if not vaults:
         return
     vaults_sorted = sorted(vaults, key=lambda v: v.id)
-    idx = _RECONCILE_TICK_COUNTER % len(vaults_sorted)
-    _RECONCILE_TICK_COUNTER += 1
+    idx = next(_RECONCILE_TICK_COUNTER) % len(vaults_sorted)
     chosen = vaults_sorted[idx]
     try:
         repaired = await api.reconcile_missing_refresh_tasks(
