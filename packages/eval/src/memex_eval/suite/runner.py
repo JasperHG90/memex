@@ -1753,6 +1753,28 @@ async def run_suite(
                     suite.shipped_snapshot_path,
                     suite.name,
                 )
+            elif (
+                from_snapshot is not None
+                and from_snapshot != 'auto'
+                and reuse_vault is None
+                and suite.shipped_snapshot_path is not None
+                and suite.shipped_snapshot_path.is_dir()
+            ):
+                # Operator passed an explicit --from-snapshot path while
+                # the suite ships its own snapshot. Mirror the warning
+                # above so the override is visible — baselines were
+                # captured against the shipped snapshot and will not
+                # match an arbitrary alternative.
+                logger.warning(
+                    'Suite %r ships a snapshot at %s but --from-snapshot=%r '
+                    'is explicitly set, overriding the shipped reference '
+                    'state. Baselines were captured against the shipped '
+                    'snapshot; comparing against a different snapshot will '
+                    'produce spurious RBO failures.',
+                    suite.name,
+                    suite.shipped_snapshot_path,
+                    from_snapshot,
+                )
 
             # Resolve auto cache lookup before deciding the path.
             cache_lookup: '_snapshot_cache.CacheLookup | None' = None

@@ -38,6 +38,21 @@ class TestShippedSnapshotPath:
             f'shipped snapshot dir missing at {suite.shipped_snapshot_path}. '
             'Run `memex-eval suite refresh-snapshot retrieval_stability` to regenerate.'
         )
+        # Stronger than is_dir() — an empty directory passes is_dir()
+        # but produces an obscure import error at runner setup time.
+        # Assert the marker AND the manifest so an empty-shell snapshot
+        # fails this test, not the suite-run path.
+        marker = suite.shipped_snapshot_path / '_complete.marker'
+        manifest = suite.shipped_snapshot_path / 'vaults' / '_default' / 'manifest.json'
+        assert marker.is_file(), (
+            f'shipped snapshot at {suite.shipped_snapshot_path} is missing '
+            f'the _complete.marker sentinel. The snapshot is incomplete; '
+            'rerun refresh-snapshot.'
+        )
+        assert manifest.is_file(), (
+            f'shipped snapshot at {suite.shipped_snapshot_path} is missing '
+            f'vaults/_default/manifest.json. Rerun refresh-snapshot.'
+        )
 
     def test_pydantic_round_trip_preserves_path(self, suite) -> None:
         """``model_dump`` + ``model_validate`` must preserve the field.
@@ -51,6 +66,38 @@ class TestShippedSnapshotPath:
 
         re_validated = _LegacySuite.model_validate(dumped)
         assert re_validated.shipped_snapshot_path == suite.shipped_snapshot_path
+
+    def test_decorator_build_preserves_path(self, tmp_path) -> None:
+        """The decorator's ``Suite.build()`` (the actual production path
+        from suite ``__init__.py`` → legacy Suite) must thread
+        ``shipped_snapshot_path`` through to the legacy model.
+
+        The Pydantic ``model_validate`` test above only exercises the
+        deserialize path; the runner consumes the object built by
+        ``decorator.Suite.build()`` directly. Cover both.
+        """
+        from memex_eval.suite import SuiteMetadata, SuiteSources
+        from memex_eval.suite.decorator import Suite as _DecoratorSuite
+
+        metadata = SuiteMetadata(
+            name='_snapshot_path_round_trip_test',
+            schema_version='1',
+            suite_version='1.0.0',
+            description='d',
+            tags=['test'],
+            primary_metrics=['suite.pass_rate'],
+            components_under_test=[],
+            knobs=[],
+        )
+        snap_dir = tmp_path / 'snapshot'
+        snap_dir.mkdir()
+        decorator_suite = _DecoratorSuite(
+            metadata=metadata,
+            sources=SuiteSources(notes=[]),
+            shipped_snapshot_path=snap_dir,
+        )
+        legacy = decorator_suite.build()
+        assert legacy.shipped_snapshot_path == snap_dir
 
     def test_field_is_optional_for_other_suites(self) -> None:
         """Suites that don't ship a snapshot must still load."""
@@ -71,8 +118,14 @@ class TestShippedSnapshotManifest:
 
     def test_manifest_alembic_head_matches_live_head(self, suite) -> None:
         manifest_path = suite.shipped_snapshot_path / 'vaults' / '_default' / 'manifest.json'
-        if not manifest_path.is_file():
-            pytest.skip('snapshot not present locally — covered by refresh-snapshot workflow')
+        # Manifest absence is now a hard fail (covered by
+        # test_field_is_populated_for_retrieval_stability above),
+        # not a skip — a missing manifest means the snapshot is broken
+        # and should not pass tests silently.
+        assert manifest_path.is_file(), (
+            f'snapshot manifest missing at {manifest_path}. Run '
+            '`memex-eval suite refresh-snapshot retrieval_stability` to regenerate.'
+        )
         manifest = json.loads(manifest_path.read_text())
         snapshot_head = manifest.get('alembic_head')
         assert snapshot_head, 'manifest missing alembic_head field'
@@ -85,10 +138,14 @@ class TestShippedSnapshotManifest:
         import memex_core
 
         ini = Path(memex_core.__file__).parent / 'alembic.ini'
-        if not ini.is_file():
-            pytest.skip(
-                f'alembic.ini not found at {ini}; cannot validate snapshot freshness in this env'
-            )
+        # Missing alembic.ini is a packaging regression — fail hard so
+        # the snapshot can't ship without an alembic-head guard. (The
+        # previous version of this test skipped on missing ini, letting
+        # the gate go silently green on misconfigured environments.)
+        assert ini.is_file(), (
+            f'alembic.ini missing at {ini}; cannot validate snapshot '
+            'freshness. This is a packaging regression in memex_core.'
+        )
         cfg = Config(str(ini))
         script = ScriptDirectory.from_config(cfg)
         live_head = script.get_current_head()
@@ -107,8 +164,7 @@ class TestShippedSnapshotManifest:
         but be invisible without this pin.
         """
         manifest_path = suite.shipped_snapshot_path / 'vaults' / '_default' / 'manifest.json'
-        if not manifest_path.is_file():
-            pytest.skip('snapshot not present locally')
+        assert manifest_path.is_file(), f'snapshot manifest missing at {manifest_path}.'
         manifest = json.loads(manifest_path.read_text())
         emb = manifest.get('embedding_model') or {}
         assert emb.get('name'), 'manifest.embedding_model.name missing'

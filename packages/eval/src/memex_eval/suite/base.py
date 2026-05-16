@@ -398,10 +398,22 @@ def _aggregate_text(answer: AgentAnswer) -> str:
 
 
 def _aggregate_unit_ids(answer: AgentAnswer) -> list[str]:
-    """Return the retrieved unit IDs, preferring the explicit list."""
+    """Return the retrieved unit IDs, preferring the explicit list.
+
+    Fallback iterates ``answer.units`` and reads ``note_id`` (the
+    ``NoteSearchResult`` field for note-search) OR ``id`` (the
+    ``MemoryUnitDTO`` field for memory-search). Reading ``id`` only
+    would silently return empty strings for every note-search result
+    — the exact latent bug ``agents.py:419`` closed by populating
+    ``retrieved_unit_ids`` directly. The fallback now matches.
+    """
     if answer.retrieved_unit_ids:
         return list(answer.retrieved_unit_ids)
-    return [str(getattr(u, 'id', '')) for u in answer.units if getattr(u, 'id', None)]
+    return [
+        str(getattr(u, 'note_id', None) or getattr(u, 'id', ''))
+        for u in answer.units
+        if getattr(u, 'note_id', None) or getattr(u, 'id', None)
+    ]
 
 
 def _absorb_judge_usage(answer: AgentAnswer, judge: Any) -> None:

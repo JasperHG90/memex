@@ -1161,9 +1161,11 @@ def suite_refresh_snapshot(
     populating; do NOT run against a production server.
     """
     import asyncio
+    import os as _os
     import shutil
     import subprocess as _sp
     import sys
+    import time as _time
 
     import httpx
 
@@ -1187,16 +1189,13 @@ def suite_refresh_snapshot(
     dsn = _resolve_db_dsn()
     redacted = dsn.split('@', 1)[1] if '@' in dsn else dsn
 
-    # Probe the server BEFORE any destructive action. A down server
-    # used to mean the DB got wiped + the snapshot got rmtree'd and
-    # then we'd discover the failure on subprocess connect-refused —
-    # leaving the operator with no DB and no snapshot. The lightweight
-    # ``GET /vaults`` doubles as auth + reachability check; 401 is
-    # acceptable (the suite-run subprocess uses unauthenticated reads
-    # against the same server in dev configurations).
+    # Probe the server BEFORE any destructive action. ``httpx.HTTPError``
+    # is the umbrella class covering Connect/Timeout/Protocol/Read errors
+    # — narrowing further (as the round-2 commit originally did) lets
+    # ReadError / RemoteProtocolError propagate as raw tracebacks.
     try:
         probe = httpx.get(f'{server.rstrip("/")}/vaults', timeout=5.0)
-    except (httpx.ConnectError, httpx.TimeoutException) as e:
+    except httpx.HTTPError as e:
         console.print(
             f'[red]Server probe at {server!r} failed: {type(e).__name__}: {e}.[/red] '
             'Refusing to proceed (DB + snapshot would be destroyed before '
@@ -1208,6 +1207,14 @@ def suite_refresh_snapshot(
             f'[red]Server at {server!r} returned {probe.status_code}.[/red] Refusing to proceed.'
         )
         raise typer.Exit(code=1)
+    # Note: 401 from the probe is accepted — the suite-run subprocess
+    # writes (ingest), and a misconfigured API key will surface as a
+    # non-zero subprocess exit, which triggers the restore path below.
+    # DB-identity match between this CLI's resolved DSN and the
+    # server's actual DB is NOT verified here — out of scope for this
+    # PR; documented as a known limitation. Operators should ensure
+    # MEMEX_SERVER__META_STORE__INSTANCE__* env vars are consistent
+    # with the server's configuration before invoking this command.
 
     console.print()
     console.print('[bold red]⚠  DESTRUCTIVE OPERATION[/bold red]')
@@ -1215,11 +1222,12 @@ def suite_refresh_snapshot(
         f'  Target DB:      [cyan]{redacted}[/cyan]\n'
         f'  Target server:  [cyan]{server}[/cyan]\n'
         f'  Snapshot dest:  [cyan]{shipped}[/cyan]\n'
-        '  Action: drop+recreate every SQLModel table; ingest the suite\n'
+        '  Action: stash any existing snapshot to <dest>.bak.<pid>-<ts>;\n'
+        '          drop+recreate every SQLModel table; ingest the suite\n'
         '          corpus via the live server; wait for extraction;\n'
         '          export the resulting state to the snapshot dir.\n'
-        '          Existing snapshot is moved aside to <dest>.bak.<pid>\n'
-        '          and restored on subprocess failure.'
+        '          On ANY failure (KeyboardInterrupt, subprocess error,\n'
+        '          copytree failure), the stashed snapshot is restored.'
     )
     console.print()
     if not force:
@@ -1228,84 +1236,96 @@ def suite_refresh_snapshot(
             console.print('Aborted.')
             raise typer.Exit(code=1)
 
-    # Phase 1: wipe DB
-    asyncio.run(drop_and_recreate_schema(dsn))
-    console.print('[green]✓[/green] DB reset.')
-
-    # Phase 2: stash the existing snapshot to a sibling .bak path
-    # BEFORE invoking the subprocess. The shipped path must be absent
-    # so the runner doesn't auto-import it (which would skip the
-    # cache-populate that this command depends on). If the subprocess
-    # fails, restore from .bak; only delete .bak on subprocess success.
     cache_root = resolve_cache_root(None)
-    import os as _os
 
+    # Phase 1 (BEFORE any wipe): stash any existing shipped snapshot.
+    # Earlier ordering wiped the DB BEFORE stashing; if the stash then
+    # failed (ENOSPC, EACCES), the operator was left with no DB AND no
+    # snapshot. Stashing first means a stash failure is recoverable.
+    # Backup name uses pid+timestamp so a stale .bak.<pid> from a
+    # crashed prior run with a reused pid doesn't get silently nuked.
     backup: Path | None
     if shipped.is_dir():
-        _backup_candidate = shipped.with_name(f'{shipped.name}.bak.{_os.getpid()}')
+        backup_name = f'{shipped.name}.bak.{_os.getpid()}-{int(_time.time())}'
+        _backup_candidate = shipped.with_name(backup_name)
         if _backup_candidate.exists():
             shutil.rmtree(_backup_candidate)
         shutil.move(str(shipped), str(_backup_candidate))
         backup = _backup_candidate
+        console.print(f'[green]✓[/green] Stashed existing snapshot to {_backup_candidate.name}.')
     else:
         backup = None
 
-    # Phase 3: run the suite via the SAME Python interpreter that's
-    # executing this command. Using a PATH-based ``memex-eval`` binary
-    # can resolve to a different venv (system-installed, sibling
-    # worktree's .venv earlier on PATH) and silently produce a
-    # snapshot that doesn't match the local checkout.
-    cmd = [
-        sys.executable,
-        '-m',
-        'memex_eval.cli',
-        'suite',
-        'run',
-        name,
-        '--from-snapshot',
-        'auto',
-        '--reingest',
-        '--server',
-        server,
-        '--snapshot-cache-dir',
-        str(cache_root),
-    ]
-    console.print(f'[dim]Running: {" ".join(cmd)}[/dim]')
+    def _restore_if_backup() -> None:
+        """Restore the stashed snapshot. ``shutil.move`` into an existing
+        directory would put the backup INSIDE it; rmtree the (possibly
+        partial) shipped dir first so move replaces atomically.
+        """
+        # Mypy can't narrow ``backup`` through a closure, so re-bind locally.
+        b = backup
+        if b is not None and b.is_dir():
+            if shipped.is_dir():
+                shutil.rmtree(shipped)
+            shutil.move(str(b), str(shipped))
+            console.print(f'[yellow]Restored prior snapshot from {b.name}.[/yellow]')
+
+    # Single wide try/except wrapping every destructive step from here
+    # to the end. Any exception — KeyboardInterrupt, subprocess crash,
+    # filesystem error, anything — triggers the restore path. The
+    # narrow per-step try blocks the previous round had left windows
+    # where a SIGINT between steps would orphan the backup.
     try:
+        # Phase 2: wipe DB.
+        asyncio.run(drop_and_recreate_schema(dsn))
+        console.print('[green]✓[/green] DB reset.')
+
+        # Phase 3: invoke the suite-run subprocess via the SAME Python
+        # interpreter. ``python -m memex_eval`` resolves to the
+        # ``__main__.py`` shipped with this package, guaranteeing the
+        # child shares the parent's interpreter + installed package
+        # (a PATH-based ``memex-eval`` binary could resolve to a
+        # different venv).
+        cmd = [
+            sys.executable,
+            '-m',
+            'memex_eval',
+            'suite',
+            'run',
+            name,
+            '--from-snapshot',
+            'auto',
+            '--reingest',
+            '--server',
+            server,
+            '--snapshot-cache-dir',
+            str(cache_root),
+        ]
+        console.print(f'[dim]Running: {" ".join(cmd)}[/dim]')
         result = _sp.run(cmd)
-    except BaseException:
-        if backup is not None and backup.is_dir():
-            shutil.move(str(backup), str(shipped))
-        raise
-    if result.returncode != 0:
-        console.print(f'[red]suite run failed (exit {result.returncode}).[/red]')
-        if backup is not None and backup.is_dir():
-            shutil.move(str(backup), str(shipped))
-            console.print(f'[yellow]Restored prior snapshot from {backup}.[/yellow]')
-        raise typer.Exit(code=result.returncode)
+        if result.returncode != 0:
+            console.print(f'[red]suite run failed (exit {result.returncode}).[/red]')
+            raise typer.Exit(code=result.returncode)
 
-    # Phase 4: copy the populated cache slot to the shipped path.
-    sources_hash = compute_sources_hash(suite)
-    lookup_info = _cache_lookup(cache_root, name, sources_hash)
-    if not lookup_info.hit:
-        console.print(
-            f'[red]Cache populate did not complete: no slot at {lookup_info.cache_path}.[/red]'
-        )
-        if backup is not None and backup.is_dir():
-            shutil.move(str(backup), str(shipped))
-            console.print(f'[yellow]Restored prior snapshot from {backup}.[/yellow]')
-        raise typer.Exit(code=1)
+        # Phase 4: copy the populated cache slot to the shipped path.
+        sources_hash = compute_sources_hash(suite)
+        lookup_info = _cache_lookup(cache_root, name, sources_hash)
+        if not lookup_info.hit:
+            console.print(
+                f'[red]Cache populate did not complete: no slot at {lookup_info.cache_path}.[/red] '
+                'Most likely the subprocess used a different interpreter / venv. '
+                'Verify `python -m memex_eval suite list` shows the suite.'
+            )
+            raise typer.Exit(code=1)
 
-    shipped.parent.mkdir(parents=True, exist_ok=True)
-    try:
+        shipped.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(lookup_info.cache_path, shipped)
     except BaseException:
-        if backup is not None and backup.is_dir():
-            shutil.move(str(backup), str(shipped))
-            console.print(f'[yellow]Restored prior snapshot from {backup}.[/yellow]')
+        # KeyboardInterrupt, typer.Exit, subprocess failure, copytree
+        # failure — all funnel through here. Restore stashed snapshot.
+        _restore_if_backup()
         raise
 
-    # Snapshot is in place; drop the backup.
+    # Success: snapshot is in place; drop the backup.
     if backup is not None and backup.is_dir():
         shutil.rmtree(backup)
     console.print(
