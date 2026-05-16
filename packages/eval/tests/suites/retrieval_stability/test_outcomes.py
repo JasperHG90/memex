@@ -372,8 +372,13 @@ class TestCaptureMode:
         baseline_file = tmp_path / 's1.json'
         outcome = _outcome(baseline=[], baseline_path=str(baseline_file))
         outcome.score(AgentAnswer(retrieved_unit_ids=['u1']), _scenario())
-        # Tmp suffix is .json.tmp — must not survive a successful write.
-        assert not (tmp_path / 's1.json.tmp').exists()
+        # Tmp suffix is ``.json.tmp.<pid>`` (PID-suffixed for capture-
+        # race serialisation, round 10). Assert nothing matching the
+        # tempfile pattern survives a successful atomic rename — the
+        # earlier ``s1.json.tmp`` literal check was vacuously true
+        # because that exact filename was never generated.
+        leftover = [p.name for p in tmp_path.iterdir() if p.name.startswith('s1.json.tmp')]
+        assert leftover == [], f'tempfile leak: {leftover}'
 
     def test_capture_self_heals_meta(self, monkeypatch, tmp_path) -> None:
         """A baseline captured at top_k=5 is overwritten at top_k=10 on

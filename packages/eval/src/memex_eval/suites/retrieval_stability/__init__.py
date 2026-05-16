@@ -86,6 +86,18 @@ def _scrape_queries_from_suite(corpus: str) -> list[str]:
     its own scenario registration against the framework's global suite
     registry. We want only the literal query strings without spinning
     up the source suite's runtime state.
+
+    Match scope: any ``Call`` node whose callee name is ``register`` or
+    ``scenario`` (attribute or bare). This is intentionally permissive
+    so the function works against either ``suite.register(query=...)``
+    or a bare ``register(...)`` import. The trade-off: a non-suite
+    call like ``some_registry.register(query='x')`` in the same file
+    would be picked up as a false-positive query. None of the current
+    source suites have such a call (verified by grep); the
+    floor-count test in ``test_snapshot_invariants.py`` guards count
+    regressions but not additive false-positives. If a source suite
+    ever introduces such a call, narrow this matcher to require the
+    callee's attribute owner to be a ``Name('suite')``.
     """
     src_path = _SOURCE_SUITES_ROOT / corpus / '__init__.py'
     if not src_path.is_file():
