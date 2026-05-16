@@ -327,6 +327,18 @@ async def test_stable_unit_id_rejects_nul_in_text() -> None:
         _stable_unit_id('corpus', 'note', 0, 'paragraph\x00with-nul')
 
 
+async def test_stable_unit_id_rejects_negative_paragraph_index() -> None:
+    """Internal callers always pass ``enumerate(...)`` indices (≥ 0),
+    but the function is part of the public framework-extension
+    surface. An external caller passing a negative index would derive
+    a valid-looking but semantically wrong UUID; reject loudly.
+    """
+    from memex_eval.suites.retrieval_stability._setup_actions import _stable_unit_id
+
+    with pytest.raises(ValueError, match='non-negative'):
+        _stable_unit_id('corpus', 'note', -1, 'paragraph text')
+
+
 async def test_namespace_uuid_is_pinned_to_committed_value() -> None:
     """Regression guard against accidental namespace UUID regeneration.
 

@@ -133,6 +133,13 @@ def _stable_unit_id(corpus_name: str, note_key: str, paragraph_index: int, text:
         raise ValueError(f'note_key must not contain NUL: {note_key!r}')
     if '\x00' in text:
         raise ValueError('paragraph text must not contain NUL (use _split_into_paragraphs)')
+    # The internal call site uses ``enumerate(paragraphs)`` so this is
+    # always non-negative, but the function is part of the public
+    # framework-extension example surface. Guard the contract so an
+    # external caller passing a negative index gets a clear error
+    # rather than a silent UUID derived from ``...\x00-1\x00...``.
+    if paragraph_index < 0:
+        raise ValueError(f'paragraph_index must be non-negative, got {paragraph_index}')
     name = f'{corpus_name}\x00{note_key}\x00{paragraph_index}\x00{text}'
     return uuid.uuid5(_RANKING_BASELINE_NAMESPACE, name)
 

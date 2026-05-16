@@ -320,30 +320,29 @@ class RankingBaselineRbo(ExpectedOutcomeBase):
         # serialises writers within a single host so the visible state
         # is "one consistent run captured this". Capture mode is
         # operator-driven (env-gated) and runs rarely; the lock
-        # overhead is negligible.
-        import os as _os
-
+        # overhead is negligible. ``fcntl`` is POSIX-only and a no-op
+        # on Windows (Memex is Linux-first; capture is not exercised
+        # on Windows).
         try:
             import fcntl as _fcntl
         except ImportError:
             _fcntl = None  # type: ignore[assignment]
 
-        # PID + getpid()-suffixed tempfile makes two concurrent writers
-        # use distinct temp paths, so neither's tempfile clobbers the
+        # PID-suffixed tempfile makes two concurrent writers use
+        # distinct temp paths, so neither's tempfile clobbers the
         # other before the rename. Earlier ``.json.tmp`` shared name
         # was a single-writer assumption; this lifts that.
-        tmp = path.with_suffix(f'{path.suffix}.tmp.{_os.getpid()}')
-        # Lock on the destination path so cross-process writers
-        # serialise on the same lockfile (one path → one lock). Open
-        # the lock file with O_CREAT so the first writer creates it
-        # and subsequent writers reuse it. On Windows fcntl is absent;
-        # the lock is a no-op there (Memex is Linux-first; capture is
-        # not exercised on Windows).
+        tmp = path.with_suffix(f'{path.suffix}.tmp.{os.getpid()}')
+        # Lock on a per-destination lockfile so cross-process writers
+        # serialise on the same path (one baseline → one lock).
+        # ``O_CREAT`` means the first writer creates it and subsequent
+        # writers reuse it; the file persists across runs (harmless,
+        # zero-byte).
         lock_path = path.with_suffix(path.suffix + '.lock')
         lock_fd: int | None = None
         try:
             if _fcntl is not None:
-                lock_fd = _os.open(str(lock_path), _os.O_CREAT | _os.O_RDWR, 0o600)
+                lock_fd = os.open(str(lock_path), os.O_CREAT | os.O_RDWR, 0o600)
                 _fcntl.flock(lock_fd, _fcntl.LOCK_EX)
             tmp.write_text(json.dumps(payload, indent=2, sort_keys=True) + '\n')
             tmp.replace(path)
@@ -352,8 +351,10 @@ class RankingBaselineRbo(ExpectedOutcomeBase):
             raise
         finally:
             if lock_fd is not None:
-                _fcntl.flock(lock_fd, _fcntl.LOCK_UN)  # type: ignore[union-attr]
-                _os.close(lock_fd)
+                # ``os.close`` releases the flock implicitly on Linux;
+                # the explicit unlock is omitted to keep ordering
+                # simple. See ``snapshot_cache.py`` for the same idiom.
+                os.close(lock_fd)
         logger.info(
             'captured baseline for %s → %s (%d ids)',
             scenario.id,
