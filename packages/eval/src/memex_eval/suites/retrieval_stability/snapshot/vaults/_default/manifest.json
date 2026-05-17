@@ -1,5 +1,5 @@
 {
-  "alembic_head": "042_drop_note_status_appended",
+  "alembic_head": "044_mm_observations_gin_index",
   "embedding_model": {
     "dim": 384,
     "hash": "main",
