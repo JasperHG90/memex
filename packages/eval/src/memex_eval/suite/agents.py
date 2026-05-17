@@ -1180,6 +1180,18 @@ class HermesBackend(AnswerBackend):
             '  memory_char_limit: 2200\n'
             '  user_char_limit: 1375\n'
             '  provider: memex\n'
+            'auxiliary:\n'
+            '  compression:\n'
+            # Hermes auto-detects context length from each provider's
+            # model registry. Some Ollama Cloud models (e.g. ``gemma4:31b-
+            # cloud``) advertise an 8K detected length even though their
+            # actual context is 262K; Hermes refuses to load the agent if
+            # the auxiliary compression model is below its 64K minimum.
+            # Pin the override to the main model's declared
+            # ``context_length`` since we reuse the main model as the
+            # compression model by default — the same provider with the
+            # same actual capability.
+            f'    context_length: {model_ctx_len}\n'
         )
         os.environ['HERMES_HOME'] = str(hermes_home)
         self._hermes_home = hermes_home
