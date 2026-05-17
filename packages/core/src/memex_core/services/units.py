@@ -2,14 +2,28 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from memex_common.exceptions import MemoryUnitNotFoundError
+from sqlalchemy import and_, cast, text
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import insert as pg_insert
+from sqlmodel import col, select
+from sqlmodel.ext.asyncio.session import AsyncSession
+
+from memex_common.exceptions import MemoryUnitNotFoundError, ObservationReadOnlyError
 from memex_common.schemas import UnitHistoryNodeDTO
 from memex_core.context import get_actor, get_session_id
+from memex_core.metrics import (
+    DEPRIORITIZE_BATCH_UNFLUSHED_NO_VAULT_TOTAL,
+    DEPRIORITIZE_OBSERVATION_EMPTY_EVIDENCE_TOTAL,
+    DEPRIORITIZE_REJECTED_OBSERVATION_UUID_TOTAL,
+    REFRESH_OBSERVATION_TASK_ENQUEUED_TOTAL,
+    RESTORE_OBSERVATION_NO_AFFECTED_ENTITIES_TOTAL,
+)
 from memex_core.services.base import BaseService
 
 logger = logging.getLogger('memex.core.services.units')
@@ -38,6 +52,7 @@ class UnitsService(BaseService):
         vault_id: UUID | None = None,
         actor: str | None = None,
         background_tasks: Any | None = None,
+        defer_observation_refresh: bool = False,
     ) -> Any:
         """Flip ``MemoryUnit.is_deprioritized`` to True and record an audit event.
 
@@ -46,8 +61,20 @@ class UnitsService(BaseService):
         ``MemoryUnitNotFoundError`` (the route caller maps this to 404). When
         None, no vault check is applied (legacy CLI path).
 
-        Does NOT cascade to MentalModels; does NOT call ``prune_stale_evidence``.
-        The retrieval-time filter honours the flag — see
+        When ``unit_id`` does not match a ``MemoryUnit`` but matches an
+        ``Observation.id`` inside ``mental_models.observations``, raises
+        ``ObservationReadOnlyError`` carrying the underlying source MU IDs;
+        the HTTP layer maps this to a structured 400 redirecting the caller.
+
+        On a successful flip, scans ``mental_models.observations`` for
+        observations citing this MU and atomically enqueues one
+        ``refresh_observation`` task per match — in the same session as the
+        flag flip, so rollback is real. When ``defer_observation_refresh=True``,
+        the inline scan is suppressed and the caller is responsible for
+        invoking ``flush_deferred_observation_refresh`` with the collected
+        unit IDs after the batch boundary.
+
+        Retrieval-time filter still honours the flag — see
         ``memory/retrieval/strategies.py:93-95``.
         """
         return await self._flip_deprioritized(
@@ -58,6 +85,7 @@ class UnitsService(BaseService):
             vault_id=vault_id,
             actor=actor,
             background_tasks=background_tasks,
+            defer_observation_refresh=defer_observation_refresh,
         )
 
     async def batch_set_unit_deprioritized(
@@ -67,6 +95,7 @@ class UnitsService(BaseService):
         *,
         actor: str | None = None,
         background_tasks: Any | None = None,
+        vault_id: UUID | None = None,
     ) -> list[UUID]:
         """Flip ``is_deprioritized`` to True for many units in a single UPDATE.
 
@@ -78,6 +107,13 @@ class UnitsService(BaseService):
         the per-row INSERT cost no longer dominates large consolidation
         batches. The per-row reason / cascade semantics still match the
         single-row path (one ``AuditLog`` row per affected unit).
+
+        After the bulk UPDATE commits, the method calls
+        ``flush_deferred_observation_refresh(updated_ids, vault_id)`` to
+        enqueue refresh-observation tasks per citing observation in a single
+        LATERAL JSONB scan. If ``vault_id`` is None (legacy callers), the
+        flush is skipped — the row is still deprio'd, but observations may
+        leak until the next routine reflection cycle or reconcile tick.
         """
         from sqlalchemy import update as sa_update
 
@@ -94,9 +130,36 @@ class UnitsService(BaseService):
                 .values(is_deprioritized=True)
                 .returning(MemoryUnit.id)
             )
+            # Vault scope: when a caller supplies vault_id, the UPDATE must NOT
+            # touch a unit from another vault — even if the id was passed in
+            # by mistake. Cross-vault flips would corrupt vault isolation and
+            # leave dangling refresh tasks on the wrong vault's mental models.
+            if vault_id is not None:
+                stmt = stmt.where(MemoryUnit.vault_id == vault_id)  # type: ignore[attr-defined]
             result = await session.execute(stmt)
             updated_ids = [row[0] for row in result.all()]
             await session.commit()
+
+        if updated_ids and vault_id is not None:
+            try:
+                await self.flush_deferred_observation_refresh(list(updated_ids), vault_id=vault_id)
+            except Exception:
+                logger.exception(
+                    'flush_deferred_observation_refresh failed; the reconcile-tick '
+                    'pass will repair missing refresh tasks. unit_ids=%d',
+                    len(updated_ids),
+                )
+        elif updated_ids and vault_id is None:
+            # Legacy callers without a vault scope cannot trigger the vault-scoped
+            # LATERAL scan; observations stay stale until the next routine reflect
+            # or the reconcile-tick (vault-partitioned, opt-in for historical).
+            DEPRIORITIZE_BATCH_UNFLUSHED_NO_VAULT_TOTAL.inc(len(updated_ids))
+            logger.warning(
+                'batch_set_unit_deprioritized: vault_id missing; %d MUs deprio`d '
+                'but observation-refresh flush skipped. Observations citing these '
+                'MUs will refresh on the next routine reflection cycle.',
+                len(updated_ids),
+            )
 
         if self._audit_service is not None and updated_ids:
             resolved_actor = actor if actor is not None else get_actor()
@@ -149,12 +212,29 @@ class UnitsService(BaseService):
         vault_id: UUID | None,
         actor: str | None,
         background_tasks: Any | None,
+        defer_observation_refresh: bool = False,
     ) -> Any:
         from memex_core.memory.sql_models import MemoryUnit
 
         async with self.metastore.session() as session:
             unit = await session.get(MemoryUnit, unit_id)
             if unit is None:
+                # Pre-resolve against MentalModel.observations — the unit_id may be an
+                # Observation.id (read-only projection). If so, return 400 with
+                # source_memory_units redirecting the caller to the underlying MU.
+                source_mus = await self._find_source_mus_for_observation(
+                    session, unit_id, vault_id=vault_id
+                )
+                if source_mus is not None:
+                    DEPRIORITIZE_REJECTED_OBSERVATION_UUID_TOTAL.inc()
+                    if not source_mus:
+                        # Observation exists but has zero evidence MUs — keep
+                        # the 400 contract so the caller knows this is an
+                        # observation (not a missing unit), but emit a
+                        # dedicated counter so the malformed-row state is
+                        # observable.
+                        DEPRIORITIZE_OBSERVATION_EMPTY_EVIDENCE_TOTAL.inc()
+                    raise ObservationReadOnlyError(source_mus)
                 raise MemoryUnitNotFoundError(f'Memory unit {unit_id} not found.')
             if vault_id is not None and unit.vault_id != vault_id:
                 # Vault-scoping invariant: cross-vault mutation rejected.
@@ -167,8 +247,32 @@ class UnitsService(BaseService):
                 raise MemoryUnitNotFoundError(
                     f'Memory unit {unit_id} not found in vault {vault_id}.'
                 )
+
+            # No idempotency short-circuit here: FSFM's auto-band cooldown
+            # (api.py reads memory_restore audit rows within the cooldown
+            # window) depends on every restore call producing an audit row.
+            # Refresh-task enqueue dedupes via the partial UNIQUE; priority-
+            # reflect upsert dedupes via ON CONFLICT — so a re-call is safe.
             unit.is_deprioritized = value
             session.add(unit)
+            await session.flush()
+
+            if value is True and not defer_observation_refresh:
+                # Deprio path: enqueue refresh-observation tasks per citing observation
+                # in the SAME session as the flag flip, so rollback rolls back both.
+                await self._enqueue_refresh_tasks_for_mu(
+                    session,
+                    triggering_unit_id=unit_id,
+                    vault_id=unit.vault_id,
+                )
+            elif value is False and not defer_observation_refresh:
+                # Restore path: priority-lane reflect tasks per affected entity.
+                await self._enqueue_priority_reflect_for_restore(
+                    session,
+                    restored_unit_id=unit_id,
+                    vault_id=unit.vault_id,
+                )
+
             await session.commit()
             await session.refresh(unit)
 
@@ -183,6 +287,320 @@ class UnitsService(BaseService):
                 background_tasks=background_tasks,
             )
         return unit
+
+    async def _find_source_mus_for_observation(
+        self,
+        session: AsyncSession,
+        observation_id: UUID,
+        *,
+        vault_id: UUID | None,
+    ) -> list[UUID] | None:
+        """If ``observation_id`` matches an Observation inside any MentalModel,
+        return the list of source MU IDs from its evidence. Else return None.
+
+        Vault-scoped when ``vault_id`` is provided. Uses the GIN index on
+        ``mental_models.observations`` via ``@>`` containment.
+        """
+        from memex_core.memory.sql_models import MentalModel
+
+        probe = json.dumps([{'id': str(observation_id)}])
+        stmt = (
+            select(MentalModel.observations)
+            .where(col(MentalModel.observations).op('@>')(cast(probe, JSONB)))
+            .order_by(col(MentalModel.id))
+        )
+        if vault_id is not None:
+            stmt = stmt.where(col(MentalModel.vault_id) == vault_id)
+        result = await session.exec(stmt)
+        target = str(observation_id)
+        matches: list[list[UUID]] = []
+        for observations in result.all():
+            for obs in observations or []:
+                if not isinstance(obs, dict):
+                    continue
+                if str(obs.get('id')) != target:
+                    continue
+                ev = obs.get('evidence') or []
+                source_mus: list[UUID] = []
+                for ev_item in ev:
+                    if not isinstance(ev_item, dict):
+                        continue
+                    mid = ev_item.get('memory_id')
+                    if mid is None:
+                        continue
+                    try:
+                        source_mus.append(UUID(str(mid)))
+                    except (ValueError, TypeError):
+                        continue
+                matches.append(source_mus)
+        if not matches:
+            return None
+        if len(matches) > 1:
+            # Observation UUIDs come from uuid4 (default_factory) and should be
+            # globally unique. Multiple MentalModels matching the same id is
+            # invariant violation — log loudly so it doesn't go unnoticed.
+            # We return the first match's source MUs (deterministic on the
+            # query plan); the operator should investigate the duplicate.
+            logger.error(
+                'Observation %s matched %d MentalModels (UUID collision — '
+                'invariant violation); returning first match only.',
+                observation_id,
+                len(matches),
+            )
+        # The agent contract for observation UUIDs is 400-with-source_memory_units
+        # regardless of how many MUs the observation cites. Returning None here
+        # would silently degrade the contract to a 404 on the zero-evidence
+        # edge case — the caller would think the unit doesn't exist at all
+        # rather than learning it's a read-only observation. Bump a dedicated
+        # counter so the rare malformed state (an observation row with no
+        # evidence MUs) is observable in metrics.
+        return matches[0]
+
+    async def _enqueue_refresh_tasks_for_mu(
+        self,
+        session: AsyncSession,
+        *,
+        triggering_unit_id: UUID,
+        vault_id: UUID,
+    ) -> None:
+        """Scan vault-scoped MentalModels for observations citing the deprio'd MU
+        and bulk-insert one ``refresh_observation`` row per (mental_model, obs)
+        match. Uses ``with_for_update(of=MentalModel, skip_locked=True)`` —
+        mirroring the batch ``flush_deferred_observation_refresh`` path — so a
+        concurrent Phase 5 CAS write or another deprio on the same MentalModel
+        doesn't serialise the deprio path. Anything skipped is repaired by the
+        reconcile-tick pass (vault-partitioned). Idempotent dedupe via partial
+        UNIQUE on (entity, vault, observation_id) for pending+processing.
+        """
+        from memex_core.memory.sql_models import MentalModel, ReflectionQueue, ReflectionStatus
+
+        probe = json.dumps([{'evidence': [{'memory_id': str(triggering_unit_id)}]}])
+        stmt = (
+            select(MentalModel.id, MentalModel.entity_id, MentalModel.observations)
+            .where(col(MentalModel.vault_id) == vault_id)
+            .where(col(MentalModel.observations).op('@>')(cast(probe, JSONB)))
+            .with_for_update(of=MentalModel, skip_locked=True)
+        )
+        result = await session.exec(stmt)
+        rows = result.all()
+        if not rows:
+            return
+
+        triggering_str = str(triggering_unit_id)
+        seen: set[tuple[UUID, UUID]] = set()
+        values_rows: list[dict[str, Any]] = []
+        priority_lane = self.config.server.memory.reflection.refresh_obs_priority_lane
+        for mm_id, entity_id, observations in rows:
+            for obs in observations or []:
+                if not isinstance(obs, dict):
+                    continue
+                ev = obs.get('evidence') or []
+                if not any(
+                    isinstance(e, dict) and str(e.get('memory_id')) == triggering_str for e in ev
+                ):
+                    continue
+                obs_id_raw = obs.get('id')
+                if obs_id_raw is None:
+                    continue
+                try:
+                    obs_id = UUID(str(obs_id_raw))
+                except (ValueError, TypeError):
+                    continue
+                key = (mm_id, obs_id)
+                if key in seen:
+                    continue
+                seen.add(key)
+                values_rows.append(
+                    {
+                        'entity_id': entity_id,
+                        'vault_id': vault_id,
+                        'status': ReflectionStatus.PENDING,
+                        'priority_lane': priority_lane,
+                        'priority_score': 1.0,
+                        'task_type': 'refresh_observation',
+                        'observation_id': obs_id,
+                        'source_unit_id': triggering_unit_id,
+                        'accumulated_evidence': 0,
+                    }
+                )
+        if not values_rows:
+            return
+        insert_stmt = pg_insert(ReflectionQueue).values(values_rows)
+        # index_where uses col(...) wrappers to match the queue_service upsert
+        # form character-for-character; partial-UNIQUE arbiter inference is
+        # text-normalized but consistent col() form removes future-drift risk.
+        insert_stmt = insert_stmt.on_conflict_do_nothing(
+            index_elements=['entity_id', 'vault_id', 'observation_id'],
+            index_where=and_(
+                col(ReflectionQueue.task_type) == 'refresh_observation',
+                col(ReflectionQueue.status).in_(
+                    [ReflectionStatus.PENDING, ReflectionStatus.PROCESSING]
+                ),
+            ),
+        )
+        # ON CONFLICT DO NOTHING returns rowcount = true insert count (conflicts
+        # are silently skipped). Counting len(values_rows) would over-count
+        # when a sibling deprio already enqueued the same (entity, vault, obs).
+        insert_result = await session.execute(insert_stmt)
+        inserted = getattr(insert_result, 'rowcount', 0) or 0
+        if inserted > 0:
+            REFRESH_OBSERVATION_TASK_ENQUEUED_TOTAL.inc(inserted)
+
+    async def _enqueue_priority_reflect_for_restore(
+        self,
+        session: AsyncSession,
+        *,
+        restored_unit_id: UUID,
+        vault_id: UUID,
+    ) -> None:
+        """Look up entities that mention the restored MU and enqueue priority-lane reflects.
+
+        Uses ``unit_entities`` (the join table — NOT a non-existent
+        ``entity_mentions``). Orphan MUs (no entity rows) emit a counter and
+        return without enqueueing — the restored MU is still queryable;
+        routine reflection picks it up later.
+        """
+        from memex_core.memory.reflect.queue_service import ReflectionQueueService
+        from memex_core.memory.sql_models import UnitEntity
+
+        stmt = (
+            select(UnitEntity.entity_id)
+            .where(col(UnitEntity.unit_id) == restored_unit_id)
+            .where(col(UnitEntity.vault_id) == vault_id)
+            .distinct()
+        )
+        result = await session.exec(stmt)
+        entity_ids: set[UUID] = {eid for eid in result.all() if eid is not None}
+        if not entity_ids:
+            RESTORE_OBSERVATION_NO_AFFECTED_ENTITIES_TOTAL.inc()
+            return
+        queue_service = ReflectionQueueService(self.config.server.memory.reflection)
+        await queue_service.enqueue_priority_reflect(session, entity_ids, vault_id)
+
+    async def flush_deferred_observation_refresh(self, unit_ids: list[UUID], vault_id: UUID) -> int:
+        """Run a vault-scoped JSONB scan + bulk INSERT of refresh-observation tasks.
+
+        Called by callers that used ``defer_observation_refresh=True`` per-MU
+        (FSFM auto-band) AND by ``batch_set_unit_deprioritized`` after its
+        bulk UPDATE commits. Uses ``LATERAL unnest(:probes::jsonb[])`` so the
+        GIN index fires per probe. SQLAlchemy ORM does not express LATERAL
+        joins ergonomically, so this single query stays as ``text(...)``; the
+        rest of the path (insert, dedupe) uses SQLModel constructs.
+
+        Lock-hold trade-off: ``FOR UPDATE OF mm SKIP LOCKED`` is held until
+        ``session.commit()`` after the INSERT. This is INTENTIONAL — the row
+        lock blocks concurrent Phase 5 CAS writes from advancing
+        ``mental_models.version`` between our scan and the refresh enqueue,
+        preventing a missed refresh in the race window. The trade-off is that
+        large ``unit_ids`` batches keep the lock for the INSERT's duration;
+        callers should page batches (>100 MUs) to bound the hold. ``SKIP
+        LOCKED`` ensures concurrent flushes don't serialize on the same MMs
+        — whichever flush gets there first wins, the other moves on, and
+        the reconcile-tick pass repairs any missed enqueue.
+
+        Returns the number of refresh rows enqueued (after dedupe).
+        """
+        from memex_core.memory.sql_models import ReflectionQueue, ReflectionStatus
+
+        if not unit_ids:
+            return 0
+
+        probes_json: list[str] = [
+            json.dumps([{'evidence': [{'memory_id': str(uid)}]}]) for uid in unit_ids
+        ]
+
+        async with self.metastore.session() as session:  # type: AsyncSession
+            # SKIP LOCKED: under a large deprio burst, multiple flushes may
+            # race on the same mental_models rows. A blocking FOR UPDATE
+            # serializes them and holds row locks across the INSERT — SKIP
+            # LOCKED lets the second flush move on; any MM it skips will be
+            # picked up by the reconcile-tick pass (vault-partitioned).
+            # ``probes`` is bound as an explicit text[] (asyncpg cannot
+            # infer the array element type from a bare ``list[str]``); the
+            # SQL casts to ``jsonb[]`` on the server side.
+            from sqlalchemy import bindparam
+            from sqlalchemy.dialects.postgresql import ARRAY
+            from sqlalchemy import String as SAString
+
+            # Postgres rejects ``DISTINCT`` + ``FOR UPDATE`` ("FOR UPDATE is
+            # not allowed with DISTINCT clause"). The Python side dedupes via
+            # the ``seen: set[(mm_id, obs_id)]`` set below, so duplicates from
+            # multiple probes matching the same MM are harmless here.
+            stmt = text(
+                'SELECT mm.id, mm.entity_id, mm.observations '
+                'FROM mental_models mm, '
+                'LATERAL unnest(CAST(:probes AS jsonb[])) AS probe(p) '
+                'WHERE mm.vault_id = :vault_id AND mm.observations @> probe.p '
+                'FOR UPDATE OF mm SKIP LOCKED'
+            ).bindparams(bindparam('probes', type_=ARRAY(SAString)))
+            scan = await session.execute(
+                stmt,
+                {'vault_id': vault_id, 'probes': probes_json},
+            )
+            rows = scan.all()
+            if not rows:
+                return 0
+
+            unit_id_strs = {str(uid) for uid in unit_ids}
+            seen: set[tuple[UUID, UUID]] = set()
+            values_rows: list[dict[str, Any]] = []
+            priority_lane = self.config.server.memory.reflection.refresh_obs_priority_lane
+            for mm_id, entity_id, observations in rows:
+                for obs in observations or []:
+                    if not isinstance(obs, dict):
+                        continue
+                    ev = obs.get('evidence') or []
+                    triggering_str: str | None = None
+                    for e in ev:
+                        if isinstance(e, dict) and str(e.get('memory_id')) in unit_id_strs:
+                            triggering_str = str(e.get('memory_id'))
+                            break
+                    if triggering_str is None:
+                        continue
+                    obs_id_raw = obs.get('id')
+                    if obs_id_raw is None:
+                        continue
+                    try:
+                        obs_id = UUID(str(obs_id_raw))
+                        triggering_uuid = UUID(triggering_str)
+                    except (ValueError, TypeError):
+                        continue
+                    key = (mm_id, obs_id)
+                    if key in seen:
+                        continue
+                    seen.add(key)
+                    values_rows.append(
+                        {
+                            'entity_id': entity_id,
+                            'vault_id': vault_id,
+                            'status': ReflectionStatus.PENDING,
+                            'priority_lane': priority_lane,
+                            'priority_score': 1.0,
+                            'task_type': 'refresh_observation',
+                            'observation_id': obs_id,
+                            'source_unit_id': triggering_uuid,
+                            'accumulated_evidence': 0,
+                        }
+                    )
+            if not values_rows:
+                await session.commit()
+                return 0
+            insert_stmt = pg_insert(ReflectionQueue).values(values_rows)
+            insert_stmt = insert_stmt.on_conflict_do_nothing(
+                index_elements=['entity_id', 'vault_id', 'observation_id'],
+                index_where=and_(
+                    col(ReflectionQueue.task_type) == 'refresh_observation',
+                    col(ReflectionQueue.status).in_(
+                        [ReflectionStatus.PENDING, ReflectionStatus.PROCESSING]
+                    ),
+                ),
+            )
+            flush_result = await session.execute(insert_stmt)
+            await session.commit()
+            inserted = getattr(flush_result, 'rowcount', 0) or 0
+            if inserted > 0:
+                REFRESH_OBSERVATION_TASK_ENQUEUED_TOTAL.inc(inserted)
+            return inserted
 
     async def get_unit_history(
         self,

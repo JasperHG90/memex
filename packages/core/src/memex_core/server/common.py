@@ -18,6 +18,7 @@ from memex_common.exceptions import (
     FeatureDisabledError,
     MemexError,
     NoteNotAppendableError,
+    ObservationReadOnlyError,
     ResourceNotFoundError,
     VaultNotFoundError,
 )
@@ -57,6 +58,18 @@ def _handle_error(e: Exception, context: str) -> HTTPException:
         raise e
 
     logger.error(f'{context}: {e}', exc_info=True)
+
+    # ObservationReadOnlyError must precede every other isinstance check.
+    # It is a MemexError subclass; the generic `isinstance(e, MemexError)`
+    # branch below would otherwise flatten its structured `source_memory_units`
+    # detail to a string and silently break the agent contract. Defense in
+    # depth: route handlers also catch this explicitly, but this clause
+    # closes the gap for any future call site that routes through
+    # `_handle_error` directly.
+    if isinstance(e, ObservationReadOnlyError):
+        # Shape owned by ObservationReadOnlyError.to_http_detail() — same
+        # SSOT as the explicit route handler in server/memories.py.
+        return HTTPException(status_code=400, detail=e.to_http_detail())
 
     if isinstance(e, VaultNotFoundError):
         return HTTPException(status_code=404, detail=str(e))

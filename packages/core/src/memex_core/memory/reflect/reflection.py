@@ -6,7 +6,8 @@ from collections import defaultdict
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import datetime, timezone
 from typing import AsyncIterator, Callable
-from uuid import UUID
+from typing import Any
+from uuid import UUID, uuid4
 
 import dspy
 from sqlmodel import select, col
@@ -21,10 +22,22 @@ EntitySessionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
 from memex_core.config import MemexConfig, GLOBAL_VAULT_ID
 from memex_core.llm import run_dspy_operation
 from memex_core.tracing import trace_span
-from memex_core.memory.sql_models import Entity, MemoryUnit, UnitEntity, ContentStatus
-from memex_core.memory.sql_models import MentalModel, Observation, EvidenceItem
+from memex_core.memory.sql_models import (
+    ContentStatus,
+    Entity,
+    MemoryUnit,
+    MentalModel,
+    Observation,
+    EvidenceItem,
+    ReflectionQueue,
+    UnitEntity,
+)
 from memex_core.memory.reflect.entity_locks import get_entity_lock
-from memex_core.memory.reflect.exceptions import ReflectionAbandonedError
+from memex_core.memory.reflect.exceptions import (
+    ReflectionAbandonedError,
+    RefreshCASAbandonedError,
+    RefreshStaleReadError,
+)
 from memex_core.memory.reflect.models import ReflectionRequest
 from memex_core.memory.reflect.prompts import (
     SeedPhaseSignature,
@@ -39,6 +52,8 @@ from memex_core.memory.reflect.prompts import (
     ReflectEvidenceContext,
     ReflectComparisonObservation,
     EnrichmentSignature,
+    RefreshedObservation,
+    RefreshObservationSignature,
 )
 from memex_core.memory.reflect.utils import (
     build_memory_context,
@@ -49,7 +64,19 @@ from memex_core.memory.reflect.trends import compute_trend
 from memex_core.memory.models.protocols import EmbeddingsModel
 from memex_core.memory.formatting import format_for_embedding
 from memex_core.memory.confidence import extract_confidence_and_count, mean_and_variance
-from memex_core.metrics import REFLECTION_CAS_ABANDONS_TOTAL
+from memex_core.metrics import (
+    PHASE4_PROVENANCE_MALFORMED_TOTAL,
+    REFLECTION_CAS_ABANDONS_TOTAL,
+    REFRESH_OBSERVATION_DROP_OVERRIDDEN_TOTAL,
+    REFRESH_OBSERVATION_EMPTY_CONTENT_COERCED_TOTAL,
+    REFRESH_OBSERVATION_MERGED_PREDECESSOR_TOTAL,
+    REFRESH_OBSERVATION_TASK_ALREADY_ABSORBED_TOTAL,
+    REFRESH_OBSERVATION_TASK_COMPLETED_TOTAL,
+    REFRESH_OBSERVATION_TASK_DROPPED_BY_LLM_TOTAL,
+    REFRESH_OBSERVATION_TASK_LATENCY_SECONDS,
+    REFRESH_OBSERVATION_TASK_OBS_ALREADY_PRUNED_TOTAL,
+    REFRESH_OBSERVATION_TASK_ZERO_EVIDENCE_TOTAL,
+)
 
 logger = logging.getLogger('memex.core.memory.reflect.reflection')
 
@@ -72,8 +99,15 @@ def get_reflection_engine(
     embedder: EmbeddingsModel,
     entity_session_factory: EntitySessionFactory | None = None,
 ) -> 'ReflectionEngine':
-    """
-    Factory method to create a ReflectionEngine with dependencies.
+    """Factory for ReflectionEngine.
+
+    For the refresh-observation path, callers MUST pass an
+    ``entity_session_factory`` — that path opens its own per-phase sessions
+    through the factory and does not read ``self.session``. The shared
+    ``session`` is only used for the batch reflect path. ``_entity_session``
+    raises a clear ``RuntimeError`` if both ``self.session`` is None AND
+    ``entity_session_factory`` is None, so the misconfiguration surfaces at
+    first access rather than as a silent ``AttributeError``.
     """
     return ReflectionEngine(
         session=session,
@@ -81,6 +115,68 @@ def get_reflection_engine(
         embedder=embedder,
         entity_session_factory=entity_session_factory,
     )
+
+
+def _resolve_provenance_uuid(prov: Any | None, existing: list['Observation']) -> UUID:
+    """Pick a stable UUID for a Phase 4 output observation from its provenance entry.
+
+    Returns the lowest-index existing UUID for status='merged' or 'kept'; fresh uuid4()
+    for status='added' or any malformed provenance (counter bumped with reason label).
+    """
+    if prov is None:
+        return uuid4()
+    status = getattr(prov, 'status', None)
+    idxs = getattr(prov, 'merged_from_existing_indices', None) or []
+    if status == 'added':
+        return uuid4()
+    # 'kept' and 'merged' both need at least one existing index; an empty list
+    # is malformed — split the labels so prompt-drift can be diagnosed.
+    if not idxs:
+        if status == 'kept':
+            PHASE4_PROVENANCE_MALFORMED_TOTAL.labels(reason='kept_no_indices').inc()
+        elif status == 'merged':
+            PHASE4_PROVENANCE_MALFORMED_TOTAL.labels(reason='merged_no_indices').inc()
+        else:
+            PHASE4_PROVENANCE_MALFORMED_TOTAL.labels(reason='unknown_status').inc()
+        return uuid4()
+    if any(i < 0 for i in idxs):
+        PHASE4_PROVENANCE_MALFORMED_TOTAL.labels(reason='index_negative').inc()
+        return uuid4()
+    if any(i >= len(existing) for i in idxs):
+        # 'existing_index_oob' distinguishes this from the 'output_index_oob'
+        # bump in _phase_4_compare (where the bad index is into the OUTPUT
+        # observations array, not the existing one).
+        PHASE4_PROVENANCE_MALFORMED_TOTAL.labels(reason='existing_index_oob').inc()
+        return uuid4()
+    if len(set(idxs)) != len(idxs):
+        PHASE4_PROVENANCE_MALFORMED_TOTAL.labels(reason='index_duplicate').inc()
+        return uuid4()
+    keep = existing[min(idxs)]
+    # NOTE: MERGED_PREDECESSOR_TOTAL is bumped in the caller AFTER the
+    # collision-detection pass, so a UUID that gets discarded due to
+    # collision doesn't over-count as a real "predecessor dropped" event.
+    return keep.id
+
+
+def _drop_observation_in_place(mm: 'MentalModel', obs_id: UUID) -> None:
+    """Remove the observation whose `id == obs_id` from `mm.observations` in place.
+
+    Handles both dict-form (JSONB-loaded) and Observation-instance-form (mid-Phase-4)
+    entries. The `_refresh_observation` path no longer relies on this helper —
+    it computes the new observations list as a pure-Python operation outside
+    the session and binds it via an explicit CAS UPDATE
+    ``values(observations=new_observations)``. This helper is retained for
+    test scaffolding (tests bypass the CAS path) and for any future caller
+    that wants ORM-tracked in-place mutation; such a caller MUST persist via
+    ``flag_modified(mm, 'observations')`` before commit, OR (preferred) use
+    the CAS-UPDATE pattern from `_refresh_observation` Phase C.
+    """
+    obs_id_str = str(obs_id)
+    mm.observations = [
+        o
+        for o in mm.observations
+        if str(o.get('id') if isinstance(o, dict) else getattr(o, 'id', None)) != obs_id_str
+    ]
 
 
 class ReflectionEngine:
@@ -165,6 +261,14 @@ class ReflectionEngine:
             async with self.entity_session_factory() as session:
                 yield session
         else:
+            if self.session is None:
+                raise RuntimeError(
+                    'ReflectionEngine has neither entity_session_factory nor '
+                    'a shared session. Construct via get_reflection_engine() '
+                    'with entity_session_factory=metastore.session for the '
+                    'refresh-observation path, or pass a session for legacy '
+                    'single-session callers.'
+                )
             yield self.session
 
     async def reflect_batch(
@@ -622,6 +726,407 @@ class ReflectionEngine:
         mental_model.embedding = new_embedding
         return True
 
+    async def _refresh_observation(self, item: 'ReflectionQueue') -> None:
+        """Surgically refresh one observation after an MU deprio.
+
+        Three-phase shape — no DB transaction spans the LLM call, matching
+        the V18 invariant ("per-entity sessions release tx between phases"):
+
+          Phase A (short read tx)
+            Load the MentalModel for ``(item.entity_id, item.vault_id)``.
+            Locate the observation by ``obs.id == item.observation_id``;
+            if absent, idempotent ack via
+            ``REFRESH_OBSERVATION_TASK_OBS_ALREADY_PRUNED_TOTAL``.
+            Race re-check: query every sibling refresh-task row for the
+            same ``(entity, vault, obs)`` and read every ``source_unit_id``.
+            If NONE of those triggering MUs is still cited by
+            ``obs.evidence``, the deprio signal has already been absorbed;
+            idempotent ack via
+            ``REFRESH_OBSERVATION_TASK_ALREADY_ABSORBED_TOTAL``.
+            Compute ``live_ids`` = evidence MUs whose
+            ``is_deprioritized = False`` AND ``vault_id IN (item.vault_id,
+            GLOBAL_VAULT_ID)``. ``status`` is intentionally NOT filtered:
+            STALE evidence (note-supersession cascade) remains cited as
+            historical support — the historical-citation question was
+            deferred and STALE evidence is the de-facto audit trail.
+            Snapshot ``claimed_version``, the observation dict, the obs
+            index, and the surviving units into pure-Python state. Close
+            the session (releases its DB conn back to the pool).
+
+          Phase B (no DB session, no lock)
+            If ``live_ids`` is empty, the decision is `drop` — skip LLM.
+            Otherwise invoke ``RefreshObservationSignature`` to restate
+            content on the surviving evidence. The LLM call runs with NO
+            database transaction open and NO advisory/asyncio lock held.
+
+          Phase C (short write tx)
+            CAS UPDATE: ``WHERE id = mm.id AND version = claimed_version``.
+            ``rowcount = 0`` ⇒ Phase 5 or another refresh advanced the
+            version between Phase A and Phase C; raise
+            ``AdvisoryLockTakenError`` so the scheduler re-claims with
+            backoff WITHOUT bumping retry_count — concurrent contention is
+            not a failure. Apply the LLM's ``should_drop`` decision with
+            a retention guardrail: when
+            ``len(live_ids) >= min_evidence_for_obs_retention``, override
+            ``should_drop=True`` and keep the restated content.
+
+        Embedding stays on the refresh path — centroid drift is dominated
+        by full reflect; the next routine cycle recomputes it.
+        """
+        from memex_core.memory.sql_models import (
+            MemoryUnit,
+            MentalModel,
+            ReflectionQueue,
+        )
+
+        start = datetime.now(timezone.utc)
+        try:
+            # ---------- Phase A: short read tx ----------
+            mm_id: UUID
+            mm_entity_id: UUID
+            claimed_version: int
+            original_observations: list[Any]
+            obs: dict[str, Any]
+            obs_index: int
+            obs_id_str: str
+            evidence_list: list[Any]
+            live_ids: set[UUID]
+            obs_context: ReflectObservationContext | None = None
+            surviving_context: list[ReflectMemoryContext] = []
+
+            async with self._entity_session() as session:
+                mm_stmt = (
+                    select(MentalModel)
+                    .where(col(MentalModel.entity_id) == item.entity_id)
+                    .where(col(MentalModel.vault_id) == item.vault_id)
+                )
+                mm_result = await session.exec(mm_stmt)
+                mm = mm_result.first()
+                if mm is None:
+                    REFRESH_OBSERVATION_TASK_OBS_ALREADY_PRUNED_TOTAL.inc()
+                    return
+
+                claimed_version = mm.version
+                mm_id = mm.id
+                mm_entity_id = mm.entity_id
+                obs_id_str = str(item.observation_id)
+                obs_found: dict[str, Any] | None = None
+                obs_index_found: int | None = None
+                original_observations = list(mm.observations or [])
+                # JSONB-loaded observations are dicts in production. Phase 4
+                # reconstruction can transit ``Observation`` instances; the
+                # downstream CAS write needs dicts, so coerce via model_dump
+                # when present. Defensive — should not fire in steady state.
+                for i, candidate in enumerate(original_observations):
+                    if isinstance(candidate, dict):
+                        if str(candidate.get('id')) == obs_id_str:
+                            obs_found = candidate
+                            obs_index_found = i
+                            break
+                    else:
+                        cand_id = getattr(candidate, 'id', None)
+                        dump = getattr(candidate, 'model_dump', None)
+                        if str(cand_id) == obs_id_str and callable(dump):
+                            obs_found = dump(mode='json')
+                            obs_index_found = i
+                            break
+                if obs_found is None or obs_index_found is None:
+                    REFRESH_OBSERVATION_TASK_OBS_ALREADY_PRUNED_TOTAL.inc()
+                    return
+                obs = obs_found
+                obs_index = obs_index_found
+
+                # Sibling refresh-task lookup: read every IN-FLIGHT row's
+                # source_unit_id so the "already absorbed" check considers
+                # all triggering MUs from the deprio burst. Historical
+                # FAILED/DEAD_LETTER/completed-but-not-deleted rows are
+                # filtered out — their source MUs may have been re-cited
+                # since and shouldn't make the absorption check too strict.
+                #
+                # Trade-off: if a prior refresh for this observation went to
+                # DEAD_LETTER and the deprio'd MU is still cited in
+                # ``obs.evidence``, this task will proceed through the LLM
+                # call to re-drop it. That's redundant work but self-
+                # correcting: the CAS write replaces the observation in-
+                # place. The alternative (include DEAD_LETTER rows) would
+                # over-absorb when source MUs have been legitimately re-cited.
+                from memex_core.memory.sql_models import ReflectionStatus
+
+                # ``source_unit_id IS NOT NULL`` is intentional: rows with
+                # NULL ``source_unit_id`` carry no signal for the "already
+                # absorbed" check — they didn't originate from a specific
+                # deprio'd MU we can probe against. The current production
+                # paths (``_flip_deprioritized``, ``flush_deferred_observation_refresh``)
+                # ALWAYS set ``source_unit_id`` before enqueuing, so a NULL
+                # row would be an invariant violation. Excluding them keeps
+                # the absorption check from being relaxed by malformed rows
+                # rather than tightened; the explicit fallback on the next
+                # lines covers the legitimate "this is the only triggering
+                # row" case via ``item.source_unit_id``.
+                sibling_stmt = (
+                    select(ReflectionQueue.source_unit_id)
+                    .where(col(ReflectionQueue.entity_id) == item.entity_id)
+                    .where(col(ReflectionQueue.vault_id) == item.vault_id)
+                    .where(col(ReflectionQueue.observation_id) == item.observation_id)
+                    .where(col(ReflectionQueue.task_type) == 'refresh_observation')
+                    .where(col(ReflectionQueue.source_unit_id).is_not(None))
+                    .where(
+                        col(ReflectionQueue.status).in_(
+                            [ReflectionStatus.PENDING, ReflectionStatus.PROCESSING]
+                        )
+                    )
+                )
+                sibling_result = await session.exec(sibling_stmt)
+                triggering_unit_ids: set[str] = {
+                    str(sid) for sid in sibling_result.all() if sid is not None
+                }
+                if not triggering_unit_ids and item.source_unit_id is not None:
+                    triggering_unit_ids = {str(item.source_unit_id)}
+
+                evidence_list = obs.get('evidence') or []
+                cited_mu_strs = {
+                    str(e.get('memory_id'))
+                    for e in evidence_list
+                    if isinstance(e, dict) and e.get('memory_id') is not None
+                }
+                if triggering_unit_ids and not (triggering_unit_ids & cited_mu_strs):
+                    REFRESH_OBSERVATION_TASK_ALREADY_ABSORBED_TOTAL.inc()
+                    return
+
+                evidence_uuids: list[UUID] = []
+                for e in evidence_list:
+                    if not isinstance(e, dict):
+                        continue
+                    mid = e.get('memory_id')
+                    if mid is None:
+                        continue
+                    try:
+                        evidence_uuids.append(UUID(str(mid)))
+                    except (ValueError, TypeError):
+                        continue
+
+                live_ids = set()
+                if evidence_uuids:
+                    live_stmt = select(MemoryUnit.id).where(
+                        col(MemoryUnit.id).in_(evidence_uuids),
+                        col(MemoryUnit.is_deprioritized).is_(False),
+                        col(MemoryUnit.vault_id).in_([item.vault_id, GLOBAL_VAULT_ID]),
+                    )
+                    live_result = await session.exec(live_stmt)
+                    live_ids = set(live_result.all())
+
+                if live_ids:
+                    # Load full units inside the read session so we can build
+                    # the LLM context before the session closes — the LLM call
+                    # itself happens in Phase B with NO session open.
+                    live_units_stmt = select(MemoryUnit).where(
+                        col(MemoryUnit.id).in_(list(live_ids)),
+                        col(MemoryUnit.vault_id).in_([item.vault_id, GLOBAL_VAULT_ID]),
+                    )
+                    live_units_result = await session.exec(live_units_stmt)
+                    surviving_units = list(live_units_result.all())
+                    obs_context = ReflectObservationContext(
+                        index_id=0,
+                        title=str(obs.get('title') or ''),
+                        content=str(obs.get('content') or ''),
+                    )
+                    surviving_context = build_memory_context(surviving_units)
+            # ---------- Phase A end: session closed, no lock held ----------
+
+            # ---------- Phase B: LLM call (no DB tx, no lock) ----------
+            refreshed: RefreshedObservation | None = None
+            if live_ids and obs_context is not None:
+                try:
+                    refreshed = await self._invoke_refresh_signature_with_context(
+                        obs_context, surviving_context
+                    )
+                except (RuntimeError, ValueError) as e:
+                    # Wrap with the observation context so production logs
+                    # can pin a sporadic LLM failure to a specific obs.
+                    raise RuntimeError(
+                        f'refresh signature failed for observation '
+                        f'{obs_id_str} (entity {mm_entity_id}): {e}'
+                    ) from e
+
+            # ---------- Phase C: short write tx + CAS UPDATE ----------
+            reflect_cfg = self.config.server.memory.reflection
+            min_retention = reflect_cfg.min_evidence_for_obs_retention
+
+            should_drop = not live_ids  # zero-evidence ⇒ drop
+            zero_evidence_drop = should_drop
+            llm_drop_honored = False
+            llm_drop_overridden = False
+            empty_content_coerced = False
+            if refreshed is not None:
+                llm_drop = bool(refreshed.should_drop)
+                # Defensive: if the validator was bypassed (DSPy adapter swallowed
+                # the ValueError) we still receive should_drop=False with empty
+                # content/title. Treat as a drop and skip the retention guardrail
+                # — empty payload is unrecoverable regardless of evidence count.
+                # Tracked under its own counter so operators can distinguish
+                # validator-bypass coercions from honored LLM drops.
+                content_empty = not (
+                    (refreshed.content or '').strip() and (refreshed.title or '').strip()
+                )
+                if not llm_drop and content_empty:
+                    logger.warning(
+                        'refresh_observation: refreshed payload had empty content/title '
+                        'but should_drop=False; coercing to drop'
+                    )
+                    llm_drop = True
+                    empty_content_coerced = True
+                if llm_drop and not content_empty and len(live_ids) >= min_retention:
+                    logger.warning(
+                        'refresh_observation: LLM should_drop=True overridden; '
+                        'live_ids=%d, reason=%r',
+                        len(live_ids),
+                        refreshed.dropped_reason,
+                    )
+                    # Defer counter bump until AFTER CAS commit succeeds —
+                    # on CAS abandon we re-run Phase C on the next claim
+                    # and would otherwise double-count the override.
+                    llm_drop_overridden = True
+                    llm_drop = False
+                if llm_drop:
+                    should_drop = True
+                    # Only attribute to LLM_drop_honored when the LLM actually
+                    # set should_drop=True. Empty-content coercion uses its
+                    # own counter (see EMPTY_CONTENT_COERCED below).
+                    if not empty_content_coerced:
+                        llm_drop_honored = True
+
+            # Build the new observations list as a pure-Python operation.
+            if should_drop:
+                new_observations = [
+                    o
+                    for o in original_observations
+                    if str(o.get('id') if isinstance(o, dict) else getattr(o, 'id', None))
+                    != obs_id_str
+                ]
+            elif refreshed is not None:
+                live_strs = {str(u) for u in live_ids}
+                new_evidence = [
+                    e
+                    for e in evidence_list
+                    if isinstance(e, dict) and str(e.get('memory_id')) in live_strs
+                ]
+                new_obs = dict(obs)
+                new_obs['content'] = refreshed.content
+                new_obs['title'] = refreshed.title
+                new_obs['evidence'] = new_evidence
+                new_observations = list(original_observations)
+                new_observations[obs_index] = new_obs
+            else:
+                # Unreachable: should_drop=False implies refreshed is not None.
+                new_observations = list(original_observations)
+
+            now = datetime.now(timezone.utc)
+            async with self._entity_session() as session:
+                # Re-validate live_ids inside the write tx. Without this, a
+                # concurrent _flip_deprioritized(unit_X) committed during
+                # Phase B would have its refresh-task enqueue DEDUPED away
+                # by the partial UNIQUE (our row is still PROCESSING), and
+                # we'd then commit observations still citing the now-deprio'd
+                # X — the exact deprio leak this feature closes. Abandoning
+                # the cycle (raise → reclaim without retry bump) is the
+                # correct response: the re-run reads the current state.
+                if evidence_uuids:
+                    revalidate_stmt = select(MemoryUnit.id).where(
+                        col(MemoryUnit.id).in_(evidence_uuids),
+                        col(MemoryUnit.is_deprioritized).is_(False),
+                        col(MemoryUnit.vault_id).in_([item.vault_id, GLOBAL_VAULT_ID]),
+                    )
+                    revalidate_result = await session.exec(revalidate_stmt)
+                    current_live_ids = set(revalidate_result.all())
+                    if current_live_ids != live_ids:
+                        REFLECTION_CAS_ABANDONS_TOTAL.inc()
+                        raise RefreshStaleReadError(
+                            f'refresh live-evidence changed between Phase A and '
+                            f'Phase C for entity {mm_entity_id}: phase_a='
+                            f'{len(live_ids)}, current={len(current_live_ids)}; '
+                            'reclaim'
+                        )
+
+                cas_stmt = (
+                    sa_update(MentalModel)
+                    .where(col(MentalModel.id) == mm_id)
+                    .where(col(MentalModel.version) == claimed_version)
+                    .values(
+                        observations=new_observations,
+                        version=claimed_version + 1,
+                        last_refreshed=now,
+                    )
+                    .execution_options(synchronize_session=False)
+                )
+                cas_result = await session.execute(cas_stmt)
+                rowcount = getattr(cas_result, 'rowcount', 0) or 0
+                if rowcount == 0:
+                    REFLECTION_CAS_ABANDONS_TOTAL.inc()
+                    raise RefreshCASAbandonedError(
+                        f'refresh CAS abandoned for entity {mm_entity_id} '
+                        f'(version {claimed_version} advanced concurrently); reclaim'
+                    )
+                await session.commit()
+            # Counters only on successful CAS commit. On CAS abandon, none
+            # of these fire — the re-claim will re-decide and re-tick.
+            if zero_evidence_drop:
+                REFRESH_OBSERVATION_TASK_ZERO_EVIDENCE_TOTAL.inc()
+            elif empty_content_coerced:
+                REFRESH_OBSERVATION_EMPTY_CONTENT_COERCED_TOTAL.inc()
+            elif llm_drop_honored:
+                REFRESH_OBSERVATION_TASK_DROPPED_BY_LLM_TOTAL.inc()
+            elif llm_drop_overridden:
+                REFRESH_OBSERVATION_DROP_OVERRIDDEN_TOTAL.inc()
+            REFRESH_OBSERVATION_TASK_COMPLETED_TOTAL.inc()
+        finally:
+            # Latency includes claim-to-outcome wall clock for ALL paths,
+            # including CAS abandons and ``AdvisoryLockTakenError`` raises.
+            # Intentional — operators care about end-to-end latency under
+            # contention, not just the happy path. Filter by counter ratios
+            # if a CAS-abandon-only or happy-path-only view is needed.
+            REFRESH_OBSERVATION_TASK_LATENCY_SECONDS.observe(
+                (datetime.now(timezone.utc) - start).total_seconds()
+            )
+
+    async def _invoke_refresh_signature_with_context(
+        self,
+        obs_context: ReflectObservationContext,
+        surviving_context: list[ReflectMemoryContext],
+    ) -> RefreshedObservation:
+        """Invoke RefreshObservationSignature with pre-built contexts.
+
+        Contexts are built inside Phase A (read tx) so the LLM call here
+        runs with NO database session open and NO advisory lock held.
+        Raises ``RuntimeError`` on transient LLM failure or malformed
+        output. The scheduler's per-item handler catches this and calls
+        ``mark_queue_item_failed`` — retry_count is incremented and the
+        row is re-claimed on the next tick (DEAD_LETTERs after
+        max_retries).
+        """
+        if self.lm is None:
+            raise RuntimeError('LM must be initialized')
+        predictor = dspy.Predict(RefreshObservationSignature)
+        result = await run_dspy_operation(
+            lm=self.lm,
+            predictor=predictor,
+            input_kwargs={
+                'observation': obs_context,
+                'surviving_evidence': surviving_context,
+            },
+            operation_name='reflection.refresh_observation',
+        )
+        if result is None:
+            raise RuntimeError(
+                'RefreshObservationSignature: transient LLM failure '
+                '(run_dspy_operation returned None)'
+            )
+        refreshed = getattr(result, 'refreshed', None)
+        if refreshed is None:
+            raise RuntimeError(
+                'RefreshObservationSignature: malformed LLM output (missing refreshed field)'
+            )
+        return refreshed
+
     async def _phase_6_enrich(
         self,
         entity_name: str,
@@ -655,12 +1160,22 @@ class ReflectionEngine:
             return
 
         async with self._entity_session() as ph6_session:
-            # 2. Build unit map from recent_memories, load any missing from DB
-            unit_map: dict[UUID, MemoryUnit] = {m.id: m for m in recent_memories}
+            # 2. Build unit map from recent_memories, load any missing from DB.
+            # Exclude deprio'd MUs from both arms: the secondary fetch filters
+            # ``is_deprioritized=False`` and the pre-existing map drops any
+            # deprio'd unit ALREADY present in ``recent_memories`` — without
+            # this, an in-memory MU flipped to deprio'd between Phase 0 and
+            # Phase 6 would still get its tsvector/tags strengthened here.
+            unit_map: dict[UUID, MemoryUnit] = {
+                m.id: m for m in recent_memories if not m.is_deprioritized
+            }
             missing_ids = set(evidence_ids.keys()) - set(unit_map.keys())
 
             if missing_ids:
-                stmt = select(MemoryUnit).where(col(MemoryUnit.id).in_(list(missing_ids)))
+                stmt = select(MemoryUnit).where(
+                    col(MemoryUnit.id).in_(list(missing_ids)),
+                    col(MemoryUnit.is_deprioritized).is_(False),
+                )
                 result = await ph6_session.exec(stmt)
                 for unit in result.all():
                     unit_map[unit.id] = unit
@@ -866,6 +1381,7 @@ class ReflectionEngine:
             )
             .join(MemoryUnit, col(UnitEntity.unit_id) == col(MemoryUnit.id))
             .where(col(MemoryUnit.status) == ContentStatus.ACTIVE)
+            .where(col(MemoryUnit.is_deprioritized).is_(False))
             .where(col(UnitEntity.entity_id).in_(entity_ids))
         )
 
@@ -994,6 +1510,7 @@ class ReflectionEngine:
             async with self._entity_session() as ph0_session:
                 live_stmt = select(MemoryUnit.id).where(
                     col(MemoryUnit.id).in_(list(all_evidence_ids)),
+                    col(MemoryUnit.is_deprioritized).is_(False),
                     (col(MemoryUnit.vault_id) == vault_id)
                     | (col(MemoryUnit.vault_id) == GLOBAL_VAULT_ID),
                 )
@@ -1150,6 +1667,7 @@ class ReflectionEngine:
                     limit=self.config.server.memory.reflection.search_limit,
                     threshold=self.config.server.memory.reflection.similarity_threshold,
                     vault_ids=[vault_id],
+                    reflect_input_only=True,
                 )
 
                 if not similar_items:
@@ -1198,8 +1716,9 @@ class ReflectionEngine:
         query = (
             select(MemoryUnit)
             .where(
+                col(MemoryUnit.is_deprioritized).is_(False),
                 (col(MemoryUnit.vault_id) == vault_id)
-                | (col(MemoryUnit.vault_id) == GLOBAL_VAULT_ID)
+                | (col(MemoryUnit.vault_id) == GLOBAL_VAULT_ID),
             )
             .order_by(func.random())
             .limit(sample_size)
@@ -1378,9 +1897,41 @@ class ReflectionEngine:
         if not result or not result.result or not result.result.observations:
             raise RuntimeError('Phase 4 Compare failed (LLM output error).')
 
-        # 4. Reconstruct Observations
+        # 4. Reconstruct Observations.
+        # Stable IDs come from result.result.provenance: lowest-existing-index wins
+        # on 'merged'/'kept'; 'added' or malformed → fresh uuid4(). The default_factory
+        # on Observation.id handles the fresh-uuid4 path.
+        provenance = getattr(result.result, 'provenance', None) or []
+        output_count = len(result.result.observations)
+        if not provenance:
+            # LLM omitted the entire list — every output observation gets a
+            # fresh uuid4, losing all existing stable IDs for this entity.
+            # One increment per occurrence keeps the counter unitary; the
+            # ``output_count`` breadth is observable separately via the
+            # phase 4 output_count histogram if/when it lands.
+            PHASE4_PROVENANCE_MALFORMED_TOTAL.labels(reason='empty').inc()
+        elif len(provenance) != output_count:
+            PHASE4_PROVENANCE_MALFORMED_TOTAL.labels(reason='length_mismatch').inc()
+            provenance = []  # ignore the entire list; per-output fresh uuid4
+
+        # Build lookup by output_index (LLM may emit out-of-order entries).
+        # Track existing UUIDs already consumed by a 'merged'/'kept' output so
+        # the same UUID can't be assigned to two output observations (which
+        # would leave one un-refreshable via observation_id).
+        provenance_by_index: dict[int, Any] = {}
+        for prov in provenance:
+            out_idx = getattr(prov, 'output_index', None)
+            if isinstance(out_idx, int) and 0 <= out_idx < output_count:
+                provenance_by_index[out_idx] = prov
+            else:
+                # 'output_index_oob' distinguishes this from
+                # 'existing_index_oob' in `_resolve_provenance_uuid` —
+                # different prompt-drift signals deserve separate labels.
+                PHASE4_PROVENANCE_MALFORMED_TOTAL.labels(reason='output_index_oob').inc()
+
         final_list = []
-        for val_obs in result.result.observations:
+        seen_uuids: set[UUID] = set()
+        for i, val_obs in enumerate(result.result.observations):
             evidence_models = []
             for ev in val_obs.evidence:
                 try:
@@ -1405,8 +1956,31 @@ class ReflectionEngine:
             # Compute Trend based on evidence timestamps
             trend = compute_trend(evidence_models)
 
+            prov_entry = provenance_by_index.get(i)
+            obs_id = _resolve_provenance_uuid(prov_entry, existing)
+            # Collision: two outputs resolved to the same existing UUID (e.g.
+            # the LLM reused 'merged' indices across outputs). Fall back to
+            # uuid4 for the second occurrence; the first keeps the stable id.
+            collided = obs_id in seen_uuids
+            if collided:
+                PHASE4_PROVENANCE_MALFORMED_TOTAL.labels(reason='uuid_collision').inc()
+                obs_id = uuid4()
+            seen_uuids.add(obs_id)
+            # Predecessor counting: only count when we kept the lowest-idx UUID
+            # (no collision). On collision the merge output is downgraded to
+            # 'added' (fresh uuid4); the "predecessors dropped" framing no
+            # longer applies — counting it would inflate the metric.
+            if not collided and prov_entry is not None:
+                idxs = getattr(prov_entry, 'merged_from_existing_indices', None) or []
+                # `_resolve_provenance_uuid` only returns a stable existing UUID
+                # when status in {'kept', 'merged'} and all indices were valid;
+                # in that case len(idxs) > 1 means N-1 UUIDs were discarded.
+                if len(idxs) > 1 and all(0 <= idx < len(existing) for idx in idxs):
+                    REFRESH_OBSERVATION_MERGED_PREDECESSOR_TOTAL.inc(len(idxs) - 1)
+
             final_list.append(
                 Observation(
+                    id=obs_id,
                     title=val_obs.title,
                     content=val_obs.content,
                     evidence=evidence_models,

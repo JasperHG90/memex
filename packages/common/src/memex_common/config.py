@@ -593,6 +593,61 @@ class ReflectionConfig(BaseModel):
             'observing CONFIDENCE_VARIANCE_OBSERVED populates as expected.'
         ),
     )
+    refresh_obs_priority_lane: bool = Field(
+        default=True,
+        description=(
+            'When True, refresh-observation tasks land on the priority lane and '
+            'are claimed ahead of regular reflect tasks. Default True so the agent '
+            'sees its deprio signal honored quickly. '
+            'STARVATION RISK: a large deprio burst (many MUs deprio`d in quick '
+            'succession, each citing many observations) can monopolize the '
+            'priority lane and delay regular reflect cycles. Empirically the '
+            'priority lane drains quickly because each refresh task is bounded '
+            'in work; if you observe reflect-lane staleness coinciding with '
+            'priority-lane queue depth >100, flip this to False and let refresh '
+            'compete on score with regular reflects.'
+        ),
+    )
+    min_evidence_for_obs_retention: int = Field(
+        default=2,
+        ge=0,
+        description=(
+            'Guardrail against LLM false-positive should_drop=True in '
+            '_refresh_observation: if surviving_evidence_count >= this threshold, '
+            'override the drop and keep the observation with re-stated content. '
+            'Default 2 — engages only when at least 2 evidence items survive, so '
+            'tiny-evidence observations remain LLM-authoritative.'
+        ),
+    )
+    refresh_obs_retry_backoff_min_seconds: int = Field(
+        default=2,
+        ge=1,
+        description='Minimum jitter window for AdvisoryLockTakenError re-claim backoff.',
+    )
+    refresh_obs_retry_backoff_max_seconds: int = Field(
+        default=5,
+        ge=1,
+        description=(
+            'Maximum jitter window for AdvisoryLockTakenError re-claim backoff. '
+            'Tight default (2-5s); raise proportionally if you tune '
+            'background_reflection_interval_seconds below 30s.'
+        ),
+    )
+    reconcile_historical_deprios_on_boot: bool = Field(
+        default=False,
+        description=(
+            'When False (default), the reconcile pass on scheduler ticks only repairs '
+            'refresh-task rows missing for MUs deprio`d since deploy. When True, the '
+            'reconcile pass also drains historical (pre-V21) deprio`d MUs that lack '
+            'refresh tasks. Flip True after eval data is captured.'
+        ),
+    )
+    reconcile_batch_size: int = Field(
+        default=50,
+        ge=1,
+        le=500,
+        description='Per-tick reconcile-pass batch size; caps work per scheduler tick.',
+    )
 
     @model_validator(mode='after')
     def _validate_weight_scores(v: 'ReflectionConfig'):
@@ -601,6 +656,23 @@ class ReflectionConfig(BaseModel):
         if weight > 1:
             raise ValueError(
                 "'Urgency', 'resonance', and 'importance' weights should count up to 1 exactly."
+            )
+        return v
+
+    @model_validator(mode='after')
+    def _validate_refresh_backoff_window(v: 'ReflectionConfig'):
+        """Assert min <= max for the refresh-retry backoff jitter window.
+
+        ``random.uniform(min, max)`` silently swaps endpoints if min > max,
+        so a misconfig produces a degenerate jitter distribution without an
+        error. Reject the misconfig up-front.
+        """
+        if v.refresh_obs_retry_backoff_min_seconds > v.refresh_obs_retry_backoff_max_seconds:
+            raise ValueError(
+                'refresh_obs_retry_backoff_min_seconds '
+                f'({v.refresh_obs_retry_backoff_min_seconds}) must be <= '
+                'refresh_obs_retry_backoff_max_seconds '
+                f'({v.refresh_obs_retry_backoff_max_seconds}).'
             )
         return v
 

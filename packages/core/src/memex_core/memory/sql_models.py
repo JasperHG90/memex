@@ -194,6 +194,16 @@ class MentalModel(SQLModel, table=True):  # type: ignore
             'vault_id',
             unique=True,
         ),
+        # JSONB containment GIN — supports vault-scoped scans for observations
+        # citing a deprioritized MU (deprio → refresh-task enqueue path).
+        # Created by migration 044. Declared here so alembic autogenerate does
+        # NOT emit a spurious drop_index for it on future revisions.
+        Index(
+            'idx_mental_models_observations_gin',
+            'observations',
+            postgresql_using='gin',
+            postgresql_ops={'observations': 'jsonb_path_ops'},
+        ),
     )
 
 
@@ -1320,6 +1330,33 @@ class ReflectionQueue(SQLModel, table=True):  # type: ignore
         description='Error message from the most recent failure.',
     )
 
+    task_type: str = Field(
+        default='reflect',
+        sa_column=Column(Text, nullable=False, server_default=sql_text("'reflect'")),
+        description=(
+            "'reflect' = full Phase 0-6 entity reflection; 'refresh_observation' = "
+            'surgical re-synthesis of a single observation after MU deprio.'
+        ),
+    )
+    observation_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(SA_UUID(), nullable=True),
+        description='Refresh-task payload: the observation in mental_models.observations to refresh.',
+    )
+    priority_lane: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, nullable=False, server_default='false'),
+        description='True for refresh tasks and restore-driven priority reflects; claimed ahead of regular tasks.',
+    )
+    source_unit_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(SA_UUID(), nullable=True),
+        description=(
+            'The MU whose deprio triggered the refresh. Used by the post-lock '
+            'sibling-query re-check in _refresh_observation.'
+        ),
+    )
+
     # Relationships
 
     entity: 'Entity' = Relationship()
@@ -1332,12 +1369,41 @@ class ReflectionQueue(SQLModel, table=True):  # type: ignore
         ),
         Index('idx_reflection_queue_status', 'status'),
         CheckConstraint("status IN ('pending', 'processing', 'failed', 'dead_letter')"),
-        # Ensure only one pending/processing task per entity per vault
-        # Note: Standard SQL UNIQUE considers NULLs distinct.
-        # We rely on the application layer (ReflectionQueueService) to handle the logic for global (NULL) vault uniqueness,
-        # or we could use a partial index if strictly necessary.
-        # For now, a composite index helps lookups.
-        Index('idx_reflection_queue_entity_vault', 'entity_id', 'vault_id'),
+        CheckConstraint(
+            "task_type IN ('reflect', 'refresh_observation')",
+            name='ck_reflection_queue_task_type',
+        ),
+        # The three partial indices created in migration 043 are mirrored here
+        # so alembic autogenerate does NOT emit drop_index for them on future
+        # revisions. Predicate text is rendered by SQLAlchemy in a normalized
+        # form; the migration uses raw SQL with literal-string predicates that
+        # Postgres canonicalizes to the same shape.
+        Index(
+            'idx_reflection_queue_lane_priority',
+            sql_text('priority_lane DESC'),
+            sql_text('priority_score DESC'),
+            'last_queued_at',
+            postgresql_where=sql_text("status IN ('pending', 'failed')"),
+        ),
+        Index(
+            'idx_reflection_queue_refresh_unique',
+            'entity_id',
+            'vault_id',
+            'observation_id',
+            unique=True,
+            postgresql_where=sql_text(
+                "task_type = 'refresh_observation' AND status IN ('pending', 'processing')"
+            ),
+        ),
+        Index(
+            'idx_reflection_queue_entity_vault_active_unique',
+            'entity_id',
+            'vault_id',
+            unique=True,
+            postgresql_where=sql_text(
+                "task_type = 'reflect' AND status IN ('pending', 'processing')"
+            ),
+        ),
     )
 
 

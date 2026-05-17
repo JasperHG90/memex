@@ -2,8 +2,11 @@
 DSPy prompts and signatures for the Hindsight Reflect Loop.
 """
 
+from typing import Literal
+from uuid import UUID
+
 import dspy
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 # Shared strict description for index-based citations
 EVIDENCE_INDEX_DESCRIPTION = (
@@ -139,6 +142,14 @@ class UpdateExistingSignature(dspy.Signature):
 
 
 class ValidatedObservation(BaseModel):
+    id: UUID | None = Field(
+        default=None,
+        description=(
+            'Stable identifier for this observation. LLMs do not mint UUIDs; '
+            'this field is populated by the reconstruction layer from the provenance '
+            'mapping (existing UUID for merged/kept observations, fresh uuid4 for added).'
+        ),
+    )
     title: str = Field(description='Concise title for the observation.')
     content: str = Field(description='Detailed content of the observation.')
     evidence: list[NewEvidenceItem] = Field(description='List of verified supporting evidence.')
@@ -176,11 +187,45 @@ class ValidatePhaseSignature(dspy.Signature):
 # =============================================================================
 
 
+class ObservationProvenance(BaseModel):
+    """Per-output provenance entry telling the reconstruction layer how to pick a stable UUID.
+
+    The LLM emits one entry per item in ``ComparePhaseOutput.observations`` (same index).
+    """
+
+    output_index: int = Field(
+        description='Index into ComparePhaseOutput.observations this provenance entry describes.',
+    )
+    status: Literal['added', 'merged', 'kept'] = Field(
+        description=(
+            "'added' for a genuinely new observation (no existing predecessors); "
+            "'merged' when this output combines two or more existing observations; "
+            "'kept' when this output reuses a single existing observation unchanged."
+        ),
+    )
+    merged_from_existing_indices: list[int] = Field(
+        default_factory=list,
+        description=(
+            "0-based indices into the 'existing_context' input that this output corresponds to. "
+            "Empty for status='added'. One index for 'kept'. Two or more for 'merged'. "
+            'Example: if output index 0 combines existing #1 and existing #2, emit '
+            "{output_index: 0, status: 'merged', merged_from_existing_indices: [1, 2]}."
+        ),
+    )
+
+
 class ComparePhaseOutput(BaseModel):
     observations: list[ValidatedObservation] = Field(
         description='The final merged list of observations.'
     )
-    changes_summary: dict = Field(description='Summary of what was added, merged, or removed.')
+    provenance: list[ObservationProvenance] = Field(
+        default_factory=list,
+        description=(
+            'Per-output provenance entry (same length as observations). Tells the '
+            'reconstruction layer how to assign stable UUIDs: reuse the existing UUID '
+            "for 'merged' (lowest index wins) or 'kept', mint fresh for 'added'."
+        ),
+    )
     entity_summary: str = Field(
         description='One-sentence summary of this entity based on all observations. English only.'
     )
@@ -286,4 +331,74 @@ class EnrichmentSignature(dspy.Signature):
 
     enrichments: list[EnrichedTagSet] = dspy.OutputField(
         desc='Enriched tag sets for each memory that warrants new tags. May be shorter than input.'
+    )
+
+
+# =============================================================================
+# REFRESH: surgical re-synthesis of a single observation on surviving evidence
+# =============================================================================
+
+
+class RefreshedObservation(BaseModel):
+    """Result of re-synthesizing an observation on a strictly-smaller evidence set."""
+
+    content: str = Field(
+        description=(
+            'Restated observation content on the surviving evidence. If the surviving '
+            'evidence still supports the original observation, you may restate it with '
+            'unchanged content; otherwise rewrite it to reflect only what the evidence supports.'
+        ),
+    )
+    title: str = Field(
+        description='Observation title — unchanged unless the surviving evidence no longer supports it.',
+    )
+    should_drop: bool = Field(
+        default=False,
+        description=(
+            'True if the surviving evidence no longer supports any coherent observation. '
+            'Use sparingly; the caller applies a retention guardrail and may override.'
+        ),
+    )
+    dropped_reason: str | None = Field(
+        default=None,
+        description='When should_drop=True, a one-line rationale recorded in logs/metrics.',
+    )
+
+    @model_validator(mode='after')
+    def _non_empty_when_keeping(self) -> 'RefreshedObservation':
+        """Reject blank content/title when should_drop=False.
+
+        Without this, an LLM that returns ``RefreshedObservation(content='',
+        title='', should_drop=False)`` would persist a degenerate observation.
+        Raising forces the caller's `_invoke_refresh_signature_with_context`
+        to treat the result as malformed — scheduler marks the task failed,
+        retry_count++, eventually DEAD_LETTERs.
+        """
+        if not self.should_drop:
+            if not (self.content or '').strip():
+                raise ValueError('RefreshedObservation.content is empty but should_drop=False')
+            if not (self.title or '').strip():
+                raise ValueError('RefreshedObservation.title is empty but should_drop=False')
+        return self
+
+
+class RefreshObservationSignature(dspy.Signature):
+    """Re-synthesise a single observation on a strictly-smaller evidence set.
+
+    Some of the original supporting memories have been pruned (deprioritized or stale).
+    State only what the surviving evidence supports; if support is insufficient,
+    set should_drop=True with a brief dropped_reason.
+
+    STRICT RULE: All output text MUST be in English.
+    """
+
+    observation: ReflectObservationContext = dspy.InputField(
+        desc='The existing observation under review (title + content).'
+    )
+    surviving_evidence: list[ReflectMemoryContext] = dspy.InputField(
+        desc='Memory units that still support the observation; may be empty.'
+    )
+
+    refreshed: RefreshedObservation = dspy.OutputField(
+        desc='Updated observation, or a drop signal if surviving evidence is insufficient.'
     )

@@ -54,11 +54,17 @@ def test_record_outcome_specifies_verb_enum() -> None:
         assert verb in desc
 
 
-def test_deprioritize_warns_about_virtual_units() -> None:
+def test_deprioritize_warns_about_observation_uuid_400() -> None:
+    """V21: observation UUIDs return HTTP 400 with source_memory_units, not 404.
+
+    The description must mention the new structured-400 contract so the
+    agent can redirect against the listed MU IDs.
+    """
     desc = td.MEMEX_MEMORY_DEPRIORITIZE_DESC
     assert 'virtual' in desc.lower()
-    assert '404' in desc
     assert 'unit_metadata.virtual' in desc
+    assert 'HTTP 400' in desc or '400' in desc
+    assert 'source_memory_units' in desc
 
 
 def test_deprioritize_marks_non_destructive() -> None:

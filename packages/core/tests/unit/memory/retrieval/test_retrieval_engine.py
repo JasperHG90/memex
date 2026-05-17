@@ -76,6 +76,34 @@ async def test_convert_mm_to_units():
     assert units[1].text == '[Test Model] Obs 2: Content 2'
     assert units[1].unit_metadata['trend'] == 'stale'
 
+    # V21: virtual_id == observation.id (stable uuid4 from Phase 4 provenance),
+    # NOT a uuid5 hash of (model.id, title).
+    assert units[0].id == obs1.id
+    assert units[1].id == obs2.id
+
+
+@pytest.mark.asyncio
+async def test_convert_mm_to_units_legacy_obs_dict_without_id_falls_back_to_uuid5():
+    """Legacy JSONB rows that predate Observation.id falling-back to uuid5."""
+    from uuid import uuid5
+    from memex_core.memory.retrieval.engine import _VIRTUAL_UNIT_NS
+
+    engine = RetrievalEngine(embedder=MagicMock(), reranker=MagicMock())
+    mm_id = uuid4()
+    # Legacy dict shape — no 'id' key (predates V21).
+    legacy_obs = {'title': 'Legacy', 'content': 'old', 'evidence': []}
+    model = MentalModel(
+        id=mm_id,
+        name='M',
+        summary='',
+        observations=[legacy_obs],
+        last_refreshed=datetime(2024, 1, 1, tzinfo=timezone.utc),
+    )
+    units = engine._convert_mm_to_units(model)
+    assert len(units) == 1
+    expected = uuid5(_VIRTUAL_UNIT_NS, f'{mm_id}:Legacy')
+    assert units[0].id == expected
+
 
 @pytest.mark.asyncio
 async def test_retrieve_empty_results(mock_embedder):

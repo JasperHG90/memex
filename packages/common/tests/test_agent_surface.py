@@ -22,7 +22,7 @@ from memex_common import agent_surface as ags
 # ---------------------------------------------------------------------------
 
 
-_UNIVERSAL_CHAR_CAP = 6_800  # ~1,943 tokens at 3.5 chars/token (empirical cl100k)
+_UNIVERSAL_CHAR_CAP = 7_200  # ~2,057 tokens at 3.5 chars/token (empirical cl100k)
 # Bumped 5,500 → 6,000 when CRITICAL_HEADER / VIRTUAL_UNIT / CRITICAL_FOOTER
 # adopted `<critical_constraint name="…">` XML tags (Anthropic best practice:
 # XML disambiguates load-bearing constraints; the model attends more reliably
@@ -38,6 +38,12 @@ _UNIVERSAL_CHAR_CAP = 6_800  # ~1,943 tokens at 3.5 chars/token (empirical cl100
 # in KV namespace picking (app: was losing to user: in eval); (b) "lock the
 # lesson in" / "record it as a success" → ``memex_record_outcome`` on
 # existing units, NEVER a fresh ``memex_add_note``. Worth the cache cost.
+# Bumped 6,800 → 7,200 when the deprio-leak fix expanded VIRTUAL_UNIT to
+# describe the new HTTP 400 + ``source_memory_units`` contract (observations
+# are read-only projections of MUs; deprio on an observation UUID is
+# redirected to the underlying MU IDs). The expanded prose lands the
+# behavioural contract directly in the universal surface rather than
+# relying on the per-tool description alone.
 
 
 def _approx_tokens(text: str) -> int:
@@ -84,9 +90,9 @@ _REQUIRED_KEYWORDS: tuple[str, ...] = (
     'units=[{unit_id, verb, reason}]',
     'success=True',  # the bare-success rejection
     '400',
-    # Virtual unit invariant.
+    # Read-only observations invariant (V21).
     'unit_metadata.virtual',
-    '404',
+    'source_memory_units',
     # KV namespace prefixes.
     'user:',
     'project:<id>:',

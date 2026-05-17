@@ -60,10 +60,11 @@ def _tool_call_outcomes():
 
 class TestSuiteStructure:
     def test_scenarios_count(self) -> None:
-        # 29 = 31 original minus two FSRS-tool xfail tripwires
-        # (`review_loop_drives_due`, `review_loop_records_rating`) that the
-        # FSFM rip-out removed the MCP tools for. See suite docstring.
-        assert len(SUITE.scenarios) == 29
+        # 32 = 31 prior + `feedback_deprioritize_observation_400_recovery`
+        # (V21 400-with-source_memory_units contract). The earlier note
+        # in this comment claimed 29 but additional KV-register scenarios
+        # had landed in the meantime without the count being refreshed.
+        assert len(SUITE.scenarios) == 32
 
     def test_scenario_ids_unique(self) -> None:
         ids = [s.id for s in SUITE.scenarios]
@@ -148,6 +149,7 @@ class TestMutatingDiscipline:
         'feedback_records_success',
         'feedback_clarifies_under_ambiguity',
         'feedback_deprioritize_obsolete',
+        'feedback_deprioritize_observation_400_recovery',
         'kv_writes_project_preference',
         'kv_writes_user_preference',
         'kv_writes_global_convention',
@@ -155,8 +157,6 @@ class TestMutatingDiscipline:
         'lifecycle_append_meeting',
         'lifecycle_archive_legacy_warehouse_note',
         'lifecycle_append_parent_remains_retrievable',
-        'review_loop_drives_due',
-        'review_loop_records_rating',
         'asset_lifecycle_detach',
     }
 
@@ -247,6 +247,7 @@ class TestCorpus:
             'quarterly-revenue-q3.md',
             'march-meeting-notes.md',
             'sarah-chen-profile.md',
+            'kafka-batching-strategy.md',
         }
         present = {p.name for p in _CORPUS_DIR.iterdir() if p.suffix == '.md'}
         missing = required - present

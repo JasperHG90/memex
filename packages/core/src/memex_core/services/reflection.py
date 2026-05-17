@@ -8,6 +8,7 @@ from typing import Any, Literal
 from uuid import UUID
 
 import dspy
+from sqlalchemy import text
 
 from memex_common.config import GLOBAL_VAULT_ID
 from memex_core.config import MemexConfig
@@ -19,7 +20,7 @@ from memex_core.memory.reflect.models import (
     ReflectionResult,
 )
 from memex_core.memory.reflect.queue_service import ReflectionQueueService
-from memex_core.memory.sql_models import Observation
+from memex_core.memory.sql_models import Observation, ReflectionQueue
 from memex_core.memory.models.protocols import EmbeddingsModel
 from memex_core.services.audit import AuditService, audit_event
 from memex_core.services.rate_limit import (
@@ -362,10 +363,149 @@ class ReflectionService:
                 session, limit=limit, vault_id=vault_id
             )
 
+    async def refresh_observation(self, item: 'ReflectionQueue') -> None:
+        """Execute a single refresh-observation task end-to-end.
+
+        Constructs a per-call ``ReflectionEngine`` (mirrors the existing
+        per-batch construction in ``reflect_batch_detailed``) and invokes
+        the engine's ``_refresh_observation`` — which opens its own short
+        per-phase sessions internally (Phase A read, Phase C write). On
+        success, opens a fresh session to delete the queue row via
+        ``complete_refresh``.
+
+        No outer session is held across the LLM call: holding a pool
+        connection idle while the LLM round-trip runs would halve effective
+        pool size under refresh load.
+
+        Raises ``AdvisoryLockTakenError`` for the scheduler to treat as a
+        reclaim-without-retry-bump. Other exceptions propagate to the
+        scheduler's per-item error handler which calls ``mark_failed``.
+        """
+        from memex_core.memory.reflect.reflection import get_reflection_engine
+
+        # The refresh path uses ``entity_session_factory`` exclusively —
+        # the engine never reads ``self.session``. We still pass session=
+        # None because ``_entity_session`` raises a loud RuntimeError if
+        # any future code path on this engine instance accidentally falls
+        # through to ``self.session``.
+        engine = get_reflection_engine(
+            session=None,  # type: ignore[arg-type]
+            config=self.config,
+            embedder=self.embedding_model,
+            entity_session_factory=self.metastore.session,
+        )
+        await engine._refresh_observation(item)
+        async with self.metastore.session() as session:
+            await self.queue_service.complete_refresh(session, item)
+
+    async def reclaim_refresh_with_backoff(self, item: 'ReflectionQueue') -> None:
+        """Reset a refresh task to PENDING with a jittered last_queued_at.
+
+        Used by the scheduler when ``_refresh_observation`` raises
+        ``AdvisoryLockTakenError``. ``retry_count`` is NOT incremented —
+        advisory-lock contention is transient, not a failure.
+        """
+        import random
+
+        cfg = self.config.server.memory.reflection
+        jitter = random.uniform(
+            float(cfg.refresh_obs_retry_backoff_min_seconds),
+            float(cfg.refresh_obs_retry_backoff_max_seconds),
+        )
+        async with self.metastore.session() as session:
+            await self.queue_service.reclaim_with_backoff(session, item, jitter)
+
+    async def mark_item_failed(self, item: 'ReflectionQueue', error: str) -> None:
+        """Mark a specific claimed queue item as failed, filtered by task_type.
+
+        Refresh-observation failures filter by ``observation_id`` so they
+        don't bump retry_count on a co-pending reflect task for the same
+        entity.
+        """
+        async with self.metastore.session() as session:
+            await self.queue_service.mark_failed(
+                session,
+                entity_id=item.entity_id,
+                vault_id=item.vault_id,
+                error=error,
+                task_type=getattr(item, 'task_type', 'reflect') or 'reflect',
+                observation_id=getattr(item, 'observation_id', None),
+            )
+
+    async def reconcile_missing_refresh_tasks(self, vault_id: UUID, batch_size: int = 50) -> int:
+        """Repair deprio'd MUs that lack a refresh-observation queue row.
+
+        Scoped to a single ``vault_id`` to avoid cross-tenant noise. Returns
+        the number of refresh rows enqueued by the repair pass.
+        """
+        from memex_core.metrics import (
+            REFRESH_OBSERVATION_RECONCILE_REPAIRED_TOTAL,
+        )
+
+        async with self.metastore.session() as session:
+            # The NOT EXISTS subquery filters to in-flight statuses only —
+            # without ``status IN ('pending', 'processing')`` a stuck
+            # DEAD_LETTER (or FAILED, ABANDONED) row would suppress
+            # re-enqueue indefinitely, leaving the MU's observations stale
+            # permanently. The dead-letter recovery path is separate (operator
+            # action / mark_failed → mark_abandoned cycle).
+            from sqlalchemy import Integer as SAInteger
+            from sqlalchemy import bindparam
+
+            # ``LIMIT :limit`` with a bare int parameter can trip asyncpg's
+            # type inference ("cannot determine data type for parameter $N").
+            # Pin the type explicitly — same discipline as the ``ARRAY(String)``
+            # bind on ``flush_deferred_observation_refresh``'s ``:probes``.
+            stmt = text(
+                'SELECT mu.id FROM memory_units mu '
+                'WHERE mu.vault_id = :vault_id '
+                'AND mu.is_deprioritized = TRUE '
+                'AND NOT EXISTS ('
+                '    SELECT 1 FROM reflection_queue rq '
+                '    WHERE rq.vault_id = mu.vault_id '
+                '    AND rq.source_unit_id = mu.id '
+                "    AND rq.task_type = 'refresh_observation'"
+                "    AND rq.status IN ('pending', 'processing')"
+                ') '
+                'LIMIT :limit'
+            ).bindparams(bindparam('limit', type_=SAInteger))
+            scan = await session.execute(
+                stmt,
+                {'vault_id': vault_id, 'limit': batch_size},
+            )
+            unit_ids = [row[0] for row in scan.all()]
+            if not unit_ids:
+                return 0
+
+        # Construct a thin UnitsService on demand — flush_deferred_observation_refresh
+        # only needs metastore + config; filestore is required by BaseService but the
+        # flush helper never touches it. Reusing the ReflectionService's metastore
+        # keeps every refresh enqueue in the same connection pool.
+        from memex_core.services.units import UnitsService
+
+        units_service = UnitsService(
+            metastore=self.metastore,
+            filestore=None,  # type: ignore[arg-type]  # flush path doesn't read filestore
+            config=self.config,
+        )
+        enqueued = await units_service.flush_deferred_observation_refresh(
+            unit_ids, vault_id=vault_id
+        )
+        if enqueued:
+            REFRESH_OBSERVATION_RECONCILE_REPAIRED_TOTAL.labels(vault_id=str(vault_id)).inc(
+                enqueued
+            )
+        return enqueued
+
     async def recover_stale_processing(self) -> int:
         """Reset PROCESSING items stuck longer than the configured timeout."""
         async with self.metastore.session() as session:
             return await self.queue_service.recover_stale_processing(session)
+
+    async def queue_observability_snapshot(self) -> tuple[dict[str, int], float]:
+        """Cheap aggregates for the scheduler's Prometheus gauge refresh."""
+        async with self.metastore.session() as session:
+            return await self.queue_service.observability_snapshot(session)
 
     async def get_dead_letter_items(
         self,
