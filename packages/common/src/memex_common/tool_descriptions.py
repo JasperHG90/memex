@@ -47,10 +47,11 @@ MEMEX_RECORD_OUTCOME_DESC = (
     'units. Add a fresh memex_add_note only when the user is recording a new '
     'durable insight, not confirming a known one.\n'
     '\n'
-    '<example>WRONG: search returns Redis-incident unit u1 → call '
-    'memex_add_note(title="Redis cache fix confirmed"). RIGHT: same search → '
-    'memex_record_outcome(units=[{unit_id:u1, verb:"helpful", '
-    'reason:"in-process caching held"}]).</example>'
+    '<example>User: "The JWT rotation change we landed last sprint — it\'s '
+    'been clean." WRONG: search returns the rotation-decision unit u1 → call '
+    'memex_add_note(title="JWT rotation confirmed working"). RIGHT: same '
+    'search → memex_record_outcome(units=[{unit_id:u1, verb:"helpful", '
+    'reason:"new cadence held 30 days"}]).</example>'
 )
 
 

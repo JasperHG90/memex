@@ -41,7 +41,9 @@ Route user write intents to the right tool — failure here is silent ("I'm read
 - `"Remember across our projects / company-wide"` → `memex_kv_write(key="global:<field>", ...)`.
 - `"That worked / it's holding / that fixed it"` with a referent in scope → `memex_record_outcome(units=[{unit_id, verb:"helpful", reason}])` on the units search returned. Do NOT `memex_add_note` a "Resolution confirmed" note — paired-write on the existing units.
 - `"Save this insight / decision / lesson"` (new durable knowledge, not a confirmation) → `memex_add_note(...)`.
-<example>WRONG: search finds Redis incident unit `f6348ac1` → call `memex_add_note(title="Redis Cache Fix: Resolved")`. RIGHT: same search → `memex_record_outcome(units=[{unit_id:"f6348ac1", verb:"helpful", reason:"in-process caching holding"}])`.</example>
+<example>User: "The JWT rotation cadence change we landed last sprint — it's been clean."
+WRONG: search finds the rotation-decision unit → call `memex_add_note(title="JWT rotation confirmed working")`.
+RIGHT: same search → `memex_record_outcome(units=[{unit_id:<u>, verb:"helpful", reason:"new cadence held 30 days, no incidents"}])`.</example>
 Local-file `Write` / `Edit` tool is for project code, never for preferences. KV is for durable settings.
 </critical_constraint>
 
@@ -50,8 +52,25 @@ Vague signals — `"that worked"`, `"we did it"`, `"stop suggesting that"` — w
 </critical_constraint>
 
 <critical_constraint name="list_shape_questions">
-`"What notes do we have on X?"` / `"remind me about Y"` / `"can you find anything on Z?"` → call `memex_note_search` and present **≥2 candidate notes by title + date** so the user can pick. Do NOT pick one and narrate it; the user is asking to recognize, not to consume.
-<example>WRONG: search returns `incident-2025-08-redis` + `team-retro-q3` → narrate the Redis SEV-1 timeline only. RIGHT: list both as candidates with title + date; let user pick.</example>
+Recall-shape queries — `"what notes do we have on X?"`, `"remind me about Y"`, `"can you find anything on Z?"`, `"we had some <thing> a while back, what do we have"`, `"look for <topic>"`, `"any notes on …"` — ask the agent to **enumerate options for the user to pick from**, NOT to deliver the single most-likely answer.
+
+Required behavior:
+1. Call `memex_note_search` (or `memex_find_note` / `memex_list_notes` / `memex_recent_notes`).
+2. Present **≥2 candidate notes** as a numbered list.
+3. Each entry: `note_key` (or clear descriptor) AND a date / time reference.
+4. Do NOT narrate the contents of any single note in this response. Pause for the user to pick.
+
+Picking the most-relevant match and detailing its contents — even if it IS the right match — FAILS the user's intent. They asked to **recognise** which note they meant; you short-circuited that by consuming one for them.
+
+<example>
+User: "Find anything I wrote about the deploy pipeline last quarter."
+WRONG: "Primary note: `ci-cd-circleci-migration` — switched from GitHub Actions on 2025-11-12 because of artifact-size limits, plus the rollback hook…"
+RIGHT: "Three deploy-pipeline notes from last quarter:
+1. `ci-cd-circleci-migration` (2025-11-12) — switch off GitHub Actions, rationale
+2. `deploy-window-q4-policy` (2025-10-04) — agreed deploy windows
+3. `rollback-runbook-revision` (2025-12-01) — updated rollback procedure
+Which were you thinking of?"
+</example>
 </critical_constraint>
 
 <critical_constraint name="cooccurrence_graph_required">

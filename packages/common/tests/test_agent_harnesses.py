@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from memex_common.agent_harnesses import CLAUDE_CODE_HARNESS, HERMES_HARNESS
 
-_TIER_2_CHAR_CAP = 4_000
+_TIER_2_CHAR_CAP = 5_000
 # Hermes has a tighter natural ceiling — its harness only needs the
 # outcome lexicon + capture cadence. Pin its cap separately so the CC
 # harness's expansion doesn't relax the Hermes budget.
