@@ -89,6 +89,25 @@ def cache_key(suite_name: str, sources_hash: str) -> str:
     return f'{suite_name}-{sources_hash[:16]}'
 
 
+def compute_sources_hash(suite: object) -> str:
+    """Recompute the cache-key hash exactly as the runner does.
+
+    Mirrors the inline computation in ``runner.py:_run_suite`` so callers
+    outside the runner (notably ``memex-eval suite refresh-snapshot``)
+    can locate the cache slot the runner wrote to without duplicating
+    the hashing recipe. If the runner's recipe ever changes, this
+    function MUST move in lockstep; the function is the single
+    cache-key contract.
+    """
+    import hashlib
+
+    sources_hash = suite.sources.content_hash()  # type: ignore[attr-defined]
+    routing = hashlib.sha256()
+    for sc in sorted(suite.scenarios, key=lambda s: s.id):  # type: ignore[attr-defined]
+        routing.update(f'{sc.id}:{sc.vault_name or ""}\n'.encode())
+    return hashlib.sha256(f'{sources_hash}:{routing.hexdigest()}'.encode()).hexdigest()
+
+
 @dataclass(frozen=True)
 class CacheLookup:
     cache_root: Path

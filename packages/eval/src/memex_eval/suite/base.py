@@ -398,10 +398,25 @@ def _aggregate_text(answer: AgentAnswer) -> str:
 
 
 def _aggregate_unit_ids(answer: AgentAnswer) -> list[str]:
-    """Return the retrieved unit IDs, preferring the explicit list."""
+    """Return the retrieved unit IDs, preferring the explicit list.
+
+    Fallback iterates ``answer.units`` and prefers ``id`` (the
+    ``MemoryUnitDTO`` field — the actual UNIT UUID, what every
+    unit-id-keyed baseline matches) over ``note_id`` (only present on
+    ``NoteSearchResult``, where ``id`` is absent so we fall through).
+    Earlier priority order returned the SOURCE-NOTE UUID instead of
+    the unit UUID for memory units, silently invalidating the gate's
+    unit-id matching. ``agents.py:419`` already populates
+    ``retrieved_unit_ids`` directly for both search types, so this
+    fallback is the safety net.
+    """
     if answer.retrieved_unit_ids:
         return list(answer.retrieved_unit_ids)
-    return [str(getattr(u, 'id', '')) for u in answer.units if getattr(u, 'id', None)]
+    return [
+        str(getattr(u, 'id', None) or getattr(u, 'note_id', ''))
+        for u in answer.units
+        if getattr(u, 'id', None) or getattr(u, 'note_id', None)
+    ]
 
 
 def _absorb_judge_usage(answer: AgentAnswer, judge: Any) -> None:
@@ -1560,6 +1575,15 @@ class Suite(BaseModel):
     sources: SuiteSources
     scenarios: list[Scenario]
     readme_path: Path | None = None
+    # Path to a snapshot directory shipped *with the suite package* (not
+    # the per-machine snapshot cache). When set and the directory exists,
+    # the runner treats it as the default value of ``--from-snapshot``:
+    # ingest+extraction is skipped and the shipped state is imported,
+    # giving every run identical MemoryUnit / Note / Chunk UUIDs. This is
+    # the mechanism that lets ranking-stability suites pin baselines on
+    # unit IDs instead of laundered note_keys. Refresh via the
+    # ``memex-eval suite refresh-snapshot`` subcommand.
+    shipped_snapshot_path: Path | None = None
 
     model_config = ConfigDict(arbitrary_types_allowed=True)
 

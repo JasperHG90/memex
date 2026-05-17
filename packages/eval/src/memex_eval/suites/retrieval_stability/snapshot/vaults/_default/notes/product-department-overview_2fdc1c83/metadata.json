@@ -1,0 +1,122 @@
+{
+  "appended_to": null,
+  "archived_at": null,
+  "assets": [],
+  "content_hash": "4700840668e58eb5d9ee4db204efe830",
+  "created_at": "2026-05-16T06:45:52.742011+00:00",
+  "description": "Product Department Operations and Onboarding Initiative",
+  "doc_metadata": {
+    "retain_params": {
+      "assets": [],
+      "author": null,
+      "content_fingerprint": "4700840668e58eb5d9ee4db204efe830",
+      "filestore_path": null,
+      "note_description": "Overview of the Product department at TechCo Global.",
+      "note_name": "Product Department Overview",
+      "source": "note",
+      "source_uri": null,
+      "tags": [
+        "department",
+        "product",
+        "techco"
+      ],
+      "template": null,
+      "uuid": "2fdc1c83993387e9fce019ce8fa79910"
+    },
+    "tags": [
+      "department",
+      "product",
+      "techco"
+    ]
+  },
+  "filestore_path": null,
+  "id": "2fdc1c83-9933-87e9-fce0-19ce8fa79910",
+  "page_index": {
+    "metadata": {
+      "description": "Product Department Operations and Onboarding Initiative",
+      "publish_date": "2026-05-16 06:45:52.741501+00:00",
+      "source_uri": null,
+      "tags": [
+        "department",
+        "product",
+        "techco",
+        "product management",
+        "user onboarding",
+        "churn reduction",
+        "techco global",
+        "ux design",
+        "team structure"
+      ],
+      "title": "Product Department Overview",
+      "total_tokens": 97
+    },
+    "toc": [
+      {
+        "block_id": "c3fa39474c3d6b80e0dbca7febdd9f11",
+        "children": [
+          {
+            "block_id": "c3fa39474c3d6b80e0dbca7febdd9f11",
+            "children": [],
+            "end_index": 231,
+            "id": "7123b51a940e4f69c05ea2b34ce0e696",
+            "level": 2,
+            "original_header_id": 1,
+            "start_index": 140,
+            "subtree_tokens": 20,
+            "summary": {
+              "how": "By improving the initial user experience to encourage retention",
+              "what": "Redesigning the onboarding flow to reduce churn",
+              "when": "During the first week of user signup",
+              "where": "The application's onboarding stage",
+              "who": "The product/development team and new users"
+            },
+            "title": "Current Initiative",
+            "token_estimate": 20
+          },
+          {
+            "block_id": "c3fa39474c3d6b80e0dbca7febdd9f11",
+            "children": [],
+            "end_index": 426,
+            "id": "0cb2c4da21f337fb88627a6f8520de26",
+            "level": 2,
+            "original_header_id": 2,
+            "start_index": 231,
+            "subtree_tokens": 40,
+            "summary": {
+              "how": "Reporting to the head of the department",
+              "what": "Responsibility for all product-related activities",
+              "when": "Current",
+              "where": "TechCo Global",
+              "who": "The Product department (15 members) and Kevin O'Brien"
+            },
+            "title": "Responsibilities",
+            "token_estimate": 40
+          }
+        ],
+        "end_index": 426,
+        "id": "f479ea7a1d8d9924b2e2bbed5ca8b479",
+        "level": 1,
+        "original_header_id": 0,
+        "start_index": 0,
+        "subtree_tokens": 97,
+        "summary": {
+          "how": "Utilizing core tools including Jira, Amplitude, and Miro.",
+          "what": "Overview of the Product Department's structure and resources.",
+          "when": null,
+          "where": "TechCo Global",
+          "who": "Kevin O'Brien (Department Head) and a team of 15 employees."
+        },
+        "title": "Product Department — TechCo Global",
+        "token_estimate": 37
+      }
+    ]
+  },
+  "publish_date": "2026-05-16T06:45:52.741501+00:00",
+  "session_id": "e3a6eb2f-01b6-4b47-9cc7-39f7b80b51dd",
+  "status": "active",
+  "summary_version_incorporated": null,
+  "superseded_by": null,
+  "title": "Product Department Overview",
+  "updated_at": "2026-05-16T06:45:52.742011+00:00",
+  "vault_id": "77230e2b-dd50-4ad4-9e2e-42d4223d0f29"
+}

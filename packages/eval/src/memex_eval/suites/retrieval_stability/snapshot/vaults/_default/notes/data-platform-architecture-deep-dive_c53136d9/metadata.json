@@ -1,0 +1,180 @@
+{
+  "appended_to": null,
+  "archived_at": null,
+  "assets": [],
+  "content_hash": "36af99a173a2e1017dd9552f4c986709",
+  "created_at": "2026-05-16T06:45:38.147649+00:00",
+  "description": "DataForge Distributed Data Platform Architecture",
+  "doc_metadata": {
+    "retain_params": {
+      "assets": [],
+      "author": null,
+      "content_fingerprint": "36af99a173a2e1017dd9552f4c986709",
+      "filestore_path": null,
+      "note_description": "Comprehensive architecture documentation for the DataForge platform.",
+      "note_name": "Data Platform Architecture Deep Dive",
+      "source": "note",
+      "source_uri": null,
+      "tags": [
+        "architecture",
+        "dataforge",
+        "deep-dive"
+      ],
+      "template": null,
+      "uuid": "c53136d948df49700a18d1f87127d988"
+    },
+    "tags": [
+      "architecture",
+      "dataforge",
+      "deep-dive"
+    ]
+  },
+  "filestore_path": null,
+  "id": "c53136d9-48df-4970-0a18-d1f87127d988",
+  "page_index": {
+    "metadata": {
+      "description": "DataForge Distributed Data Platform Architecture",
+      "publish_date": "2026-05-16 06:45:38.147050+00:00",
+      "source_uri": null,
+      "tags": [
+        "architecture",
+        "dataforge",
+        "deep-dive",
+        "data architecture",
+        "apache flink",
+        "apache kafka",
+        "postgresql",
+        "pgvector",
+        "observability",
+        "distributed systems"
+      ],
+      "title": "Data Platform Architecture Deep Dive",
+      "total_tokens": 239
+    },
+    "toc": [
+      {
+        "block_id": "b17078080ba78f1c6f4b25fd24e06b8f",
+        "children": [
+          {
+            "block_id": "b17078080ba78f1c6f4b25fd24e06b8f",
+            "children": [],
+            "end_index": 377,
+            "id": "d672dc5ec7de74785f8639a1ade9d6db",
+            "level": 2,
+            "original_header_id": 1,
+            "start_index": 125,
+            "subtree_tokens": 49,
+            "summary": {
+              "how": "By ingesting via Kafka, processing with Flink, and storing in PostgreSQL with pgvector.",
+              "what": "Distributed data platform architecture.",
+              "when": null,
+              "where": "Microservices-based environment.",
+              "who": "DataForge"
+            },
+            "title": "Architecture Overview",
+            "token_estimate": 49
+          },
+          {
+            "block_id": "b17078080ba78f1c6f4b25fd24e06b8f",
+            "children": [],
+            "end_index": 595,
+            "id": "b3bd0f695fe6ef8b35c78781fbf309ff",
+            "level": 2,
+            "original_header_id": 2,
+            "start_index": 377,
+            "subtree_tokens": 46,
+            "summary": {
+              "how": "Via a Kafka cluster with 12 partitions using validation, enrichment, and routing.",
+              "what": "Processing 50,000 events per second.",
+              "when": null,
+              "where": "At the ingestion layer of the system architecture.",
+              "who": "Ingestion layer and Kafka cluster."
+            },
+            "title": "Ingestion Layer",
+            "token_estimate": 46
+          },
+          {
+            "block_id": "b17078080ba78f1c6f4b25fd24e06b8f",
+            "children": [],
+            "end_index": 802,
+            "id": "b90d2b53f997b74f79333b93a8ac8688",
+            "level": 2,
+            "original_header_id": 3,
+            "start_index": 595,
+            "subtree_tokens": 38,
+            "summary": {
+              "how": "By performing data enrichment, deduplication, and transformation with exactly-once semantics.",
+              "what": "Streaming data processing and transformation.",
+              "when": "Before writing data to the storage layer.",
+              "where": "Within the processing layer of a data pipeline.",
+              "who": "Apache Flink"
+            },
+            "title": "Processing Layer",
+            "token_estimate": 38
+          },
+          {
+            "block_id": "b17078080ba78f1c6f4b25fd24e06b8f",
+            "children": [],
+            "end_index": 1014,
+            "id": "d9257f63be33e91e70161d3ec4d33c56",
+            "level": 2,
+            "original_header_id": 4,
+            "start_index": 802,
+            "subtree_tokens": 40,
+            "summary": {
+              "how": "By using partitioned tables for time-series data and specialized indexes for vector similarity search.",
+              "what": "Transactional and vector storage capabilities.",
+              "when": null,
+              "where": "The storage layer of the database system.",
+              "who": "PostgreSQL 16 with pgvector."
+            },
+            "title": "Storage Layer",
+            "token_estimate": 40
+          },
+          {
+            "block_id": "b17078080ba78f1c6f4b25fd24e06b8f",
+            "children": [],
+            "end_index": 1223,
+            "id": "824db93eab73d6d1c68995e3466a3138",
+            "level": 2,
+            "original_header_id": 5,
+            "start_index": 1014,
+            "subtree_tokens": 39,
+            "summary": {
+              "how": "By implementing OpenTelemetry for tracing, Prometheus for metrics, and Grafana for dashboards.",
+              "what": "Establishment of the observability stack.",
+              "when": "During the initial platform build.",
+              "where": "Within the platform infrastructure.",
+              "who": "Jordan Park"
+            },
+            "title": "Observability",
+            "token_estimate": 39
+          }
+        ],
+        "end_index": 1223,
+        "id": "79ce1ca82302a7a8333972392a411803",
+        "level": 1,
+        "original_header_id": 0,
+        "start_index": 0,
+        "subtree_tokens": 239,
+        "summary": {
+          "how": "By organizing components into ingestion, processing, storage, and observability layers.",
+          "what": "A deep dive into the architectural design of a data platform.",
+          "when": null,
+          "where": "Within the context of a data platform infrastructure.",
+          "who": "Data platform architects and engineers."
+        },
+        "title": "Data Platform Architecture — Deep Dive",
+        "token_estimate": 27
+      }
+    ]
+  },
+  "publish_date": "2026-05-16T06:45:38.147050+00:00",
+  "session_id": "762430ab-38a5-4d89-baee-b502bc7430f7",
+  "status": "active",
+  "summary_version_incorporated": null,
+  "superseded_by": null,
+  "title": "Data Platform Architecture Deep Dive",
+  "updated_at": "2026-05-16T06:45:38.147649+00:00",
+  "vault_id": "77230e2b-dd50-4ad4-9e2e-42d4223d0f29"
+}

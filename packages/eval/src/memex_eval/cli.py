@@ -1133,6 +1133,241 @@ def suite_reset_db(
     console.print('[green]✓[/green] Suite DB schema reset.')
 
 
+@suite_app.command('refresh-snapshot')
+def suite_refresh_snapshot(
+    name: str = typer.Argument(..., help='Suite name.'),
+    server: str = typer.Option(
+        DEFAULT_SERVER, '--server', '-s', envvar='MEMEX_EVAL_DEFAULT_SERVER'
+    ),
+    force: bool = typer.Option(False, '--force', '-f', help='Skip the confirmation prompt.'),
+) -> None:
+    """Regenerate the suite's shipped snapshot from current code.
+
+    Runs the suite's ingest+extract pipeline against a fresh eval DB,
+    then captures the post-extraction state into ``<suite_pkg>/snapshot/``.
+    Subsequent ``memex-eval suite run <name>`` invocations import this
+    snapshot instead of re-extracting, giving every run identical
+    MemoryUnit / Note / Chunk UUIDs.
+
+    Run this when any of the following change:
+
+    * Alembic schema (snapshot's ``alembic_head`` no longer matches HEAD)
+    * Extractor logic (LLM prompts, DSPy signatures, page-index code)
+    * Embedder model identity
+    * Corpus markdown in ``<suite_pkg>/sources/``
+
+    Requires an already-running Memex server reachable at ``--server``.
+    Destructive: drops every SQLModel table in the eval DB before
+    populating; do NOT run against a production server.
+    """
+    import asyncio
+    import os as _os
+    import shutil
+    import subprocess as _sp
+    import sys
+    import time as _time
+
+    import httpx
+
+    from memex_eval.suite import load_suite
+    from memex_eval.suite.db_reset import _resolve_db_dsn, drop_and_recreate_schema
+    from memex_eval.suite.snapshot_cache import (
+        compute_sources_hash,
+        lookup as _cache_lookup,
+        resolve_cache_root,
+    )
+
+    suite = load_suite(name)
+    shipped = suite.shipped_snapshot_path
+    if shipped is None:
+        console.print(
+            f'[red]Suite {name!r} does not declare shipped_snapshot_path.[/red] '
+            'Set it on the Suite(...) constructor (Path next to __init__.py).'
+        )
+        raise typer.Exit(code=1)
+
+    dsn = _resolve_db_dsn()
+    redacted = dsn.split('@', 1)[1] if '@' in dsn else dsn
+
+    # Probe the server BEFORE any destructive action. ``httpx.HTTPError``
+    # is the umbrella class covering Connect/Timeout/Protocol/Read errors
+    # — narrowing further (as the round-2 commit originally did) lets
+    # ReadError / RemoteProtocolError propagate as raw tracebacks.
+    try:
+        probe = httpx.get(f'{server.rstrip("/")}/vaults', timeout=5.0)
+    except httpx.HTTPError as e:
+        console.print(
+            f'[red]Server probe at {server!r} failed: {type(e).__name__}: {e}.[/red] '
+            'Refusing to proceed (DB + snapshot would be destroyed before '
+            'the subprocess could detect the issue).'
+        )
+        raise typer.Exit(code=1) from None
+    if probe.status_code >= 500:
+        console.print(
+            f'[red]Server at {server!r} returned {probe.status_code}.[/red] Refusing to proceed.'
+        )
+        raise typer.Exit(code=1)
+    # Note: 401 from the probe is accepted — the suite-run subprocess
+    # writes (ingest), and a misconfigured API key will surface as a
+    # non-zero subprocess exit, which triggers the restore path below.
+    # DB-identity match between this CLI's resolved DSN and the
+    # server's actual DB is NOT verified here — out of scope for this
+    # PR; documented as a known limitation. Operators should ensure
+    # MEMEX_SERVER__META_STORE__INSTANCE__* env vars are consistent
+    # with the server's configuration before invoking this command.
+
+    console.print()
+    console.print('[bold red]⚠  DESTRUCTIVE OPERATION[/bold red]')
+    console.print(
+        f'  Target DB:      [cyan]{redacted}[/cyan]\n'
+        f'  Target server:  [cyan]{server}[/cyan]\n'
+        f'  Snapshot dest:  [cyan]{shipped}[/cyan]\n'
+        '  Action: stash any existing snapshot to <dest>.bak.<pid>-<ts>;\n'
+        '          drop+recreate every SQLModel table; ingest the suite\n'
+        '          corpus via the live server; wait for extraction;\n'
+        '          export the resulting state to the snapshot dir.\n'
+        '          On ANY failure (KeyboardInterrupt, subprocess error,\n'
+        '          copytree failure), the stashed snapshot is restored.'
+    )
+    console.print()
+    if not force:
+        confirm = typer.confirm('Type y to proceed', default=False)
+        if not confirm:
+            console.print('Aborted.')
+            raise typer.Exit(code=1)
+
+    cache_root = resolve_cache_root(None)
+
+    # Phase 1 (BEFORE any wipe): stash any existing shipped snapshot.
+    # Earlier ordering wiped the DB BEFORE stashing; if the stash then
+    # failed (ENOSPC, EACCES), the operator was left with no DB AND no
+    # snapshot. Stashing first means a stash failure is recoverable.
+    # Initialize backup tracker BEFORE the try block so a stash-itself
+    # failure can't leave ``backup`` unbound. The stash is performed
+    # inside the wide try so any stash-failure path (filesystem error,
+    # SIGINT mid-rename) also routes through the restore handler.
+    backup: Path | None = None
+
+    def _restore_if_backup() -> None:
+        """Restore the stashed snapshot.
+
+        ``shutil.move`` into an existing directory would put the backup
+        INSIDE it as a subdir; rmtree the (possibly partial) shipped
+        path first so move replaces atomically. Use ``exists()`` (not
+        ``is_dir()``) so the cleanup handles every prior shape — a
+        partial copytree that produced a directory, a stray file, or
+        a symlink. Mypy can't narrow ``backup`` through a closure, so
+        re-bind locally.
+        """
+        b = backup
+        if b is not None and b.is_dir():
+            if shipped.exists():
+                if shipped.is_dir() and not shipped.is_symlink():
+                    shutil.rmtree(shipped)
+                else:
+                    shipped.unlink()
+            shutil.move(str(b), str(shipped))
+            console.print(f'[yellow]Restored prior snapshot from {b.name}.[/yellow]')
+
+    # Single wide try/except wrapping every destructive step: stash,
+    # wipe, subprocess, copy. Any exception — KeyboardInterrupt,
+    # subprocess crash, filesystem error, anything — triggers the
+    # restore path. A failing restore itself does NOT mask the
+    # original exception: it logs and re-raises the original.
+    try:
+        # Phase 2: stash the existing snapshot (inside the try so a
+        # rename failure here also routes through the restore handler).
+        # Backup name uses pid+timestamp so a stale .bak.<pid> from a
+        # crashed prior run with a reused pid doesn't get silently nuked.
+        if shipped.is_dir():
+            backup_name = f'{shipped.name}.bak.{_os.getpid()}-{int(_time.time())}'
+            _backup_candidate = shipped.with_name(backup_name)
+            if _backup_candidate.exists():
+                shutil.rmtree(_backup_candidate)
+            shutil.move(str(shipped), str(_backup_candidate))
+            backup = _backup_candidate
+            console.print(
+                f'[green]✓[/green] Stashed existing snapshot to {_backup_candidate.name}.'
+            )
+
+        # Phase 3: wipe DB.
+        asyncio.run(drop_and_recreate_schema(dsn))
+        console.print('[green]✓[/green] DB reset.')
+
+        # Phase 3: invoke the suite-run subprocess via the SAME Python
+        # interpreter. ``python -m memex_eval`` resolves to the
+        # ``__main__.py`` shipped with this package, guaranteeing the
+        # child shares the parent's interpreter + installed package
+        # (a PATH-based ``memex-eval`` binary could resolve to a
+        # different venv).
+        cmd = [
+            sys.executable,
+            '-m',
+            'memex_eval',
+            'suite',
+            'run',
+            name,
+            '--from-snapshot',
+            'auto',
+            '--reingest',
+            '--server',
+            server,
+            '--snapshot-cache-dir',
+            str(cache_root),
+        ]
+        console.print(f'[dim]Running: {" ".join(cmd)}[/dim]')
+        result = _sp.run(cmd)
+        if result.returncode != 0:
+            console.print(f'[red]suite run failed (exit {result.returncode}).[/red]')
+            raise typer.Exit(code=result.returncode)
+
+        # Phase 4: copy the populated cache slot to the shipped path.
+        sources_hash = compute_sources_hash(suite)
+        lookup_info = _cache_lookup(cache_root, name, sources_hash)
+        if not lookup_info.hit:
+            console.print(
+                f'[red]Cache populate did not complete: no slot at {lookup_info.cache_path}.[/red] '
+                'Most likely the subprocess used a different interpreter / venv. '
+                'Verify `python -m memex_eval suite list` shows the suite.'
+            )
+            raise typer.Exit(code=1)
+
+        shipped.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copytree(lookup_info.cache_path, shipped)
+    except BaseException:
+        # KeyboardInterrupt, typer.Exit, subprocess failure, copytree
+        # failure — all funnel through here. Wrap restore so a
+        # secondary failure (e.g. FS full mid-restore, a second SIGINT
+        # while restore is running) does NOT mask the original
+        # exception. Catch BaseException symmetrically with the outer
+        # handler — a narrower ``Exception`` would let SIGINT during
+        # restore swallow the original traceback. Surface restore
+        # failures via the same ``console`` channel the operator is
+        # already watching; ``refresh-snapshot`` doesn't initialize
+        # the stdlib root logger so a bare ``logging.exception(...)``
+        # would land on the lastResort handler and likely be invisible.
+        try:
+            _restore_if_backup()
+        except BaseException as restore_exc:
+            console.print(
+                f'[red]Restore failed: {type(restore_exc).__name__}: '
+                f'{restore_exc}.[/red] Original error follows.'
+            )
+        raise
+
+    # Success: snapshot is in place; drop the backup.
+    if backup is not None and backup.is_dir():
+        shutil.rmtree(backup)
+    console.print(
+        f'[green]✓[/green] Snapshot refreshed at [cyan]{shipped}[/cyan] '
+        f'(source slot: {lookup_info.cache_path}).'
+    )
+    console.print(
+        '[dim]Tip: commit the snapshot directory + force-add files '
+        'under baselines/ before pushing.[/dim]'
+    )
+
+
 @suite_app.command('history')
 def suite_history(
     name: str = typer.Argument(..., help='Suite name.'),

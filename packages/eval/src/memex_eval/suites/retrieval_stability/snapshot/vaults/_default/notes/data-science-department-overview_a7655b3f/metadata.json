@@ -1,0 +1,123 @@
+{
+  "appended_to": null,
+  "archived_at": null,
+  "assets": [],
+  "content_hash": "0a6c5e9c78837527af2fa643613eb395",
+  "created_at": "2026-05-16T06:45:41.130411+00:00",
+  "description": "TechCo Global Data Science Department Overview",
+  "doc_metadata": {
+    "retain_params": {
+      "assets": [],
+      "author": null,
+      "content_fingerprint": "0a6c5e9c78837527af2fa643613eb395",
+      "filestore_path": null,
+      "note_description": "Overview of the Data Science department at TechCo Global.",
+      "note_name": "Data Science Department Overview",
+      "source": "note",
+      "source_uri": null,
+      "tags": [
+        "department",
+        "data-science",
+        "techco"
+      ],
+      "template": null,
+      "uuid": "a7655b3fb2730d9a4a36d57470a9dbdb"
+    },
+    "tags": [
+      "department",
+      "data-science",
+      "techco"
+    ]
+  },
+  "filestore_path": null,
+  "id": "a7655b3f-b273-0d9a-4a36-d57470a9dbdb",
+  "page_index": {
+    "metadata": {
+      "description": "TechCo Global Data Science Department Overview",
+      "publish_date": "2026-05-16 06:45:41.129877+00:00",
+      "source_uri": null,
+      "tags": [
+        "department",
+        "data-science",
+        "techco",
+        "data science",
+        "customer lifetime value",
+        "gradient boosting",
+        "tech stack",
+        "department structure",
+        "predictive modeling",
+        "data engineering"
+      ],
+      "title": "Data Science Department Overview",
+      "total_tokens": 97
+    },
+    "toc": [
+      {
+        "block_id": "066afcfa16a5e03470fca6ac5f63c900",
+        "children": [
+          {
+            "block_id": "066afcfa16a5e03470fca6ac5f63c900",
+            "children": [],
+            "end_index": 247,
+            "id": "5e763cd076b86e04b9ebd70c58fb6a3d",
+            "level": 2,
+            "original_header_id": 1,
+            "start_index": 146,
+            "subtree_tokens": 15,
+            "summary": {
+              "how": "gradient boosting",
+              "what": "building a customer lifetime value prediction model",
+              "when": "current initiative",
+              "where": null,
+              "who": "data/development team"
+            },
+            "title": "Current Initiative",
+            "token_estimate": 15
+          },
+          {
+            "block_id": "066afcfa16a5e03470fca6ac5f63c900",
+            "children": [],
+            "end_index": 451,
+            "id": "0d618c8d268d6ba30e0a669fe6aee50b",
+            "level": 2,
+            "original_header_id": 2,
+            "start_index": 247,
+            "subtree_tokens": 43,
+            "summary": {
+              "how": "Reporting to the head of the department",
+              "what": "Ownership of all data science-related activities",
+              "when": "Currently",
+              "where": "TechCo Global",
+              "who": "Data Science department (12 team members) and Mei-Lin Zhao"
+            },
+            "title": "Responsibilities",
+            "token_estimate": 43
+          }
+        ],
+        "end_index": 451,
+        "id": "eaf779e41cd3b56c2c75311a0985d560",
+        "level": 1,
+        "original_header_id": 0,
+        "start_index": 0,
+        "subtree_tokens": 97,
+        "summary": {
+          "how": "By utilizing a tech stack consisting of Snowflake, dbt, and Jupyter.",
+          "what": "Overview of department leadership, personnel size, and core tools.",
+          "when": null,
+          "where": "TechCo Global's Data Science Department.",
+          "who": "Department Head Mei-Lin Zhao and 12 employees."
+        },
+        "title": "Data Science Department — TechCo Global",
+        "token_estimate": 39
+      }
+    ]
+  },
+  "publish_date": "2026-05-16T06:45:41.129877+00:00",
+  "session_id": "22a31e2d-245c-4ba2-a982-c91824d85148",
+  "status": "active",
+  "summary_version_incorporated": null,
+  "superseded_by": null,
+  "title": "Data Science Department Overview",
+  "updated_at": "2026-05-16T06:45:41.130411+00:00",
+  "vault_id": "77230e2b-dd50-4ad4-9e2e-42d4223d0f29"
+}

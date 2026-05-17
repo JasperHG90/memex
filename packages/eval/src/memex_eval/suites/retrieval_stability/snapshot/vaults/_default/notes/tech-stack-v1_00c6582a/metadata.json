@@ -1,0 +1,122 @@
+{
+  "appended_to": null,
+  "archived_at": null,
+  "assets": [],
+  "content_hash": "9557cf49bee773758e9648a8121e7c3a",
+  "created_at": "2026-05-16T06:46:21.697628+00:00",
+  "description": "Project Nexus technical infrastructure and stack documentation",
+  "doc_metadata": {
+    "retain_params": {
+      "assets": [],
+      "author": null,
+      "content_fingerprint": "9557cf49bee773758e9648a8121e7c3a",
+      "filestore_path": null,
+      "note_description": "Project Nexus technology stack as of January 2025.",
+      "note_name": "tech-stack-v1",
+      "source": "note",
+      "source_uri": null,
+      "tags": [
+        "tech-stack",
+        "project-nexus",
+        "infrastructure"
+      ],
+      "template": null,
+      "uuid": "00c6582a50d0dcea66f09e6285e26f81"
+    },
+    "tags": [
+      "tech-stack",
+      "project-nexus",
+      "infrastructure"
+    ]
+  },
+  "filestore_path": null,
+  "id": "00c6582a-50d0-dcea-66f0-9e6285e26f81",
+  "page_index": {
+    "metadata": {
+      "description": "Project Nexus technical infrastructure and stack documentation",
+      "publish_date": "2025-01-01 00:00:00+00:00",
+      "source_uri": null,
+      "tags": [
+        "tech-stack",
+        "project-nexus",
+        "infrastructure",
+        "tech stack",
+        "django",
+        "kubernetes",
+        "devops",
+        "mysql",
+        "cloud computing"
+      ],
+      "title": "tech-stack-v1",
+      "total_tokens": 127
+    },
+    "toc": [
+      {
+        "block_id": "02c3facdb3e9f0b1a1a577b50459c146",
+        "children": [
+          {
+            "block_id": "02c3facdb3e9f0b1a1a577b50459c146",
+            "children": [],
+            "end_index": 308,
+            "id": "f5c61f8dc0c30baf6ca60e5cdf823821",
+            "level": 2,
+            "original_header_id": 1,
+            "start_index": 45,
+            "subtree_tokens": 74,
+            "summary": {
+              "how": "By utilizing Python, Django, MySQL, Jenkins, Docker, Kubernetes, and Datadog.",
+              "what": "A list of technologies and tools forming the project's infrastructure.",
+              "when": "Current",
+              "where": "AWS EKS and self-hosted environments.",
+              "who": "Project Nexus"
+            },
+            "title": "Current Stack",
+            "token_estimate": 74
+          },
+          {
+            "block_id": "02c3facdb3e9f0b1a1a577b50459c146",
+            "children": [],
+            "end_index": 501,
+            "id": "1fdc716007bf424d7180c069efb215e3",
+            "level": 2,
+            "original_header_id": 2,
+            "start_index": 308,
+            "subtree_tokens": 41,
+            "summary": {
+              "how": "By selecting Django for its ORM/admin and MySQL for JSON/replication features.",
+              "what": "Technical stack selection and maintenance responsibilities.",
+              "when": null,
+              "where": "Project development and operations environment.",
+              "who": "DevOps team, Django, and MySQL 8.0."
+            },
+            "title": "Notes",
+            "token_estimate": 41
+          }
+        ],
+        "end_index": 501,
+        "id": "eea5f4442686e0442956481b7024df14",
+        "level": 1,
+        "original_header_id": 0,
+        "start_index": 0,
+        "subtree_tokens": 127,
+        "summary": {
+          "how": "By documenting the current stack and associated notes.",
+          "what": "Overview of Project Nexus technology stack and technical documentation.",
+          "when": "January 2025",
+          "where": "Project Nexus technical environment",
+          "who": "Project Nexus development team"
+        },
+        "title": "Project Nexus — Tech Stack (January 2025)",
+        "token_estimate": 12
+      }
+    ]
+  },
+  "publish_date": "2025-01-01T00:00:00+00:00",
+  "session_id": "d4e50982-76ec-497f-bfe3-dc2fd5ed4650",
+  "status": "active",
+  "summary_version_incorporated": null,
+  "superseded_by": null,
+  "title": "tech-stack-v1",
+  "updated_at": "2026-05-16T06:46:21.697628+00:00",
+  "vault_id": "77230e2b-dd50-4ad4-9e2e-42d4223d0f29"
+}

@@ -1,0 +1,119 @@
+{
+  "appended_to": null,
+  "archived_at": null,
+  "assets": [],
+  "content_hash": "2ec058a94850cdcef7b6fbbf77196a40",
+  "created_at": "2026-05-16T06:46:03.711178+00:00",
+  "description": "Project Gamma Real-Time Platform",
+  "doc_metadata": {
+    "retain_params": {
+      "assets": [],
+      "author": null,
+      "content_fingerprint": "2ec058a94850cdcef7b6fbbf77196a40",
+      "filestore_path": null,
+      "note_description": "Project Gamma uses Elixir and Phoenix for real-time features.",
+      "note_name": "Project Gamma Overview",
+      "source": "note",
+      "source_uri": null,
+      "tags": [
+        "project",
+        "elixir"
+      ],
+      "template": null,
+      "uuid": "707c745107aa8f718e3a02b6def8f3d7"
+    },
+    "tags": [
+      "project",
+      "elixir"
+    ]
+  },
+  "filestore_path": null,
+  "id": "707c7451-07aa-8f71-8e3a-02b6def8f3d7",
+  "page_index": {
+    "metadata": {
+      "description": "Project Gamma Real-Time Platform",
+      "publish_date": "2026-05-16 06:46:03.710721+00:00",
+      "source_uri": null,
+      "tags": [
+        "project",
+        "elixir",
+        "project gamma",
+        "phoenix liveview",
+        "real-time platform",
+        "polaris labs",
+        "beam vm",
+        "backend architecture"
+      ],
+      "title": "Project Gamma Overview",
+      "total_tokens": 103
+    },
+    "toc": [
+      {
+        "block_id": "d100181959305c6c98310efc47efc3c6",
+        "children": [
+          {
+            "block_id": "d100181959305c6c98310efc47efc3c6",
+            "children": [],
+            "end_index": 347,
+            "id": "8c3be551516cface81a3b7fe7350ac35",
+            "level": 2,
+            "original_header_id": 1,
+            "start_index": 91,
+            "subtree_tokens": 48,
+            "summary": {
+              "how": "Elixir, Phoenix framework, and WebSocket-based communication on the BEAM virtual machine",
+              "what": "Project Gamma, a real-time collaboration platform",
+              "when": null,
+              "where": "Internal development at Polaris Labs",
+              "who": "Polaris Labs"
+            },
+            "title": "Overview",
+            "token_estimate": 48
+          },
+          {
+            "block_id": "d100181959305c6c98310efc47efc3c6",
+            "children": [],
+            "end_index": 466,
+            "id": "895c13de1e4fc3da2d6192982b9c8190",
+            "level": 2,
+            "original_header_id": 2,
+            "start_index": 347,
+            "subtree_tokens": 34,
+            "summary": {
+              "how": "By integrating Elixir with Phoenix LiveView, CockroachDB, and RabbitMQ.",
+              "what": "A defined software development tech stack.",
+              "when": "Current project development phase.",
+              "where": "Backend infrastructure and system architecture.",
+              "who": "Development team and the system's runtime environment."
+            },
+            "title": "Tech Stack",
+            "token_estimate": 34
+          }
+        ],
+        "end_index": 466,
+        "id": "17ea4a05c852bf73d72a2045cfd87b31",
+        "level": 1,
+        "original_header_id": 0,
+        "start_index": 0,
+        "subtree_tokens": 103,
+        "summary": {
+          "how": "By organizing detailed information into Overview and Tech Stack subsections.",
+          "what": "The introductory container for Project Gamma, a real-time platform.",
+          "when": null,
+          "where": "Within the project documentation structure.",
+          "who": "Project Gamma"
+        },
+        "title": "Project Gamma — Real-Time Platform",
+        "token_estimate": 21
+      }
+    ]
+  },
+  "publish_date": "2026-05-16T06:46:03.710721+00:00",
+  "session_id": "3ee3f954-b3fd-48ff-b449-28e7ea7fea98",
+  "status": "active",
+  "summary_version_incorporated": null,
+  "superseded_by": null,
+  "title": "Project Gamma Overview",
+  "updated_at": "2026-05-16T06:46:03.711178+00:00",
+  "vault_id": "77230e2b-dd50-4ad4-9e2e-42d4223d0f29"
+}

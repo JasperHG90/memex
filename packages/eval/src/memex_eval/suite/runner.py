@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import datetime as dt
-import hashlib
 import inspect
 import json
 import logging
@@ -1637,14 +1636,10 @@ async def run_suite(
 
     # Fold scenario vault routing into the cache key so a suite that
     # adds a per-scenario vault_name without touching source content
-    # doesn't silently hit a stale single-vault cache slot.
-    sources_hash = suite.sources.content_hash()
-    _scenario_routing = hashlib.sha256()
-    for sc in sorted(suite.scenarios, key=lambda s: s.id):
-        _scenario_routing.update(f'{sc.id}:{sc.vault_name or ""}\n'.encode())
-    sources_hash = hashlib.sha256(
-        f'{sources_hash}:{_scenario_routing.hexdigest()}'.encode()
-    ).hexdigest()
+    # doesn't silently hit a stale single-vault cache slot. Computation
+    # lives in ``snapshot_cache.compute_sources_hash`` so the
+    # ``refresh-snapshot`` CLI can locate the same slot.
+    sources_hash = _snapshot_cache.compute_sources_hash(suite)
     git_sha = _git_capture(['rev-parse', 'HEAD'])
     git_branch = _git_capture(['rev-parse', '--abbrev-ref', 'HEAD'])
     memex_v = _memex_version()
@@ -1712,6 +1707,93 @@ async def run_suite(
             #   (d) default: create vault(s) and ingest sources as today.
             vault_map: dict[str | None, UUID] = {}
             note_id_by_key: dict[str, str] = {}
+
+            # Suite-shipped snapshot: when the suite package contains its
+            # own snapshot directory (refreshed via
+            # ``memex-eval suite refresh-snapshot <name>``) and the
+            # operator did not pass ``--from-snapshot`` explicitly, use
+            # the shipped path as the default. Lets ranking-stability
+            # suites pin baselines on deterministic unit IDs without
+            # making every operator remember the flag.
+            if (
+                from_snapshot is None
+                and reuse_vault is None
+                and suite.shipped_snapshot_path is not None
+                and suite.shipped_snapshot_path.is_dir()
+            ):
+                from_snapshot = str(suite.shipped_snapshot_path)
+                logger.info(
+                    'Suite ships snapshot at %s; using as --from-snapshot default.',
+                    suite.shipped_snapshot_path,
+                )
+            elif (
+                from_snapshot == 'auto'
+                and reuse_vault is None
+                and suite.shipped_snapshot_path is not None
+                and suite.shipped_snapshot_path.is_dir()
+            ):
+                # Operator passed --from-snapshot auto explicitly while
+                # the suite ships its own snapshot. The shipped snapshot
+                # is the gate's reference state; ``auto`` means "use the
+                # per-machine cache" which on a fresh machine is empty,
+                # forcing ingest+extract and producing fresh UUIDs that
+                # invalidate every baseline. Warn loudly so the
+                # operator can switch to the shipped path or run
+                # ``memex-eval suite refresh-snapshot`` first.
+                logger.warning(
+                    'Suite %r ships a snapshot at %s but --from-snapshot=auto '
+                    "is explicitly set. The shipped snapshot is the gate's "
+                    'reference state; auto mode bypasses it and uses the per-'
+                    'machine cache. On a cache miss this triggers ingest+'
+                    'extract, producing fresh UUIDs that invalidate every '
+                    'baseline. To use the shipped snapshot, drop the '
+                    '--from-snapshot flag; to refresh the shipped snapshot, '
+                    'run ``memex-eval suite refresh-snapshot %r``.',
+                    suite.name,
+                    suite.shipped_snapshot_path,
+                    suite.name,
+                )
+            elif (
+                from_snapshot is not None
+                and from_snapshot != 'auto'
+                and reuse_vault is None
+                and suite.shipped_snapshot_path is not None
+                and suite.shipped_snapshot_path.is_dir()
+            ):
+                # Operator passed an explicit --from-snapshot path while
+                # the suite ships its own snapshot. Mirror the warning
+                # above so the override is visible — baselines were
+                # captured against the shipped snapshot and will not
+                # match an arbitrary alternative.
+                logger.warning(
+                    'Suite %r ships a snapshot at %s but --from-snapshot=%r '
+                    'is explicitly set, overriding the shipped reference '
+                    'state. Baselines were captured against the shipped '
+                    'snapshot; comparing against a different snapshot will '
+                    'produce spurious RBO failures.',
+                    suite.name,
+                    suite.shipped_snapshot_path,
+                    from_snapshot,
+                )
+            elif (
+                reuse_vault is not None
+                and suite.shipped_snapshot_path is not None
+                and suite.shipped_snapshot_path.is_dir()
+            ):
+                # --reuse-vault skips the snapshot-import path entirely
+                # because the reused vault carries its own state. The
+                # gate's baselines were captured against the shipped
+                # snapshot's UUIDs; a reused vault will have different
+                # UUIDs and verify will fail. Surface this so the
+                # operator doesn't waste a full run figuring out why.
+                logger.info(
+                    'Suite %r ships a snapshot at %s but --reuse-vault is '
+                    'set, so the shipped snapshot is bypassed. Baselines '
+                    'captured against the shipped snapshot will NOT match '
+                    "the reused vault's UUIDs; expect verify failures.",
+                    suite.name,
+                    suite.shipped_snapshot_path,
+                )
 
             # Resolve auto cache lookup before deciding the path.
             cache_lookup: '_snapshot_cache.CacheLookup | None' = None

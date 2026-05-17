@@ -174,7 +174,8 @@ logs
 # LLM
 .persona
 .serena
-.claude
+.claude/*
+!.claude/rules/
 .opencode
 conductor
 gemini-extension.json

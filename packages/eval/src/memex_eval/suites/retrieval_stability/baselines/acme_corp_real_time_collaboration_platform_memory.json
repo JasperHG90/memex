@@ -1,0 +1,25 @@
+{
+  "meta": {
+    "config_pins": {
+      "composite_boost_log_clip": "inf",
+      "reranking_mw_alpha": "default",
+      "reranking_recency_alpha": "default",
+      "reranking_temporal_alpha": "default"
+    },
+    "schema_version": 3,
+    "search_type": "memory",
+    "top_k": 10
+  },
+  "ranking": [
+    "96d2efa6-5b0b-4946-8d80-55abbef20b35",
+    "43df2d8b-b970-47c9-b922-66f856309efd",
+    "7a9440fc-f274-47e8-b9d5-0438bfd44128",
+    "e4f0fec5-69e9-45e2-87de-f691df2d1559",
+    "6498e057-d0fa-4499-af73-3acb65a3fb13",
+    "d609f5af-93e8-4bbe-8b79-f6481465bb35",
+    "3c6eba13-3718-4449-881b-6dbc62254d0f",
+    "93612d28-67ef-4af0-a645-8d4d9a3360be",
+    "e02b0ce4-296a-460f-a7a7-c605595701be",
+    "d470af21-89b3-4163-aff1-d56ee05aebdb"
+  ]
+}

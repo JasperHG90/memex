@@ -1,0 +1,101 @@
+{
+  "appended_to": null,
+  "archived_at": null,
+  "assets": [],
+  "content_hash": "a22a4f48f415879a0fb465945d13844e",
+  "created_at": "2026-05-16T06:45:22.584323+00:00",
+  "description": "API Versioning and Deprecation Policy",
+  "doc_metadata": {
+    "retain_params": {
+      "assets": [],
+      "author": null,
+      "content_fingerprint": "a22a4f48f415879a0fb465945d13844e",
+      "filestore_path": null,
+      "note_description": "Original API versioning policy with intentional contradictions.",
+      "note_name": "API Versioning Policy (Alpha)",
+      "source": "note",
+      "source_uri": null,
+      "tags": [
+        "api",
+        "versioning",
+        "policy"
+      ],
+      "template": null,
+      "uuid": "aff42a6ebc803e055857cb2cf825dd3e"
+    },
+    "tags": [
+      "api",
+      "versioning",
+      "policy"
+    ]
+  },
+  "filestore_path": null,
+  "id": "aff42a6e-bc80-3e05-5857-cb2cf825dd3e",
+  "page_index": {
+    "metadata": {
+      "description": "API Versioning and Deprecation Policy",
+      "publish_date": "2025-01-01 00:00:00+00:00",
+      "source_uri": null,
+      "tags": [
+        "api",
+        "versioning",
+        "policy",
+        "api design",
+        "deprecation policy",
+        "software development lifecycle",
+        "api documentation"
+      ],
+      "title": "API Versioning Policy (Alpha)",
+      "total_tokens": 93
+    },
+    "toc": [
+      {
+        "block_id": "72fedc964fc67b709b72a6ff3d9057d6",
+        "children": [
+          {
+            "block_id": "72fedc964fc67b709b72a6ff3d9057d6",
+            "children": [],
+            "end_index": 394,
+            "id": "91f0b4525ec65abc40c51f7d5f047892",
+            "level": 2,
+            "original_header_id": 1,
+            "start_index": 88,
+            "subtree_tokens": 71,
+            "summary": {
+              "how": "By using /v[n]/ paths and requiring 90-day deprecation notices for major changes",
+              "what": "URL-based API versioning policy (v1 and v2)",
+              "when": "Currently active for v1 and v2",
+              "where": "Public API endpoints",
+              "who": "Public API developers and consumers"
+            },
+            "title": "Policy",
+            "token_estimate": 71
+          }
+        ],
+        "end_index": 394,
+        "id": "c62a55f3496e89b9acb2b8089dd11ea2",
+        "level": 1,
+        "original_header_id": 0,
+        "start_index": 0,
+        "subtree_tokens": 93,
+        "summary": {
+          "how": "By establishing a preliminary framework for API updates.",
+          "what": "Introduction to the API Versioning Policy.",
+          "when": "During the Alpha development phase.",
+          "where": "In the API documentation and system architecture.",
+          "who": "API developers and consumers."
+        },
+        "title": "API Versioning Policy (Alpha)",
+        "token_estimate": 22
+      }
+    ]
+  },
+  "publish_date": "2025-01-01T00:00:00+00:00",
+  "session_id": "ffa0590d-11bd-4e4e-861f-eb882e21ca62",
+  "status": "active",
+  "summary_version_incorporated": null,
+  "superseded_by": null,
+  "title": "API Versioning Policy (Alpha)",
+  "updated_at": "2026-05-16T06:45:22.584323+00:00",
+  "vault_id": "77230e2b-dd50-4ad4-9e2e-42d4223d0f29"
+}

@@ -1,0 +1,13 @@
+# Captured baselines are machine-specific: the ONNX embedder and
+# cross-encoder reranker are not bit-exact across CPU ISAs, so a
+# baseline captured on aarch64 will drift on x86_64 even with
+# identical code. To prevent operators on non-reference architectures
+# from accidentally committing baselines that would corrupt the gate
+# for everyone else, ignore everything in this directory by default.
+#
+# To commit a reference-architecture baseline, override with
+#   git add -f packages/eval/src/memex_eval/suites/retrieval_stability/baselines/<scenario_id>.json
+# This forces a deliberate decision about which architecture is
+# canonical for the regression gate.
+*.json
+*.json.tmp

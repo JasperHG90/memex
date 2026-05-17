@@ -1,0 +1,122 @@
+{
+  "appended_to": null,
+  "archived_at": null,
+  "assets": [],
+  "content_hash": "1f275229816bac143dfbdd1586390c09",
+  "created_at": "2026-05-16T06:45:54.656497+00:00",
+  "description": "TechCo Global Security Department Structure and Strategic Initiatives",
+  "doc_metadata": {
+    "retain_params": {
+      "assets": [],
+      "author": null,
+      "content_fingerprint": "1f275229816bac143dfbdd1586390c09",
+      "filestore_path": null,
+      "note_description": "Overview of the Security department at TechCo Global.",
+      "note_name": "Security Department Overview",
+      "source": "note",
+      "source_uri": null,
+      "tags": [
+        "department",
+        "security",
+        "techco"
+      ],
+      "template": null,
+      "uuid": "36d99df31a3371bc36a2c8ea3ada4527"
+    },
+    "tags": [
+      "department",
+      "security",
+      "techco"
+    ]
+  },
+  "filestore_path": null,
+  "id": "36d99df3-1a33-71bc-36a2-c8ea3ada4527",
+  "page_index": {
+    "metadata": {
+      "description": "TechCo Global Security Department Structure and Strategic Initiatives",
+      "publish_date": "2026-05-16 06:45:54.655946+00:00",
+      "source_uri": null,
+      "tags": [
+        "department",
+        "security",
+        "techco",
+        "security operations",
+        "soc 2 compliance",
+        "zero-trust",
+        "departmental structure",
+        "it infrastructure",
+        "security tooling"
+      ],
+      "title": "Security Department Overview",
+      "total_tokens": 101
+    },
+    "toc": [
+      {
+        "block_id": "ad5e273b3eb9956d405b8d67ff403ed1",
+        "children": [
+          {
+            "block_id": "ad5e273b3eb9956d405b8d67ff403ed1",
+            "children": [],
+            "end_index": 249,
+            "id": "dd3da7847c126a1ab1619a86656187b6",
+            "level": 2,
+            "original_header_id": 1,
+            "start_index": 151,
+            "subtree_tokens": 19,
+            "summary": {
+              "how": "By achieving compliance standards and implementing security architecture",
+              "what": "SOC 2 Type II certification and zero-trust access",
+              "when": "Current initiative",
+              "where": "Internal IT infrastructure",
+              "who": "The organization/security team"
+            },
+            "title": "Current Initiative",
+            "token_estimate": 19
+          },
+          {
+            "block_id": "ad5e273b3eb9956d405b8d67ff403ed1",
+            "children": [],
+            "end_index": 443,
+            "id": "8609a56544e25458ac7d1277db8d815b",
+            "level": 2,
+            "original_header_id": 2,
+            "start_index": 249,
+            "subtree_tokens": 41,
+            "summary": {
+              "how": "By conducting all security-related activities and reporting to the head of the department.",
+              "what": "Management of security responsibilities and departmental reporting structure.",
+              "when": "Currently",
+              "where": "TechCo Global",
+              "who": "The Security department (team of 8) and Yuki Tanaka (Head of Department)."
+            },
+            "title": "Responsibilities",
+            "token_estimate": 41
+          }
+        ],
+        "end_index": 443,
+        "id": "4bde9fb3160cd23a8c6a43dcabca5828",
+        "level": 1,
+        "original_header_id": 0,
+        "start_index": 0,
+        "subtree_tokens": 101,
+        "summary": {
+          "how": "By utilizing core tools including CrowdStrike, Snyk, and HashiCorp Vault.",
+          "what": "Overview of department staffing, leadership, and technical stack.",
+          "when": null,
+          "where": "TechCo Global Security Department.",
+          "who": "Yuki Tanaka and a team of 8 employees."
+        },
+        "title": "Security Department — TechCo Global",
+        "token_estimate": 41
+      }
+    ]
+  },
+  "publish_date": "2026-05-16T06:45:54.655946+00:00",
+  "session_id": "17f5647e-cb35-4f18-b1f8-864378c96e66",
+  "status": "active",
+  "summary_version_incorporated": null,
+  "superseded_by": null,
+  "title": "Security Department Overview",
+  "updated_at": "2026-05-16T06:45:54.656497+00:00",
+  "vault_id": "77230e2b-dd50-4ad4-9e2e-42d4223d0f29"
+}
