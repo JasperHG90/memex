@@ -495,7 +495,7 @@ class LocksService:
             # unit. Audit-log emission stays per-unit so cascade semantics
             # match the single-row path.
             updated_ids = await self.units.batch_set_unit_deprioritized(
-                candidates, reason, actor=actor
+                candidates, reason, actor=actor, vault_id=vault_id
             )
             units_deprioritized = len(updated_ids)
             if has_proposals_table:

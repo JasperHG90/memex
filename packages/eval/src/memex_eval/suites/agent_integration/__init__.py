@@ -63,6 +63,7 @@ from memex_eval.suite import (
     CompositeOutcome,
     KeywordsPresent,
     LLMJudge,
+    SetupAction,
     SuiteMetadata,
     SuiteSources,
     ToolCallArgMatches,
@@ -70,6 +71,13 @@ from memex_eval.suite import (
     ToolCallCountAcross,
 )
 from memex_eval.suite.decorator import Suite
+
+# Suite-private extension modules — import for decorator side effects
+# (must run BEFORE any ``suite.register(...)`` call that references the
+# registered names). See ``.claude/rules/eval-suites.md``
+# (baseline-anchor-stability rule, import-order subsection).
+from memex_eval.suites.agent_integration._outcomes import DeprioRecoversFrom400  # noqa: F401,E402
+from memex_eval.suites.agent_integration import _setup_actions as _seed_actions  # noqa: F401,E402
 
 _ROOT = Path(__file__).parent
 _DUR_MS = 180_000.0
@@ -629,6 +637,39 @@ suite.register(
         min_count=1,
         match_mode='any',
     ),
+    replicates_override=1,
+    mutating_scenario=True,
+)
+
+suite.register(
+    id='feedback_deprioritize_observation_400_recovery',
+    group='feedback',
+    description=(
+        'V21 contract: when the agent passes an observation UUID to '
+        'memex_memory_deprioritize, the server returns HTTP 400 with '
+        'source_memory_units; the agent must retry against one of those '
+        'MU IDs. The setup action seeds a MentalModel + Observation citing '
+        'two MUs ingested from the kafka-batching-strategy source note. '
+        'Pass: ≥1 deprio call targets one of the cited MU IDs.'
+    ),
+    query=(
+        'We changed direction on the Kafka batching strategy — the 250ms '
+        'time-based windows are no longer what we recommend. Deprioritize '
+        "our Kafka batching memory so it doesn't keep surfacing."
+    ),
+    max_duration_ms=_DUR_MS,
+    setup_actions=[
+        SetupAction(
+            kind='seed_mental_model_observation',
+            # The four explicit fields below are documented defaults of the
+            # handler; we name them here so the scenario reads as a contract.
+            note_key='kafka-batching-strategy',
+            entity_name='Kafka Batching Strategy',
+            observation_title='Kafka producers use 250ms time-based batching windows',
+            max_evidence_mus=2,
+        ),
+    ],
+    expected=DeprioRecoversFrom400(type='deprio_recovers_from_400'),
     replicates_override=1,
     mutating_scenario=True,
 )

@@ -119,7 +119,7 @@ Agent-facing prompt content lives in three tiers. SSOTs are `packages/common/src
 
 <constraint name="agent-surface-tiers" priority="high">
 1a (MCP, terse): `memex_mcp/server.py` `instructions=` (~500 tok) + per-tool descriptions (~300 tok each). Tool contracts + 4xx triggers ONLY. No multi-step composition flow.
-1b (universal, SSOT): `memex_common.agent_surface` (~1,600 tok / ≤6,000 chars; cap pinned by `test_agent_surface.py`). LLM-optimized; concrete; imperative. Composed via `compose_universal()`.
+1b (universal, SSOT): `memex_common.agent_surface` (~2,050 tok / ≤7,200 chars; cap pinned by `test_agent_surface.py`). LLM-optimized; concrete; imperative. Composed via `compose_universal()`.
 2 (agent-specific): hermes `briefing.py` + Claude Code SessionStart hook output (~400 tok each).
 </constraint>
 

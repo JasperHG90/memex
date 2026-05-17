@@ -58,7 +58,7 @@ from memex_core.memory.reflect.models import (
     ReflectionResult,
 )
 from memex_core.memory.reflect.queue_service import ReflectionQueueService
-from memex_core.memory.sql_models import MemoryUnit, Vault
+from memex_core.memory.sql_models import MemoryUnit, ReflectionQueue, Vault
 from memex_core.memory.models.protocols import EmbeddingsModel, RerankerModel
 from memex_core.memory.models.ner import FastNERModel
 from memex_core.memory.entity_resolver import EntityResolver
@@ -843,6 +843,7 @@ class MemexAPI:
                             reason=f'fsfm_auto: composite_score={composite_score:.4f}',
                             vault_id=vault_id,
                             actor='fsfm_auto',
+                            defer_observation_refresh=True,
                         )
                     except (MemoryUnitNotFoundError, IntegrityError) as exc:
                         logger.warning(
@@ -878,6 +879,23 @@ class MemexAPI:
                 # session context manager — the metastore's session does
                 # not auto-commit.
                 await session.commit()
+
+            # FSFM deferred each per-unit refresh enqueue (defer_observation_refresh=True);
+            # flush them all in one LATERAL JSONB scan + bulk INSERT now that the
+            # batch is committed. A flush failure is logged but does NOT roll back
+            # the deprios — the reconcile-tick pass repairs missing refresh tasks.
+            if summary.deprioritized:
+                try:
+                    await self._units.flush_deferred_observation_refresh(
+                        [UUID(uid) for uid in summary.deprioritized],
+                        vault_id=vault_id,
+                    )
+                except Exception:
+                    logger.exception(
+                        'FSFM: flush_deferred_observation_refresh failed; reconcile '
+                        'tick will repair. deprio count=%d',
+                        len(summary.deprioritized),
+                    )
 
             FSFM_SCORER_RUNS_TOTAL.labels(outcome='success').inc()
         except Exception:
@@ -1841,9 +1859,35 @@ class MemexAPI:
         """Claim reflection queue batch. Delegates to ReflectionService."""
         return await self._reflection.claim_reflection_queue_batch(limit=limit, vault_id=vault_id)
 
+    async def refresh_observation(self, item: 'ReflectionQueue') -> None:
+        """Execute a single refresh-observation task. Delegates to ReflectionService."""
+        return await self._reflection.refresh_observation(item)
+
+    async def reclaim_refresh_with_backoff(self, item: 'ReflectionQueue') -> None:
+        """Re-enqueue a refresh task whose advisory lock was held."""
+        return await self._reflection.reclaim_refresh_with_backoff(item)
+
+    async def mark_queue_item_failed(self, item: 'ReflectionQueue', error: str) -> None:
+        """Mark a specific claimed queue item as failed."""
+        return await self._reflection.mark_item_failed(item, error)
+
+    async def reconcile_missing_refresh_tasks(self, vault_id: UUID, batch_size: int = 50) -> int:
+        """Reconcile deprio'd MUs missing refresh-observation queue rows."""
+        return await self._reflection.reconcile_missing_refresh_tasks(
+            vault_id=vault_id, batch_size=batch_size
+        )
+
     async def recover_stale_processing(self) -> int:
         """Reset PROCESSING items stuck longer than the configured timeout."""
         return await self._reflection.recover_stale_processing()
+
+    async def reflection_queue_observability_snapshot(self) -> tuple[dict[str, int], float]:
+        """Return (queue depth by task_type, age of oldest DEAD_LETTER refresh row).
+
+        Used by the scheduler to populate Prometheus gauges; not load-bearing
+        for correctness (gauge refresh failures are logged-and-ignored).
+        """
+        return await self._reflection.queue_observability_snapshot()
 
     async def get_dead_letter_items(
         self,

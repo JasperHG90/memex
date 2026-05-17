@@ -41,10 +41,126 @@ REFLECTION_QUEUE_SIZE = Gauge(
     'Number of pending reflection tasks',
 )
 
+REFLECTION_QUEUE_DEPTH_BY_TASK_TYPE = Gauge(
+    'memex_reflection_queue_depth_by_task_type',
+    'Pending+processing reflection queue depth, labeled by task_type. '
+    'Operators monitor priority-lane starvation by watching the ratio of '
+    "task_type='refresh_observation' to task_type='reflect' under sustained "
+    'deprio bursts; sustained refresh-dominance is the trigger to flip '
+    '``ReflectionConfig.refresh_obs_priority_lane`` to False.',
+    ['task_type'],
+)
+
+REFLECTION_QUEUE_DEAD_LETTER_AGE_SECONDS = Gauge(
+    'memex_reflection_queue_dead_letter_age_seconds',
+    'Age (since last_queued_at) of the oldest DEAD_LETTER refresh-observation '
+    'row, in seconds. ``complete_reflection`` deletes only ``reflect``-type '
+    'rows; DEAD_LETTER refresh siblings persist as a diagnostic trail without '
+    'auto-expiry. Non-zero in steady state signals operator action — inspect '
+    'and clear via ``retry_dead_letter`` or manual DELETE.',
+)
+
 REFLECTION_CAS_ABANDONS_TOTAL = Counter(
     'memex_reflection_cas_abandons_total',
     'Number of Phase 5 mental-model writes abandoned because a concurrent '
     'refresh advanced the version column between read and CAS UPDATE.',
+)
+
+# Deprioritize/refresh-observation lifecycle counters.
+DEPRIORITIZE_REJECTED_OBSERVATION_UUID_TOTAL = Counter(
+    'memex_deprioritize_rejected_observation_uuid_total',
+    'Calls to memory_deprioritize where the unit_id resolved to an observation, '
+    'not a memory unit; client received HTTP 400 with source_memory_units.',
+)
+DEPRIORITIZE_OBSERVATION_EMPTY_EVIDENCE_TOTAL = Counter(
+    'memex_deprioritize_observation_empty_evidence_total',
+    'Calls to memory_deprioritize where the unit_id resolved to an observation '
+    'with zero evidence MUs — invariant violation in mental_models JSONB; the '
+    'agent still receives the 400 contract but source_memory_units is empty.',
+)
+
+REFRESH_OBSERVATION_TASK_ENQUEUED_TOTAL = Counter(
+    'memex_refresh_observation_task_enqueued_total',
+    'Refresh-observation tasks enqueued by an MU deprio (after dedupe).',
+)
+
+REFRESH_OBSERVATION_TASK_COMPLETED_TOTAL = Counter(
+    'memex_refresh_observation_task_completed_total',
+    'Refresh-observation tasks completed (any outcome: refreshed, dropped, acked).',
+)
+
+REFRESH_OBSERVATION_TASK_ZERO_EVIDENCE_TOTAL = Counter(
+    'memex_refresh_observation_task_zero_evidence_total',
+    'Refresh tasks that dropped the observation because no surviving evidence remained.',
+)
+
+REFRESH_OBSERVATION_TASK_OBS_ALREADY_PRUNED_TOTAL = Counter(
+    'memex_refresh_observation_task_obs_already_pruned_total',
+    'Refresh tasks idempotently acked because the observation row was already gone by claim time.',
+)
+
+REFRESH_OBSERVATION_TASK_ALREADY_ABSORBED_TOTAL = Counter(
+    'memex_refresh_observation_task_already_absorbed_total',
+    'Post-lock race check: none of the triggering MUs is still cited; acked idempotently.',
+)
+
+REFRESH_OBSERVATION_TASK_DROPPED_BY_LLM_TOTAL = Counter(
+    'memex_refresh_observation_task_dropped_by_llm_total',
+    'LLM returned should_drop=True AND surviving_evidence_count below the retention threshold.',
+)
+
+REFRESH_OBSERVATION_EMPTY_CONTENT_COERCED_TOTAL = Counter(
+    'memex_refresh_observation_empty_content_coerced_total',
+    'LLM returned should_drop=False with blank content/title (validator bypassed); '
+    'observation was coerced to drop. Distinguished from honored should_drop so the '
+    'rate of validator-bypass coercions is monitorable separately from real drops.',
+)
+
+DEPRIORITIZE_BATCH_UNFLUSHED_NO_VAULT_TOTAL = Counter(
+    'memex_deprioritize_batch_unflushed_no_vault_total',
+    'batch_set_unit_deprioritized called without vault_id (legacy path); MUs were '
+    'flipped to deprioritized but observation refresh was skipped because the '
+    'vault-scoped JSONB scan cannot run. Observations citing these MUs will only '
+    'refresh on the next routine reflection cycle or the reconcile-tick pass.',
+)
+
+REFRESH_OBSERVATION_DROP_OVERRIDDEN_TOTAL = Counter(
+    'memex_refresh_observation_drop_overridden_total',
+    'Guardrail: LLM said should_drop=True but surviving_evidence_count >= retention threshold; override.',
+)
+
+REFRESH_OBSERVATION_MERGED_PREDECESSOR_TOTAL = Counter(
+    'memex_refresh_observation_merged_predecessor_total',
+    'Phase 4 dropped a predecessor UUID during a merge (kept the lowest-index UUID).',
+)
+
+PHASE4_PROVENANCE_MALFORMED_TOTAL = Counter(
+    'memex_phase4_provenance_malformed_total',
+    'Phase 4 ComparePhaseOutput.provenance entry malformed; fresh uuid4 used instead.',
+    ['reason'],
+)
+
+RESTORE_OBSERVATION_NO_AFFECTED_ENTITIES_TOTAL = Counter(
+    'memex_restore_observation_no_affected_entities_total',
+    'Restore of an orphan MU (zero unit_entities rows); no priority reflect enqueued.',
+)
+
+REFLECTION_QUEUE_PRIORITY_LANE_ENQUEUED_TOTAL = Counter(
+    'memex_reflection_queue_priority_lane_enqueued_total',
+    'Priority-lane reflect tasks enqueued (e.g. from restore).',
+)
+
+REFRESH_OBSERVATION_RECONCILE_REPAIRED_TOTAL = Counter(
+    'memex_refresh_observation_reconcile_repaired_total',
+    'Reconcile-tick repaired a missing refresh task for a deprioritized MU.',
+    ['vault_id'],
+)
+
+REFRESH_OBSERVATION_TASK_LATENCY_SECONDS = Histogram(
+    'memex_refresh_observation_task_latency_seconds',
+    'Processing wall-clock from claim/dispatch to refresh completion (does NOT '
+    'include queue wait between enqueue and claim). Compute queue-wait from '
+    'reflection_queue.last_queued_at if needed.',
 )
 
 # ---------------------------------------------------------------------------

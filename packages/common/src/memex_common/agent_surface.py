@@ -79,8 +79,8 @@ CRITICAL_HEADER = """## Critical constraints
 `memex_record_outcome` requires `units=[{unit_id, verb, reason}]`. Bare `success=True` → HTTP 400.
 </critical_constraint>
 
-<critical_constraint name="virtual_unit_404">
-Virtual units (`unit_metadata.virtual: true`) → `memex_memory_deprioritize` returns 404. Filter before paired writes.
+<critical_constraint name="observation_read_only">
+Observations (`unit_metadata.virtual: true`) are read-only projections of MUs; `memex_memory_deprioritize` on an observation UUID returns HTTP 400 with `source_memory_units`. Re-issue against one of the listed MU IDs.
 </critical_constraint>
 
 <critical_constraint name="kv_scope_qualifier">
@@ -143,12 +143,12 @@ Triggers: "evolved", "used to", "history of", "what changed", "audit".
 - Broad audit → `memex_memory_search(apply_pre_filter=False)` (bypasses MW/FSFM/confidence filters)."""
 
 
-VIRTUAL_UNIT = """## Virtual units (cannot be deprioritized)
+VIRTUAL_UNIT = """## Read-only observations
 
 <critical_constraint name="virtual_unit_filter">
-`unit_metadata.virtual: true` units are synthesized from MentalModel observations — no DB row. `memex_memory_deprioritize` on their UUID returns HTTP 404.
+Mental-model observations are read-only projections of memory units (surfaced with `unit_metadata.virtual: true`). Calling `memex_memory_deprioritize` on an observation's UUID returns HTTP 400 with body `{source_memory_units: [...]}`; re-issue against one of those MU IDs to suppress the underlying fact. Observations refresh asynchronously on the surviving evidence.
 
-Filter candidates to `unit_metadata.virtual` unset/false BEFORE paired writes. If empty, fall back to entity-anchored search to recover real source units.
+Note: an observation's `evidence` list may include STALE memory units (those superseded by a newer contradicting note); STALE evidence remains cited as historical support and is NOT auto-pruned — treat it as audit-trail rather than active claim.
 </critical_constraint>"""
 
 
@@ -191,7 +191,7 @@ CRITICAL_FOOTER = """## Critical reminders
 </critical_reminder>
 
 <critical_reminder name="virtual_unit_filter">
-Virtual units (`unit_metadata.virtual: true`) → deprio returns 404; filter them.
+Observations (`unit_metadata.virtual: true`) → deprio returns 400 with `source_memory_units`; re-issue against one of the listed MU IDs.
 </critical_reminder>
 
 <critical_reminder name="kv_scope_qualifier">

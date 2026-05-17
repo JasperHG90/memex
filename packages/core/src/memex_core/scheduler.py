@@ -1,4 +1,5 @@
 import asyncio
+import itertools
 import logging
 import asyncpg
 from typing import TYPE_CHECKING
@@ -18,38 +19,155 @@ logger = logging.getLogger('memex.core.scheduler')
 # Arbitrary 64-bit integer for Postgres Advisory Lock
 MEMEX_LEADER_LOCK_ID = 5432789123456789
 
+# Reconcile-tick cursor — partitioned across vaults so one tenant's backlog
+# can't starve another. Sorted by ``vault.id`` so churn (vaults
+# added/removed mid-runtime) cannot permanently skip a slot.
+# ``itertools.count`` is GIL-atomic on ``next()``, so concurrent scheduler
+# coroutines cannot interleave a read-increment-write and skip/duplicate a
+# slot. Across processes the counter still drifts (each worker has its own),
+# but vault-skew across workers is acceptable — reconciliation is idempotent
+# via ON CONFLICT DO NOTHING.
+_RECONCILE_TICK_COUNTER = itertools.count()
+
+
+async def _reconcile_one_vault_slice(api: 'MemexAPI') -> None:
+    """Repair deprio'd MUs missing refresh rows for one vault per tick.
+
+    Gated behind ``reconcile_historical_deprios_on_boot`` config — defaults
+    False so operators opt in after eval data is captured. Picks the vault
+    via ``vaults_sorted = sorted(api.list_vaults(), key=lambda v: v.id)``
+    and a global tick cursor; ``GLOBAL_VAULT_ID`` is included as a normal
+    slot in the rotation.
+    """
+    cfg = getattr(api, 'config', None)
+    if cfg is None:
+        return
+    try:
+        reflect_cfg = cfg.server.memory.reflection
+    except AttributeError:
+        return
+    if not getattr(reflect_cfg, 'reconcile_historical_deprios_on_boot', False):
+        return
+    try:
+        vaults = await api.list_vaults()
+    except Exception:
+        logger.exception('Scheduler: reconcile pass could not list vaults; skipping tick')
+        return
+    if not vaults:
+        return
+    vaults_sorted = sorted(vaults, key=lambda v: v.id)
+    idx = next(_RECONCILE_TICK_COUNTER) % len(vaults_sorted)
+    chosen = vaults_sorted[idx]
+    try:
+        repaired = await api.reconcile_missing_refresh_tasks(
+            vault_id=chosen.id, batch_size=reflect_cfg.reconcile_batch_size
+        )
+        if repaired:
+            logger.info(
+                'Scheduler: reconcile repaired %d missing refresh tasks for vault %s',
+                repaired,
+                chosen.id,
+            )
+    except Exception:
+        logger.exception(
+            'Scheduler: reconcile pass failed for vault %s; will retry next slot',
+            chosen.id,
+        )
+
+
+async def _refresh_queue_depth_gauges(api: 'MemexAPI') -> None:
+    """Update queue-depth-by-task_type and dead-letter-age gauges.
+
+    Operators monitor refresh-vs-reflect ratio to spot priority-lane
+    starvation; dead-letter age surfaces stale DEAD_LETTER refresh
+    rows that ``complete_reflection`` intentionally does not delete.
+    """
+    try:
+        from memex_core.metrics import (
+            REFLECTION_QUEUE_DEAD_LETTER_AGE_SECONDS,
+            REFLECTION_QUEUE_DEPTH_BY_TASK_TYPE,
+        )
+
+        depths, oldest_dl_age = await api.reflection_queue_observability_snapshot()
+        for task_type, depth in depths.items():
+            REFLECTION_QUEUE_DEPTH_BY_TASK_TYPE.labels(task_type=task_type).set(depth)
+        REFLECTION_QUEUE_DEAD_LETTER_AGE_SECONDS.set(oldest_dl_age)
+    except Exception:
+        logger.debug('Scheduler: queue depth gauge refresh failed', exc_info=True)
+
 
 async def periodic_reflection_task(api: 'MemexAPI', batch_size: int):
     """
     The actual business logic to run periodically.
     """
+    from memex_core.memory.reflect.exceptions import AdvisoryLockTakenError
+
     async with background_session('bg-sched-reflect'):
         logger.info('Scheduler: Running periodic reflection check...')
         try:
-            # 0. Recover stale PROCESSING items before claiming new ones
+            # 0. Recover stale PROCESSING items before claiming new ones.
             recovered = await api.recover_stale_processing()
             if recovered:
                 logger.info(f'Scheduler: Recovered {recovered} stale PROCESSING items.')
 
-            # 1. Claim items
+            # 0b. Update observability gauges (cheap aggregate queries).
+            await _refresh_queue_depth_gauges(api)
+
+            # 1. Claim items (priority lane first; refresh + reflect mixed in one batch).
             queue_items = await api.claim_reflection_queue_batch(limit=batch_size)
+
+            # 1b. Reconcile: repair any deprio'd MU missing a refresh row in this
+            # tick's vault slice. Vault cursor uses sorted vault.id so a tenant
+            # added/removed mid-runtime can't permanently starve a slot.
+            await _reconcile_one_vault_slice(api)
+
             if not queue_items:
                 return
 
-            # 2. Trigger batch reflection
-            from memex_core.memory.reflect.models import ReflectionRequest
-
-            requests = [
-                ReflectionRequest(
-                    entity_id=item.entity_id,
-                    vault_id=item.vault_id,
-                    limit_recent_memories=20,
-                )
-                for item in queue_items
+            # 2. Partition by task_type and dispatch refresh BEFORE reflect.
+            refresh_items = [
+                item for item in queue_items if item.task_type == 'refresh_observation'
             ]
+            reflect_items = [item for item in queue_items if item.task_type == 'reflect']
 
-            logger.info(f'Scheduler: Reflecting on {len(requests)} entities.')
-            await api.reflect_batch(requests)
+            for item in refresh_items:
+                try:
+                    await api.refresh_observation(item)
+                except AdvisoryLockTakenError:
+                    # Transient: another worker holds the entity lock or the
+                    # refresh CAS UPDATE lost the version race to a concurrent
+                    # Phase 5 commit. Re-claim later with jittered backoff;
+                    # do NOT increment retry_count — contention is not failure.
+                    await api.reclaim_refresh_with_backoff(item)
+                except Exception as exc:
+                    # Refresh is best-effort isolated per-item — any other
+                    # exception class (ImportError, AttributeError, TypeError,
+                    # subclasses of SQLAlchemyError beyond IntegrityError /
+                    # OperationalError) must NOT escape to the outer handler,
+                    # because escape would starve every reflect item in this
+                    # batch. Mark this row failed (retry_count++ → DEAD_LETTER
+                    # at threshold) and continue to the next refresh item.
+                    logger.warning(
+                        'Scheduler: refresh_observation failed for obs %s: %s',
+                        item.observation_id,
+                        exc,
+                    )
+                    await api.mark_queue_item_failed(item, error=str(exc))
+
+            if reflect_items:
+                from memex_core.memory.reflect.models import ReflectionRequest
+
+                requests = [
+                    ReflectionRequest(
+                        entity_id=item.entity_id,
+                        vault_id=item.vault_id,
+                        limit_recent_memories=20,
+                    )
+                    for item in reflect_items
+                ]
+
+                logger.info(f'Scheduler: Reflecting on {len(requests)} entities.')
+                await api.reflect_batch(requests)
 
         except (OSError, RuntimeError, ValueError, IntegrityError, OperationalError) as e:
             # IntegrityError is the V18-specific failure mode: the

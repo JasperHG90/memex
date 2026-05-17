@@ -3,11 +3,14 @@ import logging
 from uuid import UUID
 from datetime import datetime, timedelta, timezone
 
+from sqlalchemy import and_, func, or_, text as sql_text
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import select, col, desc
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from memex_core.memory.sql_models import Entity, ReflectionQueue, ReflectionStatus
 from memex_core.config import ReflectionConfig, GLOBAL_VAULT_ID
+from memex_core.metrics import REFLECTION_QUEUE_PRIORITY_LANE_ENQUEUED_TOTAL
 
 logger = logging.getLogger('memex.core.memory.reflect.queue_service')
 
@@ -252,15 +255,33 @@ class ReflectionQueueService:
         """
         Fetch and lock the next batch of pending/failed reflection tasks.
         Uses SELECT ... FOR UPDATE SKIP LOCKED to ensure safe concurrency.
-        Marks tasks as PROCESSING.
+        Marks tasks as PROCESSING. Priority lane is claimed first; refresh-
+        task backoff via ``last_queued_at`` is respected (rows whose backoff
+        hasn't elapsed are skipped, supported by the partial index from
+        migration 043).
         """
+        now = datetime.now(timezone.utc)
         stmt = (
             select(ReflectionQueue)
             .where(
                 col(ReflectionQueue.status).in_([ReflectionStatus.PENDING, ReflectionStatus.FAILED])
             )
             .where(col(ReflectionQueue.priority_score) >= self.config.min_priority)
-            .order_by(desc(col(ReflectionQueue.priority_score)))
+            # Backoff filter — but a freshly enqueued row has
+            # ``last_queued_at IS NULL``, and ``NULL <= now()`` is UNKNOWN
+            # (falsy in WHERE), which would silently exclude every fresh
+            # task. Treat NULL as eligible.
+            .where(
+                or_(
+                    col(ReflectionQueue.last_queued_at) <= now,
+                    col(ReflectionQueue.last_queued_at).is_(None),
+                )
+            )
+            .order_by(
+                desc(col(ReflectionQueue.priority_lane)),
+                desc(col(ReflectionQueue.priority_score)),
+                col(ReflectionQueue.last_queued_at),
+            )
             .limit(limit)
             .with_for_update(skip_locked=True)
         )
@@ -287,18 +308,139 @@ class ReflectionQueueService:
 
         return list(items)
 
-    async def complete_reflection(self, session, entity_ids, vault_id=GLOBAL_VAULT_ID):
+    async def complete_reflection(
+        self,
+        session: AsyncSession,
+        entity_ids: list[UUID] | set[UUID],
+        vault_id: UUID = GLOBAL_VAULT_ID,
+    ) -> None:
+        """Delete reflect tasks for the given entities — including historical
+        FAILED and DEAD_LETTER rows for the same ``(entity, vault)``.
+
+        Filters by ``task_type='reflect'`` so a reflect ack does NOT nuke any
+        pending/processing ``refresh_observation`` rows on the same entity —
+        the two task types ride independent lanes by design.
+
+        Asymmetry note: ``complete_refresh`` deletes ONLY the claimed row
+        (scoped by ``ReflectionQueue.id``) and intentionally preserves
+        FAILED/DEAD_LETTER siblings as a diagnostic trail. This method
+        preserves the original pre-V21 behavior — reflect's per-entity
+        rows are coalesced on every ack — because reflect tasks are
+        per-entity (one row per status) whereas refresh tasks are
+        per-observation (many rows per entity, partial-UNIQUE-deduped
+        on the in-flight lane).
+        """
         if not entity_ids:
             return
         stmt = (
             select(ReflectionQueue)
-            .where(col(ReflectionQueue.entity_id).in_(entity_ids))
+            .where(col(ReflectionQueue.entity_id).in_(list(entity_ids)))
             .where(col(ReflectionQueue.vault_id) == vault_id)
+            .where(col(ReflectionQueue.task_type) == 'reflect')
         )
         results = await session.exec(stmt)
         items = results.all()
         for item in items:
             await session.delete(item)
+        await session.commit()
+
+    async def complete_refresh(self, session: AsyncSession, item: ReflectionQueue) -> None:
+        """Delete only the claimed refresh-observation row.
+
+        Scoped to ``ReflectionQueue.id == item.id`` so the ack cannot wipe
+        historical FAILED/DEAD_LETTER siblings on the same
+        ``(entity_id, vault_id, observation_id)`` — operators need those
+        rows as the diagnostic trail when a refresh task starts failing.
+        """
+        row = await session.get(ReflectionQueue, item.id)
+        if row is not None:
+            await session.delete(row)
+            await session.commit()
+
+    async def enqueue_priority_reflect(
+        self,
+        session: AsyncSession,
+        entity_ids: set[UUID] | list[UUID],
+        vault_id: UUID = GLOBAL_VAULT_ID,
+    ) -> int:
+        """Insert priority-lane reflect tasks; upsert priority_lane=True on existing pending/processing rows.
+
+        Used by the restore-MU path. The upsert relies on the partial UNIQUE
+        index ``idx_reflection_queue_entity_vault_active_unique`` from
+        migration 043 (predicate filtered to pending+processing reflect rows).
+        ``index_where`` uses SQLAlchemy column expressions so the rendered
+        predicate matches the migration DDL form character-for-character —
+        partial-UNIQUE arbiter inference is text-normalized and finicky.
+
+        Insert-vs-update detection via ``RETURNING (xmax = 0) AS was_insert``:
+        Postgres exposes the row's ``xmax`` system column on a successful
+        DML — for a fresh INSERT, ``xmax`` is 0 (no deleting transaction);
+        for an ON CONFLICT UPDATE, ``xmax`` is the updating xid. This gives
+        a per-row insert/update label without a second query and is the
+        canonical Postgres idiom. Wrapped in ``sql_text(...)`` because the
+        bare ``column('xmax') == 0`` form depends on Postgres-version-
+        sensitive integer-literal coercion.
+        """
+        if not entity_ids:
+            return 0
+
+        rows = [
+            {
+                'entity_id': eid,
+                'vault_id': vault_id,
+                'status': ReflectionStatus.PENDING,
+                'priority_lane': True,
+                'priority_score': 1.0,
+                'task_type': 'reflect',
+                'accumulated_evidence': 0,
+            }
+            for eid in entity_ids
+        ]
+        stmt = pg_insert(ReflectionQueue).values(rows)
+        stmt = stmt.on_conflict_do_update(
+            index_elements=['entity_id', 'vault_id'],
+            index_where=and_(
+                col(ReflectionQueue.task_type) == 'reflect',
+                col(ReflectionQueue.status).in_(
+                    [ReflectionStatus.PENDING, ReflectionStatus.PROCESSING]
+                ),
+            ),
+            set_={
+                'priority_lane': True,
+                'priority_score': func.greatest(
+                    col(ReflectionQueue.priority_score), stmt.excluded.priority_score
+                ),
+            },
+        )
+        # ON CONFLICT DO UPDATE returns rowcount = inserts + updates. To count
+        # ONLY true inserts (an existing PENDING row's priority_lane flip is
+        # not an enqueue), use RETURNING with the Postgres-specific xmax check
+        # — xmax is type xid and only sql_text() renders a stable
+        # ``xmax = 0`` comparison across Postgres versions (a bare
+        # ``column('xmax') == 0`` would rely on integer-literal coercion to
+        # xid which has no native operator in pg_proc).
+        stmt = stmt.returning(sql_text('(xmax = 0) AS was_insert'))
+        result = await session.execute(stmt)
+        rows_returned = result.all()
+        # Caller owns the transaction (restore-path commits flag flip + upsert
+        # together). Bump counter only for true INSERTs.
+        true_inserts = sum(1 for r in rows_returned if r[0])
+        if true_inserts > 0:
+            REFLECTION_QUEUE_PRIORITY_LANE_ENQUEUED_TOTAL.inc(true_inserts)
+        return true_inserts
+
+    async def reclaim_with_backoff(
+        self, session: AsyncSession, item: ReflectionQueue, jitter_seconds: float
+    ) -> None:
+        """Re-enqueue a task whose advisory lock was held (sentinel path).
+
+        Resets status to PENDING with ``last_queued_at = now() + jitter`` so
+        the worker doesn't busy-spin on a long-held lock. ``retry_count`` is
+        NOT incremented — advisory-lock contention is benign, not a failure.
+        """
+        item.status = ReflectionStatus.PENDING
+        item.last_queued_at = datetime.now(timezone.utc) + timedelta(seconds=jitter_seconds)
+        session.add(item)
         await session.commit()
 
     async def mark_abandoned(
@@ -348,12 +490,51 @@ class ReflectionQueueService:
         entity_id: UUID,
         vault_id: UUID = GLOBAL_VAULT_ID,
         error: str = '',
+        *,
+        task_type: str = 'reflect',
+        observation_id: UUID | None = None,
     ) -> None:
-        """Record a failure for a queue item, moving to DEAD_LETTER when retries exhausted."""
+        """Record a failure for a queue item, moving to DEAD_LETTER when retries exhausted.
+
+        Filters by ``task_type`` (and ``observation_id`` for refresh tasks) so a
+        reflect failure on an entity does NOT bump retry_count on a co-pending
+        refresh task for the same entity.
+        """
+        if task_type == 'refresh_observation' and observation_id is None:
+            # A refresh failure with no observation_id cannot be safely
+            # attributed to any row — bumping retry_count on a random sibling
+            # would dead-letter the wrong task. Log and abort; the orphan
+            # PROCESSING row (if any) is recovered by ``recover_stale_processing``.
+            logger.warning(
+                'mark_failed called with task_type=refresh_observation and '
+                'observation_id=None for entity %s vault %s — aborting to avoid '
+                'incrementing retry_count on the wrong row',
+                entity_id,
+                vault_id,
+            )
+            return
         stmt = (
             select(ReflectionQueue)
             .where(col(ReflectionQueue.entity_id) == entity_id)
             .where(col(ReflectionQueue.vault_id) == vault_id)
+            .where(col(ReflectionQueue.task_type) == task_type)
+        )
+        if task_type == 'refresh_observation':
+            stmt = stmt.where(col(ReflectionQueue.observation_id) == observation_id)
+        # Prefer the currently-PROCESSING row (the one we just failed) over
+        # any historical FAILED siblings; without ORDER BY, the planner may
+        # return any matching row, leaving the PROCESSING one stuck.
+        # ``LIMIT 1`` + ``FOR UPDATE SKIP LOCKED`` matches ``claim_next_batch``'s
+        # row-level safety — two concurrent failure paths for the same row
+        # don't double-increment retry_count, and a row held by an in-flight
+        # claim is silently skipped.
+        stmt = (
+            stmt.order_by(
+                (col(ReflectionQueue.status) == ReflectionStatus.PROCESSING).desc(),
+                col(ReflectionQueue.last_queued_at).desc(),
+            )
+            .with_for_update(skip_locked=True)
+            .limit(1)
         )
         result = await session.exec(stmt)
         item = result.first()
@@ -422,8 +603,57 @@ class ReflectionQueueService:
         await session.refresh(item)
         return item
 
+    async def observability_snapshot(self, session: AsyncSession) -> tuple[dict[str, int], float]:
+        """Return (depth by task_type, oldest DEAD_LETTER refresh age in seconds).
+
+        Two cheap aggregate queries used by the scheduler to refresh Prometheus
+        gauges. Depth counts ``status IN ('pending', 'processing')`` rows
+        grouped by ``task_type``. Dead-letter age is the gap between now and
+        the oldest ``last_queued_at`` of a DEAD_LETTER row with
+        ``task_type='refresh_observation'`` — non-zero in steady state signals
+        operator action (DEAD_LETTER refresh rows accumulate without auto-expiry
+        because ``complete_reflection`` only deletes ``reflect``-type rows by
+        design).
+        """
+        depth_rows = (
+            await session.exec(
+                select(ReflectionQueue.task_type, func.count())  # type: ignore[call-overload]
+                .where(
+                    col(ReflectionQueue.status).in_(
+                        [ReflectionStatus.PENDING, ReflectionStatus.PROCESSING]
+                    )
+                )
+                .group_by(col(ReflectionQueue.task_type))
+            )
+        ).all()
+        depths = {str(row[0]): int(row[1]) for row in depth_rows}
+        for tt in ('reflect', 'refresh_observation'):
+            depths.setdefault(tt, 0)
+
+        oldest_dl_row = (
+            await session.exec(
+                select(ReflectionQueue.last_queued_at)
+                .where(col(ReflectionQueue.status) == ReflectionStatus.DEAD_LETTER)
+                .where(col(ReflectionQueue.task_type) == 'refresh_observation')
+                .order_by(col(ReflectionQueue.last_queued_at))
+                .limit(1)
+            )
+        ).first()
+        if oldest_dl_row is None:
+            oldest_age = 0.0
+        else:
+            now = datetime.now(timezone.utc)
+            oldest_age = max(0.0, (now - oldest_dl_row).total_seconds())
+        return depths, oldest_age
+
     async def recover_stale_processing(self, session: AsyncSession) -> int:
         """Reset PROCESSING items that have been stuck longer than the configured timeout.
+
+        Covers BOTH ``task_type='reflect'`` and ``task_type='refresh_observation'``
+        — the WHERE clause filters by status only. If a refresh worker crashes
+        between Phase C CAS abandon and the scheduler's
+        ``reclaim_refresh_with_backoff`` call, the orphan PROCESSING row is
+        recovered here on the next stale-recovery tick.
 
         Returns the number of recovered items.
         """
