@@ -1,4 +1,4 @@
-"""Alembic 043_drop_procedure_outcomes migration tests.
+"""Alembic 045_drop_procedure_outcomes migration tests.
 
 Verifies the ``procedure_outcomes`` table is dropped on upgrade and that
 downgrade re-creates an empty table with the original schema.
@@ -6,7 +6,7 @@ downgrade re-creates an empty table with the original schema.
 The test bypasses the full chain (which is non-idempotent past 035 against
 ``001_full_baseline``'s ``metadata.create_all`` — a pre-existing migration
 infrastructure limitation, unrelated to this revision) and seeds the
-pre-043 state by upgrading to the head set by ``001_full_baseline``, then
+pre-045 state by upgrading to the head set by ``001_full_baseline``, then
 manually re-creating the ``procedure_outcomes`` table to mirror the
 post-028 schema. The migration body is then exercised via ``op``
 directly inside a migration context.
@@ -29,7 +29,7 @@ pytestmark = [pytest.mark.integration]
 
 @pytest_asyncio.fixture
 async def fresh_db_url(postgres_container: PostgresContainer) -> AsyncGenerator[str, None]:
-    async for url in make_fresh_db(postgres_container, db_prefix='mig043'):
+    async for url in make_fresh_db(postgres_container, db_prefix='mig045'):
         yield url
 
 
@@ -37,7 +37,7 @@ async def _create_procedure_outcomes(url: str) -> None:
     """Re-create the post-028 ``procedure_outcomes`` table on a fresh DB.
 
     Mirrors the schema introduced by migration 028. Used to seed the
-    pre-043 state without running the non-idempotent 036-042 chain.
+    pre-045 state without running the non-idempotent 036-044 chain.
     """
     engine = create_async_engine(url, poolclass=NullPool)
     try:
@@ -62,7 +62,7 @@ async def _create_procedure_outcomes(url: str) -> None:
 
 
 async def _run_migration_op(url: str, direction: str) -> None:
-    """Execute migration 043's upgrade or downgrade body in an isolated context.
+    """Execute migration 045's upgrade or downgrade body in an isolated context.
 
     Loads the revision module by path (alembic's loader) and invokes
     ``upgrade()`` / ``downgrade()`` with ``op`` bound to an alembic
@@ -80,9 +80,9 @@ async def _run_migration_op(url: str, direction: str) -> None:
         / 'memex_core'
         / 'alembic'
         / 'versions'
-        / '043_drop_procedure_outcomes.py'
+        / '045_drop_procedure_outcomes.py'
     )
-    spec = importlib.util.spec_from_file_location('mig_043', rev_path)
+    spec = importlib.util.spec_from_file_location('mig_045', rev_path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

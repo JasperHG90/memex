@@ -1,9 +1,9 @@
 """procedure_outcomes — vault-scoped MW counters for procedural KV keys.
 
-SUPERSEDED by 043_drop_procedure_outcomes — the table and the
+SUPERSEDED by 045_drop_procedure_outcomes — the table and the
 ``record_outcome(target_type='kv_key', ...)`` path were removed; procedures
 no longer carry Memory Worth. This migration is kept in the chain for
-historical replay; upgrading past 043 drops the table again.
+historical replay; upgrading past 045 drops the table again.
 
 Scoped to counters ONLY — active value/version/history live in KVEntry.value
 JSON envelope (no schema change to kv_entries). One row per (vault_id, kv_key).

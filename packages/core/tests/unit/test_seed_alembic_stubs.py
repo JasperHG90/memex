@@ -55,14 +55,16 @@ def test_seed_chain_is_linear_and_correct() -> None:
     sd = ScriptDirectory.from_config(cfg)
 
     heads = sd.get_heads()
-    assert heads == ['043_drop_procedure_outcomes'], (
-        f'Expected single head 043_drop_procedure_outcomes, got {heads}'
+    assert heads == ['045_drop_procedure_outcomes'], (
+        f'Expected single head 045_drop_procedure_outcomes, got {heads}'
     )
 
     walk = list(sd.walk_revisions())
     top10 = [(r.revision, r.down_revision) for r in walk[:10]]
     expected_top10 = [
-        ('043_drop_procedure_outcomes', '042_drop_note_status_appended'),
+        ('045_drop_procedure_outcomes', '044_mm_observations_gin_index'),
+        ('044_mm_observations_gin_index', '043_reflection_queue_refresh_task'),
+        ('043_reflection_queue_refresh_task', '042_drop_note_status_appended'),
         ('042_drop_note_status_appended', '041_archived_fsfm'),
         ('041_archived_fsfm', '040_outcome_per_unit_schema'),
         ('040_outcome_per_unit_schema', '039_memory_unit_claim_type'),
@@ -70,8 +72,6 @@ def test_seed_chain_is_linear_and_correct() -> None:
         ('038_link_type_refines', '037_entity_last_merge_scan_at'),
         ('037_entity_last_merge_scan_at', '036_fsfm_cooldown_index'),
         ('036_fsfm_cooldown_index', '035_drop_fsrs_revisit_columns'),
-        ('035_drop_fsrs_revisit_columns', '034_add_mw_mode'),
-        ('034_add_mw_mode', '033_confidence_evidence_count'),
     ]
     assert top10 == expected_top10, f'Tier A chain mismatch: got {top10}'
 

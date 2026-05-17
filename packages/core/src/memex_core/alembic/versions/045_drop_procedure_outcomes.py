@@ -13,8 +13,8 @@ the source data does not survive a drop; downgrading is a schema-only
 rollback. Snapshot exports created after this migration will not include
 procedure_outcomes rows.
 
-Revision ID: 043_drop_procedure_outcomes
-Revises: 042_drop_note_status_appended
+Revision ID: 045_drop_procedure_outcomes
+Revises: 044_mm_observations_gin_index
 Create Date: 2026-05-15
 """
 
@@ -22,8 +22,8 @@ import sqlalchemy as sa
 from alembic import op
 from sqlalchemy.dialects.postgresql import UUID
 
-revision: str = '043_drop_procedure_outcomes'
-down_revision: str | None = '042_drop_note_status_appended'
+revision: str = '045_drop_procedure_outcomes'
+down_revision: str | None = '044_mm_observations_gin_index'
 branch_labels: str | list[str] | None = None
 depends_on: str | list[str] | None = None
 
