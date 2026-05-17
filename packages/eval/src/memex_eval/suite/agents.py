@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import abc
 import asyncio
+import atexit
 import contextlib
 import json
 import logging
@@ -619,6 +620,20 @@ class ClaudeCodeBackend(AnswerBackend):
         self.timeout_s = timeout_s
         self.model: str = os.environ.get('MEMEX_EVAL_CLAUDE_MODEL') or self.DEFAULT_MODEL
         self.plugin_dir: Path | None = _resolve_suite_plugin_dir()
+        # Per-suite tmpdir cache: same vault_id → same workspace path →
+        # same plugin-resolved project_id across scenarios in one suite run.
+        # Cross-scenario KV reads (e.g. ``kv_retrieves_convention``
+        # depending on ``kv_writes_project_preference``) need a stable
+        # project namespace. Cleanup runs at process exit.
+        self._suite_workspaces: dict[str, Path] = {}
+
+    def _suite_workspace(self, vault_id: UUID) -> Path:
+        key = str(vault_id)
+        if key not in self._suite_workspaces:
+            workspace = Path(tempfile.mkdtemp(prefix='memex-eval-claude-'))
+            self._suite_workspaces[key] = workspace
+            atexit.register(shutil.rmtree, str(workspace), ignore_errors=True)
+        return self._suite_workspaces[key]
 
     def _executable_path(self) -> str:
         """Binary that must be on PATH for this backend; subclasses override."""
@@ -726,124 +741,147 @@ class ClaudeCodeBackend(AnswerBackend):
         mcp_server_url = server_url.rstrip('/')
         if mcp_server_url.endswith('/api/v1'):
             mcp_server_url = mcp_server_url[: -len('/api/v1')]
-        with tempfile.TemporaryDirectory(prefix='memex-eval-claude-') as tmp:
-            tmpdir = Path(tmp)
-            (tmpdir / '.mcp.json').write_text(
-                _CLAUDE_MCP_TEMPLATE.format(workspace=workspace_root, server_url=mcp_server_url)
-            )
-            md_template = (
-                _CLAUDE_MD_WITH_PLUGIN if self.plugin_dir is not None else _CLAUDE_MD_NO_PLUGIN
-            )
-            (tmpdir / 'CLAUDE.md').write_text(
-                md_template.format(vault_name=vault_name or str(vault_id))
-            )
-            claude_dir = tmpdir / '.claude'
-            claude_dir.mkdir()
-            # Block Claude Code's built-in auto-memory skill from
-            # intercepting "remember X" / "save this" intents that should
-            # route to ``memex_kv_write``. Auto-memory persists to
-            # ``~/.claude/projects/<id>/memory/MEMORY.md`` via the ``Write``
-            # tool; denying writes to that path forces the agent to use
-            # the memex KV layer instead. The path glob covers both the
-            # per-project sub-tree and the bare project root in case the
-            # skill ever stores at a sibling location.
-            _AUTO_MEMORY_DENY = (
-                'Write(/home/*/.claude/projects/**)',
-                'Edit(/home/*/.claude/projects/**)',
-            )
-            (claude_dir / 'settings.local.json').write_text(
-                json.dumps(
-                    {
-                        'permissions': {
-                            'allow': list(_MEMEX_TOOL_ALLOWLIST),
-                            'deny': list(_AUTO_MEMORY_DENY),
-                        }
-                    },
-                    indent=2,
+
+        # Per-suite stable workspace: same vault_id across scenarios →
+        # same path → same plugin-resolved project_id, so
+        # ``kv_writes_project_preference`` and ``kv_retrieves_convention``
+        # share the ``project:<workspace>:…`` namespace. The dir lives for
+        # the lifetime of the backend instance (one process) and is cleaned
+        # at exit by the atexit handler registered in ``_suite_workspace``.
+        tmpdir = self._suite_workspace(vault_id)
+        # Bind the eval vault to this suite's project_id so the CC
+        # plugin's SessionStart hook resolves it as the active vault. The
+        # plugin's resolver derives project_id from either a real git
+        # remote or, lacking one, the PWD. We deliberately do NOT create a
+        # synthetic git remote (it isn't a real project) — let the plugin
+        # fall through to the path branch, and bind the KV under the same
+        # path the plugin will compute.
+        if vault_name:
+            try:
+                await api.kv_put(
+                    value=vault_name,
+                    key=f'app:claude-code:project:{tmpdir}:vault',
                 )
+            except Exception as _kv_err:
+                logger.warning(
+                    'Failed to bind project KV → vault (%s); the CC plugin '
+                    'may not resolve the active vault for scenario %r',
+                    _kv_err,
+                    scenario.id,
+                )
+        (tmpdir / '.mcp.json').write_text(
+            _CLAUDE_MCP_TEMPLATE.format(workspace=workspace_root, server_url=mcp_server_url)
+        )
+        md_template = (
+            _CLAUDE_MD_WITH_PLUGIN if self.plugin_dir is not None else _CLAUDE_MD_NO_PLUGIN
+        )
+        (tmpdir / 'CLAUDE.md').write_text(
+            md_template.format(vault_name=vault_name or str(vault_id))
+        )
+        claude_dir = tmpdir / '.claude'
+        claude_dir.mkdir(exist_ok=True)
+        # Block Claude Code's built-in auto-memory skill from
+        # intercepting "remember X" / "save this" intents that should
+        # route to ``memex_kv_write``. Auto-memory persists to
+        # ``~/.claude/projects/<id>/memory/MEMORY.md`` via the ``Write``
+        # tool; denying writes to that path forces the agent to use
+        # the memex KV layer instead. The path glob covers both the
+        # per-project sub-tree and the bare project root in case the
+        # skill ever stores at a sibling location.
+        _AUTO_MEMORY_DENY = (
+            'Write(/home/*/.claude/projects/**)',
+            'Edit(/home/*/.claude/projects/**)',
+        )
+        (claude_dir / 'settings.local.json').write_text(
+            json.dumps(
+                {
+                    'permissions': {
+                        'allow': list(_MEMEX_TOOL_ALLOWLIST),
+                        'deny': list(_AUTO_MEMORY_DENY),
+                    }
+                },
+                indent=2,
             )
-            # Silence ``claude``'s non-git-workdir warning (matches longmemeval).
-            # Also bind a stable ``origin`` so the agent's project-id resolver
-            # (memex_resolve_project_id / Claude Code's own project naming)
-            # picks the SAME ``project:<id>:`` namespace across scenarios in
-            # one suite run. Without this, every scenario gets a fresh temp
-            # path, so a ``kv_writes_project_preference`` scenario stores
-            # under ``project:/tmp/eval-AAA:…`` and the dependent
-            # ``kv_retrieves_convention`` then looks under
-            # ``project:/tmp/eval-BBB:…`` and finds nothing — masking a
-            # working KV layer as "agent didn't search". The hostname
-            # ``memex-eval.local`` is intentionally a non-routable test
-            # marker; the path encodes suite + scenario-group bucket.
-            subprocess.run(['git', 'init'], cwd=tmpdir, capture_output=True, check=False)
-            subprocess.run(
-                [
-                    'git',
-                    'remote',
-                    'add',
-                    'origin',
-                    f'https://memex-eval.local/agent-eval/{scenario.group or "default"}.git',
-                ],
+        )
+        cmd = self._build_subprocess_cmd(scenario)
+        # Inject MEMEX_LOCAL_PATH so the plugin's SessionStart hook
+        # resolves `memex` against the workspace checkout (where this
+        # branch's agent-surface refactor lives) instead of `uvx --from
+        # git+https://github.com/.../memex@latest`. Explicit env values
+        # are respected so callers can opt out for distribution tests.
+        child_env = os.environ.copy()
+        if 'MEMEX_LOCAL_PATH' not in os.environ:
+            child_env['MEMEX_LOCAL_PATH'] = workspace_root
+        # Disable Claude Code's built-in auto-memory skill (undocumented
+        # env var per anthropics/claude-code#23750). Without this the
+        # agent's "remember X" intent is intercepted into
+        # ``~/.claude/projects/<id>/memory/MEMORY.md`` via the Write
+        # tool, and — worse for eval correctness — the auto-memory layer
+        # reads from the user's PRE-EXISTING auto-memory store and
+        # surfaces unrelated session content as if it came from the
+        # eval vault. Empirically this contaminated sonnet's pass rate
+        # by ≥30 percentage points (NVIDIA/Exxon/Google Finance content
+        # leaking into Acme-Corp scenarios). Disabling auto-memory
+        # forces every retrieval through the memex MCP, which is the
+        # eval's measurement target.
+        if 'CLAUDE_CODE_DISABLE_AUTO_MEMORY' not in os.environ:
+            child_env['CLAUDE_CODE_DISABLE_AUTO_MEMORY'] = '1'
+        # Force the plugin's bash hooks (which call ``memex`` CLI for
+        # KV vault resolution, briefing fetch, etc.) onto the eval
+        # server. Without this override, the operator's
+        # ``MEMEX_SERVER_URL`` env (e.g. their personal memex) leaks
+        # into the subprocess and the plugin's ``memex kv get`` reads
+        # from the wrong store — so the project→vault binding written
+        # by this backend to the eval server is invisible, and the
+        # SessionStart hook concludes "No vault set" even though MCP
+        # (configured via ``.mcp.json``) is correctly bound. API key
+        # is dropped because the eval server doesn't require auth and
+        # the operator's key would belong to a different server.
+        child_env['MEMEX_SERVER_URL'] = mcp_server_url
+        child_env.pop('MEMEX_API_KEY', None)
+        # Make the eval vault the default reader/writer for the MCP
+        # server's own fallback chain. Without this, an agent that
+        # doesn't pass ``vault_ids`` (Sonnet routinely omits it; GLM
+        # threads it through) hits ``config.read_vaults`` →
+        # ``[server.default_reader_vault]`` → "global" → empty
+        # search results. The MCP config object reads
+        # ``MEMEX_VAULT__ACTIVE`` via the ``MEMEX_`` env prefix and
+        # nested-delimiter ``__``, so this is the cleanest hook to
+        # bind both write and read defaults to the eval vault
+        # without requiring agent-side vault_ids discipline.
+        if vault_name:
+            child_env['MEMEX_VAULT__ACTIVE'] = vault_name
+        try:
+            proc = subprocess.run(
+                cmd,
                 cwd=tmpdir,
                 capture_output=True,
+                text=True,
+                timeout=self.timeout_s,
                 check=False,
+                env=child_env,
             )
+        except subprocess.TimeoutExpired:
+            out.error = f'{cmd[0]} subprocess timed out after {self.timeout_s}s'
+            out.duration_ms = (time.monotonic() - started) * 1000
+            return out
 
-            cmd = self._build_subprocess_cmd(scenario)
-            # Inject MEMEX_LOCAL_PATH so the plugin's SessionStart hook
-            # resolves `memex` against the workspace checkout (where this
-            # branch's agent-surface refactor lives) instead of `uvx --from
-            # git+https://github.com/.../memex@latest`. Explicit env values
-            # are respected so callers can opt out for distribution tests.
-            child_env = os.environ.copy()
-            if 'MEMEX_LOCAL_PATH' not in os.environ:
-                child_env['MEMEX_LOCAL_PATH'] = workspace_root
-            # Disable Claude Code's built-in auto-memory skill (undocumented
-            # env var per anthropics/claude-code#23750). Without this the
-            # agent's "remember X" intent is intercepted into
-            # ``~/.claude/projects/<id>/memory/MEMORY.md`` via the Write
-            # tool, and — worse for eval correctness — the auto-memory layer
-            # reads from the user's PRE-EXISTING auto-memory store and
-            # surfaces unrelated session content as if it came from the
-            # eval vault. Empirically this contaminated sonnet's pass rate
-            # by ≥30 percentage points (NVIDIA/Exxon/Google Finance content
-            # leaking into Acme-Corp scenarios). Disabling auto-memory
-            # forces every retrieval through the memex MCP, which is the
-            # eval's measurement target.
-            if 'CLAUDE_CODE_DISABLE_AUTO_MEMORY' not in os.environ:
-                child_env['CLAUDE_CODE_DISABLE_AUTO_MEMORY'] = '1'
+        if proc.returncode != 0:
+            out.error = f'{cmd[0]} exited {proc.returncode}: {(proc.stderr or "").strip()[:500]}'
+
+        # Stash the raw stream-json verbatim for MLflow artifact upload.
+        out.session_log_text = proc.stdout or ''
+
+        # Parse stream-json trace: one JSON-encoded message per line.
+        for line in (proc.stdout or '').splitlines():
+            line = line.strip()
+            if not line:
+                continue
             try:
-                proc = subprocess.run(
-                    cmd,
-                    cwd=tmpdir,
-                    capture_output=True,
-                    text=True,
-                    timeout=self.timeout_s,
-                    check=False,
-                    env=child_env,
-                )
-            except subprocess.TimeoutExpired:
-                out.error = f'{cmd[0]} subprocess timed out after {self.timeout_s}s'
-                out.duration_ms = (time.monotonic() - started) * 1000
-                return out
-
-            if proc.returncode != 0:
-                out.error = (
-                    f'{cmd[0]} exited {proc.returncode}: {(proc.stderr or "").strip()[:500]}'
-                )
-
-            # Stash the raw stream-json verbatim for MLflow artifact upload.
-            out.session_log_text = proc.stdout or ''
-
-            # Parse stream-json trace: one JSON-encoded message per line.
-            for line in (proc.stdout or '').splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    msg = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                _absorb_claude_message(msg, out)
+                msg = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            _absorb_claude_message(msg, out)
 
         out.duration_ms = (time.monotonic() - started) * 1000
         return out
