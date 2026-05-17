@@ -31,10 +31,31 @@ Capture cadence: write a short note (`memex_add_note`, ≤300 tokens, no per-fil
 
 CLAUDE_CODE_HARNESS = """## Claude Code-specific framing
 
-Capture cadence: call `memex_add_note(background=true, author="claude-code")` when you (1) complete a multi-step task, (2) diagnose a bug root cause, (3) make/discover an architectural decision, or (4) resolve a tricky env issue. Hard max 300 tokens; no per-file changelogs. User preferences / conventions are NOT note-shaped — those go to `memex_kv_write` per the KV-namespace rules above.
+Capture cadence: call `memex_add_note(background=true, author="claude-code")` when you (1) complete a multi-step task, (2) diagnose a bug root cause, (3) make/discover an architectural decision, or (4) resolve a tricky env issue. Hard max 300 tokens; no per-file changelogs. User preferences / conventions are NOT note-shaped — those go to `memex_kv_write` per the KV namespace rules above.
 
-<critical_constraint name="preference_routing">
-"Remember"/"save this"/"for future sessions" directives for preferences or conventions go to `memex_kv_write` — see KV namespace rules above. Do NOT use the built-in `Write` tool to save them into CLAUDE.md / AGENTS.md / .memex/ / any local file. Local files are for project code; KV is for durable settings.
+<critical_constraint name="write_routing">
+Route user write intents to the right tool — failure here is silent ("I'm ready" with no tool call) or the wrong namespace.
+- `"Remember about me: I prefer X"` → `memex_kv_write(key="user:<field>", value=X)`.
+- `"Remember in this repo / project / codebase: ..."` → `memex_kv_write(key="project:<id>:<field>", ...)`.
+- `"Remember whenever I use <app> ..."` → `memex_kv_write(key="app:<app-id>:<field>", ...)`. The `<app>` cue wins over "I"/"my" — Claude Code preferences go under `app:claude-code:*`, NOT `user:claude-code:*`.
+- `"Remember across our projects / company-wide"` → `memex_kv_write(key="global:<field>", ...)`.
+- `"That worked / it's holding / that fixed it"` with a referent in scope → `memex_record_outcome(units=[{unit_id, verb:"helpful", reason}])` on the units search returned. Do NOT `memex_add_note` a "Resolution confirmed" note — paired-write on the existing units.
+- `"Save this insight / decision / lesson"` (new durable knowledge, not a confirmation) → `memex_add_note(...)`.
+<example>WRONG: search finds Redis incident unit `f6348ac1` → call `memex_add_note(title="Redis Cache Fix: Resolved")`. RIGHT: same search → `memex_record_outcome(units=[{unit_id:"f6348ac1", verb:"helpful", reason:"in-process caching holding"}])`.</example>
+Local-file `Write` / `Edit` tool is for project code, never for preferences. KV is for durable settings.
+</critical_constraint>
+
+<critical_constraint name="clarify_under_ambiguity">
+Vague signals — `"that worked"`, `"we did it"`, `"stop suggesting that"` — with NO specific referent in the conversation → ASK which fix / which suggestion. Never call `memex_record_outcome` with a guessed `unit_id`; never fabricate a target from search results.
+</critical_constraint>
+
+<critical_constraint name="list_shape_questions">
+`"What notes do we have on X?"` / `"remind me about Y"` / `"can you find anything on Z?"` → call `memex_note_search` and present **≥2 candidate notes by title + date** so the user can pick. Do NOT pick one and narrate it; the user is asking to recognize, not to consume.
+<example>WRONG: search returns `incident-2025-08-redis` + `team-retro-q3` → narrate the Redis SEV-1 timeline only. RIGHT: list both as candidates with title + date; let user pick.</example>
+</critical_constraint>
+
+<critical_constraint name="cooccurrence_graph_required">
+Relationship questions (`"who does X work with?"`, `"what cooccurs with Y?"`, `"strongest counterpart"`) REQUIRE `memex_get_entity_cooccurrences` after `memex_list_entities`. `memex_list_entities` returns names but not graph edges — you cannot answer "strongest counterpart" from it alone.
 </critical_constraint>
 
 Slash commands:
