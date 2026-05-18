@@ -160,7 +160,10 @@ class TestReadScenarioSpecsIsSideEffectFree:
     re-introducing the side effect.
     """
 
-    @pytest.mark.parametrize('corpus', ['acme_corp', 'ai_research_lab', 'project_nexus'])
+    @pytest.mark.parametrize(
+        'corpus',
+        ['acme_corp', 'agent_integration', 'ai_research_lab', 'project_nexus'],
+    )
     def test_read_does_not_import_parent_package(self, corpus: str) -> None:
         import sys
 
