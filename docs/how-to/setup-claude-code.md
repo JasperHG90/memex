@@ -83,12 +83,24 @@ The plugin registers lifecycle hooks that fire automatically during your session
 
 | Hook | Trigger | Action |
 | :--- | :--- | :--- |
-| `SessionStart` | Claude Code session begins | Searches Memex for relevant context and injects it along with behavioral instructions |
+| `SessionStart` | Claude Code session begins | Installs the agent-surface rule file (see below), fetches the per-vault briefing, and injects it as `additionalContext` |
 | `PreCompact` | Context window is about to compress | Reminds Claude to persist important context before compaction |
 | `PostToolUse (Bash)` | After a `git commit` | Prompts capture of commit details as a memory note |
 | `PostToolUse (Write/Edit)` | After file writes/edits | Prompts capture of significant changes (throttled to every 10th invocation) |
 
 Hooks are managed by the plugin — no manual configuration needed.
+
+### How the agent surface is delivered
+
+Memex's static behavioral instructions (capture cadence, retrieval routing, citation rules) are installed at `SessionStart` as a project rule file at `<project>/.claude/rules/memex-agent-surface.md`. Claude Code auto-loads that file into the system prompt the next time it boots — bypassing the harness's 10K-character cap on hook output and benefiting from the prompt cache.
+
+On the **first install** in a project, the rule file is written during `SessionStart`, but the system prompt for the current session was assembled before the hook ran. The plugin surfaces a restart hint in its status line:
+
+```
+🧠 Memex connected · Agent surface installed at .claude/rules/memex-agent-surface.md — restart Claude Code to load it
+```
+
+Restart Claude Code once after the first install. Subsequent updates refresh the rule file in place; the CLI skips the rewrite when content is unchanged, so file watchers don't refire and git's dirty state stays honest.
 
 ## Configuration
 

@@ -55,14 +55,14 @@ claude --plugin-dir ./packages/claude-code-plugin
 
 - **Skills**: `/remember`, `/recall`, and `/retro` slash commands for manual memory capture, retrieval, and structured session postmortems.
 - **Hooks**: Full session lifecycle integration:
-  - `SessionStart` — installs rules, fetches a token-budgeted briefing, resolves the active vault, generates a per-session note key.
+  - `SessionStart` — installs rules (including `<project>/.claude/rules/memex-agent-surface.md`, the Tier 1b+2 agent surface auto-loaded into the system prompt), fetches a token-budgeted briefing, resolves the active vault, generates a per-session note key.
   - `SessionEnd` — auto-captures the full session transcript to long-term memory (safety net under `/remember`).
   - `PreCompact` — captures transcript-since-last-compact to the session note before context is discarded.
   - `UserPromptExpansion` — when `/recall` is invoked without arguments, composes a query from the last N transcript turns.
   - `PreToolUse` (on `memex_add_note`) — auto-injects ambient capture metadata (git, session, project, model, plugin version) and defaults `background: true`.
   - `PostToolUse` (on `memex_add_note`, `Bash`, `Write`/`Edit`) — capture-counter, commit-nudge, edit-spiral nudge.
 - **MCP Server**: Memex tools available as MCP tools (search, entities, notes, KV store)
-- **Behavioral Instructions**: Injected at session start via `additionalContext` — covers proactive capture rules, retrieval routing, and citation requirements
+- **Behavioral Instructions**: Delivered as a project rule file (`memex-agent-surface.md`, installed at `SessionStart`) so it loads into the system prompt directly rather than via the hook output channel — covers proactive capture rules, retrieval routing, and citation requirements. The dynamic per-vault briefing still rides on `additionalContext`.
 
 ## Auto-capture safety net
 
