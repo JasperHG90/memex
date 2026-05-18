@@ -872,7 +872,7 @@ class LintService(BaseService):
         :class:`KeyError` instead of silently falling back.
         """
         cfg = self.config.server.memory.deprioritize_score
-        contradiction_cfg = self.config.server.contradiction
+        contradiction_cfg = self.config.server.memory.contradiction
         known: dict[str, Any] = {
             'lambda_link': cfg.lambda_link,
             'mu_entity': cfg.mu_entity,
