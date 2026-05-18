@@ -66,6 +66,7 @@ def _render_finding(console: Console, index: int, total: int, finding: dict[str,
     lint_type = finding.get('lint_type', '?')
     target_type = finding.get('target_type', '?')
     target_id = finding.get('target_id', '?')
+    target_text = finding.get('target_text')
     vault_id = finding.get('vault_id') or '(global)'
     created_at = finding.get('created_at', '')
     suggested_action = finding.get('suggested_action', '')
@@ -82,6 +83,8 @@ def _render_finding(console: Console, index: int, total: int, finding: dict[str,
     body.add_column(overflow='fold')
     body.add_row('id', finding.get('id', '?'))
     body.add_row('target', str(target_id))
+    if target_text:
+        body.add_row('text', str(target_text))
     if created_at:
         body.add_row('created', str(created_at))
     if evidence:

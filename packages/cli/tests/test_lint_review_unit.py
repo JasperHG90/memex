@@ -26,6 +26,7 @@ _FINDINGS = [
         'rule_name': 'cold_low_mw_unit',
         'target_type': 'memory_unit',
         'target_id': 'unit-aaa',
+        'target_text': 'Release captain approves staging.',
         'vault_id': '22222222-2222-2222-2222-222222222222',
         'evidence': {'mw_score': 0.18, 'success_co_count': 1, 'failure_co_count': 6},
         'suggested_action': 'Deprioritize the unit; 5+ outcomes with low MW.',
@@ -97,6 +98,21 @@ def test_all_skip_session_collects_no_verdicts(runner, mock_config, mock_api, st
     assert 'skipped' in text.lower()
     assert mock_api.lint_resolve.await_count == 0
     assert mock_api.lint_dismiss.await_count == 0
+
+
+def test_render_finding_shows_target_text_when_present(runner, mock_config, mock_api, strip_ansi):
+    """Memory-unit findings render the unit's text so the reviewer isn't flying blind.
+
+    Pinned by: F<target_text>-rendering. Without this, a reviewer sees a UUID and
+    rule_name but cannot judge accept/dismiss without a separate fetch.
+    """
+    result = _invoke(runner, mock_api, mock_config, ['review', '--all'], stdin='s\ns\ns\n')
+
+    assert result.exit_code == 0, strip_ansi(result.stdout)
+    text = strip_ansi(result.stdout)
+    assert _FINDINGS[0]['target_text'] in text, (
+        f'target_text was not rendered in the review card; output was:\n{text}'
+    )
 
 
 def test_one_accept_two_skips_resolves_only_first_when_apply(

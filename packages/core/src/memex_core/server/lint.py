@@ -140,11 +140,14 @@ async def lint_findings(
         async with api.metastore.session() as session:
             result = await session.execute(
                 text(
-                    'SELECT id::text, vault_id::text, lint_type, target_type, target_id, '
-                    'rule_name, evidence, suggested_action, status, source, '
-                    'created_at, resolved_at, resolved_by '
-                    f'FROM maintenance_proposals WHERE {where} '  # noqa: S608
-                    'ORDER BY created_at DESC '
+                    'SELECT mp.id::text, mp.vault_id::text, mp.lint_type, mp.target_type, '
+                    'mp.target_id, mp.rule_name, mp.evidence, mp.suggested_action, mp.status, '
+                    'mp.source, mp.created_at, mp.resolved_at, mp.resolved_by, '
+                    '(SELECT mu.text FROM memory_units mu '
+                    "WHERE mp.target_type = 'memory_unit' "
+                    'AND mu.id::text = mp.target_id) AS target_text '
+                    f'FROM maintenance_proposals mp WHERE {where} '  # noqa: S608
+                    'ORDER BY mp.created_at DESC '
                     'LIMIT :limit OFFSET :offset'
                 ),
                 params,
