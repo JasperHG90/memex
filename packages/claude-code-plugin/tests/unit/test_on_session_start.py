@@ -137,17 +137,113 @@ def test_emits_additional_context_with_briefing(mock_memex: MockMemex, temp_git_
 
 
 # ---------------------------------------------------------------------------
-# Agent-surface composition (Phase 5 + round-2 hook fix).
+# Agent-surface install — delivered as <project>/.claude/rules/memex-agent-surface.md
+# instead of inline in `additionalContext`. Claude Code v2.1.x silently truncates
+# SessionStart hook output above ~10K chars (Anthropic-side #42369), so the
+# Tier 1b/2 agent surface now travels via the project rules dir (auto-loaded
+# into the system prompt without going through hooks).
 # ---------------------------------------------------------------------------
 
 
-def test_agent_surface_concatenates_before_briefing(
+def test_agent_surface_installed_as_project_rule(
     mock_memex: MockMemex, temp_git_repo: Path
 ) -> None:
-    """The hook composes Tier 1b/2 (static, from `memex agent-surface`) +
-    `---` separator + dynamic vault briefing (from `memex briefing`) in that
-    order. Order matters — universal static content must sit in the
-    cacheable prompt prefix, not after per-session state."""
+    """The hook calls `memex agent-surface claude-code --output-dir <project>/.claude/rules`
+    and the resulting rule file lands at the path the harness auto-loads."""
+    result = run_script(
+        'on_session_start.sh',
+        stdin=_session_start_payload(),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+    )
+    assert result.returncode == 0, result.stderr
+
+    rule_path = temp_git_repo / '.claude' / 'rules' / 'memex-agent-surface.md'
+    assert rule_path.is_file(), (
+        f'agent-surface rule file not installed at {rule_path}; '
+        f'calls={[c.get("argv") for c in mock_memex.calls()]!r}'
+    )
+
+    # And the hook reached the CLI with the right invocation shape.
+    surface_calls = mock_memex.calls_matching('agent-surface', 'claude-code')
+    assert surface_calls, 'expected `memex agent-surface claude-code` call'
+    argv = surface_calls[0]['argv']
+    assert '--output-dir' in argv, f'expected --output-dir flag in argv={argv!r}'
+
+
+def test_first_install_emits_restart_warning(mock_memex: MockMemex, temp_git_repo: Path) -> None:
+    """First install (rule file did not exist before the hook ran) must
+    surface a restart hint in the `systemMessage` — the system prompt is
+    assembled BEFORE SessionStart fires, so the brand-new rule file isn't
+    live until the next session boot.
+
+    Pin the filename (a stable contract) rather than the surrounding
+    English wording (editorial)."""
+    rule_path = temp_git_repo / '.claude' / 'rules' / 'memex-agent-surface.md'
+    assert not rule_path.exists(), 'pre-condition: rule absent for first-install test'
+
+    result = run_script(
+        'on_session_start.sh',
+        stdin=_session_start_payload(),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+    )
+    assert result.returncode == 0, result.stderr
+    out = json.loads(result.stdout)
+    sm = out['systemMessage']
+    assert 'memex-agent-surface.md' in sm, (
+        f'expected install hint referencing the rule filename; got {sm!r}'
+    )
+
+
+def test_routine_install_silent(mock_memex: MockMemex, temp_git_repo: Path) -> None:
+    """When the rule file already exists, no install hint should leak —
+    routine refreshes are silent so the systemMessage stays clean.
+
+    Also assert the success status IS present so a hook that returns ``{}``
+    (the ERR trap) doesn't false-pass this negative check."""
+    rule_dir = temp_git_repo / '.claude' / 'rules'
+    rule_dir.mkdir(parents=True, exist_ok=True)
+    (rule_dir / 'memex-agent-surface.md').write_text('pre-existing content', encoding='utf-8')
+
+    result = run_script(
+        'on_session_start.sh',
+        stdin=_session_start_payload(),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+    )
+    assert result.returncode == 0, result.stderr
+    out = json.loads(result.stdout)
+    sm = out['systemMessage']
+    assert 'Memex connected' in sm, f'unexpected ERR-trap fallback; got {sm!r}'
+    assert 'memex-agent-surface.md' not in sm, f'install hint leaked on routine install; got {sm!r}'
+
+
+def test_additional_context_excludes_agent_surface_body(
+    mock_memex: MockMemex, temp_git_repo: Path
+) -> None:
+    """The agent-surface body must NOT appear in additionalContext — that's
+    the whole point of the rules-file route. Pinning this prevents a future
+    refactor from accidentally re-inlining the surface and re-hitting the
+    10K cap."""
+    result = run_script(
+        'on_session_start.sh',
+        stdin=_session_start_payload(),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+    )
+    assert result.returncode == 0, result.stderr
+    out = json.loads(result.stdout)
+    ctx = out['hookSpecificOutput']['additionalContext']
+    assert '<mock-agent-surface' not in ctx, (
+        f'agent-surface body leaked into additionalContext: {ctx[:400]!r}'
+    )
+
+
+def test_additional_context_under_10k_chars(mock_memex: MockMemex, temp_git_repo: Path) -> None:
+    """additionalContext must stay under Claude Code's hardcoded 10K-char
+    `persistHookOutput` cap (Anthropic-side #42369). Above the cap the
+    harness truncates to a 2KB preview and the briefing is lost."""
     mock_memex.set_kv('app:claude-code:project:github.com/acme/myapp:vault', 'eng-vault')
     result = run_script(
         'on_session_start.sh',
@@ -158,36 +254,18 @@ def test_agent_surface_concatenates_before_briefing(
     assert result.returncode == 0, result.stderr
     out = json.loads(result.stdout)
     ctx = out['hookSpecificOutput']['additionalContext']
-
-    # Both halves present
-    surface_marker = '<mock-agent-surface target="claude-code"/>'
-    briefing_marker = '(mock briefing content)'
-    assert surface_marker in ctx, f'agent-surface block missing; ctx={ctx[:300]!r}'
-    assert briefing_marker in ctx, f'briefing block missing; ctx={ctx[:300]!r}'
-
-    # Order: agent-surface FIRST, then `---`, then briefing.
-    surface_pos = ctx.index(surface_marker)
-    briefing_pos = ctx.index(briefing_marker)
-    sep_pos = ctx.find('\n---\n', surface_pos)
-    assert surface_pos < sep_pos < briefing_pos, (
-        f'wrong order: surface={surface_pos}, sep={sep_pos}, briefing={briefing_pos}'
-    )
-
-    # The hook invoked `memex agent-surface claude-code` (positional target form).
-    surface_calls = mock_memex.calls_matching('agent-surface', 'claude-code')
-    assert surface_calls, (
-        f'expected `memex agent-surface claude-code` call; got calls='
-        f'{[c.get("argv") for c in mock_memex.calls()]!r}'
+    assert len(ctx) < 10_000, (
+        f'additionalContext is {len(ctx)} chars — exceeds the harness 10K cap; '
+        f'first 400 chars: {ctx[:400]!r}'
     )
 
 
-def test_agent_surface_failure_falls_back_to_briefing_only(
+def test_agent_surface_install_failure_does_not_block_briefing(
     mock_memex: MockMemex, temp_git_repo: Path
 ) -> None:
-    """When `memex agent-surface` fails (older plugin install pinned to a
-    version that predates the subcommand), the hook degrades gracefully —
-    no agent-surface block, but the briefing still lands in additionalContext."""
-    mock_memex.set_kv('app:claude-code:project:github.com/acme/myapp:vault', 'eng-vault')
+    """If the agent-surface install fails (e.g. older plugin install pinned
+    to a version that predates the --output-dir flag), the hook must
+    degrade gracefully — the dynamic briefing still lands in additionalContext."""
     mock_memex.force_fail('agent-surface claude-code')
 
     result = run_script(
@@ -199,11 +277,9 @@ def test_agent_surface_failure_falls_back_to_briefing_only(
     assert result.returncode == 0, result.stderr
     out = json.loads(result.stdout)
     ctx = out['hookSpecificOutput']['additionalContext']
-
-    # Briefing still lands
     assert '(mock briefing content)' in ctx
-    # No agent-surface marker (the if-guard in the hook caught the failure)
-    assert '<mock-agent-surface' not in ctx
+    # No rule file should have been written either.
+    assert not (temp_git_repo / '.claude' / 'rules' / 'memex-agent-surface.md').is_file()
 
 
 def test_uvx_missing_emits_exactly_one_json_document(
@@ -293,9 +369,9 @@ def test_bad_plugin_version_emits_exactly_one_json_document(
 
 
 def test_temp_files_cleaned_up_on_success(mock_memex: MockMemex, temp_git_repo: Path) -> None:
-    """The hook's EXIT trap removes both `tmp_surface` and `tmp_briefing`
-    on the success path. Verify by listing /tmp before/after and asserting
-    no script-created temp files remain."""
+    """The hook's EXIT trap removes `tmp_briefing` on the success path.
+    Verify by listing /tmp before/after and asserting no script-created
+    temp files remain."""
     before = set(Path('/tmp').glob('tmp.*'))
     result = run_script(
         'on_session_start.sh',

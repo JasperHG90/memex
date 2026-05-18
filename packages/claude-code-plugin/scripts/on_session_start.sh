@@ -110,27 +110,42 @@ project_vault=$(memex_resolve_active_vault)
 echo "$project_vault" > "$STATE_DIR/active_vault"
 echo "$project_id" > "$STATE_DIR/project_id"
 
+# --- Install Tier 1b+2 agent surface as a project rule file ---
+# Claude Code v2.1.x silently truncates SessionStart `additionalContext`
+# above 10K chars (Anthropic-side #42369), so the agent surface cannot
+# travel inline anymore. Instead we install it into `<project>/.claude/rules/`
+# where the harness loads it as system-prompt content (no cap, cached). The
+# CLI's --output-dir flag is atomic and skips the rewrite when content is
+# unchanged. First-install only takes effect after the next session boot
+# (the system prompt is assembled before SessionStart hooks fire), so
+# surface a restart hint when we just created the file. Failures (e.g.
+# older CLI without --output-dir) are kept silent in the systemMessage but
+# breadcrumb'd to $STATE_DIR/agent_surface_install.err so operators can
+# diagnose silent installs.
+agent_surface_install_warning=""
+if [ -n "$_project_root" ]; then
+    rules_dir="${_project_root}/.claude/rules"
+    rules_path="${rules_dir}/memex-agent-surface.md"
+    rules_existed_before=0
+    [ -f "$rules_path" ] && rules_existed_before=1
+    if memex agent-surface claude-code --output-dir "$rules_dir" \
+            >/dev/null 2>"$STATE_DIR/agent_surface_install.err"; then
+        # Empty stderr on success — keep the state dir tidy.
+        [ -s "$STATE_DIR/agent_surface_install.err" ] || rm -f "$STATE_DIR/agent_surface_install.err"
+        if [ "$rules_existed_before" -eq 0 ] && [ -f "$rules_path" ]; then
+            agent_surface_install_warning=" · Agent surface installed at .claude/rules/memex-agent-surface.md — restart Claude Code to load it"
+        fi
+    fi
+fi
+
 # --- Build briefing CLI args ---
 briefing_args=(briefing --budget 2000)
 [ -n "$project_vault" ] && briefing_args+=(--vault "$project_vault")
 [ -n "$project_id" ] && briefing_args+=(--project-id "$project_id")
 
 # --- Register cleanup trap upfront so any later failure cleans temp files ---
-# Set vars to empty so the trap-body `rm -f` is well-defined even before
-# either `mktemp` runs. Then build mktemp results into the same names so
-# the trap sees the actual paths.
-tmp_surface=''
 tmp_briefing=''
-trap 'rm -f "$tmp_briefing" "$tmp_surface"' EXIT
-
-# --- Compose Tier 1b (universal) + Tier 2 (claude-code) system-prompt content ---
-# Static; same bytes every session. Drawn from memex_common.agent_surface via
-# the CLI bridge — no server roundtrip, cacheable prompt prefix.
-tmp_surface=$(mktemp)
-agent_surface_content=""
-if memex agent-surface claude-code > "$tmp_surface" 2>/dev/null; then
-    agent_surface_content=$(cat "$tmp_surface")
-fi
+trap 'rm -f "$tmp_briefing"' EXIT
 
 # --- Fetch dynamic session briefing (per-vault state from the server) ---
 tmp_briefing=$(mktemp)
@@ -142,18 +157,12 @@ EOF
     exit 0
 fi
 
-# --- Build additionalContext (Tier 1b/2 prefix, then dynamic briefing) ---
-server_briefing=$(cat "$tmp_briefing")
-if [ -n "$agent_surface_content" ]; then
-    briefing_content="${agent_surface_content}
-
----
-
-${server_briefing}"
-else
-    briefing_content="${server_briefing}"
-fi
-status="🧠 Memex connected"
+# --- Build additionalContext (dynamic briefing only; agent surface is on disk) ---
+# Command substitution strips trailing newlines, so re-append one to guarantee
+# a stable separator before the vault/session/auto-tag instructions that follow.
+briefing_content="$(cat "$tmp_briefing")
+"
+status="🧠 Memex connected${agent_surface_install_warning}"
 
 if [ -n "$project_vault" ]; then
     vault_instruction="
