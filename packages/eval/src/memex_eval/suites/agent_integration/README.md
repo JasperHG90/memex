@@ -223,21 +223,48 @@ replicates × 22 non-mutating scenarios are still ~±15pp on per-scenario
 binary outcomes — pair with a baseline-model comparison for
 confident calls.
 
-Recent baseline (single replicate, 38-scenario suite, 2026-05-17,
-post infrastructure fixes — env-leak override, per-suite stable
-project_id, MCP `MEMEX_VAULT__ACTIVE` default; see `## Backends`):
+Latest baseline (single replicate, 39-scenario suite, 2026-05-18,
+post-harness-expansion — `CLAUDE_CODE_HARNESS` routing-discipline
+constraints + `MEMEX_RECORD_OUTCOME_DESC` / `MEMEX_KV_WRITE_DESC`
+trigger lexicons; see `## Backends`):
 
-| Backend | Model | pass_rate | Cost |
-|---|---|---|---|
-| `hermes` | `glm-5.1:cloud` | **1.0000** (37/37 + 1 xfail) | $0.01 |
-| `hermes` | `gemma4:31b-cloud` | **0.9737** (36/37 + 1 xfail) | $0.01 |
-| `claude-code` | `claude-opus-4-7` | **0.9474** (36/38) | $9.60 |
-| `claude-code` | `claude-sonnet-4-6` | **0.8947** (34/38) | $3.71 |
-| `ollama-claude` | `glm-5.1:cloud` | **0.8947** (34/38) | $24.13 |
-| `ollama-claude` | `gemma4:31b-cloud` | **0.7838** (29/37 + 1 errored) | $19.07 |
+| Backend | Model | pass_rate | tokens in | tokens out |
+|---|---|---|---|---|
+| `hermes` | `glm-5.1:cloud` | **1.0000** (38/38 + 1 xfail) | 2.80M | 21.9K |
+| `hermes` | `gemma4:31b-cloud` | **0.8947** (35/39, 4 fail + 1 error + 1 xfail) | 2.69M | 14.7K |
+| `claude-code` | `claude-opus-4-7` | **1.0000** (39/39) | 4.57M | 42.3K |
+| `ollama-claude` | `glm-5.1:cloud` | **0.8462** (33/39) | 5.01M | 30.2K |
+
+> Suite grew 38→39 scenarios with `feedback_deprioritize_observation_400_recovery`.
+> Suite-level `pass_rate` excludes xfail from the denominator.
+
+Sampling-variance check — 6 oc×glm fails re-run on a second replicate
+(2026-05-18 09:13): 3 flipped to pass (`asset_lifecycle_detach`,
+`kv_writes_global_convention`, `kv_writes_user_preference`),
+3 stayed failing (`feedback_clarifies_under_ambiguity`,
+`kv_writes_project_preference`, `kv_writes_app_setting`). GLM-5.1 has
+significant temperature-driven variance on routing-discipline scenarios;
+multi-replicate runs recommended for ranking-grade calls.
+
+Prior baseline (2026-05-17, 38-scenario suite, post-infra-fix,
+pre-harness-expansion):
+
+| Backend | Model | pass_rate |
+|---|---|---|
+| `hermes` | `glm-5.1:cloud` | 1.0000 (37/37 + 1 xfail) |
+| `hermes` | `gemma4:31b-cloud` | 0.9737 (36/37 + 1 xfail) |
+| `claude-code` | `claude-opus-4-7` | 0.9474 (36/38) |
+| `claude-code` | `claude-sonnet-4-6` | 0.8947 (34/38) |
+| `ollama-claude` | `glm-5.1:cloud` | 0.8947 (34/38) |
+| `ollama-claude` | `gemma4:31b-cloud` | 0.7838 (29/37 + 1 errored) |
+
+Net effect of harness expansion (cc×opus: +0.0526; oc×glm: −0.0485 on
+2-run mean): the expanded `<critical_constraint>` blocks help bigger
+models exploit the structure and pull smaller models toward the
+example's concrete arm. Same harness, different model capacity.
 
 Pre-infrastructure-fix (2026-05-16, retained for context — gap between
-this and the above row of the same model is the leak the eval framework
+this and the next row of the same model is the env-leak the framework
 carried until 2026-05-17):
 
 | Backend | Model | pass_rate |
@@ -246,148 +273,109 @@ carried until 2026-05-17):
 | `claude-code` | `claude-sonnet-4-6` | 0.8421 (32/38) |
 | `ollama-claude` | `glm-5.1:cloud` | 0.9474 (36/38) |
 
-### Per-scenario × per-model failure matrix
+### Per-scenario × per-model failure matrix (2026-05-18, post-harness)
 
-Only scenarios that failed on at least one backend listed (25 passed
-on all 6 configs and are omitted). Legend: `.` pass, `F` fail,
+Only scenarios that failed on at least one backend listed (28 passed
+on all 4 configs and are omitted). Legend: `.` pass, `F` fail,
 `E` error (timeout / exception), `x` xfail.
 
-| Scenario | h×glm | h×gem | cc×son | cc×opus | oc×glm | oc×gem |
-|---|---|---|---|---|---|---|
-| `agent_calls_memex_search` | . | **F** | . | . | . | . |
-| `asset_lifecycle_detach` | x | x | . | . | . | . |
-| `entity_cooccurrence_strongest` | . | . | . | **F** | . | **E** |
-| `feedback_clarifies_under_ambiguity` | . | . | **F** | . | . | **F** |
-| `feedback_records_success` | . | . | **F** | . | **F** | . |
-| `feedback_surfaces_candidate_notes` | . | . | **F** | **F** | . | **F** |
-| `kv_retrieves_convention` | . | . | . | . | . | **F** |
-| `kv_writes_app_setting` | . | . | **F** | . | **F** | **F** |
-| `kv_writes_global_convention` | . | . | . | . | . | **F** |
-| `kv_writes_project_preference` | . | . | . | . | . | **F** |
-| `kv_writes_user_preference` | . | . | . | . | **F** | **F** |
-| `navigation_via_page_index` | . | . | . | . | **F** | . |
-| `survey_broad_topic` | . | . | . | . | . | **F** |
+| Scenario | h×glm | h×gem | cc×opus | oc×glm |
+|---|---|---|---|---|
+| `asset_lifecycle_detach` | x | x | . | **F** (flaky — passed on rerun) |
+| `feedback_clarifies_under_ambiguity` | . | . | . | **F** (stable across 2 runs) |
+| `feedback_deprioritize_observation_400_recovery` | . | **E** | . | . |
+| `feedback_surfaces_candidate_notes` | . | **F** | . | . |
+| `kv_writes_app_setting` | . | . | . | **F** (stable across 2 runs; was failing pre-harness too) |
+| `kv_writes_global_convention` | . | . | . | **F** (flaky — passed on rerun) |
+| `kv_writes_project_preference` | . | . | . | **F** (stable across 2 runs) |
+| `kv_writes_user_preference` | . | . | . | **F** (flaky — passed on rerun) |
+| `lifecycle_append_meeting` | . | **F** | . | . |
+| `lifecycle_append_parent_remains_retrievable` | . | **F** | . | . |
+| `lifecycle_archive_legacy_warehouse_note` | . | **F** | . | . |
 
-### Error analysis (post-hoc)
+### Error analysis (post-hoc, 2026-05-18)
 
 Categorising the failures by the agent's actual tool sequence + final
 answer (extracted from `session_log_text` in each run's `--output`
 JSON):
 
-**(A) Loose-KV namespace inference fragility** — 5 fails. The 4
-`kv_writes_*` scenarios with loose, natural-language phrasing ("Remember
-about me…", "Remember this for whenever I use Claude Code…") require
-the agent to *infer* the right namespace from scope cues. The
-hard-wakeword variants (`Store in KV: user:editor=Neovim`) pass on every
-backend.
+**(A) Loose-KV namespace inference fragility on oc×glm** — 3 stable
+fails + 2 flaky-now-flipped. The 4 `kv_writes_*` scenarios with loose,
+natural-language phrasing ("Remember about me…", "Remember this for
+whenever I use Claude Code…") require the agent to *infer* the right
+namespace from scope cues. The hard-wakeword variants
+(`Store in KV: user:editor=Neovim`) pass on every backend.
 
 - Hermes×{GLM, Gemma}: all 4 loose-KV writes pass.
-- Sonnet 4.6: `kv_writes_app_setting` fails (1/4).
 - Opus 4.7: all 4 loose-KV writes pass.
-- GLM-via-CC: `kv_writes_user_preference`, `kv_writes_app_setting` fail
-  — sometimes picks wrong namespace (`user:preferences:claude_code_ui`
-  when `app:` was correct), sometimes makes no tool call at all
-  ("Vault loaded with 37 notes. Ready for your question.").
-- **Gemma-via-CC fails 4/4**: makes ZERO tool calls and replies "I am
-  ready to answer the evaluation questions against the vault. Please
-  provide the question." Treats the "Remember about me…" intent as a
-  setup statement, not a write trigger.
+- GLM-via-CC: `kv_writes_app_setting` + `kv_writes_project_preference`
+  are stable fails across 2 runs; `kv_writes_global_convention` +
+  `kv_writes_user_preference` are flaky (1 run fail, next pass).
+  Failure mode: picks wrong namespace (e.g. `user:preferences:claude_code_ui`
+  when `app:` was correct) or omits the scope qualifier entirely.
 
-**(B) `feedback_records_success` paired-write routing** — 2 fails. The
-scenario expects `memex_record_outcome(units=[{verb:'helpful'}])`. Some
-models fall through to capturing the resolution as a *new note* via
-`memex_add_note` / `memex_append_note`, never paired-writing on the
-existing memory units.
-
-- Sonnet 4.6: searches → finds Redis unit → calls `memex_append_note`
-  with a "## Resolution confirmed" delta. Never `record_outcome`.
-- GLM-via-CC: searches → calls `memex_add_note` ("title: Redis to
-  in-process cache migration confirmed successful") + `memex_kv_write`.
-  Never `record_outcome`.
-- Opus 4.7, Gemma-via-CC, both Hermes: route correctly to
-  `memex_record_outcome(units=[{...verb:'helpful'...}])`.
+**(B) `feedback_records_success` paired-write routing** — 0 fails now.
+The expanded `MEMEX_RECORD_OUTCOME_DESC` trigger lexicon + JWT-rotation
+WRONG/RIGHT example landed. All 4 backends now correctly route to
+`memex_record_outcome(units=[{...verb:'helpful'...}])` instead of
+`memex_add_note(...)`. Previously cost cc×sonnet + oc×glm; now clean.
 
 **(C) `feedback_surfaces_candidate_notes` multi-candidate enumeration**
-— 3 fails. Scenario expects ≥2 candidate notes presented by title+date
-so the user can pick. The agent's search returns the right notes; the
-*answer format* is wrong (single note narrated in detail vs. a list).
+— 1 fail (h×gem only). The expanded `<critical_constraint name="list_shape_questions">`
+block with the deploy-pipeline WRONG/RIGHT example fixed cc×opus and
+oc×glm; h×gem still falls through to single-note narration.
 
-- Sonnet, Opus, Gemma-via-CC all narrate one note ("The main note on
-  the caching-layer bug is `incident-2025-08-redis` — Redis Cache
-  Cascading Outage and System Recovery (August 14, 2025). Key points:
-  …").
-- GLM-via-CC and both Hermes enumerate multiple candidates.
-- Note Opus fails here too — this is genuinely a model bias toward
-  "answer the question directly" over "let the user pick", not just a
-  Sonnet-only issue.
+**(D) `feedback_clarifies_under_ambiguity` on oc×glm** — 1 stable fail.
+The user says "that worked" with no specific referent. GLM-via-CC:
+1. `memex_recent_notes(limit=5)` — **prohibited** by harness rule
+2. `memex_memory_search(query="issue that was resolved or fix that worked")`
+3. `memex_record_outcome(units=[3 fabricated units])` marking Redis
+   migration + trend alerts as `helpful`
 
-**(D) `feedback_clarifies_under_ambiguity`** — 2 fails. The user says
-"that worked" with no specific referent (vault has multiple bug-fix
-narratives). Scenario expects the agent to ask which fix the user
-means before calling `record_outcome`.
+Despite the `<critical_constraint name="clarify_under_ambiguity">` and
+the `NEVER use memex_recent_notes for discovery` prohibition both being
+present in `CLAUDE_CODE_HARNESS`, GLM ignores them and fabricates a
+target. Opus + both Hermes ask the user to clarify. This is a
+small-model attention failure on negative-imperative constraints.
 
-- Sonnet, Gemma-via-CC guess a target and write the outcome.
-- Opus, GLM-via-CC, both Hermes ask for clarification.
+**(E) Note-lifecycle distinction on h×gem** — 3 fails. Gemma chooses
+`memex_add_note` instead of `memex_append_note` /
+`memex_set_note_status` for `lifecycle_append_meeting`,
+`lifecycle_append_parent_remains_retrievable`,
+`lifecycle_archive_legacy_warehouse_note`. The note-lifecycle imperatives
+in the universal `agent_surface` don't land on this model.
 
-**(E) Cooccurrence-graph routing (`entity_cooccurrence_strongest`)** —
-1 fail + 1 error.
+**(F) `feedback_deprioritize_observation_400_recovery` on h×gem** — 1
+error (timeout). Agent loops on tool calls without converging within
+the 300s subprocess cap. Likely an extended search→deprio→search cycle.
 
-- Opus 4.7 calls `memex_list_entities` 4x + `memex_note_search` +
-  `memex_memory_search` + `memex_get_page_indices`. Does NOT call
-  `memex_get_entity_cooccurrences`. Concludes "no individual is named
-  by personal name; only the CTO recurs" — misses the graph-anchored
-  cooccurrence the scenario expects.
-- Gemma-via-CC hits the 300s subprocess timeout — loops on tool calls
-  without converging.
+**(G) `asset_lifecycle_detach`** — flaky on oc×glm (passed on rerun).
+Was xfail-on-Hermes throughout; only oc×glm flips between pass and fail.
 
-**(F) Wrong-tool routing on broad questions (`agent_calls_memex_search`)**
-— 1 fail (Hermes×Gemma). Scenario asserts the agent calls
-`memex_memory_search` OR `memex_note_search` before answering. Gemma
-reached for `memex_survey` instead. Real coverage — survey would be
-fine in production — but the scenario was written before survey was a
-mainstream option.
-
-**(G) Page-index navigation (`navigation_via_page_index`)** — 1 fail
-(GLM-via-CC). Scenario expects `memex_get_page_indices` on a large
-note. GLM treated the question as content lookup + paired-write,
-never opened the page index.
-
-**(H) LLM-judge composite (`survey_broad_topic`)** — 1 fail
-(Gemma-via-CC). Tool routing correct (called `memex_survey` + 2
-searches + 2 `memex_read_note`), but the answer didn't meet the
-judge's rubric for comprehensiveness.
-
-**(I) Cascade (`kv_retrieves_convention`)** — 1 fail (Gemma-via-CC).
-Depends on `kv_writes_project_preference` — which Gemma failed in
-category (A). Even with the value present, Gemma doesn't route
-preference questions to KV.
-
-### Headline observations
+### Headline observations (2026-05-18)
 
 - **All 7 hard-wake-word KV/TTL scenarios pass on every backend.**
   Imperative triggers (`Store in KV: <k>=<v>`, `KV: get <k>`,
   `KV: search <q>`) bypass routing reasoning end-to-end.
-- **Hermes wraps the model in a tighter prompt loop** than the
-  Claude Code subprocess — both GLM and Gemma do measurably better
-  under Hermes than via `claude` CLI.
-- **Opus 4.7 is the strongest claude-code variant.** Two failures,
-  both routing-discipline (cooccurrence-graph, multi-candidate
-  enumeration). Worth the $9.60 over Sonnet's $3.71 at single replicate
-  if you need maximal coverage.
-- **Sonnet 4.6 has 4 routing-discipline gaps** — loose-KV `app:`
-  inference, paired-write vs add_note, clarification under ambiguity,
-  multi-candidate enumeration. None of them are infrastructure now;
-  they're prompt-side gaps in `agent_surface`.
-- **Gemma-via-claude-code (8F + 1E) is brittle in this harness.** Most
-  failures are "agent issues zero tool calls" — Gemma seems to treat
-  many natural-language scaffolds as setup statements rather than
-  action triggers. Hermes×Gemma works much better (1F) — the agent
-  loop matters more than the model for this corpus.
-- Claude-code drift between adjacent runs at single-replicate × 38
-  scenarios was historically ±20pp; with the infrastructure fixes the
-  per-scenario CI band tightens because the "no vault set" fallback no
-  longer randomly damages unrelated scenarios. Use `--replicates 5`
-  minimum for ranking calls.
+- **cc×opus 4.7 hits 1.00**, up from 0.9474 pre-harness. The expanded
+  `<critical_constraint>` blocks + WRONG/RIGHT examples close the prior
+  gaps (cooccurrence-graph routing, multi-candidate enumeration,
+  paired-write vs add_note).
+- **h×glm-5.1 hits 1.00** (38/38 + 1 xfail). Hermes wraps the model in
+  a tighter prompt loop than the CC subprocess; both GLM and Gemma
+  measurably better under Hermes than via `claude` CLI.
+- **oc×glm-5.1 has net regression of ~2 scenarios** vs pre-harness
+  baseline. Re-run shows ~half were sampling-flaky; the stable fails
+  are `feedback_clarifies_under_ambiguity` + 2 of 4 loose-KV scenarios.
+  Same harness as cc×opus → over-specification trap: GLM-5.1 attends
+  to the example's concrete arm (`app:claude-code:` from the JWT example)
+  and misclassifies cues for other namespaces.
+- **h×gem-4 lost 3 lifecycle scenarios** in the new run — note-lifecycle
+  imperatives (`append_note` vs `add_note`, `set_note_status` for archive)
+  not landing. Gemma defaults to `add_note` regardless of intent.
+- Single-replicate × 39-scenario CI bands are still ±10–15pp on GLM via
+  ollama-claude (confirmed by 3/6 rerun flips). Use `--replicates 3`
+  minimum for oc×glm; `--replicates 5` for ranking-grade calls.
 
 ## Cost (Hermes + GLM-5.1, 5 replicates × 38 scenarios)
 
