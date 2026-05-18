@@ -34,8 +34,9 @@ async def _reconcile_one_vault_slice(api: 'MemexAPI') -> None:
     """Repair deprio'd MUs missing refresh rows for one vault per tick.
 
     Gated behind ``reconcile_historical_deprios_on_boot`` config — defaults
-    False so operators opt in after eval data is captured. Picks the vault
-    via ``vaults_sorted = sorted(api.list_vaults(), key=lambda v: v.id)``
+    True so the SKIP LOCKED contention path in ``_enqueue_refresh_tasks_for_mu``
+    (and any pre-V21 historical deprios) cannot leak indefinitely. Picks the
+    vault via ``vaults_sorted = sorted(api.list_vaults(), key=lambda v: v.id)``
     and a global tick cursor; ``GLOBAL_VAULT_ID`` is included as a normal
     slot in the rotation.
     """
@@ -46,7 +47,7 @@ async def _reconcile_one_vault_slice(api: 'MemexAPI') -> None:
         reflect_cfg = cfg.server.memory.reflection
     except AttributeError:
         return
-    if not getattr(reflect_cfg, 'reconcile_historical_deprios_on_boot', False):
+    if not getattr(reflect_cfg, 'reconcile_historical_deprios_on_boot', True):
         return
     try:
         vaults = await api.list_vaults()

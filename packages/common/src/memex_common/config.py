@@ -634,12 +634,13 @@ class ReflectionConfig(BaseModel):
         ),
     )
     reconcile_historical_deprios_on_boot: bool = Field(
-        default=False,
+        default=True,
         description=(
-            'When False (default), the reconcile pass on scheduler ticks only repairs '
-            'refresh-task rows missing for MUs deprio`d since deploy. When True, the '
-            'reconcile pass also drains historical (pre-V21) deprio`d MUs that lack '
-            'refresh tasks. Flip True after eval data is captured.'
+            'When True (default), the reconcile pass on scheduler ticks repairs '
+            'refresh-task rows missing for any deprio`d MU — including historical '
+            '(pre-V21) MUs and rows dropped by the SKIP LOCKED contention path in '
+            '`_enqueue_refresh_tasks_for_mu`. Set False only to opt out of the '
+            'safety net (e.g. while capturing a specific eval baseline).'
         ),
     )
     reconcile_batch_size: int = Field(
