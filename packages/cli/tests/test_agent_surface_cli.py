@@ -9,16 +9,20 @@ Pins:
 - ``--output-format=json`` wraps the content in the Claude Code SessionStart
   envelope ``{"systemPromptAdditions": "..."}`` so the hook can pipe it
   directly through.
+- ``--output-dir DIR`` writes ``<DIR>/memex-agent-surface.md`` atomically,
+  skipping the rewrite when content is unchanged.
 """
 
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 
 import pytest
 from typer.testing import CliRunner
 
-from memex_cli.agent_surface import app
+from memex_cli.agent_surface import _OUTPUT_FILENAME, app
 
 runner = CliRunner()
 
@@ -144,6 +148,115 @@ def test_target_is_required_positional() -> None:
     assert result.exit_code != 0, (
         f'bare invocation should fail (target required); got exit={result.exit_code}'
     )
+
+
+# ---------------------------------------------------------------------------
+# --output-dir: file-sink behavior for the Claude Code plugin install path.
+# ---------------------------------------------------------------------------
+
+
+def test_output_dir_writes_named_file(tmp_path: Path) -> None:
+    """`--output-dir DIR` writes <DIR>/memex-agent-surface.md with the same
+    body that stdout mode would emit."""
+    result = runner.invoke(app, ['claude-code', '--output-dir', str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    written = (tmp_path / _OUTPUT_FILENAME).read_text(encoding='utf-8')
+    expected = _run('claude-code')
+    assert written == expected
+
+
+def test_output_dir_creates_missing_parent(tmp_path: Path) -> None:
+    """Nested directories are created as needed (mkdir parents=True)."""
+    nested = tmp_path / 'deep' / 'nested' / 'rules'
+    assert not nested.exists()
+    result = runner.invoke(app, ['claude-code', '--output-dir', str(nested)])
+    assert result.exit_code == 0, result.output
+    assert (nested / _OUTPUT_FILENAME).is_file()
+
+
+def test_output_dir_skips_rewrite_on_unchanged_content(tmp_path: Path) -> None:
+    """Second invocation with identical args must NOT rewrite the file —
+    mtime stays put so file-watchers and InstructionsLoaded don't refire."""
+    args = ['claude-code', '--output-dir', str(tmp_path)]
+    runner.invoke(app, args)
+    target = tmp_path / _OUTPUT_FILENAME
+    first_mtime_ns = target.stat().st_mtime_ns
+    # Force a measurable mtime delta even on filesystems with coarse mtime.
+    os.utime(target, ns=(first_mtime_ns, first_mtime_ns - 1_000_000_000))
+    sentinel_mtime_ns = target.stat().st_mtime_ns
+
+    result = runner.invoke(app, args)
+    assert result.exit_code == 0, result.output
+    assert target.stat().st_mtime_ns == sentinel_mtime_ns, (
+        'content-diff skip failed: file was rewritten even though body was unchanged'
+    )
+
+
+def test_output_dir_rewrites_on_content_diff(tmp_path: Path) -> None:
+    """If on-disk content has drifted from what the CLI would emit, the next
+    invocation must restore it."""
+    args = ['claude-code', '--output-dir', str(tmp_path)]
+    runner.invoke(app, args)
+    target = tmp_path / _OUTPUT_FILENAME
+    target.write_text('CORRUPTED — should be restored on next call', encoding='utf-8')
+
+    result = runner.invoke(app, args)
+    assert result.exit_code == 0, result.output
+    restored = target.read_text(encoding='utf-8')
+    assert restored == _run('claude-code')
+
+
+def test_output_dir_atomic_no_partial_on_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If the atomic rename fails mid-write, no .tmp litter should remain
+    and any pre-existing target file must be untouched."""
+    args = ['claude-code', '--output-dir', str(tmp_path)]
+    # Prime an existing file, then drift its content so the next invocation
+    # is forced past the content-diff skip and into the write path.
+    runner.invoke(app, args)
+    target = tmp_path / _OUTPUT_FILENAME
+    sentinel = 'PRE-EXISTING CONTENT — must survive a failed rename'
+    target.write_text(sentinel, encoding='utf-8')
+
+    import memex_cli.agent_surface as mod
+
+    def _boom(*_args: object, **_kw: object) -> None:
+        raise OSError('simulated rename failure')
+
+    monkeypatch.setattr(mod.os, 'replace', _boom)
+
+    result = runner.invoke(app, args)
+    assert result.exit_code != 0, 'CLI should propagate the rename failure'
+    # Original (sentinel) content intact — no partial overwrite.
+    assert target.read_text(encoding='utf-8') == sentinel
+    # No leftover temp files.
+    tmp_litter = [p for p in tmp_path.iterdir() if p.name.startswith(f'.{_OUTPUT_FILENAME}.')]
+    assert tmp_litter == [], f'temp files leaked after failure: {tmp_litter}'
+
+
+def test_output_dir_with_json_format_errors(tmp_path: Path) -> None:
+    """`--output-dir` with `--output-format=json` is contradictory — the JSON
+    envelope is only meaningful for stdout piping. Fail loudly rather than
+    silently dropping one of the flags."""
+    result = runner.invoke(
+        app,
+        ['claude-code', '--output-dir', str(tmp_path), '--output-format', 'json'],
+    )
+    assert result.exit_code != 0, 'JSON + output-dir must be rejected'
+    combined = (result.output or '') + (getattr(result, 'stderr', '') or '')
+    assert 'output-dir' in combined.lower() and 'json' in combined.lower()
+    assert not (tmp_path / _OUTPUT_FILENAME).exists(), (
+        'rejected invocation should not have written the file'
+    )
+
+
+def test_output_dir_emits_nothing_to_stdout(tmp_path: Path) -> None:
+    """When `--output-dir` is set the markdown body lives on disk, not on
+    stdout — silence keeps the SessionStart hook's JSON envelope clean."""
+    result = runner.invoke(app, ['claude-code', '--output-dir', str(tmp_path)])
+    assert result.exit_code == 0, result.output
+    assert result.stdout == '', f'stdout should be empty, got: {result.stdout!r}'
 
 
 def test_critical_constraint_xml_tags_in_universal() -> None:

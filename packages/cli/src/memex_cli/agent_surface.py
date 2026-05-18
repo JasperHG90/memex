@@ -34,13 +34,22 @@ across sessions.
 from __future__ import annotations
 
 import json
+import os
 import sys
+import tempfile
 from enum import Enum
+from pathlib import Path
+from typing import Optional
 
 import typer
 
 from memex_common.agent_harnesses import CLAUDE_CODE_HARNESS, HERMES_HARNESS
 from memex_common.agent_surface import MCP_TRANSPORT_INSTRUCTIONS, compose_universal
+
+# Stable filename for `--output-dir` writes. Owned by the CLI so callers
+# (the Claude Code plugin hook in particular) cannot pick a name that
+# later renames break installs for existing users.
+_OUTPUT_FILENAME = 'memex-agent-surface.md'
 
 
 app = typer.Typer(
@@ -77,6 +86,48 @@ def _compose_for_target(target: Target) -> str:
     raise ValueError(f'unknown target: {target!r}')
 
 
+def _write_to_dir(body: str, output_dir: Path) -> None:
+    """Atomic write of ``body`` to ``<output_dir>/memex-agent-surface.md``.
+
+    Creates ``output_dir`` if missing. Skips the rewrite when the existing
+    file content already matches ``body`` byte-for-byte — avoids mtime churn
+    that fires ``InstructionsLoaded`` and any file-watcher hooks, and keeps
+    git dirty-state honest when the rules dir lives inside a repo.
+    """
+    try:
+        output_dir.mkdir(parents=True, exist_ok=True)
+    except (FileExistsError, NotADirectoryError) as exc:
+        typer.echo(
+            f'--output-dir {output_dir} is not a directory ({exc}).',
+            err=True,
+        )
+        raise typer.Exit(code=2) from exc
+    target_path = output_dir / _OUTPUT_FILENAME
+    if target_path.is_file():
+        try:
+            if target_path.read_text(encoding='utf-8') == body:
+                return
+        except (OSError, UnicodeDecodeError):
+            # Corrupted or binary on-disk content — fall through to rewrite.
+            pass
+
+    fd, tmp_name = tempfile.mkstemp(
+        dir=str(output_dir),
+        prefix=f'.{_OUTPUT_FILENAME}.',
+        suffix='.tmp',
+    )
+    try:
+        with os.fdopen(fd, 'w', encoding='utf-8') as fh:
+            fh.write(body)
+        os.replace(tmp_name, target_path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except FileNotFoundError:
+            pass
+        raise
+
+
 # `app.command()` with `no_args_is_help=True` on the single-command app makes
 # typer flatten this into `memex agent-surface TARGET [OPTIONS]`. The function
 # name controls the flattened command label, so it must stay as
@@ -95,9 +146,28 @@ def agent_surface(
         help='Output format: text (raw markdown) or json (Claude Code SessionStart envelope).',
         case_sensitive=False,
     ),
+    output_dir: Optional[Path] = typer.Option(
+        None,
+        '--output-dir',
+        help=(
+            'If set, write to <dir>/memex-agent-surface.md atomically instead of '
+            'stdout. Creates <dir> if missing. Skips the rewrite when content is '
+            'unchanged. Mutually exclusive with --output-format=json.'
+        ),
+    ),
 ) -> None:
     """Emit the system-prompt content for the requested target to stdout."""
     body = _compose_for_target(target)
+    if output_dir is not None:
+        if output_format == OutputFormat.json:
+            typer.echo(
+                '--output-dir is mutually exclusive with --output-format=json '
+                '(the JSON envelope is only meaningful for stdout piping).',
+                err=True,
+            )
+            raise typer.Exit(code=2)
+        _write_to_dir(body, output_dir)
+        return
     if output_format == OutputFormat.json:
         sys.stdout.write(json.dumps({'systemPromptAdditions': body}))
     else:
