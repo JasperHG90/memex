@@ -106,21 +106,20 @@ class TestShippedSnapshotPath:
         assert other.shipped_snapshot_path is None
 
 
-class TestScrapedQueryFloor:
-    """Guard against silent-omission regressions in ``_scrape_queries_from_suite``.
+class TestSourceSuiteQueryFloor:
+    """Guard against silent-omission regressions in source-suite query enumeration.
 
-    The AST scraper at suite-import time emits a logger.warning when a
-    source suite uses non-literal queries (f-strings, variables), but
-    the warning is invisible if logging is unconfigured. If a refactor
-    in one of the upstream corpora switches a literal ``query='...'``
-    to a dynamic expression, the corresponding scenarios silently
-    vanish from this suite. A hard-floor count test catches this
-    failure mode at CI time rather than at next-capture time.
+    Each source corpus exposes its scenarios as pure data via
+    ``scenarios.py`` (see ``memex_eval.suite.read_scenario_specs``).
+    If a future refactor in any of the upstream corpora drops or
+    renames queries — or removes the ``scenarios.py`` data file
+    entirely — the corresponding scenarios silently vanish from this
+    suite. A hard-floor count test catches the regression at CI time
+    rather than at next-capture time. The floor values reflect the
+    corpus state at PR-merge time; bump on intentional additions,
+    decrease only after explicit operator review of what was lost.
     """
 
-    # Floor values reflect the corpus state at PR-merge time. Bump
-    # these when intentionally adding queries to a source suite;
-    # decrease only after explicit operator review of what was lost.
     _EXPECTED_QUERY_FLOOR: dict[str, int] = {
         'acme_corp': 36,
         'ai_research_lab': 7,
@@ -131,17 +130,57 @@ class TestScrapedQueryFloor:
         'corpus,floor',
         sorted(_EXPECTED_QUERY_FLOOR.items()),
     )
-    def test_scraped_queries_meet_floor(self, corpus: str, floor: int) -> None:
-        from memex_eval.suites.retrieval_stability import _scrape_queries_from_suite
+    def test_source_suite_query_count_meets_floor(self, corpus: str, floor: int) -> None:
+        from memex_eval.suites.retrieval_stability import _queries_from_source_suite
 
-        queries = _scrape_queries_from_suite(corpus)
+        queries = _queries_from_source_suite(corpus)
         assert len(queries) >= floor, (
-            f'retrieval_stability scraped {len(queries)} queries from '
+            f'retrieval_stability enumerated {len(queries)} queries from '
             f'corpus {corpus!r}, below the floor of {floor}. Either a '
-            f"source suite refactored a literal `query='...'` into a "
-            f'non-literal expression (silently dropped from the gate), '
+            f'source suite removed or renamed scenarios in scenarios.py, '
             f'or queries were intentionally removed. Investigate before '
             f'lowering the floor in this test.'
+        )
+
+
+class TestReadScenarioSpecsIsSideEffectFree:
+    """``read_scenario_specs(name)`` MUST NOT trigger the source suite's
+    full registration. This is the load-bearing architectural contract
+    that lets ``retrieval_stability`` enumerate source-corpus queries
+    cheaply (no Suite construction, no setup_action registration, no
+    eager memex_core import).
+
+    The pre-Option-A approach (AST scraping) achieved this by avoiding
+    Python imports entirely. The post-Option-A approach achieves it via
+    ``spec_from_file_location`` loading only ``scenarios.py``. Both
+    paths guard against the source suite's ``__init__.py`` firing.
+
+    Failure mode this catches: someone moves a ``suite.register(...)``
+    call into ``scenarios.py`` (data + registration coupling),
+    re-introducing the side effect.
+    """
+
+    @pytest.mark.parametrize('corpus', ['acme_corp', 'ai_research_lab', 'project_nexus'])
+    def test_read_does_not_import_parent_package(self, corpus: str) -> None:
+        import sys
+
+        from memex_eval.suite import read_scenario_specs
+
+        module_path = f'memex_eval.suites.{corpus}'
+        # If a previous test imported the parent, drop it so we test
+        # the contract clean.
+        sys.modules.pop(module_path, None)
+        sys.modules.pop(f'{module_path}.scenarios', None)
+        sys.modules.pop(f'_scenarios_only.{corpus}.scenarios', None)
+
+        specs = read_scenario_specs(corpus)
+        assert specs, f'{corpus} returned no scenario specs'
+        # Parent package must NOT be in sys.modules — that would mean
+        # __init__.py ran, defeating the whole point.
+        assert module_path not in sys.modules, (
+            f'read_scenario_specs({corpus!r}) imported the parent package; '
+            f"that re-triggers __init__.py's full registration and breaks "
+            f'the side-effect-free contract.'
         )
 
 

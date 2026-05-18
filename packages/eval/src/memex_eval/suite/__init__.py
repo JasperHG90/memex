@@ -107,6 +107,7 @@ from memex_eval.suite.loader import (
     discover_suite_names,
     discover_suites,
     load_suite,
+    read_scenario_specs,
 )
 from memex_eval.suite.setup_actions import (
     SetupActionHandler,
@@ -201,6 +202,7 @@ __all__ = [
     'load_suite',
     'discover_suites',
     'discover_suite_names',
+    'read_scenario_specs',
     'SuiteNotFound',
     # Extensibility surface
     'ExpectedOutcomeBase',

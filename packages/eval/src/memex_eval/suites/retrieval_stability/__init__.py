@@ -33,13 +33,12 @@ those registrations must already exist.
 
 from __future__ import annotations
 
-import ast
 import json
 import logging
 import re
 from pathlib import Path
 
-from memex_eval.suite import SuiteMetadata, SuiteSources
+from memex_eval.suite import SuiteMetadata, SuiteSources, read_scenario_specs
 from memex_eval.suite.decorator import Suite
 
 logger = logging.getLogger('memex_eval.suites.retrieval_stability')
@@ -55,7 +54,6 @@ _ROOT = Path(__file__).parent
 _SOURCES_DIR = _ROOT / 'sources'
 _BASELINES_DIR = _ROOT / 'baselines'
 _SNAPSHOT_DIR = _ROOT / 'snapshot'
-_SOURCE_SUITES_ROOT = _ROOT.parent  # packages/eval/src/memex_eval/suites/
 
 
 def _slugify(text: str, max_len: int = 60) -> str:
@@ -79,104 +77,44 @@ def _slugify(text: str, max_len: int = 60) -> str:
     return slug
 
 
-def _scrape_queries_from_suite(corpus: str) -> list[str]:
-    """AST-scrape unique ``query=`` literals from a source suite.
+def _queries_from_source_suite(corpus: str) -> list[str]:
+    """Enumerate unique literal queries from a source corpus.
 
-    Why scrape instead of import: importing the source suite triggers
-    its own scenario registration against the framework's global suite
-    registry. We want only the literal query strings without spinning
-    up the source suite's runtime state.
+    Uses ``read_scenario_specs`` which loads only the source suite's
+    ``scenarios.py`` (pure data module) via ``spec_from_file_location``
+    — never invokes the source suite's ``__init__.py``, never triggers
+    its scenario registration, never eagerly imports memex_core. The
+    return contract is well-typed (``list[dict]`` of registration
+    kwargs); query enumeration is a one-key projection.
 
-    Match scope: any ``Call`` node whose callee name is ``register`` or
-    ``scenario`` (attribute or bare). This is intentionally permissive
-    so the function works against either ``suite.register(query=...)``
-    or a bare ``register(...)`` import. The trade-off: a non-suite
-    call like ``some_registry.register(query='x')`` in the same file
-    would be picked up as a false-positive query. None of the current
-    source suites have such a call (verified by grep); the
-    floor-count test in ``test_snapshot_invariants.py`` guards count
-    regressions but not additive false-positives. If a source suite
-    ever introduces such a call, narrow this matcher to require the
-    callee's attribute owner to be a ``Name('suite')``.
+    Duplicate queries inside a corpus are de-duplicated, preserving
+    first-seen order, so the resulting (corpus, query) tuples are
+    unique. A source suite that doesn't ship a ``scenarios.py`` (the
+    data/registration split is opt-in per suite) is reported via
+    ``logger.warning`` and contributes zero queries.
     """
-    src_path = _SOURCE_SUITES_ROOT / corpus / '__init__.py'
-    if not src_path.is_file():
+    from memex_eval.suite import SuiteNotFound
+
+    try:
+        specs = read_scenario_specs(corpus)
+    except SuiteNotFound as exc:
         logger.warning(
-            'retrieval_stability: source suite %r not found at %s — '
-            'zero scenarios will be registered for this corpus',
+            'retrieval_stability: source suite %r has no scenarios.py — '
+            'no scenarios will be registered for this corpus. (%s)',
             corpus,
-            src_path,
+            exc,
         )
         return []
-    tree = ast.parse(src_path.read_text(encoding='utf-8'))
     seen: set[str] = set()
     ordered: list[str] = []
-    non_constant_query_count = 0
-    positional_arg_count = 0
-    for node in ast.walk(tree):
-        if not isinstance(node, ast.Call):
+    for spec in specs:
+        query = spec.get('query')
+        if not isinstance(query, str) or not query:
             continue
-        func = node.func
-        if isinstance(func, ast.Attribute):
-            call_name = func.attr
-        elif isinstance(func, ast.Name):
-            call_name = func.id
-        else:
+        if query in seen:
             continue
-        if call_name not in {'register', 'scenario'}:
-            continue
-        # Positional-arg detection: ``suite.register(id, desc, query, ...)``
-        # would pass ``query`` positionally and bypass the keyword
-        # scraper below. None of the current source suites use this
-        # form (verified by grep), but a future refactor that flips
-        # query from kwarg to positional would silently drop those
-        # scenarios from this gate. Flag positional args on register/
-        # scenario calls so the operator sees a loud warning rather
-        # than a silent shrink. The floor-count test in
-        # ``test_snapshot_invariants.py`` is the second safety net.
-        if node.args:
-            positional_arg_count += 1
-        for kw in node.keywords:
-            if kw.arg != 'query':
-                continue
-            if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
-                v = kw.value.value
-                if v not in seen:
-                    seen.add(v)
-                    ordered.append(v)
-            else:
-                # Non-literal query expression (f-string, variable,
-                # concat) — flag for the operator so a refactor that
-                # switches to dynamic query construction doesn't
-                # silently shrink this suite.
-                non_constant_query_count += 1
-    if positional_arg_count:
-        logger.warning(
-            'retrieval_stability: %s had %d `register(...)` or '
-            '`scenario(...)` calls with positional arguments. The '
-            'scraper only walks keyword arguments, so a `query` passed '
-            'positionally is invisible to this gate. Convert to '
-            '`query=...` keyword form, or update the scraper to '
-            'inspect positional args.',
-            src_path,
-            positional_arg_count,
-        )
-    if not ordered:
-        logger.warning(
-            'retrieval_stability: scraped 0 queries from %s — the '
-            'source suite parsed but contained no literal `query=` '
-            'kwargs. This suite will register no scenarios for that '
-            'corpus.',
-            src_path,
-        )
-    elif non_constant_query_count:
-        logger.warning(
-            'retrieval_stability: %s had %d `query=` arguments that '
-            'were not string literals; those scenarios are not '
-            'represented in this suite.',
-            src_path,
-            non_constant_query_count,
-        )
+        seen.add(query)
+        ordered.append(query)
     return ordered
 
 
@@ -367,7 +305,7 @@ def _register_query(corpus: str, query: str) -> None:
 
 
 for _corpus in ('acme_corp', 'ai_research_lab', 'project_nexus'):
-    for _query in _scrape_queries_from_suite(_corpus):
+    for _query in _queries_from_source_suite(_corpus):
         _register_query(_corpus, _query)
 
 

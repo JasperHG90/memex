@@ -138,9 +138,62 @@ def discover_suites() -> list[Suite]:
     return out
 
 
+def read_scenario_specs(suite_name: str) -> list[dict]:
+    """Read a suite's scenarios as pure data without triggering registration.
+
+    Loads only the suite's ``scenarios.py`` module via
+    ``spec_from_file_location``, bypassing the parent package's
+    ``__init__.py`` entirely. The returned list contains the raw
+    keyword-argument dicts each scenario passes to ``suite.register(...)``.
+    Read-only consumers (e.g. another suite that enumerates queries
+    from a corpus) can therefore introspect scenario data without
+    paying the import cost of constructing the parent ``Suite``,
+    registering all its scenarios, or eagerly importing heavy
+    dependencies (memex_core, ONNX backends, etc.).
+
+    The constraint on ``scenarios.py``: it MUST use absolute imports
+    only (``from memex_eval.suite import X``), never relative
+    (``from . import X``). A relative import would trigger the parent
+    package's ``__init__.py``, defeating the purpose.
+
+    Suites that don't ship a ``scenarios.py`` (the data/registration
+    split is opt-in) raise ``SuiteNotFound`` — callers must fall back
+    to ``load_suite(name).scenarios`` if the data form is absent.
+    """
+    pkg = importlib.import_module(_SUITES_PACKAGE)
+    pkg_root = Path(pkg.__file__).parent if pkg.__file__ else None
+    if pkg_root is None:
+        raise SuiteNotFound(f'Cannot resolve {_SUITES_PACKAGE} package root')
+    scenarios_path = pkg_root / suite_name / 'scenarios.py'
+    if not scenarios_path.is_file():
+        raise SuiteNotFound(
+            f'Suite {suite_name!r} does not ship a scenarios.py module; '
+            f'expected at {scenarios_path}. Either migrate the suite to the '
+            f'data/registration split, or use load_suite({suite_name!r}).scenarios '
+            f'(which triggers full registration).'
+        )
+    spec = importlib.util.spec_from_file_location(
+        f'_scenarios_only.{suite_name}.scenarios',
+        scenarios_path,
+    )
+    if spec is None or spec.loader is None:
+        raise SuiteNotFound(f'Could not import {scenarios_path}')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    specs = getattr(module, 'SCENARIO_SPECS', None)
+    if specs is None:
+        raise SuiteNotFound(
+            f'{scenarios_path} does not export SCENARIO_SPECS. '
+            f'A scenarios.py module must declare '
+            f'SCENARIO_SPECS: list[dict] at module scope.'
+        )
+    return list(specs)
+
+
 __all__ = [
     'SuiteNotFound',
-    'load_suite',
-    'discover_suites',
     'discover_suite_names',
+    'discover_suites',
+    'load_suite',
+    'read_scenario_specs',
 ]
