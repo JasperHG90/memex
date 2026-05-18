@@ -3,7 +3,7 @@
   "archived_at": null,
   "assets": [],
   "content_hash": "3df2312337f4040bc0878271b9f5569f",
-  "created_at": "2026-05-16T06:45:27.525040+00:00",
+  "created_at": "2026-05-18T07:32:18.387084+00:00",
   "description": "Corporate Core Values and Guiding Principles",
   "doc_metadata": {
     "retain_params": {
@@ -92,11 +92,11 @@
     ]
   },
   "publish_date": "2018-01-01T00:00:00+00:00",
-  "session_id": "a2b8e78c-d4ea-4d71-9c5a-2bc22bdc3ebe",
+  "session_id": "010c116c-441a-4233-b0d6-13abac43fd54",
   "status": "active",
   "summary_version_incorporated": null,
   "superseded_by": null,
   "title": "Company Core Values",
-  "updated_at": "2026-05-16T06:45:27.525040+00:00",
-  "vault_id": "77230e2b-dd50-4ad4-9e2e-42d4223d0f29"
+  "updated_at": "2026-05-18T07:32:18.387084+00:00",
+  "vault_id": "22c11c49-1ccc-43a4-830c-dca2472f519c"
 }

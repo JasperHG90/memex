@@ -3,7 +3,7 @@
   "archived_at": null,
   "assets": [],
   "content_hash": "2b3123856233f98a867c8f59b6408cd9",
-  "created_at": "2026-05-16T06:45:48.164226+00:00",
+  "created_at": "2026-05-18T07:32:39.448967+00:00",
   "description": "TechCo Global Legal Operations and Compliance Strategy",
   "doc_metadata": {
     "retain_params": {
@@ -34,7 +34,7 @@
   "page_index": {
     "metadata": {
       "description": "TechCo Global Legal Operations and Compliance Strategy",
-      "publish_date": "2026-05-16 06:45:48.163703+00:00",
+      "publish_date": "2026-05-18 07:32:39.448419+00:00",
       "source_uri": null,
       "tags": [
         "department",
@@ -112,12 +112,12 @@
       }
     ]
   },
-  "publish_date": "2026-05-16T06:45:48.163703+00:00",
-  "session_id": "192e970f-7f73-4ea8-91fd-998b660cd34a",
+  "publish_date": "2026-05-18T07:32:39.448419+00:00",
+  "session_id": "9441c51e-a42d-4aea-999f-e9b4b17d5213",
   "status": "active",
   "summary_version_incorporated": null,
   "superseded_by": null,
   "title": "Legal Department Overview",
-  "updated_at": "2026-05-16T06:45:48.164226+00:00",
-  "vault_id": "77230e2b-dd50-4ad4-9e2e-42d4223d0f29"
+  "updated_at": "2026-05-18T07:32:39.448967+00:00",
+  "vault_id": "22c11c49-1ccc-43a4-830c-dca2472f519c"
 }

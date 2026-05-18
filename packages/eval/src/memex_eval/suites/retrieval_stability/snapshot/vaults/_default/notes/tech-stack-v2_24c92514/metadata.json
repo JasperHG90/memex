@@ -3,7 +3,7 @@
   "archived_at": null,
   "assets": [],
   "content_hash": "073fee26ebc8136ccba7f7dfd3d5c8ed",
-  "created_at": "2026-05-16T06:46:23.398756+00:00",
+  "created_at": "2026-05-18T07:33:15.593431+00:00",
   "description": "Project Nexus Infrastructure and Tech Stack Migration",
   "doc_metadata": {
     "retain_params": {
@@ -116,11 +116,11 @@
     ]
   },
   "publish_date": "2025-07-01T00:00:00+00:00",
-  "session_id": "07b0ff00-f83e-480b-a051-edcc1ec3ba72",
+  "session_id": "a6b08de1-38e0-4ae7-a343-dfdc67ce1385",
   "status": "active",
   "summary_version_incorporated": null,
   "superseded_by": null,
   "title": "tech-stack-v2",
-  "updated_at": "2026-05-16T06:46:23.398756+00:00",
-  "vault_id": "77230e2b-dd50-4ad4-9e2e-42d4223d0f29"
+  "updated_at": "2026-05-18T07:33:15.593431+00:00",
+  "vault_id": "22c11c49-1ccc-43a4-830c-dca2472f519c"
 }

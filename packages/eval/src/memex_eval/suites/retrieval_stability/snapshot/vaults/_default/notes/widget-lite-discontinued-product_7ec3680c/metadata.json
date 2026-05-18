@@ -3,7 +3,7 @@
   "archived_at": null,
   "assets": [],
   "content_hash": "8802d09df2e35f5600c4cbf4f570d448",
-  "created_at": "2026-05-16T06:46:29.449015+00:00",
+  "created_at": "2026-05-18T07:33:20.305006+00:00",
   "description": "Discontinuation and Migration of Widget Lite",
   "doc_metadata": {
     "retain_params": {
@@ -112,11 +112,11 @@
     ]
   },
   "publish_date": "2025-03-01T00:00:00+00:00",
-  "session_id": "2b965cef-190b-42d5-9539-249cbee16926",
+  "session_id": "723b24a6-cd81-4fda-8a43-6041f0459cb1",
   "status": "active",
   "summary_version_incorporated": null,
   "superseded_by": null,
   "title": "Widget Lite Discontinued Product",
-  "updated_at": "2026-05-16T06:46:29.449015+00:00",
-  "vault_id": "77230e2b-dd50-4ad4-9e2e-42d4223d0f29"
+  "updated_at": "2026-05-18T07:33:20.305006+00:00",
+  "vault_id": "22c11c49-1ccc-43a4-830c-dca2472f519c"
 }

@@ -3,7 +3,7 @@
   "archived_at": null,
   "assets": [],
   "content_hash": "23bbc84921c7eaf82d36d908aeb59e27",
-  "created_at": "2026-05-16T06:45:59.390841+00:00",
+  "created_at": "2026-05-18T07:32:51.255684+00:00",
   "description": "Project Alpha Inception and Technical Strategy",
   "doc_metadata": {
     "retain_params": {
@@ -149,11 +149,11 @@
     ]
   },
   "publish_date": "2025-03-15T00:00:00+00:00",
-  "session_id": "7723b812-1074-4ad5-88a0-756d0c2e0631",
+  "session_id": "f0d10855-afaf-40f0-b97c-fa65104e091f",
   "status": "active",
   "summary_version_incorporated": null,
   "superseded_by": null,
   "title": "Project Alpha Kickoff",
-  "updated_at": "2026-05-16T06:45:59.390841+00:00",
-  "vault_id": "77230e2b-dd50-4ad4-9e2e-42d4223d0f29"
+  "updated_at": "2026-05-18T07:32:51.255684+00:00",
+  "vault_id": "22c11c49-1ccc-43a4-830c-dca2472f519c"
 }

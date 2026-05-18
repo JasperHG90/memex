@@ -3,7 +3,7 @@
   "archived_at": null,
   "assets": [],
   "content_hash": "4700840668e58eb5d9ee4db204efe830",
-  "created_at": "2026-05-16T06:45:52.742011+00:00",
+  "created_at": "2026-05-18T07:32:44.031142+00:00",
   "description": "Product Department Operations and Onboarding Initiative",
   "doc_metadata": {
     "retain_params": {
@@ -34,7 +34,7 @@
   "page_index": {
     "metadata": {
       "description": "Product Department Operations and Onboarding Initiative",
-      "publish_date": "2026-05-16 06:45:52.741501+00:00",
+      "publish_date": "2026-05-18 07:32:44.030387+00:00",
       "source_uri": null,
       "tags": [
         "department",
@@ -111,12 +111,12 @@
       }
     ]
   },
-  "publish_date": "2026-05-16T06:45:52.741501+00:00",
-  "session_id": "e3a6eb2f-01b6-4b47-9cc7-39f7b80b51dd",
+  "publish_date": "2026-05-18T07:32:44.030387+00:00",
+  "session_id": "bb11b5e1-b912-41c3-a3b8-dbd82913ea22",
   "status": "active",
   "summary_version_incorporated": null,
   "superseded_by": null,
   "title": "Product Department Overview",
-  "updated_at": "2026-05-16T06:45:52.742011+00:00",
-  "vault_id": "77230e2b-dd50-4ad4-9e2e-42d4223d0f29"
+  "updated_at": "2026-05-18T07:32:44.031142+00:00",
+  "vault_id": "22c11c49-1ccc-43a4-830c-dca2472f519c"
 }

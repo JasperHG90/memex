@@ -357,6 +357,46 @@ Follow-up work to drop the floor back toward 0.99:
 - Pin ONNX intra-op + omp threads to 1 on the embedder + cross-encoder sessions in `memex_core` to remove the kernel-level non-determinism.
 - Diagnose the omitted `quarterly_business_review` query (re-add to suite once fixed).
 
+### Known low-signal queries — RBO conflates "right thing found" with "filler order stable"
+
+The 2026-05-18 refresh hit pass_rate=0.97 (97/100) on the verify run.
+Two of the three sub-floor scenarios are float-tie drift at the
+RBO≈0.91 line (just below the 0.92 floor); the third —
+`ai_research_lab_amara_osei_note` — sits at RBO≈0.39. Diagnosis:
+
+- The suite ingests `acme_corp` + `ai_research_lab` + `project_nexus`
+  into a single vault for retrieval queries. The query `Amara Osei`
+  has exactly **2 relevant notes** in that combined corpus (her profile
+  + the conference talk where she presented). Positions 3–10 in the
+  top-10 are populated by acme_corp department-overview filler notes
+  (HR, sales, marketing, legal, etc.) whose cosine similarity to
+  "Amara Osei" is at the noise floor.
+- Reranker scores on those positions differ by ~10⁻⁶ across runs;
+  ONNX CPU-kernel non-determinism flips the order of positions 3–10
+  freely. RBO over top-10 then drops sharply (~0.39) even though
+  **rank 1 is rock-solid** (the actual Osei profile) and rank 2 is
+  reasonably stable (the conference talk).
+
+RBO over top-k is the wrong gate for queries with <`top_k` truly
+relevant documents in the corpus — it penalizes filler-order drift
+the same as a real top-1 regression. Two complementary fixes:
+
+1. **Per-query `top_k`** — scope `top_k` to the actual number of
+   plausible matches in the corpus. `Amara Osei` → `top_k=2`. Captures
+   the discrimination signal (did the relevant docs land in front?)
+   without scoring the noise-floor tail.
+2. **Recall@k / precision@k alongside RBO** — for each scenario,
+   report `recall@1`, `recall@3`, `recall@5`, `recall@10` and the
+   matching precision values, anchored on a per-scenario
+   `relevant_doc_ids` list rather than a full ranking baseline.
+   These metrics ignore arbitrary positional drift among irrelevant
+   results — "did the right doc appear in the top-k cut?" rather than
+   "did irrelevant docs keep the same arbitrary order?". RBO stays as
+   the high-signal-query gate; recall@k carries the low-signal queries.
+
+Both are out-of-scope for the current refresh — captured here as
+follow-up work so the next refresh cycle picks them up.
+
 ## Limits
 
 - ONNX inference is not bit-exact across CPU ISAs. A baseline captured on aarch64 will drift on x86_64 even with identical code. The intended deployment model is per-architecture baselines or a CI matrix; this PR ships baselines for one architecture and leaves the multi-arch story for follow-up.

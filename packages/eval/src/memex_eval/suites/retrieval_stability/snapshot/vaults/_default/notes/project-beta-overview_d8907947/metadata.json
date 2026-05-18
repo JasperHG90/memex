@@ -3,7 +3,7 @@
   "archived_at": null,
   "assets": [],
   "content_hash": "0bed91580f1e78ce3744821287b2d5a5",
-  "created_at": "2026-05-16T06:46:01.698151+00:00",
+  "created_at": "2026-05-18T07:32:53.771681+00:00",
   "description": "Acme Corp Project Beta: Machine Learning Infrastructure and Team Overview",
   "doc_metadata": {
     "retain_params": {
@@ -151,11 +151,11 @@
     ]
   },
   "publish_date": "2025-08-01T00:00:00+00:00",
-  "session_id": "e2cf8010-d928-480e-997f-6ad27fc780bb",
+  "session_id": "da83d6ab-ff78-4731-b2b8-b5fdc26d4277",
   "status": "active",
   "summary_version_incorporated": null,
   "superseded_by": null,
   "title": "Project Beta Overview",
-  "updated_at": "2026-05-16T06:46:01.698151+00:00",
-  "vault_id": "77230e2b-dd50-4ad4-9e2e-42d4223d0f29"
+  "updated_at": "2026-05-18T07:32:53.771681+00:00",
+  "vault_id": "22c11c49-1ccc-43a4-830c-dca2472f519c"
 }

@@ -3,7 +3,7 @@
   "archived_at": null,
   "assets": [],
   "content_hash": "36af99a173a2e1017dd9552f4c986709",
-  "created_at": "2026-05-16T06:45:38.147649+00:00",
+  "created_at": "2026-05-18T07:32:28.004443+00:00",
   "description": "DataForge Distributed Data Platform Architecture",
   "doc_metadata": {
     "retain_params": {
@@ -34,7 +34,7 @@
   "page_index": {
     "metadata": {
       "description": "DataForge Distributed Data Platform Architecture",
-      "publish_date": "2026-05-16 06:45:38.147050+00:00",
+      "publish_date": "2026-05-18 07:32:28.003797+00:00",
       "source_uri": null,
       "tags": [
         "architecture",
@@ -169,12 +169,12 @@
       }
     ]
   },
-  "publish_date": "2026-05-16T06:45:38.147050+00:00",
-  "session_id": "762430ab-38a5-4d89-baee-b502bc7430f7",
+  "publish_date": "2026-05-18T07:32:28.003797+00:00",
+  "session_id": "5daa7234-dfdd-48ed-9e17-c922072202ef",
   "status": "active",
   "summary_version_incorporated": null,
   "superseded_by": null,
   "title": "Data Platform Architecture Deep Dive",
-  "updated_at": "2026-05-16T06:45:38.147649+00:00",
-  "vault_id": "77230e2b-dd50-4ad4-9e2e-42d4223d0f29"
+  "updated_at": "2026-05-18T07:32:28.004443+00:00",
+  "vault_id": "22c11c49-1ccc-43a4-830c-dca2472f519c"
 }

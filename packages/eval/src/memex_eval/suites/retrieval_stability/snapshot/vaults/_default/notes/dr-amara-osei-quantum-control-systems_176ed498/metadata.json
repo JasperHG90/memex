@@ -3,7 +3,7 @@
   "archived_at": null,
   "assets": [],
   "content_hash": "1b9a568cfbd18fbbb0c28f105104e918",
-  "created_at": "2026-05-16T06:45:58.441453+00:00",
+  "created_at": "2026-05-18T07:32:49.937927+00:00",
   "description": "Professional Profile and Research of Dr. Amara Osei",
   "doc_metadata": {
     "retain_params": {
@@ -34,7 +34,7 @@
   "page_index": {
     "metadata": {
       "description": "Professional Profile and Research of Dr. Amara Osei",
-      "publish_date": "2026-05-16 06:45:58.440852+00:00",
+      "publish_date": "2026-05-18 07:32:49.937100+00:00",
       "source_uri": null,
       "tags": [
         "quantum",
@@ -111,12 +111,12 @@
       }
     ]
   },
-  "publish_date": "2026-05-16T06:45:58.440852+00:00",
-  "session_id": "8eff0e48-aa3a-40c1-bc2a-4b51be92e7bc",
+  "publish_date": "2026-05-18T07:32:49.937100+00:00",
+  "session_id": "65b59ce3-e51d-4545-b546-c7147f7e01ff",
   "status": "active",
   "summary_version_incorporated": null,
   "superseded_by": null,
   "title": "Dr. Amara Osei — Quantum Control Systems",
-  "updated_at": "2026-05-16T06:45:58.441453+00:00",
-  "vault_id": "77230e2b-dd50-4ad4-9e2e-42d4223d0f29"
+  "updated_at": "2026-05-18T07:32:49.937927+00:00",
+  "vault_id": "22c11c49-1ccc-43a4-830c-dca2472f519c"
 }

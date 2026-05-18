@@ -3,7 +3,7 @@
   "archived_at": null,
   "assets": [],
   "content_hash": "b391b8fdd7d1b6fac4122a0e6976e223",
-  "created_at": "2026-05-16T06:46:09.850555+00:00",
+  "created_at": "2026-05-18T07:33:01.309627+00:00",
   "description": "Q2 2025 Quarterly Business Review and Performance",
   "doc_metadata": {
     "retain_params": {
@@ -131,11 +131,11 @@
     ]
   },
   "publish_date": "2025-06-30T00:00:00+00:00",
-  "session_id": "4baf4821-5d84-4d30-88c4-9cd2e394be77",
+  "session_id": "3631d6e9-048d-4f45-93c0-b8f30c5110ac",
   "status": "active",
   "summary_version_incorporated": null,
   "superseded_by": null,
   "title": "Quarterly Business Review Q2 2025",
-  "updated_at": "2026-05-16T06:46:09.850555+00:00",
-  "vault_id": "77230e2b-dd50-4ad4-9e2e-42d4223d0f29"
+  "updated_at": "2026-05-18T07:33:01.309627+00:00",
+  "vault_id": "22c11c49-1ccc-43a4-830c-dca2472f519c"
 }

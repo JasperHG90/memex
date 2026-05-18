@@ -3,7 +3,7 @@
   "archived_at": null,
   "assets": [],
   "content_hash": "8359dff377994626fe4f605d6f5e13db",
-  "created_at": "2026-05-16T06:46:20.470276+00:00",
+  "created_at": "2026-05-18T07:33:12.853499+00:00",
   "description": "AI Research Lab Weekly Progress and Infrastructure Planning",
   "doc_metadata": {
     "retain_params": {
@@ -170,11 +170,11 @@
     ]
   },
   "publish_date": "2025-09-05T00:00:00+00:00",
-  "session_id": "0cb1f172-a9ab-4ed6-b37c-17573e4bc841",
+  "session_id": "e797f10b-2a4e-4a85-b779-cbd62048d36c",
   "status": "active",
   "summary_version_incorporated": null,
   "superseded_by": null,
   "title": "team-meeting-notes",
-  "updated_at": "2026-05-16T06:46:20.470276+00:00",
-  "vault_id": "77230e2b-dd50-4ad4-9e2e-42d4223d0f29"
+  "updated_at": "2026-05-18T07:33:12.853499+00:00",
+  "vault_id": "22c11c49-1ccc-43a4-830c-dca2472f519c"
 }

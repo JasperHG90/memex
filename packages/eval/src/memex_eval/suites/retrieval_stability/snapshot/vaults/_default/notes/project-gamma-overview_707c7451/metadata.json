@@ -3,7 +3,7 @@
   "archived_at": null,
   "assets": [],
   "content_hash": "2ec058a94850cdcef7b6fbbf77196a40",
-  "created_at": "2026-05-16T06:46:03.711178+00:00",
+  "created_at": "2026-05-18T07:32:56.481749+00:00",
   "description": "Project Gamma Real-Time Platform",
   "doc_metadata": {
     "retain_params": {
@@ -32,7 +32,7 @@
   "page_index": {
     "metadata": {
       "description": "Project Gamma Real-Time Platform",
-      "publish_date": "2026-05-16 06:46:03.710721+00:00",
+      "publish_date": "2026-05-18 07:32:56.480853+00:00",
       "source_uri": null,
       "tags": [
         "project",
@@ -108,12 +108,12 @@
       }
     ]
   },
-  "publish_date": "2026-05-16T06:46:03.710721+00:00",
-  "session_id": "3ee3f954-b3fd-48ff-b449-28e7ea7fea98",
+  "publish_date": "2026-05-18T07:32:56.480853+00:00",
+  "session_id": "2de1f699-1aa0-4a63-82b5-79556cfd19f3",
   "status": "active",
   "summary_version_incorporated": null,
   "superseded_by": null,
   "title": "Project Gamma Overview",
-  "updated_at": "2026-05-16T06:46:03.711178+00:00",
-  "vault_id": "77230e2b-dd50-4ad4-9e2e-42d4223d0f29"
+  "updated_at": "2026-05-18T07:32:56.481749+00:00",
+  "vault_id": "22c11c49-1ccc-43a4-830c-dca2472f519c"
 }
