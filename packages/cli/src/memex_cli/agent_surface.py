@@ -78,9 +78,12 @@ def _compose_for_target(target: Target) -> str:
 
 
 # `app.command()` with `no_args_is_help=True` on the single-command app makes
-# typer flatten this into `memex agent-surface TARGET [OPTIONS]`.
+# typer flatten this into `memex agent-surface TARGET [OPTIONS]`. The function
+# name controls the flattened command label, so it must stay as
+# `agent_surface` (→ `agent-surface`) to match the LAZY_SUBCOMMANDS key in
+# memex_cli.utils. Renaming will break top-level dispatch in LazyTyperGroup.
 @app.command()
-def emit(
+def agent_surface(
     target: Target = typer.Argument(
         ...,
         help='Composition target: universal/generic, hermes, claude-code, mcp.',

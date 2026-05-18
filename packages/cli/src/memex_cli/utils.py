@@ -41,7 +41,6 @@ LAZY_SUBCOMMANDS: dict[str, str] = {
     'briefing': 'memex_cli.session:app',
     'report-bug': 'memex_cli.report_bug:app',
     'diagnostics': 'memex_cli.diagnose:app',
-    'consolidate': 'memex_cli.consolidate:app',
     'agent-surface': 'memex_cli.agent_surface:app',
 }
 

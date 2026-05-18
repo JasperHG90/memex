@@ -176,6 +176,12 @@ class RemoteMemexAPI:
 
     async def resolve_vault_identifier(self, identifier: str) -> UUID:
         """Resolve a vault name or ID to a UUID."""
+        if not identifier:
+            raise ValueError(
+                'No vault specified. Pass --vault <name|uuid>, set '
+                'vault.active in your config, or set '
+                'server.default_active_vault.'
+            )
         try:
             # Check if it's already a UUID
             return UUID(identifier)

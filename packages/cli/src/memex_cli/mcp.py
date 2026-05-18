@@ -5,7 +5,7 @@ Memex MCP CLI commands.
 import asyncio
 import typer
 
-app = typer.Typer(name='mcp', help='Manage the Memex MCP server.')
+app = typer.Typer(name='mcp', help='Manage the Memex MCP server.', no_args_is_help=True)
 
 
 @app.callback()

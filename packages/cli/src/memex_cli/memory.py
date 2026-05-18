@@ -5,14 +5,9 @@ Memory Management Commands (Ingest & Retrieval).
 import asyncio
 import json
 import logging
-import pathlib as plb
 from typing import Annotated
 from uuid import UUID
 import itertools
-import base64
-import mimetypes
-
-import aiofiles
 
 import typer
 from pydantic import BaseModel, Field
@@ -29,12 +24,8 @@ from memex_cli.utils import (
 )
 from memex_common.config import MemexConfig
 from memex_common.schemas import (
-    BatchJobStatus,
-    IngestResponse,
     ReflectionRequest,
     MemoryUnitDTO,
-    NoteCreateDTO,
-    IngestURLRequest,
     LineageDirection,
 )
 
@@ -189,7 +180,7 @@ async def deprioritize_memory(
     """
     config: MemexConfig = ctx.obj
     uuid_obj = parse_uuid(unit_id, 'memory unit')
-    effective_vault = vault if vault is not None else config.vault.active
+    effective_vault = vault if vault is not None else config.write_vault
 
     async with get_api_context(config) as api:
         try:
@@ -223,7 +214,7 @@ async def restore_memory(
     """Restore a deprioritized memory unit (flips ``is_deprioritized`` back to false)."""
     config: MemexConfig = ctx.obj
     uuid_obj = parse_uuid(unit_id, 'memory unit')
-    effective_vault = vault if vault is not None else config.vault.active
+    effective_vault = vault if vault is not None else config.write_vault
 
     async with get_api_context(config) as api:
         try:
@@ -236,75 +227,6 @@ async def restore_memory(
     console.print(f'[green]Memory unit {unit.id} restored.[/green]')
 
 
-@app.command('score')
-@async_command
-async def score_memory(
-    ctx: typer.Context,
-    unit_id: Annotated[str, typer.Argument(help='UUID of the memory unit to score.')],
-    vault: Annotated[
-        str | None,
-        typer.Option(
-            '--vault',
-            '-v',
-            help='Vault name or UUID. Defaults to the active vault.',
-        ),
-    ] = None,
-    json_output: Annotated[
-        bool,
-        typer.Option(
-            '--json',
-            help='Print the breakdown as raw JSON (for piping into jq / scripts).',
-        ),
-    ] = False,
-):
-    """Compute and print the FSFM composite deprioritization score for a unit.
-
-    The breakdown shows each component (graph_pressure, mw_complement,
-    temporal_staleness, entity_dormancy), the importance baseline, and the
-    final score in ``[0, 1]``. Use this when tuning the configured weights or
-    investigating why a unit was (or wasn't) flagged by the linter.
-    """
-    config: MemexConfig = ctx.obj
-    uuid_obj = parse_uuid(unit_id, 'memory unit')
-    effective_vault = vault if vault is not None else config.vault.active
-
-    async with get_api_context(config) as api:
-        try:
-            resolved_vault = await api.resolve_vault_identifier(effective_vault)
-            breakdown = await api.score_memory_unit(uuid_obj, vault_id=resolved_vault)
-        except Exception as e:
-            handle_api_error(e)
-            return
-
-    if breakdown is None:
-        console.print(f'[red]Memory unit {unit_id} not found in vault.[/red]')
-        raise typer.Exit(code=1)
-
-    if json_output:
-        console.print(breakdown.model_dump_json(indent=2))
-        return
-
-    panel_lines = [
-        f'[bold]Composite score:[/bold] {breakdown.score:.4f}',
-        f'[bold]Importance baseline:[/bold] {breakdown.importance:.3f}'
-        if breakdown.importance is not None
-        else '[bold]Importance baseline:[/bold] (NULL)',
-    ]
-    if breakdown.is_protected:
-        panel_lines.append(
-            f'[yellow]Protected:[/yellow] {breakdown.protected_reason} (score short-circuited to 0)'
-        )
-    console.print(Panel('\n'.join(panel_lines), title=f'Score for {breakdown.unit_id}'))
-
-    if breakdown.components:
-        comp = Table(title='Components', show_header=True)
-        comp.add_column('Component')
-        comp.add_column('Value', justify='right')
-        for k, v in breakdown.components.items():
-            comp.add_row(k, f'{v:.4f}')
-        console.print(comp)
-
-
 @app.command('reconsolidate')
 @async_command
 async def reconsolidate_memory(
@@ -315,15 +237,36 @@ async def reconsolidate_memory(
         typer.Option('--vault', '-v', help='Vault name or UUID. Defaults to the active vault.'),
     ] = None,
 ):
-    """Re-evaluate memories for an entity under a per-entity advisory lock.
+    """Re-evaluate every memory unit linked to one entity. **Use sparingly.**
 
-    Runs contradiction detection across all units linked to the entity, then
-    triggers reflection. LLM-intensive — use only when there is concrete
-    evidence of conflicting information.
+    Acquires a per-entity advisory lock (serializes against the scheduler's
+    own reflection of this entity), runs contradiction detection across the
+    full set of units that mention the entity, then triggers the Hindsight
+    reflection cycle on the entity's mental model.
+
+    When to use:
+        - You (or an agent) have concrete evidence that this entity's
+          mental model is wrong or contains contradictions — e.g. `memex
+          lint findings` flagged it, retrieval is returning inconsistent
+          answers, or you just resolved a maintenance proposal that merged
+          two entities and the survivor needs its model rebuilt.
+        - Targeted, deliberate maintenance. Always scoped to one entity.
+
+    When NOT to use:
+        - For routine maintenance. The scheduler reflects entities on a
+          timer; calling this manually duplicates that work.
+        - Across many entities. Run them one at a time with evidence —
+          batch reconsolidation is what the scheduler is for.
+
+    Cost: LLM-intensive. Contradiction detection plus a full reflection
+    pass — typically multiple LLM calls per linked memory unit. A noisy
+    entity with hundreds of units can cost dollars per invocation. The
+    advisory lock means a concurrent scheduler reflection on the same
+    entity will block until this completes.
     """
     config: MemexConfig = ctx.obj
     entity_uuid = parse_uuid(entity_id, 'entity')
-    effective_vault = vault if vault is not None else config.vault.active
+    effective_vault = vault if vault is not None else config.write_vault
 
     async with get_api_context(config) as api:
         try:
@@ -349,12 +292,35 @@ async def consolidate_memory(
         typer.Option('--dry-run', help='Preview without making changes.'),
     ] = False,
 ):
-    """Vault-wide low-Memory-Worth unit consolidation. Use sparingly.
+    """Vault-wide low-Memory-Worth unit consolidation. **Use sparingly.**
 
-    For per-entity hygiene, prefer `memex memory reconsolidate`.
+    Scans every active memory unit in the vault, computes the FSFM composite
+    deprioritization score (graph_pressure, mw_complement, temporal_staleness,
+    entity_dormancy, weighted against the importance baseline), and flips
+    units below the auto-band threshold to `is_deprioritized=True`. Those
+    units stop appearing in retrieval unless `include_deprioritized=true`
+    is passed; restore one with `memex memory restore <id>`.
+
+    When to use:
+        - After a large bulk ingest, to flush noise before a high-stakes
+          retrieval session.
+        - When `memex diagnostics retrieval` shows high-volume / low-MW
+          entities and you want to flip their weakest units in one pass.
+
+    When NOT to use:
+        - For routine maintenance. The scheduler runs the same scorer +
+          auto-band on a timer; on-demand calls duplicate work the
+          background loop will do anyway.
+        - For per-entity cleanup — prefer `memex memory reconsolidate
+          <entity-uuid>`, which is scoped and runs contradiction detection
+          first.
+
+    Cost: DB scan + score computation over every active unit in the vault.
+    No LLM calls. Use `--dry-run` to preview which units would flip without
+    writing.
     """
     config: MemexConfig = ctx.obj
-    effective_vault = vault if vault is not None else config.vault.active
+    effective_vault = vault if vault is not None else config.write_vault
 
     async with get_api_context(config) as api:
         try:
@@ -398,201 +364,6 @@ async def delete_memory(
         console.print(f'[green]Memory unit {unit_id} deleted successfully.[/green]')
     else:
         console.print(f'[red]Memory unit {unit_id} not found.[/red]')
-
-
-@app.command('add')
-@async_command
-async def add_memory(
-    ctx: typer.Context,
-    content: Annotated[str | None, typer.Argument(help='The content of the memory to add.')] = None,
-    file: Annotated[
-        plb.Path | None,
-        typer.Option('--file', '-f', help='Path to a file or directory to ingest.', dir_okay=True),
-    ] = None,
-    url: Annotated[
-        str | None,
-        typer.Option('--url', '-u', help='URL to scrape and ingest.'),
-    ] = None,
-    asset: Annotated[
-        list[plb.Path] | None,
-        typer.Option('--asset', '-a', help='Path to an asset file to attach to the note.'),
-    ] = None,
-    vault: Annotated[
-        str | None,
-        typer.Option('--vault', '-v', help='Vault name or UUID. Defaults to the active vault.'),
-    ] = None,
-    key: Annotated[
-        str | None, typer.Option('--key', '-k', help='Unique stable key for the note.')
-    ] = None,
-    background: Annotated[
-        bool, typer.Option('--background', '-b', help='Queue as background job.')
-    ] = False,
-    user_notes: Annotated[
-        str | None,
-        typer.Option('--user-notes', '-n', help='Your own context or commentary about this note.'),
-    ] = None,
-):
-    """
-    Add a new memory to Memex.
-    You can provide text directly, use --file to load from disk, or --url to scrape a website.
-    Use --asset to attach auxiliary files (images, PDFs) to a note.
-    """
-    config: MemexConfig = ctx.obj
-    # Override active vault if specified
-    if vault:
-        config.vault.active = vault
-
-    # Determine input source
-    if file:
-        file_path = file
-        if not file_path.exists():
-            console.print(f'[red]Error: Path does not exist: {file_path}[/red]')
-            raise typer.Exit(1)
-    elif url:
-        pass  # Valid input
-    elif content:
-        pass
-    else:
-        console.print('[red]Error: Must provide content, --file, or --url.[/red]')
-        raise typer.Exit(1)
-
-    console.print('[bold green]Adding Memory[/bold green]')
-
-    async with get_api_context(config) as api:
-        result: IngestResponse | BatchJobStatus | dict[str, str]
-        if url:
-            try:
-                # Load assets if provided
-                assets_dict = {}
-                if asset:
-                    console.print(f'[cyan]Loading {len(asset)} asset(s)...[/cyan]')
-                    for asset_path in asset:
-                        if not asset_path.exists():
-                            console.print(f'[red]Warning: Asset not found: {asset_path}[/red]')
-                            continue
-
-                        async with aiofiles.open(asset_path, 'rb') as f:
-                            asset_data = await f.read()
-
-                        assets_dict[asset_path.name] = base64.b64encode(asset_data)
-
-                console.print(f'[cyan]Fetching and summarizing {url}...[/cyan]')
-                req = IngestURLRequest(
-                    url=url,
-                    assets=assets_dict,
-                    vault_id=config.write_vault,
-                    user_notes=user_notes,
-                )
-                result = await api.ingest_url(req, background=background)
-            except Exception as e:
-                handle_api_error(e)
-        elif file and not asset:
-            # Multi-part upload using aiofiles (Traditional path)
-            try:
-                files_to_upload = []
-                if file.is_dir():
-                    console.print(f'[cyan]Scanning directory {file.name}...[/cyan]')
-                    # Recursively find all files
-                    for p in file.rglob('*'):
-                        if p.is_file() and not p.name.startswith('.'):
-                            async with aiofiles.open(p, 'rb') as f:
-                                data = await f.read()
-
-                            mime_type, _ = mimetypes.guess_type(p)
-                            mime_type = mime_type or 'application/octet-stream'
-                            # Use relative path as filename to preserve structure
-                            rel_path = str(p.relative_to(file))
-                            files_to_upload.append(('files', (rel_path, data, mime_type)))
-                else:
-                    console.print(f'[cyan]Reading file {file.name}...[/cyan]')
-                    async with aiofiles.open(file, 'rb') as f:
-                        data = await f.read()
-                    mime_type, _ = mimetypes.guess_type(file)
-                    mime_type = mime_type or 'application/octet-stream'
-                    files_to_upload.append(('files', (file.name, data, mime_type)))
-
-                if not files_to_upload:
-                    console.print('[red]Error: No files found to upload.[/red]')
-                    raise typer.Exit(1)
-
-                console.print(
-                    f'[cyan]Uploading and summarizing {len(files_to_upload)} file(s)...[/cyan]'
-                )
-                metadata = {}
-                if config.write_vault:
-                    metadata['vault_id'] = str(config.write_vault)
-                if user_notes:
-                    metadata['user_notes'] = user_notes
-
-                result = await api.ingest_upload(
-                    files=files_to_upload, metadata=metadata, background=background
-                )
-            except Exception as e:
-                handle_api_error(e)
-        else:
-            # Handle NoteDTO path (content + assets or file + assets)
-            try:
-                note_content = ''
-                note_name = 'Quick Note'
-                note_description = 'Added via CLI'
-
-                if file:
-                    if file.is_dir():
-                        console.print(
-                            '[red]Error: --asset cannot be used with a directory --file. Point --file to a markdown file instead.[/red]'
-                        )
-                        raise typer.Exit(1)
-
-                    console.print(f'[cyan]Reading main note file {file.name}...[/cyan]')
-                    async with aiofiles.open(file, 'r', encoding='utf-8') as f:
-                        note_content = await f.read()
-                    note_name = file.stem
-                else:
-                    note_content = content or ''
-
-                # Encode content
-                # Load assets
-                assets_dict = {}
-                if asset:
-                    console.print(f'[cyan]Loading {len(asset)} asset(s)...[/cyan]')
-                    for asset_path in asset:
-                        if not asset_path.exists():
-                            console.print(f'[red]Warning: Asset not found: {asset_path}[/red]')
-                            continue
-
-                        async with aiofiles.open(asset_path, 'rb') as f:
-                            asset_data = await f.read()
-
-                        assets_dict[asset_path.name] = base64.b64encode(asset_data)
-
-                note = NoteCreateDTO(
-                    name=note_name,
-                    description=note_description,
-                    content=base64.b64encode(note_content.encode('utf-8')),
-                    files=assets_dict,
-                    tags=['cli', 'note-with-assets'] if asset else ['cli', 'quick-note'],
-                    note_key=key,
-                    vault_id=config.write_vault,
-                    user_notes=user_notes,
-                )
-
-                result = await api.ingest(note, background=background)
-            except Exception as e:
-                handle_api_error(e)
-
-        # 4. Show Result
-        if isinstance(result, BatchJobStatus):
-            console.print(f'[bold green]Queued.[/bold green] Job ID: [cyan]{result.job_id}[/cyan]')
-            console.print(f'[dim]Poll: GET /api/v1/ingestions/{result.job_id}[/dim]')
-        elif isinstance(result, dict):
-            # Fire-and-forget background (url/upload): server accepted but no job ID
-            console.print('[bold green]Accepted.[/bold green] Ingestion running in background.')
-        elif result.status == 'skipped':
-            console.print(f'[yellow]Memory skipped: {result.reason}[/yellow]')
-        else:
-            console.print(f'[green]Memory added successfully![/green] UUID: {result.note_id}')
-            if result.unit_ids:
-                console.print(f'Extracted {len(result.unit_ids)} memory units.')
 
 
 @app.command('search')

@@ -35,7 +35,7 @@ docs-clean:
 # Install python dependencies
 install:
   uv sync --all-groups --all-extras
-  uv tool install -e ./packages/cli
+  uv tool install -e './packages/cli[sync,server,mcp]' --force
 
 # Install pre-commit hooks
 prek_setup:

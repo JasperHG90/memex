@@ -119,7 +119,7 @@ async def delete_mental_model(
     Delete the mental model for an entity in a specific vault. Does NOT delete the entity itself.
     """
     config: MemexConfig = ctx.obj
-    effective_vault = vault if vault is not None else config.vault.active
+    effective_vault = vault if vault is not None else config.write_vault
 
     async with get_api_context(config) as api:
         try:

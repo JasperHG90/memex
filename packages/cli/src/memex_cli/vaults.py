@@ -250,68 +250,6 @@ async def delete_vault(
         console.print(f'[red]Vault "{identifier}" not found.[/red]')
 
 
-@app.command('set-mw-mode')
-@async_command
-async def set_mw_mode(
-    ctx: typer.Context,
-    identifier: Annotated[str, typer.Argument(help='Name or UUID of the vault.')],
-    mode: Annotated[str, typer.Argument(help='Memory Worth mode: stationary or ema.')],
-):
-    """Set the Memory Worth counter mode for a vault (stationary or ema)."""
-    if mode not in ('stationary', 'ema'):
-        console.print(f'[red]Invalid mode: {mode!r}. Must be "stationary" or "ema".[/red]')
-        raise typer.Exit(code=1)
-
-    config: MemexConfig = ctx.obj
-
-    async with get_api_context(config) as api:
-        try:
-            vault_uuid = await api.resolve_vault_identifier(identifier)
-        except Exception as e:
-            handle_api_error(e)
-
-        try:
-            await api.set_mw_mode(vault_uuid, mode)
-        except Exception as e:
-            handle_api_error(e)
-
-    console.print(
-        f'[green]Vault[/green] {identifier} [green]Memory Worth mode set to[/green] {mode}'
-    )
-
-
-@app.command('show')
-@async_command
-async def show_vault(
-    ctx: typer.Context,
-    identifier: Annotated[str, typer.Argument(help='Name or UUID of the vault.')],
-):
-    """Show vault details including Memory Worth mode."""
-    config: MemexConfig = ctx.obj
-
-    async with get_api_context(config) as api:
-        try:
-            vault_uuid = await api.resolve_vault_identifier(identifier)
-        except Exception as e:
-            handle_api_error(e)
-
-        vault = await api.get_vault(vault_uuid)
-
-    if vault is None:
-        console.print(f'[red]Vault {identifier} not found.[/red]')
-        raise typer.Exit(code=1)
-
-    table = Table(title=f'Vault: {vault.name}', show_header=False, box=None, padding=(0, 2))
-    table.add_column(style='dim')
-    table.add_column(style='bold')
-    table.add_row('ID', str(vault.id))
-    table.add_row('Name', vault.name)
-    table.add_row('Description', vault.description or '—')
-    table.add_row('Memory Worth', vault.mw_mode)
-    table.add_row('Created', str(vault.created_at))
-    console.print(table)
-
-
 @app.command('summary')
 @async_command
 async def vault_summary(

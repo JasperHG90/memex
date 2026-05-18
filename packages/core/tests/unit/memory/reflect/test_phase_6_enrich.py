@@ -7,6 +7,7 @@ from uuid import uuid4
 
 import numpy as np
 import pytest
+from sqlalchemy.sql.dml import Update as _SaUpdate
 
 from memex_core.memory.reflect.prompts import (
     EnrichedTagSet,
@@ -18,6 +19,11 @@ from memex_core.memory.sql_models import (
     Observation,
 )
 from memex_common.types import FactTypes
+
+
+def _select_calls(exec_mock):
+    """Calls that issued a SELECT (filters out UPDATE flush statements)."""
+    return [c for c in exec_mock.call_args_list if not isinstance(c.args[0], _SaUpdate)]
 
 
 def _make_unit(text: str, unit_metadata: dict | None = None) -> MemoryUnit:
@@ -569,8 +575,10 @@ async def test_phase_6_loads_missing_evidence_units(engine, db_lock):
             recent_memories=[unit_in_memory],
         )
 
-    # Verify DB was queried for the missing unit
-    engine.session.exec.assert_called_once()
+    # Verify DB was queried for the missing unit (exactly one SELECT;
+    # subsequent UPDATEs flushing the enrichments also go through exec but
+    # aren't queries).
+    assert len(_select_calls(engine.session.exec)) == 1
 
     # Both units should have been enriched
     assert 'enriched_tags' in unit_in_memory.unit_metadata
@@ -599,6 +607,7 @@ async def test_phase_6_does_not_query_db_when_all_units_in_memory(engine, db_loc
             recent_memories=[unit],
         )
 
-    # Should NOT have called session.exec (no missing units to load)
-    engine.session.exec.assert_not_called()
+    # Should NOT have issued any SELECT (no missing units to load); only
+    # UPDATE statements flushing the enrichment are allowed.
+    assert _select_calls(engine.session.exec) == []
     assert set(unit.unit_metadata['enriched_tags']) == {'tag'}

@@ -15,7 +15,7 @@ from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlalchemy import func, update as sa_update
 from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.orm import defer
-from sqlalchemy.orm.attributes import flag_modified
+from sqlalchemy.orm.attributes import flag_modified, set_committed_value
 
 EntitySessionFactory = Callable[[], AbstractAsyncContextManager[AsyncSession]]
 
@@ -1276,46 +1276,52 @@ class ReflectionEngine:
                 units_to_merge.append(unit)
                 enriched_count += 1
 
-            # Merge in id-ascending order. ``merge`` issues SELECT…FOR
-            # UPDATE-equivalent row locking via the dirty UPDATE that
-            # follows at commit; deterministic ordering means two
-            # concurrent enrichments on overlapping unit sets cannot
-            # deadlock on opposing lock-acquisition order.
+            # Direct UPDATE in id-ascending order — only ``metadata`` and
+            # ``updated_at`` go in SET. ``merge()`` here used to copy every
+            # mapped attribute from the source instance onto the persistent
+            # copy, which marked ``search_tsvector`` dirty and forced it
+            # into the UPDATE; Postgres rejects that because the column is
+            # GENERATED ALWAYS AS STORED. The id-ascending UPDATE order
+            # still gives deterministic row-lock acquisition, so concurrent
+            # Phase 6 calls on overlapping evidence units cannot deadlock.
+            now_ts = datetime.now(timezone.utc)
             for unit in sorted(units_to_merge, key=lambda u: u.id):
-                await ph6_session.merge(unit)
+                stmt = (
+                    sa_update(MemoryUnit)
+                    .where(col(MemoryUnit.id) == unit.id)
+                    .values(unit_metadata=unit.unit_metadata, updated_at=now_ts)
+                )
+                await ph6_session.exec(stmt)  # type: ignore[call-overload]
 
             await ph6_session.commit()
 
         # Clear the dirty flag on the orchestrator-session copy of each
         # mutated unit. ``recent_memories`` units are attached to
         # ``self.session``; ``flag_modified(unit, 'unit_metadata')``
-        # above flagged them dirty there. If we leave them dirty, the
+        # above flagged them dirty there. Without this clear, the
         # orchestrator's downstream commit (in
         # services.reflection.reflect_batch via
-        # queue_service.complete_reflection) will flush the same mutation
-        # a second time on a different connection — without Phase 6's
-        # id-ascending row lock ordering (opening a cross-worker
-        # deadlock window on shared evidence units) and without a
-        # version guard (opening a "last writer on self.session.commit
-        # wins" race that can roll back a co-tenant worker's Phase 6
-        # writes). The ph6_session merge() above already produced the
-        # authoritative row in the DB. We expire the orchestrator-session
-        # copy so the next read fetches fresh state from the DB and the
-        # dirty flag is cleared — tests using ``session.refresh(unit)``
-        # still observe the committed Phase 6 enrichments via the
-        # subsequent SELECT.
-        # Note: this is the units path (recent_memories) — distinct from
-        # the MentalModel expunge in reflect_batch (Phase 5's CAS owns
-        # mental_model writes; here Phase 6's ph6_session.merge owns
-        # unit writes). The two clean-up paths are intentionally
-        # different: expunge severs the orchestrator-session reference
-        # entirely (Phase 5 must own the write); expire just clears the
-        # dirty flag so the orchestrator-session reference is kept
-        # alive for tests / downstream reads.
+        # queue_service.complete_reflection) would flush the same
+        # mutation a second time on a different connection — without
+        # Phase 6's id-ascending row lock ordering (opening a cross-
+        # worker deadlock window on shared evidence units) and without a
+        # version guard (last-writer-wins race that could roll back a
+        # co-tenant worker's Phase 6 writes). The ph6_session UPDATE
+        # above already produced the authoritative row in the DB.
+        #
+        # We use ``set_committed_value`` (not ``session.expire``):
+        # expiring marks EVERY attribute as needing reload, so any
+        # subsequent access (e.g. the next entity's reflection re-using
+        # an overlapping evidence unit, reading ``m.is_deprioritized``
+        # or ``m.occurred_start``) triggers SA's sync lazy-load path —
+        # which can't await from async context and raises
+        # ``MissingGreenlet``. ``set_committed_value`` only clears the
+        # dirty bit on the single attribute we touched, leaving every
+        # other loaded attribute intact.
         for unit in units_to_merge:
             try:
                 if unit in self.session:
-                    self.session.expire(unit)
+                    set_committed_value(unit, 'unit_metadata', unit.unit_metadata)
             except InvalidRequestError:
                 pass
 

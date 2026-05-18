@@ -41,7 +41,7 @@ async def manifold_cmd(
 ):
     """Print the UMAP manifold JSON. 202 task info if cache is cold."""
     config: MemexConfig = ctx.obj
-    effective_vault = vault if vault is not None else config.vault.active
+    effective_vault = vault if vault is not None else config.write_vault
     async with get_api_context(config) as api:
         try:
             vault_id = await api.resolve_vault_identifier(effective_vault)
@@ -67,7 +67,7 @@ async def retrieval_cmd(
 ):
     """Print the top-N entity outcome heatmap JSON."""
     config: MemexConfig = ctx.obj
-    effective_vault = vault if vault is not None else config.vault.active
+    effective_vault = vault if vault is not None else config.write_vault
     async with get_api_context(config) as api:
         try:
             vault_id = await api.resolve_vault_identifier(effective_vault)
@@ -89,7 +89,7 @@ async def summary_cmd(
 ):
     """Print the full diagnostics summary JSON (synchronous, no UMAP block)."""
     config: MemexConfig = ctx.obj
-    effective_vault = vault if vault is not None else config.vault.active
+    effective_vault = vault if vault is not None else config.write_vault
     async with get_api_context(config) as api:
         try:
             vault_id = await api.resolve_vault_identifier(effective_vault)
@@ -117,7 +117,7 @@ async def lint_cmd(
     rows) — this is the operator/observability dashboard view.
     """
     config: MemexConfig = ctx.obj
-    effective_vault = vault if vault is not None else config.vault.active
+    effective_vault = vault if vault is not None else config.write_vault
     async with get_api_context(config) as api:
         try:
             vault_id = await api.resolve_vault_identifier(effective_vault)
