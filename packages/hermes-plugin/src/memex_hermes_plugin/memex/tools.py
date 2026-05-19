@@ -47,7 +47,6 @@ from memex_common.schemas import (
     VALID_INTENT_CLASSES,
     VALID_RISK_CLASSES,
     IntentClass,
-    NoteAppendRequest,
     RiskClass,
 )
 from memex_common.tool_descriptions import (
@@ -144,6 +143,7 @@ class MemexAPIProtocol(Protocol):
     async def kv_get(self, *args: Any, **kwargs: Any) -> Any: ...
     async def kv_list(self, *args: Any, **kwargs: Any) -> Any: ...
     async def kv_search(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def kv_search_text(self, *args: Any, **kwargs: Any) -> Any: ...
 
     # F32 — Diagnostics
     async def get_diagnostics_summary(self, *args: Any, **kwargs: Any) -> Any: ...
@@ -1893,18 +1893,19 @@ def handle_append_note(
     joiner = args.get('joiner') or 'paragraph'
     user_notes = args.get('user_notes') or None
 
-    request = NoteAppendRequest(
-        note_id=note_id_uuid,
-        note_key=note_key,
-        vault_id=str(vault_id) if vault_id else None,
-        delta=delta,
-        append_id=append_id,
-        joiner=joiner,
-        user_notes=user_notes,
-    )
-
     try:
-        response = run_sync(api.append_to_note(request), timeout=60.0)
+        response = run_sync(
+            api.append_to_note(
+                note_id=note_id_uuid,
+                note_key=note_key,
+                vault_id=str(vault_id) if vault_id else None,
+                delta=delta,
+                append_id=append_id,
+                joiner=joiner,
+                user_notes=user_notes,
+            ),
+            timeout=60.0,
+        )
     except Exception as e:
         logger.warning('memex_append_note failed: %s', e)
         return tool_error(f'Append failed: {e}')
@@ -3275,7 +3276,7 @@ def handle_kv_search(
 
     try:
         entries = run_sync(
-            api.kv_search(query=query, namespaces=namespaces, limit=limit),
+            api.kv_search_text(query=query, namespaces=namespaces, limit=limit),
             timeout=15.0,
         )
     except Exception as e:

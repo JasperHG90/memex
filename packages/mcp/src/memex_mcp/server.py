@@ -3412,7 +3412,7 @@ async def memex_kv_search(
     """Semantic search over KV store entries."""
     try:
         api = get_api(ctx)
-        results = await api.kv_search(query=query, namespaces=namespaces, limit=limit)
+        results = await api.kv_search_text(query=query, namespaces=namespaces, limit=limit)
 
         return [
             McpKVEntry(

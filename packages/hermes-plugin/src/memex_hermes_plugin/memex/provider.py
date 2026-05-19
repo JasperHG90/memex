@@ -228,11 +228,9 @@ class MemexMemoryProvider(MemoryProvider):
         if self._config is None or not self._config.create_vaults_on_init:
             return None
 
-        from memex_common.schemas import CreateVaultRequest
-
         try:
             vault = run_sync(
-                self._api.create_vault(CreateVaultRequest(name=name)),
+                self._api.create_vault(name=name),
                 timeout=10.0,
             )
             return UUID(str(vault.id))
@@ -790,16 +788,16 @@ class MemexMemoryProvider(MemoryProvider):
         if the same id was previously processed, so retries are safe.
         """
         assert self._api is not None
-        from memex_common.schemas import NoteAppendRequest
-
-        request = NoteAppendRequest(
-            note_key=self._session_note_key,
-            vault_id=vault_id,
-            delta=content,
-            append_id=append_id,
-            joiner='paragraph',
+        run_sync(
+            self._api.append_to_note(
+                note_key=self._session_note_key,
+                vault_id=vault_id,
+                delta=content,
+                append_id=append_id,
+                joiner='paragraph',
+            ),
+            timeout=30.0,
         )
-        run_sync(self._api.append_to_note(request), timeout=30.0)
 
 
 def _format_transcript(messages: list[dict[str, Any]]) -> str:

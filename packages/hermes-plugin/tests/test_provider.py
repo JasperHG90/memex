@@ -383,7 +383,13 @@ def _decode_ingest_body(api: Mock) -> str:
 
 
 def _append_deltas(api: Mock) -> list[str]:
-    return [call.args[0].delta for call in api.append_to_note.await_args_list]
+    """Read ``delta`` from each api.append_to_note call.
+
+    ``append_to_note`` now takes unpacked kwargs (parity with MemexAPI), so
+    the field lives on ``call.kwargs['delta']`` rather than on a Pydantic
+    request object passed as ``call.args[0]``.
+    """
+    return [call.kwargs['delta'] for call in api.append_to_note.await_args_list]
 
 
 def test_first_flush_creates_note_via_ingest(provider_with_append_api):
@@ -415,10 +421,10 @@ def test_pre_compress_then_session_end_appends(provider_with_append_api):
 
     api.ingest.assert_awaited_once()  # still only one create
     assert api.append_to_note.await_count == 1
-    append_req = api.append_to_note.call_args.args[0]
-    assert append_req.note_key == provider._session_note_key
-    assert append_req.delta  # non-empty
-    assert 'q3' in append_req.delta and 'a3' in append_req.delta
+    kwargs = api.append_to_note.call_args.kwargs
+    assert kwargs['note_key'] == provider._session_note_key
+    assert kwargs['delta']  # non-empty
+    assert 'q3' in kwargs['delta'] and 'a3' in kwargs['delta']
 
 
 def test_pre_compress_does_not_clear_buffer(provider_with_append_api):
@@ -486,7 +492,7 @@ def test_append_id_is_stable_for_retry(provider_with_append_api):
     provider.on_pre_compress([{'role': 'user', 'content': 'q2'}])
 
     assert api.append_to_note.await_count == 1
-    failed_append_id = api.append_to_note.call_args.args[0].append_id
+    failed_append_id = api.append_to_note.call_args.kwargs['append_id']
     # Item stayed at the head of the queue.
     assert len(provider._pending) == 1
     assert provider._pending[0]['append_id'] == failed_append_id
@@ -507,7 +513,7 @@ def test_append_id_is_stable_for_retry(provider_with_append_api):
     provider.sync_turn('q3', 'a3')
     provider.on_session_end([])
 
-    sent_append_ids = [c.args[0].append_id for c in api.append_to_note.call_args_list]
+    sent_append_ids = [c.kwargs['append_id'] for c in api.append_to_note.call_args_list]
     assert failed_append_id in sent_append_ids
     assert provider._pending == []
 

@@ -169,8 +169,12 @@ class RemoteMemexAPI:
             reader_vaults=[VaultDTO(**v) for v in result[1:]],
         )
 
-    async def create_vault(self, request: CreateVaultRequest) -> VaultDTO:
-        """Create a new vault."""
+    async def create_vault(self, name: str, description: str | None = None) -> VaultDTO:
+        """Create a new vault.
+
+        Mirrors :pymeth:`memex_core.api.MemexAPI.create_vault`.
+        """
+        request = CreateVaultRequest(name=name, description=description)
         result = await self._post('vaults', request)
         return VaultDTO(**result)
 
@@ -247,9 +251,41 @@ class RemoteMemexAPI:
 
     # --- Memory ---
     async def ingest(
-        self, note: NoteCreateDTO, background: bool = False
+        self,
+        note: NoteCreateDTO,
+        vault_id: UUID | str | None = None,
+        event_date: dt.datetime | None = None,
+        intent_override: str | None = None,
+        risk_override: str | None = None,
+        background: bool = False,
     ) -> IngestResponse | BatchJobStatus:
-        """Ingest a note into Memex."""
+        """Ingest a note into Memex.
+
+        Mirrors :pymeth:`memex_core.api.MemexAPI.ingest`. ``vault_id``,
+        ``event_date``, ``intent_override``, and ``risk_override`` override
+        the corresponding fields on ``note`` when provided — the merged DTO
+        is what's serialized over HTTP. ``background=True`` returns a
+        :class:`BatchJobStatus` once the server has queued the work.
+        """
+        # Build a merged DTO so the wire shape carries every override the
+        # caller asked for. We do NOT mutate the caller's DTO in place.
+        if (
+            vault_id is not None
+            or event_date is not None
+            or intent_override is not None
+            or risk_override is not None
+        ):
+            overrides: dict[str, Any] = {}
+            if vault_id is not None:
+                overrides['vault_id'] = vault_id
+            if event_date is not None:
+                overrides['event_date'] = event_date
+            if intent_override is not None:
+                overrides['intent_class'] = intent_override
+            if risk_override is not None:
+                overrides['risk_class'] = risk_override
+            note = note.model_copy(update=overrides)
+
         params = {'background': 'true'} if background else None
         response = await self.client.post(
             'ingestions', json=note.model_dump(mode='json'), params=params
@@ -259,13 +295,41 @@ class RemoteMemexAPI:
             return BatchJobStatus(**response.json())
         return IngestResponse(**response.json())
 
-    async def append_to_note(self, request: NoteAppendRequest) -> NoteAppendResponse:
+    async def append_to_note(
+        self,
+        *,
+        note_id: UUID | None = None,
+        note_key: str | None = None,
+        vault_id: UUID | str | None = None,
+        delta: str,
+        append_id: UUID,
+        joiner: str = 'paragraph',
+        user_notes: str | None = None,
+        pre_resolved: tuple[UUID, UUID] | None = None,
+    ) -> NoteAppendResponse:
         """Atomically append a delta to an existing note (issue #56).
 
-        Identify the note by ``note_key`` + ``vault_id`` (preferred) or by
-        ``note_id``. The server reads the parent's body, concatenates ``delta``,
-        and re-runs incremental extraction. Idempotent on ``append_id``.
+        Mirrors :pymeth:`memex_core.api.MemexAPI.append_to_note`. Identify the
+        note by ``note_key`` + ``vault_id`` (preferred) or by ``note_id``.
+        ``pre_resolved`` is an in-process optimisation that bypasses the
+        server's identifier-resolution pass; it has no HTTP representation —
+        passing a non-``None`` value raises ``NotImplementedError`` so the
+        gap is visible rather than silently degraded.
         """
+        if pre_resolved is not None:
+            raise NotImplementedError(
+                'pre_resolved is an in-process optimisation; HTTP callers '
+                'must let the server resolve the identifier.'
+            )
+        request = NoteAppendRequest(
+            note_id=note_id,
+            note_key=note_key,
+            vault_id=vault_id,
+            delta=delta,
+            append_id=append_id,
+            joiner=joiner,
+            user_notes=user_notes,
+        )
         response = await self.client.post('notes/append', json=request.model_dump(mode='json'))
         response.raise_for_status()
         return NoteAppendResponse(**response.json())
@@ -342,6 +406,7 @@ class RemoteMemexAPI:
         include_stale: bool = False,
         include_superseded: bool = False,
         include_deprioritized: bool = False,
+        debug: bool = False,
         after: dt.datetime | None = None,
         before: dt.datetime | None = None,
         tags: list[str] | None = None,
@@ -369,6 +434,7 @@ class RemoteMemexAPI:
             include_stale=include_stale,
             include_superseded=include_superseded,
             include_deprioritized=include_deprioritized,
+            debug=debug,
             after=after,
             before=before,
             tags=tags,
@@ -439,6 +505,7 @@ class RemoteMemexAPI:
         strategy_weights: dict[str, float] | None = None,
         reason: bool = False,
         summarize: bool = False,
+        mmr_lambda: float | None = None,
         after: dt.datetime | None = None,
         before: dt.datetime | None = None,
         tags: list[str] | None = None,
@@ -450,6 +517,8 @@ class RemoteMemexAPI:
             kwargs['strategies'] = strategies
         if strategy_weights is not None:
             kwargs['strategy_weights'] = strategy_weights
+        if mmr_lambda is not None:
+            kwargs['mmr_lambda'] = mmr_lambda
         if after is not None:
             kwargs['after'] = after
         if before is not None:
@@ -775,16 +844,18 @@ class RemoteMemexAPI:
     async def list_entities_ranked(
         self,
         limit: int = 100,
-        q: str | None = None,
         vault_id: UUID | None = None,
         vault_ids: list[UUID | str] | None = None,
         entity_type: str | None = None,
         slim: bool = False,
     ) -> AsyncGenerator[EntityDTO, None]:
-        """Stream entities ranked by hybrid score."""
+        """Stream entities ranked by hybrid score.
+
+        For name-based search, use :pymeth:`search_entities` instead — the
+        HTTP `/entities` endpoint overloads both list and search, but
+        exposing both verbs from one client method invites confusion.
+        """
         params: dict[str, Any] = {'limit': limit}
-        if q:
-            params['query'] = q
         resolved = resolve_vault_list(vault_id, vault_ids)
         if resolved:
             params['vault_id'] = [str(v) for v in resolved]
@@ -801,15 +872,34 @@ class RemoteMemexAPI:
 
                     yield EntityDTO(**json.loads(line))
 
-    async def get_entity(self, entity_id: UUID | str) -> EntityDTO:
+    async def get_entity(
+        self,
+        entity_id: UUID | str,
+        vault_id: UUID | str | None = None,
+    ) -> EntityDTO:
         """Get entity details."""
-        result = await self._get(f'entities/{entity_id}')
+        params: dict[str, Any] = {}
+        if vault_id is not None:
+            params['vault_id'] = str(vault_id)
+        result = await self._get(f'entities/{entity_id}', params=params or None)
         return EntityDTO(**result)
 
-    async def get_entities(self, entity_ids: list[UUID]) -> list[EntityDTO]:
+    async def get_entities(
+        self,
+        entity_ids: list[UUID],
+        vault_id: UUID | str | None = None,
+    ) -> list[EntityDTO]:
         """Get multiple entities by ID."""
-        result = await self._post('entities/batch', {'entity_ids': [str(e) for e in entity_ids]})
-        return [EntityDTO(**e) for e in result]
+        params: dict[str, Any] = {}
+        if vault_id is not None:
+            params['vault_id'] = str(vault_id)
+        response = await self.client.post(
+            'entities/batch',
+            json={'entity_ids': [str(e) for e in entity_ids]},
+            params=params or None,
+        )
+        response.raise_for_status()
+        return [EntityDTO(**e) for e in response.json()]
 
     async def get_entity_mentions(
         self,
@@ -849,12 +939,12 @@ class RemoteMemexAPI:
 
     async def get_bulk_cooccurrences(
         self,
-        ids: list[UUID],
+        entity_ids: list[UUID],
         vault_id: UUID | None = None,
         vault_ids: list[UUID | str] | None = None,
     ) -> list[dict[str, Any]]:
         """Get co-occurrences for a set of entity IDs."""
-        ids_str = ','.join(str(i) for i in ids)
+        ids_str = ','.join(str(i) for i in entity_ids)
         params: dict[str, Any] = {'ids': ids_str}
         resolved = resolve_vault_list(vault_id, vault_ids)
         if resolved:
@@ -942,15 +1032,29 @@ class RemoteMemexAPI:
         reason: str,
         *,
         vault_id: UUID | str | None = None,
+        actor: str | None = None,
+        background_tasks: Any | None = None,
     ) -> MemoryUnitDTO:
         """Deprioritize a memory unit (non-destructive).
 
         ``vault_id`` is REQUIRED by the server (vault-scoping invariant); kept
         optional here only so legacy callers get a clear server-side 422.
+        ``actor`` is forwarded to the audit log; the server may override
+        from authenticated context. ``background_tasks`` is accepted for
+        signature parity with the in-process API but has no HTTP form — a
+        non-``None`` value raises ``NotImplementedError``.
         """
+        if background_tasks is not None:
+            raise NotImplementedError(
+                'background_tasks is a FastAPI server-internal handle; HTTP '
+                'clients cannot pass one. The server runs its own background '
+                'queue post-write.'
+            )
         body: dict[str, Any] = {'reason': reason}
         if vault_id is not None:
             body['vault_id'] = str(vault_id)
+        if actor is not None:
+            body['actor'] = actor
         result = await self._post(f'memories/{unit_id}/deprioritize', body)
         return MemoryUnitDTO(**result)
 
@@ -959,15 +1063,27 @@ class RemoteMemexAPI:
         unit_id: UUID,
         *,
         vault_id: UUID | str | None = None,
+        actor: str | None = None,
+        background_tasks: Any | None = None,
     ) -> MemoryUnitDTO:
         """Restore a previously-deprioritized memory unit.
 
         ``vault_id`` is REQUIRED by the server (vault-scoping invariant); kept
         optional here only so legacy callers get a clear server-side 422.
+        ``actor`` is forwarded to the audit log; the server may override
+        from authenticated context. ``background_tasks`` is accepted for
+        signature parity but cannot cross the HTTP boundary.
         """
+        if background_tasks is not None:
+            raise NotImplementedError(
+                'background_tasks is a FastAPI server-internal handle; HTTP '
+                'clients cannot pass one.'
+            )
         body: dict[str, Any] = {}
         if vault_id is not None:
             body['vault_id'] = str(vault_id)
+        if actor is not None:
+            body['actor'] = actor
         result = await self._post(f'memories/{unit_id}/restore', body)
         return MemoryUnitDTO(**result)
 
@@ -993,15 +1109,19 @@ class RemoteMemexAPI:
         vault_id: UUID,
         *,
         dry_run: bool = False,
+        actor: str | None = None,
     ) -> dict[str, Any]:
         """Vault-wide low-Memory Worth unit consolidation.
 
-        On HTTP 429 (per-vault rate limit), raises a
-        structured ``RateLimitExceeded`` carrying ``retry_after_seconds``
-        so callers can surface the back-off time without re-parsing the
-        body. Mirrors :meth:`summarize_node`.
+        ``actor`` is forwarded to the audit log; the server may override
+        from authenticated context. On HTTP 429 (per-vault rate limit),
+        raises a structured ``RateLimitExceeded`` carrying
+        ``retry_after_seconds`` so callers can surface the back-off time
+        without re-parsing the body. Mirrors :meth:`summarize_node`.
         """
-        body = {'vault_id': str(vault_id), 'dry_run': dry_run}
+        body: dict[str, Any] = {'vault_id': str(vault_id), 'dry_run': dry_run}
+        if actor is not None:
+            body['actor'] = actor
         response = await self.client.post('memory/consolidate', json=body)
         if response.status_code == 429:
             payload = response.json()
@@ -1060,16 +1180,29 @@ class RemoteMemexAPI:
 
     async def get_note_links(
         self,
-        note_id: UUID,
-        link_type: str | None = None,
+        note_ids: list[UUID],
+        link_types: list[str] | None = None,
         limit: int = 20,
-    ) -> list[MemoryLinkDTO]:
-        """Get typed relationship links for a note."""
-        params: dict[str, Any] = {'limit': limit}
-        if link_type:
-            params['link_type'] = link_type
-        result = await self._get(f'notes/{note_id}/links', params=params)
-        return [MemoryLinkDTO(**lnk) for lnk in result]
+    ) -> dict[UUID, list[MemoryLinkDTO]]:
+        """Get typed relationship links for notes, batched.
+
+        Matches :pymeth:`memex_core.api.MemexAPI.get_note_links`. The HTTP
+        endpoint is per-note (`/notes/{id}/links`); this fans out one request
+        per (note, link_type) pair and aggregates into the batch shape
+        expected by MCP / CLI / Hermes callers.
+        """
+        out: dict[UUID, list[MemoryLinkDTO]] = {}
+        link_type_iter: list[str | None] = list(link_types) if link_types else [None]
+        for note_id in note_ids:
+            collected: list[MemoryLinkDTO] = []
+            for lt in link_type_iter:
+                params: dict[str, Any] = {'limit': limit}
+                if lt:
+                    params['link_type'] = lt
+                result = await self._get(f'notes/{note_id}/links', params=params)
+                collected.extend(MemoryLinkDTO(**lnk) for lnk in result)
+            out[note_id] = collected
+        return out
 
     # --- Reflection ---
     async def reflect(self, request: ReflectionRequest) -> ReflectionResultDTO:
@@ -1128,14 +1261,30 @@ class RemoteMemexAPI:
         response.raise_for_status()
         return ReflectionResultDTO(**response.json())
 
-    async def get_reflection_queue_batch(self, limit: int = 10) -> list[ReflectionQueueDTO]:
+    async def get_reflection_queue_batch(
+        self,
+        limit: int = 10,
+        vault_id: UUID | None = None,
+        vault_ids: list[UUID | str] | None = None,
+    ) -> list[ReflectionQueueDTO]:
         """Fetch items from the reflection queue."""
-        result = await self._get('reflections', params={'limit': limit, 'status': 'queued'})
+        params: dict[str, Any] = {'limit': limit, 'status': 'queued'}
+        resolved = resolve_vault_list(vault_id, vault_ids)
+        if resolved:
+            params['vault_id'] = [str(v) for v in resolved]
+        result = await self._get('reflections', params=params)
         return [ReflectionQueueDTO(**u) for u in result]
 
-    async def claim_reflection_queue_batch(self, limit: int = 10) -> list[ReflectionQueueDTO]:
+    async def claim_reflection_queue_batch(
+        self,
+        limit: int = 10,
+        vault_id: UUID | None = None,
+    ) -> list[ReflectionQueueDTO]:
         """Claim reflection queue items for processing."""
-        response = await self.client.post('reflections/claim', params={'limit': limit})
+        params: dict[str, Any] = {'limit': limit}
+        if vault_id is not None:
+            params['vault_id'] = str(vault_id)
+        response = await self.client.post('reflections/claim', params=params)
         result = await self._handle_response(response)
         return [ReflectionQueueDTO(**u) for u in result]
 
@@ -1279,9 +1428,10 @@ class RemoteMemexAPI:
         query: str,
         vault_ids: list[UUID | str] | None = None,
         limit: int = 5,
+        threshold: float = 0.3,
     ) -> list[FindNoteResult]:
         """Fuzzy-search notes by title using trigram similarity."""
-        params: dict[str, Any] = {'query': query, 'limit': limit}
+        params: dict[str, Any] = {'query': query, 'limit': limit, 'threshold': threshold}
         if vault_ids:
             params['vault_id'] = [str(v) for v in vault_ids]
         result = await self._get('notes/find', params=params)
@@ -1341,11 +1491,37 @@ class RemoteMemexAPI:
 
     async def kv_search(
         self,
+        query_embedding: list[float],
+        namespaces: list[str] | None = None,
+        limit: int = 5,
+    ) -> list[KVEntryDTO]:
+        """Semantic search over KV entries.
+
+        Mirrors :pymeth:`memex_core.api.MemexAPI.kv_search` — takes a
+        pre-computed query embedding. To search from text, embed it via
+        :pymeth:`embed_text` first, OR use :pymeth:`kv_search_text` for
+        the server-side encode path.
+        """
+        request = KVSearchRequest(
+            query_embedding=query_embedding,
+            namespaces=namespaces,
+            limit=limit,
+        )
+        result = await self._post('kv/search', request)
+        return [KVEntryDTO(**r) for r in result]
+
+    async def kv_search_text(
+        self,
         query: str,
         namespaces: list[str] | None = None,
         limit: int = 5,
     ) -> list[KVEntryDTO]:
-        """Semantic search over KV entries."""
+        """Convenience wrapper: server embeds ``query`` before searching.
+
+        Exists because the HTTP route accepts text-query input and embeds
+        server-side; callers without a local embedder can rely on this path.
+        :pymeth:`kv_search` requires the embedding to be pre-computed.
+        """
         request = KVSearchRequest(
             query=query,
             namespaces=namespaces,
@@ -1371,15 +1547,22 @@ class RemoteMemexAPI:
     async def kv_list(
         self,
         namespaces: list[str] | None = None,
+        limit: int = 100,
+        exclude_prefix: str | None = None,
+        key_prefix: str | None = None,
         pattern: str | None = None,
     ) -> list[KVEntryDTO]:
         """List KV entries, optionally filtered by namespace prefixes."""
-        params: dict[str, Any] = {}
+        params: dict[str, Any] = {'limit': limit}
         if namespaces is not None:
             params['namespaces'] = ','.join(namespaces)
+        if exclude_prefix is not None:
+            params['exclude_prefix'] = exclude_prefix
+        if key_prefix is not None:
+            params['key_prefix'] = key_prefix
         if pattern is not None:
             params['pattern'] = pattern
-        result = await self._get('kv', params=params or None)
+        result = await self._get('kv', params=params)
         return [KVEntryDTO(**r) for r in result]
 
     # ------------------------------------------------------------------

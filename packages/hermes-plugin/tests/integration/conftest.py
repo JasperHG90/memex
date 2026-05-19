@@ -376,9 +376,7 @@ def vault_name() -> str:
 
 @pytest_asyncio.fixture
 async def live_vault(live_api: Any, vault_name: str) -> UUID:
-    from memex_common.schemas import CreateVaultRequest
-
-    vault = await live_api.create_vault(CreateVaultRequest(name=vault_name))
+    vault = await live_api.create_vault(name=vault_name)
     return UUID(str(vault.id))
 
 

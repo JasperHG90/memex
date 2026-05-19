@@ -114,9 +114,14 @@ async def kv_search(
 ):
     """Semantic search over key-value entries by embedding similarity."""
     try:
-        # Embed the query text
-        embeddings = api.embedding_model.encode([request.query])
-        query_embedding = embeddings[0].tolist()
+        if request.query_embedding is not None:
+            query_embedding = request.query_embedding
+        else:
+            # Fall back to text path — the schema validator guarantees one of
+            # the two is set, so ``request.query`` is non-None here.
+            assert request.query is not None
+            embeddings = api.embedding_model.encode([request.query])
+            query_embedding = embeddings[0].tolist()
 
         entries = await api.kv_search(
             query_embedding=query_embedding,

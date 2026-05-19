@@ -117,7 +117,7 @@ async def kv_search(
 
     async with get_api_context(config) as api:
         try:
-            results = await api.kv_search(query=query, namespaces=namespace, limit=limit)
+            results = await api.kv_search_text(query=query, namespaces=namespace, limit=limit)
         except Exception as e:
             handle_api_error(e)
 

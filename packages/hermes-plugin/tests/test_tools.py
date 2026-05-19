@@ -79,7 +79,7 @@ from memex_hermes_plugin.memex.tools import (
     _scope_from_key,
     dispatch,
 )
-from memex_common.schemas import NoteAppendRequest, NoteAppendResponse
+from memex_common.schemas import NoteAppendResponse
 
 
 @pytest.fixture
@@ -3254,9 +3254,12 @@ def test_kv_get_returns_null_on_miss(config, vault_id):
 
 
 def test_kv_search_returns_semantic_results(config, vault_id):
-    """AC-083: handler passes query/namespaces/limit to api.kv_search; wraps into {results: [...]}."""
+    """AC-083: handler passes query/namespaces/limit to api.kv_search_text;
+    wraps into {results: [...]}. ``kv_search_text`` is the text-input variant
+    that delegates to ``kv_search`` after embedding; ``kv_search`` itself
+    takes a pre-computed embedding (mirrors MemexAPI parity)."""
     api = Mock()
-    api.kv_search = AsyncMock(
+    api.kv_search_text = AsyncMock(
         return_value=[
             _fake_kv_entry(key='user:a', value='v1'),
             _fake_kv_entry(key='user:b', value='v2'),
@@ -3272,8 +3275,8 @@ def test_kv_search_returns_semantic_results(config, vault_id):
     data = json.loads(out)
     assert len(data['results']) == 2
     assert data['results'][0]['scope'] == 'user'
-    api.kv_search.assert_awaited_once()
-    kwargs = api.kv_search.call_args.kwargs
+    api.kv_search_text.assert_awaited_once()
+    kwargs = api.kv_search_text.call_args.kwargs
     assert kwargs['query'] == 'employer'
     assert kwargs['namespaces'] == ['user']
     assert kwargs['limit'] == 3
@@ -3527,7 +3530,7 @@ def test_append_note_schema_is_registered():
 
 
 def test_append_note_dispatches_with_note_key(config, vault_id):
-    """handle_append_note builds a NoteAppendRequest and forwards it to the API."""
+    """handle_append_note forwards unpacked kwargs to api.append_to_note."""
     api = Mock()
     note_id = uuid4()
     append_id = uuid4()
@@ -3552,13 +3555,12 @@ def test_append_note_dispatches_with_note_key(config, vault_id):
     assert data['delta_bytes'] == 10
 
     api.append_to_note.assert_awaited_once()
-    request = api.append_to_note.call_args.args[0]
-    assert isinstance(request, NoteAppendRequest)
-    assert request.note_key == 'hermes:session:abc'
-    assert request.delta == 'progress note'
-    assert request.append_id == append_id
-    # vault_id from session is forwarded to the request body.
-    assert str(request.vault_id) == str(vault_id)
+    kwargs = api.append_to_note.call_args.kwargs
+    assert kwargs['note_key'] == 'hermes:session:abc'
+    assert kwargs['delta'] == 'progress note'
+    assert kwargs['append_id'] == append_id
+    # vault_id from session is forwarded.
+    assert str(kwargs['vault_id']) == str(vault_id)
 
 
 def test_append_note_dispatches_with_note_id(config, vault_id):
@@ -3580,17 +3582,18 @@ def test_append_note_dispatches_with_note_id(config, vault_id):
         vault_id=vault_id,
     )
 
-    request = api.append_to_note.call_args.args[0]
-    assert request.note_id == note_id
-    assert request.note_key is None
+    kwargs = api.append_to_note.call_args.kwargs
+    assert kwargs['note_id'] == note_id
+    assert kwargs['note_key'] is None
 
 
 def test_append_note_auto_generates_append_id(config, vault_id):
-    """When append_id is omitted, a fresh UUID is generated server-side."""
+    """When append_id is omitted, the handler generates a fresh UUID and
+    forwards it as a kwarg to api.append_to_note."""
     api = Mock()
 
-    def _fake(req: NoteAppendRequest):
-        return _append_response(uuid4(), req.append_id)
+    def _fake(**kwargs):
+        return _append_response(uuid4(), kwargs['append_id'])
 
     api.append_to_note = AsyncMock(side_effect=_fake)
 

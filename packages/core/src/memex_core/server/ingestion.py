@@ -214,6 +214,7 @@ async def ingest_note(
         result = await api.ingest(
             note,
             vault_id=request.vault_id,
+            event_date=request.event_date,
             intent_override=request.intent_class.value if request.intent_class else None,
             risk_override=request.risk_class.value if request.risk_class else None,
         )

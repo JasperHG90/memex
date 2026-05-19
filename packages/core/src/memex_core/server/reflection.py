@@ -279,10 +279,17 @@ async def list_reflections(
 async def claim_reflections(
     api: Annotated[MemexAPI, Depends(get_api)],
     limit: Annotated[int, Query(ge=1, le=500)] = 10,
+    vault_id: Annotated[
+        str | None,
+        Query(description='Vault ID or name to scope claim to a single vault.'),
+    ] = None,
 ):
     """Claim reflection queue items for processing."""
     try:
-        items = await api.claim_reflection_queue_batch(limit=limit)
+        resolved_vault: UUID | None = None
+        if vault_id:
+            resolved_vault = await api.resolve_vault_identifier(vault_id)
+        items = await api.claim_reflection_queue_batch(limit=limit, vault_id=resolved_vault)
         return ndjson_response(
             [
                 ReflectionQueueDTO(

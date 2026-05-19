@@ -142,6 +142,14 @@ class DeprioritizeRequest(BaseModel):
             '(vault-scoping invariant). Cross-vault calls are rejected with 403.'
         ),
     )
+    actor: str | None = Field(
+        default=None,
+        description=(
+            'Caller-supplied actor label for the audit log. The server may '
+            'override from the auth context (API-key name + prefix) if the '
+            'request is authenticated.'
+        ),
+    )
 
 
 class RestoreRequest(BaseModel):
@@ -150,6 +158,13 @@ class RestoreRequest(BaseModel):
         description=(
             'Vault UUID the unit belongs to. REQUIRED for per-vault auth scoping '
             '(vault-scoping invariant). Cross-vault calls are rejected with 403.'
+        ),
+    )
+    actor: str | None = Field(
+        default=None,
+        description=(
+            'Caller-supplied actor label for the audit log. The server may '
+            'override from the auth context if authenticated.'
         ),
     )
 
@@ -173,10 +188,14 @@ async def deprioritize_memory_unit(
     """
     await check_vault_access(auth, [request.vault_id], api, permission=Permission.WRITE)
     try:
+        # Auth-derived actor takes precedence over client-supplied actor;
+        # falls back to the client's value if auth is disabled.
+        actor = auth.actor if auth and auth.actor else request.actor
         unit = await api.deprioritize_memory_unit(
             id,
             reason=request.reason,
             vault_id=request.vault_id,
+            actor=actor,
             background_tasks=background_tasks,
         )
         return build_memory_unit_dto(unit)
@@ -210,9 +229,11 @@ async def restore_memory_unit(
     """Restore a deprioritized memory unit (flips ``is_deprioritized=False``)."""
     await check_vault_access(auth, [request.vault_id], api, permission=Permission.WRITE)
     try:
+        actor = auth.actor if auth and auth.actor else request.actor
         unit = await api.restore_memory_unit(
             id,
             vault_id=request.vault_id,
+            actor=actor,
             background_tasks=background_tasks,
         )
         return build_memory_unit_dto(unit)
@@ -247,6 +268,13 @@ class ConsolidateRequest(BaseModel):
     dry_run: bool = Field(
         default=False,
         description='If true, return preview without writes.',
+    )
+    actor: str | None = Field(
+        default=None,
+        description=(
+            'Caller-supplied actor label for the audit log. The server may '
+            'override from the auth context if authenticated.'
+        ),
     )
 
 
@@ -405,7 +433,8 @@ async def consolidate_vault(
     """
     await check_vault_access(auth, [request.vault_id], api, permission=Permission.WRITE)
     try:
-        return await api.consolidate_vault(request.vault_id, dry_run=request.dry_run)
+        actor = auth.actor if auth and auth.actor else request.actor
+        return await api.consolidate_vault(request.vault_id, dry_run=request.dry_run, actor=actor)
     except EntityLockTimeoutError as exc:
         logger.warning(
             'Consolidate entity lock timeout (vault_id=%s): %s',

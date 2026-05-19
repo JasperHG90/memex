@@ -210,13 +210,19 @@ async def find_notes_by_title(
     query: str = Query(..., description='Title search query'),
     vault_id: list[str] | None = Query(None, description='Filter by vault ID(s) or name(s)'),
     limit: Annotated[int, Query(ge=1, le=500, description='Maximum results to return')] = 5,
+    threshold: Annotated[
+        float,
+        Query(ge=0.0, le=1.0, description='Trigram similarity floor (0..1).'),
+    ] = 0.3,
     auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
     """Fuzzy-search notes by title using trigram similarity."""
     try:
         await check_vault_access(auth, vault_id, api)
         resolved = await resolve_vault_ids(api, vault_id)
-        results = await api.find_notes_by_title(query=query, vault_ids=resolved, limit=limit)
+        results = await api.find_notes_by_title(
+            query=query, vault_ids=resolved, limit=limit, threshold=threshold
+        )
         return [FindNoteResult(**r) for r in results]
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to find notes by title')

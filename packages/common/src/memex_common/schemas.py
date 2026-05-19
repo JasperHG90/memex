@@ -824,6 +824,14 @@ class NoteCreateDTO(BaseModel):
             '"sensitive"/"private" for restricted handling; "none" for default.'
         ),
     )
+    event_date: dt.datetime | None = Field(
+        default=None,
+        description=(
+            'Optional event-date override applied to facts extracted from the note. '
+            'Stored as the unit `event_date` / `mentioned_at` anchor. Omit to use the '
+            "note's authored/publication date."
+        ),
+    )
 
     @property
     def content_decoded(self) -> bytes:
@@ -1385,11 +1393,34 @@ class KVPutRequest(BaseModel):
 
 
 class KVSearchRequest(BaseModel):
-    """Request to semantically search key-value entries."""
+    """Request to semantically search key-value entries.
 
-    query: str
+    Exactly one of ``query`` (text — server embeds) or ``query_embedding``
+    (pre-computed vector — sized to the embedding-model dimension) must be
+    provided. Passing both is rejected.
+    """
+
+    query: str | None = Field(
+        default=None,
+        description='Text query; the server runs it through the embedding model.',
+    )
+    query_embedding: list[float] | None = Field(
+        default=None,
+        description=(
+            'Pre-computed query embedding; bypasses the server-side encode '
+            'step. Sized to the embedding-model dimension.'
+        ),
+    )
     namespaces: list[str] | None = None
     limit: int = Field(5, ge=1, le=500)
+
+    @model_validator(mode='after')
+    def _exactly_one(self) -> 'KVSearchRequest':
+        if (self.query is None) == (self.query_embedding is None):
+            raise ValueError(
+                'Provide exactly one of `query` or `query_embedding` (not both, not neither).'
+            )
+        return self
 
 
 class FindNoteResult(BaseModel):

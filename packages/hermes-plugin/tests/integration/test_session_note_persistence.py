@@ -146,8 +146,6 @@ async def test_append_id_replay_is_idempotent(initialized_provider, live_api, li
     """
     from uuid import uuid4
 
-    from memex_common.schemas import NoteAppendRequest
-
     p = initialized_provider
     p.sync_turn('first', 'turn')
     p.on_session_end([])
@@ -156,7 +154,7 @@ async def test_append_id_replay_is_idempotent(initialized_provider, live_api, li
 
     append_id = uuid4()
     delta = '\n\nMANUAL_APPEND_MARKER\n'
-    request = NoteAppendRequest(
+    append_kwargs: dict[str, Any] = dict(
         note_key=p._session_note_key,
         vault_id=str(live_vault),
         delta=delta,
@@ -164,8 +162,8 @@ async def test_append_id_replay_is_idempotent(initialized_provider, live_api, li
         joiner='paragraph',
     )
 
-    first = await live_api.append_to_note(request)
-    second = await live_api.append_to_note(request)
+    first = await live_api.append_to_note(**append_kwargs)
+    second = await live_api.append_to_note(**append_kwargs)
 
     assert first.status == 'success'
     assert second.status == 'replayed'

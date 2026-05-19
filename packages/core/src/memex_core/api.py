@@ -1096,6 +1096,7 @@ class MemexAPI:
         event_date: datetime | None = None,
         intent_override: str | None = None,
         risk_override: str | None = None,
+        background: bool = False,
     ) -> dict[str, Any]:
         """Ingest a note. Delegates to IngestionService.
 
@@ -1104,7 +1105,18 @@ class MemexAPI:
         bypassing the HTTP / MCP layers (which already validate via Pydantic and
         explicit enum parsing respectively) cannot smuggle arbitrary strings into
         the extraction pipeline.
+
+        ``background`` is accepted for signature parity with the HTTP wrapper
+        (:pymeth:`memex_common.client.RemoteMemexAPI.ingest`) but is not
+        honored in-process — the local API has no batch-job queue. Passing
+        ``True`` raises :class:`NotImplementedError` so the gap is visible.
         """
+        if background:
+            raise NotImplementedError(
+                'background=True is not supported by the in-process MemexAPI; '
+                'queue the work via the HTTP server (RemoteMemexAPI.ingest) '
+                'instead.'
+            )
         if intent_override is not None:
             try:
                 IntentClass(intent_override)
@@ -1231,15 +1243,19 @@ class MemexAPI:
         self,
         unit_ids: list[UUID],
         link_types: list[str] | None = None,
+        limit: int = 20,
     ) -> dict[UUID, list[MemoryLinkDTO]]:
         """Get typed relationship links for memory units.
 
-        Delegates to fetch_memory_links in note_relations.py.
+        Delegates to fetch_memory_links in note_relations.py. ``limit`` is
+        applied as a per-unit slice on the aggregated result for parity
+        with the HTTP wrapper.
         """
         from memex_core.memory.retrieval.note_relations import fetch_memory_links
 
         async with self.metastore.session() as session:
-            return await fetch_memory_links(session, unit_ids, link_types=link_types)
+            result = await fetch_memory_links(session, unit_ids, link_types=link_types)
+        return {uid: links[:limit] for uid, links in result.items()}
 
     async def get_note_links(
         self,
@@ -1326,47 +1342,73 @@ class MemexAPI:
     async def list_entities_ranked(
         self,
         limit: int = 100,
+        vault_id: UUID | None = None,
         vault_ids: list[UUID] | None = None,
         entity_type: str | None = None,
         slim: bool = False,
     ) -> AsyncGenerator[Any, None]:
-        """Stream entities ranked by hybrid score. Delegates to EntityService."""
+        """Stream entities ranked by hybrid score. Delegates to EntityService.
+
+        ``vault_id`` and ``vault_ids`` are accepted for symmetry with the HTTP
+        wrapper; if both are set, both are passed through (the underlying
+        service de-duplicates).
+        """
+        resolved = list(vault_ids) if vault_ids else []
+        if vault_id is not None and vault_id not in resolved:
+            resolved.append(vault_id)
         async for entity in self._entities.list_entities_ranked(
-            limit=limit, vault_ids=vault_ids, entity_type=entity_type, slim=slim
+            limit=limit,
+            vault_ids=resolved or None,
+            entity_type=entity_type,
+            slim=slim,
         ):
             yield entity
 
     async def get_entity_cooccurrences(
         self,
         entity_id: UUID | str,
+        vault_id: UUID | None = None,
         vault_ids: list[UUID] | None = None,
         limit: int = 50,
     ) -> list[Any]:
         """Get co-occurrence edges for an entity. Delegates to EntityService."""
+        resolved = list(vault_ids) if vault_ids else []
+        if vault_id is not None and vault_id not in resolved:
+            resolved.append(vault_id)
         return await self._entities.get_entity_cooccurrences(
-            entity_id, vault_ids=vault_ids, limit=limit
+            entity_id, vault_ids=resolved or None, limit=limit
         )
 
     async def get_bulk_cooccurrences(
-        self, entity_ids: list[UUID], vault_ids: list[UUID] | None = None
+        self,
+        entity_ids: list[UUID],
+        vault_id: UUID | None = None,
+        vault_ids: list[UUID] | None = None,
     ) -> list[Any]:
         """Get co-occurrences between a set of entities. Delegates to EntityService."""
-        return await self._entities.get_bulk_cooccurrences(entity_ids, vault_ids=vault_ids)
+        resolved = list(vault_ids) if vault_ids else []
+        if vault_id is not None and vault_id not in resolved:
+            resolved.append(vault_id)
+        return await self._entities.get_bulk_cooccurrences(entity_ids, vault_ids=resolved or None)
 
     async def get_entity_mentions(
         self,
         entity_id: UUID | str,
         limit: int = 20,
+        vault_id: UUID | None = None,
         vault_ids: list[UUID] | None = None,
         include_stale: bool = False,
         include_superseded: bool = False,
         include_deprioritized: bool = False,
     ) -> list[dict[str, Any]]:
         """Get entity mentions. Delegates to EntityService."""
+        resolved = list(vault_ids) if vault_ids else []
+        if vault_id is not None and vault_id not in resolved:
+            resolved.append(vault_id)
         return await self._entities.get_entity_mentions(
             entity_id,
             limit=limit,
-            vault_ids=vault_ids,
+            vault_ids=resolved or None,
             include_stale=include_stale,
             include_superseded=include_superseded,
             include_deprioritized=include_deprioritized,
@@ -1476,6 +1518,7 @@ class MemexAPI:
         self,
         query: str,
         limit: int = 10,
+        offset: int = 0,
         vault_ids: list[UUID | str] | None = None,
         token_budget: int | None = None,
         strategies: list[str] | None = None,
@@ -1493,7 +1536,18 @@ class MemexAPI:
         risk_class: str | None = None,
         apply_pre_filter: bool = True,
     ) -> tuple[list[MemoryUnit], Any]:
-        """Search with reranking. Delegates to SearchService."""
+        """Search with reranking. Delegates to SearchService.
+
+        ``offset`` is forwarded for parity with the HTTP wrapper, but the
+        in-process search service does not yet implement offset paging —
+        non-zero values raise NotImplementedError so the gap is visible
+        rather than silently ignored.
+        """
+        if offset != 0:
+            raise NotImplementedError(
+                'offset paging is not yet implemented in the in-process search '
+                'service; use the HTTP wrapper for paged search.'
+            )
         return await self._search.search(
             query=query,
             limit=limit,
@@ -1917,24 +1971,32 @@ class MemexAPI:
     async def get_top_entities(
         self,
         limit: int = 5,
+        vault_id: UUID | None = None,
         vault_ids: list[UUID] | None = None,
         entity_type: str | None = None,
     ) -> list[Any]:
         """Get top entities by mention count. Delegates to EntityService."""
+        resolved = list(vault_ids) if vault_ids else []
+        if vault_id is not None and vault_id not in resolved:
+            resolved.append(vault_id)
         return await self._entities.get_top_entities(
-            limit=limit, vault_ids=vault_ids, entity_type=entity_type
+            limit=limit, vault_ids=resolved or None, entity_type=entity_type
         )
 
     async def search_entities(
         self,
         query: str,
         limit: int = 10,
+        vault_id: UUID | None = None,
         vault_ids: list[UUID] | None = None,
         entity_type: str | None = None,
     ) -> list[Any]:
         """Search entities by name. Delegates to EntityService."""
+        resolved = list(vault_ids) if vault_ids else []
+        if vault_id is not None and vault_id not in resolved:
+            resolved.append(vault_id)
         return await self._entities.search_entities(
-            query, limit=limit, vault_ids=vault_ids, entity_type=entity_type
+            query, limit=limit, vault_ids=resolved or None, entity_type=entity_type
         )
 
     async def get_lineage(
@@ -2021,6 +2083,24 @@ class MemexAPI:
         """Semantic search over KV entries. Delegates to KVService."""
         return await self._kv.search(
             query_embedding=query_embedding, namespaces=namespaces, limit=limit
+        )
+
+    async def kv_search_text(
+        self,
+        query: str,
+        namespaces: list[str] | None = None,
+        limit: int = 5,
+    ) -> list[Any]:
+        """Embed ``query`` locally, then delegate to :pymeth:`kv_search`.
+
+        Mirrors :pymeth:`memex_common.client.RemoteMemexAPI.kv_search_text`
+        so callers holding either API surface can search from text.
+        """
+        embeddings = self.embedding_model.encode([query])
+        return await self.kv_search(
+            query_embedding=embeddings[0].tolist(),
+            namespaces=namespaces,
+            limit=limit,
         )
 
     async def kv_delete(self, key: str) -> bool:
