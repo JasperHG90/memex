@@ -1424,6 +1424,19 @@ class SurveyRequest(BaseModel):
         default=None,
         description='Max token budget for all results. Greedy packing: truncates when exceeded.',
     )
+    after: dt.datetime | None = Field(
+        default=None, description='Only results on/after this date (ISO 8601).'
+    )
+    before: dt.datetime | None = Field(
+        default=None, description='Only results on/before this date (ISO 8601).'
+    )
+    reference_date: dt.datetime | None = Field(
+        default=None,
+        description=(
+            'Relative dates in the query (e.g. "last week") resolve against '
+            'this anchor instead of now().'
+        ),
+    )
 
 
 class SurveyFact(BaseModel):

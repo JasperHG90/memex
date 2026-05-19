@@ -400,6 +400,7 @@ class RemoteMemexAPI:
         tags: list[str] | None = None,
         status: str | None = None,
         date_field: str = 'coalesce',
+        slim: bool = False,
     ) -> list[NoteListItemDTO]:
         """List all notes.
 
@@ -422,6 +423,8 @@ class RemoteMemexAPI:
         if status is not None:
             params['status'] = status
         params['date_field'] = date_field
+        if slim:
+            params['slim'] = 'true'
         result = await self._get('notes', params=params)
         return [NoteListItemDTO(**d) for d in result]
 
@@ -474,6 +477,9 @@ class RemoteMemexAPI:
         vault_ids: list[UUID | str] | None = None,
         limit_per_query: int = 10,
         token_budget: int | None = None,
+        after: dt.datetime | None = None,
+        before: dt.datetime | None = None,
+        reference_date: dt.datetime | None = None,
     ) -> SurveyResponse:
         """Broad topic survey — decompose, parallel search, grouped results."""
         request = SurveyRequest(
@@ -481,6 +487,9 @@ class RemoteMemexAPI:
             vault_ids=vault_ids,
             limit_per_query=limit_per_query,
             token_budget=token_budget,
+            after=after,
+            before=before,
+            reference_date=reference_date,
         )
         result = await self._post('survey', request)
         return SurveyResponse(**result)
@@ -724,6 +733,7 @@ class RemoteMemexAPI:
         before: dt.datetime | None = None,
         template: str | None = None,
         date_field: str = 'coalesce',
+        slim: bool = False,
     ) -> list[NoteListItemDTO]:
         """Get the most recent notes. ``date_field`` matches ``list_notes``."""
         params: dict[str, Any] = {'limit': limit, 'sort': '-created_at'}
@@ -737,6 +747,8 @@ class RemoteMemexAPI:
         if template is not None:
             params['template'] = template
         params['date_field'] = date_field
+        if slim:
+            params['slim'] = 'true'
         result = await self._get('notes', params=params)
         return [NoteListItemDTO(**d) for d in result]
 
@@ -767,6 +779,7 @@ class RemoteMemexAPI:
         vault_id: UUID | None = None,
         vault_ids: list[UUID | str] | None = None,
         entity_type: str | None = None,
+        slim: bool = False,
     ) -> AsyncGenerator[EntityDTO, None]:
         """Stream entities ranked by hybrid score."""
         params: dict[str, Any] = {'limit': limit}
@@ -777,6 +790,8 @@ class RemoteMemexAPI:
             params['vault_id'] = [str(v) for v in resolved]
         if entity_type:
             params['entity_type'] = entity_type
+        if slim:
+            params['slim'] = 'true'
 
         async with self.client.stream('GET', 'entities', params=params) as response:
             response.raise_for_status()
@@ -802,6 +817,9 @@ class RemoteMemexAPI:
         limit: int = 20,
         vault_id: UUID | None = None,
         vault_ids: list[UUID | str] | None = None,
+        include_stale: bool = False,
+        include_superseded: bool = False,
+        include_deprioritized: bool = False,
     ) -> list[dict[str, Any]]:
         """Get mentions for an entity."""
         # Returns list of dicts with 'unit': MemoryUnitDTO, 'note': NoteDTO keys
@@ -809,6 +827,12 @@ class RemoteMemexAPI:
         resolved = resolve_vault_list(vault_id, vault_ids)
         if resolved:
             params['vault_id'] = [str(v) for v in resolved]
+        if include_stale:
+            params['include_stale'] = 'true'
+        if include_superseded:
+            params['include_superseded'] = 'true'
+        if include_deprioritized:
+            params['include_deprioritized'] = 'true'
         result = await self._get(f'entities/{entity_id}/mentions', params=params)
         # We can optionally parse them into DTOs here if we want strict typing return,
         # but that's what the schema implies for now (no MentionDTO).
@@ -990,16 +1014,31 @@ class RemoteMemexAPI:
 
     async def get_memory_links(
         self,
-        unit_id: UUID,
-        link_type: str | None = None,
+        unit_ids: list[UUID],
+        link_types: list[str] | None = None,
         limit: int = 20,
-    ) -> list[MemoryLinkDTO]:
-        """Get typed relationship links for a memory unit."""
-        params: dict[str, Any] = {'limit': limit}
-        if link_type:
-            params['link_type'] = link_type
-        result = await self._get(f'memories/{unit_id}/links', params=params)
-        return [MemoryLinkDTO(**lnk) for lnk in result]
+    ) -> dict[UUID, list[MemoryLinkDTO]]:
+        """Get typed relationship links for memory units, batched.
+
+        Matches :pymeth:`memex_core.api.MemexAPI.get_memory_links`. The HTTP
+        endpoint is per-unit (`/memories/{id}/links`); this fans out one
+        request per unit and aggregates into the batch shape expected by MCP
+        / CLI / Hermes callers.
+        """
+        out: dict[UUID, list[MemoryLinkDTO]] = {}
+        # The HTTP route accepts a single `link_type` query param. When the
+        # caller asks for multiple types, fan out per type so the union surfaces.
+        link_type_iter: list[str | None] = list(link_types) if link_types else [None]
+        for unit_id in unit_ids:
+            collected: list[MemoryLinkDTO] = []
+            for lt in link_type_iter:
+                params: dict[str, Any] = {'limit': limit}
+                if lt:
+                    params['link_type'] = lt
+                result = await self._get(f'memories/{unit_id}/links', params=params)
+                collected.extend(MemoryLinkDTO(**lnk) for lnk in result)
+            out[unit_id] = collected
+        return out
 
     async def get_unit_history(
         self,
