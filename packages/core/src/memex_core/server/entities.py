@@ -64,6 +64,10 @@ async def list_entities(
         None,
         description='Filter by entity type.',
     ),
+    slim: Annotated[
+        bool,
+        Query(description='Drop entity description to keep responses under hook caps.'),
+    ] = False,
     auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
     """
@@ -97,7 +101,7 @@ async def list_entities(
 
     async def ranked_stream():
         async for entity in api.list_entities_ranked(
-            limit=limit, vault_ids=vault_ids, entity_type=entity_type
+            limit=limit, vault_ids=vault_ids, entity_type=entity_type, slim=slim
         ):
             yield build_entity_dto(entity)
 
@@ -145,11 +149,21 @@ async def get_entity_mentions(
     api: Annotated[MemexAPI, Depends(get_api)],
     limit: Annotated[int, Query(ge=1, le=500)] = 20,
     vault_id: list[str] | None = Query(None, description='Filter by vault ID(s) or name(s)'),
+    include_stale: Annotated[bool, Query()] = False,
+    include_superseded: Annotated[bool, Query()] = False,
+    include_deprioritized: Annotated[bool, Query()] = False,
 ):
     """Get mentions for an entity."""
     try:
         vault_ids = await resolve_vault_ids(api, vault_id)
-        results = await api.get_entity_mentions(id, limit=limit, vault_ids=vault_ids)
+        results = await api.get_entity_mentions(
+            id,
+            limit=limit,
+            vault_ids=vault_ids,
+            include_stale=include_stale,
+            include_superseded=include_superseded,
+            include_deprioritized=include_deprioritized,
+        )
         items = [
             {
                 'unit': build_memory_unit_dto(r['unit']),

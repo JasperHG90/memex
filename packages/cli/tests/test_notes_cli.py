@@ -31,6 +31,7 @@ def test_note_list(runner, mock_api, mock_config, monkeypatch):
         before=None,
         template=None,
         date_field='created_at',
+        slim=False,
     )
 
 
@@ -50,6 +51,7 @@ def test_note_list_with_vault(runner, mock_api, mock_config, monkeypatch):
         before=None,
         template=None,
         date_field='created_at',
+        slim=False,
     )
 
 

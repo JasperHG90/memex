@@ -472,6 +472,12 @@ async def list_notes(
         str | None,
         typer.Option('--template', help='Filter by template slug (e.g. "general_note").'),
     ] = None,
+    slim: Annotated[
+        bool,
+        typer.Option(
+            '--slim', '-s', help='Drop per-note summaries — smaller response, faster query.'
+        ),
+    ] = False,
 ):
     """
     List all notes.
@@ -519,6 +525,7 @@ async def list_notes(
                 before=parsed_before,
                 template=template,
                 date_field=date_by,
+                slim=slim,
             )
         except Exception as e:
             handle_api_error(e)
@@ -591,6 +598,12 @@ async def list_recent(
     compact: Annotated[
         bool, typer.Option('--compact', help='One line per note: title, date, description.')
     ] = False,
+    slim: Annotated[
+        bool,
+        typer.Option(
+            '--slim', '-s', help='Drop per-note summaries — smaller response, faster query.'
+        ),
+    ] = False,
 ):
     """
     Show most recent notes.
@@ -636,6 +649,7 @@ async def list_recent(
                 after=parsed_after,
                 before=parsed_before,
                 date_field=date_by,
+                slim=slim,
             )
         except Exception as e:
             handle_api_error(e)

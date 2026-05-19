@@ -1048,7 +1048,7 @@ class TestListEntitiesEdgeCases:
     async def test_ranked_generator_error_mid_iteration(self, mock_api, mcp_client):
         """If the async generator raises mid-iteration, the tool should surface it."""
 
-        async def _broken_generator(limit=100, vault_ids=None, entity_type=None):
+        async def _broken_generator(limit=100, vault_ids=None, entity_type=None, slim=False):
             yield EntityDTO(id=uuid4(), name='Good', mention_count=5)
             raise RuntimeError('generator broke')
 
@@ -1062,7 +1062,7 @@ class TestListEntitiesEdgeCases:
         """Entity names with markdown-special chars should render without breaking."""
         e = EntityDTO(id=uuid4(), name='C++ & "Rust" <lang>', mention_count=2)
 
-        async def _gen(limit=100, vault_ids=None, entity_type=None):
+        async def _gen(limit=100, vault_ids=None, entity_type=None, slim=False):
             yield e
 
         mock_api.list_entities_ranked = _gen

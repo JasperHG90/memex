@@ -875,6 +875,55 @@ def test_entity_mentions_forwards_vault_ids_list(config, vault_id):
     assert 'vault_id' not in kwargs
 
 
+def test_entity_mentions_default_filters_are_active_only(config, vault_id):
+    """V4: when caller omits include_* flags, the wrapper forwards them as False
+    so the core defaults to active, non-superseded, non-deprioritized mentions."""
+    api = Mock()
+    api.get_entity_mentions = AsyncMock(return_value=[])
+    dispatch(
+        'memex_get_entity_mentions',
+        {'entity_id': str(uuid4())},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    kwargs = api.get_entity_mentions.call_args.kwargs
+    assert kwargs['include_stale'] is False
+    assert kwargs['include_superseded'] is False
+    assert kwargs['include_deprioritized'] is False
+
+
+def test_entity_mentions_forwards_include_flags(config, vault_id):
+    """V4: include_stale / include_superseded / include_deprioritized pass through
+    from the JSON args to the MemexAPI call."""
+    api = Mock()
+    api.get_entity_mentions = AsyncMock(return_value=[])
+    dispatch(
+        'memex_get_entity_mentions',
+        {
+            'entity_id': str(uuid4()),
+            'include_stale': True,
+            'include_superseded': True,
+            'include_deprioritized': True,
+        },
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    kwargs = api.get_entity_mentions.call_args.kwargs
+    assert kwargs['include_stale'] is True
+    assert kwargs['include_superseded'] is True
+    assert kwargs['include_deprioritized'] is True
+
+
+def test_entity_mentions_schema_declares_include_filters():
+    """V4: schema advertises the three filter knobs so the agent knows to pass them."""
+    props = GET_ENTITY_MENTIONS_SCHEMA['parameters']['properties']
+    assert 'include_stale' in props
+    assert 'include_superseded' in props
+    assert 'include_deprioritized' in props
+
+
 def test_entity_cooccurrences_schema_declares_vault_ids():
     assert 'vault_ids' in GET_ENTITY_COOCCURRENCES_SCHEMA['parameters']['properties']
 

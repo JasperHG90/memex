@@ -22,7 +22,7 @@ from memex_common import agent_surface as ags
 # ---------------------------------------------------------------------------
 
 
-_UNIVERSAL_CHAR_CAP = 8_800  # ~2,514 tokens at 3.5 chars/token (empirical cl100k)
+_UNIVERSAL_CHAR_CAP = 9_100  # ~2,600 tokens at 3.5 chars/token (empirical cl100k)
 # Bumped 5,500 → 6,000 when CRITICAL_HEADER / VIRTUAL_UNIT / CRITICAL_FOOTER
 # adopted `<critical_constraint name="…">` XML tags (Anthropic best practice:
 # XML disambiguates load-bearing constraints; the model attends more reliably
@@ -46,6 +46,11 @@ _UNIVERSAL_CHAR_CAP = 8_800  # ~2,514 tokens at 3.5 chars/token (empirical cl100
 # redirected to the underlying MU IDs). The expanded prose lands the
 # behavioural contract directly in the universal surface rather than
 # relying on the per-tool description alone.
+# Bumped 8,800 → 9,100 when V5 slim-mode guidance landed in
+# RETRIEVAL_ROUTING — list-shape browse tools (`memex_recent_notes`,
+# `memex_list_notes`, `memex_list_entities`) accept `slim=True` to drop
+# heavy per-row fields, keeping responses under Claude Code's hook-output
+# cap on realistic vault sizes.
 
 
 def _approx_tokens(text: str) -> int:
@@ -122,6 +127,11 @@ _REQUIRED_KEYWORDS: tuple[str, ...] = (
     # inherits the same query-formulation discipline).
     '<critical_constraint name="search-queries">',
     'NEVER as keyword lists',
+    # V5 slim-mode guidance — pin so agents see the slim=True opt-in for
+    # the three list-shape browse tools.
+    'slim=True',
+    'memex_recent_notes',
+    'memex_list_notes',
 )
 
 

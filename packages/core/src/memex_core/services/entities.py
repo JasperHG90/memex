@@ -96,10 +96,14 @@ class EntityService(BaseService):
         limit: int = 100,
         vault_ids: list[UUID] | None = None,
         entity_type: str | None = None,
+        slim: bool = False,
     ) -> AsyncGenerator[EntityWithMetadata, None]:
         """
         Stream entities ranked by hybrid score.
         Hybrid Score = 0.4 * mention_count + 0.4 * retrieval_count + 0.2 * centrality
+
+        When ``slim`` is True, the MentalModel outerjoin is skipped — callers
+        see an empty metadata dict (no description / observations payload).
         """
         from memex_core.memory.sql_models import Entity, EntityCooccurrence, MentalModel, UnitEntity
         from sqlmodel import select, func, desc, col
@@ -129,14 +133,19 @@ class EntityService(BaseService):
             + 0.2 * centrality_stmt.c.centrality
         ).label('rank_score')
 
-        stmt = (
-            select(Entity, MentalModel, rank_score)
-            .join(centrality_stmt, centrality_stmt.c.entity_id == Entity.id)
-            .outerjoin(
-                MentalModel,
-                (MentalModel.entity_id == Entity.id) & (MentalModel.vault_id == scope_vault_id),
+        if slim:
+            stmt = select(Entity, rank_score).join(
+                centrality_stmt, centrality_stmt.c.entity_id == Entity.id
             )
-        )
+        else:
+            stmt = (
+                select(Entity, MentalModel, rank_score)
+                .join(centrality_stmt, centrality_stmt.c.entity_id == Entity.id)
+                .outerjoin(
+                    MentalModel,
+                    (MentalModel.entity_id == Entity.id) & (MentalModel.vault_id == scope_vault_id),
+                )
+            )
 
         if vault_ids:
             stmt = (
@@ -153,7 +162,10 @@ class EntityService(BaseService):
         async with self.metastore.session() as session:
             stream = await session.stream(stmt)
             async for row in stream:
-                yield _wrap_with_metadata(row[0], row[1])
+                if slim:
+                    yield _wrap_with_metadata(row[0], None)
+                else:
+                    yield _wrap_with_metadata(row[0], row[1])
 
     async def get_entity_cooccurrences(
         self,
@@ -204,10 +216,21 @@ class EntityService(BaseService):
             return list((await session.exec(stmt)).all())
 
     async def get_entity_mentions(
-        self, entity_id: UUID | str, limit: int = 20, vault_ids: list[UUID] | None = None
+        self,
+        entity_id: UUID | str,
+        limit: int = 20,
+        vault_ids: list[UUID] | None = None,
+        include_stale: bool = False,
+        include_superseded: bool = False,
+        include_deprioritized: bool = False,
     ) -> list[dict[str, Any]]:
-        """Get memory units and source documents where this entity is mentioned."""
-        from memex_core.memory.sql_models import MemoryUnit, Note, UnitEntity
+        """Get memory units and source documents where this entity is mentioned.
+
+        Filter defaults match ``memex_memory_search``: stale, superseded, and
+        deprioritized units are excluded unless explicitly requested.
+        """
+        from memex_core.memory.confidence import extract_confidence_and_count
+        from memex_core.memory.sql_models import ContentStatus, MemoryUnit, Note, UnitEntity
         from sqlmodel import desc, select
 
         eid = UUID(str(entity_id))
@@ -220,9 +243,23 @@ class EntityService(BaseService):
             )
             if vault_ids:
                 stmt = stmt.where(col(MemoryUnit.vault_id).in_(vault_ids))
-            stmt = stmt.order_by(desc(MemoryUnit.created_at)).limit(limit)
-            results = (await session.exec(stmt)).all()
-            return [{'unit': unit, 'document': doc} for unit, doc in results]
+            if not include_stale:
+                stmt = stmt.where(col(MemoryUnit.status) == ContentStatus.ACTIVE)
+            if not include_deprioritized:
+                stmt = stmt.where(col(MemoryUnit.is_deprioritized) == False)  # noqa: E712
+            # Over-fetch when the superseded post-filter will drop rows so the
+            # caller's ``limit`` is honored against the post-filtered set.
+            fetch_limit = limit * 3 if not include_superseded else limit
+            stmt = stmt.order_by(desc(MemoryUnit.created_at)).limit(fetch_limit)
+            results = list((await session.exec(stmt)).all())
+            if not include_superseded:
+                threshold = float(self.config.server.memory.retrieval.superseded_threshold)
+                results = [
+                    (unit, doc)
+                    for unit, doc in results
+                    if extract_confidence_and_count(unit)[0] >= threshold
+                ]
+            return [{'unit': unit, 'document': doc} for unit, doc in results[:limit]]
 
     async def get_entity(
         self, entity_id: UUID | str, vault_id: UUID | None = None

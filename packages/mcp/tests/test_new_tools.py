@@ -107,7 +107,7 @@ async def test_list_entities_ranked(mock_api, mcp_client):
     """Without a query, should call list_entities_ranked."""
     e1 = EntityDTO(id=uuid4(), name='Python', mention_count=42)
 
-    async def _ranked(limit: int = 100, vault_ids=None, entity_type=None):
+    async def _ranked(limit: int = 100, vault_ids=None, entity_type=None, slim=False):
         yield e1
 
     mock_api.list_entities_ranked = _ranked

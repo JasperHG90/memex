@@ -85,6 +85,10 @@ async def list_notes(
             "'created_at' = ingest time. 'publish_date' = authored date."
         ),
     ),
+    slim: Annotated[
+        bool,
+        Query(description='Drop per-note summaries to keep responses under hook caps.'),
+    ] = False,
     auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
     """
@@ -126,6 +130,7 @@ async def list_notes(
                 before=parsed_before,
                 template=template,
                 date_field=date_field,
+                slim=slim,
             )
         else:
             docs = await api.list_notes(
@@ -138,6 +143,7 @@ async def list_notes(
                 tags=tags,
                 status=status,
                 date_field=date_field,
+                slim=slim,
             )
         return ndjson_response([build_note_list_item_dto(d) for d in docs])
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:

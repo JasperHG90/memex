@@ -101,6 +101,105 @@ async def test_get_entity_mentions(api, metastore, init_global_vault):
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_get_entity_mentions_filters_default_to_active(api, metastore, init_global_vault):
+    """V4: mentions endpoint hides stale / superseded / deprioritized units by default
+    and surfaces them when include_* flags are set."""
+    await api.initialize()
+    app.state.api = api
+
+    from memex_common.config import GLOBAL_VAULT_ID
+    from memex_core.memory.sql_models import ContentStatus, Entity, MemoryUnit, Note, UnitEntity
+    import datetime
+
+    async with metastore.session() as session:
+        ent = Entity(canonical_name='V4Target')
+        note = Note(
+            id=UUID('00000000-0000-0000-0000-000000000042'),
+            vault_id=GLOBAL_VAULT_ID,
+            original_text='V4',
+        )
+        session.add_all([ent, note])
+        await session.commit()
+        await session.refresh(ent)
+
+        now = datetime.datetime.now(datetime.timezone.utc)
+        active = MemoryUnit(
+            text='active fact',
+            vault_id=GLOBAL_VAULT_ID,
+            note_id=note.id,
+            embedding=[0.1] * 384,
+            event_date=now,
+            status=ContentStatus.ACTIVE,
+            is_deprioritized=False,
+            confidence=0.9,
+        )
+        deprio = MemoryUnit(
+            text='deprioritized fact',
+            vault_id=GLOBAL_VAULT_ID,
+            note_id=note.id,
+            embedding=[0.1] * 384,
+            event_date=now,
+            status=ContentStatus.ACTIVE,
+            is_deprioritized=True,
+            confidence=0.9,
+        )
+        stale = MemoryUnit(
+            text='stale fact',
+            vault_id=GLOBAL_VAULT_ID,
+            note_id=note.id,
+            embedding=[0.1] * 384,
+            event_date=now,
+            status=ContentStatus.STALE,
+            is_deprioritized=False,
+            confidence=0.9,
+        )
+        superseded = MemoryUnit(
+            text='superseded fact',
+            vault_id=GLOBAL_VAULT_ID,
+            note_id=note.id,
+            embedding=[0.1] * 384,
+            event_date=now,
+            status=ContentStatus.ACTIVE,
+            is_deprioritized=False,
+            confidence=0.05,
+        )
+        session.add_all([active, deprio, stale, superseded])
+        await session.commit()
+        for u in (active, deprio, stale, superseded):
+            await session.refresh(u)
+            session.add(UnitEntity(unit_id=u.id, entity_id=ent.id, vault_id=GLOBAL_VAULT_ID))
+        await session.commit()
+
+    async with AsyncClient(transport=ASGITransport(app=app), base_url='http://test') as ac:
+        default = await ac.get(f'/api/v1/entities/{ent.id}/mentions')
+        assert default.status_code == 200
+        default_texts = {
+            json.loads(line)['unit']['text'] for line in default.text.splitlines() if line.strip()
+        }
+        assert default_texts == {'active fact'}
+
+        widened = await ac.get(
+            f'/api/v1/entities/{ent.id}/mentions',
+            params={
+                'include_stale': 'true',
+                'include_superseded': 'true',
+                'include_deprioritized': 'true',
+            },
+        )
+        assert widened.status_code == 200
+        widened_texts = {
+            json.loads(line)['unit']['text'] for line in widened.text.splitlines() if line.strip()
+        }
+        assert widened_texts == {
+            'active fact',
+            'deprioritized fact',
+            'stale fact',
+            'superseded fact',
+        }
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_get_bulk_cooccurrences(api, metastore, init_global_vault):
     await api.initialize()
     app.state.api = api

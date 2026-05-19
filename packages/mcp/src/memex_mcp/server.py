@@ -2391,6 +2391,12 @@ async def memex_list_notes(
             ),
         ),
     ] = 'created_at',
+    slim: Annotated[
+        bool,
+        Field(
+            description='Drop per-note summaries to keep the response under hook-output caps.',
+        ),
+    ] = False,
 ) -> list[McpNote]:
     """List notes with optional date, tag, and status filters."""
     from datetime import datetime as _dt
@@ -2423,6 +2429,7 @@ async def memex_list_notes(
             tags=tags,
             status=status,
             date_field=date_by,
+            slim=slim,
         )
 
         return [
@@ -2497,6 +2504,12 @@ async def memex_recent_notes(
             ),
         ),
     ] = 'created_at',
+    slim: Annotated[
+        bool,
+        Field(
+            description='Drop per-note summaries to keep the response under hook-output caps.',
+        ),
+    ] = False,
 ) -> list[McpNote]:
     """List recent notes."""
     from datetime import datetime as _dt
@@ -2528,6 +2541,7 @@ async def memex_recent_notes(
             before=parsed_before,
             template=template,
             date_field=date_by,
+            slim=slim,
         )
 
         return [
@@ -2592,6 +2606,12 @@ async def memex_list_entities(
             ),
         ),
     ] = None,
+    slim: Annotated[
+        bool,
+        Field(
+            description='Drop entity description to keep the response under hook-output caps.',
+        ),
+    ] = False,
 ) -> list[McpEntity]:
     """List or search entities."""
     try:
@@ -2611,7 +2631,10 @@ async def memex_list_entities(
             entities = [
                 e
                 async for e in api.list_entities_ranked(
-                    limit=limit, vault_ids=resolved_vids, entity_type=entity_type
+                    limit=limit,
+                    vault_ids=resolved_vids,
+                    entity_type=entity_type,
+                    slim=slim,
                 )
             ]
 
@@ -2621,7 +2644,9 @@ async def memex_list_entities(
                 name=e.name,
                 type=e.entity_type,
                 mention_count=e.mention_count,
-                description=(e.metadata or {}).get('description'),
+                description=None
+                if slim
+                else (getattr(e, 'metadata', None) or {}).get('description'),
             )
             for e in entities
         ]
@@ -2709,7 +2734,9 @@ async def memex_get_entities(
     name='memex_get_entity_mentions',
     description=(
         'Get facts, observations, and events that mention an entity. '
-        'Each mention links to its source note, revealing cross-note connections.'
+        'Each mention links to its source note, revealing cross-note connections. '
+        'Defaults to active, non-superseded, non-deprioritized memory units; '
+        'set the include_* flags to widen to the historical record.'
         '\n\n## Memory layers\n\n' + _LAYER_ROUTING_PRIMER
     ),
     tags={'entities'},
@@ -2722,6 +2749,21 @@ async def memex_get_entity_mentions(
     limit: Annotated[
         int, BeforeValidator(_coerce_int), Field(description='Max mentions to return.')
     ] = 10,
+    include_stale: Annotated[
+        bool,
+        Field(description='Include archived/deleted units (default: active only).'),
+    ] = False,
+    include_superseded: Annotated[
+        bool,
+        Field(
+            description='Include units whose confidence has decayed below the '
+            'superseded threshold (default: exclude).'
+        ),
+    ] = False,
+    include_deprioritized: Annotated[
+        bool,
+        Field(description='Include units the user/agent has deprioritized (default: exclude).'),
+    ] = False,
 ) -> list[McpEntityMention]:
     """Get memory units mentioning an entity."""
     try:
@@ -2731,7 +2773,13 @@ async def memex_get_entity_mentions(
         except ValueError:
             raise ToolError(f'Invalid Entity UUID: {entity_id}')
 
-        mentions = await api.get_entity_mentions(uuid_obj, limit=limit)
+        mentions = await api.get_entity_mentions(
+            uuid_obj,
+            limit=limit,
+            include_stale=include_stale,
+            include_superseded=include_superseded,
+            include_deprioritized=include_deprioritized,
+        )
 
         output: list[McpEntityMention] = []
         for m in mentions:
@@ -2766,7 +2814,17 @@ async def memex_get_entity_mentions(
 
 @mcp.tool(
     name='memex_get_entity_cooccurrences',
-    description='Find entities that frequently appear alongside a given entity — the fastest way to map relationships and discover connected concepts. Returns entity names, types, and co-occurrence counts inline (no follow-up calls needed). Use this for "what relates to X?" questions.',
+    description=(
+        'Find entities that frequently appear alongside a given entity — the fastest '
+        'way to map relationships and discover connected concepts. Returns entity '
+        'names, types, and co-occurrence counts inline (no follow-up calls needed). '
+        'Use this for "what relates to X?" questions. '
+        'Counts are corpus frequency across the entire historical record (including '
+        'superseded / deprioritized / archived units) — a high count says "these have '
+        'been mentioned together a lot", NOT "the current best understanding links '
+        'them". For currency, follow up with memex_get_entity_mentions (which '
+        'defaults to active, non-superseded units).'
+    ),
     tags={'entities'},
     annotations={'readOnlyHint': True},
     timeout=30.0,

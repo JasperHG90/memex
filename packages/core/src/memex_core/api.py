@@ -1275,6 +1275,7 @@ class MemexAPI:
         tags: list[str] | None = None,
         status: str | None = None,
         date_field: str = 'coalesce',
+        slim: bool = False,
     ) -> list[Any]:
         """List ingested documents. Delegates to NoteService."""
         return await self._notes.list_notes(
@@ -1288,6 +1289,7 @@ class MemexAPI:
             tags=tags,
             status=status,
             date_field=date_field,
+            slim=slim,
         )
 
     async def get_stats_counts(
@@ -1307,6 +1309,7 @@ class MemexAPI:
         before: datetime | None = None,
         template: str | None = None,
         date_field: str = 'coalesce',
+        slim: bool = False,
     ) -> list[Any]:
         """Get the most recent notes. Delegates to NoteService."""
         return await self._notes.get_recent_notes(
@@ -1317,6 +1320,7 @@ class MemexAPI:
             before=before,
             template=template,
             date_field=date_field,
+            slim=slim,
         )
 
     async def list_entities_ranked(
@@ -1324,10 +1328,11 @@ class MemexAPI:
         limit: int = 100,
         vault_ids: list[UUID] | None = None,
         entity_type: str | None = None,
+        slim: bool = False,
     ) -> AsyncGenerator[Any, None]:
         """Stream entities ranked by hybrid score. Delegates to EntityService."""
         async for entity in self._entities.list_entities_ranked(
-            limit=limit, vault_ids=vault_ids, entity_type=entity_type
+            limit=limit, vault_ids=vault_ids, entity_type=entity_type, slim=slim
         ):
             yield entity
 
@@ -1349,10 +1354,23 @@ class MemexAPI:
         return await self._entities.get_bulk_cooccurrences(entity_ids, vault_ids=vault_ids)
 
     async def get_entity_mentions(
-        self, entity_id: UUID | str, limit: int = 20, vault_ids: list[UUID] | None = None
+        self,
+        entity_id: UUID | str,
+        limit: int = 20,
+        vault_ids: list[UUID] | None = None,
+        include_stale: bool = False,
+        include_superseded: bool = False,
+        include_deprioritized: bool = False,
     ) -> list[dict[str, Any]]:
         """Get entity mentions. Delegates to EntityService."""
-        return await self._entities.get_entity_mentions(entity_id, limit=limit, vault_ids=vault_ids)
+        return await self._entities.get_entity_mentions(
+            entity_id,
+            limit=limit,
+            vault_ids=vault_ids,
+            include_stale=include_stale,
+            include_superseded=include_superseded,
+            include_deprioritized=include_deprioritized,
+        )
 
     async def get_entity(self, entity_id: UUID | str, vault_id: UUID | None = None) -> Any | None:
         """Get an entity by ID. Delegates to EntityService."""

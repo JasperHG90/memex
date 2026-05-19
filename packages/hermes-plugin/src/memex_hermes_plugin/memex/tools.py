@@ -556,7 +556,9 @@ GET_ENTITY_MENTIONS_SCHEMA: dict[str, Any] = {
     'description': (
         'Return memory units (facts/observations/events) that mention a '
         'specific entity, plus the source note for each. Requires an '
-        'entity_id from memex_list_entities.'
+        'entity_id from memex_list_entities. Defaults to active, '
+        'non-superseded, non-deprioritized units; set include_* flags to '
+        'widen to the historical record.'
     ),
     'parameters': {
         'type': 'object',
@@ -570,6 +572,18 @@ GET_ENTITY_MENTIONS_SCHEMA: dict[str, Any] = {
                 'description': 'Max mentions to return (default: 20).',
             },
             'vault_ids': _vault_ids_schema(),
+            'include_stale': {
+                'type': 'boolean',
+                'description': 'Include archived/deleted units (default: false).',
+            },
+            'include_superseded': {
+                'type': 'boolean',
+                'description': 'Include confidence-decayed units (default: false).',
+            },
+            'include_deprioritized': {
+                'type': 'boolean',
+                'description': 'Include deprioritized units (default: false).',
+            },
         },
         'required': ['entity_id'],
     },
@@ -580,7 +594,12 @@ GET_ENTITY_COOCCURRENCES_SCHEMA: dict[str, Any] = {
     'description': (
         'Return entities that co-occur with a given entity, with '
         'co-occurrence counts. Surfaces related concepts, people, or '
-        'projects. Requires an entity_id from memex_list_entities.'
+        'projects. Requires an entity_id from memex_list_entities. '
+        'Counts are corpus frequency across the entire historical record '
+        '(including superseded / deprioritized / archived units) — high '
+        'count says "mentioned together a lot", NOT "currently linked". '
+        'For currency, follow up with memex_get_entity_mentions (active-'
+        'only by default).'
     ),
     'parameters': {
         'type': 'object',
@@ -784,6 +803,13 @@ LIST_NOTES_SCHEMA: dict[str, Any] = {
                     "'coalesce' (publish_date if set else created_at)."
                 ),
             },
+            'slim': {
+                'type': 'boolean',
+                'description': (
+                    'Drop per-note summaries to keep responses under hook-output '
+                    'caps. Default false.'
+                ),
+            },
         },
     },
 }
@@ -820,6 +846,13 @@ RECENT_NOTES_SCHEMA: dict[str, Any] = {
                     "Which date column after/before filter on: 'created_at' "
                     "(ingest time; default), 'publish_date' (authored), or "
                     "'coalesce' (publish_date if set else created_at)."
+                ),
+            },
+            'slim': {
+                'type': 'boolean',
+                'description': (
+                    'Drop per-note summaries to keep responses under hook-output '
+                    'caps. Default false.'
                 ),
             },
         },
@@ -1932,6 +1965,9 @@ def handle_get_entity_mentions(
                 entity_id=entity_id,
                 limit=limit,
                 vault_ids=vault_ids,
+                include_stale=bool(args.get('include_stale') or False),
+                include_superseded=bool(args.get('include_superseded') or False),
+                include_deprioritized=bool(args.get('include_deprioritized') or False),
             ),
             timeout=30.0,
         )
@@ -2340,6 +2376,7 @@ def handle_list_notes(
                 date_field=date_by,
                 limit=limit,
                 offset=offset,
+                slim=bool(args.get('slim') or False),
             ),
             timeout=30.0,
         )
@@ -2379,6 +2416,7 @@ def handle_recent_notes(
                 before=parsed_before,
                 template=args.get('template') or None,
                 date_field=date_by,
+                slim=bool(args.get('slim') or False),
             ),
             timeout=30.0,
         )

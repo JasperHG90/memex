@@ -751,6 +751,7 @@ class NoteService:
         tags: list[str] | None = None,
         status: str | None = None,
         date_field: str = 'coalesce',
+        slim: bool = False,
     ) -> list[Any]:
         """
         List ingested documents.
@@ -811,6 +812,10 @@ class NoteService:
             stmt = stmt.order_by(Note.created_at.desc()).offset(offset).limit(limit)  # type: ignore[union-attr]
             notes = list((await session.exec(stmt)).all())
             notes = await self._attach_vault_names(session, notes)
+            if slim:
+                for note in notes:
+                    object.__setattr__(note, 'summaries', [])
+                return notes
             return await self._attach_summaries(session, notes)
 
     async def get_recent_notes(
@@ -822,6 +827,7 @@ class NoteService:
         before: datetime | None = None,
         template: str | None = None,
         date_field: str = 'coalesce',
+        slim: bool = False,
     ) -> list[Any]:
         """Get the most recent notes. ``date_field`` matches ``list_notes``."""
         from sqlmodel import select
@@ -847,6 +853,10 @@ class NoteService:
             stmt = stmt.limit(limit)
             notes = list((await session.exec(stmt)).all())
             notes = await self._attach_vault_names(session, notes)
+            if slim:
+                for note in notes:
+                    object.__setattr__(note, 'summaries', [])
+                return notes
             return await self._attach_summaries(session, notes)
 
     @staticmethod

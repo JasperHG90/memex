@@ -172,6 +172,12 @@ async def list_entities(
         ),
     ] = None,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
+    slim: Annotated[
+        bool,
+        typer.Option(
+            '--slim', '-s', help='Drop entity description — smaller response, faster query.'
+        ),
+    ] = False,
 ):
     """
     List or search entities.
@@ -186,7 +192,9 @@ async def list_entities(
                     query=query, limit=limit, entity_type=entity_type
                 )
             else:
-                async for ent in api.list_entities_ranked(limit=limit, entity_type=entity_type):
+                async for ent in api.list_entities_ranked(
+                    limit=limit, entity_type=entity_type, slim=slim
+                ):
                     entities.append(ent)
         except Exception as exc:
             handle_api_error(exc)
@@ -273,6 +281,18 @@ async def list_mentions(
     identifier: Annotated[str, typer.Argument(help='Name or UUID of the entity.')],
     limit: int = 20,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
+    include_stale: Annotated[
+        bool,
+        typer.Option('--include-stale', help='Include archived/deleted units.'),
+    ] = False,
+    include_superseded: Annotated[
+        bool,
+        typer.Option('--include-superseded', help='Include confidence-decayed units.'),
+    ] = False,
+    include_deprioritized: Annotated[
+        bool,
+        typer.Option('--include-deprioritized', help='Include deprioritized units.'),
+    ] = False,
 ):
     """
     Show memories and notes mentioning this entity.
@@ -282,7 +302,13 @@ async def list_mentions(
     async with get_api_context(config) as api:
         try:
             entity = await _resolve_entity(api, identifier)
-            results = await api.get_entity_mentions(entity.id, limit=limit)
+            results = await api.get_entity_mentions(
+                entity.id,
+                limit=limit,
+                include_stale=include_stale,
+                include_superseded=include_superseded,
+                include_deprioritized=include_deprioritized,
+            )
         except Exception as e:
             if isinstance(e, typer.Exit):
                 raise

@@ -110,7 +110,9 @@ RETRIEVAL_ROUTING = """## Retrieval routing
 - **Broad/panoramic** (vault-wide, no specific topic) → `memex_get_vault_summary` first; escalate to `memex_survey(query)` if too coarse.
 - **KV** — "what's our X?" / "what convention?" / "what do I prefer?" / "what setting?" → call `memex_kv_get(key)` / `memex_kv_search(query)` / `memex_kv_list()` FIRST. DO NOT `ls`, `Glob`, `Read`, `Bash`, or otherwise inspect the local filesystem before checking KV — preferences/conventions/settings live in KV, not on disk. Wake words that force this route unconditionally: `KV: get <key>`, `KV: search <query>`, `Store in KV: <key>=<value>` → execute the matching `memex_kv_*` call verbatim, no other routing.
 
-After `memory_search`: call `memex_get_notes_metadata`. After `note_search`: metadata inline — do NOT call `memex_get_notes_metadata` again. `memex_read_note` only when `total_tokens < 500`."""
+After `memory_search`: call `memex_get_notes_metadata`. After `note_search`: metadata inline — do NOT call `memex_get_notes_metadata` again. `memex_read_note` only when `total_tokens < 500`.
+
+For list-shape browse tools (`memex_recent_notes`, `memex_list_notes`, `memex_list_entities`), pass `slim=True` when you only need IDs + titles + timestamps. Drops per-note summaries and entity descriptions so the response fits under tool-output caps on realistic vaults. Default is `slim=False` (full shape)."""
 
 
 SEARCH_QUERIES = """## Search query formulation
