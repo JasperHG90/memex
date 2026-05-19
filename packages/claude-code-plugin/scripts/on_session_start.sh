@@ -42,35 +42,11 @@ NOJQ
     exit 0
 fi
 
-# --- Auto-install/update rules file ---
+# --- Resolve project root (used by the agent-surface rule install below) ---
 if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
     _project_root=$(git rev-parse --show-toplevel 2>/dev/null || echo "")
 else
     _project_root="$PWD"
-fi
-if [ -n "$_project_root" ]; then
-    _rules_src_dir="$PLUGIN_ROOT/rules"
-    _rules_dst_dir="$_project_root/.claude/rules"
-    if [ -d "$_rules_src_dir" ]; then
-        mkdir -p "$_rules_dst_dir" 2>/dev/null || true
-        for _foreign in "$_rules_src_dir"/*; do
-            [ -f "$_foreign" ] || continue
-            case "$_foreign" in
-                *.md) ;;
-                *)
-                    echo "memex on_session_start: ignoring non-.md rule file: $_foreign (extend the install loop to support new formats)" >&2
-                    ;;
-            esac
-        done
-        for _rules_src in "$_rules_src_dir"/*.md; do
-            [ -f "$_rules_src" ] || continue
-            _rules_name="$(basename "$_rules_src")"
-            _rules_dst="$_rules_dst_dir/$_rules_name"
-            if [ ! -f "$_rules_dst" ]; then
-                cp "$_rules_src" "$_rules_dst" 2>/dev/null || true
-            fi
-        done
-    fi
 fi
 
 # --- Clear stale session state ---

@@ -86,7 +86,13 @@ Prohibitions:
 - NEVER fabricate Note/Node/Unit IDs — only IDs from tool output.
 - NEVER call `memex_get_notes_metadata` after `memex_note_search` (metadata inline).
 - NEVER use `memex_read_note` on notes >500 tokens — use `memex_get_page_indices` + `memex_get_nodes`.
-- NEVER present Memex data without inline numbered citations."""
+- NEVER present Memex data without inline numbered citations.
+
+<critical_constraint name="search-queries">
+ALWAYS formulate search queries as natural language, NEVER as keyword lists.
+ALWAYS preserve proper nouns, amounts, dates, qualifiers from the original question.
+ALWAYS search for the subject/activity, NOT the answer type.
+</critical_constraint>"""
 
 
 __all__ = ['CLAUDE_CODE_HARNESS', 'HERMES_HARNESS']
