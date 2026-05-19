@@ -113,6 +113,15 @@ RETRIEVAL_ROUTING = """## Retrieval routing
 After `memory_search`: call `memex_get_notes_metadata`. After `note_search`: metadata inline — do NOT call `memex_get_notes_metadata` again. `memex_read_note` only when `total_tokens < 500`."""
 
 
+SEARCH_QUERIES = """## Search query formulation
+
+<critical_constraint name="search-queries">
+ALWAYS formulate search queries as natural language, NEVER as keyword lists.
+ALWAYS preserve proper nouns, amounts, dates, qualifiers from the original question.
+ALWAYS search for the subject/activity, NOT the answer type.
+</critical_constraint>"""
+
+
 RESOLUTION_FLOW = """## 5-step resolution flow
 
 <critical_constraint name="outcome_routing">
@@ -252,8 +261,8 @@ def compose_universal() -> str:
 
     Composition order (primacy → middle → recency):
         CRITICAL_HEADER → STORAGE_MODEL → RETRIEVAL_ROUTING →
-        RESOLUTION_FLOW → AXES → HISTORICAL_ROUTING → VIRTUAL_UNIT →
-        KV_NAMESPACE → CITATIONS → CRITICAL_FOOTER
+        SEARCH_QUERIES → RESOLUTION_FLOW → AXES → HISTORICAL_ROUTING →
+        VIRTUAL_UNIT → KV_NAMESPACE → CITATIONS → CRITICAL_FOOTER
 
     ``LAYER_ROUTING_PRIMER_TABLE`` is NOT included by default — it overlaps
     with ``RETRIEVAL_ROUTING`` (by-query-type vs by-layer decomposition of
@@ -265,6 +274,7 @@ def compose_universal() -> str:
             CRITICAL_HEADER,
             STORAGE_MODEL,
             RETRIEVAL_ROUTING,
+            SEARCH_QUERIES,
             RESOLUTION_FLOW,
             AXES,
             HISTORICAL_ROUTING,
@@ -291,6 +301,7 @@ __all__ = [
     'KV_NAMESPACE',
     'RESOLUTION_FLOW',
     'RETRIEVAL_ROUTING',
+    'SEARCH_QUERIES',
     'STORAGE_MODEL',
     'VIRTUAL_UNIT',
     # Composer.

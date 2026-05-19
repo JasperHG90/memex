@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from memex_common.agent_harnesses import CLAUDE_CODE_HARNESS, HERMES_HARNESS
 
-_TIER_2_CHAR_CAP = 5_200
+_TIER_2_CHAR_CAP = 5_000
 # Hermes has a tighter natural ceiling — its harness only needs the
 # outcome lexicon + capture cadence. Pin its cap separately so the CC
 # harness's expansion doesn't relax the Hermes budget.
@@ -45,15 +45,6 @@ def test_claude_code_harness_carries_capture_cadence_and_slash_commands() -> Non
     assert 'author="claude-code"' in CLAUDE_CODE_HARNESS
     assert '/remember' in CLAUDE_CODE_HARNESS
     assert '/recall' in CLAUDE_CODE_HARNESS
-
-
-def test_claude_code_harness_carries_search_query_constraint() -> None:
-    """The search-queries constraint moved out of the plugin-shipped
-    ``rules/memex.md`` and into the CC harness so it travels via the
-    generated agent-surface rule file instead of a static copy."""
-    assert '<critical_constraint name="search-queries">' in CLAUDE_CODE_HARNESS
-    assert 'natural language' in CLAUDE_CODE_HARNESS
-    assert 'NEVER as keyword lists' in CLAUDE_CODE_HARNESS
 
 
 def test_cli_agent_surface_uses_ssot_harnesses_by_identity() -> None:

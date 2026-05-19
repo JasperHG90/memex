@@ -117,6 +117,11 @@ _REQUIRED_KEYWORDS: tuple[str, ...] = (
     # Resolution-flow verbs.
     'memex_record_outcome',
     'memex_memory_deprioritize',
+    # Search-query hygiene (promoted from CLAUDE_CODE_HARNESS to Tier 1b so
+    # every Memex consumer — Hermes, MCP-hosted agents, Claude Code —
+    # inherits the same query-formulation discipline).
+    '<critical_constraint name="search-queries">',
+    'NEVER as keyword lists',
 )
 
 
@@ -139,6 +144,7 @@ _SECTION_CONSTANTS = (
     'CRITICAL_HEADER',
     'STORAGE_MODEL',
     'RETRIEVAL_ROUTING',
+    'SEARCH_QUERIES',
     'RESOLUTION_FLOW',
     'AXES',
     'HISTORICAL_ROUTING',
