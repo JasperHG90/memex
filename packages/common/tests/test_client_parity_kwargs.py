@@ -502,3 +502,88 @@ async def test_get_entity_mentions_forwards_include_filters() -> None:
     assert captured['params']['include_stale'] == 'true'
     assert captured['params']['include_superseded'] == 'true'
     assert captured['params']['include_deprioritized'] == 'true'
+
+
+# ---------------------------------------------------------------------------
+# actor field on deprioritize / restore / consolidate
+# ---------------------------------------------------------------------------
+#
+# The actor kwarg on deprioritize_memory_unit, restore_memory_unit, and
+# consolidate_vault is parity with MemexAPI's audit-log attribution.
+# Signature parity (test_zero_signature_drift) proves the kwarg exists on
+# RemoteMemexAPI; these tests prove it lands in the wire body so the server
+# route can forward it to ``request.actor``.
+
+
+@pytest.mark.asyncio
+async def test_deprioritize_memory_unit_forwards_actor() -> None:
+    client, captured = _make_client_capturing(
+        post_response=_mock_json_response(
+            {
+                'id': str(uuid4()),
+                'note_id': str(uuid4()),
+                'text': 'x',
+                'fact_type': 'world',
+                'status': 'active',
+                'mentioned_at': '2026-01-01T00:00:00Z',
+                'event_date': None,
+                'occurred_start': None,
+                'occurred_end': None,
+                'vault_id': str(uuid4()),
+                'unit_metadata': {},
+                'is_deprioritized': True,
+            }
+        )
+    )
+    api = RemoteMemexAPI(client)
+
+    vault_id = uuid4()
+    unit_id = uuid4()
+    await api.deprioritize_memory_unit(unit_id, reason='outdated', vault_id=vault_id, actor='ada')
+
+    body = captured['posts'][0]['json']
+    assert body['actor'] == 'ada'
+
+
+@pytest.mark.asyncio
+async def test_restore_memory_unit_forwards_actor() -> None:
+    client, captured = _make_client_capturing(
+        post_response=_mock_json_response(
+            {
+                'id': str(uuid4()),
+                'note_id': str(uuid4()),
+                'text': 'x',
+                'fact_type': 'world',
+                'status': 'active',
+                'mentioned_at': '2026-01-01T00:00:00Z',
+                'event_date': None,
+                'occurred_start': None,
+                'occurred_end': None,
+                'vault_id': str(uuid4()),
+                'unit_metadata': {},
+                'is_deprioritized': False,
+            }
+        )
+    )
+    api = RemoteMemexAPI(client)
+
+    vault_id = uuid4()
+    unit_id = uuid4()
+    await api.restore_memory_unit(unit_id, vault_id=vault_id, actor='ada')
+
+    body = captured['posts'][0]['json']
+    assert body['actor'] == 'ada'
+
+
+@pytest.mark.asyncio
+async def test_consolidate_vault_forwards_actor() -> None:
+    client, captured = _make_client_capturing(
+        post_response=_mock_json_response({'consolidated': 0, 'preview': None})
+    )
+    api = RemoteMemexAPI(client)
+
+    vault_id = uuid4()
+    await api.consolidate_vault(vault_id, dry_run=True, actor='ada')
+
+    body = captured['posts'][0]['json']
+    assert body['actor'] == 'ada'

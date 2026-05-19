@@ -29,9 +29,14 @@ def mock_api():
         'note_id': 'doc_123',
     }
 
-    # Use SimpleNamespace to simulate an object with attributes that Pydantic can read
+    # Use SimpleNamespace to simulate an object with attributes that Pydantic can read.
+    # ``mw_mode`` is read by the create_vault route into VaultDTO; without it the
+    # SimpleNamespace mock raises AttributeError before the DTO can serialise.
     mock_api.create_vault.return_value = SimpleNamespace(
-        id=MOCK_VAULT_ID, name='Test Vault', description='A test vault'
+        id=MOCK_VAULT_ID,
+        name='Test Vault',
+        description='A test vault',
+        mw_mode='stationary',
     )
 
     mock_api.search.return_value = (
@@ -136,7 +141,7 @@ def test_claim_reflection_queue(client, mock_api):
     response = client.post('/api/v1/reflections/claim?limit=5')
 
     assert response.status_code == 200
-    mock_api.claim_reflection_queue_batch.assert_called_once_with(limit=5)
+    mock_api.claim_reflection_queue_batch.assert_called_once_with(limit=5, vault_id=None)
 
     import json
 

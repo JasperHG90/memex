@@ -28,7 +28,18 @@ _HERMES_HARNESS_TOKEN_CAP = 400
 # server-side briefing string) lives under the system-prompt 1,500–6,000-token
 # window from indiehackers' empirical Claude Code analysis. The cap below
 # captures the static prefix; per-vault dynamic content adds variable size.
-_TOTAL_STATIC_PREFIX_CHAR_CAP = 9_400
+#
+# Cap bumped 9,400 → 10,200 to reflect three load-bearing universal-surface
+# refinements layered since the original baseline:
+#   • 1e3fde3b — search-queries promotion to Tier 1b (~270 chars)
+#   • 973be1d4 — list_shape strengthening + eval-corpus-leak removal (~150)
+#   • 7d72521a — CLAUDE_CODE_HARNESS routing-discipline expansion (~150)
+# Each addition is enforced behavior (paired writes, list-shape questions,
+# query formulation) inherited by every Memex consumer — Hermes, MCP,
+# Claude Code. Current measured block: 9,970 chars (~230 char headroom).
+# The cap is a tripwire: further growth requires deliberate decision about
+# trimming vs. raising vs. re-sharding into agent-specific harnesses.
+_TOTAL_STATIC_PREFIX_CHAR_CAP = 10_200
 
 
 def _approx_tokens(text: str) -> int:

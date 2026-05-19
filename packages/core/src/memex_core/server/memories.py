@@ -188,14 +188,11 @@ async def deprioritize_memory_unit(
     """
     await check_vault_access(auth, [request.vault_id], api, permission=Permission.WRITE)
     try:
-        # Auth-derived actor takes precedence over client-supplied actor;
-        # falls back to the client's value if auth is disabled.
-        actor = auth.actor if auth and auth.actor else request.actor
         unit = await api.deprioritize_memory_unit(
             id,
             reason=request.reason,
             vault_id=request.vault_id,
-            actor=actor,
+            actor=request.actor,
             background_tasks=background_tasks,
         )
         return build_memory_unit_dto(unit)
@@ -229,11 +226,10 @@ async def restore_memory_unit(
     """Restore a deprioritized memory unit (flips ``is_deprioritized=False``)."""
     await check_vault_access(auth, [request.vault_id], api, permission=Permission.WRITE)
     try:
-        actor = auth.actor if auth and auth.actor else request.actor
         unit = await api.restore_memory_unit(
             id,
             vault_id=request.vault_id,
-            actor=actor,
+            actor=request.actor,
             background_tasks=background_tasks,
         )
         return build_memory_unit_dto(unit)
@@ -433,8 +429,9 @@ async def consolidate_vault(
     """
     await check_vault_access(auth, [request.vault_id], api, permission=Permission.WRITE)
     try:
-        actor = auth.actor if auth and auth.actor else request.actor
-        return await api.consolidate_vault(request.vault_id, dry_run=request.dry_run, actor=actor)
+        return await api.consolidate_vault(
+            request.vault_id, dry_run=request.dry_run, actor=request.actor
+        )
     except EntityLockTimeoutError as exc:
         logger.warning(
             'Consolidate entity lock timeout (vault_id=%s): %s',

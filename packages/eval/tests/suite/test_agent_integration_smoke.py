@@ -60,11 +60,11 @@ def _tool_call_outcomes():
 
 class TestSuiteStructure:
     def test_scenarios_count(self) -> None:
-        # 32 = 31 prior + `feedback_deprioritize_observation_400_recovery`
-        # (V21 400-with-source_memory_units contract). The earlier note
-        # in this comment claimed 29 but additional KV-register scenarios
-        # had landed in the meantime without the count being refreshed.
-        assert len(SUITE.scenarios) == 32
+        # 39 = 32 prior + 7 `kv_wakeword_*` scenarios (V4 hard wake-word
+        # triggers for KV namespace routing: store_{user,project,global,
+        # app,with_ttl} + kv_get + kv_search). They pin the explicit
+        # imperative path through agent_surface.RETRIEVAL_ROUTING.
+        assert len(SUITE.scenarios) == 39
 
     def test_scenario_ids_unique(self) -> None:
         ids = [s.id for s in SUITE.scenarios]
@@ -118,15 +118,17 @@ class TestToolNamePrefix:
 class TestArgNameSchemaGuards:
     """Guards against the round-2 wire-level regressions.
 
-    The plugin schemas use ``success: bool`` for record_outcome and
-    ``delta: str`` for append_note. Earlier design drafts had
-    ``kind`` and ``content``; those bugs must never come back.
+    The plugin schemas use ``units: list[dict]`` for record_outcome
+    (per-unit verb shape — see CRITICAL constraint ``record_outcome_shape``)
+    and ``delta: str`` for append_note. Earlier design drafts had
+    ``kind`` and ``content`` (and the now-FutureWarning ``success`` shape);
+    those bugs must never come back.
     """
 
     @pytest.mark.parametrize(
         'tool,expected_arg',
         [
-            ('memex_record_outcome', 'success'),
+            ('memex_record_outcome', 'units'),
             ('memex_append_note', 'delta'),
         ],
     )
@@ -136,6 +138,11 @@ class TestArgNameSchemaGuards:
                 isinstance(outcome, ToolCallArgMatches)
                 and outcome.tool == tool
                 and outcome.arg_name != expected_arg
+                # Negative assertions (`expect_absent=True`) intentionally
+                # name a legacy/forbidden arg to assert it does NOT appear
+                # in the tool call. Those are the only scenarios where a
+                # non-canonical arg_name is correct.
+                and not outcome.expect_absent
             ):
                 pytest.fail(
                     f'ToolCallArgMatches(tool={tool!r}) uses '
@@ -154,13 +161,22 @@ class TestMutatingDiscipline:
         'kv_writes_user_preference',
         'kv_writes_global_convention',
         'kv_writes_app_setting',
+        'kv_wakeword_store_user',
+        'kv_wakeword_store_project',
+        'kv_wakeword_store_global',
+        'kv_wakeword_store_app',
+        'kv_wakeword_store_with_ttl',
         'lifecycle_append_meeting',
         'lifecycle_archive_legacy_warehouse_note',
         'lifecycle_append_parent_remains_retrievable',
         'asset_lifecycle_detach',
     }
 
-    _OVERRIDE_ONE_IDS = _MUTATING_IDS | {'kv_retrieves_convention'}
+    _OVERRIDE_ONE_IDS = _MUTATING_IDS | {
+        'kv_retrieves_convention',
+        'kv_wakeword_kv_get',
+        'kv_wakeword_kv_search',
+    }
 
     def test_declared_mutating_scenarios_set_flag(self) -> None:
         actual = {s.id for s in SUITE.scenarios if s.mutating_scenario}
@@ -263,7 +279,11 @@ class TestComposition:
     def test_navigation_via_page_index_uses_composite(self) -> None:
         sc = next(s for s in SUITE.scenarios if s.id == 'navigation_via_page_index')
         assert isinstance(sc.expected, CompositeOutcome)
-        assert len(sc.expected.children) == 3
+        # KeywordsPresent('pytest') + LLMJudge rubric — the navigation
+        # path is grounded by keyword presence; semantic correctness is
+        # then judged. A third child was considered (`memex_get_nodes`
+        # tool call assertion) but dropped as too brittle on top-k≥30.
+        assert len(sc.expected.children) == 2
 
     def test_survey_broad_topic_uses_composite_with_anyof(self) -> None:
         sc = next(s for s in SUITE.scenarios if s.id == 'survey_broad_topic')
