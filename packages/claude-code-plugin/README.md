@@ -149,7 +149,7 @@ The plugin is configured entirely through environment variables (set in your she
 | `MEMEX_CC_SESSION_BRIEFING` | `on` | Toggle the SessionStart briefing injection. Set to `off`/etc. to disable. The vault-binding, session-note, and auto-tag instructions still emit — only the dynamic per-vault briefing markdown is suppressed. |
 | `MEMEX_RESOLVE_VERBOSE` | unset | Internal — when `1`, the resolver emits uvx/version diagnostics as systemMessage. Hooks already set this where appropriate; users do not need to. |
 
-> **Note on the `MEMEX_CC_*` toggles**: these have no "truthy" form. Anything not in the falsy set above is treated as `on`. To re-enable, **unset** the variable rather than setting it to `1` or `true`. This is a deliberate one-way parser to keep the toggle logic five lines and avoid surprise enables under typo.
+> **Note on the `MEMEX_CC_*` toggles**: the parser only checks for the *falsy* values listed above (`off`, `0`, `false`, `no`, `disabled`). Anything else — including unsetting, leaving empty, or setting to `on`, `1`, `true`, or any other string — is treated as `on`. To re-enable a previously-disabled toggle, **unsetting** the variable is the cleanest path; explicitly setting to `on` also works. This is a deliberate one-way parser to keep the toggle logic five lines and avoid surprise enables under typo.
 
 ### How to disable behaviours
 

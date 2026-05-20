@@ -490,17 +490,18 @@ class SessionBriefingService:
                 return self._assemble(sections)
 
         # Step 5: Trim procedures (high-signal but droppable when budget is exhausted).
-        # Oldest-first via index counter (deque/index avoids O(n) pop(0) on long lists).
+        # Oldest-first: `procs` is sorted ascending by `updated_at`, so `procs[n_dropped:]`
+        # keeps the n_dropped most-recently-touched rules out (i.e. drops the oldest first).
         # If all procedures are exhausted without fitting the budget, fall through
         # to Step 7 (drop vaults). Step 6 is intentionally skipped — reserved.
         procs = list(procs_initial)
-        proc_idx = 0
-        while proc_idx < len(procs):
-            proc_idx += 1
+        n_dropped = 0
+        while n_dropped < len(procs):
+            n_dropped += 1
             sections = self._replace_section(
                 sections,
                 'procedures',
-                self._build_procedures_section(procs[proc_idx:]),
+                self._build_procedures_section(procs[n_dropped:]),
             )
             if _estimate_tokens(self._assemble(sections)) <= budget:
                 return self._assemble(sections)
