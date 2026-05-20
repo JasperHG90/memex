@@ -294,6 +294,17 @@ class SessionBriefingService:
             text = text[: _PROCEDURE_VALUE_MAX_CHARS - 1].rstrip() + '…'
         return text
 
+    @staticmethod
+    def _defang_procedure_name(name: str) -> str:
+        """Escape markdown metacharacters in a procedure key.
+
+        Keys are validated at write time (`validate_procedure_key`) but this is a
+        belt-and-suspenders defence — the renderer wraps the name in `**…**`,
+        so any literal `*` or backtick in the key would corrupt the bold span
+        or open a code span.
+        """
+        return name.replace('\\', '\\\\').replace('*', '\\*').replace('`', '\\`')
+
     def _build_procedures_section(self, entries: list[Any]) -> str:
         """Build the procedures section from KV rows under `procedure:*`."""
         if not entries:
@@ -304,7 +315,7 @@ class SessionBriefingService:
             name = entry.key.removeprefix('procedure:')
             if not name or not text:
                 continue
-            lines.append(f'- **{name}** — {text}')
+            lines.append(f'- **{self._defang_procedure_name(name)}** — {text}')
         if len(lines) == 1:
             return ''
         return '\n'.join(lines) + '\n'
@@ -431,7 +442,9 @@ class SessionBriefingService:
         # decoupled from any future change to the Step-4 drop-prefix list.
         # `_ts_floor` is tz-aware to match `updated_at` from `KVEntry` (the ORM
         # column is `TIMESTAMP WITH TIME ZONE`, so sorted() never mixes tz-aware
-        # and naive datetimes).
+        # and naive datetimes). Rows with `updated_at is None` fall back to
+        # `_ts_floor`, sorting them oldest — they'll be the first dropped by
+        # Step 5's oldest-first trim. This is the intended degradation order.
         _ts_floor = datetime.min.replace(tzinfo=timezone.utc)
         procs_initial = sorted(
             [e for e in kv_entries if e.key.startswith('procedure:')],
