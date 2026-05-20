@@ -514,8 +514,9 @@ class SessionBriefingService:
                 return self._assemble(sections)
 
         # Step 5: Trim procedures (high-signal but droppable when budget is exhausted).
-        # Oldest-first: `procs` is sorted ascending by `updated_at`, so `procs[n_dropped:]`
-        # keeps the n_dropped most-recently-touched rules out (i.e. drops the oldest first).
+        # Oldest-first: `procs` is sorted ascending by `updated_at`, so
+        # `procs[n_dropped:]` retains the most-recently-touched rules and drops
+        # the oldest `n_dropped` entries first.
         # If all procedures are exhausted without fitting the budget, fall through
         # to Step 7 (drop vaults).
         procs = list(procs_initial)

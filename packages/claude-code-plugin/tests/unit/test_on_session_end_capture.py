@@ -204,6 +204,47 @@ def test_capture_skipped_when_MEMEX_CC_TRANSCRIPT_CAPTURE_off(
     assert not mock_memex.calls_matching('note', 'append')
 
 
+@pytest.mark.parametrize('falsy', ['off', '0', 'false', 'no', 'disabled'])
+def test_capture_toggle_accepts_all_falsy_values(
+    mock_memex: MockMemex, transcript_jsonl: Path, temp_git_repo: Path, falsy: str
+) -> None:
+    """All five falsy values suppress the capture — mirrors session-start parity test."""
+    _seed_session_start_state(mock_memex)
+    if mock_memex.calls_file.exists():
+        mock_memex.calls_file.unlink()
+    result = run_script(
+        'on_session_end_capture.sh',
+        stdin=_session_end_payload(transcript_path=str(transcript_jsonl)),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+        extra_env={'MEMEX_CC_TRANSCRIPT_CAPTURE': falsy},
+    )
+    assert result.returncode == 0
+    assert not mock_memex.calls_matching('note', 'add')
+    assert not mock_memex.calls_matching('note', 'append')
+
+
+@pytest.mark.parametrize('not_falsy', ['true', '1', 'yes', 'random-garbage', 'ON'])
+def test_capture_toggle_treats_unknown_value_as_on(
+    mock_memex: MockMemex, transcript_jsonl: Path, temp_git_repo: Path, not_falsy: str
+) -> None:
+    """Anything not in the falsy set runs the capture — asymmetric one-way parser."""
+    _seed_session_start_state(mock_memex)
+    if mock_memex.calls_file.exists():
+        mock_memex.calls_file.unlink()
+    result = run_script(
+        'on_session_end_capture.sh',
+        stdin=_session_end_payload(transcript_path=str(transcript_jsonl)),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+        extra_env={'MEMEX_CC_TRANSCRIPT_CAPTURE': not_falsy},
+    )
+    assert result.returncode == 0
+    assert mock_memex.calls_matching('note', 'add'), (
+        f'value {not_falsy!r} unexpectedly suppressed capture'
+    )
+
+
 def test_session_end_disabled_does_not_advance_offset(
     mock_memex: MockMemex, transcript_jsonl: Path, temp_git_repo: Path
 ) -> None:
