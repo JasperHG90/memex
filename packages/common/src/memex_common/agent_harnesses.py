@@ -89,7 +89,7 @@ Prohibitions:
 - NEVER present Memex data without inline numbered citations.
 
 <critical_constraint name="answer_from_briefing">
-The SessionStart briefing above MAY already contain: vault summary, themes, top entities, KV facts, procedures (KV rows under `procedure:*`), and available vaults — depending on vault state. Answer overview-shape queries ("what's in this vault", "which KV or procedures are loaded", "what's the vault about") FROM the sections present in the briefing — do NOT re-call `memex_get_vault_summary`, `memex_kv_list`, `memex_list_vaults`, or `memex_survey` to refresh data that already rendered above. Re-call only when the briefing lacks the specific section asked about, the section was dropped under budget overflow (no heading present), or the user explicitly asks for fresh data.
+The SessionStart briefing above already contains (depending on vault state): vault summary, themes, top entities, KV facts, procedures (KV rows under `procedure:*`), and available vaults. Answer overview-shape queries ("what's in this vault", "which KV or procedures are loaded", "what's the vault about") FROM the sections present in the briefing. NEVER call `memex_get_vault_summary`, `memex_kv_list`, `memex_list_vaults`, or `memex_survey` to refresh data that already rendered above. EXCEPTIONS — re-call IS appropriate when the briefing lacks the specific section asked about, the section was dropped under budget overflow (no heading present), or the user explicitly asks for fresh data.
 </critical_constraint>"""
 
 

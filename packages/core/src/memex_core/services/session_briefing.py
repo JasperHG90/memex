@@ -239,12 +239,15 @@ class SessionBriefingService:
         return ''.join(lines) + '\n'
 
     def _build_kv_section(self, kv_entries: list[Any]) -> str:
-        """Build the KV facts section. Procedure rows are excluded (rendered separately)."""
-        rendered = [e for e in kv_entries if not e.key.startswith('procedure:')]
-        if not rendered:
+        """Build the KV facts section.
+
+        Caller (``_build_sections`` / ``_apply_overflow``) is responsible for
+        excluding ``procedure:*`` rows — those render in their own section.
+        """
+        if not kv_entries:
             return ''
         lines = ['\n## Key-Value Facts\n']
-        for entry in rendered:
+        for entry in kv_entries:
             lines.append(f'- `{entry.key}`: {entry.value}')
         return '\n'.join(lines) + '\n'
 
@@ -441,28 +444,31 @@ class SessionBriefingService:
         if _estimate_tokens(self._assemble(sections)) <= budget:
             return self._assemble(sections)
 
-        # Step 4: Drop KV namespaces (app -> user -> project)
+        # Step 4: Drop KV namespaces (app -> user -> project).
+        # _build_kv_section does NOT filter procedure: — exclude here so the
+        # rendered KV section matches the namespace-trim semantics.
         for drop_prefix in ('app:', 'user:', 'project:'):
             filtered = [e for e in kv_entries if not e.key.startswith(drop_prefix)]
             sections = self._replace_section(
                 sections,
                 'kv',
-                self._build_kv_section(filtered),
+                self._build_kv_section([e for e in filtered if not e.key.startswith('procedure:')]),
             )
             kv_entries = filtered
             if _estimate_tokens(self._assemble(sections)) <= budget:
                 return self._assemble(sections)
 
         # Step 5: Trim procedures (high-signal but droppable when budget is exhausted).
-        # Oldest-first (sorted ascending by `updated_at`, `pop(0)`) — preserves the
-        # most-recently-touched rules longest.
+        # Oldest-first via index counter (deque/index avoids O(n) pop(0) on long lists).
+        # Step 6 is intentionally skipped — reserved for future degradation step.
         procs = list(procs_initial)
-        while procs:
-            procs.pop(0)
+        proc_idx = 0
+        while proc_idx < len(procs):
+            proc_idx += 1
             sections = self._replace_section(
                 sections,
                 'procedures',
-                self._build_procedures_section(procs),
+                self._build_procedures_section(procs[proc_idx:]),
             )
             if _estimate_tokens(self._assemble(sections)) <= budget:
                 return self._assemble(sections)
