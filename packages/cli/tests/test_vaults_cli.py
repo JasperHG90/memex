@@ -4,6 +4,38 @@ import httpx
 from unittest.mock import MagicMock
 
 
+def test_create_vault_passes_name_and_description_positionally(
+    runner, mock_api, strip_ansi, monkeypatch
+):
+    """Unit pin: CLI calls `api.create_vault(name, description)` with positional
+    args matching `MemexAPI.create_vault(self, name: str, description: str | None = None)`.
+    Regression guard against the V4 signature-drift bug fixed in 2af755b4."""
+    vault_uuid = uuid4()
+    vault = MagicMock()
+    vault.id = vault_uuid
+    mock_api.create_vault.return_value = vault
+
+    monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(app, ['create', 'my-vault', '--description', 'docs'])
+    assert result.exit_code == 0, result.stdout
+    mock_api.create_vault.assert_called_once_with('my-vault', 'docs')
+
+    clean_stdout = strip_ansi(result.stdout)
+    assert 'Creating vault: my-vault' in clean_stdout
+    assert str(vault_uuid) in clean_stdout
+
+
+def test_create_vault_with_default_description(runner, mock_api, monkeypatch):
+    """When --description is omitted, the CLI must pass None (not a missing arg)."""
+    mock_api.create_vault.return_value = MagicMock(id=uuid4())
+    monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(app, ['create', 'bare-vault'])
+    assert result.exit_code == 0, result.stdout
+    mock_api.create_vault.assert_called_once_with('bare-vault', None)
+
+
 def test_delete_vault_by_name(runner, mock_api, strip_ansi, monkeypatch):
     vault_uuid = uuid4()
     vault_name = 'test-vault'
@@ -157,7 +189,6 @@ def test_create_vault(runner, mock_api, strip_ansi, monkeypatch):
     clean_stdout = strip_ansi(result.stdout)
     assert f'Vault created successfully! ID: {vault_uuid}' in clean_stdout
 
-    # Verify arguments
-    call_args = mock_api.create_vault.call_args[0][0]
-    assert call_args.name == vault_name
-    assert call_args.description == vault_desc
+    # Verify arguments — CLI passes (name, description) positionally to
+    # match MemexAPI.create_vault(self, name: str, description: str | None = None).
+    mock_api.create_vault.assert_called_once_with(vault_name, vault_desc)

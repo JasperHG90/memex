@@ -470,6 +470,9 @@ class SessionBriefingService:
         # Step 4: Drop KV namespaces (app -> user -> project).
         # _build_kv_section does NOT filter procedure: — exclude here so the
         # rendered KV section matches the namespace-trim semantics.
+        # NOTE: procedure: rows are intentionally retained in `kv_entries`
+        # across Step 4 — Step 5 below trims them via the `procs_initial`
+        # snapshot, not by mutating `kv_entries`.
         for drop_prefix in ('app:', 'user:', 'project:'):
             filtered = [e for e in kv_entries if not e.key.startswith(drop_prefix)]
             sections = self._replace_section(
