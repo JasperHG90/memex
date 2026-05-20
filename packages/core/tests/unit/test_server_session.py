@@ -139,3 +139,29 @@ class TestSessionBriefingEndpoint:
             params={'budget': 0},
         )
         assert response.status_code == 422
+
+    def test_briefing_route_returns_procedures_section_when_present(self, client_with_mock_db):
+        """V4 route-level pin: the HTTP endpoint surfaces the ## Procedures section
+        when the rendered briefing contains procedure rows. The route delegates to
+        `api.session_briefing.generate` — override the get_api dependency."""
+        from uuid import uuid4
+        from memex_core.server.common import get_api
+
+        vault_id = str(uuid4())
+        rendered = '# Session Briefing\n\n## Procedures\n\n- **answer:briefing** — sample\n'
+
+        fake_api = MagicMock(session_briefing=MagicMock(generate=AsyncMock(return_value=rendered)))
+
+        app.dependency_overrides[get_api] = lambda: fake_api
+        try:
+            response = client_with_mock_db.get(
+                f'/api/v1/vaults/{vault_id}/session-briefing',
+                params={'budget': 2000},
+            )
+        finally:
+            app.dependency_overrides.pop(get_api, None)
+
+        assert response.status_code == 200
+        body = response.json()
+        assert '## Procedures' in body['briefing']
+        assert 'answer:briefing' in body['briefing']

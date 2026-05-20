@@ -180,3 +180,47 @@ def test_empty_payload_is_silent(mock_memex: MockMemex) -> None:
     result = run_script('on_session_end_capture.sh', stdin='', env=mock_memex.env)
     assert result.returncode == 0
     assert mock_memex.calls() == []
+
+
+# ---------------------------------------------------------------------------
+# V4: MEMEX_CC_TRANSCRIPT_CAPTURE opt-out
+# ---------------------------------------------------------------------------
+
+
+def test_capture_skipped_when_MEMEX_CC_TRANSCRIPT_CAPTURE_off(
+    mock_memex: MockMemex, transcript_jsonl: Path, temp_git_repo: Path
+) -> None:
+    """Disabled: no `memex note add` / `note append` call, hook exits clean."""
+    _seed_session_start_state(mock_memex)
+    result = run_script(
+        'on_session_end_capture.sh',
+        stdin=_session_end_payload(transcript_path=str(transcript_jsonl)),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+        extra_env={'MEMEX_CC_TRANSCRIPT_CAPTURE': 'off'},
+    )
+    assert result.returncode == 0
+    assert not mock_memex.calls_matching('note', 'add')
+    assert not mock_memex.calls_matching('note', 'append')
+
+
+def test_session_end_disabled_does_not_advance_offset(
+    mock_memex: MockMemex, transcript_jsonl: Path, temp_git_repo: Path
+) -> None:
+    """Offset file untouched under disabled capture — re-enabling resumes from prior offset."""
+    _seed_session_start_state(mock_memex)
+    state_dir = mock_memex.plugin_data / 'memex'
+    offset_file = state_dir / 'session_note_offset_cc-sess-1'
+    state_dir.mkdir(parents=True, exist_ok=True)
+    offset_file.write_text('5')
+
+    run_script(
+        'on_session_end_capture.sh',
+        stdin=_session_end_payload(transcript_path=str(transcript_jsonl)),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+        extra_env={'MEMEX_CC_TRANSCRIPT_CAPTURE': 'off'},
+    )
+    assert offset_file.read_text().strip() == '5', (
+        'offset advanced even though capture was disabled'
+    )

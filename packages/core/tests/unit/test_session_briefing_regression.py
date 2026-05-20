@@ -206,6 +206,7 @@ class TestOverflowDegradation:
         sections = [
             ('header', '# Session Briefing\n'),
             ('kv', ''),
+            ('procedures', ''),
             ('vault_overview', svc._build_vault_overview(summary, compact=False)),
             ('mental_models', ''),
             ('vaults', ''),
@@ -223,3 +224,75 @@ class TestOverflowDegradation:
 
         # Best-effort: vault_overview should have been dropped in step 3
         assert '## Vault Overview' not in result
+
+
+class TestProceduresRendering:
+    """V4 structural regression pins for the ## Procedures section."""
+
+    @staticmethod
+    def _kv(key: str, value: str) -> MagicMock:
+        entry = MagicMock()
+        entry.key = key
+        entry.value = value
+        entry.updated_at = datetime(2026, 5, 20, tzinfo=timezone.utc)
+        return entry
+
+    def test_procedures_section_is_rendered_when_rows_present(self):
+        import json
+
+        svc = _make_briefing_service()
+        entries = [
+            self._kv(
+                'procedure:answer:briefing',
+                json.dumps({'v': 1, 'value': 'cite briefing first', 'tags': {}, 'history': []}),
+            )
+        ]
+        rendered = svc._build_procedures_section(entries)
+        assert rendered.startswith('\n## Procedures\n')
+        assert '**answer:briefing**' in rendered
+        assert 'cite briefing first' in rendered
+
+    def test_procedures_section_suppressed_when_no_rows(self):
+        svc = _make_briefing_service()
+        assert svc._build_procedures_section([]) == ''
+
+    def test_procedures_section_suppressed_when_all_degenerate(self):
+        import json
+
+        svc = _make_briefing_service()
+        entries = [
+            self._kv(
+                'procedure:',
+                json.dumps({'v': 1, 'value': 'orphan', 'tags': {}, 'history': []}),
+            ),
+            self._kv(
+                'procedure:empty',
+                json.dumps({'v': 1, 'value': '', 'tags': {}, 'history': []}),
+            ),
+        ]
+        assert svc._build_procedures_section(entries) == ''
+
+    def test_sanitize_indents_embedded_newlines(self):
+        svc = _make_briefing_service()
+        sanitized = svc._sanitize_procedure_value('intro\n## fake')
+        assert '\n## fake' not in sanitized
+        assert '\n  ## fake' in sanitized
+
+    def test_sanitize_truncates_at_max_chars(self):
+        from memex_core.services.session_briefing import _PROCEDURE_VALUE_MAX_CHARS
+
+        svc = _make_briefing_service()
+        long_value = 'x' * (_PROCEDURE_VALUE_MAX_CHARS + 50)
+        sanitized = svc._sanitize_procedure_value(long_value)
+        assert sanitized.endswith('…')
+        assert len(sanitized) <= _PROCEDURE_VALUE_MAX_CHARS + 1
+
+    def test_sanitize_falls_back_when_no_value_field(self):
+        import json
+
+        svc = _make_briefing_service()
+        assert svc._sanitize_procedure_value(json.dumps([1, 2, 3])) == '[1, 2, 3]'
+
+    def test_sanitize_handles_none(self):
+        svc = _make_briefing_service()
+        assert svc._sanitize_procedure_value(None) == ''

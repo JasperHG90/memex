@@ -55,7 +55,7 @@ claude --plugin-dir ./packages/claude-code-plugin
 
 - **Skills**: `/remember`, `/recall`, and `/retro` slash commands for manual memory capture, retrieval, and structured session postmortems.
 - **Hooks**: Full session lifecycle integration:
-  - `SessionStart` — installs rules (including `<project>/.claude/rules/memex-agent-surface.md`, the Tier 1b+2 agent surface auto-loaded into the system prompt), fetches a token-budgeted briefing, resolves the active vault, generates a per-session note key.
+  - `SessionStart` — installs rules (including `<project>/.claude/rules/memex-agent-surface.md`, the Tier 1b+2 agent surface auto-loaded into the system prompt), fetches a token-budgeted briefing (now including a `## Procedures` block of KV rows under `procedure:*` so learned behavioural rules survive across sessions), resolves the active vault, generates a per-session note key.
   - `SessionEnd` — auto-captures the full session transcript to long-term memory (safety net under `/remember`).
   - `PreCompact` — captures transcript-since-last-compact to the session note before context is discarded.
   - `UserPromptExpansion` — when `/recall` is invoked without arguments, composes a query from the last N transcript turns.
@@ -132,35 +132,59 @@ Earlier plugin versions wrote to bare `project:<id>:vault` keys. The plugin now 
 
 ## Configuration
 
-### Default vault
+The plugin is configured entirely through environment variables (set in your shell profile, your Claude Code `settings.json` `env` block, or — for MCP-only — the project's `.mcp.json`) and via `~/.config/memex/config.yaml` for the underlying Memex CLI.
 
-The plugin uses your existing Memex configuration. Set the global default vault via:
+### Environment variables
 
-```bash
-export MEMEX_VAULT__ACTIVE=my-vault
+| Variable | Default | Effect |
+|---|---|---|
+| `MEMEX_SERVER_URL` | `http://127.0.0.1:8000` | Memex server URL used by both the hooks and the MCP server. Set this when your server runs elsewhere (e.g. `host.docker.internal` from a devcontainer). |
+| `MEMEX_VAULT__ACTIVE` | unset | Server-side default active vault. Read by the Memex CLI's config layer (`~/.memex.yaml`). |
+| `MEMEX_VAULT` | unset | Per-session vault override (rung 4 in the resolution chain — see "Per-project vault binding" below). Wins over the server default but loses to project/user/agent KV bindings. |
+| `MEMEX_PLUGIN_VERSION` | `latest` | Pin the plugin's `uvx`-installed memex-cli to a specific git tag or branch (e.g. `v0.42.0`, `main`). Validated against `git ls-remote` with a 24h on-disk cache. |
+| `MEMEX_LOCAL_PATH` | unset | **Dev mode** — point at a local Memex workspace checkout instead of `uvx`-installing from GitHub. Overrides `MEMEX_PLUGIN_VERSION`. Used by the eval suite to run Claude Code against the same code path Hermes runs. |
+| `MEMEX_CC_AGENT_ID` | unset | Subagent identity. Enables the `app:claude-code:agent:<id>:vault` resolution rung (rung 3, between project and user). |
+| `MEMEX_CC_TIMEOUT` | `8` (seconds, clamped to [1, 600]) | Hard timeout per `memex` CLI call from hooks. Protects SessionEnd/PreCompact from a hung server. |
+| `MEMEX_CC_TRANSCRIPT_CAPTURE` | `on` | Toggle the SessionEnd + PreCompact transcript-capture hooks. Set to `off`/`0`/`false`/`no`/`disabled` to disable. Useful when transcripts are large and you don't want to pay the extraction cost. |
+| `MEMEX_CC_SESSION_BRIEFING` | `on` | Toggle the SessionStart briefing injection. Set to `off`/etc. to disable. The vault-binding, session-note, and auto-tag instructions still emit — only the dynamic per-vault briefing markdown is suppressed. |
+| `MEMEX_RESOLVE_VERBOSE` | unset | Internal — when `1`, the resolver emits uvx/version diagnostics as systemMessage. Hooks already set this where appropriate; users do not need to. |
+
+> **Note on the `MEMEX_CC_*` toggles**: these have no "truthy" form. Anything not in the falsy set above is treated as `on`. To re-enable, **unset** the variable rather than setting it to `1` or `true`. This is a deliberate one-way parser to keep the toggle logic five lines and avoid surprise enables under typo.
+
+### How to disable behaviours
+
+Paste into `~/.claude/settings.json` (or per-project `.claude/settings.local.json`):
+
+```jsonc
+{
+  "env": {
+    "MEMEX_CC_TRANSCRIPT_CAPTURE": "off",
+    "MEMEX_CC_SESSION_BRIEFING": "off",
+    "MEMEX_PLUGIN_VERSION": "v0.42.0"
+  }
+}
 ```
 
-Or configure it in your `~/.memex.yaml`.
+Or export in your shell profile for global effect across all Claude Code sessions:
 
-### Server URL
+```bash
+export MEMEX_CC_TRANSCRIPT_CAPTURE=off
+export MEMEX_CC_SESSION_BRIEFING=off
+```
 
-By default, the Memex CLI and hooks connect to `http://127.0.0.1:8000`. If your server runs elsewhere (e.g., in a devcontainer where the host is `host.docker.internal`), configure the URL using one of these methods, listed in priority order:
+### `~/.config/memex/config.yaml` (server URL alternative)
 
-1. **`~/.config/memex/config.yaml`** (recommended) — covers both hooks and the MCP server:
+Setting `MEMEX_SERVER_URL` in `~/.config/memex/config.yaml` is the cleanest way to point both hooks and the MCP server at a non-default server location:
 
-   ```yaml
-   server_url: http://host.docker.internal:8000
-   ```
+```yaml
+server_url: http://host.docker.internal:8000
+```
 
-2. **Environment variable** — export in your shell profile (`.bashrc` / `.zshrc`):
+This is preferred over the env var when the URL is stable for your machine.
 
-   ```bash
-   export MEMEX_SERVER_URL=http://host.docker.internal:8000
-   ```
+### `.mcp.json` env override (MCP-only)
 
-   This also covers both hooks and the MCP server.
-
-3. **Plugin MCP env override** — set `MEMEX_SERVER_URL` in the project's `.mcp.json` env block. **Note:** this only affects the MCP server process, not hooks. Use option 1 or 2 if hooks also need the custom URL.
+You can set `MEMEX_SERVER_URL` (and other env vars) in the project's `.mcp.json` env block, but **this only affects the MCP server process, not the hooks**. Use the env-var or config-file approach above when hooks also need the override.
 
 ## Updating
 

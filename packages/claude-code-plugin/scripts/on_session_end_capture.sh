@@ -32,6 +32,14 @@ if [ -z "$_payload" ]; then
     exit 0
 fi
 
+# Opt-out: MEMEX_CC_TRANSCRIPT_CAPTURE=off|0|false|no|disabled skips the capture.
+# Offset file is NOT advanced — re-enabling resumes from the prior offset (no turns lost).
+case "${MEMEX_CC_TRANSCRIPT_CAPTURE:-on}" in
+    off|0|false|no|disabled)
+        exit 0
+        ;;
+esac
+
 if ! command -v jq >/dev/null 2>&1; then
     exit 0
 fi

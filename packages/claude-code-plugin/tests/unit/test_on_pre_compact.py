@@ -308,3 +308,92 @@ def test_session_stats_included_in_context(mock_memex: MockMemex, transcript_jso
     out = json.loads(result.stdout)
     ctx = out['hookSpecificOutput']['additionalContext']
     assert '7 writes' in ctx
+
+
+# ---------------------------------------------------------------------------
+# V4: MEMEX_CC_TRANSCRIPT_CAPTURE opt-out
+# ---------------------------------------------------------------------------
+
+
+def test_pre_compact_skipped_when_MEMEX_CC_TRANSCRIPT_CAPTURE_off(
+    mock_memex: MockMemex, transcript_jsonl: Path, temp_git_repo: Path
+) -> None:
+    """Disabled: no capture, but JSON output matches the existing skipped-path shape
+    (additionalContext mentions reason + stats appendix)."""
+    _seed_session_start_state(mock_memex)
+    result = run_script(
+        'on_pre_compact.sh',
+        stdin=_precompact_payload(str(transcript_jsonl)),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+        extra_env={'MEMEX_CC_TRANSCRIPT_CAPTURE': 'off'},
+    )
+    assert result.returncode == 0, result.stderr
+    assert not mock_memex.calls_matching('note', 'add')
+    assert not mock_memex.calls_matching('note', 'append')
+
+    out = json.loads(result.stdout)
+    ctx = out['hookSpecificOutput']['additionalContext']
+    # Shape parity: disabled-path uses the existing skipped-path output template.
+    assert 'pre-compact capture skipped' in ctx
+    assert 'MEMEX_CC_TRANSCRIPT_CAPTURE' in ctx
+    # Stats appendix preserved (parity check)
+    assert 'Session stats:' in ctx
+
+
+def test_pre_compact_disabled_does_not_advance_offset(
+    mock_memex: MockMemex, transcript_jsonl: Path, temp_git_repo: Path
+) -> None:
+    """Offset file untouched when capture is disabled. Pre-seed `5`; verify no advance."""
+    _seed_session_start_state(mock_memex)
+    state_dir = mock_memex.plugin_data / 'memex'
+    offset_file = state_dir / 'session_note_offset_cc-sess-1'
+    state_dir.mkdir(parents=True, exist_ok=True)
+    offset_file.write_text('5')
+
+    run_script(
+        'on_pre_compact.sh',
+        stdin=_precompact_payload(str(transcript_jsonl)),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+        extra_env={'MEMEX_CC_TRANSCRIPT_CAPTURE': 'off'},
+    )
+    assert offset_file.read_text().strip() == '5', (
+        'offset advanced even though capture was disabled'
+    )
+
+
+def test_pre_compact_disabled_then_enabled_resumes_from_prior_offset(
+    mock_memex: MockMemex, transcript_jsonl: Path, temp_git_repo: Path
+) -> None:
+    """Disabled run leaves offset alone; subsequent enabled run captures from the prior offset
+    (no turns lost). Total lines in transcript_jsonl fixture is small (3 turns); pre-seed
+    offset=1 and verify enabled capture happens after the disabled run."""
+    _seed_session_start_state(mock_memex)
+    state_dir = mock_memex.plugin_data / 'memex'
+    offset_file = state_dir / 'session_note_offset_cc-sess-1'
+    state_dir.mkdir(parents=True, exist_ok=True)
+    offset_file.write_text('1')
+
+    # Disabled run
+    run_script(
+        'on_pre_compact.sh',
+        stdin=_precompact_payload(str(transcript_jsonl)),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+        extra_env={'MEMEX_CC_TRANSCRIPT_CAPTURE': 'off'},
+    )
+    assert offset_file.read_text().strip() == '1'
+    assert not mock_memex.calls_matching('note', 'add')
+
+    # Enabled run — should capture the remaining lines.
+    run_script(
+        'on_pre_compact.sh',
+        stdin=_precompact_payload(str(transcript_jsonl)),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+    )
+    add_calls = mock_memex.calls_matching('note', 'add')
+    assert len(add_calls) == 1, 'enabled run after disabled should add the note'
+    # Offset advanced past the seeded `1`.
+    assert int(offset_file.read_text().strip()) > 1

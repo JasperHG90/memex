@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import pytest
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock
@@ -277,11 +279,17 @@ class TestTrendSorting:
 class TestKVNamespaces:
     def test_without_project(self):
         ns = _build_kv_namespaces(None)
-        assert ns == ['global', 'user', 'app:claude-code']
+        assert ns == ['global', 'user', 'app:claude-code', 'procedure']
 
     def test_with_project(self):
         ns = _build_kv_namespaces('my-project')
-        assert ns == ['global', 'user', 'app:claude-code', 'project:my-project']
+        assert ns == [
+            'global',
+            'user',
+            'app:claude-code',
+            'procedure',
+            'project:my-project',
+        ]
 
 
 # ---------------------------------------------------------------------------
@@ -322,21 +330,28 @@ class TestSessionBriefingGenerate:
 
     @pytest.mark.asyncio
     async def test_section_order(self):
-        """Sections appear in order: header, KV, vault overview, entities, binding."""
+        """Sections appear in order: header, KV, procedures, vault overview, entities, binding."""
         svc = _make_service(
             summary=_make_vault_summary(),
             mental_models=_make_mental_models(3, with_observations=True),
-            kv_entries=[_make_kv_entry('global:test', 'value')],
+            kv_entries=[
+                _make_kv_entry('global:test', 'value'),
+                _make_kv_entry(
+                    'procedure:answer:test',
+                    json.dumps({'v': 1, 'value': 'sample procedure', 'tags': {}, 'history': []}),
+                ),
+            ],
         )
         result = await svc.generate(uuid4(), budget=2000)
 
         header_pos = result.find('# Session Briefing')
         kv_pos = result.find('## Key-Value Facts')
+        proc_pos = result.find('## Procedures')
         vault_pos = result.find('## Vault Overview')
         entity_pos = result.find('## Top Entities')
         binding_pos = result.find('*Vault:')
 
-        assert header_pos < kv_pos < vault_pos < entity_pos < binding_pos
+        assert header_pos < kv_pos < proc_pos < vault_pos < entity_pos < binding_pos
 
     @pytest.mark.asyncio
     async def test_2000_includes_narrative_and_trends(self):
@@ -939,3 +954,177 @@ class TestVaultsSection:
         result = await svc.generate(vault_id=VAULT_ID, budget=2000)
         assert '...' in result
         assert long_desc not in result
+
+
+class TestProcedures:
+    """V4: procedure KV rows render in their own ## Procedures section."""
+
+    @staticmethod
+    def _wrap(value: str) -> str:
+        return json.dumps({'v': 1, 'value': value, 'tags': {}, 'history': []})
+
+    @pytest.mark.asyncio
+    async def test_section_present_when_procedure_rows_exist(self):
+        svc = _make_service(
+            summary=_make_vault_summary(),
+            kv_entries=[
+                _make_kv_entry('procedure:answer:foo', self._wrap('answer like X')),
+                _make_kv_entry('procedure:format:bar', self._wrap('format like Y')),
+            ],
+        )
+        result = await svc.generate(uuid4(), budget=2000)
+        assert '## Procedures' in result
+        assert '**answer:foo**' in result
+        assert 'answer like X' in result
+        assert '**format:bar**' in result
+        assert 'format like Y' in result
+
+    @pytest.mark.asyncio
+    async def test_section_absent_when_no_procedure_rows(self):
+        svc = _make_service(
+            summary=_make_vault_summary(),
+            kv_entries=[_make_kv_entry('global:k', 'v')],
+        )
+        result = await svc.generate(uuid4(), budget=2000)
+        assert '## Procedures' not in result
+
+    @pytest.mark.asyncio
+    async def test_envelope_unwrap_extracts_value_field(self):
+        svc = _make_service(
+            summary=_make_vault_summary(),
+            kv_entries=[_make_kv_entry('procedure:x', self._wrap('hello'))],
+        )
+        result = await svc.generate(uuid4(), budget=2000)
+        assert 'hello' in result
+        assert '"v":' not in result.split('## Procedures')[1].split('---')[0]
+
+    @pytest.mark.asyncio
+    async def test_envelope_fallback_on_malformed_json(self):
+        svc = _make_service(
+            summary=_make_vault_summary(),
+            kv_entries=[_make_kv_entry('procedure:x', 'raw text not json')],
+        )
+        result = await svc.generate(uuid4(), budget=2000)
+        assert 'raw text not json' in result
+
+    @pytest.mark.asyncio
+    async def test_envelope_fallback_on_non_dict_json(self):
+        svc = _make_service(
+            summary=_make_vault_summary(),
+            kv_entries=[_make_kv_entry('procedure:x', json.dumps([1, 2, 3]))],
+        )
+        result = await svc.generate(uuid4(), budget=2000)
+        assert '[1, 2, 3]' in result
+
+    @pytest.mark.asyncio
+    async def test_kv_section_excludes_procedure_entries(self):
+        svc = _make_service(
+            summary=_make_vault_summary(),
+            kv_entries=[
+                _make_kv_entry('global:foo', 'bar'),
+                _make_kv_entry('procedure:x', self._wrap('proc text')),
+            ],
+        )
+        result = await svc.generate(uuid4(), budget=2000)
+        kv_section = result.split('## Key-Value Facts')[1].split('##')[0]
+        assert 'procedure:x' not in kv_section
+        assert 'proc text' not in kv_section
+        assert 'global:foo' in kv_section
+
+    @pytest.mark.asyncio
+    async def test_user_namespace_included_in_briefing(self):
+        """Guard: `user:*` rows must appear in KV section (regression pin)."""
+        svc = _make_service(
+            summary=_make_vault_summary(),
+            kv_entries=[_make_kv_entry('user:editor', 'neovim')],
+        )
+        result = await svc.generate(uuid4(), budget=2000)
+        assert '## Key-Value Facts' in result
+        assert 'user:editor' in result
+        assert 'neovim' in result
+
+    @pytest.mark.asyncio
+    async def test_value_truncation_at_max_chars(self):
+        from memex_core.services.session_briefing import _PROCEDURE_VALUE_MAX_CHARS
+
+        long_text = 'x' * (_PROCEDURE_VALUE_MAX_CHARS + 500)
+        svc = _make_service(
+            summary=_make_vault_summary(),
+            kv_entries=[_make_kv_entry('procedure:x', self._wrap(long_text))],
+        )
+        result = await svc.generate(uuid4(), budget=2000)
+        assert '…' in result
+        # Rendered text should be ≤ max + ellipsis; not the full long_text.
+        assert ('x' * (_PROCEDURE_VALUE_MAX_CHARS + 500)) not in result
+
+    @pytest.mark.asyncio
+    async def test_newline_defang_indents_embedded_headings(self):
+        """A `\\n##` in the stored value must NOT create a fake briefing heading."""
+        svc = _make_service(
+            summary=_make_vault_summary(),
+            kv_entries=[_make_kv_entry('procedure:x', self._wrap('intro\n## fake heading'))],
+        )
+        result = await svc.generate(uuid4(), budget=2000)
+        # The injected `\n## fake heading` becomes `\n  ## fake heading` (indented),
+        # so `\n## fake heading` (line-start H2) must not appear.
+        assert '\n## fake heading' not in result
+        assert '  ## fake heading' in result
+
+    @pytest.mark.asyncio
+    async def test_procedures_render_in_every_vaults_briefing(self):
+        """KV has no vault_id; the same procedure row surfaces in any vault's briefing."""
+        entries = [_make_kv_entry('procedure:shared', self._wrap('global rule'))]
+        svc_a = _make_service(summary=_make_vault_summary(), kv_entries=entries)
+        svc_b = _make_service(summary=_make_vault_summary(), kv_entries=entries)
+        result_a = await svc_a.generate(uuid4(), budget=2000)
+        result_b = await svc_b.generate(uuid4(), budget=2000)
+        assert 'global rule' in result_a
+        assert 'global rule' in result_b
+
+    @pytest.mark.asyncio
+    async def test_procedure_answer_session_briefing_round_trip(self):
+        """Bug-motivation pin: the exact KV row that triggered V4."""
+        svc = _make_service(
+            summary=_make_vault_summary(),
+            kv_entries=[
+                _make_kv_entry(
+                    'procedure:answer:session-briefing',
+                    self._wrap(
+                        'When the SessionStart briefing already contains the data, answer from it.'
+                    ),
+                )
+            ],
+        )
+        result = await svc.generate(uuid4(), budget=2000)
+        assert '**answer:session-briefing**' in result
+        assert 'answer from it' in result
+
+    @pytest.mark.asyncio
+    async def test_orphan_header_suppressed_when_all_entries_degenerate(self):
+        """`procedure:` (empty body) or empty value → no entry rendered → no orphan heading."""
+        svc = _make_service(
+            summary=_make_vault_summary(),
+            kv_entries=[
+                _make_kv_entry('procedure:', self._wrap('orphan body')),
+                _make_kv_entry('procedure:empty', self._wrap('')),
+            ],
+        )
+        result = await svc.generate(uuid4(), budget=2000)
+        assert '## Procedures' not in result
+
+    @pytest.mark.asyncio
+    async def test_overflow_step5_trims_procedures_under_budget(self):
+        """Step 5 should drop procedures when budget is exhausted by other content."""
+        large_summary = _make_vault_summary()
+        # Pad the summary narrative to push overflow into Step 5.
+        large_summary.narrative = 'x ' * 600
+
+        # Many procedure rows, each near the per-row cap, to ensure they're the
+        # largest droppable section after vault overview + KV trim.
+        entries = [_make_kv_entry(f'procedure:p{i}', self._wrap('y ' * 200)) for i in range(15)]
+        svc = _make_service(summary=large_summary, kv_entries=entries)
+        result = await svc.generate(uuid4(), budget=1000)
+        # After overflow, the procedure section MUST be slimmer than the input —
+        # not every seeded row should still be present.
+        present = sum(1 for i in range(15) if f'**p{i}**' in result)
+        assert present < 15
