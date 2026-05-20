@@ -32,6 +32,21 @@ if [ -z "$_payload" ]; then
     exit 0
 fi
 
+# =============================================================================
+# === BEHAVIOUR GUARD — opt-out short-circuit. All side effects that should ==
+# === run regardless of MEMEX_CC_TRANSCRIPT_CAPTURE MUST be placed ABOVE this. ==
+# =============================================================================
+# Falsy values (off|0|false|no|disabled) skip the capture entirely. Offset file
+# is NOT advanced — re-enabling resumes from the prior offset (no turns lost).
+# Note: the jq availability check below this guard is intentional — when capture
+# is disabled, missing jq is irrelevant (we have nothing to serialise), so we
+# don't want to fail or warn on jq absence in that path.
+case "${MEMEX_CC_TRANSCRIPT_CAPTURE:-on}" in
+    off|0|false|no|disabled)
+        exit 0
+        ;;
+esac
+
 if ! command -v jq >/dev/null 2>&1; then
     exit 0
 fi

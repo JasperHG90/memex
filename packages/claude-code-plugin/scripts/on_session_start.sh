@@ -114,31 +114,46 @@ if [ -n "$_project_root" ]; then
     fi
 fi
 
+# --- Opt-out: MEMEX_CC_SESSION_BRIEFING=off|0|false|no|disabled skips the fetch ---
+# Static vault/session/auto-tag instructions still emit; only the dynamic briefing
+# markdown is suppressed. Agent-surface install above is unaffected.
+_briefing_disabled=0
+case "${MEMEX_CC_SESSION_BRIEFING:-on}" in
+    off|0|false|no|disabled)
+        _briefing_disabled=1
+        ;;
+esac
+
 # --- Build briefing CLI args ---
 briefing_args=(briefing --budget 2000)
 [ -n "$project_vault" ] && briefing_args+=(--vault "$project_vault")
 [ -n "$project_id" ] && briefing_args+=(--project-id "$project_id")
 
-# --- Register cleanup trap upfront so any later failure cleans temp files ---
+# --- Register cleanup trap upfront so any later failure cleans temp files.
+# Guard with -n so the disabled-briefing path (tmp_briefing never assigned)
+# doesn't spawn a noisy `rm -f ""` warning on exit. ---
 tmp_briefing=''
-trap 'rm -f "$tmp_briefing"' EXIT
+trap '[ -n "$tmp_briefing" ] && rm -f "$tmp_briefing"' EXIT
 
 # --- Fetch dynamic session briefing (per-vault state from the server) ---
-tmp_briefing=$(mktemp)
+briefing_content=""
+if [ "$_briefing_disabled" -eq 0 ]; then
+    tmp_briefing=$(mktemp)
 
-if ! memex "${briefing_args[@]}" > "$tmp_briefing" 2>/dev/null; then
-    cat <<'EOF'
+    if ! memex "${briefing_args[@]}" > "$tmp_briefing" 2>/dev/null; then
+        cat <<'EOF'
 {"systemMessage": "Memex server is not reachable. Start it with:\n  memex server start -d\n\nMemex MCP tools will not work until the server is running."}
 EOF
-    exit 0
-fi
+        exit 0
+    fi
 
-# --- Build additionalContext (dynamic briefing only; agent surface is on disk) ---
-# Command substitution strips trailing newlines, so re-append one to guarantee
-# a stable separator before the vault/session/auto-tag instructions that follow.
-briefing_content="$(cat "$tmp_briefing")
+    # Command substitution strips trailing newlines, so re-append one to guarantee
+    # a stable separator before the vault/session/auto-tag instructions that follow.
+    briefing_content="$(cat "$tmp_briefing")
 "
+fi
 status="🧠 Memex connected${agent_surface_install_warning}"
+[ "$_briefing_disabled" -eq 1 ] && status="${status} · Briefing disabled (MEMEX_CC_SESSION_BRIEFING)"
 
 if [ -n "$project_vault" ]; then
     vault_instruction="

@@ -383,3 +383,89 @@ def test_temp_files_cleaned_up_on_success(mock_memex: MockMemex, temp_git_repo: 
     after = set(Path('/tmp').glob('tmp.*'))
     leaked = after - before
     assert not leaked, f'hook leaked temp files: {leaked!r}'
+
+
+# ---------------------------------------------------------------------------
+# V4: MEMEX_CC_SESSION_BRIEFING opt-out
+# ---------------------------------------------------------------------------
+
+
+def test_briefing_skipped_when_MEMEX_CC_SESSION_BRIEFING_off(
+    mock_memex: MockMemex, temp_git_repo: Path
+) -> None:
+    """Disabled briefing: no `memex briefing` call, but agent-surface install still runs."""
+    result = run_script(
+        'on_session_start.sh',
+        stdin=_session_start_payload(),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+        extra_env={'MEMEX_CC_SESSION_BRIEFING': 'off'},
+    )
+    assert result.returncode == 0, result.stderr
+
+    # No `memex briefing` call landed on the mock.
+    assert not mock_memex.calls_matching('briefing'), (
+        f'expected no briefing call, got: {mock_memex.calls_matching("briefing")}'
+    )
+
+    # Agent-surface install MUST still have run — gated upstream of the toggle.
+    assert mock_memex.calls_matching('agent-surface', 'claude-code'), (
+        'agent-surface install was incorrectly gated by MEMEX_CC_SESSION_BRIEFING'
+    )
+
+    parsed = json.loads(result.stdout)
+    assert 'Briefing disabled' in parsed.get('systemMessage', '')
+    assert '### Per-project vault' in parsed['hookSpecificOutput']['additionalContext']
+
+
+def test_briefing_runs_when_env_unset(mock_memex: MockMemex, temp_git_repo: Path) -> None:
+    """Default-on: unset toggle invokes `memex briefing`."""
+    result = run_script(
+        'on_session_start.sh',
+        stdin=_session_start_payload(),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+    )
+    assert result.returncode == 0, result.stderr
+    assert mock_memex.calls_matching('briefing'), 'briefing should run when toggle is unset'
+
+
+def test_briefing_toggle_accepts_off_0_false_no_disabled(
+    mock_memex: MockMemex, temp_git_repo: Path
+) -> None:
+    """All five falsy values suppress the briefing fetch."""
+    for falsy in ('off', '0', 'false', 'no', 'disabled'):
+        # Clear prior calls between iterations
+        if mock_memex.calls_file.exists():
+            mock_memex.calls_file.unlink()
+        result = run_script(
+            'on_session_start.sh',
+            stdin=_session_start_payload(),
+            env=mock_memex.env,
+            cwd=temp_git_repo,
+            extra_env={'MEMEX_CC_SESSION_BRIEFING': falsy},
+        )
+        assert result.returncode == 0, f'falsy={falsy} stderr={result.stderr}'
+        assert not mock_memex.calls_matching('briefing'), (
+            f'falsy value {falsy!r} did not suppress briefing'
+        )
+
+
+def test_briefing_toggle_treats_unknown_value_as_on(
+    mock_memex: MockMemex, temp_git_repo: Path
+) -> None:
+    """Anything not in the falsy set runs the fetch — documented asymmetric contract."""
+    for not_falsy in ('true', '1', 'yes', 'random-garbage', 'ON'):
+        if mock_memex.calls_file.exists():
+            mock_memex.calls_file.unlink()
+        result = run_script(
+            'on_session_start.sh',
+            stdin=_session_start_payload(),
+            env=mock_memex.env,
+            cwd=temp_git_repo,
+            extra_env={'MEMEX_CC_SESSION_BRIEFING': not_falsy},
+        )
+        assert result.returncode == 0, f'value={not_falsy} stderr={result.stderr}'
+        assert mock_memex.calls_matching('briefing'), (
+            f'value {not_falsy!r} unexpectedly suppressed briefing'
+        )

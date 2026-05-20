@@ -12,7 +12,6 @@ from rich.console import Console
 from rich.table import Table
 
 from memex_common.config import MemexConfig
-from memex_common.schemas import CreateVaultRequest
 from memex_cli.utils import get_api_context, async_command, handle_api_error
 
 console = Console()
@@ -142,10 +141,9 @@ async def create_vault(
 
     console.print(f'[green]Creating vault:[/green] {name}')
 
-    req = CreateVaultRequest(name=name, description=description)
     async with get_api_context(config) as api:
         try:
-            vault = await api.create_vault(req)
+            vault = await api.create_vault(name, description)
         except Exception as e:
             handle_api_error(e)
 

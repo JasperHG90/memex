@@ -7,8 +7,10 @@ structured markdown briefing that fits within a specified token budget.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
-from typing import Any
+from datetime import datetime, timezone
+from typing import Any, Final
 from uuid import UUID
 
 from sqlmodel import col, select
@@ -52,6 +54,11 @@ _THEME_TREND_ARROWS: dict[str, str] = {
 }
 
 
+# Sized to fit the motivating procedure:answer:session-briefing row (~900 chars).
+# At 5 rows-of-cap ~ 1250 tokens, <= 63% of the 2000-token briefing budget.
+_PROCEDURE_VALUE_MAX_CHARS: Final = 1000
+
+
 def _estimate_tokens(text: str) -> int:
     """Rough chars-to-tokens estimate (÷4)."""
     return len(text) // 4
@@ -63,8 +70,15 @@ def _compute_importance(mm: MentalModel) -> float:
 
 
 def _build_kv_namespaces(project_id: str | None) -> list[str]:
-    """Build the list of KV namespaces to include in the briefing."""
-    ns = ['global', 'user', 'app:claude-code']
+    """Build the list of KV namespaces to include in the briefing.
+
+    `procedure` is fetched alongside the namespaced prefixes; rows are split
+    out of `kv_entries` in `_build_sections` and render in their own
+    ``## Procedures`` section. Step 4 of `_apply_overflow` only drops
+    `app:/user:/project:` — `procedure:` rows are degraded separately in
+    Step 5.
+    """
+    ns = ['global', 'user', 'app:claude-code', 'procedure']
     if project_id:
         ns.append(f'project:{project_id}')
     return ns
@@ -175,8 +189,13 @@ class SessionBriefingService:
         # 1. Header (always included)
         sections.append(('header', self._build_header(summary, len(mental_models))))
 
-        # 2. KV facts (priority 1)
-        sections.append(('kv', self._build_kv_section(kv_entries)))
+        # 2. KV facts (priority 1) — procedure rows render in their own section below
+        non_proc = [e for e in kv_entries if not e.key.startswith('procedure:')]
+        proc = [e for e in kv_entries if e.key.startswith('procedure:')]
+        sections.append(('kv', self._build_kv_section(non_proc)))
+
+        # 2b. Procedures (priority 1b — behavioural rules; high signal)
+        sections.append(('procedures', self._build_procedures_section(proc)))
 
         # 3. Vault overview (priority 2 — narrative + compact themes in one section)
         sections.append(
@@ -227,12 +246,89 @@ class SessionBriefingService:
         return ''.join(lines) + '\n'
 
     def _build_kv_section(self, kv_entries: list[Any]) -> str:
-        """Build the KV facts section."""
+        """Build the KV facts section.
+
+        Caller (``_build_sections`` / ``_apply_overflow``) is responsible for
+        excluding ``procedure:*`` rows — those render in their own section.
+        """
         if not kv_entries:
             return ''
         lines = ['\n## Key-Value Facts\n']
         for entry in kv_entries:
             lines.append(f'- `{entry.key}`: {entry.value}')
+        return '\n'.join(lines) + '\n'
+
+    def _sanitize_procedure_value(self, raw: str | None) -> str:
+        """Extract the human-readable value from a procedure KV row, defanged for markdown.
+
+        ``raw`` is the value column of a ``KVEntry`` row — always ``str | None``
+        per the schema; ``Any`` would mask accidental misuse.
+        """
+        if raw is None:
+            return ''
+        parsed_ok = True
+        try:
+            payload = json.loads(raw)
+        except (json.JSONDecodeError, TypeError):
+            parsed_ok = False
+            payload = None
+
+        if isinstance(payload, dict) and 'value' in payload:
+            inner = payload['value']
+            # Envelope present but `value` is non-string — render just the inner
+            # value (don't leak `v`/`tags`/`history` from the full envelope).
+            text = inner if isinstance(inner, str) else str(inner)
+        elif parsed_ok and payload is None:
+            # `json.loads("null")` returns None — treat the same as `raw is None`
+            # rather than rendering the literal string `"null"`.
+            text = ''
+        else:
+            # Parse failed OR JSON was not a dict — render the raw stored string.
+            text = str(raw)
+        # Indent embedded newlines so a stored "\n## X" can't create a fake heading.
+        # Normalise CRLF and bare CR first so all three line terminators are defanged
+        # uniformly (markdown processors and screen readers each handle CR differently).
+        text = text.replace('\r\n', '\n').replace('\r', '\n').replace('\n', '\n  ')
+        if len(text) > _PROCEDURE_VALUE_MAX_CHARS:
+            # Reserve one char for the ellipsis so total length is exactly the cap.
+            # rstrip() drops trailing whitespace at the truncation boundary so the
+            # ellipsis abuts the last visible glyph; acceptable for behavioural
+            # procedure rules (where trailing whitespace carries no semantics).
+            text = text[: _PROCEDURE_VALUE_MAX_CHARS - 1].rstrip() + '…'
+        return text
+
+    @staticmethod
+    def _defang_procedure_name(name: str) -> str:
+        """Escape markdown metacharacters in a procedure key.
+
+        Keys are validated at write time (`validate_procedure_key`) — the scoped
+        threat model here is rendering-correctness against any key shape that
+        passed validation (mostly `[A-Za-z0-9:_-]`, but defending against the
+        broader set keeps this robust if the validator is ever loosened). The
+        renderer wraps the name in `**…**` so unescaped `*`/backtick would
+        corrupt the bold span or open a code span; `[` would open a link.
+        """
+        return (
+            name.replace('\\', '\\\\')
+            .replace('*', '\\*')
+            .replace('`', '\\`')
+            .replace('[', '\\[')
+            .replace(']', '\\]')
+        )
+
+    def _build_procedures_section(self, entries: list[Any]) -> str:
+        """Build the procedures section from KV rows under `procedure:*`."""
+        if not entries:
+            return ''
+        lines = ['\n## Procedures\n']
+        for entry in entries:
+            text = self._sanitize_procedure_value(entry.value)
+            name = entry.key.removeprefix('procedure:')
+            if not name or not text:
+                continue
+            lines.append(f'- **{self._defang_procedure_name(name)}** — {text}')
+        if len(lines) == 1:
+            return ''
         return '\n'.join(lines) + '\n'
 
     def _build_vault_overview(self, summary: Any, compact: bool = False) -> str:
@@ -353,6 +449,18 @@ class SessionBriefingService:
         kv_entries: list[Any],
     ) -> str:
         """Apply overflow degradation to fit within budget."""
+        # Snapshot procedure rows BEFORE Step 4 mutates kv_entries — keeps Step 5
+        # decoupled from any future change to the Step-4 drop-prefix list.
+        # `_ts_floor` is tz-aware to match `updated_at` from `KVEntry` (the ORM
+        # column is `TIMESTAMP WITH TIME ZONE`, so sorted() never mixes tz-aware
+        # and naive datetimes). Rows with `updated_at is None` fall back to
+        # `_ts_floor`, sorting them oldest — they'll be the first dropped by
+        # Step 5's oldest-first trim. This is the intended degradation order.
+        _ts_floor = datetime.min.replace(tzinfo=timezone.utc)
+        procs_initial = sorted(
+            [e for e in kv_entries if e.key.startswith('procedure:')],
+            key=lambda e: getattr(e, 'updated_at', None) or _ts_floor,
+        )
         # Steps 1/1b only apply at budget>=2000 where initial build used 10 models + trends.
         # At budget<2000, _build_sections already used 5 models without trends.
         if budget >= 2000:
@@ -389,17 +497,41 @@ class SessionBriefingService:
         if _estimate_tokens(self._assemble(sections)) <= budget:
             return self._assemble(sections)
 
-        # Step 4: Drop KV namespaces (app -> user -> project)
+        # Step 4: Drop KV namespaces (app -> user -> project).
+        # procedure: rows are tracked separately via `procs_initial` (snapshotted
+        # at the top of this method). Strip them from `kv_entries` once up-front
+        # so any subsequent consumer sees a procedure-free list; Step 5 below
+        # trims procedures from the snapshot, not from `kv_entries`.
+        kv_entries = [e for e in kv_entries if not e.key.startswith('procedure:')]
         for drop_prefix in ('app:', 'user:', 'project:'):
-            filtered = [e for e in kv_entries if not e.key.startswith(drop_prefix)]
+            kv_entries = [e for e in kv_entries if not e.key.startswith(drop_prefix)]
             sections = self._replace_section(
                 sections,
                 'kv',
-                self._build_kv_section(filtered),
+                self._build_kv_section(kv_entries),
             )
-            kv_entries = filtered
             if _estimate_tokens(self._assemble(sections)) <= budget:
                 return self._assemble(sections)
+
+        # Step 5: Trim procedures (high-signal but droppable when budget is exhausted).
+        # Oldest-first: `procs` is sorted ascending by `updated_at`, so
+        # `procs[n_dropped:]` retains the most-recently-touched rules and drops
+        # the oldest `n_dropped` entries first.
+        # If all procedures are exhausted without fitting the budget, fall through
+        # to Step 7 (drop vaults).
+        procs = list(procs_initial)
+        n_dropped = 0
+        while n_dropped < len(procs):
+            n_dropped += 1
+            sections = self._replace_section(
+                sections,
+                'procedures',
+                self._build_procedures_section(procs[n_dropped:]),
+            )
+            if _estimate_tokens(self._assemble(sections)) <= budget:
+                return self._assemble(sections)
+
+        # Step 6: (reserved — intentionally skipped in the numbering)
 
         # Step 7: Drop vaults section entirely
         sections = self._replace_section(sections, 'vaults', '')

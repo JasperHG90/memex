@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from memex_common.agent_harnesses import CLAUDE_CODE_HARNESS, HERMES_HARNESS
 
-_TIER_2_CHAR_CAP = 5_000
+_TIER_2_CHAR_CAP = 5_600
 # Hermes has a tighter natural ceiling — its harness only needs the
 # outcome lexicon + capture cadence. Pin its cap separately so the CC
 # harness's expansion doesn't relax the Hermes budget.
@@ -45,6 +45,22 @@ def test_claude_code_harness_carries_capture_cadence_and_slash_commands() -> Non
     assert 'author="claude-code"' in CLAUDE_CODE_HARNESS
     assert '/remember' in CLAUDE_CODE_HARNESS
     assert '/recall' in CLAUDE_CODE_HARNESS
+
+
+def test_claude_code_harness_carries_answer_from_briefing_rule() -> None:
+    """The answer-from-briefing rule must not silently disappear under future trims."""
+    assert 'answer_from_briefing' in CLAUDE_CODE_HARNESS
+    assert 'memex_get_vault_summary' in CLAUDE_CODE_HARNESS
+    assert 'memex_kv_list' in CLAUDE_CODE_HARNESS
+
+
+def test_claude_code_harness_cap_is_tight() -> None:
+    """The cap is intentionally close to the harness length — bump cap if this fails,
+    don't pad the harness. Surfaces ratchet pressure on every meaningful trim/add."""
+    margin = _TIER_2_CHAR_CAP - len(CLAUDE_CODE_HARNESS)
+    assert margin < 300, (
+        f'cap is loose ({margin} chars of slack); tighten _TIER_2_CHAR_CAP or document why.'
+    )
 
 
 def test_cli_agent_surface_uses_ssot_harnesses_by_identity() -> None:

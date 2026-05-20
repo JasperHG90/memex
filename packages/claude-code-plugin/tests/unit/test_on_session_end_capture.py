@@ -180,3 +180,126 @@ def test_empty_payload_is_silent(mock_memex: MockMemex) -> None:
     result = run_script('on_session_end_capture.sh', stdin='', env=mock_memex.env)
     assert result.returncode == 0
     assert mock_memex.calls() == []
+
+
+# ---------------------------------------------------------------------------
+# V4: MEMEX_CC_TRANSCRIPT_CAPTURE opt-out
+# ---------------------------------------------------------------------------
+
+
+def test_capture_skipped_when_MEMEX_CC_TRANSCRIPT_CAPTURE_off(
+    mock_memex: MockMemex, transcript_jsonl: Path, temp_git_repo: Path
+) -> None:
+    """Disabled: no `memex note add` / `note append` call, hook exits clean."""
+    _seed_session_start_state(mock_memex)
+    result = run_script(
+        'on_session_end_capture.sh',
+        stdin=_session_end_payload(transcript_path=str(transcript_jsonl)),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+        extra_env={'MEMEX_CC_TRANSCRIPT_CAPTURE': 'off'},
+    )
+    assert result.returncode == 0
+    assert not mock_memex.calls_matching('note', 'add')
+    assert not mock_memex.calls_matching('note', 'append')
+
+
+@pytest.mark.parametrize('falsy', ['off', '0', 'false', 'no', 'disabled'])
+def test_capture_toggle_accepts_all_falsy_values(
+    mock_memex: MockMemex, transcript_jsonl: Path, temp_git_repo: Path, falsy: str
+) -> None:
+    """All five falsy values suppress the capture — mirrors session-start parity test."""
+    _seed_session_start_state(mock_memex)
+    if mock_memex.calls_file.exists():
+        mock_memex.calls_file.unlink()
+    result = run_script(
+        'on_session_end_capture.sh',
+        stdin=_session_end_payload(transcript_path=str(transcript_jsonl)),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+        extra_env={'MEMEX_CC_TRANSCRIPT_CAPTURE': falsy},
+    )
+    assert result.returncode == 0
+    assert not mock_memex.calls_matching('note', 'add')
+    assert not mock_memex.calls_matching('note', 'append')
+
+
+@pytest.mark.parametrize('not_falsy', ['true', '1', 'yes', 'random-garbage', 'ON'])
+def test_capture_toggle_treats_unknown_value_as_on(
+    mock_memex: MockMemex, transcript_jsonl: Path, temp_git_repo: Path, not_falsy: str
+) -> None:
+    """Anything not in the falsy set runs the capture — asymmetric one-way parser."""
+    _seed_session_start_state(mock_memex)
+    if mock_memex.calls_file.exists():
+        mock_memex.calls_file.unlink()
+    result = run_script(
+        'on_session_end_capture.sh',
+        stdin=_session_end_payload(transcript_path=str(transcript_jsonl)),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+        extra_env={'MEMEX_CC_TRANSCRIPT_CAPTURE': not_falsy},
+    )
+    assert result.returncode == 0
+    assert mock_memex.calls_matching('note', 'add'), (
+        f'value {not_falsy!r} unexpectedly suppressed capture'
+    )
+
+
+def test_session_end_disabled_does_not_advance_offset(
+    mock_memex: MockMemex, transcript_jsonl: Path, temp_git_repo: Path
+) -> None:
+    """Offset file untouched under disabled capture — re-enabling resumes from prior offset."""
+    _seed_session_start_state(mock_memex)
+    state_dir = mock_memex.plugin_data / 'memex'
+    offset_file = state_dir / 'session_note_offset_cc-sess-1'
+    state_dir.mkdir(parents=True, exist_ok=True)
+    offset_file.write_text('5')
+
+    run_script(
+        'on_session_end_capture.sh',
+        stdin=_session_end_payload(transcript_path=str(transcript_jsonl)),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+        extra_env={'MEMEX_CC_TRANSCRIPT_CAPTURE': 'off'},
+    )
+    assert offset_file.read_text().strip() == '5', (
+        'offset advanced even though capture was disabled'
+    )
+
+
+def test_session_end_disabled_then_enabled_resumes_from_prior_offset(
+    mock_memex: MockMemex, transcript_jsonl: Path, temp_git_repo: Path
+) -> None:
+    """Symmetric to test_pre_compact_disabled_then_enabled_resumes_from_prior_offset:
+    after a disabled session-end run, the next enabled run captures from the seeded
+    offset (no turns lost)."""
+    _seed_session_start_state(mock_memex)
+    state_dir = mock_memex.plugin_data / 'memex'
+    # Mark the session note as already created (PreCompact must have run earlier)
+    # so the enabled SessionEnd path takes the `note append` branch.
+    (state_dir / 'session_note_created_cc-sess-1').touch()
+    offset_file = state_dir / 'session_note_offset_cc-sess-1'
+    state_dir.mkdir(parents=True, exist_ok=True)
+    offset_file.write_text('1')
+
+    # Disabled run — offset must NOT advance.
+    run_script(
+        'on_session_end_capture.sh',
+        stdin=_session_end_payload(transcript_path=str(transcript_jsonl)),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+        extra_env={'MEMEX_CC_TRANSCRIPT_CAPTURE': 'off'},
+    )
+    assert offset_file.read_text().strip() == '1'
+    assert not mock_memex.calls_matching('note', 'append')
+
+    # Enabled run — should append from line 2 onward and advance the offset past 1.
+    run_script(
+        'on_session_end_capture.sh',
+        stdin=_session_end_payload(transcript_path=str(transcript_jsonl)),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+    )
+    append_calls = mock_memex.calls_matching('note', 'append')
+    assert len(append_calls) == 1, 'enabled run after disabled should append the note'
+    assert int(offset_file.read_text().strip()) > 1

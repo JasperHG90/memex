@@ -68,7 +68,18 @@ esac
 _capture_status="skipped"
 _capture_reason=""
 
-if [ -z "$_transcript_path" ] || [ ! -f "$_transcript_path" ]; then
+# Opt-out: MEMEX_CC_TRANSCRIPT_CAPTURE=off|0|false|no|disabled bypasses the capture
+# but still emits the existing skipped-path output shape (additionalContext + stats
+# appendix). Offset file is NOT advanced — re-enabling resumes from prior offset.
+case "${MEMEX_CC_TRANSCRIPT_CAPTURE:-on}" in
+    off|0|false|no|disabled)
+        _capture_reason="disabled via MEMEX_CC_TRANSCRIPT_CAPTURE"
+        ;;
+esac
+
+if [ -n "$_capture_reason" ]; then
+    :  # toggle handled above; fall through to the output assembly below
+elif [ -z "$_transcript_path" ] || [ ! -f "$_transcript_path" ]; then
     _capture_reason="transcript_path missing or not a file"
 elif [ ! -r "$_transcript_path" ]; then
     _capture_reason="transcript_path is not readable (permissions?)"
