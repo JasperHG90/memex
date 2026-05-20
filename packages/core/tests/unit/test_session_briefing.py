@@ -1125,6 +1125,7 @@ class TestProcedures:
         svc = _make_service(summary=large_summary, kv_entries=entries)
         result = await svc.generate(uuid4(), budget=1000)
         # After overflow, the procedure section MUST be slimmer than the input —
-        # not every seeded row should still be present.
+        # not every seeded row should still be present. Two-sided: a regression
+        # that drops EVERY procedure under partial-content budget should also fail.
         present = sum(1 for i in range(15) if f'**p{i}**' in result)
-        assert present < 15
+        assert 0 < present < 15, f'expected partial trim, got present={present}'

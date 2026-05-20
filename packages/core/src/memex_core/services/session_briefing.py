@@ -70,7 +70,14 @@ def _compute_importance(mm: MentalModel) -> float:
 
 
 def _build_kv_namespaces(project_id: str | None) -> list[str]:
-    """Build the list of KV namespaces to include in the briefing."""
+    """Build the list of KV namespaces to include in the briefing.
+
+    `procedure` is fetched alongside the namespaced prefixes; rows are split
+    out of `kv_entries` in `_build_sections` and render in their own
+    ``## Procedures`` section. Step 4 of `_apply_overflow` only drops
+    `app:/user:/project:` — `procedure:` rows are degraded separately in
+    Step 5.
+    """
     ns = ['global', 'user', 'app:claude-code', 'procedure']
     if project_id:
         ns.append(f'project:{project_id}')
@@ -257,10 +264,16 @@ class SessionBriefingService:
             return ''
         try:
             payload = json.loads(raw)
-            text = payload.get('value') if isinstance(payload, dict) else None
-            if not isinstance(text, str):
-                text = str(raw)
         except (json.JSONDecodeError, TypeError):
+            payload = None
+
+        if isinstance(payload, dict) and 'value' in payload:
+            inner = payload['value']
+            # Envelope present but `value` is non-string — render just the inner
+            # value (don't leak `v`/`tags`/`history` from the full envelope).
+            text = inner if isinstance(inner, str) else str(inner)
+        else:
+            # No envelope or not a dict — render the raw stored string.
             text = str(raw)
         # Indent embedded newlines so a stored "\n## X" can't create a fake heading.
         text = text.replace('\n', '\n  ')
