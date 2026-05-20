@@ -224,3 +224,41 @@ def test_session_end_disabled_does_not_advance_offset(
     assert offset_file.read_text().strip() == '5', (
         'offset advanced even though capture was disabled'
     )
+
+
+def test_session_end_disabled_then_enabled_resumes_from_prior_offset(
+    mock_memex: MockMemex, transcript_jsonl: Path, temp_git_repo: Path
+) -> None:
+    """Symmetric to test_pre_compact_disabled_then_enabled_resumes_from_prior_offset:
+    after a disabled session-end run, the next enabled run captures from the seeded
+    offset (no turns lost)."""
+    _seed_session_start_state(mock_memex)
+    state_dir = mock_memex.plugin_data / 'memex'
+    # Mark the session note as already created (PreCompact must have run earlier)
+    # so the enabled SessionEnd path takes the `note append` branch.
+    (state_dir / 'session_note_created_cc-sess-1').touch()
+    offset_file = state_dir / 'session_note_offset_cc-sess-1'
+    state_dir.mkdir(parents=True, exist_ok=True)
+    offset_file.write_text('1')
+
+    # Disabled run — offset must NOT advance.
+    run_script(
+        'on_session_end_capture.sh',
+        stdin=_session_end_payload(transcript_path=str(transcript_jsonl)),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+        extra_env={'MEMEX_CC_TRANSCRIPT_CAPTURE': 'off'},
+    )
+    assert offset_file.read_text().strip() == '1'
+    assert not mock_memex.calls_matching('note', 'append')
+
+    # Enabled run — should append from line 2 onward and advance the offset past 1.
+    run_script(
+        'on_session_end_capture.sh',
+        stdin=_session_end_payload(transcript_path=str(transcript_jsonl)),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+    )
+    append_calls = mock_memex.calls_matching('note', 'append')
+    assert len(append_calls) == 1, 'enabled run after disabled should append the note'
+    assert int(offset_file.read_text().strip()) > 1

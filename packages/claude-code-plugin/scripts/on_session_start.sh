@@ -129,9 +129,11 @@ briefing_args=(briefing --budget 2000)
 [ -n "$project_vault" ] && briefing_args+=(--vault "$project_vault")
 [ -n "$project_id" ] && briefing_args+=(--project-id "$project_id")
 
-# --- Register cleanup trap upfront so any later failure cleans temp files ---
+# --- Register cleanup trap upfront so any later failure cleans temp files.
+# Guard with -n so the disabled-briefing path (tmp_briefing never assigned)
+# doesn't spawn a noisy `rm -f ""` warning on exit. ---
 tmp_briefing=''
-trap 'rm -f "$tmp_briefing"' EXIT
+trap '[ -n "$tmp_briefing" ] && rm -f "$tmp_briefing"' EXIT
 
 # --- Fetch dynamic session briefing (per-vault state from the server) ---
 briefing_content=""
