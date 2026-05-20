@@ -278,7 +278,8 @@ class SessionBriefingService:
         # Indent embedded newlines so a stored "\n## X" can't create a fake heading.
         text = text.replace('\n', '\n  ')
         if len(text) > _PROCEDURE_VALUE_MAX_CHARS:
-            text = text[:_PROCEDURE_VALUE_MAX_CHARS].rstrip() + '…'
+            # Reserve one char for the ellipsis so total length is exactly the cap.
+            text = text[: _PROCEDURE_VALUE_MAX_CHARS - 1].rstrip() + '…'
         return text
 
     def _build_procedures_section(self, entries: list[Any]) -> str:

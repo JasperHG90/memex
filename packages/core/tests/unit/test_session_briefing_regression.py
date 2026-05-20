@@ -285,7 +285,9 @@ class TestProceduresRendering:
         long_value = 'x' * (_PROCEDURE_VALUE_MAX_CHARS + 50)
         sanitized = svc._sanitize_procedure_value(long_value)
         assert sanitized.endswith('…')
-        assert len(sanitized) <= _PROCEDURE_VALUE_MAX_CHARS + 1
+        # The named cap is the rendered ceiling — content + ellipsis together
+        # must not exceed _PROCEDURE_VALUE_MAX_CHARS.
+        assert len(sanitized) <= _PROCEDURE_VALUE_MAX_CHARS
 
     def test_sanitize_falls_back_when_no_value_field(self):
         import json
