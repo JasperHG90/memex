@@ -286,7 +286,9 @@ class SessionBriefingService:
             # Parse failed OR JSON was not a dict — render the raw stored string.
             text = str(raw)
         # Indent embedded newlines so a stored "\n## X" can't create a fake heading.
-        text = text.replace('\n', '\n  ')
+        # Normalise CRLF and bare CR first so all three line terminators are defanged
+        # uniformly (markdown processors and screen readers each handle CR differently).
+        text = text.replace('\r\n', '\n').replace('\r', '\n').replace('\n', '\n  ')
         if len(text) > _PROCEDURE_VALUE_MAX_CHARS:
             # Reserve one char for the ellipsis so total length is exactly the cap.
             text = text[: _PROCEDURE_VALUE_MAX_CHARS - 1].rstrip() + '…'
