@@ -298,3 +298,8 @@ class TestProceduresRendering:
     def test_sanitize_handles_none(self):
         svc = _make_briefing_service()
         assert svc._sanitize_procedure_value(None) == ''
+
+    def test_sanitize_handles_json_null_literal(self):
+        """`json.loads("null")` returns None — render '' rather than the literal "null"."""
+        svc = _make_briefing_service()
+        assert svc._sanitize_procedure_value('null') == ''

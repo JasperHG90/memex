@@ -262,9 +262,11 @@ class SessionBriefingService:
         """Extract the human-readable value from a procedure KV row, defanged for markdown."""
         if raw is None:
             return ''
+        parsed_ok = True
         try:
             payload = json.loads(raw)
         except (json.JSONDecodeError, TypeError):
+            parsed_ok = False
             payload = None
 
         if isinstance(payload, dict) and 'value' in payload:
@@ -272,8 +274,12 @@ class SessionBriefingService:
             # Envelope present but `value` is non-string — render just the inner
             # value (don't leak `v`/`tags`/`history` from the full envelope).
             text = inner if isinstance(inner, str) else str(inner)
+        elif parsed_ok and payload is None:
+            # `json.loads("null")` returns None — treat the same as `raw is None`
+            # rather than rendering the literal string `"null"`.
+            text = ''
         else:
-            # No envelope or not a dict — render the raw stored string.
+            # Parse failed OR JSON was not a dict — render the raw stored string.
             text = str(raw)
         # Indent embedded newlines so a stored "\n## X" can't create a fake heading.
         text = text.replace('\n', '\n  ')
@@ -417,6 +423,9 @@ class SessionBriefingService:
         """Apply overflow degradation to fit within budget."""
         # Snapshot procedure rows BEFORE Step 4 mutates kv_entries — keeps Step 5
         # decoupled from any future change to the Step-4 drop-prefix list.
+        # `_ts_floor` is tz-aware to match `updated_at` from `KVEntry` (the ORM
+        # column is `TIMESTAMP WITH TIME ZONE`, so sorted() never mixes tz-aware
+        # and naive datetimes).
         _ts_floor = datetime.min.replace(tzinfo=timezone.utc)
         procs_initial = sorted(
             [e for e in kv_entries if e.key.startswith('procedure:')],
@@ -474,7 +483,8 @@ class SessionBriefingService:
 
         # Step 5: Trim procedures (high-signal but droppable when budget is exhausted).
         # Oldest-first via index counter (deque/index avoids O(n) pop(0) on long lists).
-        # Step 6 is intentionally skipped — reserved for future degradation step.
+        # If all procedures are exhausted without fitting the budget, fall through
+        # to Step 7 (drop vaults). Step 6 is intentionally skipped — reserved.
         procs = list(procs_initial)
         proc_idx = 0
         while proc_idx < len(procs):

@@ -1127,5 +1127,9 @@ class TestProcedures:
         # After overflow, the procedure section MUST be slimmer than the input —
         # not every seeded row should still be present. Two-sided: a regression
         # that drops EVERY procedure under partial-content budget should also fail.
+        # Expected range (budget=1000, 15 × ~200-char procedures + padded narrative):
+        # typically 2-8 survive after Step 5 trims oldest-first. If this test flips
+        # to `present == 0` after touching _build_sections / header overhead, audit
+        # the budget-arithmetic before relaxing this assertion.
         present = sum(1 for i in range(15) if f'**p{i}**' in result)
         assert 0 < present < 15, f'expected partial trim, got present={present}'
