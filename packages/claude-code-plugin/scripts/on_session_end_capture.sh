@@ -34,6 +34,9 @@ fi
 
 # Opt-out: MEMEX_CC_TRANSCRIPT_CAPTURE=off|0|false|no|disabled skips the capture.
 # Offset file is NOT advanced — re-enabling resumes from the prior offset (no turns lost).
+# IMPORTANT: this exit is intentionally early and final — any future side effects
+# that should still run when capture is disabled (e.g. telemetry, offset cleanup)
+# MUST be placed ABOVE this guard.
 case "${MEMEX_CC_TRANSCRIPT_CAPTURE:-on}" in
     off|0|false|no|disabled)
         exit 0

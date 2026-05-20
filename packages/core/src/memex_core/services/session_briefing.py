@@ -258,8 +258,12 @@ class SessionBriefingService:
             lines.append(f'- `{entry.key}`: {entry.value}')
         return '\n'.join(lines) + '\n'
 
-    def _sanitize_procedure_value(self, raw: Any) -> str:
-        """Extract the human-readable value from a procedure KV row, defanged for markdown."""
+    def _sanitize_procedure_value(self, raw: str | None) -> str:
+        """Extract the human-readable value from a procedure KV row, defanged for markdown.
+
+        ``raw`` is the value column of a ``KVEntry`` row — always ``str | None``
+        per the schema; ``Any`` would mask accidental misuse.
+        """
         if raw is None:
             return ''
         parsed_ok = True
@@ -468,19 +472,18 @@ class SessionBriefingService:
             return self._assemble(sections)
 
         # Step 4: Drop KV namespaces (app -> user -> project).
-        # _build_kv_section does NOT filter procedure: — exclude here so the
-        # rendered KV section matches the namespace-trim semantics.
-        # NOTE: procedure: rows are intentionally retained in `kv_entries`
-        # across Step 4 — Step 5 below trims them via the `procs_initial`
-        # snapshot, not by mutating `kv_entries`.
+        # procedure: rows are tracked separately via `procs_initial` (snapshotted
+        # at the top of this method). Strip them from `kv_entries` once up-front
+        # so any subsequent consumer sees a procedure-free list; Step 5 below
+        # trims procedures from the snapshot, not from `kv_entries`.
+        kv_entries = [e for e in kv_entries if not e.key.startswith('procedure:')]
         for drop_prefix in ('app:', 'user:', 'project:'):
-            filtered = [e for e in kv_entries if not e.key.startswith(drop_prefix)]
+            kv_entries = [e for e in kv_entries if not e.key.startswith(drop_prefix)]
             sections = self._replace_section(
                 sections,
                 'kv',
-                self._build_kv_section([e for e in filtered if not e.key.startswith('procedure:')]),
+                self._build_kv_section(kv_entries),
             )
-            kv_entries = filtered
             if _estimate_tokens(self._assemble(sections)) <= budget:
                 return self._assemble(sections)
 
