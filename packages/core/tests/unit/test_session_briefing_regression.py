@@ -305,10 +305,13 @@ class TestProceduresRendering:
         assert svc._sanitize_procedure_value('null') == ''
 
     def test_defang_procedure_name_escapes_markdown_metachars(self):
-        """A key containing `*` or backtick must not corrupt the `**name**` bold span."""
+        """A key containing `*`, backtick, or `[`/`]` must not corrupt the
+        `**name**` bold span or open a link inside it."""
         from memex_core.services.session_briefing import SessionBriefingService
 
         assert SessionBriefingService._defang_procedure_name('foo*bar') == 'foo\\*bar'
         assert SessionBriefingService._defang_procedure_name('foo`bar') == 'foo\\`bar'
+        assert SessionBriefingService._defang_procedure_name('foo[bar') == 'foo\\[bar'
+        assert SessionBriefingService._defang_procedure_name('foo]bar') == 'foo\\]bar'
         # Backslash must be escaped FIRST so we don't double-escape downstream chars.
         assert SessionBriefingService._defang_procedure_name('foo\\bar') == 'foo\\\\bar'

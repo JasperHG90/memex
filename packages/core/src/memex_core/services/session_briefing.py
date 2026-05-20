@@ -291,6 +291,9 @@ class SessionBriefingService:
         text = text.replace('\r\n', '\n').replace('\r', '\n').replace('\n', '\n  ')
         if len(text) > _PROCEDURE_VALUE_MAX_CHARS:
             # Reserve one char for the ellipsis so total length is exactly the cap.
+            # rstrip() drops trailing whitespace at the truncation boundary so the
+            # ellipsis abuts the last visible glyph; acceptable for behavioural
+            # procedure rules (where trailing whitespace carries no semantics).
             text = text[: _PROCEDURE_VALUE_MAX_CHARS - 1].rstrip() + '…'
         return text
 
@@ -298,12 +301,20 @@ class SessionBriefingService:
     def _defang_procedure_name(name: str) -> str:
         """Escape markdown metacharacters in a procedure key.
 
-        Keys are validated at write time (`validate_procedure_key`) but this is a
-        belt-and-suspenders defence — the renderer wraps the name in `**…**`,
-        so any literal `*` or backtick in the key would corrupt the bold span
-        or open a code span.
+        Keys are validated at write time (`validate_procedure_key`) — the scoped
+        threat model here is rendering-correctness against any key shape that
+        passed validation (mostly `[A-Za-z0-9:_-]`, but defending against the
+        broader set keeps this robust if the validator is ever loosened). The
+        renderer wraps the name in `**…**` so unescaped `*`/backtick would
+        corrupt the bold span or open a code span; `[` would open a link.
         """
-        return name.replace('\\', '\\\\').replace('*', '\\*').replace('`', '\\`')
+        return (
+            name.replace('\\', '\\\\')
+            .replace('*', '\\*')
+            .replace('`', '\\`')
+            .replace('[', '\\[')
+            .replace(']', '\\]')
+        )
 
     def _build_procedures_section(self, entries: list[Any]) -> str:
         """Build the procedures section from KV rows under `procedure:*`."""
@@ -506,7 +517,7 @@ class SessionBriefingService:
         # Oldest-first: `procs` is sorted ascending by `updated_at`, so `procs[n_dropped:]`
         # keeps the n_dropped most-recently-touched rules out (i.e. drops the oldest first).
         # If all procedures are exhausted without fitting the budget, fall through
-        # to Step 7 (drop vaults). Step 6 is intentionally skipped — reserved.
+        # to Step 7 (drop vaults).
         procs = list(procs_initial)
         n_dropped = 0
         while n_dropped < len(procs):
@@ -518,6 +529,8 @@ class SessionBriefingService:
             )
             if _estimate_tokens(self._assemble(sections)) <= budget:
                 return self._assemble(sections)
+
+        # Step 6: (reserved — intentionally skipped in the numbering)
 
         # Step 7: Drop vaults section entirely
         sections = self._replace_section(sections, 'vaults', '')

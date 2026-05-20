@@ -32,11 +32,12 @@ if [ -z "$_payload" ]; then
     exit 0
 fi
 
-# Opt-out: MEMEX_CC_TRANSCRIPT_CAPTURE=off|0|false|no|disabled skips the capture.
-# Offset file is NOT advanced — re-enabling resumes from the prior offset (no turns lost).
-# IMPORTANT: this exit is intentionally early and final — any future side effects
-# that should still run when capture is disabled (e.g. telemetry, offset cleanup)
-# MUST be placed ABOVE this guard.
+# =============================================================================
+# === BEHAVIOUR GUARD — opt-out short-circuit. All side effects that should ==
+# === run regardless of MEMEX_CC_TRANSCRIPT_CAPTURE MUST be placed ABOVE this. ==
+# =============================================================================
+# Falsy values (off|0|false|no|disabled) skip the capture entirely. Offset file
+# is NOT advanced — re-enabling resumes from the prior offset (no turns lost).
 case "${MEMEX_CC_TRANSCRIPT_CAPTURE:-on}" in
     off|0|false|no|disabled)
         exit 0
