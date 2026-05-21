@@ -154,7 +154,7 @@ For a snapshot export (step 4), open `manifest.json` and check `table_counts` ag
 
 ## See also
 
-* [How-to: Manage database migrations](database-migrations.md)
+* [How-to: Manage database migrations](cli-commands.md)
 * [How-to: Organise content with vaults](vaults.md)
-* [Reference: Configuration](../reference/configuration.md)
+* [Reference: Configuration](../reference/configuration-options.md)
 * [Explanation: Design principles — P11 local-first, zero lock-in](../explanation/design-principles.md#p11--local-first-open-source-zero-lock-in)

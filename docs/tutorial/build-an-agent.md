@@ -345,6 +345,6 @@ The script you wrote is the smallest version that exercises every verb a real ag
 ## Next steps
 
 - [Tutorial: Get started with Memex](getting-started.md) — if you skipped ahead, the install-and-first-search walkthrough is the canonical starting point.
-- [How-to: Use Memex over MCP](../how-to/using-mcp.md) — skip the HTTP code entirely if your agent runs in Claude, Cursor, or another MCP host.
-- [Reference: REST API](../reference/rest-api.md) — the full endpoint catalogue, including every parameter on the search and ingestion routes.
-- [Explanation: the Hindsight Framework](../explanation/hindsight-framework.md) — why Memex stores facts the way it does, and how reflection turns them into mental models.
+- [How-to: Use Memex over MCP](../how-to/integrations/hermes-plugin.md) — skip the HTTP code entirely if your agent runs in Claude, Cursor, or another MCP host.
+- [Reference: REST API](../reference/api-routes.md) — the full endpoint catalogue, including every parameter on the search and ingestion routes.
+- [Explanation: the Hindsight Framework](../explanation/how-memex-works/high-level-architecture.md) — why Memex stores facts the way it does, and how reflection turns them into mental models.

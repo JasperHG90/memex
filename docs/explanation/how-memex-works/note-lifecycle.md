@@ -247,6 +247,6 @@ The wrong choice usually shows up as a missing audit trail (delete instead of ar
 ## See also
 
 - [Tutorial: Set up Memex and store your first memory](../../tutorials/getting-started.md)
-- [How-to: Delete content](../../how-to/delete-archival.md)
+- [How-to: Delete content](../../how-to/deprioritize-units.md)
 - [Reference: MCP tools — `memex_set_note_status`, `memex_append_note`](../../reference/mcp-tools.md#memex_set_note_status)
 - [Explanation: Memory types](memory-types.md)

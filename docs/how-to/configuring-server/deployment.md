@@ -158,6 +158,6 @@ You see `EntityLockTimeoutError` raised on `memex_memory_reconsolidate` calls, o
 ## See also
 
 - [How-to: Secure Memex with an API key](api-key.md)
-- [Reference: Configuration](../../reference/configuration.md)
+- [Reference: Configuration](../../reference/configuration-options.md)
 - [Reference: Observability](../../reference/observability.md)
-- [Explanation: Architecture overview](../../explanation/architecture-overview.md)
+- [Explanation: Architecture overview](../../explanation/how-memex-works/high-level-architecture.md)

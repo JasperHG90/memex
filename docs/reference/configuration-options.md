@@ -957,6 +957,6 @@ Not configuration — referenced by the schema and worth knowing.
 ## See also
 
 - [Tutorial: getting started](../tutorials/getting-started.md)
-- [How-to: configure Memex](../how-to/configure-memex.md)
+- [How-to: configure Memex](../how-to/configuring-server/default-model.md)
 - [Reference: configuration (YAML walkthrough and examples)](configuration.md)
-- [Explanation: inference model backends](../explanation/inference-model-backends.md)
+- [Explanation: inference model backends](../explanation/how-memex-works/retrieval.md)

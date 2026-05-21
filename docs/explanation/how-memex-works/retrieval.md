@@ -396,6 +396,6 @@ Reflection is the upstream feeder for the mental-model strategy — the observat
 ## See also
 
 - [Tutorial: AI agent memory](../../tutorials/ai-agent-memory.md)
-- [How-to: Choose between document search and memory search](../../how-to/doc-search-vs-memory-search.md)
+- [How-to: Choose between document search and memory search](../../how-to/../tutorial/note-search-vs-memory-search.md)
 - [Reference: MCP tools](../../reference/mcp-tools.md)
 - [Explanation: About extraction](extraction.md)

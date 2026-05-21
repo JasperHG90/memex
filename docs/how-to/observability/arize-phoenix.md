@@ -6,7 +6,7 @@ This guide walks you through enabling tracing on an existing Memex server and co
 
 ## Prerequisites
 
-- A running Memex server you can restart and edit config for. See [the configuration guide](../configure-memex.md) if you have not set one up yet.
+- A running Memex server you can restart and edit config for. See [the configuration guide](configuring-server/default-model.md) if you have not set one up yet.
 - A reachable Phoenix OTLP endpoint. The Phoenix UI defaults to port `6006` and its trace receiver to `http://<host>:6006/v1/traces`. Self-hosted Phoenix (`pip install arize-phoenix && phoenix serve`) and Phoenix Cloud both work.
 - The `tracing` extra installed on `memex-core`. The dependencies live behind an opt-in extra so default installs stay small. <code-ref path="packages/core/pyproject.toml" lines="73-79" />
 
@@ -135,4 +135,4 @@ Hosted Phoenix needs an API key. Add it under `server.tracing.headers` with the 
 - [Tutorial: Getting started with Memex](../../tutorials/getting-started.md)
 - [How-to: Scrape Memex metrics with Prometheus](prometheus.md)
 - [Reference: Observability metrics](../../reference/observability.md)
-- [Explanation: Architecture overview](../../explanation/how-memex-works/architecture-overview.md)
+- [Explanation: Architecture overview](../../explanation/how-memex-works/high-level-architecture.md)

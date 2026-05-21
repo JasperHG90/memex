@@ -256,13 +256,13 @@ Most importantly: you now have a way to evaluate a future model choice for yours
 
 ## Next steps
 
-- [How to configure Memex](../how-to/configure-memex.md)
-- [Reference: configuration keys](../reference/configuration.md)
-- [Explanation: inference model backends](../explanation/inference-model-backends.md)
+- [How to configure Memex](../how-to/configuring-server/default-model.md)
+- [Reference: configuration keys](../reference/configuration-options.md)
+- [Explanation: inference model backends](../explanation/how-memex-works/retrieval.md)
 
 ## See also
 
 - [Tutorial: Get started with Memex](getting-started.md)
-- [How-to: Configure Memex](../how-to/configure-memex.md)
-- [Reference: configuration options](../reference/configuration.md)
-- [Explanation: Inference model backends](../explanation/inference-model-backends.md)
+- [How-to: Configure Memex](../how-to/configuring-server/default-model.md)
+- [Reference: configuration options](../reference/configuration-options.md)
+- [Explanation: Inference model backends](../explanation/how-memex-works/retrieval.md)

@@ -216,7 +216,7 @@ You can take Memex in three directions from here.
 
 ## See also
 
-- [How-to: Configure Memex](../how-to/configure-memex.md) — change models, storage backends, and search defaults
+- [How-to: Configure Memex](../how-to/configuring-server/default-model.md) — change models, storage backends, and search defaults
 - [Reference: CLI commands](../reference/cli.md) — every command group, every flag, every default
 - [Explanation: How Memex retrieves memory](../explanation/retrieval.md) — the five strategies behind `memex memory search`
 

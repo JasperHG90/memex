@@ -82,5 +82,5 @@ If you previously stored a plaintext API key (legacy behavior), it is automatica
 
 ## See Also
 
-* [Configuring Memex](configure-memex.md) — server configuration including auth setup
-* [Organizing Content with Vaults](organize-with-vaults.md) — vault creation and management
+* [Configuring Memex](configuring-server/default-model.md) — server configuration including auth setup
+* [Organizing Content with Vaults](vaults.md) — vault creation and management

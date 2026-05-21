@@ -1098,4 +1098,4 @@ Prometheus-compatible metrics. Registered by `prometheus-fastapi-instrumentator`
 - [Tutorial: Getting started](../tutorials/getting-started.md)
 - [How-to: Configure the API key](../how-to/configuring-server/api-key.md)
 - [Reference: Configuration](configuration.md)
-- [Explanation: Hindsight framework](../explanation/hindsight-framework.md)
+- [Explanation: Hindsight framework](../explanation/how-memex-works/high-level-architecture.md)

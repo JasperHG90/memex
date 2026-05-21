@@ -674,6 +674,6 @@ Indices / constraints:
 ## See also
 
 - [Tutorial: Getting started](../tutorials/getting-started.md)
-- [How-to: Configure Memex](../how-to/configure-memex.md)
+- [How-to: Configure Memex](../how-to/configuring-server/default-model.md)
 - [Reference: Configuration](configuration.md)
-- [Explanation: Hindsight Framework](../explanation/hindsight-framework.md)
+- [Explanation: Hindsight Framework](../explanation/how-memex-works/high-level-architecture.md)

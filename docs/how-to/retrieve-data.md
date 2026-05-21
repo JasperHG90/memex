@@ -246,4 +246,4 @@ wait for the background reflection cycle or check `memex memory reflect`.
 - [Tutorial: Getting started](../tutorials/getting-started.md)
 - [How-to: Deprioritize memory units](deprioritize-units.md)
 - [Reference: CLI commands](../reference/cli-commands.md)
-- [Explanation: retrieval strategies](../explanation/retrieval-strategies.md)
+- [Explanation: retrieval strategies](../explanation/how-memex-works/retrieval.md)

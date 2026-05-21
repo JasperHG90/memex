@@ -152,5 +152,5 @@ Cross-check that LiteLLM was used and not the ONNX fallback by grepping the serv
 
 - [Tutorial: Getting started](../../tutorials/getting-started.md)
 - [How-to: Configure the default LLM](default-model.md)
-- [Reference: server configuration](../../reference/configuration.md)
-- [Explanation: architecture overview](../../explanation/architecture-overview.md)
+- [Reference: server configuration](../../reference/configuration-options.md)
+- [Explanation: architecture overview](../../explanation/how-memex-works/high-level-architecture.md)

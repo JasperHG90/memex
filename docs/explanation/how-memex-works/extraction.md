@@ -341,6 +341,6 @@ The pipeline is one of Memex's busiest surfaces. It is also one of the most bori
 ## See also
 
 - [Tutorial: Getting started](../../tutorials/getting-started.md)
-- [How-to: Ingest documents in batch](../../how-to/batch-ingestion.md)
-- [Reference: Configuration options](../../reference/configuration.md)
+- [How-to: Ingest documents in batch](../../how-to/ingesting-data.md)
+- [Reference: Configuration options](../../reference/configuration-options.md)
 - [Explanation: About retrieval](retrieval.md)

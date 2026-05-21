@@ -214,4 +214,4 @@ memex note view <note-id>
 - [Tutorial: Get started with Memex](../tutorial/getting-started.md)
 - [How-to: Attach files to a note](asset-attachments.md)
 - [Reference: CLI commands](../reference/cli-commands.md)
-- [Explanation: About the extraction pipeline](../explanation/extraction-pipeline.md)
+- [Explanation: About the extraction pipeline](../explanation/how-memex-works/extraction.md)

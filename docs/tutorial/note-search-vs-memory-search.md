@@ -265,11 +265,11 @@ The next time someone asks you a question about your vault, the choice between t
 - [How-to: Retrieve data](../how-to/retrieve-data.md) — option matrix for the full retrieval surface.
 - [Reference: CLI commands](../reference/cli-commands.md) — every flag on `memex note search` and `memex memory search`.
 - [Reference: MCP tools](../reference/mcp-tools.md) — exact `memex_memory_search`, `memex_note_search`, and `memex_survey` signatures.
-- [Explanation: Retrieval strategies](../explanation/retrieval-strategies.md) — how the five TEMPR strategies and reciprocal rank fusion work together.
+- [Explanation: Retrieval strategies](../explanation/how-memex-works/retrieval.md) — how the five TEMPR strategies and reciprocal rank fusion work together.
 
 ## See also
 
 - [Tutorial: Get started with Memex](getting-started.md)
 - [How-to: Retrieve data](../how-to/retrieve-data.md)
 - [Reference: MCP tools](../reference/mcp-tools.md)
-- [Explanation: Retrieval strategies](../explanation/retrieval-strategies.md)
+- [Explanation: Retrieval strategies](../explanation/how-memex-works/retrieval.md)

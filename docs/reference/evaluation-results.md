@@ -162,7 +162,7 @@ The shipped snapshot (~1.8 MB, checked into the repo) preserves `Note.id`, `Memo
 
 ## External benchmark: LoCoMo
 
-LoCoMo is an external long-context conversational-memory benchmark. The numbers below come from a single run on 2026-03-22 against Claude Opus 4 via the Claude Code CLI, with Gemini 3 Flash as the judge. Source: `docs/reference/evaluation-report.md` (being retired into this page).
+LoCoMo is an external long-context conversational-memory benchmark. The numbers below come from a single run on 2026-03-22 against Claude Opus 4 via the Claude Code CLI, with Gemini 3 Flash as the judge. Source: `docs/reference/evaluation-results.md` (being retired into this page).
 
 ### Headline
 
@@ -226,7 +226,7 @@ Memex is a search tool. Asked "What instrument does Caroline play?" it searches 
 | Simple + entity | 5 | 10% | 0.80 | 2.8 | 31s | $0.11 |
 | Exhaustive | 3 | 6% | 0.67 | 21.7 | 181s | $0.87 |
 
-The full per-question table, the path diagrams, and the per-failure analysis live in the prior `docs/reference/evaluation-report.md` file. That page is being retired into this one; the numbers above are the authoritative LoCoMo summary as of 2026-03-22 and have not been re-run against later builds.
+The full per-question table, the path diagrams, and the per-failure analysis live in the prior `docs/reference/evaluation-results.md` file. That page is being retired into this one; the numbers above are the authoritative LoCoMo summary as of 2026-03-22 and have not been re-run against later builds.
 
 ---
 
@@ -248,6 +248,6 @@ Each suite README under `packages/eval/src/memex_eval/suites/<name>/README.md` c
 ## See also
 
 - [Tutorial: Getting started](../tutorial/getting-started.md)
-- [How-to: Run the evaluation suite](../how-to/evaluation-suite.md)
+- [How-to: Run the evaluation suite](../how-to/evaluation-results.md)
 - [Reference: CLI commands](cli-commands.md)
 - [Explanation: how Memex is evaluated](../explanation/how-memex-is-evaluated.md)

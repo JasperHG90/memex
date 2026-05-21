@@ -4,12 +4,12 @@ You want to run Memex on a small VPS, a laptop you also use for other work, or a
 
 Memex's peak memory comes from a handful of contributors that all share one ceiling: ONNX model weights, the Python heap, transient inference tensors during embedding and reranking, and the on-disk file-store connection pool. Every knob below caps one of those contributors.
 
-If you are deploying to a Jetson or another unified-memory edge device with a shared CPU/GPU memory pool, also read [Memory Budget on Unified-Memory Hosts](../memory-budget.md) — it covers the GPU-specific levers (`ONNX_GPU_MEM_LIMIT`, cuDNN workspace) this page does not.
+If you are deploying to a Jetson or another unified-memory edge device with a shared CPU/GPU memory pool, also read [Memory Budget on Unified-Memory Hosts](../configuring-server/low-resource.md) — it covers the GPU-specific levers (`ONNX_GPU_MEM_LIMIT`, cuDNN workspace) this page does not.
 
 ## Prerequisites
 
 - A working Memex server install (see [Tutorial: Getting started](../../tutorials/getting-started.md)).
-- A YAML config file Memex picks up — `.memex.yaml` in the project root, `~/.config/memex/config.yaml`, or a path pointed at by `MEMEX_CONFIG_PATH`. See [Configure Memex](../configure-memex.md) for the precedence rules.
+- A YAML config file Memex picks up — `.memex.yaml` in the project root, `~/.config/memex/config.yaml`, or a path pointed at by `MEMEX_CONFIG_PATH`. See [Configure Memex](./default-model.md) for the precedence rules.
 - An idea of the host's memory ceiling. The recipe below targets a host with roughly 2 GiB usable for the Memex process.
 
 ## Procedure
@@ -156,6 +156,6 @@ This is the intended behaviour, not a bug. Memex's retrieval is RRF-fused over f
 ## See also
 
 - [Tutorial: Getting started](../../tutorials/getting-started.md)
-- [How-to: Memory budget on unified-memory hosts](../memory-budget.md)
-- [Reference: configuration](../../reference/configuration.md)
-- [Explanation: inference model backends](../../explanation/inference-model-backends.md)
+- [How-to: Memory budget on unified-memory hosts](../configuring-server/low-resource.md)
+- [Reference: configuration](../../reference/configuration-options.md)
+- [Explanation: inference model backends](../../explanation/how-memex-works/retrieval.md)

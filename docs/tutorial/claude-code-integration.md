@@ -243,6 +243,6 @@ Everything you store lives in your own Memex vault on your own server. The plugi
 ## Next steps
 
 - [Tutorial: Get started with Memex](getting-started.md) — for the wider tour of vaults, notes, and search.
-- [How-to: Set up Claude Code](../how-to/setup-claude-code.md) — the recipe form of this tutorial, for when you need a quick reference rather than a walkthrough.
+- [How-to: Set up Claude Code](../how-to/integrations/claude-code.md) — the recipe form of this tutorial, for when you need a quick reference rather than a walkthrough.
 - [Reference: MCP tools](../reference/mcp-tools.md) — full parameter shapes for `memex_kv_put`, `memex_record_outcome`, and the rest.
-- [Explanation: Hindsight framework](../explanation/hindsight-framework.md) — why Memex separates notes, units, and observations, and how outcomes feed the ranking loop.
+- [Explanation: Hindsight framework](../explanation/session-briefings.md) — why Memex separates notes, units, and observations, and how outcomes feed the ranking loop.

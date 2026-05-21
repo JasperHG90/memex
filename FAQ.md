@@ -41,7 +41,7 @@ Embedding and reranking use local ONNX models by default, so they incur no LLM A
 
 ## Can I use models other than Gemini?
 
-Yes. Memex uses [LiteLLM](https://docs.litellm.ai/) under the hood, so any provider it supports works — OpenAI, Anthropic, Ollama, Azure, AWS Bedrock, and more. See [Configure Memex](./docs/how-to/configure-memex.md) for details on setting the model provider.
+Yes. Memex uses [LiteLLM](https://docs.litellm.ai/) under the hood, so any provider it supports works — OpenAI, Anthropic, Ollama, Azure, AWS Bedrock, and more. See [Configure Memex](./docs/how-to/configuring-server/default-model.md) for details on setting the model provider.
 
 ## Can I run Memex without an LLM key?
 

@@ -124,5 +124,5 @@ The leaf entity id should match the source note you ingested.
 ## See also
 
 - [How-to: Deprioritize units](deprioritize-units.md)
-- [How-to: Resolve contradictions](resolve-contradictions.md)
+- [How-to: Resolve contradictions](linting.md)
 - [Explanation: Mental model observations](../explanation/mental-model-observations.md)

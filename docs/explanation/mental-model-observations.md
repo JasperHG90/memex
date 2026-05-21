@@ -202,4 +202,4 @@ If you record outcomes against retrieval results, the same rule applies. `memex_
 - [Tutorial: Getting started](../tutorials/getting-started.md)
 - [How-to: Deprioritize units](../how-to/deprioritize-units.md)
 - [Reference: MCP tools](../reference/mcp-tools.md)
-- [Explanation: Reflection and mental models](reflection-and-mental-models.md)
+- [Explanation: Reflection and mental models](how-memex-works/synthesis-and-reflection.md)

@@ -116,6 +116,6 @@ You have done the job if:
 ## See also
 
 - [Tutorial: Getting started](../tutorials/getting-started.md)
-- [How-to: Resolve contradictions](resolve-contradictions.md)
+- [How-to: Resolve contradictions](linting.md)
 - [Reference: CLI commands](../reference/cli-commands.md)
 - [Explanation: Memory worth and FSFM scoring](../explanation/memory-worth.md)

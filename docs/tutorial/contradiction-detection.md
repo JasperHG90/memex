@@ -308,7 +308,7 @@ The mechanism behind every step is the same loop: extraction writes structured u
 
 ## Next steps
 
-- [How-to: Resolve contradictions](../how-to/resolve-contradictions.md) — the recipe-shaped version of this walkthrough, for when you already know the steps and just need the commands.
+- [How-to: Resolve contradictions](../how-to/linting.md) — the recipe-shaped version of this walkthrough, for when you already know the steps and just need the commands.
 - [How-to: Linting](../how-to/linting.md) — the wider lint surface (other rule types, the interactive `memex lint review` triage flow, dismissing findings you do not want to act on).
 - [Reference: CLI commands](../reference/cli.md) — every flag for `memex lint status`, `memex lint findings`, `memex lint apply`, `memex lint reverse`, `memex memory links`, and the rest.
 - [Explanation: How Memex reconciles contradictions](../explanation/contradiction-detection.md) — the why behind the mechanism, including how the FSFM composite score puts units under graph pressure in the first place and where the LLM's confidence threshold comes from.
@@ -316,6 +316,6 @@ The mechanism behind every step is the same loop: extraction writes structured u
 ## See also
 
 - [Tutorial: Walk through memory worth and deprioritization](memory-worth-and-deprioritization.md)
-- [How-to: Resolve contradictions](../how-to/resolve-contradictions.md)
+- [How-to: Resolve contradictions](../how-to/linting.md)
 - [Reference: lint configuration](../reference/lint-config.md)
 - [Explanation: contradiction detection](../explanation/contradiction-detection.md)

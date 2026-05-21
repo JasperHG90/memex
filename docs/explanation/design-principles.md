@@ -301,4 +301,4 @@ Six principles, one user-visible behaviour. That is what consistency looks like 
 - [Tutorial: Getting started](../tutorials/getting-started.md)
 - [How-to: Deprioritize a memory unit](../how-to/deprioritize-units.md)
 - [Reference: data model](../reference/data-model.md)
-- [Explanation: architecture overview](architecture-overview.md)
+- [Explanation: architecture overview](how-memex-works/high-level-architecture.md)

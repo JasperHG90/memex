@@ -276,6 +276,6 @@ The point of the briefing is to handle the cases where the agent would *otherwis
 ## See also
 
 - [Tutorial: Getting started](../tutorials/getting-started.md)
-- [How-to: Set up the Claude Code plugin](../how-to/setup-claude-code.md)
+- [How-to: Set up the Claude Code plugin](../how-to/integrations/claude-code.md)
 - [Reference: CLI commands](../reference/cli-commands.md)
-- [Explanation: Reflection and mental models](reflection-and-mental-models.md)
+- [Explanation: Reflection and mental models](how-memex-works/synthesis-and-reflection.md)

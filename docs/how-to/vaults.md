@@ -172,6 +172,6 @@ Removing the `vault:` key afterwards does **not** move the note back. Sync remem
 ## See also
 
 * [Tutorial: Getting started](../tutorials/getting-started.md)
-* [How-to: Sync notes](sync-notes.md)
-* [Reference: Configuring Memex](configure-memex.md)
-* [Explanation: The Hindsight framework](../explanation/hindsight-framework.md)
+* [How-to: Sync notes](ingesting-data.md)
+* [Reference: Configuring Memex](configuring-server/default-model.md)
+* [Explanation: The Hindsight framework](../explanation/how-memex-works/high-level-architecture.md)

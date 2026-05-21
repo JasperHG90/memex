@@ -273,4 +273,4 @@ no surviving mentions simply stop showing up at the top of
 - [Tutorial: Get started with Memex](getting-started.md)
 - [How-to: Retrieve data from the CLI](../how-to/retrieve-data.md)
 - [Reference: CLI commands](../reference/cli-commands.md)
-- [Explanation: retrieval strategies](../explanation/retrieval-strategies.md)
+- [Explanation: retrieval strategies](../explanation/how-memex-works/retrieval.md)

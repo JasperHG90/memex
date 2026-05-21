@@ -47,7 +47,7 @@ The internal suite is the one that runs in CI. It runs in seconds against a snap
 
 The external surface runs on demand against the LoCoMo conversation dataset. <code-ref path="packages/eval/README.md" lines="93-114" /> It produces a five-category score breakdown — single-hop, multi-hop, temporal, open-domain, adversarial — and a Markdown report with retrieval-efficiency plots.
 
-The numbers are published in `docs/reference/evaluation-report.md` and updated when the pipeline reruns. The cost of one full LoCoMo pass is dominated by the answering agent (Claude Code calling MCP tools per question), so you do not run it in CI.
+The numbers are published in `docs/reference/evaluation-results.md` and updated when the pipeline reruns. The cost of one full LoCoMo pass is dominated by the answering agent (Claude Code calling MCP tools per question), so you do not run it in CI.
 
 ## Mechanism: a worked example
 
@@ -190,7 +190,7 @@ Run it with `--from-snapshot=auto` so you skip the LLM extraction cost on reruns
 
 Run the LLM judge for ad-hoc work too. Pass `--judge-model` (or set `EVAL_JUDGE_MODEL`) on `memex-eval suite run`; without a reachable judge the runner skips `LLMJudge` and `UsefulAtK` scenarios with `status='skip'`, and you are running a strictly weaker check and calling it green.
 
-Run the LoCoMo benchmark when you change anything that would plausibly move long-conversation recall — multi-hop reasoning, temporal filtering, the answering-agent prompt — and update `docs/reference/evaluation-report.md` if the numbers shift.
+Run the LoCoMo benchmark when you change anything that would plausibly move long-conversation recall — multi-hop reasoning, temporal filtering, the answering-agent prompt — and update `docs/reference/evaluation-results.md` if the numbers shift.
 
 **What to do when a default moves.**
 
@@ -199,6 +199,6 @@ If you change a default in the design doc, three things have to move with it. Th
 ## See also
 
 - [Tutorial: Getting started](../tutorials/getting-started.md)
-- [How-to: Run the evaluation suite](../how-to/evaluation-suite.md)
-- [Reference: LoCoMo evaluation report](../reference/evaluation-report.md)
-- [Explanation: the Hindsight framework](hindsight-framework.md)
+- [How-to: Run the evaluation suite](../how-to/evaluation-results.md)
+- [Reference: LoCoMo evaluation report](../reference/evaluation-results.md)
+- [Explanation: the Hindsight framework](how-memex-works/high-level-architecture.md)

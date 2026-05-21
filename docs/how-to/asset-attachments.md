@@ -10,7 +10,7 @@ Assets are stored alongside a note's markdown in the file store at `assets/<vaul
 - An existing note. Get its UUID from `memex note list` or `memex note find "<title>"`. You cannot attach assets to a note that does not exist yet.
 - The asset files on your local disk.
 
-If you have not configured the CLI against your server, do that first: see [How-to: Configure Memex](configure-memex.md).
+If you have not configured the CLI against your server, do that first: see [How-to: Configure Memex](configuring-server/default-model.md).
 
 ## Procedure
 
@@ -115,4 +115,4 @@ If any step fails, jump to troubleshooting.
 - [Tutorial: Getting started](../tutorials/getting-started.md)
 - [How-to: Ingest data](ingesting-data.md)
 - [Reference: MCP tools](../reference/mcp-tools.md)
-- [Explanation: architecture overview](../explanation/architecture-overview.md)
+- [Explanation: architecture overview](../explanation/how-memex-works/high-level-architecture.md)

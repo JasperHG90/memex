@@ -148,6 +148,6 @@ If you want graceful degradation under provider outage, use a second config file
 ## See also
 
 - [Tutorial: Getting started](../../tutorials/getting-started.md)
-- [How-to: Configure Memex](../configure-memex.md)
-- [Reference: Configuration options](../../reference/configuration.md)
-- [Explanation: Inference model backends](../../explanation/inference-model-backends.md)
+- [How-to: Configure Memex](./default-model.md)
+- [Reference: Configuration options](../../reference/configuration-options.md)
+- [Explanation: Inference model backends](../../explanation/how-memex-works/retrieval.md)
