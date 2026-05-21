@@ -1,26 +1,8 @@
 {
   "mcpServers": {
-    "playwright": {
-      "type": "stdio",
+    "drawio": {
       "command": "npx",
-      "args": [
-        "@playwright/mcp@latest",
-        "--headless",
-        "--browser",
-        "firefox"
-      ],
-      "env": {}
-    },
-    "memex": {
-      "type": "stdio",
-      "command": "uvx",
-      "args": [
-        "--from",
-        "memex-cli[mcp] @ git+https://github.com/JasperHG90/memex.git@latest#subdirectory=packages/cli",
-        "memex",
-        "mcp",
-        "run"
-      ]
+      "args": ["-y", "@drawio/mcp"]
     }
   }
 }
