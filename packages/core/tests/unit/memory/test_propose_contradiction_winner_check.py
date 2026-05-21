@@ -54,8 +54,9 @@ def _fsfm_row():
 
 def _peer_row():
     return _row(
-        link_id=str(uuid4()),
         source_unit_id=str(uuid4()),
+        to_unit_id=str(uuid4()),
+        link_type='contradicts',
         weight=1.0,
         link_created_at=datetime.now(timezone.utc),
         source_text='Peer text',

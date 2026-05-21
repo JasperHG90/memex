@@ -314,8 +314,9 @@ _EXISTING_WINNER_PROPOSAL_SQL = text("""
 
 _LOAD_TOP_CONTRADICTS_LINK_SQL = text("""
     SELECT
-        ml.id::text AS link_id,
         ml.from_unit_id::text AS source_unit_id,
+        ml.to_unit_id::text AS to_unit_id,
+        ml.link_type AS link_type,
         ml.weight AS weight,
         ml.created_at AS link_created_at,
         src.text AS source_text,
@@ -499,7 +500,15 @@ def make_propose_contradiction_winner_check(
             'winner_unit_id': resolved_winner_unit_id,
             'loser_unit_id': resolved_loser_unit_id,
             'peer_unit_id': peer_row.source_unit_id,
-            'link_id': peer_row.link_id,
+            # MemoryLink has a composite primary key
+            # (from_unit_id, to_unit_id, link_type); record all three so the
+            # apply path can identify the row without depending on a
+            # nonexistent ml.id column.
+            'link_key': {
+                'from_unit_id': peer_row.source_unit_id,
+                'to_unit_id': peer_row.to_unit_id,
+                'link_type': peer_row.link_type,
+            },
             'confidence': confidence,
             'action': action,
             'rationale': rationale,

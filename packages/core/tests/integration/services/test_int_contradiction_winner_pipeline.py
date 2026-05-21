@@ -86,7 +86,6 @@ async def test_winner_proposal_links_back_to_fsfm_finding(session: AsyncSession,
     await session.commit()
 
     link = MemoryLink(
-        id=uuid4(),
         vault_id=vault.id,
         from_unit_id=winner.id,
         to_unit_id=loser.id,

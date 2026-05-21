@@ -27,8 +27,13 @@ logger = logging.getLogger('alembic.env')
 config = context.config
 
 # Interpret the config file for Python logging (if present).
+# disable_existing_loggers=False is required so we don't disable every
+# logger created before this point. The default (True) would mark
+# every already-instantiated logger (memex_eval.*, structlog-bridged, etc.)
+# as ``disabled=True``, which silently swallows their records for the rest
+# of the process — including any ``caplog`` capture in tests.
 if config.config_file_name is not None:
-    fileConfig(config.config_file_name)
+    fileConfig(config.config_file_name, disable_existing_loggers=False)
 
 # The metadata object used for autogenerate support.
 target_metadata = SQLModel.metadata

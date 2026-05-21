@@ -800,6 +800,7 @@ class RetrievalEngine:
         # MW EMA decay), not in gating. Operators trading away the
         # per-call cost should run ``exploration_mode='off'``.
         exploration_mode = self.retrieval_config.exploration_mode
+        total_injected = 0
         if final_results and exploration_mode != 'off':
             from memex_core.memory.retrieval.exploration import (
                 inject_exploration_units,
@@ -852,6 +853,7 @@ class RetrievalEngine:
                         injected = len(final_results) - pre_inject_count
                         if injected > 0:
                             EXPLORATION_INJECTED_TOTAL.labels(mode='epsilon_greedy').inc(injected)
+                            total_injected += injected
                     else:  # thompson
                         final_results, thetas = inject_thompson_exploration(
                             final_results,
@@ -862,6 +864,7 @@ class RetrievalEngine:
                         injected = len(final_results) - pre_inject_count
                         if injected > 0:
                             EXPLORATION_INJECTED_TOTAL.labels(mode='thompson').inc(injected)
+                            total_injected += injected
                             for theta in thetas:
                                 EXPLORATION_THOMPSON_THETA_DISTRIBUTION.observe(theta)
 
@@ -928,7 +931,13 @@ class RetrievalEngine:
         if token_budget is not None:
             return (final_results, resonance_context)
 
-        return (final_results[: request.limit], resonance_context)
+        # Exploration injections sit at the tail of ``final_results`` (appended by
+        # ``inject_exploration_units`` / ``inject_thompson_exploration``); expand
+        # the slice by the injection count so they survive the limit clamp. The
+        # design doc names exploration "post-MMR budget injection" — the limit
+        # is meant to bound the primary MMR-diversified head, not the
+        # exploration tail.
+        return (final_results[: request.limit + total_injected], resonance_context)
 
     def _fuse_multi_query_results(
         self, ranked_batches: list[tuple[Sequence[Any], float]], limit: int

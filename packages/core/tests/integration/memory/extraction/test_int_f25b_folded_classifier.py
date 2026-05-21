@@ -137,7 +137,13 @@ def _make_processed_fact(text: str, vault_id, risk_class: str = 'none') -> Proce
 
 @pytest.mark.integration
 def test_filter_safety_blocked_drops_safety_and_increments_metric() -> None:
-    """Safety facts are removed and the per-vault block counter increments."""
+    """Safety facts pass through but the per-vault block counter increments.
+
+    Blocking moved to a future pre-flight risk assessment; the classifier is
+    now a record-only observer. The per-vault counter still increments so
+    dashboards can track safety-class hit rates while the upstream gate is
+    pending.
+    """
     vault_id = uuid4()
     keep = _make_processed_fact(text=f'safe {uuid4()}', vault_id=vault_id)
     block = _make_processed_fact(text=f'blocked {uuid4()}', vault_id=vault_id, risk_class='safety')
@@ -146,8 +152,8 @@ def test_filter_safety_blocked_drops_safety_and_increments_metric() -> None:
     kept = filter_safety_blocked([keep, block])
     after = CLASSIFIER_BLOCKED_TOTAL.labels(vault_id=str(vault_id))._value.get()
 
-    assert len(kept) == 1
-    assert kept[0].fact_text == keep.fact_text
+    assert len(kept) == 2
+    assert {f.fact_text for f in kept} == {keep.fact_text, block.fact_text}
     assert after - before == 1
 
 
@@ -209,7 +215,13 @@ async def test_intent_and_risk_round_trip_through_engine_with_mock_lm(session: A
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_safety_class_facts_are_dropped_end_to_end(session: AsyncSession):
-    """A fact the (mocked) LLM flagged risk='safety' must NOT reach the DB."""
+    """A fact the (mocked) LLM flagged risk='safety' rides through to the DB.
+
+    The classifier records safety hits via metrics but does not drop facts
+    at the persistence boundary — blocking lives behind a future pre-flight
+    risk assessment. The row must land with ``risk_class='safety'`` so a
+    downstream filter can act on the label.
+    """
     engine = await _build_engine()
 
     canned_facts = [
@@ -243,9 +255,10 @@ async def test_safety_class_facts_are_dropped_end_to_end(session: AsyncSession):
         .execution_options(populate_existing=True)
     )
     rows = (await session.exec(stmt)).all()
+    risk_values = {r.risk_class for r in rows}
+    assert 'safety' in risk_values
     texts = ' '.join(r.text or '' for r in rows).lower()
-    assert 'harm' not in texts
-    assert all(r.risk_class != 'safety' for r in rows)
+    assert 'harm' in texts
 
 
 # ---------------------------------------------------------------------------

@@ -41,12 +41,14 @@ async def _seed_two_units(
     session: AsyncSession,
     *,
     same_note: bool = False,
-) -> tuple[tuple[UUID, UUID, UUID, UUID, UUID], UUID]:
+) -> tuple[tuple[UUID, UUID, UUID, UUID, UUID], dict[str, str]]:
     """Seed two units (winner=A, loser=B) and an A→B contradicts link.
 
     Returns
     -------
-    ``((vault_id, winner_unit_id, loser_unit_id, winner_note_id, loser_note_id), link_id)``.
+    ``((vault_id, winner_unit_id, loser_unit_id, winner_note_id, loser_note_id), link_key)``
+    where ``link_key`` is the composite primary key of ``memory_links``
+    ``{from_unit_id, to_unit_id, link_type}``.
     """
     vault = Vault(name=f'V5-int-{uuid4().hex[:8]}')
     session.add(vault)
@@ -100,7 +102,6 @@ async def _seed_two_units(
     await session.commit()
 
     link = MemoryLink(
-        id=uuid4(),
         vault_id=vault.id,
         from_unit_id=winner.id,
         to_unit_id=loser.id,
@@ -110,7 +111,12 @@ async def _seed_two_units(
     session.add(link)
     await session.commit()
 
-    return (vault.id, winner.id, loser.id, winner_note.id, loser_note.id), link.id
+    link_key = {
+        'from_unit_id': str(winner.id),
+        'to_unit_id': str(loser.id),
+        'link_type': 'contradicts',
+    }
+    return (vault.id, winner.id, loser.id, winner_note.id, loser_note.id), link_key
 
 
 async def _seed_proposal(
@@ -119,7 +125,7 @@ async def _seed_proposal(
     vault_id: UUID,
     loser_unit_id: UUID,
     winner_unit_id: UUID,
-    link_id: UUID | None,
+    link_key: dict[str, str] | None,
     action: str,
 ) -> UUID:
     evidence = {
@@ -130,7 +136,7 @@ async def _seed_proposal(
         'winner_unit_id': str(winner_unit_id),
         'loser_unit_id': str(loser_unit_id),
         'peer_unit_id': str(winner_unit_id),
-        'link_id': str(link_id) if link_id else None,
+        'link_key': link_key,
         'linked_to_finding': str(uuid4()),
         'flag_reason': 'low_credibility_contradiction_only',
         'confidence': 0.85,
@@ -180,11 +186,21 @@ async def _read_unit_status(session: AsyncSession, unit_id: UUID) -> str:
     return row.status if row else ''
 
 
-async def _read_link_type(session: AsyncSession, link_id: UUID) -> str:
+async def _read_link_type(session: AsyncSession, *, from_unit_id: str, to_unit_id: str) -> str:
+    """Read the live link_type for an (from, to) pair regardless of current type.
+
+    ``memory_links`` has composite PK ``(from_unit_id, to_unit_id, link_type)``;
+    apply/reverse rewrite ``link_type`` so we cannot key the lookup on the
+    original literal. The seed creates exactly one (from, to) link per test
+    so this returns at most one row.
+    """
     row = (
         await session.execute(
-            text('SELECT link_type FROM memory_links WHERE id = :id'),
-            {'id': str(link_id)},
+            text(
+                'SELECT link_type FROM memory_links '
+                'WHERE from_unit_id = :from_id AND to_unit_id = :to_id'
+            ),
+            {'from_id': from_unit_id, 'to_id': to_unit_id},
         )
     ).first()
     return row.link_type if row else ''
@@ -201,13 +217,13 @@ async def _read_note_superseded_by(session: AsyncSession, note_id: UUID):
 
 
 async def test_mark_loser_stale_roundtrip(session: AsyncSession, api) -> None:
-    (vault_id, winner_id, loser_id, _, _), link_id = await _seed_two_units(session)
+    (vault_id, winner_id, loser_id, _, _), link_key = await _seed_two_units(session)
     finding_id = await _seed_proposal(
         session,
         vault_id=vault_id,
         loser_unit_id=loser_id,
         winner_unit_id=winner_id,
-        link_id=link_id,
+        link_key=link_key,
         action='mark_loser_stale',
     )
 
@@ -231,7 +247,7 @@ async def test_mark_loser_stale_roundtrip(session: AsyncSession, api) -> None:
 
 
 async def test_supersede_loser_note_roundtrip(session: AsyncSession, api) -> None:
-    (vault_id, winner_id, loser_id, winner_note, loser_note), link_id = await _seed_two_units(
+    (vault_id, winner_id, loser_id, winner_note, loser_note), link_key = await _seed_two_units(
         session
     )
     finding_id = await _seed_proposal(
@@ -239,7 +255,7 @@ async def test_supersede_loser_note_roundtrip(session: AsyncSession, api) -> Non
         vault_id=vault_id,
         loser_unit_id=loser_id,
         winner_unit_id=winner_id,
-        link_id=link_id,
+        link_key=link_key,
         action='supersede_loser_note',
     )
 
@@ -251,7 +267,7 @@ async def test_supersede_loser_note_roundtrip(session: AsyncSession, api) -> Non
 
 
 async def test_supersede_loser_note_shared_parent_falls_back(session: AsyncSession, api) -> None:
-    (vault_id, winner_id, loser_id, _, shared_note), link_id = await _seed_two_units(
+    (vault_id, winner_id, loser_id, _, shared_note), link_key = await _seed_two_units(
         session, same_note=True
     )
     finding_id = await _seed_proposal(
@@ -259,7 +275,7 @@ async def test_supersede_loser_note_shared_parent_falls_back(session: AsyncSessi
         vault_id=vault_id,
         loser_unit_id=loser_id,
         winner_unit_id=winner_id,
-        link_id=link_id,
+        link_key=link_key,
         action='supersede_loser_note',
     )
 
@@ -273,37 +289,58 @@ async def test_supersede_loser_note_shared_parent_falls_back(session: AsyncSessi
 
 
 async def test_refine_not_contradict_roundtrip(session: AsyncSession, api) -> None:
-    (vault_id, winner_id, loser_id, _, _), link_id = await _seed_two_units(session)
+    (vault_id, winner_id, loser_id, _, _), link_key = await _seed_two_units(session)
     finding_id = await _seed_proposal(
         session,
         vault_id=vault_id,
         loser_unit_id=loser_id,
         winner_unit_id=winner_id,
-        link_id=link_id,
+        link_key=link_key,
         action='refine_not_contradict',
     )
 
     await apply_winner_proposal(api, finding_id, vault_id=vault_id, actor='itest')
-    assert await _read_link_type(session, link_id) == 'refines'
+    assert (
+        await _read_link_type(
+            session,
+            from_unit_id=link_key['from_unit_id'],
+            to_unit_id=link_key['to_unit_id'],
+        )
+        == 'refines'
+    )
 
     await reverse_winner_proposal(api, finding_id, vault_id=vault_id, actor='itest')
-    assert await _read_link_type(session, link_id) == 'contradicts'
+    assert (
+        await _read_link_type(
+            session,
+            from_unit_id=link_key['from_unit_id'],
+            to_unit_id=link_key['to_unit_id'],
+        )
+        == 'contradicts'
+    )
 
 
 async def test_inconclusive_is_noop(session: AsyncSession, api) -> None:
-    (vault_id, winner_id, loser_id, _, _), link_id = await _seed_two_units(session)
+    (vault_id, winner_id, loser_id, _, _), link_key = await _seed_two_units(session)
     finding_id = await _seed_proposal(
         session,
         vault_id=vault_id,
         loser_unit_id=loser_id,
         winner_unit_id=winner_id,
-        link_id=link_id,
+        link_key=link_key,
         action='inconclusive',
     )
 
     await apply_winner_proposal(api, finding_id, vault_id=vault_id, actor='itest')
     assert await _read_unit_status(session, loser_id) == 'active'
-    assert await _read_link_type(session, link_id) == 'contradicts'
+    assert (
+        await _read_link_type(
+            session,
+            from_unit_id=link_key['from_unit_id'],
+            to_unit_id=link_key['to_unit_id'],
+        )
+        == 'contradicts'
+    )
 
     # Reversal is also a no-op write but still produces a paired audit row.
     await reverse_winner_proposal(api, finding_id, vault_id=vault_id, actor='itest')

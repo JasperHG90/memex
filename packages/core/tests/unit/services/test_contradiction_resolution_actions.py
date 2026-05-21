@@ -77,7 +77,15 @@ def _api_with_session(cm):
     return api
 
 
-def _proposal(action, *, loser_unit_id=None, winner_unit_id=None, link_id=None):
+def _link_key_for(*, from_unit_id, to_unit_id, link_type='contradicts'):
+    return {
+        'from_unit_id': str(from_unit_id),
+        'to_unit_id': str(to_unit_id),
+        'link_type': link_type,
+    }
+
+
+def _proposal(action, *, loser_unit_id=None, winner_unit_id=None, link_key=None):
     return _row(
         id=str(uuid4()),
         vault_id='11111111-1111-1111-1111-111111111111',
@@ -89,7 +97,7 @@ def _proposal(action, *, loser_unit_id=None, winner_unit_id=None, link_id=None):
                 'action': action,
                 'winner_unit_id': winner_unit_id,
                 'loser_unit_id': loser_unit_id,
-                'link_id': link_id,
+                'link_key': link_key,
                 'winner_id': 'unit_a',
                 'loser_id': 'unit_b',
                 'confidence': 0.8,
@@ -183,17 +191,16 @@ async def test_supersede_loser_note_updates_note_superseded_by():
 async def test_refine_not_contradict_rewrites_link_type():
     loser_id = str(uuid4())
     winner_id = str(uuid4())
-    link_id = str(uuid4())
+    link_key = _link_key_for(from_unit_id=winner_id, to_unit_id=loser_id)
     proposal = _proposal(
         'refine_not_contradict',
         loser_unit_id=loser_id,
         winner_unit_id=winner_id,
-        link_id=link_id,
+        link_key=link_key,
     )
     loser_row = _row(id=loser_id, status='active', note_id=str(uuid4()))
     winner_row = _row(id=winner_id, status='active', note_id=str(uuid4()))
     link_row = _row(
-        id=link_id,
         link_type='contradicts',
         from_unit_id=winner_id,
         to_unit_id=loser_id,
@@ -212,9 +219,9 @@ async def test_refine_not_contradict_rewrites_link_type():
     refines = [
         params
         for sql, params in session._captured
-        if isinstance(params, dict) and params.get('link_type') == 'refines'
+        if isinstance(params, dict) and params.get('new_link_type') == 'refines'
     ]
-    assert refines, 'expected a link_type=refines UPDATE'
+    assert refines, 'expected a new_link_type=refines UPDATE'
 
 
 @pytest.mark.asyncio
@@ -241,7 +248,7 @@ async def test_inconclusive_is_a_noop_write():
         and (
             params.get('status') == 'stale'
             or params.get('superseded_by') is not None
-            or params.get('link_type') == 'refines'
+            or params.get('new_link_type') == 'refines'
         )
     ]
     assert not mutating, 'inconclusive must not mutate target rows'
@@ -412,7 +419,7 @@ def _resolved_proposal(
     effective_action: str,
     loser_unit_id: str | None = None,
     winner_unit_id: str | None = None,
-    link_id: str | None = None,
+    link_key: dict | None = None,
     prior_state: dict | None = None,
     applied_state: dict | None = None,
 ):
@@ -428,7 +435,7 @@ def _resolved_proposal(
                 'action': effective_action,
                 'winner_unit_id': winner_unit_id,
                 'loser_unit_id': loser_unit_id,
-                'link_id': link_id,
+                'link_key': link_key,
                 'resolution': {
                     'schema_version': 1,
                     'action': effective_action,
@@ -501,19 +508,20 @@ async def test_reverse_supersede_loser_note_refuses_when_state_diverged():
 async def test_reverse_refine_not_contradict_refuses_when_state_diverged():
     from memex_core.services.contradiction_resolution import reverse_winner_proposal
 
-    link_id = str(uuid4())
+    from_id = str(uuid4())
+    to_id = str(uuid4())
+    prior_link_key = _link_key_for(from_unit_id=from_id, to_unit_id=to_id)
+    applied_link_key = _link_key_for(from_unit_id=from_id, to_unit_id=to_id, link_type='refines')
     proposal = _resolved_proposal(
         effective_action='refine_not_contradict',
         loser_unit_id=str(uuid4()),
         winner_unit_id=str(uuid4()),
-        link_id=link_id,
-        prior_state={'link_id': link_id, 'link_type': 'contradicts'},
-        applied_state={'link_id': link_id, 'link_type': 'refines'},
+        link_key=applied_link_key,
+        prior_state={'link_key': prior_link_key, 'link_type': 'contradicts'},
+        applied_state={'link_key': applied_link_key, 'link_type': 'refines'},
     )
     # Link is now 'supports' — someone else mutated it after apply.
-    current_link = _row(
-        id=link_id, link_type='supports', from_unit_id=str(uuid4()), to_unit_id=str(uuid4())
-    )
+    current_link = _row(link_type='supports', from_unit_id=from_id, to_unit_id=to_id)
     session, cm = _make_session_with_rowcounts([proposal, current_link])
     api = _api_with_session(cm)
 
@@ -580,14 +588,17 @@ async def test_reverse_supersede_loser_note_refuses_when_note_deleted():
 async def test_reverse_refine_not_contradict_refuses_when_link_deleted():
     from memex_core.services.contradiction_resolution import reverse_winner_proposal
 
-    link_id = str(uuid4())
+    from_id = str(uuid4())
+    to_id = str(uuid4())
+    prior_link_key = _link_key_for(from_unit_id=from_id, to_unit_id=to_id)
+    applied_link_key = _link_key_for(from_unit_id=from_id, to_unit_id=to_id, link_type='refines')
     proposal = _resolved_proposal(
         effective_action='refine_not_contradict',
         loser_unit_id=str(uuid4()),
         winner_unit_id=str(uuid4()),
-        link_id=link_id,
-        prior_state={'link_id': link_id, 'link_type': 'contradicts'},
-        applied_state={'link_id': link_id, 'link_type': 'refines'},
+        link_key=applied_link_key,
+        prior_state={'link_key': prior_link_key, 'link_type': 'contradicts'},
+        applied_state={'link_key': applied_link_key, 'link_type': 'refines'},
     )
     # Link loader returns None — link no longer exists.
     session, cm = _make_session_with_rowcounts([proposal, None])
@@ -677,17 +688,16 @@ async def test_apply_supersede_loser_note_refuses_when_note_deleted_mid_txn():
 async def test_apply_refine_not_contradict_refuses_when_link_deleted_mid_txn():
     loser_id = str(uuid4())
     winner_id = str(uuid4())
-    link_id = str(uuid4())
+    link_key = _link_key_for(from_unit_id=winner_id, to_unit_id=loser_id)
     proposal = _proposal(
         'refine_not_contradict',
         loser_unit_id=loser_id,
         winner_unit_id=winner_id,
-        link_id=link_id,
+        link_key=link_key,
     )
     loser_row = _row(id=loser_id, status='active', note_id=str(uuid4()))
     winner_row = _row(id=winner_id, status='active', note_id=str(uuid4()))
     link_row = _row(
-        id=link_id,
         link_type='contradicts',
         from_unit_id=winner_id,
         to_unit_id=loser_id,
@@ -808,17 +818,16 @@ async def test_apply_supersede_loser_note_refuses_when_already_superseded():
 async def test_apply_refine_not_contradict_refuses_when_link_type_changed():
     loser_id = str(uuid4())
     winner_id = str(uuid4())
-    link_id = str(uuid4())
+    link_key = _link_key_for(from_unit_id=winner_id, to_unit_id=loser_id)
     proposal = _proposal(
         'refine_not_contradict',
         loser_unit_id=loser_id,
         winner_unit_id=winner_id,
-        link_id=link_id,
+        link_key=link_key,
     )
     loser_row = _row(id=loser_id, status='active', note_id=str(uuid4()))
     winner_row = _row(id=winner_id, status='active', note_id=str(uuid4()))
     link_row = _row(
-        id=link_id,
         link_type='contradicts',
         from_unit_id=winner_id,
         to_unit_id=loser_id,
@@ -844,9 +853,9 @@ async def test_apply_refine_not_contradict_refuses_when_link_type_changed():
     update_calls = [
         params
         for sql, params in session._captured
-        if isinstance(params, dict) and params.get('link_type') == 'refines'
+        if isinstance(params, dict) and params.get('new_link_type') == 'refines'
     ]
-    assert update_calls, 'expected the link_type=refines UPDATE to be attempted'
+    assert update_calls, 'expected the new_link_type=refines UPDATE to be attempted'
     assert update_calls[0].get('expected_link_type') == 'contradicts', (
         'CAS guard must carry the captured pre-mutation link_type'
     )

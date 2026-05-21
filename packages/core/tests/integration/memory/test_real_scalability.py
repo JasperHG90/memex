@@ -29,7 +29,9 @@ logger = logging.getLogger(__name__)
 @pytest.mark.asyncio
 @pytest.mark.integration
 @pytest.mark.llm
-async def test_real_scalability_concurrent_reflection(session: AsyncSession, postgres_uri: str):
+async def test_real_scalability_concurrent_reflection(
+    session: AsyncSession, session_manager, postgres_uri: str
+):
     """
     REAL Scalability Test (NO MOCKS).
 
@@ -99,7 +101,12 @@ async def test_real_scalability_concurrent_reflection(session: AsyncSession, pos
     embedder = await get_embedding_model()
 
     with dspy.context(lm=lm):
-        engine = ReflectionEngine(session, config, embedder=embedder)
+        # V18: per-entity DB work opens its own short session via
+        # ``entity_session_factory``; without it, concurrent reflections share
+        # ``self.session`` and collide ("session is in 'prepared' state ...").
+        engine = ReflectionEngine(
+            session, config, embedder=embedder, entity_session_factory=session_manager
+        )
 
         # 3. Execution & Measurement
         # --------------------------

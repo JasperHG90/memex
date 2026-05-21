@@ -97,7 +97,13 @@ async def test_int_check_constraint_rejects_invalid_risk(session):
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_int_filter_safety_blocked_prevents_persistence(session):
-    """filter_safety_blocked + insert_facts_batch: safety facts never reach the DB."""
+    """filter_safety_blocked passes safety facts through; they reach the DB.
+
+    Blocking now lives behind a future pre-flight risk assessment (not yet
+    implemented). The classifier records safety hits via metrics but does
+    not drop facts at the persistence boundary — they round-trip with
+    ``risk_class='safety'`` so downstream filters can act on the label.
+    """
     doc_id = uuid4()
     session.add(Note(id=doc_id, original_text='F25 safety block'))
     await session.commit()
@@ -107,21 +113,20 @@ async def test_int_filter_safety_blocked_prevents_persistence(session):
     block.risk_class = 'safety'
 
     final = filter_safety_blocked([keep, block])
-    assert len(final) == 1
-    assert final[0].fact_text == keep.fact_text
+    assert len(final) == 2
+    assert {f.fact_text for f in final} == {keep.fact_text, block.fact_text}
 
     ids = await storage.insert_facts_batch(session, final, note_id=str(doc_id))
-    assert len(ids) == 1
+    assert len(ids) == 2
 
-    # Verify the safety-marked fact did not land in the DB by counting rows
-    # whose text matches the blocked one.
+    # Verify the safety-marked fact landed in the DB with risk_class='safety'.
     result = await session.exec(
-        sql_text('SELECT count(*) FROM memory_units WHERE text = :text').bindparams(
-            text=block.fact_text
-        )
+        sql_text(
+            'SELECT count(*) FROM memory_units WHERE text = :text AND risk_class = :risk'
+        ).bindparams(text=block.fact_text, risk='safety')
     )
     count = result.scalar()
-    assert count == 0
+    assert count == 1
 
 
 @pytest.mark.integration

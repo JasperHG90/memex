@@ -129,21 +129,33 @@ _UPDATE_NOTE_SUPERSEDED_BY_NULL_SQL = text("""
 """)
 
 
+# ``memory_links`` has a composite primary key
+# ``(from_unit_id, to_unit_id, link_type)`` — there is no ``id`` column.
+# Lookups and mutations are keyed on the triple; CAS mutations additionally
+# guard the row by the expected current ``link_type``.
 _LOAD_LINK_SQL = text("""
-    SELECT id::text AS id, link_type, from_unit_id::text AS from_unit_id,
-           to_unit_id::text AS to_unit_id
-    FROM memory_links WHERE id = :link_id
+    SELECT from_unit_id::text AS from_unit_id,
+           to_unit_id::text AS to_unit_id,
+           link_type
+    FROM memory_links
+    WHERE from_unit_id = :from_unit_id
+      AND to_unit_id = :to_unit_id
+      AND link_type = :link_type
 """)
 
 
 _UPDATE_LINK_TYPE_SQL = text("""
-    UPDATE memory_links SET link_type = :link_type WHERE id = :link_id
+    UPDATE memory_links SET link_type = :new_link_type
+    WHERE from_unit_id = :from_unit_id
+      AND to_unit_id = :to_unit_id
+      AND link_type = :link_type
 """)
 
 
 _UPDATE_LINK_TYPE_CAS_SQL = text("""
-    UPDATE memory_links SET link_type = :link_type
-    WHERE id = :link_id
+    UPDATE memory_links SET link_type = :new_link_type
+    WHERE from_unit_id = :from_unit_id
+      AND to_unit_id = :to_unit_id
       AND link_type = :expected_link_type
 """)
 
@@ -166,6 +178,27 @@ def _coerce_evidence(raw: Any) -> dict[str, Any]:
     if isinstance(raw, dict):
         return dict(raw)
     return {}
+
+
+def _coerce_link_key(value: Any) -> dict[str, str] | None:
+    """Normalize an evidence ``link_key`` to ``{from_unit_id, to_unit_id, link_type}``.
+
+    Returns ``None`` if the value is missing or cannot be coerced; the caller
+    raises a ContradictionResolutionError so the apply/reverse path fails
+    loudly rather than silently dropping the link mutation.
+    """
+    if not isinstance(value, dict):
+        return None
+    from_id = value.get('from_unit_id')
+    to_id = value.get('to_unit_id')
+    link_type = value.get('link_type')
+    if not (from_id and to_id and link_type):
+        return None
+    return {
+        'from_unit_id': str(from_id),
+        'to_unit_id': str(to_id),
+        'link_type': str(link_type),
+    }
 
 
 async def apply_winner_proposal(
@@ -207,7 +240,7 @@ async def apply_winner_proposal(
         action = str(evidence.get('action') or 'inconclusive')
         winner_unit_id = evidence.get('winner_unit_id')
         loser_unit_id = evidence.get('loser_unit_id') or proposal.target_id
-        link_id = evidence.get('link_id')
+        link_key = _coerce_link_key(evidence.get('link_key'))
 
         prior_state: dict[str, Any] = {}
         applied_state: dict[str, Any] = {}
@@ -292,20 +325,22 @@ async def apply_winner_proposal(
             applied_state['loser_note_superseded_by'] = winner_row.note_id
 
         elif effective_action == 'refine_not_contradict':
-            if not link_id:
+            if link_key is None:
                 raise ContradictionResolutionError(
-                    'refine_not_contradict requires link_id in evidence'
+                    'refine_not_contradict requires link_key '
+                    '{from_unit_id, to_unit_id, link_type} in evidence'
                 )
-            link_row = (await session.execute(_LOAD_LINK_SQL, {'link_id': str(link_id)})).first()
+            link_row = (await session.execute(_LOAD_LINK_SQL, link_key)).first()
             if link_row is None:
-                raise ContradictionResolutionError(f'link {link_id} no longer exists')
-            prior_state['link_id'] = link_row.id
+                raise ContradictionResolutionError(f'link {link_key} no longer exists')
+            prior_state['link_key'] = dict(link_key)
             prior_state['link_type'] = link_row.link_type
             result = await session.execute(
                 _UPDATE_LINK_TYPE_CAS_SQL,
                 {
-                    'link_id': str(link_id),
-                    'link_type': 'refines',
+                    'from_unit_id': link_key['from_unit_id'],
+                    'to_unit_id': link_key['to_unit_id'],
+                    'new_link_type': 'refines',
                     'expected_link_type': link_row.link_type,
                 },
             )
@@ -315,12 +350,18 @@ async def apply_winner_proposal(
                     extra={
                         'finding_id': str(finding_id),
                         'effective_action': effective_action,
-                        'link_id': str(link_id),
+                        'link_key': link_key,
                     },
                 )
                 raise ContradictionResolutionError('Concurrent modification — retry the request.')
             applied['link_type'] = 'refines'
-            applied_state['link_id'] = link_row.id
+            # The link row's natural key now reflects the new link_type so
+            # reverse can locate it: (from, to, 'refines').
+            applied_state['link_key'] = {
+                'from_unit_id': link_key['from_unit_id'],
+                'to_unit_id': link_key['to_unit_id'],
+                'link_type': 'refines',
+            }
             applied_state['link_type'] = 'refines'
 
         elif effective_action == 'inconclusive':
@@ -525,18 +566,22 @@ async def reverse_winner_proposal(
                 raise ContradictionResolutionError('Concurrent modification — retry the request.')
 
         elif effective_action == 'refine_not_contradict':
-            link_id = prior_state.get('link_id')
+            # On apply the link's natural key flips
+            # (link_type: contradicts → refines), so we look up the live row
+            # under the applied-state link_key and write back the prior
+            # link_type via composite-key UPDATE.
+            applied_link_key = _coerce_link_key(applied_state.get('link_key'))
+            prior_link_key = _coerce_link_key(prior_state.get('link_key'))
             prev_link_type = prior_state.get('link_type', 'contradicts')
-            if link_id is None:
+            if applied_link_key is None or prior_link_key is None:
                 raise ContradictionResolutionError(
-                    'cannot reverse refine_not_contradict without prior_state.link_id'
+                    'cannot reverse refine_not_contradict without prior_state.link_key '
+                    'and applied_state.link_key'
                 )
-            current_link = (
-                await session.execute(_LOAD_LINK_SQL, {'link_id': str(link_id)})
-            ).first()
+            current_link = (await session.execute(_LOAD_LINK_SQL, applied_link_key)).first()
             if current_link is None:
                 raise ContradictionResolutionError(
-                    f'cannot reverse — link {link_id} no longer exists'
+                    f'cannot reverse — link {applied_link_key} no longer exists'
                 )
             expected_link_type = applied_state.get('link_type')
             if expected_link_type is not None and current_link.link_type != expected_link_type:
@@ -546,7 +591,12 @@ async def reverse_winner_proposal(
                 )
             result = await session.execute(
                 _UPDATE_LINK_TYPE_SQL,
-                {'link_id': str(link_id), 'link_type': prev_link_type},
+                {
+                    'from_unit_id': applied_link_key['from_unit_id'],
+                    'to_unit_id': applied_link_key['to_unit_id'],
+                    'link_type': applied_link_key['link_type'],
+                    'new_link_type': prev_link_type,
+                },
             )
             if not result.rowcount:
                 logger.warning(
@@ -554,7 +604,7 @@ async def reverse_winner_proposal(
                     extra={
                         'finding_id': str(finding_id),
                         'effective_action': effective_action,
-                        'link_id': str(link_id),
+                        'link_key': applied_link_key,
                     },
                 )
                 raise ContradictionResolutionError('Concurrent modification — retry the request.')
