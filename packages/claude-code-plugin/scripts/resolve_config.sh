@@ -245,9 +245,9 @@ _memex_kv_get_value() {
     memex kv get "$1" --value-only 2>/dev/null || true
 }
 
-_memex_kv_write_value() {
-    # $1: value, $2: key. Returns 0 on success, non-zero on failure.
-    memex kv write "$1" --key "$2" >/dev/null 2>&1
+_memex_kv_put_value() {
+    # $1: key, $2: value. Returns 0 on success, non-zero on failure.
+    memex kv put "$1" "$2" >/dev/null 2>&1
 }
 
 # ---------------------------------------------------------------------------
@@ -283,7 +283,7 @@ memex_kv_namespace_migrate() {
         # Forward-migrate. If the write fails (server down, missing perms),
         # the next session will retry; the legacy key remains as a safety
         # net. Log the failure to stderr so it surfaces in CC's hook trace.
-        if ! _memex_kv_write_value "$_old_val" "$_new_key"; then
+        if ! _memex_kv_put_value "$_new_key" "$_old_val"; then
             echo "memex resolve_config: forward-migration of '${_old_key}' → '${_new_key}' failed; continuing with legacy value. Will retry next session." >&2
         fi
         printf '%s' "$_old_val"

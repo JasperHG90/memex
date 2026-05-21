@@ -76,17 +76,10 @@ case "$_subcommand $_subsubcommand" in
         echo "Key not found: $_key"
         exit 1
         ;;
-    "kv write")
-        # `memex kv write <value> --key <key>`
-        _val="$3"
-        # Find --key
-        _key=""
-        while [ $# -gt 0 ]; do
-            case "$1" in
-                --key|-k) _key="$2"; shift; shift ;;
-                *) shift ;;
-            esac
-        done
+    "kv put")
+        # `memex kv put <key> <value>`
+        _key="$3"
+        _val="$4"
         if [ -f "$_kv_file" ]; then
             # Remove any existing line for this key (fixed-string equality
             # via awk so regex metacharacters in keys never match siblings —

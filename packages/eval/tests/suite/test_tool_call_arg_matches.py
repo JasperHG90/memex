@@ -18,7 +18,7 @@ def _scenario() -> Scenario:
 def _outcome(**overrides):
     base = dict(
         type='tool_call_arg_matches',
-        tool='memex_kv_write',
+        tool='memex_kv_put',
         arg_name='key',
         regex=r'^user:',
         min_count=1,
@@ -32,13 +32,13 @@ class TestStringValue:
     def test_positive_match(self) -> None:
         outcome = _outcome()
         ans = AgentAnswer(
-            tool_calls=[{'tool': 'memex_kv_write', 'input': {'key': 'user:indentation'}}]
+            tool_calls=[{'tool': 'memex_kv_put', 'input': {'key': 'user:indentation'}}]
         )
         assert outcome.score(ans, _scenario()) == {'pass': 1.0}
 
     def test_negative_match(self) -> None:
         outcome = _outcome()
-        ans = AgentAnswer(tool_calls=[{'tool': 'memex_kv_write', 'input': {'key': 'session:abc'}}])
+        ans = AgentAnswer(tool_calls=[{'tool': 'memex_kv_put', 'input': {'key': 'session:abc'}}])
         assert outcome.score(ans, _scenario()) == {'pass': 0.0}
 
     def test_re_search_not_fullmatch(self) -> None:
@@ -87,12 +87,12 @@ class TestListValue:
 class TestMissingAndNone:
     def test_none_never_matches(self) -> None:
         outcome = _outcome(regex=r'.*')
-        ans = AgentAnswer(tool_calls=[{'tool': 'memex_kv_write', 'input': {'key': None}}])
+        ans = AgentAnswer(tool_calls=[{'tool': 'memex_kv_put', 'input': {'key': None}}])
         assert outcome.score(ans, _scenario()) == {'pass': 0.0}
 
     def test_missing_arg_never_matches(self) -> None:
         outcome = _outcome(regex=r'.*')
-        ans = AgentAnswer(tool_calls=[{'tool': 'memex_kv_write', 'input': {'value': 'x'}}])
+        ans = AgentAnswer(tool_calls=[{'tool': 'memex_kv_put', 'input': {'value': 'x'}}])
         assert outcome.score(ans, _scenario()) == {'pass': 0.0}
 
 
@@ -109,22 +109,22 @@ class TestExpectAbsent:
 
     def test_matching_call_present_fails(self) -> None:
         outcome = _outcome(expect_absent=True)
-        ans = AgentAnswer(tool_calls=[{'tool': 'memex_kv_write', 'input': {'key': 'user:x'}}])
+        ans = AgentAnswer(tool_calls=[{'tool': 'memex_kv_put', 'input': {'key': 'user:x'}}])
         assert outcome.score(ans, _scenario()) == {'pass': 0.0}
 
 
 class TestMinCount:
     def test_below_threshold(self) -> None:
         outcome = _outcome(min_count=2)
-        ans = AgentAnswer(tool_calls=[{'tool': 'memex_kv_write', 'input': {'key': 'user:a'}}])
+        ans = AgentAnswer(tool_calls=[{'tool': 'memex_kv_put', 'input': {'key': 'user:a'}}])
         assert outcome.score(ans, _scenario()) == {'pass': 0.0}
 
     def test_at_threshold(self) -> None:
         outcome = _outcome(min_count=2)
         ans = AgentAnswer(
             tool_calls=[
-                {'tool': 'memex_kv_write', 'input': {'key': 'user:a'}},
-                {'tool': 'memex_kv_write', 'input': {'key': 'user:b'}},
+                {'tool': 'memex_kv_put', 'input': {'key': 'user:a'}},
+                {'tool': 'memex_kv_put', 'input': {'key': 'user:b'}},
             ]
         )
         assert outcome.score(ans, _scenario()) == {'pass': 1.0}
@@ -168,12 +168,12 @@ class TestSubstitution:
 
     def test_static_regex_unchanged_without_substitutions(self) -> None:
         outcome = _outcome(regex=r'^user:')
-        ans = AgentAnswer(tool_calls=[{'tool': 'memex_kv_write', 'input': {'key': 'user:x'}}])
+        ans = AgentAnswer(tool_calls=[{'tool': 'memex_kv_put', 'input': {'key': 'user:x'}}])
         assert outcome.score(ans, _scenario()) == {'pass': 1.0}
 
     def test_no_context_falls_back_gracefully(self) -> None:
         outcome = _outcome(regex=r'^user:')
-        ans = AgentAnswer(tool_calls=[{'tool': 'memex_kv_write', 'input': {'key': 'user:x'}}])
+        ans = AgentAnswer(tool_calls=[{'tool': 'memex_kv_put', 'input': {'key': 'user:x'}}])
         assert outcome.score(ans, _scenario(), context=None) == {'pass': 1.0}
 
     def test_substitution_uses_format_key_dict_shape_from_runner(self) -> None:

@@ -32,7 +32,7 @@ The Memex MCP server exposes 35 tools organized into 7 categories:
 | `browse` | `memex_list_notes`, `memex_recent_notes`, `memex_list_vaults`, `memex_active_vault`, `memex_get_vault_summary` | List notes, vaults, recent activity, vault summaries |
 | `assets` | `memex_list_assets`, `memex_get_resources`, `memex_add_assets`, `memex_delete_assets` | Manage file attachments (images, PDFs) |
 | `entities` | `memex_list_entities`, `memex_get_entities`, `memex_get_entity_mentions`, `memex_get_entity_cooccurrences` | Knowledge graph exploration |
-| `storage` | `memex_kv_write`, `memex_kv_get`, `memex_kv_search`, `memex_kv_list`, `memex_get_memory_units`, `memex_get_lineage` | KV store, memory units, lineage |
+| `storage` | `memex_kv_put`, `memex_kv_get`, `memex_kv_search`, `memex_kv_list`, `memex_get_memory_units`, `memex_get_lineage` | KV store, memory units, lineage |
 
 ## Instructions
 

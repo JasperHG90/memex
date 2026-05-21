@@ -29,12 +29,12 @@ def _read(slug: str) -> str:
 # ---------------------------------------------------------------------------
 
 
-def test_remember_documents_procedure_namespace_and_kv_write_path():
+def test_remember_documents_procedure_namespace_and_kv_put_path():
     text = _read('remember')
     # Procedure key shape MUST be named so an agent can self-discover the contract.
     assert 'procedure:<verb>:<context-tag>' in text
-    # Write side: kv_write is the path for capturing a learned procedure.
-    assert 'memex_kv_write' in text
+    # Write side: kv_put is the path for capturing a learned procedure.
+    assert 'memex_kv_put' in text
 
 
 def test_remember_does_not_advertise_kv_get_include_history():
@@ -69,23 +69,23 @@ def test_recall_documents_procedure_namespace_and_kv_get_include_history():
     assert 'memex_kv_list(namespaces=["procedure"])' in text
 
 
-def test_recall_does_not_advertise_kv_write_for_procedures():
+def test_recall_does_not_advertise_kv_put_for_procedures():
     """Writing a procedure: key is the /remember register, not /recall.
 
     Negative-grep regression fence per team-lead's draft-3 review:
-    recall/SKILL.md must NOT contain ``memex_kv_write`` paired with
-    ``procedure:``. Even though ``memex_kv_write`` is mentioned elsewhere
+    recall/SKILL.md must NOT contain ``memex_kv_put`` paired with
+    ``procedure:``. Even though ``memex_kv_put`` is mentioned elsewhere
     on the recall side, advertising it as the way to write a learned
     procedure belongs to /remember.
     """
     text = _read('recall')
-    # Search for the specific cross-pollination signal: kv_write used for
+    # Search for the specific cross-pollination signal: kv_put used for
     # procedure: keys in the recall context.
     lines = text.splitlines()
     for i, line in enumerate(lines):
-        if 'memex_kv_write' in line and 'procedure:' in line:
+        if 'memex_kv_put' in line and 'procedure:' in line:
             raise AssertionError(
-                f'/recall/SKILL.md line {i + 1} pairs memex_kv_write with '
+                f'/recall/SKILL.md line {i + 1} pairs memex_kv_put with '
                 f'procedure:, which belongs in /remember: {line!r}'
             )
 

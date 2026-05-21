@@ -223,12 +223,12 @@ class TestKvNamespaceCoverage:
                 outcome
                 for outcome in _walk_outcomes(sc.expected)
                 if isinstance(outcome, ToolCallArgMatches)
-                and outcome.tool == 'memex_kv_write'
+                and outcome.tool == 'memex_kv_put'
                 and outcome.arg_name == 'key'
             ]
             assert len(arg_matches) == 1, (
                 f'{sc_id}: expected exactly one ToolCallArgMatches on '
-                f'memex_kv_write.key; got {len(arg_matches)}'
+                f'memex_kv_put.key; got {len(arg_matches)}'
             )
             assert arg_matches[0].regex == expected_regex, (
                 f'{sc_id}: regex drifted to {arg_matches[0].regex!r}; expected {expected_regex!r}'

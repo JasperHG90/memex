@@ -95,7 +95,7 @@ async def test_workspace_files_and_command_with_plugin(monkeypatch: pytest.Monke
     assert 'eval-test' in captured['claude_md']
 
     allowed = captured['settings']['permissions']['allow']
-    assert 'mcp__memex__memex_kv_write' in allowed
+    assert 'mcp__memex__memex_kv_put' in allowed
     assert 'mcp__memex__memex_memory_search' in allowed
     assert 'mcp__memex__memex_append_note' in allowed
     assert set(allowed) == set(_MEMEX_TOOL_ALLOWLIST)

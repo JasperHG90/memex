@@ -125,10 +125,12 @@ def test_record_outcome_description_carries_v11_contract() -> None:
 
 
 def test_deprioritize_description_carries_partner_and_virtual_unit() -> None:
-    """Deprioritize (Tier 1a) carries: partner verb, virtual-unit 404 trigger."""
+    """Deprioritize (Tier 1a) carries: partner verb, virtual-unit 400 trigger."""
     assert 'memex_record_outcome' in MEMEX_MEMORY_DEPRIORITIZE_DESC
     assert 'virtual' in MEMEX_MEMORY_DEPRIORITIZE_DESC.lower()
-    assert '404' in MEMEX_MEMORY_DEPRIORITIZE_DESC
+    # Server returns HTTP 400 (not 404) on observation UUID — the description
+    # carries that trigger so the agent can self-correct without a round-trip.
+    assert '400' in MEMEX_MEMORY_DEPRIORITIZE_DESC
 
 
 # ---------------------------------------------------------------------------

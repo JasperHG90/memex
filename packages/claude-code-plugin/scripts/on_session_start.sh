@@ -164,7 +164,7 @@ else
     vault_instruction="
 ### Per-project vault
 
-No project-specific vault is configured (project: \`${project_id}\`). Notes will be written to the default vault. To bind this project to a specific vault, call \`memex_kv_write(key=\"app:claude-code:project:${project_id}:vault\", value=\"<vault_name>\")\`. This will take effect on the next session."
+No project-specific vault is configured (project: \`${project_id}\`). Notes will be written to the default vault. To bind this project to a specific vault, call \`memex_kv_put(key=\"app:claude-code:project:${project_id}:vault\", value=\"<vault_name>\")\`. This will take effect on the next session."
 
     status="${status} · No vault set — tell me which vault to use for this project"
 fi

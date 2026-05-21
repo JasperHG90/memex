@@ -497,7 +497,7 @@ Returns unit text, type, confidence, note ID, and supersession context for each 
 
 ## KV Store Tools
 
-### `memex_kv_write`
+### `memex_kv_put`
 
 Write a fact to the key-value store. Generates an embedding for semantic search. Use for storing structured preferences, settings, or facts. Key should be a short, namespaced identifier (e.g. `"tool:python:pkg_mgr"`).
 

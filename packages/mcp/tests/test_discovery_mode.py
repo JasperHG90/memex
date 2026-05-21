@@ -28,7 +28,7 @@ BM25_TEST_CASES: list[tuple[str, list[str]]] = [
     ),
     ('read the content of a specific note', ['memex_read_note', 'memex_get_nodes']),
     ('get the table of contents of a note', ['memex_get_page_indices']),
-    ('store a user preference', ['memex_kv_write']),
+    ('store a user preference', ['memex_kv_put']),
     ('look up a stored fact', ['memex_kv_get', 'memex_kv_search']),
     ('add a new document to memex', ['memex_add_note']),
     ('list all my vaults', ['memex_list_vaults']),

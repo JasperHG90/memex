@@ -121,7 +121,7 @@ Ask Claude:
 Or call the MCP tool directly:
 
 ```
-memex_kv_write(key="app:claude-code:project:github.com/acme/myapp:vault", value="my-vault")
+memex_kv_put(key="app:claude-code:project:github.com/acme/myapp:vault", value="my-vault")
 ```
 
 If no per-project vault is set, writes go to the default vault from your Memex config.

@@ -36,13 +36,17 @@ def _f9_tools() -> list[dict]:
         MEMORY_SUMMARIZE_NODE_SCHEMA,
     )
 
+    import copy
+
+    # LiteLLM/Gemini mutates the parameters dict in place. Deep-copy to keep
+    # the module-level schema constants intact for tests that follow.
     return [
         {
             'type': 'function',
             'function': {
                 'name': s['name'],
                 'description': s['description'],
-                'parameters': s['parameters'],
+                'parameters': copy.deepcopy(s['parameters']),
             },
         }
         for s in (

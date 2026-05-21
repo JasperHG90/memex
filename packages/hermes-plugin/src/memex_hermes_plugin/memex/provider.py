@@ -482,7 +482,7 @@ class MemexMemoryProvider(MemoryProvider):
         """Mirror built-in MEMORY.md/USER.md writes to the Memex KV store.
 
         Target → namespace mapping preserves semantic intent so the mirror
-        lands in the same namespace as an explicit ``memex_kv_write`` would:
+        lands in the same namespace as an explicit ``memex_kv_put`` would:
 
         - ``target='user'`` → ``user:hermes:<digest>`` (user-scoped facts)
         - ``target='memory'`` → ``app:hermes:memory:<digest>`` (agent scratchpad)

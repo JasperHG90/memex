@@ -36,7 +36,7 @@ Primary tools:
 
 Additional surfaces cover note lifecycle, discovery (`memex_find_note`,
 vault summaries), templates, assets, and the KV store
-(`memex_kv_write` / `memex_kv_get` / `memex_kv_search` / `memex_kv_list`).
+(`memex_kv_put` / `memex_kv_get` / `memex_kv_search` / `memex_kv_list`).
 
 The plugin injects a storage-model primer (notes / memory units / KV — what
 each is for, what supersession looks like) and routing guidance into the

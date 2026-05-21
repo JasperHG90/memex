@@ -166,7 +166,7 @@ def test_get_tool_schemas_in_hybrid_mode(provider_with_stubbed_api):
         'memex_get_resources',
         'memex_resize_image',
         'memex_add_assets',
-        'memex_kv_write',
+        'memex_kv_put',
         'memex_kv_get',
         'memex_kv_search',
         'memex_kv_list',
@@ -247,7 +247,7 @@ class TestGetToolSchemasBeforeInitialize:
             'memex_get_resources',
             'memex_resize_image',
             'memex_add_assets',
-            'memex_kv_write',
+            'memex_kv_put',
             'memex_kv_get',
             'memex_kv_search',
             'memex_kv_list',
@@ -1069,7 +1069,7 @@ def test_on_memory_write_mirrors_to_kv(provider_with_stubbed_api):
         f'KV key {kwargs["key"]!r} prefix {prefix!r} not in VALID_NAMESPACES={VALID_NAMESPACES}'
     )
     # target='user' must land in the user: namespace (semantic intent
-    # preserved so the mirror agrees with explicit memex_kv_write calls).
+    # preserved so the mirror agrees with explicit memex_kv_put calls).
     assert kwargs['key'].startswith('user:hermes:')
 
 

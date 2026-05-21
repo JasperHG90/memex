@@ -65,7 +65,7 @@ To bind a project to a vault, ask Claude:
 Or call the MCP tool directly:
 
 ```
-memex_kv_write(key="claude-code:vault:https://github.com/acme/myapp", value="my-vault")
+memex_kv_put(key="claude-code:vault:https://github.com/acme/myapp", value="my-vault")
 ```
 
 If no per-project vault is set, writes go to the default vault from your Memex config.

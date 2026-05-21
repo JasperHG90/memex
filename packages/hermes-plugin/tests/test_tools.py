@@ -8,6 +8,7 @@ DTOs so a schema drift in the client is caught here, not in production.
 from __future__ import annotations
 
 import base64 as _b64
+import copy
 import json
 import os
 import re
@@ -58,7 +59,7 @@ from memex_hermes_plugin.memex.tools import (
     KV_GET_SCHEMA,
     KV_LIST_SCHEMA,
     KV_SEARCH_SCHEMA,
-    KV_WRITE_SCHEMA,
+    KV_PUT_SCHEMA,
     LIST_ASSETS_SCHEMA,
     LIST_ENTITIES_SCHEMA,
     LIST_NOTES_SCHEMA,
@@ -163,7 +164,7 @@ def test_all_schemas_have_required_fields():
         'memex_get_resources',
         'memex_resize_image',
         'memex_add_assets',
-        'memex_kv_write',
+        'memex_kv_put',
         'memex_kv_get',
         'memex_kv_search',
         'memex_kv_list',
@@ -2755,11 +2756,11 @@ def test_add_assets_schema_shape():
     assert 'file_paths' not in params['properties']
 
 
-def test_kv_write_schema_shape():
+def test_kv_put_schema_shape():
     """AC-078: required value/key; optional ttl_seconds; namespace guidance in description."""
-    desc = KV_WRITE_SCHEMA['description']
+    desc = KV_PUT_SCHEMA['description']
     assert 'global:' in desc and 'user:' in desc and 'project:' in desc and 'app:' in desc
-    params = KV_WRITE_SCHEMA['parameters']
+    params = KV_PUT_SCHEMA['parameters']
     assert set(params['required']) == {'value', 'key'}
     assert 'ttl_seconds' in params['properties']
     assert 'ttl_seconds' not in params['required']
@@ -3112,7 +3113,7 @@ def test_add_assets_rejects_non_string_b64(config, vault_id):
 # they need a ``SessionAssetCache`` fixture that's not part of this module.
 
 
-# -- Handler tests: kv_write (#25) --
+# -- Handler tests: kv_put (#25) --
 
 
 @pytest.mark.parametrize(
@@ -3162,14 +3163,14 @@ def test_scope_from_key_matches_mcp_source_of_truth():
         assert hermes_fn(key) == mcp_fn(key), f'scope drift on key {key!r}'
 
 
-def test_kv_write_generates_embedding_then_puts(config, vault_id):
+def test_kv_put_generates_embedding_then_puts(config, vault_id):
     """AC-079: handler calls embed_text FIRST, then kv_put with that embedding."""
     api = Mock()
     api.embed_text = AsyncMock(return_value=[0.1, 0.2, 0.3])
     entry = _fake_kv_entry(key='user:work:employer', value='ACME')
     api.kv_put = AsyncMock(return_value=entry)
     out = dispatch(
-        'memex_kv_write',
+        'memex_kv_put',
         {'value': 'ACME', 'key': 'user:work:employer', 'ttl_seconds': 3600},
         api=api,
         config=config,
@@ -3188,12 +3189,12 @@ def test_kv_write_generates_embedding_then_puts(config, vault_id):
     assert put_kwargs['ttl_seconds'] == 3600
 
 
-def test_kv_write_missing_required_params(config, vault_id):
+def test_kv_put_missing_required_params(config, vault_id):
     """Missing value/key → tool_error, no API calls."""
     api = Mock()
     api.embed_text = AsyncMock()
     api.kv_put = AsyncMock()
-    out = dispatch('memex_kv_write', {'key': 'user:x'}, api=api, config=config, vault_id=vault_id)
+    out = dispatch('memex_kv_put', {'key': 'user:x'}, api=api, config=config, vault_id=vault_id)
     assert 'error' in json.loads(out)
     api.embed_text.assert_not_awaited()
     api.kv_put.assert_not_awaited()
@@ -3203,13 +3204,13 @@ def test_kv_write_missing_required_params(config, vault_id):
     'bad_key',
     ['noscope', 'unknown:foo', 'Global:foo', 'usre:work:x', ':leading', '  user:foo'],
 )
-def test_kv_write_rejects_bad_namespace(config, vault_id, bad_key):
+def test_kv_put_rejects_bad_namespace(config, vault_id, bad_key):
     """Keys outside the four RFC-012 namespaces (global:/user:/project:/app:) → tool_error."""
     api = Mock()
     api.embed_text = AsyncMock()
     api.kv_put = AsyncMock()
     out = dispatch(
-        'memex_kv_write',
+        'memex_kv_put',
         {'value': 'v', 'key': bad_key},
         api=api,
         config=config,
@@ -3340,12 +3341,14 @@ def test_add_note_content_is_structured_markdown_via_gemini():
 
     from memex_hermes_plugin.memex.tools import RETAIN_SCHEMA
 
+    # LiteLLM/Gemini mutates the parameters dict in place. Deep-copy to keep
+    # the module-level schema constants intact for tests that follow.
     tool = {
         'type': 'function',
         'function': {
             'name': RETAIN_SCHEMA['name'],
             'description': RETAIN_SCHEMA['description'],
-            'parameters': RETAIN_SCHEMA['parameters'],
+            'parameters': copy.deepcopy(RETAIN_SCHEMA['parameters']),
         },
     }
 
@@ -3440,13 +3443,15 @@ def test_hermes_routes_structured_capture_to_templates_via_gemini():
         kv_instructions_if_no_vault=False,
     )
 
+    # LiteLLM/Gemini mutates the parameters dict in place. Deep-copy to keep
+    # the module-level schema constants intact for tests that follow.
     tool_defs = [
         {
             'type': 'function',
             'function': {
                 'name': s['name'],
                 'description': s['description'],
-                'parameters': s['parameters'],
+                'parameters': copy.deepcopy(s['parameters']),
             },
         }
         for s in (LIST_TEMPLATES_SCHEMA, GET_TEMPLATE_SCHEMA, RETAIN_SCHEMA)

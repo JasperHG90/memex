@@ -362,7 +362,7 @@ class McpKVEntry(BaseModel):
     expires_at: datetime | None = None
 
 
-class McpKVWriteResult(BaseModel):
+class McpKVPutResult(BaseModel):
     key: str
     value: str
     scope: str

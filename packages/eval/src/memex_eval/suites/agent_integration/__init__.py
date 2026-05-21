@@ -692,13 +692,13 @@ suite.register(
         children=[
             ToolCallContains(
                 type='tool_call_contains',
-                expected_tools=['memex_kv_write'],
+                expected_tools=['memex_kv_put'],
                 min_count=1,
                 match_mode='any',
             ),
             ToolCallArgMatches(
                 type='tool_call_arg_matches',
-                tool='memex_kv_write',
+                tool='memex_kv_put',
                 arg_name='key',
                 regex=r'^project:.+',
                 min_count=1,
@@ -724,13 +724,13 @@ suite.register(
         children=[
             ToolCallContains(
                 type='tool_call_contains',
-                expected_tools=['memex_kv_write'],
+                expected_tools=['memex_kv_put'],
                 min_count=1,
                 match_mode='any',
             ),
             ToolCallArgMatches(
                 type='tool_call_arg_matches',
-                tool='memex_kv_write',
+                tool='memex_kv_put',
                 arg_name='key',
                 regex=r'^user:.+',
                 min_count=1,
@@ -759,13 +759,13 @@ suite.register(
         children=[
             ToolCallContains(
                 type='tool_call_contains',
-                expected_tools=['memex_kv_write'],
+                expected_tools=['memex_kv_put'],
                 min_count=1,
                 match_mode='any',
             ),
             ToolCallArgMatches(
                 type='tool_call_arg_matches',
-                tool='memex_kv_write',
+                tool='memex_kv_put',
                 arg_name='key',
                 regex=r'^global:.+',
                 min_count=1,
@@ -793,13 +793,13 @@ suite.register(
         children=[
             ToolCallContains(
                 type='tool_call_contains',
-                expected_tools=['memex_kv_write'],
+                expected_tools=['memex_kv_put'],
                 min_count=1,
                 match_mode='any',
             ),
             ToolCallArgMatches(
                 type='tool_call_arg_matches',
-                tool='memex_kv_write',
+                tool='memex_kv_put',
                 arg_name='key',
                 regex=r'^app:.+',
                 min_count=1,
@@ -832,7 +832,7 @@ suite.register(
     group='kv',
     description=(
         'Hard wake-word write — user: namespace. The agent must call '
-        'memex_kv_write with the exact key the user typed (no namespace '
+        'memex_kv_put with the exact key the user typed (no namespace '
         'rewriting, no scope-cue reinterpretation).'
     ),
     query='Store in KV: user:editor=Neovim',
@@ -842,13 +842,13 @@ suite.register(
         children=[
             ToolCallContains(
                 type='tool_call_contains',
-                expected_tools=['memex_kv_write'],
+                expected_tools=['memex_kv_put'],
                 min_count=1,
                 match_mode='any',
             ),
             ToolCallArgMatches(
                 type='tool_call_arg_matches',
-                tool='memex_kv_write',
+                tool='memex_kv_put',
                 arg_name='key',
                 regex=r'^user:editor$',
                 min_count=1,
@@ -873,13 +873,13 @@ suite.register(
         children=[
             ToolCallContains(
                 type='tool_call_contains',
-                expected_tools=['memex_kv_write'],
+                expected_tools=['memex_kv_put'],
                 min_count=1,
                 match_mode='any',
             ),
             ToolCallArgMatches(
                 type='tool_call_arg_matches',
-                tool='memex_kv_write',
+                tool='memex_kv_put',
                 arg_name='key',
                 regex=r'^project:eval-suite:lang$',
                 min_count=1,
@@ -903,13 +903,13 @@ suite.register(
         children=[
             ToolCallContains(
                 type='tool_call_contains',
-                expected_tools=['memex_kv_write'],
+                expected_tools=['memex_kv_put'],
                 min_count=1,
                 match_mode='any',
             ),
             ToolCallArgMatches(
                 type='tool_call_arg_matches',
-                tool='memex_kv_write',
+                tool='memex_kv_put',
                 arg_name='key',
                 regex=r'^global:lang_min$',
                 min_count=1,
@@ -933,13 +933,13 @@ suite.register(
         children=[
             ToolCallContains(
                 type='tool_call_contains',
-                expected_tools=['memex_kv_write'],
+                expected_tools=['memex_kv_put'],
                 min_count=1,
                 match_mode='any',
             ),
             ToolCallArgMatches(
                 type='tool_call_arg_matches',
-                tool='memex_kv_write',
+                tool='memex_kv_put',
                 arg_name='key',
                 regex=r'^app:claude-code:theme$',
                 min_count=1,
@@ -1008,7 +1008,7 @@ suite.register(
     description=(
         'Hard wake-word write with TTL: when the user specifies an '
         'expiration, the agent must pass ttl_seconds (positive integer) '
-        'to memex_kv_write — not store unexpiring.'
+        'to memex_kv_put — not store unexpiring.'
     ),
     query='Store in KV: user:current_focus=ticket-456 (expires in 1 hour, ttl_seconds=3600)',
     max_duration_ms=_DUR_MS,
@@ -1017,20 +1017,20 @@ suite.register(
         children=[
             ToolCallContains(
                 type='tool_call_contains',
-                expected_tools=['memex_kv_write'],
+                expected_tools=['memex_kv_put'],
                 min_count=1,
                 match_mode='any',
             ),
             ToolCallArgMatches(
                 type='tool_call_arg_matches',
-                tool='memex_kv_write',
+                tool='memex_kv_put',
                 arg_name='key',
                 regex=r'^user:current_focus$',
                 min_count=1,
             ),
             ToolCallArgMatches(
                 type='tool_call_arg_matches',
-                tool='memex_kv_write',
+                tool='memex_kv_put',
                 arg_name='ttl_seconds',
                 regex=r'^[1-9]\d*$',
                 min_count=1,

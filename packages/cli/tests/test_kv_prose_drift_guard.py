@@ -84,7 +84,7 @@ def test_hermes_tools_py_no_kv_fact_muddle():
     # in the file doesn't flag.
     text = _read('packages/hermes-plugin/src/memex_hermes_plugin/memex/tools.py')
     _assert_no_banned_in(
-        _kv_section(text, 'KV_WRITE_SCHEMA'), where='hermes-plugin tools.py KV section'
+        _kv_section(text, 'KV_PUT_SCHEMA'), where='hermes-plugin tools.py KV section'
     )
 
 
@@ -98,9 +98,7 @@ def test_hermes_briefing_py_no_kv_fact_muddle():
 def test_mcp_server_py_no_kv_fact_muddle():
     # server.py is large; scope to the KV tool definitions onward.
     text = _read('packages/mcp/src/memex_mcp/server.py')
-    _assert_no_banned_in(
-        _kv_section(text, "name='memex_kv_write'"), where='mcp server.py KV section'
-    )
+    _assert_no_banned_in(_kv_section(text, "name='memex_kv_put'"), where='mcp server.py KV section')
 
 
 def test_agent_surface_kv_namespace_block_is_clean():

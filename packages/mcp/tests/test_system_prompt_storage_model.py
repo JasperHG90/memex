@@ -68,7 +68,7 @@ def test_kv_layer_described_in_storage_model():
     The KV-vs-content-fact distinction (the OrangeHermes regression fence)
     is now enforced at the per-tool description layer; see
     ``packages/common/tests/test_tool_descriptions.py
-    ::test_kv_write_rejects_content_facts``.
+    ::test_kv_put_rejects_content_facts``.
     """
     assert '**KV store**' in STORAGE_MODEL
 

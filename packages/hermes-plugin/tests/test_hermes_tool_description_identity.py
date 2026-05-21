@@ -25,7 +25,7 @@ from memex_hermes_plugin.memex import tools as hermes_tools
 # whose `description=` field references a `tool_descriptions` constant.
 # Add a new row here when a new tool migrates to the SSOT.
 _PAIRINGS: list[tuple[str, str]] = [
-    ('MEMEX_KV_WRITE_DESC', 'KV_WRITE_SCHEMA'),
+    ('MEMEX_KV_PUT_DESC', 'KV_PUT_SCHEMA'),
     ('MEMEX_KV_GET_DESC', 'KV_GET_SCHEMA'),
     ('MEMEX_KV_SEARCH_DESC', 'KV_SEARCH_SCHEMA'),
     ('MEMEX_KV_LIST_DESC', 'KV_LIST_SCHEMA'),

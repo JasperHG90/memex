@@ -26,19 +26,19 @@ Outcome-signal lexicon for paired writes:
 - Success → "that worked", "that fixed it", "record it", "save this" → verb=`helpful`
 - Failure → "stop suggesting X", "didn't work", "we removed it", "that was wrong" → verb=`not_helpful`
 
-Capture cadence: write a short note (`memex_add_note`, ≤300 tokens, no per-file changelogs) when you finish a multi-step task, diagnose a non-obvious bug, or resolve a tricky env issue. User preferences / conventions are NOT note-shaped — those go to `memex_kv_write` per the KV-namespace rules above. Use `memex_append_note(note_key, delta)` to extend an existing note rather than re-ingesting."""
+Capture cadence: write a short note (`memex_add_note`, ≤300 tokens, no per-file changelogs) when you finish a multi-step task, diagnose a non-obvious bug, or resolve a tricky env issue. User preferences / conventions are NOT note-shaped — those go to `memex_kv_put` per the KV-namespace rules above. Use `memex_append_note(note_key, delta)` to extend an existing note rather than re-ingesting."""
 
 
 CLAUDE_CODE_HARNESS = """## Claude Code-specific framing
 
-Capture cadence: call `memex_add_note(background=true, author="claude-code")` when you (1) complete a multi-step task, (2) diagnose a bug root cause, (3) make/discover an architectural decision, or (4) resolve a tricky env issue. Hard max 300 tokens; no per-file changelogs. User preferences / conventions are NOT note-shaped — those go to `memex_kv_write` per the KV namespace rules above.
+Capture cadence: call `memex_add_note(background=true, author="claude-code")` when you (1) complete a multi-step task, (2) diagnose a bug root cause, (3) make/discover an architectural decision, or (4) resolve a tricky env issue. Hard max 300 tokens; no per-file changelogs. User preferences / conventions are NOT note-shaped — those go to `memex_kv_put` per the KV namespace rules above.
 
 <critical_constraint name="write_routing">
 Route user write intents to the right tool — failure here is silent ("I'm ready" with no tool call) or the wrong namespace.
-- `"Remember about me: I prefer X"` → `memex_kv_write(key="user:<field>", value=X)`.
-- `"Remember in this repo / project / codebase: ..."` → `memex_kv_write(key="project:<id>:<field>", ...)`.
-- `"Remember whenever I use <app> ..."` → `memex_kv_write(key="app:<app-id>:<field>", ...)`. The `<app>` cue wins over "I"/"my" — Claude Code preferences go under `app:claude-code:*`, NOT `user:claude-code:*`.
-- `"Remember across our projects / company-wide"` → `memex_kv_write(key="global:<field>", ...)`.
+- `"Remember about me: I prefer X"` → `memex_kv_put(key="user:<field>", value=X)`.
+- `"Remember in this repo / project / codebase: ..."` → `memex_kv_put(key="project:<id>:<field>", ...)`.
+- `"Remember whenever I use <app> ..."` → `memex_kv_put(key="app:<app-id>:<field>", ...)`. The `<app>` cue wins over "I"/"my" — Claude Code preferences go under `app:claude-code:*`, NOT `user:claude-code:*`.
+- `"Remember across our projects / company-wide"` → `memex_kv_put(key="global:<field>", ...)`.
 - `"That worked / it's holding / that fixed it"` with a referent in scope → `memex_record_outcome(units=[{unit_id, verb:"helpful", reason}])` on the units search returned. Do NOT `memex_add_note` a "Resolution confirmed" note — paired-write on the existing units.
 - `"Save this insight / decision / lesson"` (new durable knowledge, not a confirmation) → `memex_add_note(...)`.
 <example>User: "The JWT rotation cadence change we landed last sprint — it's been clean."

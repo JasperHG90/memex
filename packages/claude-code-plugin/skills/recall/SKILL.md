@@ -23,7 +23,7 @@ argument-hint: "[search query]"
 
 5. **Memory hygiene**: when asked about stale facts, call `memex_get_lint_flags(vault_id=...)`. Act autonomously on low-risk findings. When a finding has `rule_name='propose_contradiction_winner'`, call `memex_lint_apply_winner` after surfacing the proposal to the user.
 
-6. **Diagnostics**: "how is this vault doing?" → `memex_get_diagnostics_summary(vault_id=...)`.
+6. **Diagnostics**: "how is this vault doing?" → `memex_get_diagnostics_summary(vault_id=...)` — returns cluster count, top entities, and MW score distribution.
 
 ## Transcript-aware fallback contract
 

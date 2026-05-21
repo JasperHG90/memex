@@ -53,7 +53,7 @@ from memex_common.tool_descriptions import (
     MEMEX_KV_GET_DESC,
     MEMEX_KV_LIST_DESC,
     MEMEX_KV_SEARCH_DESC,
-    MEMEX_KV_WRITE_DESC,
+    MEMEX_KV_PUT_DESC,
     MEMEX_MEMORY_CONSOLIDATE_DESC,
     MEMEX_MEMORY_DEPRIORITIZE_DESC,
     MEMEX_MEMORY_RECONSOLIDATE_DESC,
@@ -1290,9 +1290,9 @@ ADD_ASSETS_SCHEMA: dict[str, Any] = {
 
 # --- KV store (Stream 5) ---
 
-KV_WRITE_SCHEMA: dict[str, Any] = {
-    'name': 'memex_kv_write',
-    'description': MEMEX_KV_WRITE_DESC,
+KV_PUT_SCHEMA: dict[str, Any] = {
+    'name': 'memex_kv_put',
+    'description': MEMEX_KV_PUT_DESC,
     'parameters': {
         'type': 'object',
         'properties': {
@@ -1460,7 +1460,7 @@ ALL_SCHEMAS: list[dict[str, Any]] = [
     RESIZE_IMAGE_SCHEMA,
     ADD_ASSETS_SCHEMA,
     # --- KV store (Stream 5) ---
-    KV_WRITE_SCHEMA,
+    KV_PUT_SCHEMA,
     KV_GET_SCHEMA,
     KV_SEARCH_SCHEMA,
     KV_LIST_SCHEMA,
@@ -3205,7 +3205,7 @@ def handle_add_assets(
 # --- KV store (Stream 5) ---
 
 
-def handle_kv_write(
+def handle_kv_put(
     api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
     """Write a fact or preference to the KV store with semantic embedding."""
@@ -3229,8 +3229,8 @@ def handle_kv_write(
             timeout=15.0,
         )
     except Exception as e:
-        logger.warning('memex_kv_write failed: %s', e)
-        return tool_error(f'KV write failed: {e}')
+        logger.warning('memex_kv_put failed: %s', e)
+        return tool_error(f'KV put failed: {e}')
 
     return json.dumps(
         {
@@ -3361,7 +3361,7 @@ HANDLERS: dict[str, _StdHandler | _AssetCacheHandler] = {
     'memex_resize_image': handle_resize_image,
     'memex_add_assets': handle_add_assets,
     # --- KV store (Stream 5) ---
-    'memex_kv_write': handle_kv_write,
+    'memex_kv_put': handle_kv_put,
     'memex_kv_get': handle_kv_get,
     'memex_kv_search': handle_kv_search,
     'memex_kv_list': handle_kv_list,
@@ -3438,7 +3438,7 @@ __all__ = [
     'KV_GET_SCHEMA',
     'KV_LIST_SCHEMA',
     'KV_SEARCH_SCHEMA',
-    'KV_WRITE_SCHEMA',
+    'KV_PUT_SCHEMA',
     # --- F32 diagnostics ---
     'GET_DIAGNOSTICS_SUMMARY_SCHEMA',
     # --- F4 (WS-quick-wins) ---

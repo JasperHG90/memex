@@ -265,10 +265,14 @@ def test_critical_constraint_xml_tags_in_universal() -> None:
     XML blocks per Anthropic best practice. Pin the named tags so a
     regression that drops the structure trips here."""
     out = _run('universal')
-    # CRITICAL_HEADER → 4 named constraints
+    # CRITICAL_HEADER → 4 named constraints. The observation-read-only
+    # constraint was previously named `virtual_unit_404` when the server
+    # returned 404 on observation deprio; it now returns HTTP 400 and the
+    # constraint name reflects the actual semantic (read-only projection)
+    # rather than the status code.
     for name in (
         'record_outcome_shape',
-        'virtual_unit_404',
+        'observation_read_only',
         'kv_scope_qualifier',
         'citations_required',
     ):

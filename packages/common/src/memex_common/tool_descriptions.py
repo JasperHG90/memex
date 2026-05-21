@@ -158,8 +158,8 @@ MEMEX_MEMORY_CONSOLIDATE_DESC = (
 # KV store.
 # ---------------------------------------------------------------------------
 
-MEMEX_KV_WRITE_DESC = (
-    'Write a namespaced operational pointer to the KV store — a preference, '
+MEMEX_KV_PUT_DESC = (
+    'Put a namespaced operational pointer into the KV store — a preference, '
     'project binding, convention, or learned procedure. NOT for content facts; '
     'those become memory units via memex_add_note.\n'
     '\n'
@@ -225,7 +225,7 @@ __all__ = [
     'MEMEX_KV_GET_DESC',
     'MEMEX_KV_LIST_DESC',
     'MEMEX_KV_SEARCH_DESC',
-    'MEMEX_KV_WRITE_DESC',
+    'MEMEX_KV_PUT_DESC',
     'MEMEX_MEMORY_CONSOLIDATE_DESC',
     'MEMEX_MEMORY_DEPRIORITIZE_DESC',
     'MEMEX_MEMORY_RECONSOLIDATE_DESC',

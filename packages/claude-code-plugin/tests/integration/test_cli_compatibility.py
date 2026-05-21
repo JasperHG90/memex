@@ -192,8 +192,8 @@ def test_kv_get_argv_is_compatible(cli_config: MemexConfig) -> None:
     assert result.stdout.strip() == 'vault-x'
 
 
-def test_kv_write_argv_is_compatible(cli_config: MemexConfig) -> None:
-    """The shape used by the migration helper: `memex kv write <value> --key <key>`."""
+def test_kv_put_argv_is_compatible(cli_config: MemexConfig) -> None:
+    """The shape used by the migration helper: `memex kv put <key> <value>`."""
     api = AsyncMock()
     import datetime as dt
     from uuid import uuid4
@@ -210,7 +210,7 @@ def test_kv_write_argv_is_compatible(cli_config: MemexConfig) -> None:
     with kv_patch:
         result = runner.invoke(
             kv_app,
-            ['write', 'legacy-vault', '--key', 'app:claude-code:project:test:vault'],
+            ['put', 'app:claude-code:project:test:vault', 'legacy-vault'],
             obj=cli_config,
         )
     assert result.exit_code == 0

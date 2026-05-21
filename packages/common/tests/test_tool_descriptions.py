@@ -72,10 +72,10 @@ def test_deprioritize_marks_non_destructive() -> None:
     assert 'NON-DESTRUCTIVE' in desc or 'non-destructive' in desc.lower()
 
 
-def test_kv_write_specifies_namespace_regex() -> None:
+def test_kv_put_specifies_namespace_regex() -> None:
     """The namespace prefix is server-enforced; the description must
     spell out the regex so the agent constructs valid keys."""
-    desc = td.MEMEX_KV_WRITE_DESC
+    desc = td.MEMEX_KV_PUT_DESC
     for prefix in (
         'global:',
         'user:',
@@ -87,12 +87,12 @@ def test_kv_write_specifies_namespace_regex() -> None:
     assert '400' in desc  # rejection on invalid prefix
 
 
-def test_kv_write_rejects_content_facts() -> None:
+def test_kv_put_rejects_content_facts() -> None:
     """Regression fence — KV is for operational pointers, NOT content facts.
     See packages/cli/tests/test_kv_prose_drift_guard.py for the broader
     drift guard. This test ensures the per-tool description carries the
     pointer-vs-fact distinction."""
-    desc = td.MEMEX_KV_WRITE_DESC
+    desc = td.MEMEX_KV_PUT_DESC
     assert 'NOT for content facts' in desc or 'NOT for facts' in desc
     assert 'memex_add_note' in desc  # the right alternative
 
@@ -129,7 +129,7 @@ _REQUIRED_CONSTANTS = (
     'MEMEX_MEMORY_SUMMARIZE_NODE_DESC',
     'MEMEX_MEMORY_RECONSOLIDATE_DESC',
     'MEMEX_MEMORY_CONSOLIDATE_DESC',
-    'MEMEX_KV_WRITE_DESC',
+    'MEMEX_KV_PUT_DESC',
     'MEMEX_KV_GET_DESC',
     'MEMEX_KV_SEARCH_DESC',
     'MEMEX_KV_LIST_DESC',

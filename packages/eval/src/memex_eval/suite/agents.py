@@ -500,7 +500,7 @@ ToolSearch(query="select:mcp__memex__memex_memory_search,mcp__memex__memex_note_
 mcp__memex__memex_find_note,mcp__memex__memex_get_page_indices,\
 mcp__memex__memex_get_nodes,mcp__memex__memex_list_entities,\
 mcp__memex__memex_get_entity_mentions,mcp__memex__memex_get_entity_cooccurrences,\
-mcp__memex__memex_kv_write,mcp__memex__memex_append_note,\
+mcp__memex__memex_kv_put,mcp__memex__memex_append_note,\
 mcp__memex__memex_set_note_status", max_results=11)
 ```
 
@@ -543,7 +543,7 @@ _MEMEX_TOOL_ALLOWLIST: tuple[str, ...] = (
     'mcp__memex__memex_set_note_status',
     'mcp__memex__memex_rename_note',
     # KV
-    'mcp__memex__memex_kv_write',
+    'mcp__memex__memex_kv_put',
     'mcp__memex__memex_kv_get',
     'mcp__memex__memex_kv_list',
     'mcp__memex__memex_kv_search',

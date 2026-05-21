@@ -26,21 +26,21 @@ app = typer.Typer(
 )
 
 
-@app.command('write')
+@app.command('put')
 @async_command
-async def kv_write(
+async def kv_put(
     ctx: typer.Context,
+    key: Annotated[
+        str,
+        typer.Argument(
+            help=(
+                'Namespaced key. Must start with one of: global:, user:, project:, app:, procedure:'
+            ),
+        ),
+    ],
     value: Annotated[
         str,
         typer.Argument(help="The pointer's value (preference, binding, or convention)."),
-    ],
-    key: Annotated[
-        str,
-        typer.Option(
-            '--key',
-            '-k',
-            help='Namespaced key (must start with global:, user:, project:, or app:).',
-        ),
     ],
     ttl: Annotated[
         int | None,
@@ -48,7 +48,7 @@ async def kv_write(
     ] = None,
 ):
     """
-    Write an operational pointer to the KV store. Key must be namespace-prefixed.
+    Put an operational pointer in the KV store. Key must be namespace-prefixed.
     """
     config: MemexConfig = ctx.obj
 

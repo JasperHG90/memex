@@ -31,7 +31,7 @@ from memex_mcp._layer_primer_descriptions import (
 )
 from memex_common.agent_surface import MCP_TRANSPORT_INSTRUCTIONS
 from memex_common.tool_descriptions import (
-    MEMEX_KV_WRITE_DESC as _MEMEX_KV_WRITE_DESCRIPTION,
+    MEMEX_KV_PUT_DESC as _MEMEX_KV_PUT_DESCRIPTION,
 )
 from memex_mcp.models import (
     McpAddAssetsResult,
@@ -47,7 +47,7 @@ from memex_mcp.models import (
     McpEvent,
     McpFindResult,
     McpKVEntry,
-    McpKVWriteResult,
+    McpKVPutResult,
     _scope_from_key,
     McpLineageNode,
     McpMemoryLink,
@@ -3272,13 +3272,13 @@ async def memex_find_note(
 
 
 @mcp.tool(
-    name='memex_kv_write',
-    description=_MEMEX_KV_WRITE_DESCRIPTION,
+    name='memex_kv_put',
+    description=_MEMEX_KV_PUT_DESCRIPTION,
     tags={'storage'},
     annotations={'readOnlyHint': False, 'idempotentHint': True},
     timeout=15.0,
 )
-async def memex_kv_write(
+async def memex_kv_put(
     ctx: Context,
     value: Annotated[
         str,
@@ -3304,7 +3304,7 @@ async def memex_kv_write(
             ),
         ),
     ] = None,
-) -> McpKVWriteResult:
+) -> McpKVPutResult:
     """Write an operational pointer to the KV store with embedding generation."""
     try:
         api = get_api(ctx)
@@ -3320,15 +3320,15 @@ async def memex_kv_write(
         )
 
         scope = _scope_from_key(entry.key)
-        return McpKVWriteResult(
+        return McpKVPutResult(
             key=entry.key, value=entry.value, scope=scope, expires_at=entry.expires_at
         )
 
     except ToolError:
         raise
     except Exception as e:
-        logger.error(f'KV write failed: {e}', exc_info=True)
-        raise ToolError(f'KV write failed: {e}')
+        logger.error(f'KV put failed: {e}', exc_info=True)
+        raise ToolError(f'KV put failed: {e}')
 
 
 @mcp.tool(

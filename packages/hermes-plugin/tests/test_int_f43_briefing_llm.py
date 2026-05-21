@@ -79,13 +79,17 @@ def _hermes_tools_with_routing() -> list[dict[str, Any]]:
             },
         }
 
+    import copy
+
+    # LiteLLM/Gemini mutates the parameters dict in place. Deep-copy to keep
+    # the module-level schema constants intact for tests that follow.
     return [
         {
             'type': 'function',
             'function': {
                 'name': RECORD_OUTCOME_SCHEMA['name'],
                 'description': RECORD_OUTCOME_SCHEMA['description'],
-                'parameters': RECORD_OUTCOME_SCHEMA['parameters'],
+                'parameters': copy.deepcopy(RECORD_OUTCOME_SCHEMA['parameters']),
             },
         },
         {
@@ -93,7 +97,7 @@ def _hermes_tools_with_routing() -> list[dict[str, Any]]:
             'function': {
                 'name': MEMORY_DEPRIORITIZE_SCHEMA['name'],
                 'description': MEMORY_DEPRIORITIZE_SCHEMA['description'],
-                'parameters': MEMORY_DEPRIORITIZE_SCHEMA['parameters'],
+                'parameters': copy.deepcopy(MEMORY_DEPRIORITIZE_SCHEMA['parameters']),
             },
         },
         _tool(

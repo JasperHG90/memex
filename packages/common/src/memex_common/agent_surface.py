@@ -168,10 +168,10 @@ Note: an observation's `evidence` list may include STALE memory units (those sup
 </critical_constraint>"""
 
 
-KV_NAMESPACE = """## Preferences / conventions → `memex_kv_write`, NOT local files
+KV_NAMESPACE = """## Preferences / conventions → `memex_kv_put`, NOT local files
 
 <critical_constraint name="kv_routing">
-"remember"/"save"/"for future sessions"/"going forward" directives conveying a preference, convention, or setting → `memex_kv_write`. Do NOT write to local files (CLAUDE.md, AGENTS.md, .memex/), do NOT use `memex_add_note`, do NOT just acknowledge.
+"remember"/"save"/"for future sessions"/"going forward" directives conveying a preference, convention, or setting → `memex_kv_put`. Do NOT write to local files (CLAUDE.md, AGENTS.md, .memex/), do NOT use `memex_add_note`, do NOT just acknowledge.
 </critical_constraint>
 
 Namespace by scope cue (NOT grammatical person). `app:`/`project:`/`global:` ALL override `user:` when their cue is present. Default to `user:` only when NO other cue applies.

@@ -132,7 +132,7 @@ Primary tools (the ones the LLM reaches for most often):
 | `memex_get_entity_mentions` | Source memory units mentioning a specific entity. |
 | `memex_get_entity_cooccurrences` | Related entities with co-occurrence counts. |
 
-Additional tools cover note lifecycle (`memex_set_note_status`, `memex_update_user_notes`, `memex_rename_note`), discovery (`memex_find_note`, `memex_list_vaults`, `memex_get_vault_summary`, page-index/node reads), templates (`memex_list_templates` / `memex_get_template` / `memex_register_template`), assets, and the KV store (`memex_kv_write` / `memex_kv_get` / `memex_kv_search` / `memex_kv_list`). See the schema list for the full surface.
+Additional tools cover note lifecycle (`memex_set_note_status`, `memex_update_user_notes`, `memex_rename_note`), discovery (`memex_find_note`, `memex_list_vaults`, `memex_get_vault_summary`, page-index/node reads), templates (`memex_list_templates` / `memex_get_template` / `memex_register_template`), assets, and the KV store (`memex_kv_put` / `memex_kv_get` / `memex_kv_search` / `memex_kv_list`). See the schema list for the full surface.
 
 ### Routing (delivered via the system prompt)
 

@@ -30,7 +30,7 @@ _UNIVERSAL_CHAR_CAP = 9_100  # ~2,600 tokens at 3.5 chars/token (empirical cl100
 # Bumped 6,000 → 6,500 when KV_NAMESPACE added a kv_routing constraint + app
 # / global / project examples — 4 of 5 KV scenarios failed in the post-fix
 # eval because sonnet was using `Write` to local files instead of
-# `memex_kv_write` and (when it did use KV) picking `user:` for app-scoped
+# `memex_kv_put` and (when it did use KV) picking `user:` for app-scoped
 # settings.
 # Bumped 6,500 → 6,800 to strengthen two further triggers: "<app>" cue
 # overrides "I"/"my" in KV namespace picking; "record it as a success" →

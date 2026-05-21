@@ -238,21 +238,33 @@ class TestSetupActionRegistry:
 
     @pytest.mark.asyncio
     async def test_unknown_action_kind_logged_not_raised(self) -> None:
-        """A typo in a setup action's kind logs a warning + records in failures."""
+        """A typo in a setup action's kind logs a warning + records in failures.
+
+        Order-independent: asserts the offending kind plus the eight built-in
+        action names appear in the error. Tests that register temporary actions
+        may leak into a bulk-run snapshot; checking subset membership instead
+        of exact list keeps this test stable across test orderings.
+        """
         from memex_eval.suite.runner import _run_setup_actions
 
         actions = [SetupAction(kind='nonexistent_action_kind_xyz')]
         ctx = await _run_setup_actions(api=None, vault_id=uuid4(), actions=actions)
-        assert ctx['_setup_failures'] == [
-            {
-                'kind': 'nonexistent_action_kind_xyz',
-                'error': (
-                    "\"Unknown setup action 'nonexistent_action_kind_xyz'. Registered: ['"
-                    "consolidation_tick', 'deprioritize', 'kv_write', 'lint_llm_run', "
-                    "'lint_run', 'record_outcome', 'trigger_reflections']\""
-                ),
-            }
-        ]
+        assert len(ctx['_setup_failures']) == 1
+        failure = ctx['_setup_failures'][0]
+        assert failure['kind'] == 'nonexistent_action_kind_xyz'
+        error_text = failure['error']
+        assert "Unknown setup action 'nonexistent_action_kind_xyz'" in error_text
+        for built_in in (
+            'clear_hermes_session_notes',
+            'consolidation_tick',
+            'deprioritize',
+            'kv_write',
+            'lint_llm_run',
+            'lint_run',
+            'record_outcome',
+            'trigger_reflections',
+        ):
+            assert built_in in error_text, f'built-in {built_in!r} missing from error'
 
     @pytest.mark.asyncio
     async def test_returned_context_keys_auto_prefixed_by_handler_name(self) -> None:
