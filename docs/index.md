@@ -4,8 +4,6 @@ Memex is a long-term memory system for LLMs and humans. It ingests text, extract
 
 This documentation follows the [Diátaxis](https://diataxis.fr/) framework — four modes, each serving a different reader need. Pick the mode that matches what you're trying to do.
 
-> **Refactor in progress.** This site is being rewritten per [`.temp/documentation/PLAN.md`](../.temp/documentation/PLAN.md) v3. Many pages below are placeholders; the existing pages under [`how-to/`](how-to/), [`reference/`](reference/), and [`explanation/`](explanation/) carry the current canonical content until each new page is filled in.
-
 ---
 
 ## Tutorials
