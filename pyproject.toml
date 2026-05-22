@@ -36,7 +36,7 @@ members = [
 
 [tool.uv]
 package = false
-required-version = "~=0.10.0"
+required-version = "~=0.11.0"
 keyring-provider = "subprocess"
 index-strategy = "first-index"
 

@@ -24,7 +24,7 @@ concurrency:
 
 env:
   PYTHON_VERSION: '3.12'
-  UV_VERSION: '0.10.x'
+  UV_VERSION: '0.11.x'
 
 jobs:
   build:

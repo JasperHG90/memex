@@ -2,23 +2,6 @@
 
 Instructions for LLM agents working in this repository.
 
-<constraint name="code-search-protocol" priority="critical">
-All code discovery MUST use `qmd`. Collections: `memex_src` (all source: py/toml/yaml/tsx/ts/svg/json), `memex_test` (test files: test_*.py), `memex_md` (markdown: *.md).
-
-Step 1 (MANDATORY): `qmd search --line-numbers -n 10 "<exact_term>" --collection <COLLECTION>`
-Step 2 (MANDATORY if Step 1 fails): `qmd vsearch --line-numbers -n 10 "<concept>" --collection <COLLECTION>`
-Step 3 (ONLY if Steps 1+2 fail): `qmd query --line-numbers -n 10 "<question>" --collection <COLLECTION>`
-
-PROHIBITED: Skipping to `query`. Skipping Step 2. Using `read_file`, `glob`, `grep`, `ripgrep`, `find`, or `search_file_content`, or any shell-based search for discovery before completing Steps 1-3.
-OVERRIDE: Use `run_shell_command` with `qmd search` for all code discovery.
-</constraint>
-
-<constraint name="code-retrieval-protocol" priority="critical">
-Step 1 (MANDATORY): `qmd get <file>:<line> -l <lines>` — start with `-l 50`.
-Step 2 (FALLBACK): `qmd get <file>` — FORBIDDEN unless Step 1 output was insufficient.
-Exception: Config files (toml/yaml/json) under 100 lines may be read fully.
-</constraint>
-
 ## Project
 
 Memex is a long-term memory system for LLMs. It stores notes as Markdown files (FileStore) with PostgreSQL+pgvector for metadata, full-text search (tsvector), and vector search (MetaStore). The core idea is the **Hindsight Framework**: ingest content, extract structured facts/observations/events, retrieve them using multiple strategies, and synthesize mental models through reflection.
