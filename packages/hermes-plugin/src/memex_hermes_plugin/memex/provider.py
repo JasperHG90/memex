@@ -27,7 +27,7 @@ from agent.memory_provider import MemoryProvider  # type: ignore[import-not-foun
 from memex_common.asset_cache import SessionAssetCache
 from memex_common.note_utils import derive_note_uuid_from_key
 
-from .async_bridge import run_sync, shutdown_loop
+from .async_bridge import run_sync
 from .briefing import BriefingCache, format_briefing_block
 from .config import HermesMemexConfig, load_config, save_config
 from .prefetch import PrefetchCache
@@ -509,6 +509,14 @@ class MemexMemoryProvider(MemoryProvider):
         Idempotent: the second call observes ``_shutdown_started`` and
         returns. Concurrent calls (Hermes' shutdown + atexit fallback) are
         gated by ``_atexit_lock`` so the teardown happens exactly once.
+
+        The async-bridge loop is **process-lifetime** and is NOT torn down
+        here — closing it mid-process races with concurrent ``run_sync``
+        callers (prefetch worker, briefing fetcher, in-flight tool
+        dispatches) and surfaces as ``RuntimeError('Event loop is
+        closed')``. The daemon thread owning the loop is reaped at process
+        exit. See ``async_bridge`` module docstring for the lifetime
+        invariant.
         """
         with self._atexit_lock:
             if self._shutdown_started:
@@ -541,7 +549,6 @@ class MemexMemoryProvider(MemoryProvider):
                 cache.cleanup()
             except Exception:
                 pass
-        shutdown_loop(thread_join_timeout=5.0)
 
     def _atexit_shutdown(self) -> None:
         """atexit callback — best-effort cleanup if ``shutdown`` was skipped."""
