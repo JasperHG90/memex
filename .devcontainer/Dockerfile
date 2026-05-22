@@ -14,7 +14,7 @@ ENV PATH="${NVM_DIR}/versions/node/v${NODE_VERSION}/bin:${PATH}"
 RUN pipx install --force uv==0.11.16
 
 RUN apt-get update && \
-    apt-get install -y gh \
+    apt-get install -y gh zstd \
     && rm -rf /var/lib/apt/lists/*
 
 USER vscode
