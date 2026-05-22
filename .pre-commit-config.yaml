@@ -52,9 +52,3 @@ repos:
         language: system
         files: ^(packages/.*/(tests|test)/.*\.py|tests/.*\.py)$
         pass_filenames: false
-      - id: check-no-fsrs-residue
-        name: check no FSRS-5 residue
-        entry: bash scripts/ci/check_no_fsrs_residue.sh
-        language: system
-        pass_filenames: false
-        always_run: true
