@@ -31,8 +31,8 @@ from memex_common.exceptions import (
 )
 from memex_core.api import NoteInput
 from memex_core.memory.sql_models import MemoryUnit, Note, NoteAppend, Vault
-from memex_core.services.notes import derive_note_uuid_from_key
 from memex_common.config import GLOBAL_VAULT_ID
+from memex_common.note_utils import derive_note_uuid_from_key
 from memex_common.types import FactTypes
 
 

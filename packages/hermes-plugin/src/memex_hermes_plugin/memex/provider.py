@@ -25,7 +25,7 @@ from uuid import UUID, uuid4
 import httpx
 from agent.memory_provider import MemoryProvider  # type: ignore[import-not-found]
 from memex_common.asset_cache import SessionAssetCache
-from memex_core.services.notes import derive_note_uuid_from_key
+from memex_common.note_utils import derive_note_uuid_from_key
 
 from .async_bridge import run_sync, shutdown_loop
 from .briefing import BriefingCache, format_briefing_block

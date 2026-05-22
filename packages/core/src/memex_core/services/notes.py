@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 from datetime import datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -17,25 +16,13 @@ from sqlmodel import col
 from sqlalchemy import func, text
 
 from memex_common.exceptions import NoteNotFoundError, ResourceNotFoundError, VaultNotFoundError
+from memex_common.note_utils import derive_note_uuid_from_key
 from memex_common.schemas import BlockSummaryDTO, NodeDTO, filter_toc
 from memex_core.config import MemexConfig
 from memex_core.services.audit import AuditService, audit_event
 from memex_core.services.vaults import VaultService
 from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
 from memex_core.storage.filestore import BaseAsyncFileStore
-
-
-def derive_note_uuid_from_key(note_key: str) -> UUID:
-    """Derive a deterministic Note.id UUID from a user-supplied note_key.
-
-    Mirrors NoteInput.note_key (api.py): if the caller passed an actual UUID
-    string, use it; otherwise, hash the key with MD5.
-    """
-    try:
-        return UUID(note_key)
-    except ValueError:
-        return UUID(hashlib.md5(note_key.encode('utf-8')).hexdigest())
-
 
 _VALID_DATE_FIELDS = {'coalesce', 'created_at', 'publish_date'}
 

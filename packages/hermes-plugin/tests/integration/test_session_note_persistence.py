@@ -33,7 +33,7 @@ _PERSIST_POLL_INTERVAL = 0.25
 
 
 def _derive(note_key: str) -> UUID:
-    from memex_core.services.notes import derive_note_uuid_from_key
+    from memex_common.note_utils import derive_note_uuid_from_key
 
     return derive_note_uuid_from_key(note_key)
 
