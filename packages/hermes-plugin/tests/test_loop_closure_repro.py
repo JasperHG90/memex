@@ -159,6 +159,70 @@ def test_run_sync_does_not_retry_on_unrelated_runtime_error() -> None:
 
 
 # --------------------------------------------------------------------------- #
+# Hermes-shaped: production failure path, end-to-end                          #
+# --------------------------------------------------------------------------- #
+
+
+def _pre_fix_run_sync(coro, timeout: float = 5.0):  # type: ignore[no-untyped-def]
+    """The pre-fix run_sync body: no defensive retry. Used to prove the
+    regression suite catches the actual production failure."""
+    future = asyncio.run_coroutine_threadsafe(coro, async_bridge.get_loop())
+    return future.result(timeout=timeout)
+
+
+def test_pre_fix_run_sync_surfaces_loop_closed_on_race() -> None:
+    """High-fidelity demonstration: without the defensive retry in run_sync,
+    a loop-swap between ``get_loop()`` and ``run_coroutine_threadsafe``
+    surfaces ``RuntimeError('Event loop is closed')`` — exactly the
+    production symptom the user reported on ``memex_record_outcome``.
+
+    This test does NOT modify production code. It uses a local reimplementation
+    of the pre-fix ``run_sync`` body to reproduce the failure end-to-end,
+    proving the regression suite would catch a revert.
+    """
+    original_get_loop = async_bridge.get_loop
+
+    def get_loop_then_close():
+        loop = original_get_loop()
+        async_bridge.shutdown_loop()
+        return loop
+
+    async def trivial() -> int:
+        return 1
+
+    coro = trivial()
+    try:
+        with patch.object(async_bridge, 'get_loop', side_effect=get_loop_then_close):
+            with pytest.raises(RuntimeError, match='Event loop is closed'):
+                _pre_fix_run_sync(coro, timeout=3.0)
+    finally:
+        coro.close()
+
+
+def test_post_fix_run_sync_absorbs_the_same_race() -> None:
+    """Counterpart to the test above: the same race against the FIXED
+    ``run_sync`` is absorbed by the defensive retry. Together, the two
+    tests bracket the fix: same race, broken before, fixed after."""
+    original_get_loop = async_bridge.get_loop
+    swap_done = [False]
+
+    def get_loop_then_close():
+        loop = original_get_loop()
+        if not swap_done[0]:
+            swap_done[0] = True
+            async_bridge.shutdown_loop()
+        return loop
+
+    async def trivial() -> int:
+        return 99
+
+    with patch.object(async_bridge, 'get_loop', side_effect=get_loop_then_close):
+        result = async_bridge.run_sync(trivial(), timeout=3.0)
+
+    assert result == 99
+
+
+# --------------------------------------------------------------------------- #
 # Probabilistic confirmation the race exists if you turn defenses off         #
 # --------------------------------------------------------------------------- #
 
