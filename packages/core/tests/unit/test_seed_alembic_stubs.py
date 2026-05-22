@@ -63,8 +63,8 @@ def test_seed_chain_is_linear_and_correct() -> None:
     top10 = [(r.revision, r.down_revision) for r in walk[:10]]
     expected_top10 = [
         ('045_drop_procedure_outcomes', '044_mm_observations_gin_index'),
-        ('044_mm_observations_gin_index', '043_reflection_queue_refresh_task'),
-        ('043_reflection_queue_refresh_task', '042_drop_note_status_appended'),
+        ('044_mm_observations_gin_index', '043_refl_queue_refresh_task'),
+        ('043_refl_queue_refresh_task', '042_drop_note_status_appended'),
         ('042_drop_note_status_appended', '041_archived_fsfm'),
         ('041_archived_fsfm', '040_outcome_per_unit_schema'),
         ('040_outcome_per_unit_schema', '039_memory_unit_claim_type'),
