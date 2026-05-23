@@ -76,19 +76,23 @@ class _OptionStaticGroup(Static):
     def render(self) -> str:
         if self.proposal is None:
             return '[dim]No proposal selected.[/dim]'
-        lines = ['[bold]Choose a remediation:[/bold]', '']
+        lines = [
+            '[bold]Pick a remediation — press the digit to commit:[/bold]',
+            '[dim](Enter alone commits the ★ Recommended option.)[/dim]',
+            '',
+        ]
         for i, option in enumerate(self.options, start=1):
             star = ' [yellow]★ Recommended[/yellow]' if option.recommended else ''
             rev = '[green]reversible[/green]' if option.reversible else '[red]forward-only[/red]'
             lines.append(f'  [bold]{i})[/bold] {option.label}{star}')
             lines.append(f'      [dim]{option.summary}[/dim]')
-            lines.append(f'      [dim]Effect: {option.effect}[/dim]')
+            if option.effect:
+                lines.append(f'      [dim]Effect: {option.effect}[/dim]')
             lines.append(f'      [dim]{rev}[/dim]')
             lines.append('')
-        lines.append('  [bold][O][/bold] Other — describe a custom remediation')
-        lines.append('  [bold][N][/bold] Add a note (without resolving)')
-        lines.append('  [bold][R][/bold] Reverse a previously-resolved proposal')
-        lines.append('  [bold][Q][/bold] Quit')
+        lines.append(
+            '[dim]Other shortcuts (see footer): o=Other · n=Note · r=Reverse · ?=Help · q=Quit[/dim]'
+        )
         return '\n'.join(lines)
 
 
@@ -203,6 +207,14 @@ class OtherScreen(ModalScreen[tuple[str, str | None, str | None] | None]):
     Returns a tuple `(action_id, reason, note)` on submit or None on cancel.
     `reason` is forwarded to the action as `params.reason` when the action
     accepts a `reason` field; `note` is stored at evidence.resolution.note.
+
+    Flow:
+
+    1. Modal opens with focus on the text input. Type your free-form
+       description.
+    2. Press Enter to advance — focus moves to the action list (text is
+       captured). Use arrows to highlight, Enter again to commit.
+    3. Esc at any time cancels without writing.
     """
 
     BINDINGS = [
@@ -216,12 +228,12 @@ class OtherScreen(ModalScreen[tuple[str, str | None, str | None] | None]):
     def compose(self) -> ComposeResult:
         rows: list[Any] = [
             Label(
-                'Describe what you would like to happen, then pick a standard action '
-                'that approximates it.',
+                'Describe what you would like to happen, then press Enter to advance '
+                'to the action picker.',
                 id='other-prompt',
             ),
             Input(placeholder='Free-form description…', id='other-text'),
-            Label('Map to one of:', id='other-map-label'),
+            Label('Map to one of (arrows + Enter):', id='other-map-label'),
         ]
         items: list[ListItem] = []
         for option in self._options:
@@ -229,8 +241,26 @@ class OtherScreen(ModalScreen[tuple[str, str | None, str | None] | None]):
             items.append(ListItem(Label(f'{option.action_id} — {option.label} ({rev})')))
         items.append(ListItem(Label('cancel — abandon')))
         rows.append(ListView(*items, id='other-list'))
-        rows.append(Label('[dim]Enter to pick · Esc to cancel[/dim]', id='other-help'))
+        rows.append(
+            Label(
+                '[dim]Enter on input → advance · Enter on list → commit · Esc cancels[/dim]',
+                id='other-help',
+            )
+        )
         yield Vertical(*rows, id='other-modal')
+
+    def on_mount(self) -> None:
+        # Focus the input so the user can start typing immediately.
+        self.query_one('#other-text', Input).focus()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        # Enter on the text field moves focus into the action list rather
+        # than dismissing the modal — the user almost certainly wants to
+        # pick a mapping next, not commit blind.
+        list_view = self.query_one('#other-list', ListView)
+        if list_view.index is None and self._options:
+            list_view.index = 0
+        list_view.focus()
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         list_view = self.query_one('#other-list', ListView)
@@ -244,6 +274,34 @@ class OtherScreen(ModalScreen[tuple[str, str | None, str | None] | None]):
         text_input = self.query_one('#other-text', Input)
         free_text = (text_input.value or '').strip() or None
         self.dismiss((option.action_id, free_text, free_text))
+
+
+class HelpScreen(ModalScreen[None]):
+    """Quick-reference modal for cockpit keybindings."""
+
+    BINDINGS = [
+        Binding('escape', 'dismiss(None)', 'Close'),
+        Binding('q', 'dismiss(None)', 'Close'),
+        Binding('question_mark', 'dismiss(None)', 'Close'),
+    ]
+
+    def compose(self) -> ComposeResult:
+        body = (
+            '[bold]Cockpit keybindings[/bold]\n'
+            '\n'
+            '  [bold]j / k / ↓ / ↑[/bold]   navigate the queue\n'
+            '  [bold]1 – 9[/bold]           commit the numbered remediation\n'
+            '  [bold]Enter[/bold]           commit the ★ Recommended remediation\n'
+            '  [bold]o[/bold]               Other — free-form text mapped to a canned action\n'
+            '  [bold]n[/bold]               stage a reviewer note (saved on next verdict)\n'
+            '  [bold]r[/bold]               reverse a previously-resolved finding\n'
+            '  [bold]F5[/bold]              refresh queue from the server\n'
+            '  [bold]?[/bold]               this help\n'
+            '  [bold]q[/bold]               quit\n'
+            '\n'
+            '[dim]Esc or q to close · ? to reopen.[/dim]'
+        )
+        yield Vertical(Static(body, id='help-body'), id='help-modal')
 
 
 class ReverseScreen(ModalScreen[str | None]):
@@ -305,19 +363,23 @@ class ProposalCockpitApp(App):
         Binding('k', 'cursor_up', 'Up', show=False),
         Binding('down', 'cursor_down', 'Down', show=False),
         Binding('up', 'cursor_up', 'Up', show=False),
+        Binding('enter', 'pick_recommended', 'Recommended', priority=True),
         Binding('n', 'add_note', 'Note'),
         Binding('o', 'other_action', 'Other'),
         Binding('r', 'reverse', 'Reverse'),
         Binding('f5', 'refresh', 'Refresh'),
-        Binding('1', 'pick(1)', '1', show=False),
-        Binding('2', 'pick(2)', '2', show=False),
-        Binding('3', 'pick(3)', '3', show=False),
-        Binding('4', 'pick(4)', '4', show=False),
-        Binding('5', 'pick(5)', '5', show=False),
-        Binding('6', 'pick(6)', '6', show=False),
-        Binding('7', 'pick(7)', '7', show=False),
-        Binding('8', 'pick(8)', '8', show=False),
-        Binding('9', 'pick(9)', '9', show=False),
+        # Priority on digit bindings so they fire even when the queue ListView
+        # has focus. Without priority, focus-chain key handling could swallow
+        # them in some Textual versions.
+        Binding('1', 'pick(1)', 'Pick #', priority=True, show=True),
+        Binding('2', 'pick(2)', 'Pick #', priority=True, show=False),
+        Binding('3', 'pick(3)', 'Pick #', priority=True, show=False),
+        Binding('4', 'pick(4)', 'Pick #', priority=True, show=False),
+        Binding('5', 'pick(5)', 'Pick #', priority=True, show=False),
+        Binding('6', 'pick(6)', 'Pick #', priority=True, show=False),
+        Binding('7', 'pick(7)', 'Pick #', priority=True, show=False),
+        Binding('8', 'pick(8)', 'Pick #', priority=True, show=False),
+        Binding('9', 'pick(9)', 'Pick #', priority=True, show=False),
     ]
 
     proposals: reactive[list[CockpitProposal]] = reactive(list, init=False)
@@ -365,6 +427,13 @@ class ProposalCockpitApp(App):
         if isinstance(item, _ProposalQueueItem):
             self._detail.show_proposal(item.proposal)
 
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        # Enter on a queue item commits the recommended option for that
+        # proposal — equivalent to pressing the digit of the recommended row.
+        if event.list_view is not self._queue:
+            return
+        self.action_pick_recommended()
+
     def _current_proposal(self) -> CockpitProposal | None:
         idx = self._queue.index
         if idx is None or idx < 0 or idx >= len(self.proposals):
@@ -398,6 +467,32 @@ class ProposalCockpitApp(App):
         # `push_screen_wait` requires a Textual worker — run the verdict
         # cycle as an exclusive worker so the modal `await` is legal.
         self._run_verdict_worker(proposal, option, None)
+
+    def action_pick_recommended(self) -> None:
+        """Pick the option marked `recommended=True` on the highlighted proposal.
+
+        Falls back to the first non-dismiss option if no option is marked
+        recommended (rare — the per-rule map should always declare one).
+        Wired to Enter and surfaced in the footer so the cockpit has a clear
+        default-commit affordance, not just numbered picks.
+        """
+        proposal = self._current_proposal()
+        if proposal is None:
+            return
+        options = self._detail.current_options
+        chosen: CockpitOption | None = None
+        for option in options:
+            if option.recommended:
+                chosen = option
+                break
+        if chosen is None:
+            for option in options:
+                if option.action_id:  # skip the dismiss sentinel for default-Enter
+                    chosen = option
+                    break
+        if chosen is None:
+            return
+        self._run_verdict_worker(proposal, chosen, None)
 
     def action_add_note(self) -> None:
         proposal = self._current_proposal()
@@ -550,18 +645,5 @@ class ProposalCockpitApp(App):
         summary = result.get('reversal') or result.get('effective_action') or 'ok'
         self._detail.show_effect(f'Reversed {finding_id[:8]}… ({summary}).')
 
-    async def action_help(self) -> None:
-        from rich.text import Text
-
-        help_text = Text(
-            'Keys:\n'
-            '  j / k or ↓ / ↑   navigate queue\n'
-            '  1 – 9            pick numbered option\n'
-            '  o                Other (free-form action)\n'
-            '  n                Add a reviewer note\n'
-            '  r                Reverse a resolved finding\n'
-            '  F5               refresh queue\n'
-            '  ?                this help\n'
-            '  q                quit\n',
-        )
-        self._detail.show_effect(str(help_text))
+    def action_help(self) -> None:
+        self.push_screen(HelpScreen())
