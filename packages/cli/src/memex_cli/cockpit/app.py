@@ -39,6 +39,21 @@ from memex_cli.cockpit.controller import (
 )
 
 
+def _extract_followup(result: dict[str, Any]) -> dict[str, Any] | None:
+    """Pull `resolution.followup` from a resolve response, tolerating shapes.
+
+    The new server returns it under `resolution.followup`. Old servers return
+    a response with no `resolution` key at all (status-flip-only path).
+    """
+    resolution = result.get('resolution')
+    if not isinstance(resolution, dict):
+        return None
+    followup = resolution.get('followup')
+    if isinstance(followup, dict):
+        return followup
+    return None
+
+
 class _ProposalQueueItem(ListItem):
     """Single row in the proposals queue list."""
 
@@ -461,6 +476,22 @@ class ProposalCockpitApp(App):
             return
         status = result.get('status', 'unknown')
         action_id = option.action_id or 'dismiss'
+        # When the cockpit asks for a canned action but the server's response
+        # has no `resolution.followup` block, the server is on the pre-cockpit
+        # code path — it accepted the body, flipped status, and ignored the
+        # action. Surface that loudly so the user doesn't believe a deprio /
+        # archive ran when it actually didn't.
+        if option.verb == 'resolve' and action_id != 'no_op':
+            followup = _extract_followup(result)
+            if followup is None or followup.get('action') != action_id:
+                self._detail.show_effect(
+                    f'{action_id} → {status}, BUT the server did NOT run the action '
+                    '(no resolution.followup in response). The server is likely on a '
+                    'pre-cockpit build; deploy this branch to make canned actions fire.',
+                    error=True,
+                )
+                await self._refresh_queue()
+                return
         self._detail.show_effect(f'{action_id} → {status}.  Refreshing queue…')
         await self._refresh_queue()
 

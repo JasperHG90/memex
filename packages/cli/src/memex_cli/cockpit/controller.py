@@ -230,13 +230,47 @@ _DEFAULT_OPTIONS_BY_RULE: dict[str, list[CockpitOption]] = {
 }
 
 
+# Client-side action catalogue: action_id → (label, description, applicable_target_types, reversible).
+# Inlined here on purpose — importing memex_core.services to read the live
+# registry transitively loads onnxruntime via SearchService / reranker, which
+# adds ~1.5s to every cockpit launch for information the cockpit already knows.
+# Adding a new server-side action means adding a row here too; the integration
+# tests in packages/core/tests/integration cover the round-trip end to end.
+_ACTION_CATALOGUE: dict[str, tuple[str, str, tuple[str, ...], bool]] = {
+    'no_op': (
+        'No-op (record only)',
+        'Record the verdict and any reviewer note without touching the target.',
+        ('memory_unit', 'mental_model', 'note', 'unit_entity'),
+        True,
+    ),
+    'deprioritize_unit': (
+        'Deprioritize unit',
+        'Suppress the unit from retrieval; refresh citing observations.',
+        ('memory_unit',),
+        True,
+    ),
+    'restore_unit': (
+        'Restore unit',
+        'Clear is_deprioritized; the unit becomes retrievable again.',
+        ('memory_unit',),
+        True,
+    ),
+    'archive_mental_model': (
+        'Archive mental model',
+        'Hide the mental model from retrieval / briefing / reflection.',
+        ('mental_model',),
+        True,
+    ),
+}
+
+
 def options_for_rule(rule_name: str, target_type: str) -> list[CockpitOption]:
     """Return the cockpit options for a given rule.
 
     Falls back to ``[no_op, dismiss]`` for unknown rules so the cockpit
     always offers a verdict path. Options are filtered to those whose
     ``action_id`` is empty (dismiss) or compatible with the target_type
-    via the action registry's ``applicable_target_types``.
+    per the client-side action catalogue above.
     """
     options = _DEFAULT_OPTIONS_BY_RULE.get(rule_name)
     if options is None:
@@ -251,42 +285,37 @@ def options_for_rule(rule_name: str, target_type: str) -> list[CockpitOption]:
             ),
             DISMISS_OPTION,
         ]
-    # Filter to options applicable to this target_type (defensive — the
-    # registry knows the truth, even if the per-rule mapping above goes
-    # stale).
-    from memex_core.services import proposal_actions  # local import — server side optional
-
     filtered: list[CockpitOption] = []
     for option in options:
         if not option.action_id:  # dismiss sentinel always allowed
             filtered.append(option)
             continue
-        try:
-            action = proposal_actions.get_action(option.action_id)
-        except KeyError:
-            continue
-        if target_type in action.applicable_target_types:
+        descriptor = _ACTION_CATALOGUE.get(option.action_id)
+        if descriptor is None:
+            continue  # unknown action — drop defensively
+        _, _, applicable_types, _ = descriptor
+        if target_type in applicable_types:
             filtered.append(option)
     return filtered
 
 
 def custom_action_options(target_type: str) -> list[CockpitOption]:
-    """Return the full registry filtered to this target_type — used by [O]ther.
+    """Return the full action catalogue filtered to this target_type — used by [O]ther.
 
     The user picks one of these to map a free-form intent onto an executable
     canned action.
     """
-    from memex_core.services import proposal_actions
-
     options: list[CockpitOption] = []
-    for action in proposal_actions.list_actions(target_type=target_type):
+    for action_id, (label, description, applicable_types, reversible) in _ACTION_CATALOGUE.items():
+        if target_type not in applicable_types:
+            continue
         options.append(
             CockpitOption(
-                action_id=action.id,
-                label=action.name,
-                summary=action.description,
-                effect='',  # filled lazily by preview()
-                reversible=action.reversible,
+                action_id=action_id,
+                label=label,
+                summary=description,
+                effect='',
+                reversible=reversible,
             )
         )
     return options
