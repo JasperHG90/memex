@@ -91,7 +91,9 @@ def _invoke(runner, mock_api, mock_config, args, stdin):
 
 def test_all_skip_session_collects_no_verdicts(runner, mock_config, mock_api, strip_ansi):
     """Three skips → 0 accepts, 0 dismisses, 3 skipped, no API mutation calls."""
-    result = _invoke(runner, mock_api, mock_config, ['review', '--all'], stdin='s\ns\ns\n')
+    result = _invoke(
+        runner, mock_api, mock_config, ['review', '--all', '--no-tui'], stdin='s\ns\ns\n'
+    )
 
     assert result.exit_code == 0, strip_ansi(result.stdout)
     text = strip_ansi(result.stdout)
@@ -106,7 +108,9 @@ def test_render_finding_shows_target_text_when_present(runner, mock_config, mock
     Pinned by: F<target_text>-rendering. Without this, a reviewer sees a UUID and
     rule_name but cannot judge accept/dismiss without a separate fetch.
     """
-    result = _invoke(runner, mock_api, mock_config, ['review', '--all'], stdin='s\ns\ns\n')
+    result = _invoke(
+        runner, mock_api, mock_config, ['review', '--all', '--no-tui'], stdin='s\ns\ns\n'
+    )
 
     assert result.exit_code == 0, strip_ansi(result.stdout)
     text = strip_ansi(result.stdout)
@@ -120,7 +124,7 @@ def test_one_accept_two_skips_resolves_only_first_when_apply(
 ):
     """``a, s, s`` with ``--apply`` → exactly one resolve call, no dismiss calls."""
     result = _invoke(
-        runner, mock_api, mock_config, ['review', '--all', '--apply'], stdin='a\ns\ns\n'
+        runner, mock_api, mock_config, ['review', '--all', '--apply', '--no-tui'], stdin='a\ns\ns\n'
     )
 
     assert result.exit_code == 0, strip_ansi(result.stdout)
@@ -131,7 +135,9 @@ def test_one_accept_two_skips_resolves_only_first_when_apply(
 
 def test_quit_early_exits_without_traversing_rest(runner, mock_config, mock_api, strip_ansi):
     """``q`` on the first finding → loop exits, summary prints, no API mutation."""
-    result = _invoke(runner, mock_api, mock_config, ['review', '--all', '--apply'], stdin='q\n')
+    result = _invoke(
+        runner, mock_api, mock_config, ['review', '--all', '--apply', '--no-tui'], stdin='q\n'
+    )
 
     assert result.exit_code == 0, strip_ansi(result.stdout)
     text = strip_ansi(result.stdout)
@@ -143,7 +149,7 @@ def test_quit_early_exits_without_traversing_rest(runner, mock_config, mock_api,
 def test_invalid_keypress_reprompts(runner, mock_config, mock_api, strip_ansi):
     """``z`` (invalid) → re-prompt; subsequent ``s`` accepted; loop progresses."""
     stdin = 'z\ns\ns\ns\n'
-    result = _invoke(runner, mock_api, mock_config, ['review', '--all'], stdin=stdin)
+    result = _invoke(runner, mock_api, mock_config, ['review', '--all', '--no-tui'], stdin=stdin)
 
     assert result.exit_code == 0, strip_ansi(result.stdout)
     text = strip_ansi(result.stdout)
@@ -154,7 +160,9 @@ def test_invalid_keypress_reprompts(runner, mock_config, mock_api, strip_ansi):
 
 def test_dry_run_collects_verdicts_without_calling_apply(runner, mock_config, mock_api, strip_ansi):
     """Without ``--apply``, accept + dismiss collect verdicts but never call the API."""
-    result = _invoke(runner, mock_api, mock_config, ['review', '--all'], stdin='a\nd\ns\n')
+    result = _invoke(
+        runner, mock_api, mock_config, ['review', '--all', '--no-tui'], stdin='a\nd\ns\n'
+    )
 
     assert result.exit_code == 0, strip_ansi(result.stdout)
     text = strip_ansi(result.stdout)
@@ -184,7 +192,7 @@ def test_review_rejects_unknown_lint_type(runner, mock_config, strip_ansi):
 def test_apply_with_dismiss_calls_dismiss_path(runner, mock_config, mock_api, strip_ansi):
     """``d`` verdict with ``--apply`` calls ``lint_dismiss`` (not ``lint_resolve``)."""
     result = _invoke(
-        runner, mock_api, mock_config, ['review', '--all', '--apply'], stdin='d\ns\ns\n'
+        runner, mock_api, mock_config, ['review', '--all', '--apply', '--no-tui'], stdin='d\ns\ns\n'
     )
 
     assert result.exit_code == 0, strip_ansi(result.stdout)
@@ -217,7 +225,9 @@ def test_missing_id_skips_finding_without_prompting(runner, mock_config, mock_ap
     with patch('memex_cli.lint.get_api_context') as gac:
         gac.return_value.__aenter__.return_value = mock_api
         gac.return_value.__aexit__.return_value = None
-        result = runner.invoke(app, ['review', '--all', '--apply'], obj=mock_config, input='s\n')
+        result = runner.invoke(
+            app, ['review', '--all', '--apply', '--no-tui'], obj=mock_config, input='s\n'
+        )
 
     assert result.exit_code == 0, strip_ansi(result.stdout)
     text = strip_ansi(result.stdout).lower()
@@ -235,7 +245,7 @@ def test_empty_findings_short_circuits(runner, mock_config, mock_api, strip_ansi
     with patch('memex_cli.lint.get_api_context') as gac:
         gac.return_value.__aenter__.return_value = mock_api
         gac.return_value.__aexit__.return_value = None
-        result = runner.invoke(app, ['review', '--all'], obj=mock_config, input='')
+        result = runner.invoke(app, ['review', '--all', '--no-tui'], obj=mock_config, input='')
 
     assert result.exit_code == 0, strip_ansi(result.stdout)
     text = strip_ansi(result.stdout).lower()
@@ -273,7 +283,7 @@ def test_apply_error_isolated_per_finding(runner, mock_config, mock_api, strip_a
         gac.return_value.__aenter__.return_value = mock_api
         gac.return_value.__aexit__.return_value = None
         result = runner.invoke(
-            app, ['review', '--all', '--apply'], obj=mock_config, input='a\na\ns\n'
+            app, ['review', '--all', '--apply', '--no-tui'], obj=mock_config, input='a\na\ns\n'
         )
 
     assert result.exit_code == 0, strip_ansi(result.stdout)

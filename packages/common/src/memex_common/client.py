@@ -1611,43 +1611,82 @@ class RemoteMemexAPI:
             params['lint_type'] = lint_type
         return await self._get('lint/findings', params=params)
 
-    async def lint_dismiss(self, finding_id: str) -> dict[str, Any]:
-        """Flip a pending finding to ``dismissed``."""
-        return await self._post(f'lint/findings/{finding_id}/dismiss', {})
+    async def lint_dismiss(
+        self,
+        finding_id: str,
+        *,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        """Flip a pending finding to ``dismissed``.
+
+        ``note`` (optional) is stored at ``evidence.resolution.note`` for
+        the audit trail. Dismiss is non-destructive; no attended-mode gate.
+        """
+        body: dict[str, Any] = {}
+        if note is not None:
+            body['note'] = note
+        return await self._post(f'lint/findings/{finding_id}/dismiss', body)
 
     async def lint_resolve(
         self,
         finding_id: str,
         *,
+        action: str | None = None,
         params: dict[str, Any] | None = None,
+        note: str | None = None,
+        legacy_params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Flip a pending finding to ``resolved``.
 
-        ``params`` is forwarded to the server as the JSON request body and is
-        rule-specific. For ``entity_collapse_cluster`` findings, pass
-        ``{"winner_id": "<uuid>"}`` (or ``"winner_canonical_name"``) to
-        override the suggested winner; otherwise the server defaults to the
-        suggested winner recorded in the finding's evidence.
+        New cockpit shape — optional ``action`` (action_id), ``params``
+        (forwarded to ``action.execute``), and ``note`` (reviewer's
+        free-form text stored at ``evidence.resolution.note``). When
+        ``action`` is supplied the server runs the canned action via the
+        proposal_actions registry, captures ``prior_state`` /
+        ``applied_state`` under ``evidence.resolution.followup``, and
+        flips status atomically. Gates on attended-mode.
+
+        Legacy shape — for ``entity_collapse_cluster`` findings, the
+        server still accepts ``{"winner_id": ...}`` or
+        ``{"winner_canonical_name": ...}`` at the top level of the body;
+        pass these via ``legacy_params`` to keep them out of the new
+        ``params`` slot.
         """
-        body: dict[str, Any] = params or {}
+        body: dict[str, Any] = {}
+        if action is not None:
+            body['action'] = action
+        if params is not None:
+            body['params'] = params
+        if note is not None:
+            body['note'] = note
+        if legacy_params:
+            for key, value in legacy_params.items():
+                body[key] = value
         return await self._post(f'lint/findings/{finding_id}/resolve', body)
 
     async def lint_apply_winner(self, finding_id: str) -> dict[str, Any]:
         """Apply a winner-proposal finding's recorded action.
 
-        The finding's ``evidence.action`` literal drives the mutation —
-        mark a unit stale, mark a note superseded, or rewrite a contradicts
-        link as refines. Returns the applied details; raises on conflict.
+        Legacy entry point — the finding's ``evidence.action`` literal
+        drives the mutation (mark a unit stale, mark a note superseded,
+        rewrite a contradicts link as refines). New cockpit code should
+        prefer :meth:`lint_resolve` with an ``action`` argument so the
+        action registry's reversibility contract applies.
         """
         return await self._post(f'lint/findings/{finding_id}/apply', {})
 
-    async def lint_reverse_winner(self, finding_id: str) -> dict[str, Any]:
-        """Reverse a previously applied winner-proposal.
+    async def lint_reverse(self, finding_id: str) -> dict[str, Any]:
+        """Reverse a previously applied resolution.
 
-        Restores the row(s) recorded under ``evidence.resolution.prior_state``
-        and writes a paired audit row. The original finding stays resolved.
+        Server dispatches on ``evidence.resolution.followup.action`` (new
+        cockpit shape) when present, falling back to the legacy
+        winner-proposal path otherwise. Forward-only actions return 409
+        with ``detail.reason='forward_only'`` and no audit row.
         """
         return await self._post(f'lint/findings/{finding_id}/reverse', {})
+
+    # Back-compat alias — old call sites bound to lint_reverse_winner.
+    lint_reverse_winner = lint_reverse
 
     async def run_lint_rules(self, vault_id: str | UUID) -> dict[str, Any]:
         """Synchronously run the V1 lint rule registry for ``vault_id``.

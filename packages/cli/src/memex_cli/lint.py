@@ -218,16 +218,16 @@ async def lint_resolve_cmd(
     """
     parse_uuid(finding_id, 'finding_id')
     config: MemexConfig = ctx.obj
-    params: dict[str, Any] | None = None
+    legacy_params: dict[str, Any] | None = None
     if winner is not None:
         try:
             UUID(winner)
-            params = {'winner_id': winner}
+            legacy_params = {'winner_id': winner}
         except ValueError:
-            params = {'winner_canonical_name': winner}
+            legacy_params = {'winner_canonical_name': winner}
     async with get_api_context(config) as api:
         try:
-            payload = await api.lint_resolve(finding_id, params=params)
+            payload = await api.lint_resolve(finding_id, legacy_params=legacy_params)
         except Exception as e:
             handle_api_error(e)
             return
@@ -318,38 +318,47 @@ async def lint_review_cmd(
             help='Filter by lint_type: structural, quality, governance, schema.',
         ),
     ] = None,
-    apply: Annotated[
-        bool,
-        typer.Option(
-            '--apply',
-            help='Actually write resolutions; otherwise dry-run preview only.',
-        ),
-    ] = False,
     limit: Annotated[
         int,
         typer.Option(
             '--limit',
             min=1,
             max=500,
-            help=(
-                'Max findings to fetch from the server. With ``--global``, the '
-                'global filter is applied client-side AFTER this cap, so a '
-                'global session may surface fewer than --limit findings if '
-                'vault-scoped findings dominate; raise --limit to compensate.'
-            ),
+            help='Max findings to load into the cockpit at once.',
         ),
     ] = 50,
+    use_tui: Annotated[
+        bool,
+        typer.Option(
+            '--tui/--no-tui',
+            help=(
+                'Launch the Textual TUI cockpit (default). Pass --no-tui to '
+                'fall back to the legacy prompt-loop reviewer (useful for '
+                'headless/CI runs that cannot drive a terminal app).'
+            ),
+        ),
+    ] = True,
+    apply: Annotated[
+        bool,
+        typer.Option(
+            '--apply',
+            help=(
+                'Legacy prompt mode only: actually write resolutions instead '
+                'of running dry. Ignored under --tui (the TUI always commits).'
+            ),
+        ),
+    ] = False,
 ):
-    """Walk pending findings interactively (analogous to ``git add -p``).
+    """Walk pending proposals interactively.
 
-    Default is dry-run: verdicts are collected and summarised but nothing is
-    written. Pass ``--apply`` to flip accepted findings to ``resolved`` and
-    dismissed findings to ``dismissed`` via the same service paths used by
-    ``memex lint resolve`` / ``memex lint dismiss``.
+    Default launches the Textual TUI cockpit — a two-pane interface with the
+    proposal queue on the left and a detail card + numbered remediation menu
+    on the right. The cockpit mirrors AskUserQuestion's pattern (canned
+    options + free-form Other + reviewer note). All verdicts go through the
+    generalised ``/lint/findings/{id}/resolve|dismiss|reverse`` endpoints.
 
-    Note: ``--global`` filters client-side after the server-side ``--limit``
-    cap (mirrors ``memex lint findings``). A server-side ``vault_id IS NULL``
-    filter is tracked as a follow-up; bump ``--limit`` if needed.
+    Pass ``--no-tui`` to fall back to the legacy prompt-loop reviewer for
+    headless/CI use; in that mode ``--apply`` switches dry-run off.
     """
     scope = _resolve_scope(vault, is_global, is_all)
     if lint_type is not None and lint_type not in {
@@ -362,13 +371,27 @@ async def lint_review_cmd(
         raise typer.Exit(2)
 
     config: MemexConfig = ctx.obj
-    async with get_api_context(config) as api:
-        try:
+    if use_tui:
+        from memex_cli.cockpit.app import ProposalCockpitApp
+        from memex_cli.cockpit.controller import CockpitController
+
+        async with get_api_context(config) as api:
             vault_id: str | None = None
             if scope == 'vault' and vault is not None:
                 vault_id = str(await api.resolve_vault_identifier(vault))
+            controller = CockpitController(api, vault_id=vault_id)
+            cockpit = ProposalCockpitApp(controller, limit=limit)
+            await cockpit.run_async()
+        return
+
+    # Legacy prompt-loop path — kept for headless invocations.
+    async with get_api_context(config) as api:
+        try:
+            vault_id_legacy: str | None = None
+            if scope == 'vault' and vault is not None:
+                vault_id_legacy = str(await api.resolve_vault_identifier(vault))
             payload = await api.lint_findings(
-                vault_id=vault_id,
+                vault_id=vault_id_legacy,
                 lint_type=lint_type,
                 status='pending',
                 limit=limit,
