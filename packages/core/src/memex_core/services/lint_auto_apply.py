@@ -15,15 +15,19 @@ Default state: **OFF**. Must be explicitly enabled per rule in config.
 
 from __future__ import annotations
 
+import json as _json
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 from sqlalchemy import text
 
 from memex_core.services.base import BaseService
+
+if TYPE_CHECKING:
+    from memex_core.api import MemexAPI
 
 logger = logging.getLogger('memex.core.services.lint_auto_apply')
 
@@ -97,10 +101,21 @@ class LintAutoApplyService(BaseService):
         vault_id: UUID,
         rule_configs: dict[str, AutoApplyRuleConfig],
         *,
+        api: MemexAPI | None = None,
         telemetry_service: Any = None,
     ) -> AutoApplyResult:
-        """Scan pending proposals and auto-resolve those that clear the gate."""
+        """Scan pending proposals and auto-resolve those that clear the gate.
+
+        ``api`` is required for actions to actually fire. When ``None``, the
+        sweep logs a warning and refuses to proceed — we don't ship silent
+        no-ops where the proposal says "deprioritized" but the unit stays
+        active.
+        """
         from memex_core.services.proposal_actions import get_action
+
+        if api is None:
+            logger.warning('auto_apply_sweep called without api — refusing to proceed')
+            return AutoApplyResult(vault_id=vault_id)
 
         result = AutoApplyResult(vault_id=vault_id)
 
@@ -121,13 +136,7 @@ class LintAutoApplyService(BaseService):
             already_applied = int(cap_row or 0)
             remaining_budget = max(0, config.daily_cap - already_applied)
             if remaining_budget <= 0:
-                result = AutoApplyResult(
-                    vault_id=vault_id,
-                    proposals_scanned=result.proposals_scanned,
-                    auto_applied=result.auto_applied,
-                    skipped_cap_reached=result.skipped_cap_reached + 1,
-                    details=result.details,
-                )
+                result = replace(result, skipped_cap_reached=result.skipped_cap_reached + 1)
                 continue
 
             # Check accept_rate from telemetry.
@@ -143,13 +152,7 @@ class LintAutoApplyService(BaseService):
                     pass
 
             if accept_rate is None or accept_rate < config.accept_rate_threshold:
-                result = AutoApplyResult(
-                    vault_id=vault_id,
-                    proposals_scanned=result.proposals_scanned,
-                    auto_applied=result.auto_applied,
-                    skipped_low_accept_rate=result.skipped_low_accept_rate + 1,
-                    details=result.details,
-                )
+                result = replace(result, skipped_low_accept_rate=result.skipped_low_accept_rate + 1)
                 continue
 
             # Fetch pending proposals for this rule.
@@ -170,30 +173,15 @@ class LintAutoApplyService(BaseService):
                 )
 
             for prop in proposals_raw:
-                result = AutoApplyResult(
-                    vault_id=vault_id,
-                    proposals_scanned=result.proposals_scanned + 1,
-                    auto_applied=result.auto_applied,
-                    skipped_low_confidence=result.skipped_low_confidence,
-                    skipped_low_accept_rate=result.skipped_low_accept_rate,
-                    skipped_cap_reached=result.skipped_cap_reached,
-                    skipped_not_reversible=result.skipped_not_reversible,
-                    errors=result.errors,
-                    details=list(result.details),
-                )
+                result = replace(result, proposals_scanned=result.proposals_scanned + 1)
 
                 surprise = prop.get('surprise_score')
                 if surprise is None or surprise < config.confidence_threshold:
-                    result = AutoApplyResult(
-                        vault_id=vault_id,
-                        proposals_scanned=result.proposals_scanned,
-                        auto_applied=result.auto_applied,
-                        skipped_low_confidence=result.skipped_low_confidence + 1,
-                        details=result.details,
+                    result = replace(
+                        result, skipped_low_confidence=result.skipped_low_confidence + 1
                     )
                     continue
 
-                # Validate action exists and is reversible.
                 try:
                     action = get_action(config.action)
                 except KeyError:
@@ -205,12 +193,8 @@ class LintAutoApplyService(BaseService):
                     continue
 
                 if not action.reversible:
-                    result = AutoApplyResult(
-                        vault_id=vault_id,
-                        proposals_scanned=result.proposals_scanned,
-                        auto_applied=result.auto_applied,
-                        skipped_not_reversible=result.skipped_not_reversible + 1,
-                        details=result.details,
+                    result = replace(
+                        result, skipped_not_reversible=result.skipped_not_reversible + 1
                     )
                     continue
 
@@ -223,25 +207,17 @@ class LintAutoApplyService(BaseService):
                 except Exception:
                     continue
 
-                # Execute.
+                actor = 'system:auto-learn'
                 try:
-                    # We need the MemexAPI to execute — but this service
-                    # only has BaseService deps. The scheduler passes it
-                    # via a kwarg when it calls us. For now, use the
-                    # metastore directly for the status flip + resolution
-                    # payload write — the action execute() needs the full
-                    # API which we can't import cleanly here.
-                    # For MVP: write the resolution payload directly and
-                    # flip status. The action's real execute() is deferred
-                    # to when the full API is available in the scheduler.
-                    from memex_core.services.lint_learning import classify_verdict  # noqa: F401
-
+                    execute_result = await action.execute(
+                        api, {}, target_id=target_id, vault_id=vault_id, actor=actor
+                    )
                     resolution = {
                         'verdict': 'accepted',
-                        'actor': 'system:auto-learn',
+                        'actor': actor,
                         'decided_at': datetime.now(timezone.utc).isoformat(),
                         'note': (
-                            f'Auto-applied by the learning loop: accept_rate={accept_rate:.2f} '
+                            f'Auto-applied: accept_rate={accept_rate:.2f} '
                             f'>= {config.accept_rate_threshold}, '
                             f'surprise={surprise:.2f} >= {config.confidence_threshold}'
                         ),
@@ -249,14 +225,11 @@ class LintAutoApplyService(BaseService):
                             'action': config.action,
                             'params': {},
                             'applied_at': datetime.now(timezone.utc).isoformat(),
-                            'applied_state': {'auto_applied': True},
-                            'prior_state': {},
+                            'applied_state': execute_result.applied_state,
+                            'prior_state': execute_result.prior_state,
                             'reversible': True,
                         },
                     }
-
-                    import json as _json
-
                     async with self.metastore.session() as session:
                         update_result = await session.execute(
                             text(
@@ -279,11 +252,9 @@ class LintAutoApplyService(BaseService):
                             },
                         )
                         await session.commit()
-
                     if update_result.rowcount:
-                        result = AutoApplyResult(
-                            vault_id=vault_id,
-                            proposals_scanned=result.proposals_scanned,
+                        result = replace(
+                            result,
                             auto_applied=result.auto_applied + 1,
                             details=[
                                 *result.details,
@@ -302,15 +273,8 @@ class LintAutoApplyService(BaseService):
                             rule_name,
                             surprise,
                         )
-
                 except Exception:
                     logger.exception('auto_apply: failed to resolve %s', finding_id[:8])
-                    result = AutoApplyResult(
-                        vault_id=vault_id,
-                        proposals_scanned=result.proposals_scanned,
-                        auto_applied=result.auto_applied,
-                        errors=result.errors + 1,
-                        details=result.details,
-                    )
+                    result = replace(result, errors=result.errors + 1)
 
         return result
