@@ -153,6 +153,7 @@ def test_review_apply_resolves_accepted_and_leaves_skipped(postgres_container, p
                 '--vault',
                 str(vault_id),
                 '--apply',
+                '--no-tui',
             ],
             input='a\ns\n',
         )
@@ -198,6 +199,7 @@ def test_review_apply_audit_log_invariant_matches_direct_resolve(postgres_contai
                 '--vault',
                 str(vault_id),
                 '--apply',
+                '--no-tui',
             ],
             input='a\nq\n',
         )
