@@ -186,6 +186,16 @@ class MentalModel(SQLModel, table=True):  # type: ignore
         ),
     )
 
+    archived_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
+        description=(
+            'Soft-delete timestamp set by the archive_mental_model proposal action; '
+            'rows with a non-NULL archived_at are hidden from retrieval, survey, and '
+            'reflection enumeration. Reversed by clearing the column.'
+        ),
+    )
+
     __table_args__ = (
         # Enforce uniqueness for Entity + Vault (Global or Specific)
         Index(
@@ -203,6 +213,13 @@ class MentalModel(SQLModel, table=True):  # type: ignore
             'observations',
             postgresql_using='gin',
             postgresql_ops={'observations': 'jsonb_path_ops'},
+        ),
+        # Partial index on archived rows — query path filters WHERE archived_at IS NULL,
+        # which the planner short-circuits using this index when populated.
+        Index(
+            'idx_mental_models_archived_at',
+            'archived_at',
+            postgresql_where=sql_text('archived_at IS NOT NULL'),
         ),
     )
 

@@ -650,6 +650,12 @@ class MentalModelStrategy:
     ) -> Select:
         statement = select(MentalModel.id).select_from(MentalModel)
 
+        # Hide archived models — set by the archive_mental_model proposal
+        # action, reversible by clearing archived_at. The partial index
+        # idx_mental_models_archived_at lets the planner short-circuit the
+        # WHERE clause on healthy vaults (no archived rows).
+        statement = statement.where(MentalModel.archived_at.is_(None))  # type: ignore[union-attr]
+
         # Apply Filters (Mental Models track last_refreshed)
         statement = apply_date_filters(statement, MentalModel.last_refreshed, **kwargs)
         statement = apply_vault_filters(statement, MentalModel.vault_id, **kwargs)
