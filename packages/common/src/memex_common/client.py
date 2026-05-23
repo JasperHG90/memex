@@ -1735,6 +1735,59 @@ class RemoteMemexAPI:
             params['vault_id'] = vault_id
         return await self._get('lint/calibration/telemetry', params=params)
 
+    # Layer 3 — threshold calibration.
+
+    async def lint_calibration_list(
+        self,
+        *,
+        rule: str | None = None,
+        vault_id: str | None = None,
+    ) -> dict[str, Any]:
+        """List calibration rows — versioned per-rule thresholds."""
+        params: dict[str, Any] = {}
+        if rule is not None:
+            params['rule'] = rule
+        if vault_id is not None:
+            params['vault_id'] = vault_id
+        return await self._get('lint/calibration/thresholds', params=params)
+
+    async def lint_calibration_run(
+        self,
+        *,
+        vault_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Run threshold calibration now."""
+        params: dict[str, Any] = {}
+        if vault_id is not None:
+            params['vault_id'] = vault_id
+        return await self._post('lint/calibration/calibrate', {}, params=params)
+
+    async def lint_calibration_freeze(
+        self,
+        *,
+        rule: str,
+        vault_id: str | None = None,
+        frozen: bool = True,
+    ) -> dict[str, Any]:
+        """Freeze or unfreeze auto-calibration for a rule."""
+        params: dict[str, Any] = {'rule': rule, 'frozen': frozen}
+        if vault_id is not None:
+            params['vault_id'] = vault_id
+        return await self._post('lint/calibration/freeze', {}, params=params)
+
+    async def lint_calibration_rollback(
+        self,
+        *,
+        rule: str,
+        version: int,
+        vault_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Rollback a rule's calibration to a specific version."""
+        params: dict[str, Any] = {'rule': rule, 'version': version}
+        if vault_id is not None:
+            params['vault_id'] = vault_id
+        return await self._post('lint/calibration/rollback', {}, params=params)
+
     async def lint_telemetry_refresh(
         self,
         *,

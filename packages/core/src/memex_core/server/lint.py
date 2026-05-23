@@ -1168,3 +1168,115 @@ async def lint_calibration_refresh(
         'window_end': result.window_end.isoformat(),
         'vault_id': str(result.vault_id) if result.vault_id else None,
     }
+
+
+# ---------------------------------------------------------------------------
+# Layer 3 — Threshold calibration
+# ---------------------------------------------------------------------------
+
+
+@router.get('/calibration/thresholds', dependencies=[Depends(require_read)])
+async def lint_calibration_thresholds(
+    api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+    rule: Annotated[str | None, Query(description='Filter to one rule_name.')] = None,
+    vault_id: Annotated[UUID | None, Query(description='Vault scope.')] = None,
+) -> dict[str, Any]:
+    """List calibration rows — versioned per-rule thresholds learned from verdicts."""
+    if vault_id is not None:
+        await check_vault_access(auth, [vault_id], api, permission=Permission.READ)
+    try:
+        rows = await api.lint_learning.get_calibrations(  # type: ignore[attr-defined]
+            rule_name=rule, vault_id=vault_id
+        )
+    except Exception as e:
+        raise _handle_error(e, 'Failed to fetch calibrations')
+    return {
+        'rows': [
+            {
+                'id': str(r.id),
+                'rule_name': r.rule_name,
+                'vault_id': str(r.vault_id) if r.vault_id else None,
+                'version': r.version,
+                'surprise_threshold': r.surprise_threshold,
+                'polarity_threshold': r.polarity_threshold,
+                'learned_at': r.learned_at.isoformat() if r.learned_at else None,
+                'superseded_by_version': r.superseded_by_version,
+                'frozen': r.frozen,
+                'rationale': r.rationale,
+            }
+            for r in rows
+        ]
+    }
+
+
+@router.post('/calibration/calibrate', dependencies=[Depends(require_write)])
+async def lint_calibration_calibrate(
+    api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+    vault_id: Annotated[UUID | None, Query(description='Vault scope.')] = None,
+) -> dict[str, Any]:
+    """Run the threshold calibration job now.
+
+    Reads telemetry, computes new thresholds, writes versioned calibration
+    rows. Idempotent: if telemetry hasn't changed, no new rows are written.
+    """
+    if vault_id is not None:
+        await check_vault_access(auth, [vault_id], api, permission=Permission.WRITE)
+    try:
+        result = await api.lint_learning.calibrate_thresholds(  # type: ignore[attr-defined]
+            vault_id=vault_id
+        )
+    except Exception as e:
+        raise _handle_error(e, 'Failed to calibrate thresholds')
+    return {
+        'rules_calibrated': result.rules_calibrated,
+        'rules_skipped_frozen': result.rules_skipped_frozen,
+        'rules_skipped_insufficient_data': result.rules_skipped_insufficient_data,
+        'rules_unchanged': result.rules_unchanged,
+        'details': result.details,
+    }
+
+
+@router.post('/calibration/freeze', dependencies=[Depends(require_write)])
+async def lint_calibration_freeze(
+    api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+    rule: Annotated[str, Query(description='Rule to freeze/unfreeze.')] = '',
+    vault_id: Annotated[UUID | None, Query(description='Vault scope.')] = None,
+    frozen: Annotated[bool, Query(description='true to freeze, false to unfreeze.')] = True,
+) -> dict[str, Any]:
+    """Freeze or unfreeze auto-calibration for a specific rule."""
+    if not rule:
+        raise HTTPException(status_code=400, detail='rule is required')
+    if vault_id is not None:
+        await check_vault_access(auth, [vault_id], api, permission=Permission.WRITE)
+    try:
+        ok = await api.lint_learning.freeze_rule(  # type: ignore[attr-defined]
+            rule, vault_id=vault_id, frozen=frozen
+        )
+    except Exception as e:
+        raise _handle_error(e, 'Failed to freeze/unfreeze calibration')
+    return {'rule': rule, 'frozen': frozen, 'updated': ok}
+
+
+@router.post('/calibration/rollback', dependencies=[Depends(require_write)])
+async def lint_calibration_rollback(
+    api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+    rule: Annotated[str, Query(description='Rule to rollback.')] = '',
+    version: Annotated[int, Query(description='Version to rollback to.')] = 0,
+    vault_id: Annotated[UUID | None, Query(description='Vault scope.')] = None,
+) -> dict[str, Any]:
+    """Rollback a rule's calibration to a specific version."""
+    if not rule or version <= 0:
+        raise HTTPException(status_code=400, detail='rule and version (>0) are required')
+    if vault_id is not None:
+        await check_vault_access(auth, [vault_id], api, permission=Permission.WRITE)
+    try:
+        ok = await api.lint_learning.rollback_calibration(  # type: ignore[attr-defined]
+            rule, version, vault_id=vault_id
+        )
+    except Exception as e:
+        raise _handle_error(e, 'Failed to rollback calibration')
+    return {'rule': rule, 'version': version, 'rolled_back': ok}

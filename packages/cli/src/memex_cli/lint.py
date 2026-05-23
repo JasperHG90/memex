@@ -548,3 +548,161 @@ async def lint_review_cmd(
         )
 
     render_summary(console, summary, apply=apply)
+
+
+# ---------------------------------------------------------------------------
+# Auto-learning loop — Layer 3: threshold calibration (memex lint calibration).
+# ---------------------------------------------------------------------------
+
+
+calibration_app = typer.Typer(
+    name='calibration',
+    help='Per-rule threshold calibration (auto-learning loop, layer 3).',
+    no_args_is_help=True,
+)
+app.add_typer(calibration_app)
+
+
+@calibration_app.command('list')
+@async_command
+async def lint_calibration_list(
+    ctx: typer.Context,
+    rule: Annotated[
+        str | None,
+        typer.Option('--rule', help='Filter to one rule_name.'),
+    ] = None,
+    vault: Annotated[
+        str | None,
+        typer.Option('--vault', '-v', help='Vault scope.'),
+    ] = None,
+):
+    """List calibration rows — versioned per-rule thresholds."""
+    config: MemexConfig = ctx.obj
+    async with get_api_context(config) as api:
+        vault_id: str | None = None
+        if vault is not None:
+            vault_id = str(await api.resolve_vault_identifier(vault))
+        try:
+            payload = await api.lint_calibration_list(rule=rule, vault_id=vault_id)
+        except Exception as e:
+            handle_api_error(e)
+            return
+    rows = payload.get('rows') or []
+    if not rows:
+        console.print('[dim]No calibration rows. Run `memex lint calibration run` first.[/dim]')
+        return
+    table = Table(title=f'lint calibrations ({len(rows)} rows)')
+    table.add_column('rule', style='cyan')
+    table.add_column('v', justify='right')
+    table.add_column('threshold', justify='right')
+    table.add_column('frozen')
+    table.add_column('superseded')
+    table.add_column('learned_at')
+    for row in rows:
+        th = row.get('surprise_threshold')
+        table.add_row(
+            row.get('rule_name', '?'),
+            str(row.get('version', '?')),
+            f'{th:.3f}' if th is not None else '—',
+            'yes' if row.get('frozen') else '',
+            str(row.get('superseded_by_version', '')) if row.get('superseded_by_version') else '',
+            (row.get('learned_at') or '')[:19],
+        )
+    console.print(table)
+
+
+@calibration_app.command('run')
+@async_command
+async def lint_calibration_run(
+    ctx: typer.Context,
+    vault: Annotated[
+        str | None,
+        typer.Option('--vault', '-v', help='Vault scope.'),
+    ] = None,
+):
+    """Run threshold calibration now — adjust per-rule emission thresholds from telemetry."""
+    config: MemexConfig = ctx.obj
+    async with get_api_context(config) as api:
+        vault_id: str | None = None
+        if vault is not None:
+            vault_id = str(await api.resolve_vault_identifier(vault))
+        try:
+            payload = await api.lint_calibration_run(vault_id=vault_id)
+        except Exception as e:
+            handle_api_error(e)
+            return
+    console.print(
+        f'[green]calibrated:[/green] '
+        f'{payload.get("rules_calibrated", 0)} adjusted · '
+        f'{payload.get("rules_unchanged", 0)} unchanged · '
+        f'{payload.get("rules_skipped_frozen", 0)} frozen · '
+        f'{payload.get("rules_skipped_insufficient_data", 0)} insufficient data'
+    )
+    for d in payload.get('details') or []:
+        status = d.get('status', '?')
+        rule = d.get('rule', '?')
+        if status == 'calibrated':
+            console.print(
+                f'  {rule}: {d.get("old_threshold", "?")} → {d.get("new_threshold", "?")} '
+                f'({d.get("reason", "")})'
+            )
+
+
+@calibration_app.command('freeze')
+@async_command
+async def lint_calibration_freeze(
+    ctx: typer.Context,
+    rule: Annotated[str, typer.Argument(help='Rule to freeze.')],
+    vault: Annotated[
+        str | None,
+        typer.Option('--vault', '-v', help='Vault scope.'),
+    ] = None,
+    unfreeze: Annotated[
+        bool,
+        typer.Option('--unfreeze', help='Unfreeze instead of freezing.'),
+    ] = False,
+):
+    """Freeze (or unfreeze) auto-calibration for a rule."""
+    config: MemexConfig = ctx.obj
+    async with get_api_context(config) as api:
+        vault_id: str | None = None
+        if vault is not None:
+            vault_id = str(await api.resolve_vault_identifier(vault))
+        try:
+            await api.lint_calibration_freeze(rule=rule, vault_id=vault_id, frozen=not unfreeze)
+        except Exception as e:
+            handle_api_error(e)
+            return
+    verb = 'unfrozen' if unfreeze else 'frozen'
+    console.print(f'[green]{verb}:[/green] {rule}')
+
+
+@calibration_app.command('rollback')
+@async_command
+async def lint_calibration_rollback(
+    ctx: typer.Context,
+    rule: Annotated[str, typer.Argument(help='Rule to rollback.')],
+    version: Annotated[int, typer.Argument(help='Version to rollback to.')],
+    vault: Annotated[
+        str | None,
+        typer.Option('--vault', '-v', help='Vault scope.'),
+    ] = None,
+):
+    """Rollback a rule to a specific calibration version."""
+    config: MemexConfig = ctx.obj
+    async with get_api_context(config) as api:
+        vault_id: str | None = None
+        if vault is not None:
+            vault_id = str(await api.resolve_vault_identifier(vault))
+        try:
+            payload = await api.lint_calibration_rollback(
+                rule=rule, version=version, vault_id=vault_id
+            )
+        except Exception as e:
+            handle_api_error(e)
+            return
+    ok = payload.get('rolled_back', False)
+    if ok:
+        console.print(f'[green]rolled back:[/green] {rule} → v{version}')
+    else:
+        console.print(f'[red]rollback failed:[/red] version {version} not found for {rule}')
