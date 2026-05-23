@@ -187,10 +187,13 @@ class LintLLMOptimizer(BaseService):
         # 2. Build examples: (target_text_stub, verdict) pairs.
         examples = _build_examples(raw_rows)
 
-        # 3. Train / validation split (80/20).
-        split_idx = int(len(examples) * 0.8)
-        train = examples[:split_idx]
-        validation = examples[split_idx:]
+        # 3. Temporal train/validation split (80/20).
+        # Examples are ordered newest-first (SQL ORDER BY resolved_at DESC).
+        # Train on the OLDER 80%, validate on the NEWER 20% — the model's
+        # score reflects how well it predicts the operator's current behavior.
+        split_idx = int(len(examples) * 0.2)
+        validation = examples[:split_idx]  # newest 20%
+        train = examples[split_idx:]  # oldest 80%
 
         if len(validation) < 5:
             return CompileResult(

@@ -432,7 +432,7 @@ class LintLLMService(BaseService):
                         'WHERE rule_name = :rule_name '
                         '  AND (vault_id = CAST(:vault_id AS uuid) OR vault_id IS NULL) '
                         '  AND superseded_by_version IS NULL '
-                        'ORDER BY vault_id IS NULL ASC '  # vault-specific wins over global
+                        'ORDER BY vault_id IS NULL ASC, version DESC '
                         'LIMIT 1'
                     ),
                     {'rule_name': check_name, 'vault_id': str(vault_id)},
