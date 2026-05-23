@@ -191,6 +191,136 @@ async def lint_dismiss_cmd(
     console.print(f'[green]dismissed:[/green] {payload["finding_id"]}')
 
 
+# ---------------------------------------------------------------------------
+# Auto-learning loop — Layer 2: per-rule telemetry (memex lint stats).
+# ---------------------------------------------------------------------------
+
+
+stats_app = typer.Typer(
+    name='stats',
+    help='Per-rule accept / dismiss telemetry (auto-learning loop, layer 2).',
+    invoke_without_command=True,
+    no_args_is_help=False,
+)
+app.add_typer(stats_app)
+
+
+def _render_telemetry_table(rows: list[dict[str, Any]]) -> Table:
+    table = Table(title=f'lint rule telemetry ({len(rows)} rows)')
+    table.add_column('rule_name', style='cyan')
+    table.add_column('scope')
+    table.add_column('accept', justify='right')
+    table.add_column('no_op', justify='right')
+    table.add_column('dismiss', justify='right')
+    table.add_column('legacy', justify='right')
+    table.add_column('accept_rate', justify='right')
+    table.add_column('window_end')
+    for row in rows:
+        rate = row.get('accept_rate')
+        rate_text = f'{rate * 100:5.1f}%' if rate is not None else '   —  '
+        table.add_row(
+            row.get('rule_name', '?'),
+            (row.get('vault_id') or 'global')[:8] if row.get('vault_id') else 'global',
+            str(row.get('accept_count', 0)),
+            str(row.get('no_op_count', 0)),
+            str(row.get('dismiss_count', 0)),
+            str(row.get('legacy_count', 0)),
+            rate_text,
+            (row.get('window_end') or '')[:19],
+        )
+    return table
+
+
+@stats_app.callback()
+@async_command
+async def lint_stats_default(
+    ctx: typer.Context,
+    vault: Annotated[
+        str | None,
+        typer.Option('--vault', '-v', help='Filter to one vault by name or UUID.'),
+    ] = None,
+    rule: Annotated[
+        str | None,
+        typer.Option('--rule', help='Filter to one rule_name.'),
+    ] = None,
+    include_global: Annotated[
+        bool,
+        typer.Option(
+            '--include-global/--no-include-global',
+            help='When --vault is omitted, include the cross-vault rollup row.',
+        ),
+    ] = True,
+):
+    """Render the per-rule telemetry rollup.
+
+    Reads ``lint_rule_telemetry``. The numbers reflect the trailing 30-day
+    window the rollup service last wrote — run ``memex lint stats refresh``
+    to recompute on demand. ``accept_rate`` is the fraction of LABELLED
+    verdicts (accept + no_op + dismiss) where a canned action ran; legacy
+    rows are excluded from the denominator.
+    """
+    if ctx.invoked_subcommand is not None:
+        return
+    config: MemexConfig = ctx.obj
+    async with get_api_context(config) as api:
+        vault_id: str | None = None
+        if vault is not None:
+            vault_id = str(await api.resolve_vault_identifier(vault))
+        try:
+            payload = await api.lint_telemetry(
+                rule=rule,
+                vault_id=vault_id,
+                include_global=include_global,
+            )
+        except Exception as e:
+            handle_api_error(e)
+            return
+    rows = payload.get('rows') or []
+    if not rows:
+        console.print(
+            '[dim]No telemetry rows. Run `memex lint stats refresh` to compute '
+            'a rollup over the trailing 30 days.[/dim]'
+        )
+        return
+    console.print(_render_telemetry_table(rows))
+
+
+@stats_app.command('refresh')
+@async_command
+async def lint_stats_refresh(
+    ctx: typer.Context,
+    vault: Annotated[
+        str | None,
+        typer.Option('--vault', '-v', help='Vault to rollup; omit for global-only refresh.'),
+    ] = None,
+    window_days: Annotated[
+        int,
+        typer.Option('--window-days', min=1, max=365, help='Rolling window length.'),
+    ] = 30,
+):
+    """Recompute the telemetry rollup over the trailing window."""
+    config: MemexConfig = ctx.obj
+    async with get_api_context(config) as api:
+        vault_id: str | None = None
+        if vault is not None:
+            vault_id = str(await api.resolve_vault_identifier(vault))
+        try:
+            payload = await api.lint_telemetry_refresh(
+                vault_id=vault_id,
+                window_days=window_days,
+            )
+        except Exception as e:
+            handle_api_error(e)
+            return
+    console.print(
+        f'[green]refreshed:[/green] '
+        f'{payload.get("rows_written", 0)} rows · '
+        f'{payload.get("rules_seen", 0)} rules · '
+        f'{payload.get("proposals_aggregated", 0)} proposals · '
+        f'window {payload.get("window_start", "")[:10]} → {payload.get("window_end", "")[:10]}'
+    )
+
+
 @app.command('resolve')
 @async_command
 async def lint_resolve_cmd(
