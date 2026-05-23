@@ -230,6 +230,7 @@ def test_review_dry_run_does_not_mutate(postgres_container, postgres_url):
                 'review',
                 '--vault',
                 str(vault_id),
+                '--no-tui',
             ],
             input='a\na\n',
         )
