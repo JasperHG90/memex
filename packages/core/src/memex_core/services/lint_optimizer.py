@@ -1,0 +1,438 @@
+"""Lint auto-learning loop — Layer 4: DSPy signature compilation.
+
+Pulls labelled verdicts, compiles a DSPy signature via BootstrapFewShot,
+validates against the current champion, and promotes the winner to
+``lint_llm_signature``. LLM checks load the latest promoted signature
+at startup. The weekly scheduler tick calls ``compile()`` per rule.
+
+Layer 5 (auto-solve) hooks into the scheduler after compilation: when
+a compiled signature exists AND the rule's telemetry clears the
+confidence + accept_rate thresholds, the scheduler auto-resolves
+high-confidence findings via the proposal-action registry.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
+from typing import Any
+from uuid import UUID
+
+from sqlalchemy import text
+
+from memex_core.services.base import BaseService
+
+logger = logging.getLogger('memex.core.services.lint_optimizer')
+
+
+# Minimum labelled examples before attempting a compile.
+MIN_EXAMPLES_FOR_COMPILE = 50
+# Champion must beat challenger by this margin to be promoted.
+CHAMPION_MARGIN = 0.05
+# Max demos per signature (BootstrapFewShot parameter).
+MAX_DEMOS = 8
+
+
+@dataclass(frozen=True)
+class CompileResult:
+    """Outcome of one ``compile()`` invocation."""
+
+    rule_name: str
+    vault_id: UUID | None
+    status: str  # 'promoted' | 'rejected' | 'insufficient_data' | 'error'
+    new_version: int | None = None
+    validation_score: float | None = None
+    champion_score: float | None = None
+    examples_used: int = 0
+    message: str = ''
+
+
+@dataclass(frozen=True)
+class SignatureDTO:
+    """Read-side projection of ``lint_llm_signature``."""
+
+    id: UUID
+    rule_name: str
+    vault_id: UUID | None
+    version: int
+    base_model: str | None
+    validation_score: float | None
+    validation_examples: int | None
+    promoted_at: datetime
+    promoted_by: str | None
+    superseded_by_version: int | None
+
+
+_FETCH_LABELLED_SQL = """
+    SELECT
+        target_id,
+        evidence,
+        status,
+        created_at,
+        resolved_at,
+        (evidence -> 'resolution' -> 'followup' ->> 'action') AS action_taken,
+        (evidence ->> 'surprise_score')::float AS surprise_score
+    FROM maintenance_proposals
+    WHERE rule_name = :rule_name
+      AND status IN ('resolved', 'dismissed')
+      AND created_at >= :window_start
+      AND (:vault_id::uuid IS NULL OR vault_id = CAST(:vault_id AS uuid))
+    ORDER BY resolved_at DESC
+    LIMIT :limit
+"""
+
+_GET_LATEST_SIGNATURE_SQL = """
+    SELECT id::text, rule_name, vault_id::text, version,
+           compiled_program, demos, base_model,
+           validation_score, validation_examples,
+           promoted_at, promoted_by, superseded_by_version
+    FROM lint_llm_signature
+    WHERE rule_name = :rule_name
+      AND (
+        (:vault_id::uuid IS NULL AND vault_id IS NULL)
+        OR vault_id = CAST(:vault_id AS uuid)
+      )
+      AND superseded_by_version IS NULL
+    ORDER BY version DESC
+    LIMIT 1
+"""
+
+_LIST_SIGNATURES_SQL = """
+    SELECT id::text, rule_name, vault_id::text, version,
+           base_model, validation_score, validation_examples,
+           promoted_at, promoted_by, superseded_by_version
+    FROM lint_llm_signature
+    WHERE (:rule_name::text IS NULL OR rule_name = :rule_name)
+    ORDER BY rule_name ASC, version DESC
+"""
+
+_INSERT_SIGNATURE_SQL = """
+    INSERT INTO lint_llm_signature (
+        rule_name, vault_id, version,
+        compiled_program, demos, base_model,
+        validation_score, validation_examples,
+        promoted_by
+    )
+    VALUES (
+        :rule_name, CAST(:vault_id AS uuid), :version,
+        CAST(:compiled_program AS jsonb), CAST(:demos AS jsonb), :base_model,
+        :validation_score, :validation_examples,
+        :promoted_by
+    )
+"""
+
+_SUPERSEDE_SIGNATURE_SQL = """
+    UPDATE lint_llm_signature
+    SET superseded_by_version = :new_version
+    WHERE rule_name = :rule_name
+      AND (
+        (:vault_id::uuid IS NULL AND vault_id IS NULL)
+        OR vault_id = CAST(:vault_id AS uuid)
+      )
+      AND superseded_by_version IS NULL
+      AND version < :new_version
+"""
+
+
+class LintLLMOptimizer(BaseService):
+    """DSPy-based signature optimization for LLM lint checks.
+
+    ``compile()`` is the primary entry point: it pulls labelled verdicts
+    for a rule, builds training/validation splits, runs the optimizer,
+    and promotes or rejects the result.
+    """
+
+    async def compile(
+        self,
+        rule_name: str,
+        *,
+        vault_id: UUID | None = None,
+        window_days: int = 90,
+        actor: str = 'system:optimizer',
+    ) -> CompileResult:
+        """Pull labelled verdicts, compile, validate, promote or reject.
+
+        This method is the scheduler entry point. The actual DSPy compile
+        is isolated in ``_run_bootstrap`` so it can be replaced with a
+        mock in tests.
+        """
+        end = datetime.now(timezone.utc)
+        start = end - timedelta(days=window_days)
+        v_id = str(vault_id) if vault_id else None
+
+        # 1. Fetch labelled examples.
+        async with self.metastore.session() as session:
+            result = await session.execute(
+                text(_FETCH_LABELLED_SQL),
+                {
+                    'rule_name': rule_name,
+                    'vault_id': v_id,
+                    'window_start': start,
+                    'limit': 200,
+                },
+            )
+            raw_rows = [dict(r) for r in result.mappings().all()]
+
+        if len(raw_rows) < MIN_EXAMPLES_FOR_COMPILE:
+            return CompileResult(
+                rule_name=rule_name,
+                vault_id=vault_id,
+                status='insufficient_data',
+                examples_used=len(raw_rows),
+                message=f'Need {MIN_EXAMPLES_FOR_COMPILE} labelled examples; have {len(raw_rows)}.',
+            )
+
+        # 2. Build examples: (target_text_stub, verdict) pairs.
+        examples = _build_examples(raw_rows)
+
+        # 3. Train / validation split (80/20).
+        split_idx = int(len(examples) * 0.8)
+        train = examples[:split_idx]
+        validation = examples[split_idx:]
+
+        if len(validation) < 5:
+            return CompileResult(
+                rule_name=rule_name,
+                vault_id=vault_id,
+                status='insufficient_data',
+                examples_used=len(examples),
+                message=f'Validation set too small ({len(validation)}); need ≥5.',
+            )
+
+        # 4. Run the optimizer — produces a compiled program + demos.
+        try:
+            compiled_program, demos, new_score = await self._run_bootstrap(
+                rule_name, train, validation
+            )
+        except Exception as exc:
+            logger.exception('DSPy compile failed for rule %s', rule_name)
+            return CompileResult(
+                rule_name=rule_name,
+                vault_id=vault_id,
+                status='error',
+                message=str(exc),
+            )
+
+        # 5. Load champion.
+        async with self.metastore.session() as session:
+            champ_row = (
+                (
+                    await session.execute(
+                        text(_GET_LATEST_SIGNATURE_SQL),
+                        {'rule_name': rule_name, 'vault_id': v_id},
+                    )
+                )
+                .mappings()
+                .first()
+            )
+
+        champion_score = float(champ_row['validation_score']) if champ_row else 0.0
+        current_version = int(champ_row['version']) if champ_row else 0
+
+        # 6. Champion-vs-challenger gate.
+        if new_score < champion_score + CHAMPION_MARGIN:
+            return CompileResult(
+                rule_name=rule_name,
+                vault_id=vault_id,
+                status='rejected',
+                validation_score=new_score,
+                champion_score=champion_score,
+                examples_used=len(examples),
+                message=(
+                    f'New ({new_score:.3f}) did not beat champion '
+                    f'({champion_score:.3f}) + margin ({CHAMPION_MARGIN}).'
+                ),
+            )
+
+        # 7. Promote.
+        new_version = current_version + 1
+        async with self.metastore.session() as session:
+            await session.execute(
+                text(_SUPERSEDE_SIGNATURE_SQL),
+                {'rule_name': rule_name, 'vault_id': v_id, 'new_version': new_version},
+            )
+            await session.execute(
+                text(_INSERT_SIGNATURE_SQL),
+                {
+                    'rule_name': rule_name,
+                    'vault_id': v_id,
+                    'version': new_version,
+                    'compiled_program': json.dumps(compiled_program),
+                    'demos': json.dumps(demos),
+                    'base_model': 'default',
+                    'validation_score': new_score,
+                    'validation_examples': len(validation),
+                    'promoted_by': actor,
+                },
+            )
+            await session.commit()
+
+        logger.info(
+            'Promoted signature v%d for rule %s (score: %.3f → %.3f)',
+            new_version,
+            rule_name,
+            champion_score,
+            new_score,
+        )
+
+        return CompileResult(
+            rule_name=rule_name,
+            vault_id=vault_id,
+            status='promoted',
+            new_version=new_version,
+            validation_score=new_score,
+            champion_score=champion_score,
+            examples_used=len(examples),
+            message=f'Promoted v{new_version} (score: {new_score:.3f}).',
+        )
+
+    async def _run_bootstrap(
+        self,
+        rule_name: str,
+        train: list[dict[str, Any]],
+        validation: list[dict[str, Any]],
+    ) -> tuple[dict[str, Any], list[dict[str, Any]], float]:
+        """Run DSPy BootstrapFewShot to produce a compiled program.
+
+        Returns (compiled_program_dict, demos_list, validation_score).
+
+        The actual DSPy invocation requires ``dspy`` + a language model
+        configured in the environment. When DSPy is not installed or the
+        LM is unavailable, this falls back to a simple majority-class
+        baseline that still produces a valid score — so the
+        champion-vs-challenger gate is always exercisable.
+        """
+        try:
+            import dspy
+
+            # Build the metric function for BootstrapFewShot.
+            def verdict_match(example: dspy.Example, pred: Any, trace: Any = None) -> bool:
+                return getattr(pred, 'verdict', '') == example.verdict
+
+            class VerdictPredictor(dspy.Signature):
+                """Given a lint finding's target text and rule, predict the operator verdict."""
+
+                target_text: str = dspy.InputField()
+                rule_name: str = dspy.InputField()
+                surprise_score: float = dspy.InputField()
+                verdict: str = dspy.OutputField(desc='One of: accept, no_op, dismiss')
+
+            teleprompter = dspy.BootstrapFewShot(
+                metric=verdict_match,
+                max_bootstrapped_demos=MAX_DEMOS,
+                max_rounds=1,
+            )
+            trainset = [
+                dspy.Example(
+                    target_text=ex.get('target_text', ''),
+                    rule_name=rule_name,
+                    surprise_score=ex.get('surprise_score', 0.0),
+                    verdict=ex['verdict'],
+                ).with_inputs('target_text', 'rule_name', 'surprise_score')
+                for ex in train
+            ]
+
+            student = dspy.Predict(VerdictPredictor)
+            compiled = teleprompter.compile(student, trainset=trainset)
+
+            # Validate.
+            correct = 0
+            for ex in validation:
+                try:
+                    pred = compiled(
+                        target_text=ex.get('target_text', ''),
+                        rule_name=rule_name,
+                        surprise_score=ex.get('surprise_score', 0.0),
+                    )
+                    if getattr(pred, 'verdict', '') == ex['verdict']:
+                        correct += 1
+                except Exception:
+                    pass
+            val_score = correct / len(validation) if validation else 0.0
+
+            # Serialise the compiled program's demos.
+            demos_list = []
+            if hasattr(compiled, 'demos'):
+                for demo in compiled.demos:
+                    demos_list.append(
+                        {
+                            'target_text': getattr(demo, 'target_text', ''),
+                            'rule_name': getattr(demo, 'rule_name', ''),
+                            'surprise_score': getattr(demo, 'surprise_score', 0.0),
+                            'verdict': getattr(demo, 'verdict', ''),
+                        }
+                    )
+
+            return ({'type': 'dspy_bootstrap', 'version': 1}, demos_list, val_score)
+
+        except ImportError:
+            logger.warning('DSPy not installed; using majority-class baseline.')
+            # Fallback: majority-class baseline.
+            from collections import Counter
+
+            counts = Counter(ex['verdict'] for ex in train)
+            majority = counts.most_common(1)[0][0] if counts else 'dismiss'
+            correct = sum(1 for ex in validation if ex['verdict'] == majority)
+            val_score = correct / len(validation) if validation else 0.0
+            return (
+                {'type': 'majority_baseline', 'majority_class': majority},
+                [],
+                val_score,
+            )
+
+    async def list_signatures(
+        self,
+        *,
+        rule_name: str | None = None,
+    ) -> list[SignatureDTO]:
+        """List all signature versions across rules."""
+        async with self.metastore.session() as session:
+            result = await session.execute(
+                text(_LIST_SIGNATURES_SQL),
+                {'rule_name': rule_name},
+            )
+            rows = result.mappings().all()
+        return [
+            SignatureDTO(
+                id=UUID(r['id']) if isinstance(r['id'], str) else r['id'],
+                rule_name=r['rule_name'],
+                vault_id=UUID(r['vault_id']) if r.get('vault_id') else None,
+                version=int(r['version']),
+                base_model=r.get('base_model'),
+                validation_score=r.get('validation_score'),
+                validation_examples=r.get('validation_examples'),
+                promoted_at=r['promoted_at'],
+                promoted_by=r.get('promoted_by'),
+                superseded_by_version=r.get('superseded_by_version'),
+            )
+            for r in rows
+        ]
+
+
+def _build_examples(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Convert raw proposal rows into (target_text, verdict) training examples."""
+    from memex_core.services.lint_learning import classify_verdict
+
+    examples: list[dict[str, Any]] = []
+    for row in rows:
+        verdict = classify_verdict(row)
+        if verdict == 'legacy':
+            continue
+        evidence = row.get('evidence') or {}
+        target_id = row.get('target_id', '')
+        surprise = row.get('surprise_score')
+        # Target text is not stored on the proposal row directly; we use
+        # whatever description is available in evidence.
+        target_text = (
+            evidence.get('explanation') or evidence.get('target_text') or str(target_id)[:200]
+        )
+        examples.append(
+            {
+                'target_text': str(target_text)[:2000],
+                'verdict': verdict,
+                'surprise_score': float(surprise) if surprise is not None else 0.0,
+            }
+        )
+    return examples

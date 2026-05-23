@@ -394,9 +394,63 @@ class LintLLMService(BaseService):
     ``(vault_id, hour_bucket)``).
     """
 
+    _calibrated_cache: dict[tuple[str, str | None], float | None]
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._calibrated_cache = {}
+
     @property
     def _settings(self):
         return self.config.server.memory.lint_llm
+
+    async def _get_calibrated_surprise_threshold(
+        self,
+        check_name: str,
+        vault_id: UUID,
+        session: AsyncSession,
+    ) -> float:
+        """Return the surprise threshold from lint_rule_calibration if one
+        exists, otherwise fall back to the static config default.
+
+        Caches per (check_name, vault_id) for the lifetime of the tick so
+        we don't re-query for every unit.
+        """
+        cache_key = (check_name, str(vault_id))
+        if cache_key in self._calibrated_cache:
+            cached = self._calibrated_cache[cache_key]
+            if cached is not None:
+                return cached
+            return float(self._settings.surprise_threshold)
+
+        try:
+            row = (
+                await session.execute(
+                    text(
+                        'SELECT surprise_threshold '
+                        'FROM lint_rule_calibration '
+                        'WHERE rule_name = :rule_name '
+                        '  AND (vault_id = CAST(:vault_id AS uuid) OR vault_id IS NULL) '
+                        '  AND superseded_by_version IS NULL '
+                        'ORDER BY vault_id IS NULL ASC '  # vault-specific wins over global
+                        'LIMIT 1'
+                    ),
+                    {'rule_name': check_name, 'vault_id': str(vault_id)},
+                )
+            ).first()
+        except Exception:
+            row = None
+
+        if row is not None and row.surprise_threshold is not None:
+            val = float(row.surprise_threshold)
+            self._calibrated_cache[cache_key] = val
+            return val
+        self._calibrated_cache[cache_key] = None
+        return float(self._settings.surprise_threshold)
+
+    def clear_calibration_cache(self) -> None:
+        """Call at the start of each tick to pick up new calibrations."""
+        self._calibrated_cache.clear()
 
     # -- quota -----------------------------------------------------------
 
@@ -599,6 +653,7 @@ class LintLLMService(BaseService):
         vault_id: UUID,
         *,
         run_llm_check: RunLLMCheck,
+        check_name: str = 'llm_semantic_contradiction',
         session: AsyncSession,
         polarity_classifier: PolarityClassifier | None = None,
         confidence_map: dict[str, tuple[float, int]] | None = None,
@@ -649,9 +704,13 @@ class LintLLMService(BaseService):
         score = await compute_unit_surprise(unit_id, vault_id, session, k=settings.surprise_k)
         outcome.surprise_score = score
 
+        effective_threshold = await self._get_calibrated_surprise_threshold(
+            check_name, vault_id, session
+        )
+
         polarity_result: PolarityResult | None = None
         polarity_contra_prob: float | None = None
-        if polarity_classifier is not None and score < settings.surprise_threshold:
+        if polarity_classifier is not None and score < effective_threshold:
             row = (
                 await session.execute(
                     _LOAD_UNIT_AND_TOP_PEER_TEXT_SQL,
@@ -677,7 +736,7 @@ class LintLLMService(BaseService):
         cleared = gate_passes(
             score,
             polarity_contra_prob,
-            surprise_threshold=settings.surprise_threshold,
+            surprise_threshold=effective_threshold,
             polarity_threshold=(
                 polarity_classifier.polarity_threshold
                 if polarity_classifier is not None
@@ -797,6 +856,7 @@ class LintLLMService(BaseService):
         vault_id: UUID,
         *,
         run_llm_check: RunLLMCheck,
+        check_name: str = 'llm_semantic_contradiction',
         polarity_classifier: PolarityClassifier | None = None,
     ) -> LintLLMTickSummary:
         """Single scheduler-tick for ``vault_id``.
@@ -857,6 +917,7 @@ class LintLLMService(BaseService):
                         unit_id,
                         vault_id,
                         run_llm_check=run_llm_check,
+                        check_name=check_name,
                         session=session,
                         polarity_classifier=polarity_classifier,
                         confidence_map=confidence_map,

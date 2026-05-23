@@ -442,9 +442,11 @@ async def periodic_lint_llm_task(api: 'MemexAPI'):
             for vault in vaults:
                 for check_name, check in checks:
                     try:
+                        api.lint_llm.clear_calibration_cache()
                         summary = await api.lint_llm.tick(
                             vault.id,
                             run_llm_check=check,
+                            check_name=f'llm_{check_name}',
                             polarity_classifier=(
                                 polarity_classifier
                                 if check_name == 'semantic_contradiction'
