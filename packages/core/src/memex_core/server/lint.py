@@ -1067,3 +1067,104 @@ async def lint_flags(
         'findings': [f.model_dump(mode='json') for f in page.findings],
         'next_cursor': page.next_cursor,
     }
+
+
+# ---------------------------------------------------------------------------
+# Lint auto-learning loop — Layer 2: telemetry rollups (L1-lint-auto-learning).
+# ---------------------------------------------------------------------------
+
+
+def _telemetry_to_json(dto: Any) -> dict[str, Any]:
+    """Render a ``LintRuleTelemetryDTO`` for HTTP responses.
+
+    Adds derived fields (``accept_rate``, ``total_count``, ``labelled_count``)
+    that the cockpit and CLI render without recomputing.
+    """
+    return {
+        'rule_name': dto.rule_name,
+        'vault_id': str(dto.vault_id) if dto.vault_id is not None else None,
+        'window_start': dto.window_start.isoformat() if dto.window_start else None,
+        'window_end': dto.window_end.isoformat() if dto.window_end else None,
+        'accept_count': dto.accept_count,
+        'no_op_count': dto.no_op_count,
+        'dismiss_count': dto.dismiss_count,
+        'legacy_count': dto.legacy_count,
+        'total_count': dto.total_count,
+        'labelled_count': dto.labelled_count,
+        'accept_rate': dto.accept_rate,
+        'median_surprise': dto.median_surprise,
+        'median_time_to_resolve_seconds': dto.median_time_to_resolve_seconds,
+        'refreshed_at': dto.refreshed_at.isoformat() if dto.refreshed_at else None,
+    }
+
+
+@router.get('/calibration/telemetry', dependencies=[Depends(require_read)])
+async def lint_calibration_telemetry(
+    api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+    rule: Annotated[str | None, Query(description='Filter to one rule_name.')] = None,
+    vault_id: Annotated[
+        UUID | None,
+        Query(description='Vault scope; omit + include_global=true for the global rollup.'),
+    ] = None,
+    include_global: Annotated[
+        bool,
+        Query(description='When vault_id is omitted, include the cross-vault rollup row.'),
+    ] = True,
+) -> dict[str, Any]:
+    """Return per-rule telemetry rows used by ``memex lint stats``.
+
+    Layer 2 of the auto-learning loop. Read-only; never mutates rollups.
+    Vault-scope auth gates per-vault rows; the global rollup
+    (``vault_id IS NULL``) requires no vault scope but still requires READ.
+    """
+    if vault_id is not None:
+        await check_vault_access(auth, [vault_id], api, permission=Permission.READ)
+    try:
+        rows = await api.lint_learning.get_telemetry(
+            rule_name=rule,
+            vault_id=vault_id,
+            include_global=include_global,
+        )
+    except Exception as e:
+        raise _handle_error(e, 'Failed to fetch lint telemetry')
+    return {'rows': [_telemetry_to_json(r) for r in rows]}
+
+
+@router.post('/calibration/refresh', dependencies=[Depends(require_write)])
+async def lint_calibration_refresh(
+    api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+    vault_id: Annotated[
+        UUID | None,
+        Query(description='Vault to rollup; omit for global-only refresh.'),
+    ] = None,
+    window_days: Annotated[
+        int,
+        Query(ge=1, le=365, description='Rolling window length. Defaults to 30.'),
+    ] = 30,
+) -> dict[str, Any]:
+    """Recompute ``lint_rule_telemetry`` for the trailing window.
+
+    Idempotent: running twice with the same window produces the same
+    rollup. Vault-scoped refreshes also refresh the global (vault_id NULL)
+    rollup. Gated by ``require_write`` — recomputing telemetry is
+    cheap but it does write rows.
+    """
+    if vault_id is not None:
+        await check_vault_access(auth, [vault_id], api, permission=Permission.WRITE)
+    try:
+        result = await api.lint_learning.refresh_telemetry(
+            vault_id=vault_id,
+            window_days=window_days,
+        )
+    except Exception as e:
+        raise _handle_error(e, 'Failed to refresh lint telemetry')
+    return {
+        'rows_written': result.rows_written,
+        'rules_seen': result.rules_seen,
+        'proposals_aggregated': result.proposals_aggregated,
+        'window_start': result.window_start.isoformat(),
+        'window_end': result.window_end.isoformat(),
+        'vault_id': str(result.vault_id) if result.vault_id else None,
+    }

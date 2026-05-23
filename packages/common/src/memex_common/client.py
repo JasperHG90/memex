@@ -112,9 +112,14 @@ class RemoteMemexAPI:
             return [json.loads(line) for line in response.text.strip().split('\n') if line]
         return response.json()
 
-    async def _post(self, path: str, data: BaseModel | dict[str, Any]) -> Any:
+    async def _post(
+        self,
+        path: str,
+        data: BaseModel | dict[str, Any],
+        params: dict[str, Any] | None = None,
+    ) -> Any:
         payload = data.model_dump(mode='json') if isinstance(data, BaseModel) else data
-        response = await self.client.post(path, json=payload)
+        response = await self.client.post(path, json=payload, params=params)
         return await self._handle_response(response)
 
     async def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
@@ -1695,6 +1700,44 @@ class RemoteMemexAPI:
         this call lazy-loads NLI on first invocation.
         """
         return await self._post(f'lint/llm/run/{vault_id}', {})
+
+    async def lint_telemetry(
+        self,
+        *,
+        rule: str | None = None,
+        vault_id: str | None = None,
+        include_global: bool = True,
+    ) -> dict[str, Any]:
+        """Fetch per-rule telemetry rollups (Layer 2 of the auto-learning loop).
+
+        Returns ``{'rows': [...]}`` where each row carries ``rule_name``,
+        ``accept_count`` / ``no_op_count`` / ``dismiss_count`` /
+        ``legacy_count``, derived ``accept_rate`` and totals, the
+        ``window_start`` / ``window_end`` boundaries, and any median
+        summary stats. Read-only.
+        """
+        params: dict[str, Any] = {'include_global': include_global}
+        if rule is not None:
+            params['rule'] = rule
+        if vault_id is not None:
+            params['vault_id'] = vault_id
+        return await self._get('lint/calibration/telemetry', params=params)
+
+    async def lint_telemetry_refresh(
+        self,
+        *,
+        vault_id: str | None = None,
+        window_days: int = 30,
+    ) -> dict[str, Any]:
+        """Recompute ``lint_rule_telemetry`` for the trailing window.
+
+        Idempotent — same window produces the same rollup. Returns the
+        rows-written / rules-seen / proposals-aggregated counts.
+        """
+        params: dict[str, Any] = {'window_days': window_days}
+        if vault_id is not None:
+            params['vault_id'] = vault_id
+        return await self._post('lint/calibration/refresh', {}, params=params)
 
     async def lint_get_flags(
         self,

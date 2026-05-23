@@ -2060,6 +2060,97 @@ class ConsolidationTick(SQLModel, table=True):  # type: ignore
 # ---------------------------------------------------------------------------
 
 
+class LintRuleTelemetry(SQLModel, table=True):  # type: ignore
+    """Rolled-up per-rule verdict counters — feeds the auto-learning loop.
+
+    Layer 2 of the lint auto-learning architecture: nightly (or on-demand)
+    the ``LintLearningService`` reads resolved ``maintenance_proposals`` for a
+    trailing window and writes one row here per ``(rule_name, vault_id)``.
+    ``vault_id IS NULL`` means a global rollup across vaults.
+
+    Layers 3 and 4 (threshold calibration, DSPy compile) read this table to
+    decide whether they have enough labelled data to act. ``memex lint stats``
+    renders it directly.
+    """
+
+    __tablename__ = 'lint_rule_telemetry'
+
+    rule_name: str = Field(
+        sa_column=Column(Text, nullable=False, primary_key=True),
+        description='Rule that produced the verdicts in this rollup.',
+    )
+    vault_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(SA_UUID(), nullable=True, primary_key=True),
+        description='Vault scope; NULL = global rollup across vaults.',
+    )
+    window_start: datetime = Field(
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=False, primary_key=True),
+        description='Start of the rolling window this row aggregates (inclusive).',
+    )
+    window_end: datetime = Field(
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=False),
+        description='End of the rolling window this row aggregates (exclusive).',
+    )
+    accept_count: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default='0'),
+        description=(
+            'Verdicts where a canned action ran (resolution.followup.action set, '
+            "action_id != 'no_op'). Counts as 'the rule's signal was useful'."
+        ),
+    )
+    no_op_count: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default='0'),
+        description=(
+            'Verdicts where the operator chose no_op — they reviewed the proposal '
+            'and chose not to mutate state. The rule was valid but did not warrant '
+            'action this time.'
+        ),
+    )
+    dismiss_count: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default='0'),
+        description='Verdicts where the operator dismissed the proposal as noise.',
+    )
+    legacy_count: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default='0'),
+        description=(
+            'Pre-cockpit rows: resolved without a resolution.followup block. '
+            'Cannot be classified as accept / no_op; counted separately so '
+            'operators can see how much history is unlabelled.'
+        ),
+    )
+    median_surprise: float | None = Field(
+        default=None,
+        sa_column=Column(Float, nullable=True),
+        description='Median evidence.surprise_score across rows in the window.',
+    )
+    median_time_to_resolve_seconds: int | None = Field(
+        default=None,
+        sa_column=Column(Integer, nullable=True),
+        description=(
+            'Median seconds between created_at and resolved_at. Slow verdicts are '
+            'higher-signal for later learning phases.'
+        ),
+    )
+    refreshed_at: datetime = Field(
+        sa_column=Column(
+            TIMESTAMP(timezone=True),
+            server_default=sql_text('now()'),
+            nullable=False,
+        ),
+        description='When this row was last (re)written by the rollup service.',
+    )
+
+    __table_args__ = (
+        Index('idx_lint_rule_telemetry_rule_window', 'rule_name', 'window_end'),
+        Index('idx_lint_rule_telemetry_vault_window', 'vault_id', 'window_end'),
+    )
+
+
 class LintLLMQuota(SQLModel, table=True):  # type: ignore
     """Hour-bucket counter for the 24h-rolling cost cap.
 
