@@ -36,9 +36,13 @@ class CockpitOption:
 # Sentinel option_id for "Dismiss" so the menu can present it uniformly.
 DISMISS_OPTION = CockpitOption(
     action_id='',
-    label='Dismiss — not actionable',
-    summary='Mark this proposal dismissed without running a remediation.',
-    effect='Flips status to dismissed. The reviewer note (if any) is recorded.',
+    label='Dismiss — this finding is wrong / noise',
+    summary=(
+        'You think the linter was wrong to flag this. Status flips to dismissed; '
+        'nothing mutates. The audit trail records your verdict so the distinction '
+        'between "wrong finding" and "valid finding, no action" is preserved.'
+    ),
+    effect='No mutation. Status flips to dismissed.',
     reversible=False,
     verb='dismiss',
 )
@@ -277,9 +281,13 @@ def options_for_rule(rule_name: str, target_type: str) -> list[CockpitOption]:
         options = [
             CockpitOption(
                 action_id='no_op',
-                label='Acknowledge — record review',
-                summary='Mark resolved without remediation.',
-                effect='No mutation.',
+                label='Mark reviewed (no mutation)',
+                summary=(
+                    'You looked at this proposal and decided no state change is '
+                    'needed. Status flips to resolved; the linter may re-emit if '
+                    'the condition still holds at the next sweep.'
+                ),
+                effect='No mutation. Status flips to resolved.',
                 reversible=True,
                 recommended=True,
             ),
