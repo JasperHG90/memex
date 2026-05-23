@@ -946,6 +946,7 @@ class LintService(BaseService):
         *,
         actor: str | None = None,
         vault_id: UUID | None = None,
+        resolution: dict[str, Any] | None = None,
     ) -> bool:
         """Flip a finding's status to ``resolved`` or ``dismissed``.
 
@@ -960,6 +961,12 @@ class LintService(BaseService):
         owned by a different vault (cross-vault check). Pass ``vault_id=None`` to
         preserve legacy in-process callers (e.g. background jobs that have
         already authenticated higher up the stack).
+
+        When ``resolution`` is supplied, the dict is written verbatim under
+        ``evidence.resolution`` via ``jsonb_set`` in the same UPDATE — the
+        atomic write keeps the reviewer's note, the executed action, and
+        the prior_state snapshot tied to the status flip (no half-states
+        where status='resolved' but evidence still says 'no resolution').
         """
         if new_status not in ('resolved', 'dismissed'):
             raise ValueError(f"new_status must be 'resolved' or 'dismissed', got {new_status!r}")
@@ -974,22 +981,28 @@ class LintService(BaseService):
             where_extra = ' AND vault_id = :vault_id'
             params['vault_id'] = str(vault_id)
 
+        if resolution is not None:
+            resolution_assignment = (
+                ", evidence = jsonb_set(COALESCE(evidence, '{}'::jsonb), "
+                "'{resolution}', CAST(:resolution_json AS jsonb), true)"
+            )
+            params['resolution_json'] = json.dumps(resolution)
+        else:
+            resolution_assignment = ''
+
         async with self.metastore.session() as session:
             # Safety invariant for S608: ``where_extra`` is either '' or the
-            # literal string ' AND vault_id = :vault_id' (set on lines 517-520).
+            # literal string ' AND vault_id = :vault_id'. ``resolution_assignment``
+            # is either '' or a fixed literal that adds an ``evidence = ...``
+            # SET clause where the JSONB payload is bound as :resolution_json.
             # No user-controlled value is ever interpolated into the SQL
-            # string — ``vault_id``, ``new_status``, ``finding_id``, and
-            # ``actor`` all flow through the bound ``params`` dict via :name
-            # placeholders. ``new_status`` is allowlist-validated on L509.
-            #
-            # noqa placement: ruff anchors S608 on the FIRST physical line of
-            # the multi-line concatenated string (line 531), so the noqa below
-            # is on the correct line. Verified by stripping the marker — ruff
-            # reports `lint.py:531:21` and `--^` underlines through L533.
+            # string — ``new_status`` is allowlist-validated on L509;
+            # everything else flows through the bound ``params`` dict.
             result = await session.execute(
                 text(
                     'UPDATE maintenance_proposals '  # noqa: S608
-                    'SET status = :new, resolved_at = now(), resolved_by = :actor '
+                    'SET status = :new, resolved_at = now(), resolved_by = :actor'
+                    f'{resolution_assignment} '
                     f"WHERE id = :id AND status = 'pending'{where_extra}"
                 ),
                 params,
