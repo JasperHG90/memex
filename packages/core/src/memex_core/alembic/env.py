@@ -107,8 +107,63 @@ def run_migrations_offline() -> None:
         context.run_migrations()
 
 
+def _is_fresh_db(connection) -> bool:
+    """True when the public schema has zero application tables."""
+    result = connection.execute(
+        text(
+            'SELECT NOT EXISTS ('
+            '  SELECT 1 FROM information_schema.tables'
+            "  WHERE table_schema = 'public' AND table_name = 'vaults'"
+            ')'
+        )
+    )
+    return bool(result.scalar())
+
+
+def _bootstrap_fresh_db(connection) -> None:
+    """Fast-path for a brand-new database.
+
+    ``SQLModel.metadata.create_all`` builds every table from the current
+    Python model definitions — including columns added by later
+    migrations. Running the migration chain after that would fail on
+    every ``ALTER TABLE ADD COLUMN`` because the column already exists.
+
+    Instead: create everything in one shot, stamp alembic at HEAD, done.
+    Data-carrying migrations (backfills) are no-ops on an empty DB.
+    """
+    connection.execute(text('CREATE EXTENSION IF NOT EXISTS vector'))
+    connection.execute(text('CREATE EXTENSION IF NOT EXISTS pg_trgm'))
+    SQLModel.metadata.create_all(bind=connection)
+
+    script_dir = context.script
+    head = script_dir.get_current_head()
+    connection.execute(
+        text(
+            'CREATE TABLE IF NOT EXISTS alembic_version ('
+            '  version_num VARCHAR(32) NOT NULL,'
+            '  CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)'
+            ')'
+        )
+    )
+    connection.execute(text('DELETE FROM alembic_version'))
+    connection.execute(
+        text('INSERT INTO alembic_version (version_num) VALUES (:rev)'),
+        {'rev': head},
+    )
+    logger.info('Fresh database: created all tables via create_all, stamped at %s', head)
+
+
 def do_run_migrations(connection):
-    """Run migrations with an active connection."""
+    """Run migrations with an active connection.
+
+    On a fresh database (no application tables), takes a shortcut:
+    ``create_all`` + stamp HEAD. On an existing database, runs the
+    normal alembic migration chain.
+    """
+    if _is_fresh_db(connection):
+        _bootstrap_fresh_db(connection)
+        return
+
     context.configure(
         connection=connection,
         target_metadata=target_metadata,
