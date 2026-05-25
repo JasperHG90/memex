@@ -472,7 +472,8 @@ async def _load_finding_or_404(finding_id: UUID, api: MemexAPI) -> dict[str, Any
             (
                 await session.execute(
                     text(
-                        'SELECT id::text AS id, vault_id, rule_name, target_id, evidence, status '
+                        'SELECT id::text AS id, vault_id, rule_name, '
+                        'target_type, target_id, evidence, status '
                         'FROM maintenance_proposals WHERE id = :id'
                     ),
                     {'id': str(finding_id)},
