@@ -181,44 +181,58 @@ async def lint_run_cmd(
         str,
         typer.Argument(help='Vault name or UUID to scan.'),
     ],
+    no_llm: Annotated[
+        bool,
+        typer.Option('--no-llm', help='Skip LLM checks (SQL rules only).'),
+    ] = False,
 ):
-    """Run the SQL lint rules now (same sweep the scheduler runs every 6h)."""
+    """Run all lint checks — SQL rules + LLM checks (semantic contradiction, schema drift).
+
+    The SQL rules run first (deterministic, cheap). The LLM checks run
+    second (needs an LLM API key + embeddings). Pass ``--no-llm`` to
+    skip the LLM pass.
+    """
     config: MemexConfig = ctx.obj
     async with get_api_context(config) as api:
         vault_id = str(await api.resolve_vault_identifier(vault))
+
+        # 1. SQL rules
         try:
-            payload = await api.run_lint_rules(vault_id)
+            sql_payload = await api.run_lint_rules(vault_id)
         except Exception as e:
             handle_api_error(e)
             return
-    total = payload.get('total_findings', 0)
-    rules = payload.get('rules', [])
-    console.print(f'[green]lint run:[/green] {total} findings across {len(rules)} rules')
-    for r in rules:
-        emitted = r.get('findings_emitted', 0)
-        if emitted:
-            console.print(f'  {r["name"]}: {emitted} findings')
+        sql_total = sql_payload.get('total_findings', 0)
+        sql_rules = sql_payload.get('rules', [])
+        console.print(
+            f'[green]sql rules:[/green] {sql_total} findings across {len(sql_rules)} rules'
+        )
+        for r in sql_rules:
+            emitted = r.get('findings_emitted', 0)
+            if emitted:
+                console.print(f'  {r["name"]}: {emitted} findings')
 
-
-@app.command('llm-run')
-@async_command
-async def lint_llm_run_cmd(
-    ctx: typer.Context,
-    vault: Annotated[
-        str,
-        typer.Argument(help='Vault name or UUID to scan.'),
-    ],
-):
-    """Run the LLM lint checks now (semantic contradiction, schema drift)."""
-    config: MemexConfig = ctx.obj
-    async with get_api_context(config) as api:
-        vault_id = str(await api.resolve_vault_identifier(vault))
-        try:
-            payload = await api.run_lint_llm(vault_id)
-        except Exception as e:
-            handle_api_error(e)
+        # 2. LLM checks
+        if no_llm:
+            console.print('[dim]LLM checks skipped (--no-llm).[/dim]')
             return
-    console.print(f'[green]lint llm-run:[/green] {payload}')
+        try:
+            llm_payload = await api.run_lint_llm(vault_id)
+            llm_findings = llm_payload.get('findings_emitted', 0)
+            llm_candidates = llm_payload.get('candidates_evaluated', 0)
+            console.print(
+                f'[green]llm checks:[/green] {llm_findings} findings '
+                f'from {llm_candidates} candidates evaluated'
+            )
+        except Exception as e:
+            err_str = str(e)
+            if '503' in err_str or 'not_initialized' in err_str.lower():
+                console.print(
+                    '[yellow]llm checks:[/yellow] skipped '
+                    '(lint_llm not enabled or model not loaded)'
+                )
+            else:
+                handle_api_error(e)
 
 
 @app.command('dismiss')
