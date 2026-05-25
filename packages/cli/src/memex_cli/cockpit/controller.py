@@ -425,6 +425,8 @@ class CockpitClient(Protocol):
 
     async def lint_reverse(self, finding_id: str) -> dict[str, Any]: ...
 
+    async def get_memory_unit(self, unit_id: str) -> Any: ...
+
 
 class CockpitController:
     """Async wrapper around the HTTP client used by the TUI."""
@@ -466,6 +468,25 @@ class CockpitController:
 
     async def reverse(self, finding_id: str) -> dict[str, Any]:
         return await self._client.lint_reverse(finding_id)
+
+    async def fetch_unit_texts(self, unit_ids: list[str]) -> dict[str, str]:
+        """Fetch the text body of one or more memory units by ID.
+
+        Returns a mapping of ``{unit_id: text}``.  Units that fail to
+        load (network error, 404, missing method on the client) are
+        silently dropped so the caller always gets a partial result
+        rather than an exception.
+        """
+        result: dict[str, str] = {}
+        for uid in unit_ids:
+            try:
+                unit = await self._client.get_memory_unit(uid)
+                text = getattr(unit, 'text', None)
+                if isinstance(text, str):
+                    result[uid] = text
+            except Exception:  # noqa: BLE001
+                continue
+        return result
 
 
 def _sort_key(p: CockpitProposal) -> tuple[int, float]:
