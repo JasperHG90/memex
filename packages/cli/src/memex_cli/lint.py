@@ -173,6 +173,54 @@ async def lint_findings(
     console.print(table)
 
 
+@app.command('run')
+@async_command
+async def lint_run_cmd(
+    ctx: typer.Context,
+    vault: Annotated[
+        str,
+        typer.Argument(help='Vault name or UUID to scan.'),
+    ],
+):
+    """Run the SQL lint rules now (same sweep the scheduler runs every 6h)."""
+    config: MemexConfig = ctx.obj
+    async with get_api_context(config) as api:
+        vault_id = str(await api.resolve_vault_identifier(vault))
+        try:
+            payload = await api.run_lint_rules(vault_id)
+        except Exception as e:
+            handle_api_error(e)
+            return
+    total = payload.get('total_findings', 0)
+    rules = payload.get('rules', [])
+    console.print(f'[green]lint run:[/green] {total} findings across {len(rules)} rules')
+    for r in rules:
+        emitted = r.get('findings_emitted', 0)
+        if emitted:
+            console.print(f'  {r["name"]}: {emitted} findings')
+
+
+@app.command('llm-run')
+@async_command
+async def lint_llm_run_cmd(
+    ctx: typer.Context,
+    vault: Annotated[
+        str,
+        typer.Argument(help='Vault name or UUID to scan.'),
+    ],
+):
+    """Run the LLM lint checks now (semantic contradiction, schema drift)."""
+    config: MemexConfig = ctx.obj
+    async with get_api_context(config) as api:
+        vault_id = str(await api.resolve_vault_identifier(vault))
+        try:
+            payload = await api.run_lint_llm(vault_id)
+        except Exception as e:
+            handle_api_error(e)
+            return
+    console.print(f'[green]lint llm-run:[/green] {payload}')
+
+
 @app.command('dismiss')
 @async_command
 async def lint_dismiss_cmd(
