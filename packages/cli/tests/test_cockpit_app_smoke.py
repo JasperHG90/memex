@@ -1,9 +1,8 @@
-"""TUI smoke test using Textual's `App.run_test()` pilot.
+"""TUI smoke test using Textual's ``App.run_test()`` pilot.
 
-Drives the cockpit through a verdict cycle: build a fake controller with one
-proposal in flight, press `1` (pick the recommended option), and assert the
-fake client recorded the resolve call. This is a smoke test — it does not
-attempt to exhaustively cover the TUI's keybindings.
+Drives the cockpit through the three-mode flow: LIST -> REVIEW -> NOTE.
+The fake client records resolve/dismiss calls so assertions can verify
+the expected actions fired.
 """
 
 from __future__ import annotations
@@ -13,7 +12,7 @@ from uuid import uuid4
 
 import pytest
 
-from memex_cli.cockpit.app import ProposalCockpitApp
+from memex_cli.cockpit.app import ProposalCockpitApp, _ProposalQueueItem
 from memex_cli.cockpit.controller import CockpitController
 
 
@@ -37,7 +36,6 @@ class _FakeClient:
         self.resolves.append(
             {'finding_id': finding_id, 'action': action, 'params': params, 'note': note}
         )
-        # Remove this finding so the next fetch returns an empty queue.
         self._findings = [f for f in self._findings if f['id'] != finding_id]
         return {'finding_id': finding_id, 'status': 'resolved'}
 
@@ -49,17 +47,25 @@ class _FakeClient:
     async def lint_reverse(self, finding_id: str) -> dict[str, Any]:
         return {'finding_id': finding_id, 'status': 'reversed'}
 
+    async def get_memory_unit(self, unit_id: str) -> Any:
+        return None
 
-def _finding() -> dict[str, Any]:
+
+def _finding(
+    *,
+    rule: str = 'cold_low_mw_unit',
+    source: str = 'rule',
+    target_type: str = 'memory_unit',
+) -> dict[str, Any]:
     return {
         'id': str(uuid4()),
         'vault_id': str(uuid4()),
-        'rule_name': 'cold_low_mw_unit',
+        'rule_name': rule,
         'lint_type': 'quality',
-        'target_type': 'memory_unit',
+        'target_type': target_type,
         'target_id': str(uuid4()),
         'target_text': 'sample low-MW unit text',
-        'source': 'rule',
+        'source': source,
         'created_at': '2026-05-23T00:00:00Z',
         'evidence': {
             'mw_score': 0.1,
@@ -72,32 +78,34 @@ def _finding() -> dict[str, Any]:
 
 
 @pytest.mark.asyncio
-async def test_cockpit_renders_queue_and_resolves_pick_1() -> None:
+async def test_cockpit_renders_queue_and_resolves_via_review() -> None:
+    """Enter → REVIEW, then Enter on action → NOTE, then Enter submits."""
     finding = _finding()
     client = _FakeClient([finding])
     controller = CockpitController(client)
     app = ProposalCockpitApp(controller, limit=5)
 
-    async with app.run_test() as pilot:
-        # Let mount + initial fetch settle.
+    async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
-        # The queue should have one row, detail pane should be populated.
         assert app.proposals
         assert app.proposals[0].finding_id == finding['id']
+        assert app.mode == 'list'
 
-        # Trigger the recommended option (pick 1) — fires the verdict worker.
-        app.action_pick('1')
-        # Let the worker start, render the modal, and accept our Esc skip.
+        await pilot.press('enter')
         await pilot.pause()
-        await pilot.press('escape')
-        # Wait for the verdict worker to finish (note skip → resolve → refresh).
+        assert app.mode == 'review'
+
+        await pilot.press('enter')
+        await pilot.pause()
+        assert app.mode == 'note'
+
+        await pilot.press('enter')
         await app.workers.wait_for_complete()
         await pilot.pause()
 
-    assert client.resolves, 'pick 1 should issue a lint_resolve call'
+    assert client.resolves, 'review flow should issue a lint_resolve call'
     resolve = client.resolves[0]
     assert resolve['finding_id'] == finding['id']
-    # cold_low_mw_unit's recommended option is deprioritize_unit.
     assert resolve['action'] == 'deprioritize_unit'
 
 
@@ -107,35 +115,69 @@ async def test_cockpit_empty_queue_shows_no_proposals() -> None:
     controller = CockpitController(client)
     app = ProposalCockpitApp(controller, limit=5)
 
-    async with app.run_test() as pilot:
+    async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
         assert app.proposals == []
 
 
 @pytest.mark.asyncio
-async def test_enter_picks_recommended_option() -> None:
-    """Enter on the highlighted proposal commits the ★ Recommended option.
-
-    cold_low_mw_unit's recommended is deprioritize_unit, so Enter should
-    issue lint_resolve with action='deprioritize_unit' — same outcome as
-    pressing `1` would, but Enter is a more discoverable affordance.
-    """
+async def test_escape_returns_to_list_from_review() -> None:
     finding = _finding()
     client = _FakeClient([finding])
     controller = CockpitController(client)
     app = ProposalCockpitApp(controller, limit=5)
 
-    async with app.run_test() as pilot:
+    async with app.run_test(size=(120, 40)) as pilot:
         await pilot.pause()
-        assert app.proposals
-        # Fire the bound action directly to bypass focus / key-routing
-        # quirks in the headless harness; the binding wiring is asserted
-        # by the absence of regressions in the BINDINGS list.
-        app.action_pick_recommended()
+        assert app.mode == 'list'
+
+        await pilot.press('enter')
         await pilot.pause()
-        await pilot.press('escape')  # skip the optional-note prompt
-        await app.workers.wait_for_complete()
+        assert app.mode == 'review'
+
+        await pilot.press('escape')
+        await pilot.pause()
+        assert app.mode == 'list'
+
+
+@pytest.mark.asyncio
+async def test_space_toggles_multiselect() -> None:
+    findings = [_finding(), _finding()]
+    client = _FakeClient(findings)
+    controller = CockpitController(client)
+    app = ProposalCockpitApp(controller, limit=5)
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        assert app.mode == 'list'
+
+        await pilot.press('space')
         await pilot.pause()
 
-    assert client.resolves, 'Enter should issue a resolve call'
-    assert client.resolves[0]['action'] == 'deprioritize_unit'
+        queue = app.query_one('#queue-list')
+        items = [c for c in queue.children if isinstance(c, _ProposalQueueItem)]
+        assert items[0].checked
+
+        await pilot.press('escape')
+        await pilot.pause()
+        assert not items[0].checked
+
+
+@pytest.mark.asyncio
+async def test_n_toggles_note_area_in_review() -> None:
+    finding = _finding()
+    client = _FakeClient([finding])
+    controller = CockpitController(client)
+    app = ProposalCockpitApp(controller, limit=5)
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+
+        await pilot.press('enter')
+        await pilot.pause()
+        assert app.mode == 'review'
+
+        await pilot.press('n')
+        await pilot.pause()
+        assert app.mode == 'note'
+        assert app.query_one('#note-section').has_class('visible')

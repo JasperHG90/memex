@@ -1,21 +1,10 @@
 """Textual TUI cockpit for the maintenance ledger.
 
-Layout::
+Three-mode UX: LIST -> REVIEW -> NOTE.
 
-    ┌─────────────────────────┬────────────────────────────────────────────┐
-    │  Pending proposals      │  Detail                                    │
-    │  (sortable list)        │                                            │
-    │  • LLM-flagged first    │  TARGET / EXPLANATION / AFFECTED / OPTIONS │
-    │                         │                                            │
-    │                         │  1) Recommended canned action              │
-    │                         │  2) Alternative canned action              │
-    │                         │  3) Dismiss                                │
-    │                         │  [O] Other  [N] Note  [R] Reverse  [Q]uit │
-    └─────────────────────────┴────────────────────────────────────────────┘
-     j/k navigate · 1-9 pick · enter execute · ? help                  status
-
-Mirrors the AskUserQuestion shape: numbered options, recommended star, free-form
-Other as escape hatch, free-text note alongside.
+LIST  — browse the queue; Space multi-selects; Enter opens REVIEW.
+REVIEW — pick an action from the action list; Enter confirms / opens NOTE.
+NOTE  — inline TextArea for an optional reviewer note; Enter submits.
 """
 
 from __future__ import annotations
@@ -34,17 +23,11 @@ from memex_cli.cockpit.controller import (
     CockpitController,
     CockpitOption,
     CockpitProposal,
-    custom_action_options,
     options_for_rule,
 )
 
 
 def _extract_followup(result: dict[str, Any]) -> dict[str, Any] | None:
-    """Pull `resolution.followup` from a resolve response, tolerating shapes.
-
-    The new server returns it under `resolution.followup`. Old servers return
-    a response with no `resolution` key at all (status-flip-only path).
-    """
     resolution = result.get('resolution')
     if not isinstance(resolution, dict):
         return None
@@ -54,231 +37,76 @@ def _extract_followup(result: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+# ---------------------------------------------------------------------------
+# Queue item
+# ---------------------------------------------------------------------------
+
+
 class _ProposalQueueItem(ListItem):
-    """Single row in the proposals queue list."""
+    """Single row in the proposals queue list, with a multi-select checkbox."""
 
     def __init__(self, proposal: CockpitProposal) -> None:
         self.proposal = proposal
+        self.checked: bool = False
         badge = 'LLM' if proposal.is_llm_source else 'rule'
-        text = (
+        self._text_base = (
             f'[{badge}] {proposal.rule_name}\n'
             f'    {proposal.target_type} · {proposal.target_id[:8]}…'
         )
-        super().__init__(Label(text))
+        super().__init__(Label(self._render_label()))
+
+    def _render_label(self) -> str:
+        mark = '[bold green]✓[/bold green] ' if self.checked else '  '
+        return f'{mark}{self._text_base}'
+
+    def toggle(self) -> None:
+        self.checked = not self.checked
+        self.query_one(Label).update(self._render_label())
 
 
-class _OptionStaticGroup(Static):
-    """Rendered menu of canned options for the highlighted proposal."""
-
-    proposal: reactive[CockpitProposal | None] = reactive(None)
-    options: reactive[list[CockpitOption]] = reactive(list)
-
-    def render(self) -> str:
-        if self.proposal is None:
-            return '[dim]No proposal selected.[/dim]'
-        lines = [
-            '[bold]Pick a remediation — press the digit to commit:[/bold]',
-            '[dim](Enter alone commits the ★ Recommended option.)[/dim]',
-            '',
-        ]
-        for i, option in enumerate(self.options, start=1):
-            star = ' [yellow]★ Recommended[/yellow]' if option.recommended else ''
-            rev = '[green]reversible[/green]' if option.reversible else '[red]forward-only[/red]'
-            lines.append(f'  [bold]{i})[/bold] {option.label}{star}')
-            lines.append(f'      [dim]{option.summary}[/dim]')
-            if option.effect:
-                lines.append(f'      [dim]Effect: {option.effect}[/dim]')
-            lines.append(f'      [dim]{rev}[/dim]')
-            lines.append('')
-        lines.append(
-            '[dim]Other shortcuts (see footer): o=Other · n=Note · r=Reverse · ?=Help · q=Quit[/dim]'
-        )
-        return '\n'.join(lines)
+# ---------------------------------------------------------------------------
+# Action-list item
+# ---------------------------------------------------------------------------
 
 
-class _DetailPanel(VerticalScroll):
-    """Right-hand pane with the detail card + action menu."""
-
-    DEFAULT_CSS = """
-    _DetailPanel {
-        padding: 1 2;
-    }
-    """
-
-    def __init__(self) -> None:
-        super().__init__()
-        self._header = Static(id='detail-header')
-        self._body = Static(id='detail-body')
-        self._options = _OptionStaticGroup(id='detail-options')
-        self._effect = Static('', id='detail-effect')
-
-    def compose(self) -> ComposeResult:
-        yield self._header
-        yield self._body
-        yield self._options
-        yield self._effect
-
-    def show_proposal(self, proposal: CockpitProposal | None) -> None:
-        if proposal is None:
-            self._header.update('[dim]Queue empty — nothing to review.[/dim]')
-            self._body.update('')
-            self._options.proposal = None
-            self._options.options = []
-            self._effect.update('')
-            return
-        badge = '[yellow]LLM[/yellow]' if proposal.is_llm_source else '[blue]rule[/blue]'
-        header_lines = [
-            f'[bold]{proposal.rule_name}[/bold]  {badge}  '
-            f'· {proposal.lint_type} / {proposal.target_type}',
-            f'[dim]vault {proposal.vault_id or "(global)"} · age {proposal.created_at}[/dim]',
-        ]
-        if proposal.surprise_score is not None:
-            header_lines.append(f'[dim]surprise={proposal.surprise_score:.2f}[/dim]')
-        if proposal.polarity_contradiction_prob is not None:
-            header_lines.append(
-                f'[dim]P(contradiction)={proposal.polarity_contradiction_prob:.3f}[/dim]'
-            )
-        self._header.update('\n'.join(header_lines))
-
-        body_lines: list[str] = []
-        body_lines.append('[bold]TARGET[/bold]')
-        body_lines.append(f'  id: {proposal.target_id}')
-        if proposal.target_text:
-            body_lines.append(f'  text: {proposal.target_text}')
-        if proposal.explanation:
-            body_lines.append('')
-            body_lines.append('[bold]EXPLANATION[/bold]')
-            body_lines.append(f'  {proposal.explanation}')
-        if proposal.related_unit_ids:
-            body_lines.append('')
-            body_lines.append(f'[bold]RELATED[/bold]  {len(proposal.related_unit_ids)} units cited')
-            for rid in proposal.related_unit_ids[:5]:
-                body_lines.append(f'  · {rid}')
-            if len(proposal.related_unit_ids) > 5:
-                body_lines.append(f'  · … and {len(proposal.related_unit_ids) - 5} more')
-        if proposal.suggested_action:
-            body_lines.append('')
-            body_lines.append(f'[dim]suggested: {proposal.suggested_action}[/dim]')
-        self._body.update('\n'.join(body_lines))
-
-        self._options.proposal = proposal
-        self._options.options = options_for_rule(proposal.rule_name, proposal.target_type)
-        self._effect.update('')
-
-    def show_effect(self, message: str, *, error: bool = False) -> None:
-        prefix = '[red]✗[/red]' if error else '[green]✓[/green]'
-        self._effect.update(f'{prefix} {message}')
-
-    @property
-    def current_options(self) -> list[CockpitOption]:
-        return list(self._options.options)
+class _ActionListItem(ListItem):
+    def __init__(self, option: CockpitOption) -> None:
+        self.option = option
+        star = ' [yellow]★ Recommended[/yellow]' if option.recommended else ''
+        super().__init__(Label(f'{option.label}{star}'))
 
 
-class NoteScreen(ModalScreen[str | None]):
-    """Modal that collects a single free-form reviewer note."""
-
-    BINDINGS = [
-        Binding('escape', 'dismiss(None)', 'Cancel'),
-        Binding('ctrl+s', 'submit', 'Save'),
-    ]
-
-    def __init__(self, *, prompt: str, initial: str = '') -> None:
-        super().__init__()
-        self._prompt = prompt
-        self._initial = initial
-
-    def compose(self) -> ComposeResult:
-        yield Vertical(
-            Label(self._prompt, id='note-prompt'),
-            TextArea(self._initial, id='note-textarea'),
-            Label('[dim]Ctrl+S to save · Esc to cancel[/dim]', id='note-help'),
-            id='note-modal',
-        )
-
-    def action_submit(self) -> None:
-        widget = self.query_one('#note-textarea', TextArea)
-        text = (widget.text or '').strip() or None
-        self.dismiss(text)
+# ---------------------------------------------------------------------------
+# Inline note widget (Submit on Enter, newline on Shift+Enter)
+# ---------------------------------------------------------------------------
 
 
-class OtherScreen(ModalScreen[tuple[str, str | None, str | None] | None]):
-    """Modal that captures a free-form intent and maps it to a canned action.
+class _NoteInput(TextArea):
+    class Submitted(Message):
+        def __init__(self, text: str) -> None:
+            super().__init__()
+            self.text = text
 
-    Returns a tuple `(action_id, reason, note)` on submit or None on cancel.
-    `reason` is forwarded to the action as `params.reason` when the action
-    accepts a `reason` field; `note` is stored at evidence.resolution.note.
+    class Cancelled(Message):
+        pass
 
-    Flow:
+    def _on_key(self, event: Any) -> None:  # type: ignore[override]
+        if event.key == 'enter':
+            event.prevent_default()
+            event.stop()
+            self.post_message(self.Submitted(self.text.strip()))
+        elif event.key == 'escape':
+            event.prevent_default()
+            event.stop()
+            self.post_message(self.Cancelled())
 
-    1. Modal opens with focus on the text input. Type your free-form
-       description.
-    2. Press Enter to advance — focus moves to the action list (text is
-       captured). Use arrows to highlight, Enter again to commit.
-    3. Esc at any time cancels without writing.
-    """
 
-    BINDINGS = [
-        Binding('escape', 'dismiss(None)', 'Cancel'),
-    ]
-
-    def __init__(self, *, options: list[CockpitOption]) -> None:
-        super().__init__()
-        self._options = options
-
-    def compose(self) -> ComposeResult:
-        rows: list[Any] = [
-            Label(
-                'Describe what you would like to happen, then press Enter to advance '
-                'to the action picker.',
-                id='other-prompt',
-            ),
-            Input(placeholder='Free-form description…', id='other-text'),
-            Label('Map to one of (arrows + Enter):', id='other-map-label'),
-        ]
-        items: list[ListItem] = []
-        for option in self._options:
-            rev = 'reversible' if option.reversible else 'forward-only'
-            items.append(ListItem(Label(f'{option.action_id} — {option.label} ({rev})')))
-        items.append(ListItem(Label('cancel — abandon')))
-        rows.append(ListView(*items, id='other-list'))
-        rows.append(
-            Label(
-                '[dim]Enter on input → advance · Enter on list → commit · Esc cancels[/dim]',
-                id='other-help',
-            )
-        )
-        yield Vertical(*rows, id='other-modal')
-
-    def on_mount(self) -> None:
-        # Focus the input so the user can start typing immediately.
-        self.query_one('#other-text', Input).focus()
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        # Enter on the text field moves focus into the action list rather
-        # than dismissing the modal — the user almost certainly wants to
-        # pick a mapping next, not commit blind.
-        list_view = self.query_one('#other-list', ListView)
-        if list_view.index is None and self._options:
-            list_view.index = 0
-        list_view.focus()
-
-    def on_list_view_selected(self, event: ListView.Selected) -> None:
-        list_view = self.query_one('#other-list', ListView)
-        idx = list_view.index
-        if idx is None:
-            return
-        if idx >= len(self._options):
-            self.dismiss(None)
-            return
-        option = self._options[idx]
-        text_input = self.query_one('#other-text', Input)
-        free_text = (text_input.value or '').strip() or None
-        self.dismiss((option.action_id, free_text, free_text))
+# ---------------------------------------------------------------------------
+# Modal screens retained from the old design
+# ---------------------------------------------------------------------------
 
 
 class HelpScreen(ModalScreen[None]):
-    """Quick-reference modal for cockpit keybindings."""
-
     BINDINGS = [
         Binding('escape', 'dismiss(None)', 'Close'),
         Binding('q', 'dismiss(None)', 'Close'),
@@ -289,24 +117,34 @@ class HelpScreen(ModalScreen[None]):
         body = (
             '[bold]Cockpit keybindings[/bold]\n'
             '\n'
-            '  [bold]j / k / ↓ / ↑[/bold]   navigate the queue\n'
-            '  [bold]1 – 9[/bold]           commit the numbered remediation\n'
-            '  [bold]Enter[/bold]           commit the ★ Recommended remediation\n'
-            '  [bold]o[/bold]               Other — free-form text mapped to a canned action\n'
-            '  [bold]n[/bold]               stage a reviewer note (saved on next verdict)\n'
-            '  [bold]r[/bold]               reverse a previously-resolved finding\n'
-            '  [bold]F5[/bold]              refresh queue from the server\n'
-            '  [bold]?[/bold]               this help\n'
-            '  [bold]q[/bold]               quit\n'
+            '[bold underline]LIST mode[/bold underline]\n'
+            '  [bold]↑ / ↓[/bold]       navigate the queue\n'
+            '  [bold]Enter[/bold]       open proposal in REVIEW mode\n'
+            '  [bold]Space[/bold]       toggle multi-select checkbox\n'
+            '  [bold]Shift+↑/↓[/bold]  toggle-select + move cursor\n'
+            '  [bold]Esc[/bold]         deselect all\n'
+            '  [bold]F5[/bold]          refresh queue from the server\n'
+            '  [bold]r[/bold]           reverse a previously-resolved finding\n'
+            '  [bold]?[/bold]           this help\n'
+            '  [bold]q[/bold]           quit\n'
             '\n'
-            '[dim]Esc or q to close · ? to reopen.[/dim]'
+            '[bold underline]REVIEW mode[/bold underline]\n'
+            '  [bold]↑ / ↓[/bold]       navigate action list\n'
+            '  [bold]Enter[/bold]       confirm action (opens note area)\n'
+            '  [bold]n[/bold]           toggle note area\n'
+            '  [bold]Esc[/bold]         back to LIST\n'
+            '\n'
+            '[bold underline]NOTE mode[/bold underline]\n'
+            '  [bold]Enter[/bold]       submit verdict\n'
+            '  [bold]Shift+Enter[/bold] newline in note\n'
+            '  [bold]Esc[/bold]         cancel note\n'
+            '\n'
+            '[dim]Esc or q to close this help.[/dim]'
         )
         yield Vertical(Static(body, id='help-body'), id='help-modal')
 
 
 class ReverseScreen(ModalScreen[str | None]):
-    """Modal that asks for a resolved-finding-id to reverse."""
-
     BINDINGS = [
         Binding('escape', 'dismiss(None)', 'Cancel'),
     ]
@@ -327,18 +165,12 @@ class ReverseScreen(ModalScreen[str | None]):
         self.dismiss(text or None)
 
 
-class _ProposalResolved(Message):
-    """Sent after a successful verdict so the queue can refresh."""
-
-    def __init__(self, finding_id: str, summary: str) -> None:
-        super().__init__()
-        self.finding_id = finding_id
-        self.summary = summary
+# ---------------------------------------------------------------------------
+# Main app
+# ---------------------------------------------------------------------------
 
 
 class ProposalCockpitApp(App):
-    """Top-level Textual application."""
-
     CSS = """
     Screen {
         layout: vertical;
@@ -350,56 +182,79 @@ class ProposalCockpitApp(App):
         width: 36;
         border: solid $secondary;
     }
+    #queue-pane.dimmed {
+        opacity: 0.4;
+    }
     #detail-pane {
         width: 1fr;
         border: solid $primary;
+        padding: 1 2;
+    }
+    #action-section {
+        display: none;
+    }
+    #action-section.visible {
+        display: block;
+    }
+    #note-section {
+        display: none;
+    }
+    #note-section.visible {
+        display: block;
+    }
+    #note-input {
+        height: 4;
+    }
+    #status-bar {
+        dock: bottom;
+        height: 1;
+        background: $surface;
     }
     """
 
     BINDINGS = [
         Binding('q', 'quit', 'Quit'),
         Binding('question_mark', 'help', 'Help', show=True, key_display='?'),
-        Binding('j', 'cursor_down', 'Down', show=False),
-        Binding('k', 'cursor_up', 'Up', show=False),
-        Binding('down', 'cursor_down', 'Down', show=False),
-        Binding('up', 'cursor_up', 'Up', show=False),
-        Binding('enter', 'pick_recommended', 'Recommended', priority=True),
-        Binding('n', 'add_note', 'Note'),
-        Binding('o', 'other_action', 'Other'),
-        Binding('r', 'reverse', 'Reverse'),
         Binding('f5', 'refresh', 'Refresh'),
-        # Priority on digit bindings so they fire even when the queue ListView
-        # has focus. Without priority, focus-chain key handling could swallow
-        # them in some Textual versions.
-        Binding('1', 'pick(1)', 'Pick #', priority=True, show=True),
-        Binding('2', 'pick(2)', 'Pick #', priority=True, show=False),
-        Binding('3', 'pick(3)', 'Pick #', priority=True, show=False),
-        Binding('4', 'pick(4)', 'Pick #', priority=True, show=False),
-        Binding('5', 'pick(5)', 'Pick #', priority=True, show=False),
-        Binding('6', 'pick(6)', 'Pick #', priority=True, show=False),
-        Binding('7', 'pick(7)', 'Pick #', priority=True, show=False),
-        Binding('8', 'pick(8)', 'Pick #', priority=True, show=False),
-        Binding('9', 'pick(9)', 'Pick #', priority=True, show=False),
+        Binding('r', 'reverse', 'Reverse'),
     ]
 
     proposals: reactive[list[CockpitProposal]] = reactive(list, init=False)
+    mode: reactive[str] = reactive('list', init=False)
 
     def __init__(self, controller: CockpitController, *, limit: int = 50) -> None:
         super().__init__()
         self._controller = controller
         self._limit = limit
-        self._queue = ListView(id='queue-list')
-        self._detail = _DetailPanel()
+        self._pending_note: str | None = None
+        self._selected_option: CockpitOption | None = None
+        self._batch_targets: list[CockpitProposal] = []
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
         yield Horizontal(
             Vertical(
-                Label('[bold]Pending proposals[/bold]'),
-                self._queue,
+                Label('[bold]Pending (0)[/bold]', id='queue-label'),
+                ListView(id='queue-list'),
                 id='queue-pane',
             ),
-            Vertical(self._detail, id='detail-pane'),
+            VerticalScroll(
+                Static(id='detail-header'),
+                Static(id='detail-body'),
+                Vertical(
+                    Label('[bold]ACTIONS[/bold]'),
+                    ListView(id='action-list'),
+                    Static(id='action-detail'),
+                    id='action-section',
+                ),
+                Vertical(
+                    Label('[dim]NOTE (optional — Enter to submit, Esc to cancel)[/dim]'),
+                    _NoteInput(id='note-input'),
+                    id='note-section',
+                ),
+                Static(id='status-bar'),
+                id='detail-pane',
+            ),
             id='cockpit-root',
         )
         yield Footer()
@@ -408,230 +263,509 @@ class ProposalCockpitApp(App):
         self.title = 'Memex Maintenance Cockpit'
         await self._refresh_queue()
 
+    # ------------------------------------------------------------------
+    # Mode transitions
+    # ------------------------------------------------------------------
+
+    def watch_mode(self, old: str, new: str) -> None:
+        queue_pane = self.query_one('#queue-pane')
+        action_section = self.query_one('#action-section')
+        note_section = self.query_one('#note-section')
+
+        if new == 'list':
+            queue_pane.remove_class('dimmed')
+            action_section.remove_class('visible')
+            note_section.remove_class('visible')
+            self._pending_note = None
+            self._selected_option = None
+            self._batch_targets = []
+            self.query_one('#queue-list', ListView).focus()
+            self._update_footer()
+        elif new in ('review', 'batch'):
+            queue_pane.add_class('dimmed')
+            action_section.add_class('visible')
+            note_section.remove_class('visible')
+            self._pending_note = None
+            self.query_one('#action-list', ListView).focus()
+            self._update_footer()
+        elif new == 'note':
+            note_section.add_class('visible')
+            note_input = self.query_one('#note-input', _NoteInput)
+            note_input.clear()
+            note_input.focus()
+            self._update_footer()
+
+        self._update_subtitle()
+
+    def _update_subtitle(self) -> None:
+        count = len(self.proposals)
+        selected = self._count_selected()
+        mode_label = self.mode.upper()
+        if self.mode == 'batch':
+            mode_label = f'BATCH ({selected} selected)'
+        self.sub_title = f'{mode_label} · {count} pending'
+
+    def _update_footer(self) -> None:
+        footer = self.query_one(Footer)
+        footer.refresh()
+
+    def _count_selected(self) -> int:
+        queue = self.query_one('#queue-list', ListView)
+        count = 0
+        for child in queue.children:
+            if isinstance(child, _ProposalQueueItem) and child.checked:
+                count += 1
+        return count
+
+    def _selected_proposals(self) -> list[CockpitProposal]:
+        queue = self.query_one('#queue-list', ListView)
+        result: list[CockpitProposal] = []
+        for child in queue.children:
+            if isinstance(child, _ProposalQueueItem) and child.checked:
+                result.append(child.proposal)
+        return result
+
+    # ------------------------------------------------------------------
+    # Queue management
+    # ------------------------------------------------------------------
+
     async def _refresh_queue(self) -> None:
         proposals = await self._controller.fetch_pending(limit=self._limit)
         self.proposals = proposals
-        self._queue.clear()
+        queue = self.query_one('#queue-list', ListView)
+        queue.clear()
         for proposal in proposals:
-            self._queue.append(_ProposalQueueItem(proposal))
+            queue.append(_ProposalQueueItem(proposal))
+        self.query_one('#queue-label', Label).update(f'[bold]Pending ({len(proposals)})[/bold]')
         if proposals:
-            self._queue.index = 0
-            self._detail.show_proposal(proposals[0])
+            queue.index = 0
+            self._show_proposal_preview(proposals[0])
         else:
-            self._detail.show_proposal(None)
+            self._show_empty_queue()
+        self.mode = 'list'
 
-    def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
-        if event.list_view is not self._queue:
-            return
-        item = event.item
-        if isinstance(item, _ProposalQueueItem):
-            self._detail.show_proposal(item.proposal)
+    def _show_empty_queue(self) -> None:
+        self.query_one('#detail-header', Static).update(
+            '[dim]Queue empty — all proposals reviewed.[/dim]'
+        )
+        self.query_one('#detail-body', Static).update('')
+        self.query_one('#status-bar', Static).update('')
 
-    def on_list_view_selected(self, event: ListView.Selected) -> None:
-        # Enter on a queue item commits the recommended option for that
-        # proposal — equivalent to pressing the digit of the recommended row.
-        if event.list_view is not self._queue:
+    def _show_proposal_preview(self, proposal: CockpitProposal) -> None:
+        badge = '[yellow]LLM[/yellow]' if proposal.is_llm_source else '[blue]rule[/blue]'
+        header_lines = [
+            f'[bold]{proposal.rule_name}[/bold]  {badge}  '
+            f'· {proposal.lint_type} / {proposal.target_type}',
+            f'[dim]vault {proposal.vault_id or "(global)"} · age {proposal.created_at}[/dim]',
+        ]
+        if proposal.surprise_score is not None:
+            header_lines.append(f'[dim]surprise={proposal.surprise_score:.2f}[/dim]')
+        if proposal.polarity_contradiction_prob is not None:
+            header_lines.append(
+                f'[dim]P(contradiction)={proposal.polarity_contradiction_prob:.3f}[/dim]'
+            )
+        self.query_one('#detail-header', Static).update('\n'.join(header_lines))
+
+        body_lines: list[str] = []
+
+        if proposal.rule_name == 'llm_semantic_contradiction':
+            body_lines.extend(self._build_contradiction_body(proposal))
+        else:
+            body_lines.append('[bold]TARGET[/bold]')
+            body_lines.append(f'  id: {proposal.target_id}')
+            if proposal.target_text:
+                body_lines.append(f'  text: {proposal.target_text}')
+
+        if proposal.explanation:
+            body_lines.append('')
+            body_lines.append('[bold]EXPLANATION[/bold]')
+            body_lines.append(f'  {proposal.explanation}')
+        if proposal.related_unit_ids:
+            body_lines.append('')
+            body_lines.append(f'[bold]RELATED[/bold]  {len(proposal.related_unit_ids)} units cited')
+            for rid in proposal.related_unit_ids[:5]:
+                body_lines.append(f'  · {rid}')
+            if len(proposal.related_unit_ids) > 5:
+                body_lines.append(f'  · … and {len(proposal.related_unit_ids) - 5} more')
+        if proposal.suggested_action:
+            body_lines.append('')
+            body_lines.append(f'[dim]suggested: {proposal.suggested_action}[/dim]')
+        self.query_one('#detail-body', Static).update('\n'.join(body_lines))
+
+    def _build_contradiction_body(self, proposal: CockpitProposal) -> list[str]:
+        lines: list[str] = []
+        lines.append(f'[bold]TARGET UNIT[/bold]  ({proposal.target_id[:8]}…)')
+        if proposal.target_text:
+            lines.append(f'  "{proposal.target_text}"')
+        else:
+            lines.append(f'  [dim]{proposal.target_id}[/dim]')
+
+        if proposal.related_unit_ids:
+            contra_id = proposal.related_unit_ids[0]
+            lines.append('')
+            lines.append(f'[bold]CONTRADICTING UNIT[/bold]  ({contra_id[:8]}…)')
+            lines.append('  [dim]loading…[/dim]')
+            self._fetch_contradiction_text(proposal, contra_id)
+        return lines
+
+    def _fetch_contradiction_text(self, proposal: CockpitProposal, contra_id: str) -> None:
+        self.run_worker(
+            self._fetch_contradiction_text_async(proposal, contra_id),
+            name='fetch_contra_text',
+        )
+
+    async def _fetch_contradiction_text_async(
+        self, proposal: CockpitProposal, contra_id: str
+    ) -> None:
+        texts = await self._controller.fetch_unit_texts([contra_id])
+        contra_text = texts.get(contra_id)
+
+        body_lines: list[str] = []
+        body_lines.append(f'[bold]TARGET UNIT[/bold]  ({proposal.target_id[:8]}…)')
+        if proposal.target_text:
+            body_lines.append(f'  "{proposal.target_text}"')
+        else:
+            body_lines.append(f'  [dim]{proposal.target_id}[/dim]')
+
+        body_lines.append('')
+        body_lines.append(f'[bold]CONTRADICTING UNIT[/bold]  ({contra_id[:8]}…)')
+        if contra_text:
+            body_lines.append(f'  "{contra_text}"')
+        else:
+            body_lines.append(f'  [dim]{contra_id}[/dim]')
+
+        if proposal.explanation:
+            body_lines.append('')
+            body_lines.append('[bold]EXPLANATION[/bold]')
+            body_lines.append(f'  {proposal.explanation}')
+        if proposal.related_unit_ids:
+            remaining = proposal.related_unit_ids[1:]
+            if remaining:
+                body_lines.append('')
+                body_lines.append(f'[bold]RELATED[/bold]  {len(remaining)} additional units cited')
+                for rid in remaining[:5]:
+                    body_lines.append(f'  · {rid}')
+                if len(remaining) > 5:
+                    body_lines.append(f'  · … and {len(remaining) - 5} more')
+        if proposal.suggested_action:
+            body_lines.append('')
+            body_lines.append(f'[dim]suggested: {proposal.suggested_action}[/dim]')
+
+        self.query_one('#detail-body', Static).update('\n'.join(body_lines))
+
+    # ------------------------------------------------------------------
+    # Detail panel: populate actions
+    # ------------------------------------------------------------------
+
+    def _populate_actions(self, proposal: CockpitProposal) -> None:
+        options = options_for_rule(proposal.rule_name, proposal.target_type)
+        action_list = self.query_one('#action-list', ListView)
+        action_list.clear()
+        for opt in options:
+            action_list.append(_ActionListItem(opt))
+        if options:
+            action_list.index = 0
+            self._show_action_detail(options[0])
+        else:
+            self.query_one('#action-detail', Static).update('[dim]No actions available.[/dim]')
+
+    def _populate_batch_actions(self, proposals: list[CockpitProposal]) -> None:
+        if not proposals:
             return
-        self.action_pick_recommended()
+        option_sets = [
+            {o.action_id for o in options_for_rule(p.rule_name, p.target_type)} for p in proposals
+        ]
+        common_ids = option_sets[0]
+        for s in option_sets[1:]:
+            common_ids = common_ids & s
+
+        ref = proposals[0]
+        all_options = options_for_rule(ref.rule_name, ref.target_type)
+        filtered = [o for o in all_options if o.action_id in common_ids]
+
+        action_list = self.query_one('#action-list', ListView)
+        action_list.clear()
+        for opt in filtered:
+            action_list.append(_ActionListItem(opt))
+        if filtered:
+            action_list.index = 0
+            self._show_action_detail(filtered[0])
+
+        self.query_one('#detail-header', Static).update(
+            f'[bold]BATCH — {len(proposals)} proposals selected[/bold]'
+        )
+        rule_names = {p.rule_name for p in proposals}
+        self.query_one('#detail-body', Static).update(
+            f'Rules: {", ".join(sorted(rule_names))}\nCommon actions: {len(filtered)}'
+        )
+
+    def _show_action_detail(self, option: CockpitOption) -> None:
+        rev = '[green]reversible[/green]' if option.reversible else '[red]forward-only[/red]'
+        lines = [
+            f'[bold]{option.label}[/bold]',
+            f'[dim]{option.summary}[/dim]',
+        ]
+        if option.effect:
+            lines.append(f'[dim]Effect: {option.effect}[/dim]')
+        lines.append(rev)
+        self.query_one('#action-detail', Static).update('\n'.join(lines))
+
+    def _show_status(self, message: str, *, error: bool = False) -> None:
+        prefix = '[red]✗[/red]' if error else '[green]✓[/green]'
+        self.query_one('#status-bar', Static).update(f'{prefix} {message}')
+
+    # ------------------------------------------------------------------
+    # Current proposal helper
+    # ------------------------------------------------------------------
 
     def _current_proposal(self) -> CockpitProposal | None:
-        idx = self._queue.index
+        queue = self.query_one('#queue-list', ListView)
+        idx = queue.index
         if idx is None or idx < 0 or idx >= len(self.proposals):
             return None
         return self.proposals[idx]
 
-    def _option(self, index: int) -> CockpitOption | None:
-        options = self._detail.current_options
-        if 1 <= index <= len(options):
-            return options[index - 1]
+    def _current_action(self) -> CockpitOption | None:
+        action_list = self.query_one('#action-list', ListView)
+        idx = action_list.index
+        if idx is None:
+            return None
+        items = list(action_list.children)
+        if 0 <= idx < len(items):
+            item = items[idx]
+            if isinstance(item, _ActionListItem):
+                return item.option
         return None
 
-    async def action_cursor_down(self) -> None:
-        self._queue.action_cursor_down()
+    # ------------------------------------------------------------------
+    # Event handlers
+    # ------------------------------------------------------------------
 
-    async def action_cursor_up(self) -> None:
-        self._queue.action_cursor_up()
+    def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
+        if event.list_view.id == 'queue-list' and self.mode == 'list':
+            item = event.item
+            if isinstance(item, _ProposalQueueItem):
+                self._show_proposal_preview(item.proposal)
+        elif event.list_view.id == 'action-list' and self.mode in ('review', 'batch'):
+            if isinstance(event.item, _ActionListItem):
+                self._show_action_detail(event.item.option)
 
-    async def action_refresh(self) -> None:
-        await self._refresh_queue()
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        if event.list_view.id == 'queue-list' and self.mode == 'list':
+            self._enter_review_mode()
+        elif event.list_view.id == 'action-list' and self.mode in ('review', 'batch'):
+            self._enter_note_mode()
 
-    def action_pick(self, index_str: str) -> None:
-        try:
-            idx = int(index_str)
-        except (ValueError, TypeError):
+    def _on__note_input_submitted(self, event: _NoteInput.Submitted) -> None:
+        self._pending_note = event.text or None
+        self._submit_verdict()
+
+    def _on__note_input_cancelled(self, event: _NoteInput.Cancelled) -> None:
+        self.query_one('#note-section').remove_class('visible')
+        self.query_one('#action-list', ListView).focus()
+        self.mode = 'review' if not self._batch_targets else 'batch'
+        self._update_footer()
+
+    # ------------------------------------------------------------------
+    # Key handling
+    # ------------------------------------------------------------------
+
+    def on_key(self, event: Any) -> None:  # type: ignore[override]
+        if self.mode == 'note':
             return
-        option = self._option(idx)
-        proposal = self._current_proposal()
-        if option is None or proposal is None:
-            return
-        # `push_screen_wait` requires a Textual worker — run the verdict
-        # cycle as an exclusive worker so the modal `await` is legal.
-        self._run_verdict_worker(proposal, option, None)
 
-    def action_pick_recommended(self) -> None:
-        """Pick the option marked `recommended=True` on the highlighted proposal.
+        if self.mode == 'list':
+            self._handle_list_key(event)
+        elif self.mode in ('review', 'batch'):
+            self._handle_review_key(event)
 
-        Falls back to the first non-dismiss option if no option is marked
-        recommended (rare — the per-rule map should always declare one).
-        Wired to Enter and surfaced in the footer so the cockpit has a clear
-        default-commit affordance, not just numbered picks.
-        """
-        proposal = self._current_proposal()
-        if proposal is None:
-            return
-        options = self._detail.current_options
-        chosen: CockpitOption | None = None
-        for option in options:
-            if option.recommended:
-                chosen = option
-                break
-        if chosen is None:
-            for option in options:
-                if option.action_id:  # skip the dismiss sentinel for default-Enter
-                    chosen = option
-                    break
-        if chosen is None:
-            return
-        self._run_verdict_worker(proposal, chosen, None)
+    def _handle_list_key(self, event: Any) -> None:  # type: ignore[override]
+        key = event.key
+        if key == 'space':
+            event.prevent_default()
+            event.stop()
+            self._toggle_current_item()
+        elif key == 'shift+up':
+            event.prevent_default()
+            event.stop()
+            self._toggle_current_item()
+            queue = self.query_one('#queue-list', ListView)
+            queue.action_cursor_up()
+        elif key == 'shift+down':
+            event.prevent_default()
+            event.stop()
+            self._toggle_current_item()
+            queue = self.query_one('#queue-list', ListView)
+            queue.action_cursor_down()
+        elif key == 'escape':
+            event.prevent_default()
+            event.stop()
+            self._deselect_all()
 
-    def action_add_note(self) -> None:
-        proposal = self._current_proposal()
-        if proposal is None:
-            return
-        self._stage_note_worker(proposal)
+    def _handle_review_key(self, event: Any) -> None:  # type: ignore[override]
+        key = event.key
+        if key == 'n':
+            event.prevent_default()
+            event.stop()
+            self._toggle_note_area()
+        elif key == 'escape':
+            event.prevent_default()
+            event.stop()
+            self.mode = 'list'
 
-    def action_other_action(self) -> None:
-        proposal = self._current_proposal()
-        if proposal is None:
+    # ------------------------------------------------------------------
+    # LIST mode actions
+    # ------------------------------------------------------------------
+
+    def _toggle_current_item(self) -> None:
+        queue = self.query_one('#queue-list', ListView)
+        idx = queue.index
+        if idx is None:
             return
-        catalogue = custom_action_options(proposal.target_type)
-        if not catalogue:
-            self._detail.show_effect(
-                'No actions apply to this target_type. Use Dismiss or [N]ote.',
-                error=True,
+        items = list(queue.children)
+        if 0 <= idx < len(items):
+            item = items[idx]
+            if isinstance(item, _ProposalQueueItem):
+                item.toggle()
+        self._update_subtitle()
+
+    def _deselect_all(self) -> None:
+        queue = self.query_one('#queue-list', ListView)
+        for child in queue.children:
+            if isinstance(child, _ProposalQueueItem) and child.checked:
+                child.toggle()
+        self._update_subtitle()
+
+    # ------------------------------------------------------------------
+    # REVIEW mode
+    # ------------------------------------------------------------------
+
+    def _enter_review_mode(self) -> None:
+        selected = self._selected_proposals()
+        if selected:
+            self._batch_targets = selected
+            self._populate_batch_actions(selected)
+            self.mode = 'batch'
+        else:
+            proposal = self._current_proposal()
+            if proposal is None:
+                return
+            self._batch_targets = []
+            self._show_proposal_preview(proposal)
+            self._populate_actions(proposal)
+            self.mode = 'review'
+
+    def _enter_note_mode(self) -> None:
+        self._selected_option = self._current_action()
+        if self._selected_option is None:
+            return
+        self.mode = 'note'
+
+    def _toggle_note_area(self) -> None:
+        note_section = self.query_one('#note-section')
+        if note_section.has_class('visible'):
+            note_section.remove_class('visible')
+            self.query_one('#action-list', ListView).focus()
+            self._update_footer()
+        else:
+            note_section.add_class('visible')
+            note_input = self.query_one('#note-input', _NoteInput)
+            note_input.clear()
+            note_input.focus()
+            self.mode = 'note'
+
+    # ------------------------------------------------------------------
+    # Verdict submission
+    # ------------------------------------------------------------------
+
+    def _submit_verdict(self) -> None:
+        option = self._selected_option
+        if option is None:
+            return
+        if self._batch_targets:
+            self.run_worker(
+                self._submit_batch_async(self._batch_targets, option, self._pending_note),
+                exclusive=True,
+                name='batch_verdict',
             )
-            return
-        self._other_action_worker(proposal, catalogue)
+        else:
+            proposal = self._current_proposal()
+            if proposal is None:
+                return
+            self.run_worker(
+                self._submit_single_async(proposal, option, self._pending_note),
+                exclusive=True,
+                name='single_verdict',
+            )
 
-    def action_reverse(self) -> None:
-        self._reverse_worker()
-
-    # Worker-decorated helpers — push_screen_wait + controller calls live
-    # here because `push_screen_wait(...)` requires `get_current_worker()`
-    # to succeed. Action handlers fire-and-forget into these.
-
-    def _run_verdict_worker(
+    async def _submit_single_async(
         self,
         proposal: CockpitProposal,
         option: CockpitOption,
-        params: dict[str, Any] | None,
+        note: str | None,
     ) -> None:
-        self.run_worker(
-            self._run_verdict_async(proposal, option, params),
-            exclusive=True,
-            name='run_verdict',
-        )
-
-    def _stage_note_worker(self, proposal: CockpitProposal) -> None:
-        self.run_worker(self._stage_note_async(proposal), exclusive=True, name='stage_note')
-
-    def _other_action_worker(
-        self,
-        proposal: CockpitProposal,
-        catalogue: list[CockpitOption],
-    ) -> None:
-        self.run_worker(
-            self._other_action_async(proposal, catalogue),
-            exclusive=True,
-            name='other_action',
-        )
-
-    def _reverse_worker(self) -> None:
-        self.run_worker(self._reverse_async(), exclusive=True, name='reverse')
-
-    async def _run_verdict_async(
-        self,
-        proposal: CockpitProposal,
-        option: CockpitOption,
-        params: dict[str, Any] | None,
-    ) -> None:
-        # Offer the user a chance to attach a note (Esc to skip).
-        note = await self.push_screen_wait(
-            NoteScreen(prompt='Optional reviewer note (Ctrl+S to save · Esc to skip):'),
-        )
         try:
             result = await self._controller.resolve(
                 proposal,
                 option,
                 note=note,
-                params=params,
             )
         except Exception as exc:  # noqa: BLE001
-            self._detail.show_effect(f'Action failed: {exc}', error=True)
+            self._show_status(f'Action failed: {exc}', error=True)
+            self.mode = 'list'
             return
         status = result.get('status', 'unknown')
         action_id = option.action_id or 'dismiss'
-        # When the cockpit asks for a canned action but the server's response
-        # has no `resolution.followup` block, the server is on the pre-cockpit
-        # code path — it accepted the body, flipped status, and ignored the
-        # action. Surface that loudly so the user doesn't believe a deprio /
-        # archive ran when it actually didn't.
+
         if option.verb == 'resolve' and action_id != 'no_op':
             followup = _extract_followup(result)
             if followup is None or followup.get('action') != action_id:
-                self._detail.show_effect(
-                    f'{action_id} → {status}, BUT the server did NOT run the action '
-                    '(no resolution.followup in response). The server is likely on a '
-                    'pre-cockpit build; deploy this branch to make canned actions fire.',
+                self._show_status(
+                    f'{action_id} → {status}, BUT the server did NOT run the '
+                    'action (no resolution.followup in response). Server is likely '
+                    'on a pre-cockpit build.',
                     error=True,
                 )
                 await self._refresh_queue()
                 return
-        self._detail.show_effect(f'{action_id} → {status}.  Refreshing queue…')
+
+        self._show_status(f'{action_id} → resolved')
         await self._refresh_queue()
 
-    async def _stage_note_async(self, proposal: CockpitProposal) -> None:
-        note = await self.push_screen_wait(
-            NoteScreen(prompt='Add a reviewer note (will be saved on next verdict):'),
-        )
-        if note:
-            self._detail.show_effect(f'Note staged. Pick an option to commit. ({note!r})')
-
-    async def _other_action_async(
+    async def _submit_batch_async(
         self,
-        proposal: CockpitProposal,
-        catalogue: list[CockpitOption],
+        proposals: list[CockpitProposal],
+        option: CockpitOption,
+        note: str | None,
     ) -> None:
-        result = await self.push_screen_wait(OtherScreen(options=catalogue))
-        if result is None:
-            return
-        action_id, reason, note = result
-        if not action_id or action_id == 'cancel':
-            return
-        synthetic = CockpitOption(
-            action_id=action_id,
-            label=f'(Other) {action_id}',
-            summary=reason or '',
-            effect='',
-            reversible=False,
-            verb='resolve',
-        )
-        params: dict[str, Any] = {}
-        if reason:
-            params['reason'] = reason
-        try:
-            result_payload = await self._controller.resolve(
-                proposal,
-                synthetic,
-                note=note,
-                params=params or None,
-            )
-        except Exception as exc:  # noqa: BLE001
-            self._detail.show_effect(f'Action failed: {exc}', error=True)
-            return
-        status = result_payload.get('status', 'unknown')
-        self._detail.show_effect(f'{action_id} → {status}.  Refreshing queue…')
+        ok = 0
+        fail = 0
+        for proposal in proposals:
+            try:
+                await self._controller.resolve(proposal, option, note=note)
+                ok += 1
+            except Exception:  # noqa: BLE001
+                fail += 1
+        parts: list[str] = []
+        if ok:
+            parts.append(f'{ok} resolved')
+        if fail:
+            parts.append(f'{fail} failed')
+        self._show_status(', '.join(parts), error=bool(fail))
         await self._refresh_queue()
+
+    # ------------------------------------------------------------------
+    # App-level actions
+    # ------------------------------------------------------------------
+
+    async def action_refresh(self) -> None:
+        await self._refresh_queue()
+
+    def action_help(self) -> None:
+        self.push_screen(HelpScreen())
+
+    def action_reverse(self) -> None:
+        self.run_worker(self._reverse_async(), exclusive=True, name='reverse')
 
     async def _reverse_async(self) -> None:
         finding_id = await self.push_screen_wait(ReverseScreen())
@@ -640,10 +774,7 @@ class ProposalCockpitApp(App):
         try:
             result = await self._controller.reverse(finding_id)
         except Exception as exc:  # noqa: BLE001
-            self._detail.show_effect(f'Reverse failed: {exc}', error=True)
+            self._show_status(f'Reverse failed: {exc}', error=True)
             return
         summary = result.get('reversal') or result.get('effective_action') or 'ok'
-        self._detail.show_effect(f'Reversed {finding_id[:8]}… ({summary}).')
-
-    def action_help(self) -> None:
-        self.push_screen(HelpScreen())
+        self._show_status(f'Reversed {finding_id[:8]}… ({summary}).')
