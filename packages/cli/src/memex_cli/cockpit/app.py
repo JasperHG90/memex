@@ -66,6 +66,74 @@ def _format_unit_meta_line(meta: UnitMeta) -> str:
     return ' [dim]  ' + '  ·  '.join(parts) + '[/dim]'
 
 
+# Keys that are already rendered elsewhere in the preview (entity_name is shown
+# prominently for orphan_mental_model; the others are internal / structural).
+_EVIDENCE_SKIP_KEYS = frozenset(
+    {
+        'entity_name',
+        'explanation',
+        'related_unit_ids',
+        'surprise_score',
+        'polarity_contradiction_prob',
+        'resolution',
+        'components',
+    }
+)
+
+# Human-friendly labels for common evidence keys.
+_EVIDENCE_LABELS: dict[str, str] = {
+    'last_refreshed': 'Last refreshed',
+    'observation_count': 'Observations',
+    'linked_active_units': 'Active linked units',
+    'mw_score': 'MW score',
+    'success_co_count': 'Successes',
+    'failure_co_count': 'Failures',
+    'last_outcome_age_days': 'Last outcome age (days)',
+    'risk_class': 'Risk class',
+    'created_at': 'Created',
+    'composite_score': 'Composite score',
+    'component_range': 'Component range',
+    'flag_reason': 'Flag reason',
+    'importance': 'Importance',
+    'intent_class': 'Intent class',
+    'contradicts_count': 'Contradicts count',
+    'contradicts_credibility_sum': 'Contradicts credibility',
+    'orphan_link_count': 'Orphan links',
+    'claim_type': 'Claim type',
+    'link_count': 'Link count',
+    'entity_id': 'Entity ID',
+}
+
+
+def _format_evidence_line(evidence: dict[str, Any]) -> str:
+    """Build a dim Rich-markup line from evidence fields.
+
+    Skips keys that are rendered elsewhere (entity_name, explanation, etc.)
+    and formats the remaining scalar values as a dot-separated line.
+    """
+    parts: list[str] = []
+    for key, value in evidence.items():
+        if key in _EVIDENCE_SKIP_KEYS:
+            continue
+        if isinstance(value, (dict, list)):
+            continue
+        if value is None:
+            continue
+        label = _EVIDENCE_LABELS.get(key, key.replace('_', ' ').capitalize())
+        # Format floats to 2 decimal places for readability.
+        if isinstance(value, float):
+            formatted = f'{value:.2f}'
+        else:
+            formatted = str(value)
+            # Truncate ISO timestamps to date-only for readability.
+            if len(formatted) > 10 and 'T' in formatted:
+                formatted = formatted[:10]
+        parts.append(f'{label}: {formatted}')
+    if not parts:
+        return ''
+    return ' [dim]' + '  ·  '.join(parts) + '[/dim]'
+
+
 # ---------------------------------------------------------------------------
 # Queue item
 # ---------------------------------------------------------------------------
@@ -471,6 +539,12 @@ class ProposalCockpitApp(App):
             body_lines.extend(self._build_contradiction_body(proposal))
         else:
             body_lines.append(f'[bold]TARGET[/bold]  [dim cyan]{proposal.target_id[:8]}[/dim cyan]')
+
+            # For orphan_mental_model, show the entity name prominently.
+            entity_name = proposal.raw_evidence.get('entity_name')
+            if entity_name:
+                body_lines.append(f'[bold]Entity: "{entity_name}"[/bold]')
+
             # Fetch and display unit metadata for the target.
             target_meta = await self._controller.fetch_unit_metadata([proposal.target_id])
             meta = target_meta.get(proposal.target_id)
@@ -480,6 +554,12 @@ class ProposalCockpitApp(App):
                     body_lines.append(meta_line)
             if proposal.target_text:
                 body_lines.append(f' {proposal.target_text}')
+
+            # Show evidence fields as a dim metadata line for all rule types.
+            evidence_line = _format_evidence_line(proposal.raw_evidence)
+            if evidence_line:
+                body_lines.append('')
+                body_lines.append(evidence_line)
 
         if proposal.explanation:
             body_lines.append('')
