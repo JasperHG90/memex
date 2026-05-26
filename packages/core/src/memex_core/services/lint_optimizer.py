@@ -157,7 +157,7 @@ _ROLLBACK_SIGNATURE_SUPERSEDE_LATER_SQL = """
         OR vault_id = CAST(:vault_id AS uuid)
       )
       AND version > :version
-      AND superseded_by_version IS NULL
+      AND (superseded_by_version IS NULL OR superseded_by_version = -1)
 """
 
 

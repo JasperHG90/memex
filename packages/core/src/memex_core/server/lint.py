@@ -1301,6 +1301,7 @@ async def lint_optimize_run(
     Pulls labelled verdicts, compiles via BootstrapFewShot, validates against
     the current champion, and promotes the winner.
     """
+    _require_attended_mode(api)
     if not rule:
         raise HTTPException(status_code=400, detail='rule is required')
     if vault_id is not None:
@@ -1361,6 +1362,7 @@ async def lint_optimize_rollback(
     vault_id: Annotated[UUID | None, Query(description='Vault scope.')] = None,
 ) -> dict[str, Any]:
     """Rollback a rule's DSPy signature to a specific version."""
+    _require_attended_mode(api)
     if not rule or version <= 0:
         raise HTTPException(status_code=400, detail='rule and version (>0) are required')
     if vault_id is not None:
