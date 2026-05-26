@@ -155,20 +155,18 @@ async def lint_findings(
         return
 
     table = Table(title=f'{status} findings ({len(findings)})')
-    table.add_column('id', style='cyan', no_wrap=False)
-    table.add_column('lint_type')
-    table.add_column('rule_name')
-    table.add_column('target_type')
-    table.add_column('target_id', max_width=36)
-    table.add_column('vault_id', max_width=36)
+    table.add_column('id', style='cyan', no_wrap=True)
+    table.add_column('rule', no_wrap=True)
+    table.add_column('target', max_width=44)
+    table.add_column('vault', max_width=12)
+    table.add_column('age')
     for f in findings:
         table.add_row(
-            f['id'][:8] + '…',
-            f['lint_type'],
+            f['id'],
             f['rule_name'],
-            f['target_type'],
-            f['target_id'],
-            f['vault_id'] or '(global)',
+            f'{f["target_type"]}:{f["target_id"][:8]}',
+            (f['vault_id'] or '(global)')[:12],
+            str(f.get('created_at', ''))[:10],
         )
     console.print(table)
 
@@ -178,61 +176,67 @@ async def lint_findings(
 async def lint_run_cmd(
     ctx: typer.Context,
     vault: Annotated[
-        str,
-        typer.Argument(help='Vault name or UUID to scan.'),
-    ],
+        str | None,
+        typer.Option('--vault', '-v', help='Vault to scan. Omit to scan all vaults.'),
+    ] = None,
     no_llm: Annotated[
         bool,
         typer.Option('--no-llm', help='Skip LLM checks (SQL rules only).'),
     ] = False,
 ):
-    """Run all lint checks — SQL rules + LLM checks (semantic contradiction, schema drift).
+    """Run all lint checks on one or all vaults.
 
-    The SQL rules run first (deterministic, cheap). The LLM checks run
-    second (needs an LLM API key + embeddings). Pass ``--no-llm`` to
-    skip the LLM pass.
+    SQL rules run first (deterministic, cheap). LLM checks run second
+    (needs an LLM API key + embeddings). Pass ``--no-llm`` to skip the
+    LLM pass.
     """
     config: MemexConfig = ctx.obj
     async with get_api_context(config) as api:
-        vault_id = str(await api.resolve_vault_identifier(vault))
+        if vault is not None:
+            vault_ids = [str(await api.resolve_vault_identifier(vault))]
+        else:
+            vaults_payload = await api.list_vaults()
+            vault_ids = [str(v.id) for v in vaults_payload]
+            console.print(f'[dim]Scanning {len(vault_ids)} vaults…[/dim]')
 
-        # 1. SQL rules
-        try:
-            sql_payload = await api.run_lint_rules(vault_id)
-        except Exception as e:
-            handle_api_error(e)
-            return
-        sql_total = sql_payload.get('total_findings', 0)
-        sql_rules = sql_payload.get('rules', [])
-        console.print(
-            f'[green]sql rules:[/green] {sql_total} findings across {len(sql_rules)} rules'
-        )
-        for r in sql_rules:
-            emitted = r.get('findings_emitted', 0)
-            if emitted:
-                console.print(f'  {r["name"]}: {emitted} findings')
+        for vault_id in vault_ids:
+            if len(vault_ids) > 1:
+                console.print(f'\n[bold]vault {vault_id[:8]}…[/bold]')
+            try:
+                sql_payload = await api.run_lint_rules(vault_id)
+            except Exception as e:
+                handle_api_error(e)
+                continue
+            sql_total = sql_payload.get('total_findings', 0)
+            sql_rules = sql_payload.get('rules', [])
+            console.print(
+                f'[green]sql rules:[/green] {sql_total} findings across {len(sql_rules)} rules'
+            )
+            for r in sql_rules:
+                emitted = r.get('findings_emitted', 0)
+                if emitted:
+                    console.print(f'  {r["name"]}: {emitted} findings')
 
-        # 2. LLM checks
+            if no_llm:
+                continue
+            try:
+                llm_payload = await api.run_lint_llm(vault_id)
+                llm_findings = llm_payload.get('findings_emitted', 0)
+                llm_candidates = llm_payload.get('candidates_evaluated', 0)
+                console.print(
+                    f'[green]llm checks:[/green] {llm_findings} findings '
+                    f'from {llm_candidates} candidates evaluated'
+                )
+            except Exception as e:
+                err_str = str(e)
+                if '503' in err_str or 'not_initialized' in err_str.lower():
+                    console.print(
+                        '[yellow]llm checks:[/yellow] skipped (not enabled or model not loaded)'
+                    )
+                else:
+                    handle_api_error(e)
         if no_llm:
             console.print('[dim]LLM checks skipped (--no-llm).[/dim]')
-            return
-        try:
-            llm_payload = await api.run_lint_llm(vault_id)
-            llm_findings = llm_payload.get('findings_emitted', 0)
-            llm_candidates = llm_payload.get('candidates_evaluated', 0)
-            console.print(
-                f'[green]llm checks:[/green] {llm_findings} findings '
-                f'from {llm_candidates} candidates evaluated'
-            )
-        except Exception as e:
-            err_str = str(e)
-            if '503' in err_str or 'not_initialized' in err_str.lower():
-                console.print(
-                    '[yellow]llm checks:[/yellow] skipped '
-                    '(lint_llm not enabled or model not loaded)'
-                )
-            else:
-                handle_api_error(e)
 
 
 @app.command('dismiss')
@@ -260,7 +264,7 @@ async def lint_dismiss_cmd(
 
 stats_app = typer.Typer(
     name='stats',
-    help='Per-rule accept / dismiss telemetry (auto-learning loop, layer 2).',
+    help='Per-rule accept / dismiss / no-op telemetry rollups.',
     invoke_without_command=True,
     no_args_is_help=False,
 )
@@ -619,7 +623,7 @@ async def lint_review_cmd(
 
 optimize_app = typer.Typer(
     name='optimize',
-    help='DSPy signature optimization (auto-learning loop, layer 4).',
+    help='Compile and manage optimized LLM lint signatures.',
     no_args_is_help=True,
 )
 app.add_typer(optimize_app)
@@ -754,7 +758,7 @@ async def lint_optimize_rollback_cmd(
 
 calibration_app = typer.Typer(
     name='calibration',
-    help='Per-rule threshold calibration (auto-learning loop, layer 3).',
+    help='Per-rule emission threshold calibration.',
     no_args_is_help=True,
 )
 app.add_typer(calibration_app)
