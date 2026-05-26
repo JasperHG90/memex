@@ -983,6 +983,7 @@ async def lint_llm_run(
                 polarity_classifier=(
                     polarity_classifier if check_name == 'semantic_contradiction' else None
                 ),
+                skip_quota=True,
             )
             summaries.append(
                 {
