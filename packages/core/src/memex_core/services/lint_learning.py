@@ -141,7 +141,7 @@ _FETCH_SQL = """
     WHERE created_at >= :window_start
       AND created_at < :window_end
       AND status IN ('resolved', 'dismissed')
-      AND (:vault_id IS NULL OR vault_id = CAST(:vault_id AS uuid))
+      AND (CAST(:vault_id AS text) IS NULL OR vault_id = CAST(:vault_id AS uuid))
 """
 
 

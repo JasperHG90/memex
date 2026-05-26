@@ -400,7 +400,14 @@ class ProposalCockpitApp(App):
         self.query_one('#status-bar', Static).update('')
 
     def _show_proposal_preview(self, proposal: CockpitProposal) -> None:
-        self.query_one('#detail-header', Static).update(self._render_header(proposal))
+        self.run_worker(
+            self._show_proposal_preview_async(proposal),
+            name='show_preview',
+        )
+
+    async def _show_proposal_preview_async(self, proposal: CockpitProposal) -> None:
+        header = await self._render_header(proposal)
+        self.query_one('#detail-header', Static).update(header)
 
         body_lines: list[str] = []
 
@@ -413,12 +420,16 @@ class ProposalCockpitApp(App):
 
         if proposal.explanation:
             body_lines.append('')
-            body_lines.append(f' {proposal.explanation}')
+            body_lines.append('[dim]' + '─' * 50 + '[/dim]')
+            body_lines.append('[bold]EXPLANATION[/bold]')
+            body_lines.append(f'[dim italic] {proposal.explanation}[/dim italic]')
 
         is_contradiction = proposal.rule_name == 'llm_semantic_contradiction'
         if proposal.related_unit_ids and not is_contradiction:
+            n = len(proposal.related_unit_ids)
+            unit_word = 'unit' if n == 1 else 'units'
             body_lines.append('')
-            body_lines.append(f'[dim]related: {len(proposal.related_unit_ids)} units cited[/dim]')
+            body_lines.append(f'[dim]related: {n} {unit_word} cited[/dim]')
         if proposal.suggested_action:
             body_lines.append('')
             body_lines.append(f'[dim]suggested: {proposal.suggested_action}[/dim]')
@@ -426,9 +437,12 @@ class ProposalCockpitApp(App):
         body_lines.append('[dim]' + '─' * 72 + '[/dim]')
         self.query_one('#detail-body', Static).update('\n'.join(body_lines))
 
-    def _render_header(self, proposal: CockpitProposal) -> str:
+    async def _render_header(self, proposal: CockpitProposal) -> str:
         badge = '[yellow]LLM[/yellow]' if proposal.is_llm_source else '[blue]rule[/blue]'
-        vault_short = (proposal.vault_id or '(global)')[:8]
+        if proposal.vault_id:
+            vault_label = await self._controller.resolve_vault_name(proposal.vault_id)
+        else:
+            vault_label = '(global)'
         line1 = (
             f' [bold]{proposal.rule_name}[/bold]  {badge}'
             f'  [dim]· {proposal.lint_type} / {proposal.target_type}[/dim]'
@@ -439,7 +453,7 @@ class ProposalCockpitApp(App):
         if proposal.polarity_contradiction_prob is not None:
             right_parts.append(f'P(contra) {proposal.polarity_contradiction_prob:.3f}')
         right = f'  [dim]{" · ".join(right_parts)}[/dim]' if right_parts else ''
-        line2 = f' [dim]vault {vault_short} · {proposal.created_at or "?"}[/dim]{right}'
+        line2 = f' [dim]vault {vault_label} · {proposal.created_at or "?"}[/dim]{right}'
         return f'{line1}\n{line2}'
 
     def _build_contradiction_body(self, proposal: CockpitProposal) -> list[str]:
@@ -491,12 +505,15 @@ class ProposalCockpitApp(App):
         if proposal.explanation:
             body_lines.append('')
             body_lines.append('[dim]' + '─' * 50 + '[/dim]')
+            body_lines.append('[bold]EXPLANATION[/bold]')
             body_lines.append(f'[dim italic] {proposal.explanation}[/dim italic]')
 
         remaining = proposal.related_unit_ids[1:] if proposal.related_unit_ids else []
         if remaining:
+            n = len(remaining)
+            unit_word = 'unit' if n == 1 else 'units'
             body_lines.append('')
-            body_lines.append(f'[dim]related: {len(remaining)} additional units cited[/dim]')
+            body_lines.append(f'[dim]{n} more related {unit_word} not shown[/dim]')
         if proposal.suggested_action:
             body_lines.append('')
             body_lines.append(f'[dim]suggested: {proposal.suggested_action}[/dim]')

@@ -474,6 +474,8 @@ class CockpitClient(Protocol):
 
     async def get_memory_unit(self, unit_id: str) -> Any: ...
 
+    async def list_vaults(self) -> Any: ...
+
 
 class CockpitController:
     """Async wrapper around the HTTP client used by the TUI."""
@@ -481,6 +483,25 @@ class CockpitController:
     def __init__(self, client: CockpitClient, *, vault_id: str | None = None) -> None:
         self._client = client
         self._vault_id = vault_id
+        self._vault_name_cache: dict[str, str] = {}
+
+    async def resolve_vault_name(self, vault_id: str) -> str:
+        """Resolve a vault UUID to its human-readable name.
+
+        Results are cached for the lifetime of the controller so that the
+        vault list is fetched at most once per session.
+        """
+        if vault_id in self._vault_name_cache:
+            return self._vault_name_cache[vault_id]
+        try:
+            vaults = await self._client.list_vaults()
+            for v in vaults:
+                vid = str(getattr(v, 'id', ''))
+                vname = str(getattr(v, 'name', ''))
+                self._vault_name_cache[vid] = vname
+        except Exception:  # noqa: BLE001
+            pass  # fall through — return truncated UUID below
+        return self._vault_name_cache.get(vault_id, vault_id[:8])
 
     async def fetch_pending(self, *, limit: int = 50) -> list[CockpitProposal]:
         """Fetch pending proposals, LLM-first then rule, newest first within tier."""
