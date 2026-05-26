@@ -613,6 +613,141 @@ async def lint_review_cmd(
 
 
 # ---------------------------------------------------------------------------
+# Auto-learning loop — Layer 4: DSPy signature optimization (memex lint optimize).
+# ---------------------------------------------------------------------------
+
+
+optimize_app = typer.Typer(
+    name='optimize',
+    help='DSPy signature optimization (auto-learning loop, layer 4).',
+    no_args_is_help=True,
+)
+app.add_typer(optimize_app)
+
+
+@optimize_app.command('run')
+@async_command
+async def lint_optimize_run_cmd(
+    ctx: typer.Context,
+    rule: Annotated[
+        str,
+        typer.Option('--rule', help='Rule to compile a signature for.'),
+    ],
+    vault: Annotated[
+        str | None,
+        typer.Option('--vault', '-v', help='Vault scope.'),
+    ] = None,
+):
+    """Trigger a DSPy signature compile for a specific rule.
+
+    Pulls labelled verdicts, compiles via BootstrapFewShot, validates
+    against the current champion, and promotes or rejects the result.
+    """
+    config: MemexConfig = ctx.obj
+    async with get_api_context(config) as api:
+        vault_id: str | None = None
+        if vault is not None:
+            vault_id = str(await api.resolve_vault_identifier(vault))
+        try:
+            payload = await api.lint_optimize_run(rule=rule, vault_id=vault_id)
+        except Exception as e:
+            handle_api_error(e)
+            return
+
+    status = payload.get('status', '?')
+    style = {
+        'promoted': 'green',
+        'rejected': 'yellow',
+        'insufficient_data': 'yellow',
+        'error': 'red',
+    }.get(status, 'white')
+    console.print(f'[{style}]{status}:[/{style}] {payload.get("message", "")}')
+    if payload.get('new_version'):
+        console.print(f'  version:          {payload["new_version"]}')
+    if payload.get('validation_score') is not None:
+        console.print(f'  validation_score: {payload["validation_score"]:.3f}')
+    if payload.get('champion_score') is not None:
+        console.print(f'  champion_score:   {payload["champion_score"]:.3f}')
+    console.print(f'  examples_used:    {payload.get("examples_used", 0)}')
+    for w in payload.get('warnings') or []:
+        console.print(f'  [yellow]warning:[/yellow] {w}')
+
+
+@optimize_app.command('history')
+@async_command
+async def lint_optimize_history_cmd(
+    ctx: typer.Context,
+    rule: Annotated[
+        str | None,
+        typer.Option('--rule', help='Filter to one rule_name.'),
+    ] = None,
+):
+    """List compiled signature versions with validation scores."""
+    config: MemexConfig = ctx.obj
+    async with get_api_context(config) as api:
+        try:
+            payload = await api.lint_optimize_history(rule=rule)
+        except Exception as e:
+            handle_api_error(e)
+            return
+    sigs = payload.get('signatures') or []
+    if not sigs:
+        console.print('[dim]No compiled signatures found.[/dim]')
+        return
+    table = Table(title=f'compiled signatures ({len(sigs)})')
+    table.add_column('rule_name', style='cyan')
+    table.add_column('v', justify='right')
+    table.add_column('val_score', justify='right')
+    table.add_column('val_examples', justify='right')
+    table.add_column('promoted_at')
+    table.add_column('promoted_by')
+    table.add_column('superseded')
+    for s in sigs:
+        vs = s.get('validation_score')
+        table.add_row(
+            s.get('rule_name', '?'),
+            str(s.get('version', '?')),
+            f'{vs:.3f}' if vs is not None else '—',
+            str(s.get('validation_examples', '—')),
+            (s.get('promoted_at') or '')[:19],
+            s.get('promoted_by') or '',
+            'yes' if s.get('superseded') else '',
+        )
+    console.print(table)
+
+
+@optimize_app.command('rollback')
+@async_command
+async def lint_optimize_rollback_cmd(
+    ctx: typer.Context,
+    rule: Annotated[str, typer.Option('--rule', help='Rule to rollback.')],
+    version: Annotated[int, typer.Option('--version', help='Version to rollback to.')],
+    vault: Annotated[
+        str | None,
+        typer.Option('--vault', '-v', help='Vault scope.'),
+    ] = None,
+):
+    """Rollback a rule's DSPy signature to a specific version."""
+    config: MemexConfig = ctx.obj
+    async with get_api_context(config) as api:
+        vault_id: str | None = None
+        if vault is not None:
+            vault_id = str(await api.resolve_vault_identifier(vault))
+        try:
+            payload = await api.lint_optimize_rollback(
+                rule=rule, version=version, vault_id=vault_id
+            )
+        except Exception as e:
+            handle_api_error(e)
+            return
+    ok = payload.get('rolled_back', False)
+    if ok:
+        console.print(f'[green]rolled back:[/green] {rule} → v{version}')
+    else:
+        console.print(f'[red]rollback failed:[/red] version {version} not found for {rule}')
+
+
+# ---------------------------------------------------------------------------
 # Auto-learning loop — Layer 3: threshold calibration (memex lint calibration).
 # ---------------------------------------------------------------------------
 
