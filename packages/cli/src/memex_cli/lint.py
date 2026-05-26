@@ -240,6 +240,20 @@ async def lint_run_cmd(
         if no_llm:
             console.print('[dim]LLM checks skipped (--no-llm).[/dim]')
 
+        # Show total pending so the user knows what's waiting for review,
+        # regardless of whether THIS run or the background scheduler created them.
+        try:
+            status_payload = await api.lint_status(scope='all')
+            pending = status_payload.get('pending', 0)
+            if pending:
+                console.print(
+                    f'\n[bold]{pending} pending findings.[/bold] Run `memex lint review` to triage.'
+                )
+            else:
+                console.print('\n[dim]No pending findings.[/dim]')
+        except Exception:
+            pass
+
 
 @app.command('dismiss')
 @async_command
