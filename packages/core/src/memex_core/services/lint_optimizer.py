@@ -79,7 +79,7 @@ _FETCH_LABELLED_SQL = """
     WHERE rule_name = :rule_name
       AND status IN ('resolved', 'dismissed')
       AND created_at >= :window_start
-      AND (:vault_id::uuid IS NULL OR vault_id = CAST(:vault_id AS uuid))
+      AND (CAST(:vault_id AS uuid) IS NULL OR vault_id = CAST(:vault_id AS uuid))
     ORDER BY resolved_at DESC
     LIMIT :limit
 """
@@ -92,7 +92,7 @@ _GET_LATEST_SIGNATURE_SQL = """
     FROM lint_llm_signature
     WHERE rule_name = :rule_name
       AND (
-        (:vault_id::uuid IS NULL AND vault_id IS NULL)
+        (CAST(:vault_id AS uuid) IS NULL AND vault_id IS NULL)
         OR vault_id = CAST(:vault_id AS uuid)
       )
       AND superseded_by_version IS NULL
@@ -105,7 +105,7 @@ _LIST_SIGNATURES_SQL = """
            base_model, validation_score, validation_examples,
            promoted_at, promoted_by, superseded_by_version
     FROM lint_llm_signature
-    WHERE (:rule_name::text IS NULL OR rule_name = :rule_name)
+    WHERE (CAST(:rule_name AS text) IS NULL OR rule_name = :rule_name)
     ORDER BY rule_name ASC, version DESC
 """
 
@@ -118,7 +118,7 @@ _GET_SIGNATURE_DETAIL_SQL = """
     WHERE rule_name = :rule_name
       AND version = :version
       AND (
-        (:vault_id::uuid IS NULL AND vault_id IS NULL)
+        (CAST(:vault_id AS uuid) IS NULL AND vault_id IS NULL)
         OR vault_id = CAST(:vault_id AS uuid)
       )
     LIMIT 1
@@ -144,7 +144,7 @@ _SUPERSEDE_SIGNATURE_SQL = """
     SET superseded_by_version = :new_version
     WHERE rule_name = :rule_name
       AND (
-        (:vault_id::uuid IS NULL AND vault_id IS NULL)
+        (CAST(:vault_id AS uuid) IS NULL AND vault_id IS NULL)
         OR vault_id = CAST(:vault_id AS uuid)
       )
       AND superseded_by_version IS NULL
@@ -157,7 +157,7 @@ _ROLLBACK_SIGNATURE_UNSUPERSEDE_SQL = """
     SET superseded_by_version = NULL
     WHERE rule_name = :rule_name
       AND (
-        (:vault_id::uuid IS NULL AND vault_id IS NULL)
+        (CAST(:vault_id AS uuid) IS NULL AND vault_id IS NULL)
         OR vault_id = CAST(:vault_id AS uuid)
       )
       AND version = :version
@@ -168,7 +168,7 @@ _ROLLBACK_SIGNATURE_SUPERSEDE_LATER_SQL = """
     SET superseded_by_version = -1
     WHERE rule_name = :rule_name
       AND (
-        (:vault_id::uuid IS NULL AND vault_id IS NULL)
+        (CAST(:vault_id AS uuid) IS NULL AND vault_id IS NULL)
         OR vault_id = CAST(:vault_id AS uuid)
       )
       AND version > :version

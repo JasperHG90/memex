@@ -196,14 +196,14 @@ _SELECT_SQL = """
         median_time_to_resolve_seconds,
         refreshed_at
     FROM lint_rule_telemetry
-    WHERE (:rule_name::text IS NULL OR rule_name = :rule_name)
+    WHERE (CAST(:rule_name AS text) IS NULL OR rule_name = :rule_name)
       AND (
-        :vault_id::uuid IS NULL
+        CAST(:vault_id AS uuid) IS NULL
           AND :include_global = TRUE
           AND vault_id IS NULL
-        OR :vault_id::uuid IS NOT NULL
+        OR CAST(:vault_id AS uuid) IS NOT NULL
           AND vault_id = CAST(:vault_id AS uuid)
-        OR :vault_id::uuid IS NULL
+        OR CAST(:vault_id AS uuid) IS NULL
           AND :include_global = FALSE
       )
     ORDER BY window_end DESC, rule_name ASC
@@ -492,7 +492,7 @@ _GET_LATEST_CALIBRATION_SQL = """
     FROM lint_rule_calibration
     WHERE rule_name = :rule_name
       AND (
-        (:vault_id::uuid IS NULL AND vault_id IS NULL)
+        (CAST(:vault_id AS uuid) IS NULL AND vault_id IS NULL)
         OR vault_id = CAST(:vault_id AS uuid)
       )
       AND superseded_by_version IS NULL
@@ -506,9 +506,9 @@ _LIST_CALIBRATIONS_SQL = """
            learned_at, learned_from_window_start, learned_from_window_end,
            superseded_by_version, frozen, rationale
     FROM lint_rule_calibration
-    WHERE (:rule_name::text IS NULL OR rule_name = :rule_name)
+    WHERE (CAST(:rule_name AS text) IS NULL OR rule_name = :rule_name)
       AND (
-        (:vault_id::uuid IS NULL AND vault_id IS NULL)
+        (CAST(:vault_id AS uuid) IS NULL AND vault_id IS NULL)
         OR vault_id = CAST(:vault_id AS uuid)
       )
     ORDER BY rule_name ASC, version DESC
@@ -534,7 +534,7 @@ _SUPERSEDE_CALIBRATION_SQL = """
     SET superseded_by_version = :new_version
     WHERE rule_name = :rule_name
       AND (
-        (:vault_id::uuid IS NULL AND vault_id IS NULL)
+        (CAST(:vault_id AS uuid) IS NULL AND vault_id IS NULL)
         OR vault_id = CAST(:vault_id AS uuid)
       )
       AND superseded_by_version IS NULL
@@ -546,7 +546,7 @@ _FREEZE_CALIBRATION_SQL = """
     SET frozen = :frozen
     WHERE rule_name = :rule_name
       AND (
-        (:vault_id::uuid IS NULL AND vault_id IS NULL)
+        (CAST(:vault_id AS uuid) IS NULL AND vault_id IS NULL)
         OR vault_id = CAST(:vault_id AS uuid)
       )
       AND superseded_by_version IS NULL
@@ -557,7 +557,7 @@ _ROLLBACK_CALIBRATION_SQL = """
     SET superseded_by_version = NULL
     WHERE rule_name = :rule_name
       AND (
-        (:vault_id::uuid IS NULL AND vault_id IS NULL)
+        (CAST(:vault_id AS uuid) IS NULL AND vault_id IS NULL)
         OR vault_id = CAST(:vault_id AS uuid)
       )
       AND version = :version
@@ -568,7 +568,7 @@ _SUPERSEDE_LATER_VERSIONS_SQL = """
     SET superseded_by_version = -1
     WHERE rule_name = :rule_name
       AND (
-        (:vault_id::uuid IS NULL AND vault_id IS NULL)
+        (CAST(:vault_id AS uuid) IS NULL AND vault_id IS NULL)
         OR vault_id = CAST(:vault_id AS uuid)
       )
       AND version > :version
