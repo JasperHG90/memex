@@ -363,11 +363,14 @@ class LintLLMOptimizer(BaseService):
                 return getattr(pred, 'verdict', '') == example.verdict
 
             class VerdictPredictor(dspy.Signature):
-                """Given a lint finding's target text and rule, predict the operator verdict."""
+                """Given a lint finding's target text, rule, and any prior reviewer rationale, predict the operator verdict."""
 
                 target_text: str = dspy.InputField()
                 rule_name: str = dspy.InputField()
                 surprise_score: float = dspy.InputField()
+                rationale: str = dspy.InputField(
+                    desc='Reviewer note explaining why they accepted/dismissed (empty if none)',
+                )
                 verdict: str = dspy.OutputField(desc='One of: accept, no_op, dismiss')
 
             teleprompter = dspy.BootstrapFewShot(
@@ -380,8 +383,9 @@ class LintLLMOptimizer(BaseService):
                     target_text=ex.get('target_text', ''),
                     rule_name=rule_name,
                     surprise_score=ex.get('surprise_score', 0.0),
+                    rationale=ex.get('rationale', ''),
                     verdict=ex['verdict'],
-                ).with_inputs('target_text', 'rule_name', 'surprise_score')
+                ).with_inputs('target_text', 'rule_name', 'surprise_score', 'rationale')
                 for ex in train
             ]
 
@@ -396,6 +400,7 @@ class LintLLMOptimizer(BaseService):
                         target_text=ex.get('target_text', ''),
                         rule_name=rule_name,
                         surprise_score=ex.get('surprise_score', 0.0),
+                        rationale=ex.get('rationale', ''),
                     )
                     if getattr(pred, 'verdict', '') == ex['verdict']:
                         correct += 1
@@ -412,6 +417,7 @@ class LintLLMOptimizer(BaseService):
                             'target_text': getattr(demo, 'target_text', ''),
                             'rule_name': getattr(demo, 'rule_name', ''),
                             'surprise_score': getattr(demo, 'surprise_score', 0.0),
+                            'rationale': getattr(demo, 'rationale', ''),
                             'verdict': getattr(demo, 'verdict', ''),
                         }
                     )
@@ -522,7 +528,7 @@ class LintLLMOptimizer(BaseService):
 
 
 def _build_examples(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    """Convert raw proposal rows into (target_text, verdict) training examples."""
+    """Convert raw proposal rows into training examples including the reviewer's rationale."""
     from memex_core.services.lint_learning import classify_verdict
 
     examples: list[dict[str, Any]] = []
@@ -533,16 +539,19 @@ def _build_examples(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         evidence = row.get('evidence') or {}
         target_id = row.get('target_id', '')
         surprise = row.get('surprise_score')
-        # Target text is not stored on the proposal row directly; we use
-        # whatever description is available in evidence.
         target_text = (
             evidence.get('explanation') or evidence.get('target_text') or str(target_id)[:200]
         )
+        resolution = evidence.get('resolution') or {}
+        note = ''
+        if isinstance(resolution, dict):
+            note = str(resolution.get('note') or '')[:500]
         examples.append(
             {
                 'target_text': str(target_text)[:2000],
                 'verdict': verdict,
                 'surprise_score': float(surprise) if surprise is not None else 0.0,
+                'rationale': note,
             }
         )
     return examples
