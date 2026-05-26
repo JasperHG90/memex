@@ -31,6 +31,9 @@ class CockpitOption:
     requires_review: bool = False
     # Verb the controller sends to the server: 'resolve' or 'dismiss'.
     verb: str = 'resolve'
+    # Extra params forwarded to the server (e.g. override_target_id for
+    # deprioritizing the RELATED unit instead of the TARGET).
+    params: dict[str, Any] | None = None
 
 
 # Sentinel option_id for "Dismiss" so the menu can present it uniformly.
@@ -266,6 +269,50 @@ _ACTION_CATALOGUE: dict[str, tuple[str, str, tuple[str, ...], bool]] = {
         True,
     ),
 }
+
+
+def options_for_contradiction(
+    proposal: CockpitProposal,
+) -> list[CockpitOption]:
+    """Generate per-unit deprioritize options for a semantic contradiction.
+
+    The user sees which exact unit (by short ID) will be deprioritized,
+    and can pick either side.
+    """
+    target_short = proposal.target_id[:8]
+    options: list[CockpitOption] = [
+        CockpitOption(
+            action_id='deprioritize_unit',
+            label=f'Deprioritize TARGET ({target_short})',
+            summary=f'Suppress TARGET {target_short}; related units stay active.',
+            effect='Sets is_deprioritized=true on the target unit.',
+            reversible=True,
+            recommended=True,
+        ),
+    ]
+    if proposal.related_unit_ids:
+        related_short = proposal.related_unit_ids[0][:8]
+        options.append(
+            CockpitOption(
+                action_id='deprioritize_unit',
+                label=f'Deprioritize RELATED ({related_short})',
+                summary=f'Suppress RELATED {related_short}; target stays active.',
+                effect='Sets is_deprioritized=true on the related unit.',
+                reversible=True,
+                params={'override_target_id': proposal.related_unit_ids[0]},
+            ),
+        )
+    options.append(
+        CockpitOption(
+            action_id='no_op',
+            label='Acknowledge — not a real contradiction',
+            summary='Record review; both sides stay active.',
+            effect='No mutation; the contradiction signal persists in audit.',
+            reversible=True,
+        ),
+    )
+    options.append(DISMISS_OPTION)
+    return options
 
 
 def options_for_rule(rule_name: str, target_type: str) -> list[CockpitOption]:

@@ -33,6 +33,7 @@ from memex_cli.cockpit.controller import (
     CockpitController,
     CockpitOption,
     CockpitProposal,
+    options_for_contradiction,
     options_for_rule,
 )
 
@@ -489,7 +490,8 @@ class ProposalCockpitApp(App):
 
         if proposal.explanation:
             body_lines.append('')
-            body_lines.append(f' {proposal.explanation}')
+            body_lines.append('[dim]' + '─' * 50 + '[/dim]')
+            body_lines.append(f'[dim italic] {proposal.explanation}[/dim italic]')
 
         remaining = proposal.related_unit_ids[1:] if proposal.related_unit_ids else []
         if remaining:
@@ -508,7 +510,10 @@ class ProposalCockpitApp(App):
     # ------------------------------------------------------------------
 
     def _populate_actions(self, proposal: CockpitProposal) -> None:
-        options = options_for_rule(proposal.rule_name, proposal.target_type)
+        if proposal.rule_name == 'llm_semantic_contradiction':
+            options = options_for_contradiction(proposal)
+        else:
+            options = options_for_rule(proposal.rule_name, proposal.target_type)
         action_list = self.query_one('#action-list', ListView)
         action_list.clear()
         for i, opt in enumerate(options):
@@ -769,6 +774,7 @@ class ProposalCockpitApp(App):
                 proposal,
                 option,
                 note=note,
+                params=option.params,
             )
         except Exception as exc:  # noqa: BLE001
             self._show_status(f'Action failed: {exc}', error=True)
