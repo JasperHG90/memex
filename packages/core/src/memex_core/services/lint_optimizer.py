@@ -240,14 +240,22 @@ class LintLLMOptimizer(BaseService):
         train = examples[split_idx:]  # oldest 80%
 
         if len(validation) < 5:
+            compile_warnings.append(
+                f'low_validation_set: only {len(validation)} validation examples '
+                f'(recommended ≥5). Score may be unreliable.'
+            )
+        if not train:
             return CompileResult(
                 rule_name=rule_name,
                 vault_id=vault_id,
                 status='insufficient_data',
                 examples_used=len(examples),
-                message=f'Validation set too small ({len(validation)}); need ≥5.',
+                message='Zero training examples after split — nothing to compile.',
                 warnings=compile_warnings,
             )
+        if not validation:
+            validation = train[:1]
+            compile_warnings.append('no_validation_set: using 1 training example for validation.')
 
         # 4. Run the optimizer — produces a compiled program + demos.
         try:
