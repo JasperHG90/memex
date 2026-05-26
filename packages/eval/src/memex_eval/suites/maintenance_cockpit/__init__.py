@@ -438,19 +438,17 @@ async def threshold_calibration_stable_in_range(ctx: ScenarioContext) -> None:
         window_days=30,
     )
 
-    # Get calibration count before
+    our_rule = 'llm_schema_drift'
     before = await ctx.api.lint_calibration_list(
+        rule=our_rule,
         vault_id=str(ctx.vault_id),
     )
     rows_before = len(before.get('rows') or [])
 
-    # Run calibration
-    await ctx.api.lint_calibration_run(
-        vault_id=str(ctx.vault_id),
-    )
+    await ctx.api.lint_calibration_run(vault_id=str(ctx.vault_id))
 
-    # Get calibration count after
     after = await ctx.api.lint_calibration_list(
+        rule=our_rule,
         vault_id=str(ctx.vault_id),
     )
     rows_after = len(after.get('rows') or [])
@@ -459,7 +457,8 @@ async def threshold_calibration_stable_in_range(ctx: ScenarioContext) -> None:
     ctx.metrics['new_calibration_rows'] = float(new_rows)
     ctx.metrics['pass'] = 1.0 if new_rows == 0 else 0.0
     assert new_rows == 0, (
-        f'Expected no new calibration row in the dead zone, but {new_rows} new row(s) were written.'
+        f'Expected no new calibration row for {our_rule} in the dead zone, '
+        f'but {new_rows} new row(s) were written.'
     )
 
 
