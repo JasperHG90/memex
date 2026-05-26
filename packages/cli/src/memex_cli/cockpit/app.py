@@ -308,6 +308,7 @@ class ProposalCockpitApp(App):
         self._selected_option: CockpitOption | None = None
         self._batch_targets: list[CockpitProposal] = []
         # DETAIL mode state
+        self._viewing_source_note: bool = False
         self._detail_unit_ids: list[str] = []
         self._detail_unit_index: int = 0
 
@@ -362,6 +363,7 @@ class ProposalCockpitApp(App):
             self._batch_targets = []
             self._detail_unit_ids = []
             self._detail_unit_index = 0
+            self._viewing_source_note = False
             self.query_one('#queue-list', ListView).focus()
             self._update_footer()
         elif new in ('review', 'batch'):
@@ -855,7 +857,11 @@ class ProposalCockpitApp(App):
         if key == 'escape':
             event.prevent_default()
             event.stop()
-            self.mode = 'list'
+            if self._viewing_source_note:
+                self._viewing_source_note = False
+                self._load_detail_for_current_unit()
+            else:
+                self.mode = 'list'
         elif key == 'tab' and len(self._detail_unit_ids) > 1:
             event.prevent_default()
             event.stop()
@@ -1002,11 +1008,12 @@ class ProposalCockpitApp(App):
             self._show_status('Could not load source note text.', error=True)
             return
 
+        self._viewing_source_note = True
         short_id = unit_id[:8]
         note_label = detail.note_key or detail.note_id
         lines: list[str] = []
         lines.append(f'[bold]─── SOURCE NOTE: {note_label} ───[/bold]')
-        lines.append(f'[dim]unit {short_id} · press Esc to return to list[/dim]')
+        lines.append(f'[dim]unit {short_id} · Esc to return to detail[/dim]')
         lines.append('')
         lines.append('[dim]' + '─' * 60 + '[/dim]')
         lines.append('')
