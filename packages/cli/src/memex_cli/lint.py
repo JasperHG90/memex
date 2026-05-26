@@ -250,8 +250,9 @@ async def lint_run_cmd(
                 continue
             try:
                 llm_payload = await api.run_lint_llm(vault_id)
-                llm_findings = llm_payload.get('findings_emitted', 0)
-                llm_candidates = llm_payload.get('candidates_evaluated', 0)
+                summaries = llm_payload.get('summaries', [])
+                llm_findings = sum(s.get('emitted', 0) for s in summaries)
+                llm_candidates = sum(s.get('evaluated', 0) for s in summaries)
                 console.print(
                     f'[green]llm checks:[/green] {llm_findings} findings '
                     f'from {llm_candidates} candidates evaluated'

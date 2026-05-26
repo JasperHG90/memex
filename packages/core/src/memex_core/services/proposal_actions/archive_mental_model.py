@@ -41,7 +41,7 @@ _ARCHIVE_SQL = text("""
     UPDATE mental_models
     SET archived_at = now()
     WHERE id = :id
-      AND vault_id = :vault_id
+      AND (CAST(:vault_id AS uuid) IS NULL OR vault_id = CAST(:vault_id AS uuid))
       AND archived_at IS NULL
     RETURNING archived_at
 """)
@@ -51,7 +51,7 @@ _UNARCHIVE_SQL = text("""
     UPDATE mental_models
     SET archived_at = NULL
     WHERE id = :id
-      AND vault_id = :vault_id
+      AND (CAST(:vault_id AS uuid) IS NULL OR vault_id = CAST(:vault_id AS uuid))
       AND archived_at IS NOT NULL
     RETURNING id
 """)
@@ -95,7 +95,10 @@ class ArchiveMentalModelAction:
         async with api.metastore.session() as session:
             result = await session.execute(
                 _ARCHIVE_SQL,
-                {'id': UUID(target_id), 'vault_id': vault_id},
+                {
+                    'id': UUID(target_id),
+                    'vault_id': str(vault_id) if vault_id is not None else None,
+                },
             )
             row = result.first()
             await session.commit()
@@ -128,7 +131,10 @@ class ArchiveMentalModelAction:
         async with api.metastore.session() as session:
             result = await session.execute(
                 _UNARCHIVE_SQL,
-                {'id': UUID(target_id), 'vault_id': vault_id},
+                {
+                    'id': UUID(target_id),
+                    'vault_id': str(vault_id) if vault_id is not None else None,
+                },
             )
             row = result.first()
             await session.commit()
