@@ -243,6 +243,25 @@ _SELECT_DEFERRED_FIFO_SQL = text("""
 """)
 
 
+# Check whether a reverse-pair contradiction finding already exists (pending or
+# recently resolved/dismissed). Used to suppress the A→B finding when B→A already
+# exists, eliminating duplicate contradiction reports.
+_REVERSE_CONTRADICTION_EXISTS_SQL = text("""
+    SELECT 1 FROM maintenance_proposals mp
+    WHERE mp.rule_name = :rule_name
+      AND mp.target_type = :target_type
+      AND mp.vault_id = CAST(:vault_id AS uuid)
+      AND mp.target_id = :related_id
+      AND mp.evidence->'related_unit_ids' @> CAST(:target_id_json AS jsonb)
+      AND (
+          mp.status = 'pending'
+          OR (mp.status IN ('resolved', 'dismissed')
+              AND mp.resolved_at > now() - interval '30 days')
+      )
+    LIMIT 1
+""")
+
+
 _DISMISS_DEFERRED_SQL = text("""
     UPDATE maintenance_proposals
     SET status = 'dismissed', resolved_at = now(), resolved_by = 'lint_llm'
@@ -280,6 +299,7 @@ _LOAD_UNIT_AND_TOP_PEER_TEXT_SQL = text("""
               AND m.id != :unit_id
               AND m.status = 'active'
               AND m.embedding IS NOT NULL
+              AND (m.metadata->>'virtual' IS NULL OR m.metadata->>'virtual' != 'true')
               AND self.embedding IS NOT NULL
             ORDER BY (m.embedding <=> self.embedding)
             LIMIT 1
@@ -293,6 +313,7 @@ _SELECT_TICK_CANDIDATES_SQL = text("""
     WHERE m.vault_id = :vault_id
       AND m.status = 'active'
       AND m.embedding IS NOT NULL
+      AND (m.metadata->>'virtual' IS NULL OR m.metadata->>'virtual' != 'true')
       AND NOT EXISTS (
           SELECT 1 FROM maintenance_proposals p
           WHERE p.target_type = 'memory_unit'
@@ -637,7 +658,30 @@ class LintLLMService(BaseService):
 
         Returns True if a new row was inserted, False if a duplicate pending
         finding already existed for the same target + rule + vault.
+
+        For ``llm_semantic_contradiction`` findings, also checks whether a
+        reverse-pair finding (B→A) already exists before inserting A→B. This
+        is a belt-and-suspenders guard complementing the emission-time UUID
+        normalization in ``make_semantic_contradiction_check``.
         """
+        # Reverse-pair dedup for contradiction findings.
+        if finding.rule_name == 'llm_semantic_contradiction' and finding.related_unit_ids:
+            for related_id in finding.related_unit_ids:
+                row = (
+                    await session.execute(
+                        _REVERSE_CONTRADICTION_EXISTS_SQL,
+                        {
+                            'rule_name': finding.rule_name,
+                            'target_type': finding.target_type,
+                            'vault_id': str(vault_id),
+                            'related_id': related_id,
+                            'target_id_json': json.dumps(finding.target_id),
+                        },
+                    )
+                ).first()
+                if row is not None:
+                    return False
+
         evidence = {
             'check_type': finding.check_type,
             'surprise_score': finding.surprise_score,

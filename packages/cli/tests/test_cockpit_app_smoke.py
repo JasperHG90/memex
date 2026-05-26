@@ -50,6 +50,9 @@ class _FakeClient:
     async def get_memory_unit(self, unit_id: str) -> Any:
         return None
 
+    async def list_vaults(self) -> list[Any]:
+        return []
+
 
 def _finding(
     *,
