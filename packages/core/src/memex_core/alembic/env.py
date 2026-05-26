@@ -140,7 +140,7 @@ def _bootstrap_fresh_db(connection) -> None:
     connection.execute(
         text(
             'CREATE TABLE IF NOT EXISTS alembic_version ('
-            '  version_num VARCHAR(32) NOT NULL,'
+            '  version_num VARCHAR(128) NOT NULL,'
             '  CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)'
             ')'
         )
@@ -170,6 +170,13 @@ def do_run_migrations(connection):
     if _is_fresh_db(connection):
         _bootstrap_fresh_db(connection)
         return
+
+    # Widen alembic_version.version_num if it's still the default varchar(32).
+    # Our migration revision IDs can exceed 32 chars; this prevents silent
+    # truncation or INSERT failures on existing databases.
+    connection.execute(
+        text('ALTER TABLE alembic_version ALTER COLUMN version_num TYPE varchar(128)')
+    )
 
     context.configure(
         connection=connection,
