@@ -178,44 +178,26 @@ async def cooldown_suppression(ctx: ScenarioContext) -> None:
         return
 
     finding_id = seeded[0]['id']
-    target_id = seeded[0]['target_id']
+    seeded_target = seeded[0]['target_id']
 
-    # Step 2: resolve with deprioritize_unit action
     await ctx.api.lint_resolve(
         finding_id,
-        action='deprioritize_unit',
-        params={'unit_id': target_id},
+        action='no_op',
         note='eval-suite: testing cooldown suppression',
     )
 
-    # Step 3: seed a SECOND finding with the same rule_name and target_id
-    # to simulate what lint would emit on a re-run. The real cooldown
-    # check happens at the storage layer: the ON CONFLICT partial-index
-    # on (rule_name, target_type, target_id, vault_id) WHERE status='pending'
-    # means a fresh INSERT for the same tuple is accepted (prior was
-    # resolved, not pending). We verify the cooldown table instead: the
-    # resolve should have written a cooldown entry, and a fresh seed
-    # should still show up as pending (the seed endpoint bypasses
-    # cooldown — it inserts unconditionally). The REAL cooldown test is:
-    # after resolving, run_lint_rules should NOT re-emit for the same target.
-    #
-    # Approach: run SQL-rule lint and verify no new pending finding
-    # re-appears for the rule_name we resolved.
     try:
         await ctx.api.run_lint_rules(ctx.vault_id)
     except Exception as exc:
         logger.warning('run_lint_rules failed (non-fatal): %s', exc)
 
-    # Step 4: check that no pending finding exists for the same rule
     reappeared = await _get_pending_findings(ctx, rule_name='llm_semantic_contradiction')
-    # Filter to only findings that match our specific target_id
-    # (other seeded findings from parallel scenarios should not count)
-    same_target = [f for f in reappeared if f.get('target_id') == target_id]
+    same_target = [f for f in reappeared if f.get('target_id') == seeded_target]
     count = len(same_target)
     ctx.metrics['pass'] = 1.0 if count == 0 else 0.0
     ctx.metrics['pending_after_rerun'] = float(count)
     assert count == 0, (
-        f'Cooldown failed: {count} pending finding(s) for target_id={target_id} '
+        f'Cooldown failed: {count} pending finding(s) for target_id={seeded_target} '
         f're-appeared after resolving + re-running lint.'
     )
 
@@ -244,19 +226,17 @@ async def evidence_blob_integrity(ctx: ScenarioContext) -> None:
         return
 
     finding_id = seeded[0]['id']
-    target_id = seeded[0]['target_id']
 
     result = await ctx.api.lint_resolve(
         finding_id,
-        action='deprioritize_unit',
-        params={'unit_id': target_id},
+        action='no_op',
         note='test rationale',
     )
 
     resolution = result.get('resolution') or {}
     note_ok = resolution.get('note') == 'test rationale'
     followup = resolution.get('followup') or {}
-    action_ok = followup.get('action') == 'deprioritize_unit'
+    action_ok = followup.get('action') == 'no_op'
     has_applied = 'applied_state' in followup
     has_prior = 'prior_state' in followup
 
@@ -305,7 +285,7 @@ async def telemetry_verdict_rollup(ctx: ScenarioContext) -> None:
         if i < 2:
             await ctx.api.lint_resolve(
                 fid,
-                action='deprioritize_unit',
+                action='no_op',
                 params={'unit_id': s['target_id']},
                 note=f'eval-suite: accept #{i + 1}',
             )
@@ -442,7 +422,7 @@ async def threshold_calibration_stable_in_range(ctx: ScenarioContext) -> None:
             if i < mid:
                 await ctx.api.lint_resolve(
                     fid,
-                    action='deprioritize_unit',
+                    action='no_op',
                     params={'unit_id': s['target_id']},
                     note='eval-suite: accept for balance',
                 )
@@ -580,7 +560,7 @@ async def optimizer_compiles_and_stores(ctx: ScenarioContext) -> None:
             if i < mid:
                 await ctx.api.lint_resolve(
                     fid,
-                    action='deprioritize_unit',
+                    action='no_op',
                     params={'unit_id': s['target_id']},
                     note=f'eval-suite: accept #{i + 1}',
                 )
@@ -610,7 +590,7 @@ async def optimizer_compiles_and_stores(ctx: ScenarioContext) -> None:
         ctx.metrics['pass'] = 0.0
         assert False, f'lint_optimize_run failed: {exc}'  # noqa: B011
 
-    version = result.get('version')
+    version = result.get('new_version')
     validation_score = result.get('validation_score')
 
     ctx.metrics['version'] = float(version) if version is not None else 0.0
