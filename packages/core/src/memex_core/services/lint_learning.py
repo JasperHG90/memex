@@ -424,31 +424,38 @@ class LintLearningService(BaseService):
                     'reason': reason,
                 }
 
-                # Supersede all prior unsuperseded rows for this rule.
-                await session.execute(
-                    text(_SUPERSEDE_CALIBRATION_SQL),
-                    {'rule_name': rule, 'vault_id': v_id, 'new_version': new_version},
-                )
-
-                # Insert the new calibration row. A concurrent
-                # calibrate_thresholds() call may race us to the same version
-                # number — catch the unique violation and report gracefully
-                # rather than propagating as 500.
+                # Wrap the supersede + insert in a SAVEPOINT so that an
+                # IntegrityError (version race) only rolls back this rule's
+                # writes, not the entire transaction. Without the nested
+                # transaction, PostgreSQL marks the session as
+                # InFailedSqlTransaction and all subsequent SQL in the loop
+                # would fail.
                 try:
-                    await session.execute(
-                        text(_INSERT_CALIBRATION_SQL),
-                        {
-                            'rule_name': rule,
-                            'vault_id': v_id,
-                            'version': new_version,
-                            'surprise_threshold': new_threshold,
-                            'polarity_threshold': None,
-                            'learned_from_window_start': trow.window_start,
-                            'learned_from_window_end': trow.window_end,
-                            'frozen': False,
-                            'rationale': _json.dumps(rationale),
-                        },
-                    )
+                    async with session.begin_nested():
+                        # Supersede all prior unsuperseded rows for this rule.
+                        await session.execute(
+                            text(_SUPERSEDE_CALIBRATION_SQL),
+                            {'rule_name': rule, 'vault_id': v_id, 'new_version': new_version},
+                        )
+
+                        # Insert the new calibration row. A concurrent
+                        # calibrate_thresholds() call may race us to the same version
+                        # number — catch the unique violation and report gracefully
+                        # rather than propagating as 500.
+                        await session.execute(
+                            text(_INSERT_CALIBRATION_SQL),
+                            {
+                                'rule_name': rule,
+                                'vault_id': v_id,
+                                'version': new_version,
+                                'surprise_threshold': new_threshold,
+                                'polarity_threshold': None,
+                                'learned_from_window_start': trow.window_start,
+                                'learned_from_window_end': trow.window_end,
+                                'frozen': False,
+                                'rationale': _json.dumps(rationale),
+                            },
+                        )
                 except IntegrityError:
                     logger.warning(
                         'Calibration version %d for rule %s lost race (IntegrityError)',

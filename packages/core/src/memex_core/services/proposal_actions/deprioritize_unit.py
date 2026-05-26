@@ -69,6 +69,8 @@ class DeprioritizeUnitAction:
         reason = str(params.get('reason') or 'cockpit: maintenance proposal accepted')
         override = params.get('override_target_id')
         unit_id = UUID(override) if override else UUID(target_id)
+        # vault_id=None is intentionally supported: MemexAPI.deprioritize_memory_unit
+        # skips the vault-scoping check when vault_id is None (legacy/CLI callers).
         await api.deprioritize_memory_unit(
             unit_id,
             reason,
