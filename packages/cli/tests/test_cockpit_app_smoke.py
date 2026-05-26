@@ -47,7 +47,13 @@ class _FakeClient:
     async def lint_reverse(self, finding_id: str) -> dict[str, Any]:
         return {'finding_id': finding_id, 'status': 'reversed'}
 
+    async def lint_flag(self, finding_id: str) -> dict[str, Any]:
+        return {'finding_id': finding_id, 'flagged': True, 'flagged_at': '2026-05-26T00:00:00Z'}
+
     async def get_memory_unit(self, unit_id: str) -> Any:
+        return None
+
+    async def get_note(self, note_id: Any) -> Any:
         return None
 
     async def list_vaults(self) -> list[Any]:

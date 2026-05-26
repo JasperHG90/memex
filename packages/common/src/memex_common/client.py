@@ -1593,6 +1593,7 @@ class RemoteMemexAPI:
         vault_id: str | None = None,
         lint_type: str | None = None,
         status: str = 'pending',
+        flagged: bool | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> dict[str, Any]:
@@ -1602,6 +1603,8 @@ class RemoteMemexAPI:
             params['vault_id'] = vault_id
         if lint_type is not None:
             params['lint_type'] = lint_type
+        if flagged is not None:
+            params['flagged'] = str(flagged).lower()
         return await self._get('lint/findings', params=params)
 
     async def lint_dismiss(
@@ -1680,6 +1683,15 @@ class RemoteMemexAPI:
 
     # Back-compat alias — old call sites bound to lint_reverse_winner.
     lint_reverse_winner = lint_reverse
+
+    async def lint_flag(self, finding_id: str) -> dict[str, Any]:
+        """Toggle the flagged_at bookmark on a finding.
+
+        Sets ``flagged_at = now()`` when currently NULL; clears to NULL
+        when already flagged. Flagging is orthogonal to status — any
+        finding can be flagged or unflagged.
+        """
+        return await self._post(f'lint/findings/{finding_id}/flag', {})
 
     async def run_lint_rules(self, vault_id: str | UUID) -> dict[str, Any]:
         """Synchronously run the V1 lint rule registry for ``vault_id``.

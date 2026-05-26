@@ -129,6 +129,9 @@ async def lint_findings(
     vault_id: UUID | None = Query(None, description='Scope to one vault.'),
     lint_type: str | None = Query(None, pattern='^(structural|quality|governance|schema)$'),
     status: str = Query('pending', pattern='^(pending|resolved|dismissed)$'),
+    flagged: bool | None = Query(
+        None, description='Filter to flagged (true) or unflagged (false).'
+    ),
     limit: int = Query(50, ge=1, le=500),
     offset: int = Query(0, ge=0),
     auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
@@ -149,6 +152,10 @@ async def lint_findings(
         if lint_type is not None:
             clauses.append('lint_type = :lint_type')
             params['lint_type'] = lint_type
+        if flagged is True:
+            clauses.append('flagged_at IS NOT NULL')
+        elif flagged is False:
+            clauses.append('flagged_at IS NULL')
 
         where = ' AND '.join(clauses)
         params['limit'] = limit
@@ -159,7 +166,7 @@ async def lint_findings(
                 text(
                     'SELECT mp.id::text, mp.vault_id::text, mp.lint_type, mp.target_type, '
                     'mp.target_id, mp.rule_name, mp.evidence, mp.suggested_action, mp.status, '
-                    'mp.source, mp.created_at, mp.resolved_at, mp.resolved_by, '
+                    'mp.source, mp.created_at, mp.resolved_at, mp.resolved_by, mp.flagged_at, '
                     '(SELECT mu.text FROM memory_units mu '
                     "WHERE mp.target_type = 'memory_unit' "
                     'AND mu.id::text = mp.target_id) AS target_text '
@@ -219,6 +226,54 @@ async def _gate_finding_for_write(
     if finding_vault is not None:
         await check_vault_access(auth, [finding_vault], api, permission=Permission.WRITE)
     return finding_vault
+
+
+@router.post('/findings/{finding_id}/flag', dependencies=[Depends(require_write)])
+async def lint_flag(
+    finding_id: UUID,
+    api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+) -> dict[str, Any]:
+    """Toggle the ``flagged_at`` bookmark on a finding.
+
+    Sets ``flagged_at = now()`` when currently NULL; clears to NULL when
+    already flagged. Flagging is orthogonal to resolution status — any
+    finding (pending, resolved, dismissed) can be flagged or unflagged.
+    This is a non-destructive bookmark; no ``_require_attended_mode`` gate.
+    """
+    # Vault-scope auth gate (same as dismiss/resolve).
+    found, finding_vault = await api.lint.get_finding_vault_id(finding_id)
+    if not found:
+        raise HTTPException(status_code=404, detail='Finding not found')
+    if finding_vault is not None:
+        await check_vault_access(auth, [finding_vault], api, permission=Permission.WRITE)
+    try:
+        async with api.metastore.session() as session:
+            result = await session.execute(
+                text(
+                    'UPDATE maintenance_proposals '
+                    'SET flagged_at = CASE '
+                    '  WHEN flagged_at IS NULL THEN now() '
+                    '  ELSE NULL '
+                    'END '
+                    'WHERE id = :id '
+                    'RETURNING flagged_at'
+                ),
+                {'id': str(finding_id)},
+            )
+            updated_row = result.mappings().first()
+            await session.commit()
+    except Exception as e:
+        raise _handle_error(e, 'Failed to toggle flag on finding')
+    if updated_row is None:
+        raise HTTPException(status_code=404, detail='Finding not found')
+    new_flagged_at = updated_row['flagged_at']
+    flagged = new_flagged_at is not None
+    return {
+        'finding_id': str(finding_id),
+        'flagged': flagged,
+        'flagged_at': new_flagged_at.isoformat() if flagged else None,
+    }
 
 
 @router.post('/findings/{finding_id}/dismiss', dependencies=[Depends(require_write)])

@@ -128,6 +128,14 @@ async def lint_findings(
             help='Lifecycle filter: pending, resolved, dismissed.',
         ),
     ] = 'pending',
+    flagged: Annotated[
+        bool,
+        typer.Option(
+            '--flagged/--no-flagged',
+            help='Show only flagged findings (flagged_at IS NOT NULL).',
+            show_default=False,
+        ),
+    ] = False,
     limit: Annotated[int, typer.Option('--limit', min=1, max=500)] = 50,
 ):
     """List maintenance findings."""
@@ -139,11 +147,17 @@ async def lint_findings(
     async with get_api_context(config) as api:
         try:
             vault_id = str(await api.resolve_vault_identifier(vault)) if vault is not None else None
+            # Only pass flagged=True to the server when the user explicitly
+            # requested --flagged; otherwise omit it so all findings show.
+            extra_params: dict[str, Any] = {}
+            if flagged:
+                extra_params['flagged'] = True
             payload = await api.lint_findings(
                 vault_id=vault_id,
                 lint_type=lint_type,
                 status=status,
                 limit=limit,
+                **extra_params,
             )
         except Exception as e:
             handle_api_error(e)
@@ -151,7 +165,8 @@ async def lint_findings(
 
     findings = payload.get('findings', [])
     if not findings:
-        console.print(f'[dim]No {status} findings.[/dim]')
+        qualifier = 'flagged ' if flagged else ''
+        console.print(f'[dim]No {qualifier}{status} findings.[/dim]')
         return
 
     table = Table(title=f'{status} findings ({len(findings)})')
@@ -161,7 +176,9 @@ async def lint_findings(
     table.add_column('target_type')
     table.add_column('target_id', max_width=36)
     table.add_column('vault_id', max_width=36)
+    table.add_column('⚑', justify='center')
     for f in findings:
+        flag_indicator = '⚑' if f.get('flagged_at') else ''
         table.add_row(
             f['id'][:8] + '…',
             f['lint_type'],
@@ -169,6 +186,7 @@ async def lint_findings(
             f['target_type'],
             f['target_id'],
             f['vault_id'] or '(global)',
+            flag_indicator,
         )
     console.print(table)
 

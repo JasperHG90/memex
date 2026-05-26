@@ -1940,6 +1940,11 @@ class MaintenanceProposal(SQLModel, table=True):  # type: ignore
             'alongside resolved_at when status flips to resolved/dismissed.'
         ),
     )
+    flagged_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
+        description='Set when the finding is flagged for later review; NULL when unflagged.',
+    )
 
     __table_args__ = (
         CheckConstraint(
