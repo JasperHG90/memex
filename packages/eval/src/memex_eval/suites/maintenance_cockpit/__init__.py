@@ -304,16 +304,15 @@ async def telemetry_verdict_rollup(ctx: ScenarioContext) -> None:
     )
     rows = telemetry.get('rows') or []
 
-    # Sum across all rules
-    total_accept = sum(int(r.get('accept_count', 0)) for r in rows)
+    total_no_op = sum(int(r.get('no_op_count', 0)) for r in rows)
     total_dismiss = sum(int(r.get('dismiss_count', 0)) for r in rows)
 
-    ctx.metrics['accept_count'] = float(total_accept)
+    ctx.metrics['no_op_count'] = float(total_no_op)
     ctx.metrics['dismiss_count'] = float(total_dismiss)
-    accept_ok = total_accept >= 2
+    noop_ok = total_no_op >= 2
     dismiss_ok = total_dismiss >= 1
-    ctx.metrics['pass'] = 1.0 if (accept_ok and dismiss_ok) else 0.0
-    assert accept_ok, f'Expected accept_count>=2, got {total_accept}'
+    ctx.metrics['pass'] = 1.0 if (noop_ok and dismiss_ok) else 0.0
+    assert noop_ok, f'Expected no_op_count>=2, got {total_no_op}'
     assert dismiss_ok, f'Expected dismiss_count>=1, got {total_dismiss}'
 
 
@@ -333,8 +332,9 @@ async def telemetry_verdict_rollup(ctx: ScenarioContext) -> None:
     group='calibration',
 )
 async def threshold_calibration_adjusts(ctx: ScenarioContext) -> None:
-    # Seed enough findings to dismiss and create a low accept_rate
-    seeded = await _seed_findings(ctx, count=6)
+    # Seed many findings to dismiss — enough to overwhelm any prior
+    # no_op verdicts from other scenarios sharing the same vault.
+    seeded = await _seed_findings(ctx, count=20)
     if len(seeded) < 3:
         _skip_no_findings(
             ctx,
