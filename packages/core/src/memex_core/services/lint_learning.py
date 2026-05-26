@@ -581,25 +581,45 @@ def _compute_new_threshold(
     accept_rate: float,
     n_labelled: int,
 ) -> tuple[float | None, str]:
-    """Return (new_threshold, reason) or (None, reason) if no change is warranted."""
+    """Return (new_threshold, reason) or (None, reason) if no change is warranted.
+
+    When ``n_labelled < MIN_LABELLED_FOR_CALIBRATION``, the function proceeds
+    with the adjustment but annotates the reason with a ``low_sample_size``
+    warning so callers can surface it.
+    """
+    low_sample_warning = ''
     if n_labelled < MIN_LABELLED_FOR_CALIBRATION:
-        return None, f'insufficient data (n={n_labelled} < {MIN_LABELLED_FOR_CALIBRATION})'
+        low_sample_warning = (
+            f' [warning:low_sample_size n={n_labelled} < {MIN_LABELLED_FOR_CALIBRATION}]'
+        )
 
     if accept_rate < LOW_ACCEPT_RATE:
         delta = min(THRESHOLD_STEP, THRESHOLD_MAX_STEP_PER_RUN)
         new = min(current + delta, THRESHOLD_CEILING)
         if new == current:
-            return None, f'already at ceiling ({THRESHOLD_CEILING})'
-        return new, f'accept_rate={accept_rate:.2f} < {LOW_ACCEPT_RATE} → raised by {delta}'
+            return None, f'already at ceiling ({THRESHOLD_CEILING}){low_sample_warning}'
+        return (
+            new,
+            f'accept_rate={accept_rate:.2f} < {LOW_ACCEPT_RATE}'
+            f' → raised by {delta}{low_sample_warning}',
+        )
 
     if accept_rate > HIGH_ACCEPT_RATE:
         delta = min(THRESHOLD_STEP, THRESHOLD_MAX_STEP_PER_RUN)
         new = max(current - delta, THRESHOLD_FLOOR)
         if new == current:
-            return None, f'already at floor ({THRESHOLD_FLOOR})'
-        return new, f'accept_rate={accept_rate:.2f} > {HIGH_ACCEPT_RATE} → lowered by {delta}'
+            return None, f'already at floor ({THRESHOLD_FLOOR}){low_sample_warning}'
+        return (
+            new,
+            f'accept_rate={accept_rate:.2f} > {HIGH_ACCEPT_RATE}'
+            f' → lowered by {delta}{low_sample_warning}',
+        )
 
-    return None, f'accept_rate={accept_rate:.2f} is within [{LOW_ACCEPT_RATE}, {HIGH_ACCEPT_RATE}]'
+    return (
+        None,
+        f'accept_rate={accept_rate:.2f} is within'
+        f' [{LOW_ACCEPT_RATE}, {HIGH_ACCEPT_RATE}]{low_sample_warning}',
+    )
 
 
 # Extend LintLearningService with Layer 3 methods.

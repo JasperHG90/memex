@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
@@ -47,6 +47,7 @@ class CompileResult:
     champion_score: float | None = None
     examples_used: int = 0
     message: str = ''
+    warnings: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -136,6 +137,30 @@ _SUPERSEDE_SIGNATURE_SQL = """
 """
 
 
+_ROLLBACK_SIGNATURE_UNSUPERSEDE_SQL = """
+    UPDATE lint_llm_signature
+    SET superseded_by_version = NULL
+    WHERE rule_name = :rule_name
+      AND (
+        (:vault_id::uuid IS NULL AND vault_id IS NULL)
+        OR vault_id = CAST(:vault_id AS uuid)
+      )
+      AND version = :version
+"""
+
+_ROLLBACK_SIGNATURE_SUPERSEDE_LATER_SQL = """
+    UPDATE lint_llm_signature
+    SET superseded_by_version = -1
+    WHERE rule_name = :rule_name
+      AND (
+        (:vault_id::uuid IS NULL AND vault_id IS NULL)
+        OR vault_id = CAST(:vault_id AS uuid)
+      )
+      AND version > :version
+      AND superseded_by_version IS NULL
+"""
+
+
 class LintLLMOptimizer(BaseService):
     """DSPy-based signature optimization for LLM lint checks.
 
@@ -175,13 +200,17 @@ class LintLLMOptimizer(BaseService):
             )
             raw_rows = [dict(r) for r in result.mappings().all()]
 
+        compile_warnings: list[str] = []
         if len(raw_rows) < MIN_EXAMPLES_FOR_COMPILE:
-            return CompileResult(
-                rule_name=rule_name,
-                vault_id=vault_id,
-                status='insufficient_data',
-                examples_used=len(raw_rows),
-                message=f'Need {MIN_EXAMPLES_FOR_COMPILE} labelled examples; have {len(raw_rows)}.',
+            compile_warnings.append(
+                f'low_sample_size: have {len(raw_rows)} labelled examples, '
+                f'recommended minimum is {MIN_EXAMPLES_FOR_COMPILE}'
+            )
+            logger.warning(
+                'Rule %s: proceeding with %d examples (< %d recommended)',
+                rule_name,
+                len(raw_rows),
+                MIN_EXAMPLES_FOR_COMPILE,
             )
 
         # 2. Build examples: (target_text_stub, verdict) pairs.
@@ -202,6 +231,7 @@ class LintLLMOptimizer(BaseService):
                 status='insufficient_data',
                 examples_used=len(examples),
                 message=f'Validation set too small ({len(validation)}); need ≥5.',
+                warnings=compile_warnings,
             )
 
         # 4. Run the optimizer — produces a compiled program + demos.
@@ -216,6 +246,7 @@ class LintLLMOptimizer(BaseService):
                 vault_id=vault_id,
                 status='error',
                 message=str(exc),
+                warnings=compile_warnings,
             )
 
         # 5. Load champion.
@@ -247,6 +278,7 @@ class LintLLMOptimizer(BaseService):
                     f'New ({new_score:.3f}) did not beat champion '
                     f'({champion_score:.3f}) + margin ({CHAMPION_MARGIN}).'
                 ),
+                warnings=compile_warnings,
             )
 
         # 7. Promote.
@@ -289,6 +321,7 @@ class LintLLMOptimizer(BaseService):
             champion_score=champion_score,
             examples_used=len(examples),
             message=f'Promoted v{new_version} (score: {new_score:.3f}).',
+            warnings=compile_warnings,
         )
 
     async def _run_bootstrap(
@@ -412,6 +445,33 @@ class LintLLMOptimizer(BaseService):
             )
             for r in rows
         ]
+
+    async def rollback_signature(
+        self,
+        rule_name: str,
+        version: int,
+        *,
+        vault_id: UUID | None = None,
+    ) -> bool:
+        """Rollback to a specific signature version.
+
+        Marks all versions after ``version`` as superseded and
+        un-supersedes the target. Same pattern as calibration rollback.
+        """
+        v_id = str(vault_id) if vault_id else None
+        async with self.metastore.session() as session:
+            # Mark everything after `version` as superseded.
+            await session.execute(
+                text(_ROLLBACK_SIGNATURE_SUPERSEDE_LATER_SQL),
+                {'rule_name': rule_name, 'vault_id': v_id, 'version': version},
+            )
+            # Un-supersede the target version.
+            result = await session.execute(
+                text(_ROLLBACK_SIGNATURE_UNSUPERSEDE_SQL),
+                {'rule_name': rule_name, 'vault_id': v_id, 'version': version},
+            )
+            await session.commit()
+        return bool(result.rowcount)
 
 
 def _build_examples(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
