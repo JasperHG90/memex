@@ -404,9 +404,9 @@ async def threshold_calibration_adjusts(ctx: ScenarioContext) -> None:
     group='calibration',
 )
 async def threshold_calibration_stable_in_range(ctx: ScenarioContext) -> None:
-    # Seed enough to dominate telemetry and land near 50% accept_rate
-    # despite prior scenarios' contributions to the same vault.
-    seeded = await _seed_findings(ctx, count=40)
+    # Use a distinct rule_name so calibration state from prior
+    # scenarios (which use 'llm_semantic_contradiction') doesn't bleed in.
+    seeded = await _seed_findings(ctx, count=10, rule_name='llm_schema_drift')
     if len(seeded) < 4:
         _skip_no_findings(
             ctx,
