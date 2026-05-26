@@ -421,6 +421,8 @@ class ProposalCockpitApp(App):
         if proposal.suggested_action:
             body_lines.append('')
             body_lines.append(f'[dim]suggested: {proposal.suggested_action}[/dim]')
+        body_lines.append('')
+        body_lines.append('[dim]' + '─' * 72 + '[/dim]')
         self.query_one('#detail-body', Static).update('\n'.join(body_lines))
 
     def _render_header(self, proposal: CockpitProposal) -> str:
@@ -496,6 +498,8 @@ class ProposalCockpitApp(App):
         if proposal.suggested_action:
             body_lines.append('')
             body_lines.append(f'[dim]suggested: {proposal.suggested_action}[/dim]')
+        body_lines.append('')
+        body_lines.append('[dim]' + '─' * 72 + '[/dim]')
 
         self.query_one('#detail-body', Static).update('\n'.join(body_lines))
 
@@ -547,7 +551,16 @@ class ProposalCockpitApp(App):
 
     def _show_action_detail(self, option: CockpitOption) -> None:
         rev = '[green]reversible[/green]' if option.reversible else '[red]permanent[/red]'
-        self.query_one('#action-detail', Static).update(f' [dim]{option.summary}  {rev}[/dim]')
+        summary = option.summary
+        current = self._current_proposal()
+        if (
+            current
+            and option.action_id == 'deprioritize_unit'
+            and current.rule_name == 'llm_semantic_contradiction'
+        ):
+            short_id = current.target_id[:8]
+            summary = f'Suppress TARGET {short_id}; related units stay active.'
+        self.query_one('#action-detail', Static).update(f' [dim]{summary}  {rev}[/dim]')
         # Update cursor glyphs on all action items
         action_list = self.query_one('#action-list', ListView)
         for child in action_list.children:
