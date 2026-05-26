@@ -404,8 +404,9 @@ async def threshold_calibration_adjusts(ctx: ScenarioContext) -> None:
     group='calibration',
 )
 async def threshold_calibration_stable_in_range(ctx: ScenarioContext) -> None:
-    # Seed an even number of findings and resolve half/half
-    seeded = await _seed_findings(ctx, count=6)
+    # Seed enough to dominate telemetry and land near 50% accept_rate
+    # despite prior scenarios' contributions to the same vault.
+    seeded = await _seed_findings(ctx, count=40)
     if len(seeded) < 4:
         _skip_no_findings(
             ctx,
