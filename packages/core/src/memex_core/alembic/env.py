@@ -159,6 +159,13 @@ def do_run_migrations(connection):
     On a fresh database (no application tables), takes a shortcut:
     ``create_all`` + stamp HEAD. On an existing database, runs the
     normal alembic migration chain.
+
+    Either way, ``create_all`` runs as the final step. It is idempotent
+    (``checkfirst=True`` is the default) — creates any tables that exist
+    in the SQLModel metadata but not yet in the database, and skips
+    tables that already exist. This catches SQLModel classes added
+    between the DB's last ``create_all`` and now — the user should never
+    have to manually create tables that the code already declares.
     """
     if _is_fresh_db(connection):
         _bootstrap_fresh_db(connection)
@@ -171,6 +178,8 @@ def do_run_migrations(connection):
     )
     with context.begin_transaction():
         context.run_migrations()
+
+    SQLModel.metadata.create_all(bind=connection, checkfirst=True)
 
 
 async def run_async_migrations() -> None:
