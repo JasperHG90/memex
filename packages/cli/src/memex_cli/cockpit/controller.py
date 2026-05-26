@@ -27,6 +27,32 @@ class UnitMeta:
 
 
 @dataclass(frozen=True)
+class UnitDetail:
+    """Rich detail view for a single memory unit in the DETAIL drill-down."""
+
+    unit_id: str
+    text: str
+    status: str | None = None
+    created_at: str | None = None
+    note_id: str | None = None
+    note_key: str | None = None
+    note_created_at: str | None = None
+    chunk_index: str | None = None  # e.g. "page 3 of 7"
+    entities: list[str] = field(default_factory=list)
+    fact_type: str | None = None
+    confidence: float | None = None
+    is_deprioritized: bool = False
+
+
+@dataclass(frozen=True)
+class UnitLineage:
+    """Upstream and downstream lineage summary for a memory unit."""
+
+    upstream: list[tuple[str, str]] = field(default_factory=list)  # (unit_id, label)
+    downstream: list[tuple[str, str]] = field(default_factory=list)  # (unit_id, label)
+
+
+@dataclass(frozen=True)
 class CockpitOption:
     """A single canned remediation the cockpit can present to the user."""
 
@@ -520,6 +546,17 @@ class CockpitClient(Protocol):
 
     async def get_note(self, note_id: Any) -> Any: ...
 
+    async def get_note_page_index(self, note_id: Any) -> Any: ...
+
+    async def get_lineage(
+        self,
+        entity_type: str,
+        entity_id: Any,
+        direction: Any = ...,
+        depth: int = 3,
+        limit: int = 10,
+    ) -> Any: ...
+
     async def list_vaults(self) -> Any: ...
 
 
@@ -649,6 +686,179 @@ class CockpitController:
                 status=status,
             )
         return result
+
+    async def get_unit_detail(self, unit_id: str) -> UnitDetail | None:
+        """Fetch enriched detail for a single memory unit.
+
+        Combines unit metadata, source note metadata, and chunk position
+        into a single ``UnitDetail`` view-model for the DETAIL drill-down.
+        Returns ``None`` if the unit cannot be loaded.
+        """
+        try:
+            unit = await self._client.get_memory_unit(unit_id)
+        except Exception:  # noqa: BLE001
+            return None
+
+        text = getattr(unit, 'text', '') or ''
+        status = getattr(unit, 'status', None)
+        fact_type = getattr(unit, 'fact_type', None)
+        confidence = getattr(unit, 'confidence', None)
+        is_deprioritized = getattr(unit, 'is_deprioritized', False)
+
+        # Extract created date from mentioned_at.
+        created_at: str | None = None
+        mentioned = getattr(unit, 'mentioned_at', None)
+        if mentioned is not None:
+            try:
+                created_at = mentioned.isoformat()
+            except AttributeError:
+                created_at = str(mentioned) if mentioned else None
+
+        # Resolve source note metadata.
+        note_id_raw = getattr(unit, 'note_id', None)
+        note_id_str: str | None = str(note_id_raw) if note_id_raw is not None else None
+        note_key: str | None = None
+        note_created: str | None = None
+        if note_id_raw is not None:
+            try:
+                note = await self._client.get_note(note_id_raw)
+                note_key = getattr(note, 'name', None) or getattr(note, 'title', None)
+                note_created_dt = getattr(note, 'created_at', None)
+                if note_created_dt is not None:
+                    try:
+                        note_created = note_created_dt.strftime('%Y-%m-%d')
+                    except AttributeError:
+                        note_created = str(note_created_dt)[:10]
+            except Exception:  # noqa: BLE001
+                pass  # note lookup is best-effort
+
+        # Determine chunk position within the source note's page index.
+        chunk_index: str | None = None
+        chunk_id = getattr(unit, 'chunk_id', None)
+        if note_id_raw is not None and chunk_id is not None:
+            try:
+                page_index = await self._client.get_note_page_index(note_id_raw)
+                if page_index is not None:
+                    toc = page_index if isinstance(page_index, dict) else {}
+                    toc_nodes = toc.get('toc', [])
+                    total_pages = _count_toc_nodes(toc_nodes)
+                    position = _find_chunk_position(toc_nodes, str(chunk_id))
+                    if total_pages > 0 and position is not None:
+                        chunk_index = f'page {position} of {total_pages}'
+                    elif total_pages > 0:
+                        chunk_index = f'{total_pages} pages in source note'
+            except Exception:  # noqa: BLE001
+                pass
+
+        # Extract entity names from metadata (if populated by the server).
+        entities: list[str] = []
+        meta = getattr(unit, 'metadata', None) or {}
+        if isinstance(meta, dict):
+            ent_list = meta.get('entities') or meta.get('entity_names') or []
+            if isinstance(ent_list, list):
+                entities = [str(e) for e in ent_list]
+
+        return UnitDetail(
+            unit_id=unit_id,
+            text=text,
+            status=status,
+            created_at=created_at,
+            note_id=note_id_str,
+            note_key=note_key,
+            note_created_at=note_created,
+            chunk_index=chunk_index,
+            entities=entities,
+            fact_type=fact_type,
+            confidence=confidence,
+            is_deprioritized=is_deprioritized,
+        )
+
+    async def get_unit_lineage(self, unit_id: str) -> UnitLineage:
+        """Fetch upstream and downstream lineage for a memory unit.
+
+        Returns a ``UnitLineage`` with lists of (unit_id, label) tuples.
+        Falls back to empty lists on any error.
+        """
+        upstream: list[tuple[str, str]] = []
+        downstream: list[tuple[str, str]] = []
+
+        try:
+            from memex_common.schemas import LineageDirection
+
+            up_resp = await self._client.get_lineage(
+                'memory_unit',
+                unit_id,
+                direction=LineageDirection.UPSTREAM,
+                depth=2,
+                limit=5,
+            )
+            for node in getattr(up_resp, 'derived_from', []):
+                entity = getattr(node, 'entity', {})
+                nid = str(entity.get('id', ''))[:8]
+                ntxt = str(entity.get('text', ''))[:80]
+                upstream.append((nid, ntxt))
+        except Exception:  # noqa: BLE001
+            pass  # lineage is best-effort
+
+        try:
+            from memex_common.schemas import LineageDirection
+
+            down_resp = await self._client.get_lineage(
+                'memory_unit',
+                unit_id,
+                direction=LineageDirection.DOWNSTREAM,
+                depth=2,
+                limit=5,
+            )
+            for node in getattr(down_resp, 'derived_from', []):
+                entity = getattr(node, 'entity', {})
+                nid = str(entity.get('id', ''))[:8]
+                ntxt = str(entity.get('text', ''))[:80]
+                downstream.append((nid, ntxt))
+        except Exception:  # noqa: BLE001
+            pass
+
+        return UnitLineage(upstream=upstream, downstream=downstream)
+
+    async def fetch_note_text(self, note_id: str) -> str | None:
+        """Fetch the original text of a note by ID.
+
+        Returns ``None`` on any error.
+        """
+        try:
+            note = await self._client.get_note(note_id)
+            return getattr(note, 'original_text', None)
+        except Exception:  # noqa: BLE001
+            return None
+
+
+def _count_toc_nodes(toc: list[dict[str, Any]]) -> int:
+    """Count total leaf+branch nodes in a TOC tree."""
+    count = 0
+    for node in toc:
+        count += 1
+        children = node.get('children', [])
+        if children:
+            count += _count_toc_nodes(children)
+    return count
+
+
+def _find_chunk_position(
+    toc: list[dict[str, Any]], chunk_id: str, *, counter: list[int] | None = None
+) -> int | None:
+    """Find 1-based position of a chunk_id in the TOC tree (DFS order)."""
+    if counter is None:
+        counter = [0]
+    for node in toc:
+        counter[0] += 1
+        if node.get('id') == chunk_id:
+            return counter[0]
+        children = node.get('children', [])
+        if children:
+            result = _find_chunk_position(children, chunk_id, counter=counter)
+            if result is not None:
+                return result
+    return None
 
 
 def _sort_key(p: CockpitProposal) -> tuple[int, float]:
