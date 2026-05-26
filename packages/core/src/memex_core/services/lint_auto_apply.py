@@ -32,6 +32,7 @@ from memex_core.services.base import BaseService
 
 if TYPE_CHECKING:
     from memex_core.api import MemexAPI
+    from memex_core.services.lint_learning import LintLearningService
 
 logger = logging.getLogger('memex.core.services.lint_auto_apply')
 
@@ -85,6 +86,7 @@ _COUNT_AUTO_APPLIED_TODAY_SQL = """
     SELECT count(*)
     FROM maintenance_proposals
     WHERE vault_id = CAST(:vault_id AS uuid)
+      AND rule_name = :rule_name
       AND status = 'resolved'
       AND resolved_by = 'system:auto-learn'
       AND resolved_at >= :today_start
@@ -106,7 +108,7 @@ class LintAutoApplyService(BaseService):
         rule_configs: dict[str, AutoApplyRuleConfig],
         *,
         api: MemexAPI | None = None,
-        telemetry_service: Any = None,
+        telemetry_service: LintLearningService | None = None,
     ) -> AutoApplyResult:
         """Scan pending proposals and auto-resolve those that clear the gate.
 
@@ -143,7 +145,11 @@ class LintAutoApplyService(BaseService):
                 cap_row = (
                     await session.execute(
                         text(_COUNT_AUTO_APPLIED_TODAY_SQL),
-                        {'vault_id': str(vault_id), 'today_start': today_start},
+                        {
+                            'vault_id': str(vault_id),
+                            'rule_name': rule_name,
+                            'today_start': today_start,
+                        },
                     )
                 ).scalar()
             already_applied = int(cap_row or 0)
