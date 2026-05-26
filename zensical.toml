@@ -73,6 +73,7 @@ nav = [
       "explanation/how-memex-works/synthesis-and-reflection.md",
       "explanation/how-memex-works/feedback.md",
       "explanation/how-memex-works/note-lifecycle.md",
+      "explanation/how-memex-works/contradiction-detection.md",
     ]},
     "explanation/session-briefings.md",
     "explanation/mental-model-observations.md",
