@@ -17,7 +17,17 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.message import Message
 from textual.reactive import reactive
 from textual.screen import ModalScreen
-from textual.widgets import Footer, Header, Input, Label, ListItem, ListView, Static, TextArea
+from textual.widgets import (
+    Footer,
+    Header,
+    Input,
+    Label,
+    ListItem,
+    ListView,
+    Rule,
+    Static,
+    TextArea,
+)
 
 from memex_cli.cockpit.controller import (
     CockpitController,
@@ -70,10 +80,22 @@ class _ProposalQueueItem(ListItem):
 
 
 class _ActionListItem(ListItem):
-    def __init__(self, option: CockpitOption) -> None:
+    def __init__(self, option: CockpitOption, *, highlighted: bool = False) -> None:
         self.option = option
-        star = ' [yellow]★ Recommended[/yellow]' if option.recommended else ''
-        super().__init__(Label(f'{option.label}{star}'))
+        super().__init__(Label(self._render_label(highlighted)))
+
+    def _render_label(self, highlighted: bool = False) -> str:
+        cursor = '[bold]▸[/bold] ' if highlighted else '  '
+        star = ' [yellow]★[/yellow]' if self.option.recommended else '  '
+        rev_glyph = '[dim]↩[/dim]' if self.option.reversible else '[dim]⏎[/dim]'
+        label = f'[bold]{self.option.label}[/bold]' if highlighted else self.option.label
+        return f'{cursor}{label}{star}  {rev_glyph}'
+
+    def set_highlighted(self, highlighted: bool) -> None:
+        try:
+            self.query_one(Label).update(self._render_label(highlighted))
+        except Exception:  # noqa: BLE001
+            pass  # widget not yet mounted
 
 
 # ---------------------------------------------------------------------------
@@ -139,8 +161,24 @@ class HelpScreen(ModalScreen[None]):
             '  [bold]Shift+Enter[/bold] newline in note\n'
             '  [bold]Esc[/bold]         cancel note\n'
             '\n'
-            '[dim]Esc or q to close this help.[/dim]'
+            '[bold underline]ACTION EFFECTS[/bold underline]\n'
         )
+        # Append action effect details from all known options
+        from memex_cli.cockpit.controller import _DEFAULT_OPTIONS_BY_RULE
+
+        effect_lines: list[str] = []
+        seen: set[str] = set()
+        for options in _DEFAULT_OPTIONS_BY_RULE.values():
+            for opt in options:
+                key = opt.action_id or opt.label
+                if key in seen:
+                    continue
+                seen.add(key)
+                if opt.effect:
+                    effect_lines.append(f'  [bold]{opt.label}[/bold]')
+                    effect_lines.append(f'    [dim]{opt.effect}[/dim]')
+        body += '\n'.join(effect_lines)
+        body += '\n\n[dim]Esc or q to close this help.[/dim]'
         yield Vertical(Static(body, id='help-body'), id='help-modal')
 
 
@@ -196,6 +234,14 @@ class ProposalCockpitApp(App):
     #action-section.visible {
         display: block;
     }
+    #action-list ListItem {
+        padding: 0;
+        margin: 0;
+        height: 1;
+    }
+    #action-rule {
+        color: $text-muted;
+    }
     #note-section {
         display: none;
     }
@@ -242,7 +288,7 @@ class ProposalCockpitApp(App):
                 Static(id='detail-header'),
                 Static(id='detail-body'),
                 Vertical(
-                    Label('[bold]ACTIONS[/bold]'),
+                    Rule(line_style='heavy', id='action-rule'),
                     ListView(id='action-list'),
                     Static(id='action-detail'),
                     id='action-section',
@@ -288,6 +334,7 @@ class ProposalCockpitApp(App):
             self._pending_note = None
             self.query_one('#action-list', ListView).focus()
             self._update_footer()
+            self.call_after_refresh(lambda: action_section.scroll_visible(animate=False))
         elif new == 'note':
             note_section.add_class('visible')
             note_input = self.query_one('#note-input', _NoteInput)
@@ -352,59 +399,61 @@ class ProposalCockpitApp(App):
         self.query_one('#status-bar', Static).update('')
 
     def _show_proposal_preview(self, proposal: CockpitProposal) -> None:
-        badge = '[yellow]LLM[/yellow]' if proposal.is_llm_source else '[blue]rule[/blue]'
-        header_lines = [
-            f'[bold]{proposal.rule_name}[/bold]  {badge}  '
-            f'· {proposal.lint_type} / {proposal.target_type}',
-            f'[dim]vault {proposal.vault_id or "(global)"} · age {proposal.created_at}[/dim]',
-        ]
-        if proposal.surprise_score is not None:
-            header_lines.append(f'[dim]surprise={proposal.surprise_score:.2f}[/dim]')
-        if proposal.polarity_contradiction_prob is not None:
-            header_lines.append(
-                f'[dim]P(contradiction)={proposal.polarity_contradiction_prob:.3f}[/dim]'
-            )
-        self.query_one('#detail-header', Static).update('\n'.join(header_lines))
+        self.query_one('#detail-header', Static).update(self._render_header(proposal))
 
         body_lines: list[str] = []
 
         if proposal.rule_name == 'llm_semantic_contradiction':
             body_lines.extend(self._build_contradiction_body(proposal))
         else:
-            body_lines.append('[bold]TARGET[/bold]')
-            body_lines.append(f'  id: {proposal.target_id}')
+            body_lines.append(f'[bold]TARGET[/bold]  [dim cyan]{proposal.target_id[:8]}[/dim cyan]')
             if proposal.target_text:
-                body_lines.append(f'  text: {proposal.target_text}')
+                body_lines.append(f' {proposal.target_text}')
 
         if proposal.explanation:
             body_lines.append('')
-            body_lines.append('[bold]EXPLANATION[/bold]')
-            body_lines.append(f'  {proposal.explanation}')
-        if proposal.related_unit_ids:
+            body_lines.append(f' {proposal.explanation}')
+
+        is_contradiction = proposal.rule_name == 'llm_semantic_contradiction'
+        if proposal.related_unit_ids and not is_contradiction:
             body_lines.append('')
-            body_lines.append(f'[bold]RELATED[/bold]  {len(proposal.related_unit_ids)} units cited')
-            for rid in proposal.related_unit_ids[:5]:
-                body_lines.append(f'  · {rid}')
-            if len(proposal.related_unit_ids) > 5:
-                body_lines.append(f'  · … and {len(proposal.related_unit_ids) - 5} more')
+            body_lines.append(f'[dim]related: {len(proposal.related_unit_ids)} units cited[/dim]')
         if proposal.suggested_action:
             body_lines.append('')
             body_lines.append(f'[dim]suggested: {proposal.suggested_action}[/dim]')
         self.query_one('#detail-body', Static).update('\n'.join(body_lines))
 
+    def _render_header(self, proposal: CockpitProposal) -> str:
+        badge = '[yellow]LLM[/yellow]' if proposal.is_llm_source else '[blue]rule[/blue]'
+        vault_short = (proposal.vault_id or '(global)')[:8]
+        line1 = (
+            f' [bold]{proposal.rule_name}[/bold]  {badge}'
+            f'  [dim]· {proposal.lint_type} / {proposal.target_type}[/dim]'
+        )
+        right_parts: list[str] = []
+        if proposal.surprise_score is not None:
+            right_parts.append(f'surprise={proposal.surprise_score:.2f}')
+        if proposal.polarity_contradiction_prob is not None:
+            right_parts.append(f'P(contra) {proposal.polarity_contradiction_prob:.3f}')
+        right = f'  [dim]{" · ".join(right_parts)}[/dim]' if right_parts else ''
+        line2 = f' [dim]vault {vault_short} · {proposal.created_at or "?"}[/dim]{right}'
+        return f'{line1}\n{line2}'
+
     def _build_contradiction_body(self, proposal: CockpitProposal) -> list[str]:
         lines: list[str] = []
-        lines.append(f'[bold]TARGET UNIT[/bold]  ({proposal.target_id[:8]}…)')
+        lines.append(f' [bold]TARGET[/bold]   [dim cyan]{proposal.target_id[:8]}[/dim cyan]')
         if proposal.target_text:
-            lines.append(f'  "{proposal.target_text}"')
+            lines.append(f' {proposal.target_text}')
         else:
-            lines.append(f'  [dim]{proposal.target_id}[/dim]')
+            lines.append(f' [dim]{proposal.target_id}[/dim]')
 
         if proposal.related_unit_ids:
             contra_id = proposal.related_unit_ids[0]
             lines.append('')
-            lines.append(f'[bold]CONTRADICTING UNIT[/bold]  ({contra_id[:8]}…)')
-            lines.append('  [dim]loading…[/dim]')
+            lines.append('     [dim]vs.[/dim]')
+            lines.append('')
+            lines.append(f' [bold]RELATED[/bold]  [dim cyan]{contra_id[:8]}[/dim cyan]')
+            lines.append(' [dim]loading…[/dim]')
             self._fetch_contradiction_text(proposal, contra_id)
         return lines
 
@@ -421,32 +470,29 @@ class ProposalCockpitApp(App):
         contra_text = texts.get(contra_id)
 
         body_lines: list[str] = []
-        body_lines.append(f'[bold]TARGET UNIT[/bold]  ({proposal.target_id[:8]}…)')
+        body_lines.append(f' [bold]TARGET[/bold]   [dim cyan]{proposal.target_id[:8]}[/dim cyan]')
         if proposal.target_text:
-            body_lines.append(f'  "{proposal.target_text}"')
+            body_lines.append(f' {proposal.target_text}')
         else:
-            body_lines.append(f'  [dim]{proposal.target_id}[/dim]')
+            body_lines.append(f' [dim]{proposal.target_id}[/dim]')
 
         body_lines.append('')
-        body_lines.append(f'[bold]CONTRADICTING UNIT[/bold]  ({contra_id[:8]}…)')
+        body_lines.append('     [dim]vs.[/dim]')
+        body_lines.append('')
+        body_lines.append(f' [bold]RELATED[/bold]  [dim cyan]{contra_id[:8]}[/dim cyan]')
         if contra_text:
-            body_lines.append(f'  "{contra_text}"')
+            body_lines.append(f' {contra_text}')
         else:
-            body_lines.append(f'  [dim]{contra_id}[/dim]')
+            body_lines.append(' [dim](text not loaded)[/dim]')
 
         if proposal.explanation:
             body_lines.append('')
-            body_lines.append('[bold]EXPLANATION[/bold]')
-            body_lines.append(f'  {proposal.explanation}')
-        if proposal.related_unit_ids:
-            remaining = proposal.related_unit_ids[1:]
-            if remaining:
-                body_lines.append('')
-                body_lines.append(f'[bold]RELATED[/bold]  {len(remaining)} additional units cited')
-                for rid in remaining[:5]:
-                    body_lines.append(f'  · {rid}')
-                if len(remaining) > 5:
-                    body_lines.append(f'  · … and {len(remaining) - 5} more')
+            body_lines.append(f' {proposal.explanation}')
+
+        remaining = proposal.related_unit_ids[1:] if proposal.related_unit_ids else []
+        if remaining:
+            body_lines.append('')
+            body_lines.append(f'[dim]related: {len(remaining)} additional units cited[/dim]')
         if proposal.suggested_action:
             body_lines.append('')
             body_lines.append(f'[dim]suggested: {proposal.suggested_action}[/dim]')
@@ -461,8 +507,8 @@ class ProposalCockpitApp(App):
         options = options_for_rule(proposal.rule_name, proposal.target_type)
         action_list = self.query_one('#action-list', ListView)
         action_list.clear()
-        for opt in options:
-            action_list.append(_ActionListItem(opt))
+        for i, opt in enumerate(options):
+            action_list.append(_ActionListItem(opt, highlighted=(i == 0)))
         if options:
             action_list.index = 0
             self._show_action_detail(options[0])
@@ -485,8 +531,8 @@ class ProposalCockpitApp(App):
 
         action_list = self.query_one('#action-list', ListView)
         action_list.clear()
-        for opt in filtered:
-            action_list.append(_ActionListItem(opt))
+        for i, opt in enumerate(filtered):
+            action_list.append(_ActionListItem(opt, highlighted=(i == 0)))
         if filtered:
             action_list.index = 0
             self._show_action_detail(filtered[0])
@@ -500,19 +546,20 @@ class ProposalCockpitApp(App):
         )
 
     def _show_action_detail(self, option: CockpitOption) -> None:
-        rev = '[green]reversible[/green]' if option.reversible else '[red]forward-only[/red]'
-        lines = [
-            f'[bold]{option.label}[/bold]',
-            f'[dim]{option.summary}[/dim]',
-        ]
-        if option.effect:
-            lines.append(f'[dim]Effect: {option.effect}[/dim]')
-        lines.append(rev)
-        self.query_one('#action-detail', Static).update('\n'.join(lines))
+        rev = '[green]reversible[/green]' if option.reversible else '[red]permanent[/red]'
+        self.query_one('#action-detail', Static).update(f' [dim]{option.summary}  {rev}[/dim]')
+        # Update cursor glyphs on all action items
+        action_list = self.query_one('#action-list', ListView)
+        for child in action_list.children:
+            if isinstance(child, _ActionListItem):
+                is_current = child.option is option
+                child.set_highlighted(is_current)
 
     def _show_status(self, message: str, *, error: bool = False) -> None:
-        prefix = '[red]✗[/red]' if error else '[green]✓[/green]'
-        self.query_one('#status-bar', Static).update(f'{prefix} {message}')
+        if error:
+            self.query_one('#status-bar', Static).update(f' [red]✗ {message}[/red]')
+        else:
+            self.query_one('#status-bar', Static).update(f' [dim]✓ {message}[/dim]')
 
     # ------------------------------------------------------------------
     # Current proposal helper
