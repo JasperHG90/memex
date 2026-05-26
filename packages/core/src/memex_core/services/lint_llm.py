@@ -671,6 +671,7 @@ class LintLLMService(BaseService):
         session: AsyncSession,
         polarity_classifier: PolarityClassifier | None = None,
         confidence_map: dict[str, tuple[float, int]] | None = None,
+        skip_quota: bool = False,
     ) -> MaybeRunOutcome:
         """Surprise-gate → quota → LLM check → write finding (or defer).
 
@@ -761,17 +762,18 @@ class LintLLMService(BaseService):
             outcome.skipped_below_threshold = True
             return outcome
 
-        admitted = await self.check_and_increment_quota(vault_id, session=session)
-        if not admitted:
-            await self.defer(
-                unit_id,
-                vault_id,
-                reason=_DEFER_REASON_COST_CAP,
-                surprise_score=score,
-                session=session,
-            )
-            outcome.deferred = True
-            return outcome
+        if not skip_quota:
+            admitted = await self.check_and_increment_quota(vault_id, session=session)
+            if not admitted:
+                await self.defer(
+                    unit_id,
+                    vault_id,
+                    reason=_DEFER_REASON_COST_CAP,
+                    surprise_score=score,
+                    session=session,
+                )
+                outcome.deferred = True
+                return outcome
 
         context = CheckContext(polarity=polarity_result)
         finding = await _invoke_check(run_llm_check, unit_id, vault_id, session, context)
@@ -872,6 +874,7 @@ class LintLLMService(BaseService):
         run_llm_check: RunLLMCheck,
         check_name: str = 'llm_semantic_contradiction',
         polarity_classifier: PolarityClassifier | None = None,
+        skip_quota: bool = False,
     ) -> LintLLMTickSummary:
         """Single scheduler-tick for ``vault_id``.
 
@@ -935,6 +938,7 @@ class LintLLMService(BaseService):
                         session=session,
                         polarity_classifier=polarity_classifier,
                         confidence_map=confidence_map,
+                        skip_quota=skip_quota,
                     )
                     await session.commit()
                 except Exception:
