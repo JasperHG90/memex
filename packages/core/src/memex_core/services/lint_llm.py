@@ -182,9 +182,17 @@ _INSERT_LLM_FINDING_SQL = text("""
         vault_id, lint_type, target_type, target_id,
         rule_name, evidence, suggested_action, status, source
     )
-    VALUES (
+    SELECT
         :vault_id, :lint_type, :target_type, :target_id,
         :rule_name, CAST(:evidence AS jsonb), :suggested_action, 'pending', 'llm'
+    WHERE NOT EXISTS (
+        SELECT 1 FROM maintenance_proposals mp
+        WHERE mp.rule_name = :rule_name
+          AND mp.target_type = :target_type
+          AND mp.target_id = :target_id
+          AND mp.vault_id = CAST(:vault_id AS uuid)
+          AND mp.status IN ('resolved', 'dismissed')
+          AND mp.resolved_at > now() - interval '30 days'
     )
     ON CONFLICT (rule_name, target_type, target_id, vault_id)
     WHERE status = 'pending'
@@ -192,16 +200,22 @@ _INSERT_LLM_FINDING_SQL = text("""
 """)
 
 
-# Same partial-unique-index dependency as _INSERT_LLM_FINDING_SQL above —
-# see note there. Index lives in migration 025_maintenance_proposals.py.
 _INSERT_DEFERRED_SQL = text("""
     INSERT INTO maintenance_proposals (
         vault_id, lint_type, target_type, target_id,
         rule_name, evidence, suggested_action, status, source
     )
-    VALUES (
+    SELECT
         :vault_id, 'quality', 'memory_unit', :target_id,
         :rule_name, CAST(:evidence AS jsonb), :suggested_action, 'pending', 'llm'
+    WHERE NOT EXISTS (
+        SELECT 1 FROM maintenance_proposals mp
+        WHERE mp.rule_name = :rule_name
+          AND mp.target_type = 'memory_unit'
+          AND mp.target_id = :target_id
+          AND mp.vault_id = CAST(:vault_id AS uuid)
+          AND mp.status IN ('resolved', 'dismissed')
+          AND mp.resolved_at > now() - interval '30 days'
     )
     ON CONFLICT (rule_name, target_type, target_id, vault_id)
     WHERE status = 'pending'
