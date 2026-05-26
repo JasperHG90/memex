@@ -35,6 +35,7 @@ from .project import derive_project_id, resolve_vault
 from .session import make_session_note_key
 from .templates import HERMES_SESSION_TEMPLATE
 from .tools import ALL_SCHEMAS, TOOLS_MODE_SCHEMAS, dispatch
+from .transcript import format_transcript, passes_quality_gate, preprocess_turns
 
 logger = logging.getLogger(__name__)
 
@@ -453,7 +454,21 @@ class MemexMemoryProvider(MemoryProvider):
             # Degenerate case: ``sync_turn`` was never called this session
             # (some Hermes deployments only fire on_session_end). Trust
             # Hermes' history as the fallback source.
-            chunk = _format_transcript(messages)
+            retain = self._config.retain
+            cleaned = preprocess_turns(
+                messages,
+                strip_system_prompts=retain.strip_system_prompts,
+                strip_html_content=retain.strip_html_content,
+                html_content_threshold=retain.html_content_threshold,
+            )
+            if passes_quality_gate(
+                cleaned,
+                min_turns=retain.min_capture_turns,
+                min_content_chars=retain.min_capture_chars,
+            ):
+                chunk = format_transcript(cleaned)
+            else:
+                chunk = ''
         if chunk:
             self._enqueue_chunk(chunk, title=self._format_session_title())
         with self._state_lock:
@@ -600,12 +615,34 @@ class MemexMemoryProvider(MemoryProvider):
         watermark moves on capture, not on successful flush — the pending
         queue handles retries via stable ``append_id``s, so we never need to
         reread the same buffer slice twice.
+
+        The raw turns are preprocessed (system-prompt stripping, HTML
+        sanitization) and quality-gated before formatting.
         """
         with self._state_lock:
             unflushed = self._turn_buffer[self._flushed_index :]
             if not unflushed:
                 return ''
-            formatted = _format_transcript(unflushed)
+            retain = self._config.retain if self._config else None
+            cleaned = preprocess_turns(
+                unflushed,
+                strip_system_prompts=retain.strip_system_prompts if retain else True,
+                strip_html_content=retain.strip_html_content if retain else True,
+                html_content_threshold=retain.html_content_threshold if retain else 500,
+            )
+            if not passes_quality_gate(
+                cleaned,
+                min_turns=retain.min_capture_turns if retain else 1,
+                min_content_chars=retain.min_capture_chars if retain else 50,
+            ):
+                logger.info(
+                    'Transcript quality gate rejected session (%d turns, %d chars)',
+                    len(cleaned),
+                    sum(len(t.get('user', '')) + len(t.get('assistant', '')) for t in cleaned),
+                )
+                self._flushed_index = len(self._turn_buffer)
+                return ''
+            formatted = format_transcript(cleaned)
             if not formatted.strip():
                 return ''
             self._flushed_index = len(self._turn_buffer)
@@ -808,29 +845,11 @@ class MemexMemoryProvider(MemoryProvider):
 
 
 def _format_transcript(messages: list[dict[str, Any]]) -> str:
-    """Render a list of turn dicts as a flat markdown transcript.
+    """Render a list of turn dicts as a structured markdown transcript.
 
-    Accepts both ``{user, assistant}`` pairs (our sync_turn buffer format) and
-    Hermes' own ``{role, content}`` message objects.
+    Delegates to ``transcript.format_transcript``.
     """
-    lines: list[str] = []
-    for m in messages:
-        if 'user' in m or 'assistant' in m:
-            if m.get('user'):
-                lines.append(f'**User:** {m["user"]}')
-            if m.get('assistant'):
-                lines.append(f'**Assistant:** {m["assistant"]}')
-        else:
-            role = str(m.get('role', 'user')).strip() or 'user'
-            content = m.get('content', '')
-            if isinstance(content, list):
-                content = '\n'.join(
-                    c.get('text', '') if isinstance(c, dict) else str(c) for c in content
-                )
-            if content:
-                lines.append(f'**{role.capitalize()}:** {content}')
-        lines.append('')
-    return '\n'.join(lines).strip()
+    return format_transcript(messages)
 
 
 __all__ = ['MemexMemoryProvider']
