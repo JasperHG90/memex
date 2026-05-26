@@ -399,7 +399,7 @@ async def _invoke_check(
     unit_id: UUID,
     vault_id: UUID,
     session: AsyncSession,
-    context: CheckContext,
+    context: CheckContext | None,
 ) -> LLMLintFinding | None:
     """Invoke ``run_llm_check`` with backward-compatible context plumbing.
 
