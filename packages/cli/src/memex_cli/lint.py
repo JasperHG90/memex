@@ -155,18 +155,20 @@ async def lint_findings(
         return
 
     table = Table(title=f'{status} findings ({len(findings)})')
-    table.add_column('id', style='cyan', no_wrap=True)
-    table.add_column('rule', no_wrap=True)
-    table.add_column('target', max_width=44)
-    table.add_column('vault', max_width=12)
-    table.add_column('age')
+    table.add_column('id', style='cyan', no_wrap=False)
+    table.add_column('lint_type')
+    table.add_column('rule_name')
+    table.add_column('target_type')
+    table.add_column('target_id', max_width=36)
+    table.add_column('vault_id', max_width=36)
     for f in findings:
         table.add_row(
-            f['id'],
+            f['id'][:8] + '…',
+            f['lint_type'],
             f['rule_name'],
-            f'{f["target_type"]}:{f["target_id"][:8]}',
-            (f['vault_id'] or '(global)')[:12],
-            str(f.get('created_at', ''))[:10],
+            f['target_type'],
+            f['target_id'],
+            f['vault_id'] or '(global)',
         )
     console.print(table)
 
@@ -907,3 +909,441 @@ async def lint_calibration_rollback(
         console.print(f'[green]rolled back:[/green] {rule} → v{version}')
     else:
         console.print(f'[red]rollback failed:[/red] version {version} not found for {rule}')
+
+
+# ---------------------------------------------------------------------------
+# Compiled LLM lint signatures -- browse, inspect, compare.
+# ---------------------------------------------------------------------------
+
+from rich.panel import Panel  # noqa: E402
+from rich.text import Text  # noqa: E402
+
+signatures_app = typer.Typer(
+    name='signatures',
+    help='Browse and inspect compiled LLM lint signatures.',
+    no_args_is_help=True,
+)
+app.add_typer(signatures_app)
+
+
+def _sig_status_text(sig: dict[str, Any]) -> Text:
+    """Render the status column for a signature row."""
+    superseded = sig.get('superseded_by_version')
+    if superseded is None:
+        return Text('● active', style='bold green')
+    if superseded == -1:
+        return Text('rolled back', style='yellow')
+    return Text(f'→ v{superseded}', style='dim')
+
+
+def _truncate(s: str, length: int = 45) -> str:
+    """Truncate ``s`` to ``length`` chars, appending an ellipsis if needed."""
+    if len(s) <= length:
+        return s
+    return s[: length - 1] + '…'
+
+
+def _verdict_text(verdict: str) -> Text:
+    """Color-code a verdict string."""
+    if verdict == 'accept':
+        return Text('accept', style='green')
+    if verdict == 'dismiss':
+        return Text('dismiss', style='red')
+    return Text(verdict, style='dim')
+
+
+def _score_delta_text(delta: float) -> Text:
+    """Render a signed score delta with color."""
+    if delta > 0:
+        return Text(f'(+{delta:.3f})', style='green')
+    if delta < 0:
+        return Text(f'({delta:.3f})', style='red')
+    return Text('(+0.000)', style='dim')
+
+
+def _bar_chart(value: int, total: int, width: int = 20) -> Text:
+    """Render a block-char bar chart."""
+    if total == 0:
+        return Text('░' * width, style='dim')
+    filled = round(value / total * width)
+    empty = width - filled
+    bar = Text()
+    bar.append('█' * filled, style='green')
+    bar.append('░' * empty, style='dim')
+    return bar
+
+
+@signatures_app.command('list')
+@async_command
+async def signatures_list_cmd(
+    ctx: typer.Context,
+    rule: Annotated[
+        str | None,
+        typer.Option('--rule', help='Filter to one rule_name.'),
+    ] = None,
+    vault: Annotated[
+        str | None,
+        typer.Option('--vault', '-v', help='Vault scope (name or UUID).'),
+    ] = None,
+):
+    """List compiled signature versions with status indicators."""
+    config: MemexConfig = ctx.obj
+    async with get_api_context(config) as api:
+        vault_id: str | None = None
+        if vault is not None:
+            vault_id = str(await api.resolve_vault_identifier(vault))
+        try:
+            payload = await api.lint_optimize_history(rule=rule)
+        except Exception as e:
+            handle_api_error(e)
+            return
+    sigs = payload.get('signatures') or []
+    if vault_id is not None:
+        sigs = [s for s in sigs if s.get('vault_id') == vault_id]
+    if not sigs:
+        console.print('[dim]No compiled signatures found.[/dim]')
+        return
+
+    table = Table(title=f'signatures ({len(sigs)})')
+    table.add_column('rule_name', style='cyan')
+    table.add_column('v', justify='right')
+    table.add_column('score', justify='right')
+    table.add_column('examples', justify='right')
+    table.add_column('promoted_at')
+    table.add_column('promoted_by')
+    table.add_column('status')
+    for s in sigs:
+        vs = s.get('validation_score')
+        status_text = _sig_status_text(s)
+        score_str = f'{vs:.3f}' if vs is not None else '—'
+        examples_str = str(s.get('validation_examples', '—'))
+        promoted_at = (s.get('promoted_at') or '')[:19]
+        promoted_by = s.get('promoted_by') or ''
+
+        is_active = s.get('superseded_by_version') is None
+        table.add_row(
+            s.get('rule_name', '?'),
+            str(s.get('version', '?')),
+            score_str,
+            examples_str,
+            promoted_at,
+            promoted_by,
+            status_text,
+            style='' if is_active else 'dim',
+        )
+    console.print(table)
+
+
+@signatures_app.command('show')
+@async_command
+async def signatures_show_cmd(
+    ctx: typer.Context,
+    rule: Annotated[str, typer.Argument(help='Rule name.')],
+    version: Annotated[int, typer.Argument(help='Signature version number.')],
+    vault: Annotated[
+        str | None,
+        typer.Option('--vault', '-v', help='Vault scope (name or UUID).'),
+    ] = None,
+):
+    """Show full detail for a specific signature version, including demos."""
+    config: MemexConfig = ctx.obj
+    async with get_api_context(config) as api:
+        vault_id: str | None = None
+        if vault is not None:
+            vault_id = str(await api.resolve_vault_identifier(vault))
+        try:
+            detail = await api.lint_signature_detail(rule, version, vault_id=vault_id)
+        except Exception as e:
+            handle_api_error(e)
+            return
+
+    if detail is None:
+        console.print(f'[red]Signature not found:[/red] {rule} v{version}')
+        raise typer.Exit(1)
+
+    # Header info
+    vs = detail.get('validation_score')
+    score_str = f'{vs:.3f}' if vs is not None else '—'
+    examples = detail.get('validation_examples', '—')
+    base_model = detail.get('base_model') or '—'
+    promoted_at = (str(detail.get('promoted_at') or ''))[:19]
+    promoted_by = detail.get('promoted_by') or '—'
+    program = detail.get('compiled_program') or {}
+    program_type = program.get('type', '—') if isinstance(program, dict) else '—'
+    superseded = detail.get('superseded_by_version')
+    if superseded is None:
+        status_line = '[bold green]● active[/bold green]'
+    elif superseded == -1:
+        status_line = '[yellow]rolled back[/yellow]'
+    else:
+        status_line = f'[dim]→ v{superseded}[/dim]'
+
+    header_lines = [
+        f'[bold]{rule}[/bold] v{version}  {status_line}',
+        f'score: {score_str}  examples: {examples}  base_model: {base_model}',
+        f'promoted_at: {promoted_at}  promoted_by: {promoted_by}',
+        f'program: {program_type}',
+    ]
+
+    # Demos table
+    demos = detail.get('demos') or []
+    demo_table: Table | None = None
+    if demos:
+        demo_table = Table(show_header=True, expand=True)
+        demo_table.add_column('#', justify='right', style='dim', width=3)
+        demo_table.add_column('target_text', ratio=3)
+        demo_table.add_column('verdict', justify='center')
+        demo_table.add_column('surprise', justify='right')
+        for i, d in enumerate(demos, 1):
+            target = _truncate(str(d.get('target_text', '')), 45)
+            verdict = _verdict_text(str(d.get('verdict', '')))
+            surprise = d.get('surprise_score')
+            surprise_str = f'{surprise:.2f}' if surprise is not None else '—'
+            demo_table.add_row(str(i), target, verdict, surprise_str)
+
+    panel_content = Text()
+    for line in header_lines:
+        panel_content.append_text(Text.from_markup(line))
+        panel_content.append('\n')
+    console.print(Panel(panel_content, title=f'{rule} v{version}', border_style='cyan'))
+    if demo_table is not None:
+        console.print(demo_table)
+    else:
+        console.print('[dim]No demos in this signature.[/dim]')
+
+
+@signatures_app.command('diff')
+@async_command
+async def signatures_diff_cmd(
+    ctx: typer.Context,
+    rule: Annotated[str, typer.Argument(help='Rule name.')],
+    v1: Annotated[int, typer.Argument(help='First version to compare.')],
+    v2: Annotated[int, typer.Argument(help='Second version to compare.')],
+    vault: Annotated[
+        str | None,
+        typer.Option('--vault', '-v', help='Vault scope (name or UUID).'),
+    ] = None,
+):
+    """Compare two signature versions side by side."""
+    config: MemexConfig = ctx.obj
+    async with get_api_context(config) as api:
+        vault_id: str | None = None
+        if vault is not None:
+            vault_id = str(await api.resolve_vault_identifier(vault))
+        try:
+            d1 = await api.lint_signature_detail(rule, v1, vault_id=vault_id)
+            d2 = await api.lint_signature_detail(rule, v2, vault_id=vault_id)
+        except Exception as e:
+            handle_api_error(e)
+            return
+
+    if d1 is None:
+        console.print(f'[red]Signature not found:[/red] {rule} v{v1}')
+        raise typer.Exit(1)
+    if d2 is None:
+        console.print(f'[red]Signature not found:[/red] {rule} v{v2}')
+        raise typer.Exit(1)
+
+    # Metadata comparison
+    s1 = d1.get('validation_score')
+    s2 = d2.get('validation_score')
+    e1 = d1.get('validation_examples')
+    e2 = d2.get('validation_examples')
+
+    meta_table = Table(title=f'{rule}: v{v1} vs v{v2}', show_header=True)
+    meta_table.add_column('field', style='cyan')
+    meta_table.add_column(f'v{v1}', justify='right')
+    meta_table.add_column(f'v{v2}', justify='right')
+    meta_table.add_column('delta', justify='right')
+
+    score_delta = (s2 or 0) - (s1 or 0)
+    meta_table.add_row(
+        'score',
+        f'{s1:.3f}' if s1 is not None else '—',
+        f'{s2:.3f}' if s2 is not None else '—',
+        _score_delta_text(score_delta),
+    )
+    examples_delta = (e2 or 0) - (e1 or 0)
+    meta_table.add_row(
+        'examples',
+        str(e1) if e1 is not None else '—',
+        str(e2) if e2 is not None else '—',
+        str(examples_delta) if examples_delta else '',
+    )
+    console.print(meta_table)
+
+    # Demos comparison -- match by target_text content
+    demos1 = d1.get('demos') or []
+    demos2 = d2.get('demos') or []
+
+    map1: dict[str, dict[str, Any]] = {}
+    for d in demos1:
+        key = str(d.get('target_text', ''))[:200]
+        map1[key] = d
+    map2: dict[str, dict[str, Any]] = {}
+    for d in demos2:
+        key = str(d.get('target_text', ''))[:200]
+        map2[key] = d
+
+    all_keys: list[str] = []
+    seen: set[str] = set()
+    for k in list(map1.keys()) + list(map2.keys()):
+        if k not in seen:
+            all_keys.append(k)
+            seen.add(k)
+
+    if all_keys:
+        diff_demo_table = Table(title='demos', show_header=True, expand=True)
+        diff_demo_table.add_column('', width=1)
+        diff_demo_table.add_column('target_text', ratio=3)
+        diff_demo_table.add_column(f'v{v1}', justify='center')
+        diff_demo_table.add_column(f'v{v2}', justify='center')
+        for key in all_keys:
+            in1 = key in map1
+            in2 = key in map2
+            v1_verdict = str(map1[key].get('verdict', '')) if in1 else ''
+            v2_verdict = str(map2[key].get('verdict', '')) if in2 else ''
+            if in1 and in2:
+                marker = ' ' if v1_verdict == v2_verdict else '*'
+            elif in1:
+                marker = '-'
+            else:
+                marker = '+'
+            marker_style = {'*': 'yellow', '+': 'green', '-': 'red'}.get(marker, 'dim')
+            diff_demo_table.add_row(
+                Text(marker, style=marker_style),
+                _truncate(key, 45),
+                _verdict_text(v1_verdict) if v1_verdict else Text('', style='dim'),
+                _verdict_text(v2_verdict) if v2_verdict else Text('', style='dim'),
+            )
+        console.print(diff_demo_table)
+    else:
+        console.print('[dim]No demos in either version.[/dim]')
+
+
+@signatures_app.command('status')
+@async_command
+async def signatures_status_cmd(
+    ctx: typer.Context,
+    rule: Annotated[
+        str | None,
+        typer.Option('--rule', help='Filter to one rule_name.'),
+    ] = None,
+    vault: Annotated[
+        str | None,
+        typer.Option('--vault', '-v', help='Vault scope (name or UUID).'),
+    ] = None,
+):
+    """Composite status: signature + calibration + telemetry + optimizer readiness per rule."""
+    config: MemexConfig = ctx.obj
+    async with get_api_context(config) as api:
+        vault_id: str | None = None
+        if vault is not None:
+            vault_id = str(await api.resolve_vault_identifier(vault))
+        try:
+            sig_payload = await api.lint_optimize_history(rule=rule)
+            cal_payload = await api.lint_calibration_list(rule=rule, vault_id=vault_id)
+            tel_payload = await api.lint_telemetry(
+                rule=rule, vault_id=vault_id, include_global=vault_id is None
+            )
+        except Exception as e:
+            handle_api_error(e)
+            return
+
+    sigs = sig_payload.get('signatures') or []
+    cals = cal_payload.get('rows') or []
+    tels = tel_payload.get('rows') or []
+
+    rule_names: set[str] = set()
+    for s in sigs:
+        rule_names.add(s.get('rule_name', ''))
+    for c in cals:
+        rule_names.add(c.get('rule_name', ''))
+    for t in tels:
+        rule_names.add(t.get('rule_name', ''))
+
+    if not rule_names:
+        console.print('[dim]No data found. Run lint checks and resolve findings first.[/dim]')
+        return
+
+    for rn in sorted(rule_names):
+        rule_sigs = [s for s in sigs if s.get('rule_name') == rn]
+        active_sig = next(
+            (s for s in rule_sigs if s.get('superseded_by_version') is None),
+            None,
+        )
+        rule_cals = [c for c in cals if c.get('rule_name') == rn]
+        active_cal = next(
+            (c for c in rule_cals if not c.get('superseded_by_version')),
+            None,
+        )
+        rule_tel = next((t for t in tels if t.get('rule_name') == rn), None)
+
+        lines: list[str] = []
+
+        # Signature section
+        if active_sig:
+            vs = active_sig.get('validation_score')
+            demo_count = active_sig.get('validation_examples', 0)
+            score_fmt = f'{vs:.3f}' if vs is not None else '—'
+            lines.append(
+                f'  [bold]signature:[/bold] v{active_sig.get("version", "?")} '
+                f'score={score_fmt} demos={demo_count}'
+            )
+        else:
+            lines.append('  [bold]signature:[/bold] [dim]none compiled[/dim]')
+
+        # Calibration section
+        if active_cal:
+            th = active_cal.get('surprise_threshold')
+            frozen = active_cal.get('frozen', False)
+            frozen_tag = ' [yellow](frozen)[/yellow]' if frozen else ''
+            th_fmt = f'{th:.3f}' if th is not None else '—'
+            lines.append(
+                f'  [bold]calibration:[/bold] v{active_cal.get("version", "?")} '
+                f'threshold={th_fmt}{frozen_tag}'
+            )
+        else:
+            lines.append('  [bold]calibration:[/bold] [dim]none[/dim]')
+
+        # Telemetry section
+        if rule_tel:
+            accept = int(rule_tel.get('accept_count', 0))
+            no_op = int(rule_tel.get('no_op_count', 0))
+            dismiss = int(rule_tel.get('dismiss_count', 0))
+            total = accept + no_op + dismiss
+            rate = rule_tel.get('accept_rate')
+            bar = _bar_chart(accept, total)
+            rate_str = f'{rate * 100:.1f}%' if rate is not None else '—'
+            lines.append(
+                f'  [bold]telemetry:[/bold] accept={accept} no_op={no_op} dismiss={dismiss}'
+            )
+            bar_line = Text('  ')
+            bar_line.append_text(bar)
+            bar_line.append(f'  accept_rate={rate_str}')
+            lines.append(str(bar_line))
+        else:
+            lines.append('  [bold]telemetry:[/bold] [dim]no data[/dim]')
+
+        # Optimizer readiness
+        labelled = int(rule_tel.get('labelled_count', 0)) if rule_tel else 0
+        min_examples = 50
+        rate = rule_tel.get('accept_rate') if rule_tel else None
+        ready = labelled >= min_examples
+        rate_ok = rate is not None and 0.3 <= rate <= 0.8
+        lines.append(
+            f'  [bold]optimizer:[/bold] '
+            f'labelled={labelled}/{min_examples} '
+            f'{"[green]ready[/green]" if ready else "[yellow]not ready[/yellow]"}'
+            f'  accept_rate={"in range" if rate_ok else "out of range"} '
+            f'{"[green]ok[/green]" if rate_ok else "[yellow]needs review[/yellow]"}'
+        )
+
+        panel_text = '\n'.join(lines)
+        console.print(
+            Panel(
+                panel_text,
+                title=f'[bold cyan]{rn}[/bold cyan]',
+                border_style='cyan',
+            )
+        )
