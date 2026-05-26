@@ -99,7 +99,8 @@ async def lint_status(
 
     pending = payload.get('pending', 0)
     if scope == 'vault':
-        console.print(f'[bold]vault {payload["vault_id"]}:[/bold] {pending} pending findings')
+        v_name = payload.get('vault_name', payload.get('vault_id', ''))
+        console.print(f'[bold]vault {v_name}:[/bold] {pending} pending findings')
     elif scope == 'global':
         console.print(f'[bold]global:[/bold] {pending} pending findings')
     else:
@@ -147,8 +148,6 @@ async def lint_findings(
     async with get_api_context(config) as api:
         try:
             vault_id = str(await api.resolve_vault_identifier(vault)) if vault is not None else None
-            # Only pass flagged=True to the server when the user explicitly
-            # requested --flagged; otherwise omit it so all findings show.
             extra_params: dict[str, Any] = {}
             if flagged:
                 extra_params['flagged'] = True
@@ -159,6 +158,12 @@ async def lint_findings(
                 limit=limit,
                 **extra_params,
             )
+            vault_names: dict[str, str] = {}
+            try:
+                vaults_list = await api.list_vaults()
+                vault_names = {str(v.id): v.name for v in vaults_list}
+            except Exception:  # noqa: BLE001
+                pass
         except Exception as e:
             handle_api_error(e)
             return
@@ -175,17 +180,19 @@ async def lint_findings(
     table.add_column('rule_name')
     table.add_column('target_type')
     table.add_column('target_id', max_width=36)
-    table.add_column('vault_id', max_width=36)
+    table.add_column('vault', max_width=36)
     table.add_column('⚑', justify='center')
     for f in findings:
         flag_indicator = '⚑' if f.get('flagged_at') else ''
+        vid = f['vault_id'] or ''
+        v_label = vault_names.get(vid, vid[:8] if vid else '(global)')
         table.add_row(
             f['id'][:8] + '…',
             f['lint_type'],
             f['rule_name'],
             f['target_type'],
             f['target_id'],
-            f['vault_id'] or '(global)',
+            v_label,
             flag_indicator,
         )
     console.print(table)
@@ -212,16 +219,18 @@ async def lint_run_cmd(
     """
     config: MemexConfig = ctx.obj
     async with get_api_context(config) as api:
+        vaults_payload = await api.list_vaults()
+        vault_names: dict[str, str] = {str(v.id): v.name for v in vaults_payload}
         if vault is not None:
             vault_ids = [str(await api.resolve_vault_identifier(vault))]
         else:
-            vaults_payload = await api.list_vaults()
-            vault_ids = [str(v.id) for v in vaults_payload]
+            vault_ids = list(vault_names.keys())
             console.print(f'[dim]Scanning {len(vault_ids)} vaults…[/dim]')
 
         for vault_id in vault_ids:
+            label = vault_names.get(vault_id, vault_id[:8])
             if len(vault_ids) > 1:
-                console.print(f'\n[bold]vault {vault_id[:8]}…[/bold]')
+                console.print(f'\n[bold]vault {label}[/bold]')
             try:
                 sql_payload = await api.run_lint_rules(vault_id)
             except Exception as e:
