@@ -115,7 +115,7 @@ class LintAutoApplyService(BaseService):
         no-ops where the proposal says "deprioritized" but the unit stays
         active.
         """
-        from memex_core.services.proposal_actions import get_action
+        from memex_core.services.proposal_actions import ActionValidationError, get_action
 
         if api is None:
             logger.warning('auto_apply_sweep called without api — refusing to proceed')
@@ -217,56 +217,62 @@ class LintAutoApplyService(BaseService):
 
                 try:
                     action.validate({}, target_type=target_type, target_id=target_id)
+                except ActionValidationError:
+                    continue
                 except Exception:
+                    logger.warning(
+                        'auto_apply: unexpected validation error for %s on %s',
+                        config.action,
+                        finding_id,
+                        exc_info=True,
+                    )
                     continue
 
-                # Guard: lock the proposal row and re-verify it is still
-                # pending before executing the side-effecting action. Without
-                # this, a concurrent resolution (or a prior sweep whose status
-                # flip failed) could cause re-execution of the action on a
-                # proposal that is no longer pending.
-                async with self.metastore.session() as session:
-                    lock_row = (
-                        await session.execute(
-                            text(
-                                'SELECT status FROM maintenance_proposals '
-                                'WHERE id = CAST(:id AS uuid) '
-                                'FOR UPDATE'
-                            ),
-                            {'id': finding_id},
-                        )
-                    ).first()
-                    if lock_row is None or lock_row.status != 'pending':
-                        logger.debug(
-                            'auto_apply: skipping %s (status no longer pending)',
-                            finding_id[:8],
-                        )
-                        continue
-
+                # Lock the proposal row with FOR UPDATE and hold the lock
+                # through action execution + status flip. This prevents a
+                # concurrent sweep or manual review from resolving the same
+                # proposal while our action is in flight.
                 actor = 'system:auto-learn'
                 try:
-                    execute_result = await action.execute(
-                        api, {}, target_id=target_id, vault_id=vault_id, actor=actor
-                    )
-                    resolution = {
-                        'verdict': 'accepted',
-                        'actor': actor,
-                        'decided_at': datetime.now(timezone.utc).isoformat(),
-                        'note': (
-                            f'Auto-applied: accept_rate={accept_rate:.2f} '
-                            f'>= {config.accept_rate_threshold}, '
-                            f'surprise={surprise:.2f} >= {config.confidence_threshold}'
-                        ),
-                        'followup': {
-                            'action': config.action,
-                            'params': {},
-                            'applied_at': datetime.now(timezone.utc).isoformat(),
-                            'applied_state': execute_result.applied_state,
-                            'prior_state': execute_result.prior_state,
-                            'reversible': True,
-                        },
-                    }
                     async with self.metastore.session() as session:
+                        lock_row = (
+                            await session.execute(
+                                text(
+                                    'SELECT status FROM maintenance_proposals '
+                                    'WHERE id = CAST(:id AS uuid) '
+                                    'FOR UPDATE'
+                                ),
+                                {'id': finding_id},
+                            )
+                        ).first()
+                        if lock_row is None or lock_row.status != 'pending':
+                            logger.debug(
+                                'auto_apply: skipping %s (status no longer pending)',
+                                finding_id[:8],
+                            )
+                            continue
+
+                        execute_result = await action.execute(
+                            api, {}, target_id=target_id, vault_id=vault_id, actor=actor
+                        )
+                        resolution = {
+                            'verdict': 'accepted',
+                            'actor': actor,
+                            'decided_at': datetime.now(timezone.utc).isoformat(),
+                            'note': (
+                                f'Auto-applied: accept_rate={accept_rate:.2f} '
+                                f'>= {config.accept_rate_threshold}, '
+                                f'surprise={surprise:.2f} >= {config.confidence_threshold}'
+                            ),
+                            'followup': {
+                                'action': config.action,
+                                'params': {},
+                                'applied_at': datetime.now(timezone.utc).isoformat(),
+                                'applied_state': execute_result.applied_state,
+                                'prior_state': execute_result.prior_state,
+                                'reversible': True,
+                            },
+                        }
                         update_result = await session.execute(
                             text(
                                 'UPDATE maintenance_proposals '  # noqa: S608
@@ -287,8 +293,9 @@ class LintAutoApplyService(BaseService):
                                 'resolution_json': _json.dumps(resolution),
                             },
                         )
+                        rows_updated = update_result.rowcount
                         await session.commit()
-                    if update_result.rowcount:
+                    if rows_updated:
                         result.auto_applied += 1
                         result.details.append(
                             {
@@ -306,9 +313,6 @@ class LintAutoApplyService(BaseService):
                             surprise,
                         )
                     else:
-                        # Action executed but status flip failed (row deleted
-                        # or status already non-pending). The side effect is
-                        # real and may need manual reconciliation.
                         logger.warning(
                             'auto_apply.side_effect_without_status_flip',
                             extra={
