@@ -68,6 +68,7 @@ jobs:
           api_key: ${{ secrets.OLLAMA_API_KEY }}
           max_iterations: '12'
           quiet_mode: 'false'
+          uv_version: '0.11.x'
 
       - name: Post review comment
         env:
