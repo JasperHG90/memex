@@ -1794,6 +1794,27 @@ class RemoteMemexAPI:
 
     # Layer 4 — DSPy signature optimization.
 
+    async def lint_signature_detail(
+        self,
+        rule: str,
+        version: int,
+        *,
+        vault_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Fetch full signature detail including demos and compiled_program.
+
+        Returns ``None`` on 404 (signature not found).
+        """
+        params: dict[str, Any] = {'rule': rule, 'version': version}
+        if vault_id is not None:
+            params['vault_id'] = vault_id
+        try:
+            return await self._get('lint/optimize/signature', params=params)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return None
+            raise
+
     async def lint_optimize_run(
         self,
         *,

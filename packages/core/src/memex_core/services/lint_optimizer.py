@@ -109,6 +109,21 @@ _LIST_SIGNATURES_SQL = """
     ORDER BY rule_name ASC, version DESC
 """
 
+_GET_SIGNATURE_DETAIL_SQL = """
+    SELECT id::text, rule_name, vault_id::text, version,
+           compiled_program, demos, base_model,
+           validation_score, validation_examples,
+           promoted_at, promoted_by, superseded_by_version
+    FROM lint_llm_signature
+    WHERE rule_name = :rule_name
+      AND version = :version
+      AND (
+        (:vault_id::uuid IS NULL AND vault_id IS NULL)
+        OR vault_id = CAST(:vault_id AS uuid)
+      )
+    LIMIT 1
+"""
+
 _INSERT_SIGNATURE_SQL = """
     INSERT INTO lint_llm_signature (
         rule_name, vault_id, version,
@@ -417,6 +432,38 @@ class LintLLMOptimizer(BaseService):
                 [],
                 val_score,
             )
+
+    async def get_signature_detail(
+        self,
+        rule_name: str,
+        version: int,
+        *,
+        vault_id: UUID | None = None,
+    ) -> dict[str, Any] | None:
+        """Fetch full signature detail including ``demos`` and ``compiled_program``.
+
+        Returns a dict with all columns or ``None`` if no matching row exists.
+        Used by the CLI ``memex lint signatures show`` and ``diff`` commands.
+        """
+        v_id = str(vault_id) if vault_id else None
+        async with self.metastore.session() as session:
+            result = await session.execute(
+                text(_GET_SIGNATURE_DETAIL_SQL),
+                {'rule_name': rule_name, 'vault_id': v_id, 'version': version},
+            )
+            row = result.mappings().first()
+        if row is None:
+            return None
+        r = dict(row)
+        # Normalise JSON columns that may come back as strings.
+        for col in ('compiled_program', 'demos'):
+            val = r.get(col)
+            if isinstance(val, str):
+                try:
+                    r[col] = json.loads(val)
+                except json.JSONDecodeError:
+                    pass
+        return r
 
     async def list_signatures(
         self,

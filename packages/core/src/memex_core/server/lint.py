@@ -1323,6 +1323,28 @@ async def lint_optimize_run(
     }
 
 
+@router.get('/optimize/signature', dependencies=[Depends(require_read)])
+async def lint_optimize_signature_detail(
+    api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+    rule: Annotated[str, Query(description='Rule name.')] = '',
+    version: Annotated[int, Query(description='Signature version.')] = 0,
+    vault_id: Annotated[UUID | None, Query(description='Vault scope.')] = None,
+) -> dict[str, Any]:
+    """Full signature detail including demos and compiled_program."""
+    if not rule or version <= 0:
+        raise HTTPException(status_code=400, detail='rule and version (>0) are required')
+    if vault_id is not None:
+        await check_vault_access(auth, [vault_id], api, permission=Permission.READ)
+    try:
+        detail = await api.lint_optimizer.get_signature_detail(rule, version, vault_id=vault_id)
+    except Exception as e:
+        raise _handle_error(e, 'Failed to fetch signature detail')
+    if detail is None:
+        raise HTTPException(status_code=404, detail='Signature not found')
+    return detail
+
+
 @router.get('/optimize/history', dependencies=[Depends(require_read)])
 async def lint_optimize_history(
     api: Annotated[MemexAPI, Depends(get_api)],
