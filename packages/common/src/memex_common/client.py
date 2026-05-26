@@ -1703,6 +1703,34 @@ class RemoteMemexAPI:
         """
         return await self._post(f'lint/run/{vault_id}', {})
 
+    async def lint_seed_finding(
+        self,
+        *,
+        vault_id: str | UUID,
+        rule_name: str = 'llm_semantic_contradiction',
+        source: str = 'llm',
+        evidence: dict[str, Any] | None = None,
+        target_id: str | None = None,
+        suggested_action: str | None = None,
+    ) -> dict[str, Any]:
+        """Insert a single synthetic maintenance_proposals row.
+
+        Eval-only — requires ``MEMEX_EVAL_MODE=1`` on the server.
+        Returns ``{'id': ..., 'target_id': ..., 'status': 'pending'}``.
+        """
+        body: dict[str, Any] = {
+            'vault_id': str(vault_id),
+            'rule_name': rule_name,
+            'source': source,
+        }
+        if evidence is not None:
+            body['evidence'] = evidence
+        if target_id is not None:
+            body['target_id'] = target_id
+        if suggested_action is not None:
+            body['suggested_action'] = suggested_action
+        return await self._post('lint/findings/seed', body)
+
     async def run_lint_llm(self, vault_id: str | UUID) -> dict[str, Any]:
         """Synchronously run the LLM-gated lint pass for ``vault_id``.
 

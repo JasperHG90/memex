@@ -900,6 +900,75 @@ async def lint_run(
     }
 
 
+@router.post('/findings/seed', dependencies=[Depends(require_write)])
+async def lint_seed_finding(
+    api: Annotated[MemexAPI, Depends(get_api)],
+    vault_id: Annotated[UUID, Body(embed=False)],
+    rule_name: Annotated[str, Body(embed=False)] = 'llm_semantic_contradiction',
+    source: Annotated[str, Body(embed=False)] = 'llm',
+    evidence: Annotated[dict[str, Any] | None, Body(embed=False)] = None,
+    target_id: Annotated[str | None, Body(embed=False)] = None,
+    suggested_action: Annotated[str | None, Body(embed=False)] = None,
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+) -> dict[str, Any]:
+    """Insert a single synthetic maintenance_proposals row.
+
+    Eval-only endpoint — gated by ``MEMEX_EVAL_MODE=1``. Returns 403
+    when the env var is absent or falsy so production servers never
+    expose it. The eval suite calls this to guarantee findings exist
+    without depending on the lint pipeline (which requires aged data,
+    embeddings, and LLM API access that eval environments may lack).
+    """
+    eval_mode = os.environ.get('MEMEX_EVAL_MODE', '').strip().lower()
+    if eval_mode not in ('1', 'true', 'yes'):
+        raise HTTPException(
+            status_code=403,
+            detail=('Lint seed endpoint is eval-only. Set MEMEX_EVAL_MODE=1 to enable.'),
+        )
+    await check_vault_access(auth, [vault_id], api, permission=Permission.WRITE)
+    import json
+    from uuid import uuid4
+
+    fid = str(uuid4())
+    tid = target_id or str(uuid4())
+    lint_type = 'quality' if source == 'llm' else 'structural'
+    ev = evidence or {
+        'check_type': 'semantic_contradiction',
+        'explanation': 'Synthetic finding seeded by eval suite.',
+        'surprise_score': 0.55,
+        'related_unit_ids': [str(uuid4())],
+    }
+    sa = suggested_action or 'Eval suite seed'
+    try:
+        async with api.metastore.session() as session:
+            await session.execute(
+                text(
+                    'INSERT INTO maintenance_proposals '
+                    '(id, vault_id, lint_type, target_type, target_id, '
+                    'rule_name, evidence, suggested_action, status, source) '
+                    'VALUES (CAST(:id AS uuid), CAST(:vault_id AS uuid), '
+                    ':lint_type, :target_type, :target_id, :rule_name, '
+                    "CAST(:evidence AS jsonb), :suggested_action, 'pending', "
+                    ':source)'
+                ),
+                {
+                    'id': fid,
+                    'vault_id': str(vault_id),
+                    'lint_type': lint_type,
+                    'target_type': 'memory_unit',
+                    'target_id': tid,
+                    'rule_name': rule_name,
+                    'evidence': json.dumps(ev),
+                    'suggested_action': sa,
+                    'source': source,
+                },
+            )
+            await session.commit()
+    except Exception as e:
+        raise _handle_error(e, 'Failed to seed lint finding')
+    return {'id': fid, 'target_id': tid, 'status': 'pending'}
+
+
 @router.post('/llm/run/{vault_id}', dependencies=[Depends(require_write)])
 async def lint_llm_run(
     vault_id: UUID,
