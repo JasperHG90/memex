@@ -2275,6 +2275,8 @@ class LintRuleCalibration(SQLModel, table=True):  # type: ignore
         sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
         description='End of the telemetry window this row was derived from.',
     )
+    # Three states: NULL (active), positive int (superseded by that
+    # version), -1 (rolled back by operator).
     superseded_by_version: int | None = Field(
         default=None,
         sa_column=Column(Integer, nullable=True),
@@ -2303,6 +2305,11 @@ class LintRuleCalibration(SQLModel, table=True):  # type: ignore
             'rule_name',
             'vault_id',
             postgresql_where=sql_text('superseded_by_version IS NULL'),
+        ),
+        CheckConstraint(
+            'superseded_by_version IS NULL OR superseded_by_version = -1'
+            ' OR superseded_by_version > 0',
+            name='ck_lint_rule_calibration_superseded_valid',
         ),
     )
 
@@ -2377,6 +2384,8 @@ class LintLLMSignature(SQLModel, table=True):  # type: ignore
         sa_column=Column(Text, nullable=True),
         description='Actor that promoted this signature.',
     )
+    # Three states: NULL (active), positive int (superseded by that
+    # version), -1 (rolled back by operator).
     superseded_by_version: int | None = Field(
         default=None,
         sa_column=Column(Integer, nullable=True),
@@ -2395,5 +2404,10 @@ class LintLLMSignature(SQLModel, table=True):  # type: ignore
             'rule_name',
             'vault_id',
             postgresql_where=sql_text('superseded_by_version IS NULL'),
+        ),
+        CheckConstraint(
+            'superseded_by_version IS NULL OR superseded_by_version = -1'
+            ' OR superseded_by_version > 0',
+            name='ck_lint_llm_signature_superseded_valid',
         ),
     )

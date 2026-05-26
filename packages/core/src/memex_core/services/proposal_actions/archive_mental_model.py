@@ -7,6 +7,15 @@ visibility flag, so a stale model stays whole on disk.
 
 Used by the `orphan_mental_model` SQL rule (`services/lint.py`) when a
 model has had zero linked active units for >30 days.
+
+Limitation (auto-apply): execute() opens its own session via
+``api.metastore.session()`` and commits independently. If the caller's
+subsequent status flip fails, the archive persists with no resolved
+proposal — the side effect is real but the proposal stays pending.
+The auto-apply layer logs a structured warning when this happens.
+
+TODO: accept an optional shared session so the archive + status flip
+can commit atomically. Requires a deeper refactor of the action protocol.
 """
 
 from __future__ import annotations

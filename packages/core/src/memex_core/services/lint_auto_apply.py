@@ -17,7 +17,7 @@ from __future__ import annotations
 
 import json as _json
 import logging
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -43,7 +43,7 @@ class AutoApplyRuleConfig:
     action: str = 'deprioritize_unit'
 
 
-@dataclass(frozen=True)
+@dataclass
 class AutoApplyResult:
     """Outcome of one ``auto_apply_sweep`` invocation."""
 
@@ -136,7 +136,7 @@ class LintAutoApplyService(BaseService):
             already_applied = int(cap_row or 0)
             remaining_budget = max(0, config.daily_cap - already_applied)
             if remaining_budget <= 0:
-                result = replace(result, skipped_cap_reached=result.skipped_cap_reached + 1)
+                result.skipped_cap_reached += 1
                 continue
 
             # Check accept_rate from telemetry.
@@ -149,10 +149,14 @@ class LintAutoApplyService(BaseService):
                     if rows:
                         accept_rate = rows[0].accept_rate
                 except Exception:
-                    pass
+                    logger.warning(
+                        'auto_apply: failed to fetch telemetry for rule %s',
+                        rule_name,
+                        exc_info=True,
+                    )
 
             if accept_rate is None or accept_rate < config.accept_rate_threshold:
-                result = replace(result, skipped_low_accept_rate=result.skipped_low_accept_rate + 1)
+                result.skipped_low_accept_rate += 1
                 continue
 
             # Fetch pending proposals for this rule.
@@ -173,13 +177,11 @@ class LintAutoApplyService(BaseService):
                 )
 
             for prop in proposals_raw:
-                result = replace(result, proposals_scanned=result.proposals_scanned + 1)
+                result.proposals_scanned += 1
 
                 surprise = prop.get('surprise_score')
                 if surprise is None or surprise < config.confidence_threshold:
-                    result = replace(
-                        result, skipped_low_confidence=result.skipped_low_confidence + 1
-                    )
+                    result.skipped_low_confidence += 1
                     continue
 
                 try:
@@ -193,9 +195,7 @@ class LintAutoApplyService(BaseService):
                     continue
 
                 if not action.reversible:
-                    result = replace(
-                        result, skipped_not_reversible=result.skipped_not_reversible + 1
-                    )
+                    result.skipped_not_reversible += 1
                     continue
 
                 target_type = str(prop.get('target_type', ''))
@@ -253,18 +253,14 @@ class LintAutoApplyService(BaseService):
                         )
                         await session.commit()
                     if update_result.rowcount:
-                        result = replace(
-                            result,
-                            auto_applied=result.auto_applied + 1,
-                            details=[
-                                *result.details,
-                                {
-                                    'finding_id': finding_id,
-                                    'rule': rule_name,
-                                    'action': config.action,
-                                    'surprise': surprise,
-                                },
-                            ],
+                        result.auto_applied += 1
+                        result.details.append(
+                            {
+                                'finding_id': finding_id,
+                                'rule': rule_name,
+                                'action': config.action,
+                                'surprise': surprise,
+                            }
                         )
                         logger.info(
                             'auto_apply: resolved %s via %s (rule=%s, surprise=%.2f)',
@@ -273,8 +269,21 @@ class LintAutoApplyService(BaseService):
                             rule_name,
                             surprise,
                         )
+                    else:
+                        # Action executed but status flip failed (row deleted
+                        # or status already non-pending). The side effect is
+                        # real and may need manual reconciliation.
+                        logger.warning(
+                            'auto_apply.side_effect_without_status_flip',
+                            extra={
+                                'finding_id': finding_id,
+                                'action': config.action,
+                                'target_id': target_id,
+                                'applied_state': execute_result.applied_state,
+                            },
+                        )
                 except Exception:
                     logger.exception('auto_apply: failed to resolve %s', finding_id[:8])
-                    result = replace(result, errors=result.errors + 1)
+                    result.errors += 1
 
         return result

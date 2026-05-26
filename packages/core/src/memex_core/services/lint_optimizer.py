@@ -163,6 +163,10 @@ _ROLLBACK_SIGNATURE_UNSUPERSEDE_SQL = """
       AND version = :version
 """
 
+# superseded_by_version semantics (three states):
+#   NULL          — active (current signature row)
+#   positive int  — superseded by that version number
+#   -1            — rolled back (explicitly reverted by operator)
 _ROLLBACK_SIGNATURE_SUPERSEDE_LATER_SQL = """
     UPDATE lint_llm_signature
     SET superseded_by_version = -1
@@ -235,9 +239,9 @@ class LintLLMOptimizer(BaseService):
         # Examples are ordered newest-first (SQL ORDER BY resolved_at DESC).
         # Train on the OLDER 80%, validate on the NEWER 20% — the model's
         # score reflects how well it predicts the operator's current behavior.
-        split_idx = int(len(examples) * 0.2)
-        validation = examples[:split_idx]  # newest 20%
-        train = examples[split_idx:]  # oldest 80%
+        valid_cutoff = int(len(examples) * 0.2)
+        validation = examples[:valid_cutoff]  # newest 20%
+        train = examples[valid_cutoff:]  # oldest 80%
 
         if len(validation) < 5:
             compile_warnings.append(
