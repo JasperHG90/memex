@@ -285,11 +285,22 @@ class LintLLMOptimizer(BaseService):
                 .first()
             )
 
-        champion_score = float(champ_row['validation_score']) if champ_row else 0.0
+        champion_score = float(champ_row['validation_score']) if champ_row else -1.0
         current_version = int(champ_row['version']) if champ_row else 0
 
         # 6. Champion-vs-challenger gate.
-        if new_score < champion_score + CHAMPION_MARGIN:
+        # No champion → always promote (first compile).
+        # New beats champion by margin → promote.
+        # Scores tied AND new has more data → promote (more data = more reliable).
+        # Otherwise → reject.
+        no_champion = champ_row is None
+        beats_margin = new_score >= champion_score + CHAMPION_MARGIN
+        tied_with_more_data = abs(new_score - champion_score) < CHAMPION_MARGIN and len(
+            examples
+        ) > (champ_row['validation_examples'] or 0 if champ_row else 0)
+        should_promote = no_champion or beats_margin or tied_with_more_data
+
+        if not should_promote:
             return CompileResult(
                 rule_name=rule_name,
                 vault_id=vault_id,
