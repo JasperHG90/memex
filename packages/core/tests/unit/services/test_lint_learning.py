@@ -177,9 +177,10 @@ class TestTelemetryDTODerivedFields:
 
     def test_accept_rate_excludes_legacy(self) -> None:
         dto = self._dto(accept_count=7, no_op_count=2, dismiss_count=1, legacy_count=50)
-        # 7 accepts / (7+2+1) = 0.7. Legacy must not dilute.
+        # (7 accepts + 2 no_op) / (7+2+1) = 0.9. Legacy must not dilute.
+        # no_op counts as positive engagement (operator reviewed and acted).
         assert dto.accept_rate is not None
-        assert abs(dto.accept_rate - 0.7) < 1e-9
+        assert abs(dto.accept_rate - 0.9) < 1e-9
 
     def test_accept_rate_none_when_no_labelled(self) -> None:
         dto = self._dto(accept_count=0, no_op_count=0, dismiss_count=0, legacy_count=20)

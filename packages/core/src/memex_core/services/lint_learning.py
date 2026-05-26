@@ -60,14 +60,20 @@ class LintRuleTelemetryDTO:
 
     @property
     def accept_rate(self) -> float | None:
-        """Fraction of labelled verdicts where a canned action ran.
+        """Fraction of labelled verdicts where the operator engaged positively.
 
-        Excludes legacy rows from the denominator — those aren't labelled,
-        so they shouldn't dilute the rate.
+        Both ``accept`` (canned action ran) AND ``no_op`` (operator reviewed
+        and acknowledged) count as positive engagement. Only ``dismiss``
+        counts as negative — the operator said the rule was wrong.
+
+        This matters because rules like ``sensitive_unreviewed_unit`` have
+        ``no_op`` as their primary intended action. Counting ``no_op`` as
+        neutral would make those rules show 0% accept rate, causing the
+        calibration loop to suppress rules the operator IS using.
         """
         if self.labelled_count == 0:
             return None
-        return self.accept_count / self.labelled_count
+        return (self.accept_count + self.no_op_count) / self.labelled_count
 
 
 @dataclass(frozen=True)
