@@ -17,6 +17,16 @@ from typing import Any, Protocol
 
 
 @dataclass(frozen=True)
+class UnitMeta:
+    """Lightweight metadata for a memory unit, ready for TUI display."""
+
+    unit_id: str
+    date: str | None = None  # ISO date string from mentioned_at
+    note_name: str | None = None  # source note title
+    status: str | None = None
+
+
+@dataclass(frozen=True)
 class CockpitOption:
     """A single canned remediation the cockpit can present to the user."""
 
@@ -35,6 +45,20 @@ class CockpitOption:
     # deprioritizing the RELATED unit instead of the TARGET).
     params: dict[str, Any] | None = None
 
+
+# Sentinel option for "Flag for later" — orthogonal to resolution.
+FLAG_OPTION = CockpitOption(
+    action_id='__flag__',
+    label='Flag for later',
+    summary=(
+        'Bookmark this finding so you can easily find it later. '
+        'Flagging does NOT resolve or dismiss — it is a personal bookmark '
+        'orthogonal to the finding lifecycle.'
+    ),
+    effect='No mutation. Toggles the flagged_at timestamp.',
+    reversible=True,
+    verb='flag',
+)
 
 # Sentinel option_id for "Dismiss" so the menu can present it uniformly.
 DISMISS_OPTION = CockpitOption(
@@ -70,6 +94,7 @@ _DEFAULT_OPTIONS_BY_RULE: dict[str, list[CockpitOption]] = {
             effect='No mutation; the orphan signal persists until conditions change.',
             reversible=True,
         ),
+        FLAG_OPTION,
         DISMISS_OPTION,
     ],
     'cold_low_mw_unit': [
@@ -90,6 +115,7 @@ _DEFAULT_OPTIONS_BY_RULE: dict[str, list[CockpitOption]] = {
             effect='No mutation; the cold-low-MW signal persists.',
             reversible=True,
         ),
+        FLAG_OPTION,
         DISMISS_OPTION,
     ],
     'composite_deprioritize_candidate': [
@@ -108,6 +134,7 @@ _DEFAULT_OPTIONS_BY_RULE: dict[str, list[CockpitOption]] = {
             effect='No mutation.',
             reversible=True,
         ),
+        FLAG_OPTION,
         DISMISS_OPTION,
     ],
     'llm_semantic_contradiction': [
@@ -129,6 +156,7 @@ _DEFAULT_OPTIONS_BY_RULE: dict[str, list[CockpitOption]] = {
             effect='No mutation; the contradiction signal persists in audit.',
             reversible=True,
         ),
+        FLAG_OPTION,
         DISMISS_OPTION,
     ],
     'llm_schema_drift': [
@@ -147,6 +175,7 @@ _DEFAULT_OPTIONS_BY_RULE: dict[str, list[CockpitOption]] = {
             effect='Sets is_deprioritized=true; observation refresh queued.',
             reversible=True,
         ),
+        FLAG_OPTION,
         DISMISS_OPTION,
     ],
     'claim_too_aggressive': [
@@ -165,6 +194,7 @@ _DEFAULT_OPTIONS_BY_RULE: dict[str, list[CockpitOption]] = {
             effect='Sets is_deprioritized=true; observation refresh queued.',
             reversible=True,
         ),
+        FLAG_OPTION,
         DISMISS_OPTION,
     ],
     'sensitive_unreviewed_unit': [
@@ -183,6 +213,7 @@ _DEFAULT_OPTIONS_BY_RULE: dict[str, list[CockpitOption]] = {
             effect='Sets is_deprioritized=true; observation refresh queued.',
             reversible=True,
         ),
+        FLAG_OPTION,
         DISMISS_OPTION,
     ],
     'dangling_entity_ref_in_unit': [
@@ -194,6 +225,7 @@ _DEFAULT_OPTIONS_BY_RULE: dict[str, list[CockpitOption]] = {
             reversible=True,
             recommended=True,
         ),
+        FLAG_OPTION,
         DISMISS_OPTION,
     ],
     'orphan_contradicts_links_post_stale': [
@@ -205,6 +237,7 @@ _DEFAULT_OPTIONS_BY_RULE: dict[str, list[CockpitOption]] = {
             reversible=True,
             recommended=True,
         ),
+        FLAG_OPTION,
         DISMISS_OPTION,
     ],
     # entity_collapse_cluster and propose_contradiction_winner still flow
@@ -311,6 +344,7 @@ def options_for_contradiction(
             reversible=True,
         ),
     )
+    options.append(FLAG_OPTION)
     options.append(DISMISS_OPTION)
     return options
 
@@ -338,11 +372,13 @@ def options_for_rule(rule_name: str, target_type: str) -> list[CockpitOption]:
                 reversible=True,
                 recommended=True,
             ),
+            FLAG_OPTION,
             DISMISS_OPTION,
         ]
     filtered: list[CockpitOption] = []
     for option in options:
-        if not option.action_id:  # dismiss sentinel always allowed
+        if not option.action_id or option.action_id == '__flag__':
+            # dismiss and flag sentinels are always allowed
             filtered.append(option)
             continue
         descriptor = _ACTION_CATALOGUE.get(option.action_id)
@@ -398,6 +434,7 @@ class CockpitProposal:
     related_unit_ids: list[str]
     polarity_contradiction_prob: float | None
     suggested_action: str | None
+    flagged_at: str | None
     raw_evidence: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -429,12 +466,17 @@ class CockpitProposal:
             related_unit_ids=[str(r) for r in rel],
             polarity_contradiction_prob=polarity,
             suggested_action=finding.get('suggested_action'),
+            flagged_at=finding.get('flagged_at'),
             raw_evidence=evidence,
         )
 
     @property
     def is_llm_source(self) -> bool:
         return self.source == 'llm'
+
+    @property
+    def is_flagged(self) -> bool:
+        return self.flagged_at is not None
 
 
 class CockpitClient(Protocol):
@@ -472,7 +514,11 @@ class CockpitClient(Protocol):
 
     async def lint_reverse(self, finding_id: str) -> dict[str, Any]: ...
 
+    async def lint_flag(self, finding_id: str) -> dict[str, Any]: ...
+
     async def get_memory_unit(self, unit_id: str) -> Any: ...
+
+    async def get_note(self, note_id: Any) -> Any: ...
 
     async def list_vaults(self) -> Any: ...
 
@@ -537,6 +583,10 @@ class CockpitController:
     async def reverse(self, finding_id: str) -> dict[str, Any]:
         return await self._client.lint_reverse(finding_id)
 
+    async def flag_finding(self, finding_id: str) -> dict[str, Any]:
+        """Toggle the flagged_at bookmark on a finding."""
+        return await self._client.lint_flag(finding_id)
+
     async def fetch_unit_texts(self, unit_ids: list[str]) -> dict[str, str]:
         """Fetch the text body of one or more memory units by ID.
 
@@ -554,6 +604,50 @@ class CockpitController:
                     result[uid] = text
             except Exception:  # noqa: BLE001
                 continue
+        return result
+
+    async def fetch_unit_metadata(self, unit_ids: list[str]) -> dict[str, UnitMeta]:
+        """Fetch lightweight metadata for one or more memory units.
+
+        Returns ``{unit_id: UnitMeta}``.  Resolves the source note title
+        via ``get_note`` when a ``note_id`` is present on the unit.
+        Units that fail to load are silently omitted.
+        """
+        result: dict[str, UnitMeta] = {}
+        for uid in unit_ids:
+            try:
+                unit = await self._client.get_memory_unit(uid)
+            except Exception:  # noqa: BLE001
+                continue
+
+            # Extract date from mentioned_at (datetime or ISO string).
+            date_str: str | None = None
+            mentioned = getattr(unit, 'mentioned_at', None)
+            if mentioned is not None:
+                try:
+                    date_str = mentioned.strftime('%Y-%m-%d')
+                except AttributeError:
+                    # Fallback for string values.
+                    date_str = str(mentioned)[:10] if mentioned else None
+
+            status = getattr(unit, 'status', None)
+
+            # Resolve source note title.
+            note_name: str | None = None
+            note_id = getattr(unit, 'note_id', None)
+            if note_id is not None:
+                try:
+                    note = await self._client.get_note(note_id)
+                    note_name = getattr(note, 'name', None) or getattr(note, 'title', None)
+                except Exception:  # noqa: BLE001
+                    pass  # note lookup is best-effort
+
+            result[uid] = UnitMeta(
+                unit_id=uid,
+                date=date_str,
+                note_name=note_name,
+                status=status,
+            )
         return result
 
 

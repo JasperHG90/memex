@@ -33,6 +33,7 @@ from memex_cli.cockpit.controller import (
     CockpitController,
     CockpitOption,
     CockpitProposal,
+    UnitMeta,
     options_for_contradiction,
     options_for_rule,
 )
@@ -48,6 +49,20 @@ def _extract_followup(result: dict[str, Any]) -> dict[str, Any] | None:
     return None
 
 
+def _format_unit_meta_line(meta: UnitMeta) -> str:
+    """Build a dim Rich-markup line showing created date, source note, and status."""
+    parts: list[str] = []
+    if meta.date:
+        parts.append(f'created: {meta.date}')
+    if meta.note_name:
+        parts.append(f'note: {meta.note_name}')
+    if meta.status:
+        parts.append(f'status: {meta.status}')
+    if not parts:
+        return ''
+    return ' [dim]  ' + '  ·  '.join(parts) + '[/dim]'
+
+
 # ---------------------------------------------------------------------------
 # Queue item
 # ---------------------------------------------------------------------------
@@ -60,18 +75,23 @@ class _ProposalQueueItem(ListItem):
         self.proposal = proposal
         self.checked: bool = False
         badge = 'LLM' if proposal.is_llm_source else 'rule'
-        self._text_base = (
-            f'[{badge}] {proposal.rule_name}\n'
-            f'    {proposal.target_type} · {proposal.target_id[:8]}…'
-        )
+        self._badge = badge
         super().__init__(Label(self._render_label()))
 
     def _render_label(self) -> str:
         mark = '[bold green]✓[/bold green] ' if self.checked else '  '
-        return f'{mark}{self._text_base}'
+        flag = '[yellow]⚑[/yellow] ' if self.proposal.is_flagged else ''
+        return (
+            f'{mark}{flag}[{self._badge}] {self.proposal.rule_name}\n'
+            f'    {self.proposal.target_type} · {self.proposal.target_id[:8]}…'
+        )
 
     def toggle(self) -> None:
         self.checked = not self.checked
+        self.query_one(Label).update(self._render_label())
+
+    def refresh_label(self) -> None:
+        """Re-render the label (e.g. after a flag toggle)."""
         self.query_one(Label).update(self._render_label())
 
 
@@ -147,6 +167,7 @@ class HelpScreen(ModalScreen[None]):
             '  [bold]Shift+↑/↓[/bold]  toggle-select + move cursor\n'
             '  [bold]Esc[/bold]         deselect all\n'
             '  [bold]F5[/bold]          refresh queue from the server\n'
+            '  [bold]f[/bold]           toggle flag on highlighted finding\n'
             '  [bold]r[/bold]           reverse a previously-resolved finding\n'
             '  [bold]?[/bold]           this help\n'
             '  [bold]q[/bold]           quit\n'
@@ -263,6 +284,7 @@ class ProposalCockpitApp(App):
         Binding('q', 'quit', 'Quit'),
         Binding('question_mark', 'help', 'Help', show=True, key_display='?'),
         Binding('f5', 'refresh', 'Refresh'),
+        Binding('f', 'flag', 'Flag'),
         Binding('r', 'reverse', 'Reverse'),
     ]
 
@@ -415,6 +437,13 @@ class ProposalCockpitApp(App):
             body_lines.extend(self._build_contradiction_body(proposal))
         else:
             body_lines.append(f'[bold]TARGET[/bold]  [dim cyan]{proposal.target_id[:8]}[/dim cyan]')
+            # Fetch and display unit metadata for the target.
+            target_meta = await self._controller.fetch_unit_metadata([proposal.target_id])
+            meta = target_meta.get(proposal.target_id)
+            if meta:
+                meta_line = _format_unit_meta_line(meta)
+                if meta_line:
+                    body_lines.append(meta_line)
             if proposal.target_text:
                 body_lines.append(f' {proposal.target_text}')
 
@@ -486,8 +515,18 @@ class ProposalCockpitApp(App):
         texts = await self._controller.fetch_unit_texts([contra_id])
         contra_text = texts.get(contra_id)
 
+        # Fetch metadata for both the target and related unit.
+        both_ids = [proposal.target_id, contra_id]
+        all_meta = await self._controller.fetch_unit_metadata(both_ids)
+        target_meta = all_meta.get(proposal.target_id)
+        contra_meta = all_meta.get(contra_id)
+
         body_lines: list[str] = []
         body_lines.append(f' [bold]TARGET[/bold]   [dim cyan]{proposal.target_id[:8]}[/dim cyan]')
+        if target_meta:
+            meta_line = _format_unit_meta_line(target_meta)
+            if meta_line:
+                body_lines.append(meta_line)
         if proposal.target_text:
             body_lines.append(f' {proposal.target_text}')
         else:
@@ -497,6 +536,10 @@ class ProposalCockpitApp(App):
         body_lines.append('     [dim]vs.[/dim]')
         body_lines.append('')
         body_lines.append(f' [bold]RELATED[/bold]  [dim cyan]{contra_id[:8]}[/dim cyan]')
+        if contra_meta:
+            meta_line = _format_unit_meta_line(contra_meta)
+            if meta_line:
+                body_lines.append(meta_line)
         if contra_text:
             body_lines.append(f' {contra_text}')
         else:
@@ -683,6 +726,10 @@ class ProposalCockpitApp(App):
             event.prevent_default()
             event.stop()
             self._deselect_all()
+        elif key == 'f':
+            event.prevent_default()
+            event.stop()
+            self._toggle_flag_current()
 
     def _handle_review_key(self, event: Any) -> None:  # type: ignore[override]
         key = event.key
@@ -717,6 +764,33 @@ class ProposalCockpitApp(App):
             if isinstance(child, _ProposalQueueItem) and child.checked:
                 child.toggle()
         self._update_subtitle()
+
+    def _toggle_flag_current(self) -> None:
+        proposal = self._current_proposal()
+        if proposal is None:
+            return
+        self.run_worker(
+            self._toggle_flag_async(proposal),
+            exclusive=False,
+            name='toggle_flag',
+        )
+
+    async def _toggle_flag_async(self, proposal: CockpitProposal) -> None:
+        try:
+            result = await self._controller.flag_finding(proposal.finding_id)
+        except Exception as exc:  # noqa: BLE001
+            self._show_status(f'Flag toggle failed: {exc}', error=True)
+            return
+        flagged = result.get('flagged', False)
+        proposal.flagged_at = result.get('flagged_at')
+        # Update the queue item label to reflect the new flag state.
+        queue = self.query_one('#queue-list', ListView)
+        for child in queue.children:
+            if isinstance(child, _ProposalQueueItem) and child.proposal is proposal:
+                child.refresh_label()
+                break
+        verb = 'Flagged' if flagged else 'Unflagged'
+        self._show_status(f'{verb} {proposal.finding_id[:8]}…')
 
     # ------------------------------------------------------------------
     # REVIEW mode
@@ -786,6 +860,28 @@ class ProposalCockpitApp(App):
         option: CockpitOption,
         note: str | None,
     ) -> None:
+        # Flag is orthogonal — call the flag endpoint and stay in LIST mode
+        # without removing the finding from the queue.
+        if option.verb == 'flag':
+            try:
+                result = await self._controller.flag_finding(proposal.finding_id)
+            except Exception as exc:  # noqa: BLE001
+                self._show_status(f'Flag toggle failed: {exc}', error=True)
+                self.mode = 'list'
+                return
+            flagged = result.get('flagged', False)
+            proposal.flagged_at = result.get('flagged_at')
+            # Update the queue item label.
+            queue = self.query_one('#queue-list', ListView)
+            for child in queue.children:
+                if isinstance(child, _ProposalQueueItem) and child.proposal is proposal:
+                    child.refresh_label()
+                    break
+            verb = 'Flagged' if flagged else 'Unflagged'
+            self._show_status(f'{verb} {proposal.finding_id[:8]}…')
+            self.mode = 'list'
+            return
+
         try:
             result = await self._controller.resolve(
                 proposal,
@@ -823,13 +919,29 @@ class ProposalCockpitApp(App):
     ) -> None:
         ok = 0
         fail = 0
+        if option.verb == 'flag':
+            for proposal in proposals:
+                try:
+                    result = await self._controller.flag_finding(proposal.finding_id)
+                    proposal.flagged_at = result.get('flagged_at')
+                    ok += 1
+                except Exception:  # noqa: BLE001
+                    fail += 1
+            parts: list[str] = []
+            if ok:
+                parts.append(f'{ok} flagged')
+            if fail:
+                parts.append(f'{fail} failed')
+            self._show_status(', '.join(parts), error=bool(fail))
+            await self._refresh_queue()
+            return
         for proposal in proposals:
             try:
                 await self._controller.resolve(proposal, option, note=note)
                 ok += 1
             except Exception:  # noqa: BLE001
                 fail += 1
-        parts: list[str] = []
+        parts = []
         if ok:
             parts.append(f'{ok} resolved')
         if fail:
@@ -846,6 +958,10 @@ class ProposalCockpitApp(App):
 
     def action_help(self) -> None:
         self.push_screen(HelpScreen())
+
+    def action_flag(self) -> None:
+        if self.mode == 'list':
+            self._toggle_flag_current()
 
     def action_reverse(self) -> None:
         self.run_worker(self._reverse_async(), exclusive=True, name='reverse')
