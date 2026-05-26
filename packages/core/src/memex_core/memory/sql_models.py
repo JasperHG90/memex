@@ -2075,17 +2075,25 @@ class LintRuleTelemetry(SQLModel, table=True):  # type: ignore
 
     __tablename__ = 'lint_rule_telemetry'
 
+    id: UUID = Field(
+        default_factory=uuid4,
+        sa_column=Column(
+            SA_UUID(),
+            primary_key=True,
+            server_default=sql_text('gen_random_uuid()'),
+        ),
+    )
     rule_name: str = Field(
-        sa_column=Column(Text, nullable=False, primary_key=True),
+        sa_column=Column(Text, nullable=False),
         description='Rule that produced the verdicts in this rollup.',
     )
     vault_id: UUID | None = Field(
         default=None,
-        sa_column=Column(SA_UUID(), nullable=True, primary_key=True),
+        sa_column=Column(SA_UUID(), nullable=True),
         description='Vault scope; NULL = global rollup across vaults.',
     )
     window_start: datetime = Field(
-        sa_column=Column(TIMESTAMP(timezone=True), nullable=False, primary_key=True),
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=False),
         description='Start of the rolling window this row aggregates (inclusive).',
     )
     window_end: datetime = Field(

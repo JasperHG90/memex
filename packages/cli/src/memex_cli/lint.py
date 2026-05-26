@@ -645,52 +645,62 @@ optimize_app = typer.Typer(
 app.add_typer(optimize_app)
 
 
+_KNOWN_LLM_RULES = [
+    'llm_semantic_contradiction',
+    'llm_schema_drift',
+    'propose_contradiction_winner',
+]
+
+
 @optimize_app.command('run')
 @async_command
 async def lint_optimize_run_cmd(
     ctx: typer.Context,
     rule: Annotated[
-        str,
-        typer.Option('--rule', help='Rule to compile a signature for.'),
-    ],
+        str | None,
+        typer.Option('--rule', help='Rule to compile. Omit to compile all LLM rules.'),
+    ] = None,
     vault: Annotated[
         str | None,
         typer.Option('--vault', '-v', help='Vault scope.'),
     ] = None,
 ):
-    """Trigger a DSPy signature compile for a specific rule.
+    """Compile optimized LLM lint signatures from your review history.
 
-    Pulls labelled verdicts, compiles via BootstrapFewShot, validates
-    against the current champion, and promotes or rejects the result.
+    Without --rule, compiles all known LLM rules. With --rule, compiles
+    just that one.
     """
+    rules = [rule] if rule else _KNOWN_LLM_RULES
     config: MemexConfig = ctx.obj
     async with get_api_context(config) as api:
         vault_id: str | None = None
         if vault is not None:
             vault_id = str(await api.resolve_vault_identifier(vault))
-        try:
-            payload = await api.lint_optimize_run(rule=rule, vault_id=vault_id)
-        except Exception as e:
-            handle_api_error(e)
-            return
+        for r in rules:
+            console.print(f'[dim]Compiling {r}…[/dim]')
+            try:
+                payload = await api.lint_optimize_run(rule=r, vault_id=vault_id)
+            except Exception as e:
+                handle_api_error(e)
+                continue
 
-    status = payload.get('status', '?')
-    style = {
-        'promoted': 'green',
-        'rejected': 'yellow',
-        'insufficient_data': 'yellow',
-        'error': 'red',
-    }.get(status, 'white')
-    console.print(f'[{style}]{status}:[/{style}] {payload.get("message", "")}')
-    if payload.get('new_version'):
-        console.print(f'  version:          {payload["new_version"]}')
-    if payload.get('validation_score') is not None:
-        console.print(f'  validation_score: {payload["validation_score"]:.3f}')
-    if payload.get('champion_score') is not None:
-        console.print(f'  champion_score:   {payload["champion_score"]:.3f}')
-    console.print(f'  examples_used:    {payload.get("examples_used", 0)}')
-    for w in payload.get('warnings') or []:
-        console.print(f'  [yellow]warning:[/yellow] {w}')
+            status = payload.get('status', '?')
+            style = {
+                'promoted': 'green',
+                'rejected': 'yellow',
+                'insufficient_data': 'yellow',
+                'error': 'red',
+            }.get(status, 'white')
+            console.print(f'  [{style}]{status}:[/{style}] {payload.get("message", "")}')
+            if payload.get('new_version'):
+                console.print(f'    version:          {payload["new_version"]}')
+            if payload.get('validation_score') is not None:
+                console.print(f'    validation_score: {payload["validation_score"]:.3f}')
+            if payload.get('champion_score') is not None:
+                console.print(f'    champion_score:   {payload["champion_score"]:.3f}')
+            console.print(f'    examples_used:    {payload.get("examples_used", 0)}')
+            for w in payload.get('warnings') or []:
+                console.print(f'    [yellow]warning:[/yellow] {w}')
 
 
 @optimize_app.command('history')
