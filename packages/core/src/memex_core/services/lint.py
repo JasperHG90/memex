@@ -181,6 +181,7 @@ _ORPHAN_MENTAL_MODEL_SQL = """
     SELECT
         mm.id::text AS target_id,
         jsonb_build_object(
+            'entity_name', mm.name,
             'last_refreshed', mm.last_refreshed,
             'observation_count', jsonb_array_length(mm.observations),
             'linked_active_units', 0
