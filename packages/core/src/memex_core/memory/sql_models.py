@@ -2154,6 +2154,12 @@ class LintRuleTelemetry(SQLModel, table=True):  # type: ignore
     )
 
     __table_args__ = (
+        UniqueConstraint(
+            'rule_name',
+            'vault_id',
+            'window_start',
+            name='uq_lint_rule_telemetry_rule_vault_window',
+        ),
         Index('idx_lint_rule_telemetry_rule_window', 'rule_name', 'window_end'),
         Index('idx_lint_rule_telemetry_vault_window', 'vault_id', 'window_end'),
     )
