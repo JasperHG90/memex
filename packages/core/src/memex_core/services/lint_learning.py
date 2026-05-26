@@ -23,6 +23,7 @@ Verdict classification:
 
 from __future__ import annotations
 
+import json as _json
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -135,6 +136,7 @@ _FETCH_SQL = """
     WHERE created_at >= :window_start
       AND created_at < :window_end
       AND status IN ('resolved', 'dismissed')
+      AND (:vault_id IS NULL OR vault_id = CAST(:vault_id AS uuid))
 """
 
 
@@ -204,20 +206,16 @@ _SELECT_SQL = """
     FROM lint_rule_telemetry
     WHERE (CAST(:rule_name AS text) IS NULL OR rule_name = :rule_name)
       AND (
-        CAST(:vault_id AS uuid) IS NULL
-          AND :include_global = TRUE
-          AND vault_id IS NULL
-        OR CAST(:vault_id AS uuid) IS NOT NULL
-          AND vault_id = CAST(:vault_id AS uuid)
-        OR CAST(:vault_id AS uuid) IS NULL
-          AND :include_global = FALSE
+        (CAST(:vault_id AS uuid) IS NULL AND :include_global = TRUE AND vault_id IS NULL)
+        OR (CAST(:vault_id AS uuid) IS NOT NULL AND vault_id = CAST(:vault_id AS uuid))
+        OR (CAST(:vault_id AS uuid) IS NULL AND :include_global = FALSE)
       )
     ORDER BY window_end DESC, rule_name ASC
 """
 
 
 class LintLearningService(BaseService):
-    """Read + refresh the lint telemetry rollups.
+    """Read + refresh the lint telemetry rollups and Layer 3 calibration.
 
     Refresh is idempotent: re-running with the same window writes the
     same row contents. Vault-scoped refreshes write per-vault rows AND
@@ -251,7 +249,11 @@ class LintLearningService(BaseService):
         async with self.metastore.session() as session:
             result = await session.execute(
                 text(_FETCH_SQL),
-                {'window_start': start, 'window_end': end},
+                {
+                    'window_start': start,
+                    'window_end': end,
+                    'vault_id': str(vault_id) if vault_id is not None else None,
+                },
             )
             rows = [dict(row) for row in result.mappings().all()]
 
@@ -344,6 +346,206 @@ class LintLearningService(BaseService):
             )
             rows = result.mappings().all()
         return [_dto_from_row(dict(r)) for r in rows]
+
+    # ------------------------------------------------------------------
+    # Layer 3 — Threshold calibration (methods below)
+    # ------------------------------------------------------------------
+
+    async def calibrate_thresholds(
+        self,
+        *,
+        vault_id: UUID | None = None,
+    ) -> CalibrationResult:
+        """Read telemetry for every rule, compute new thresholds, write calibration rows.
+
+        Idempotent per run: if telemetry hasn't changed since the last
+        calibration, no new rows are written (the ``reason`` will say
+        'unchanged').
+        """
+        telemetry_rows = await self.get_telemetry(
+            vault_id=vault_id, include_global=vault_id is None
+        )
+
+        details: list[dict[str, Any]] = []
+        calibrated = 0
+        skipped_frozen = 0
+        skipped_insufficient = 0
+        unchanged = 0
+
+        async with self.metastore.session() as session:
+            for trow in telemetry_rows:
+                rule = trow.rule_name
+                v_id = str(trow.vault_id) if trow.vault_id else None
+
+                # Load current calibration for this rule.
+                result = await session.execute(
+                    text(_GET_LATEST_CALIBRATION_SQL),
+                    {'rule_name': rule, 'vault_id': v_id},
+                )
+                current_row = result.mappings().first()
+
+                if current_row and current_row['frozen']:
+                    skipped_frozen += 1
+                    details.append({'rule': rule, 'status': 'frozen'})
+                    continue
+
+                current_threshold = (
+                    float(current_row['surprise_threshold'])
+                    if current_row and current_row['surprise_threshold'] is not None
+                    else DEFAULT_SURPRISE_THRESHOLD
+                )
+                current_version = int(current_row['version']) if current_row else 0
+
+                if trow.accept_rate is None:
+                    skipped_insufficient += 1
+                    details.append({'rule': rule, 'status': 'no_labelled_data'})
+                    continue
+
+                new_threshold, reason = _compute_new_threshold(
+                    current_threshold, trow.accept_rate, trow.labelled_count
+                )
+
+                if new_threshold is None:
+                    unchanged += 1
+                    details.append({'rule': rule, 'status': 'unchanged', 'reason': reason})
+                    continue
+
+                new_version = current_version + 1
+                rationale = {
+                    'accept_rate': trow.accept_rate,
+                    'labelled_count': trow.labelled_count,
+                    'previous_threshold': current_threshold,
+                    'new_threshold': new_threshold,
+                    'reason': reason,
+                }
+
+                # Supersede all prior unsuperseded rows for this rule.
+                await session.execute(
+                    text(_SUPERSEDE_CALIBRATION_SQL),
+                    {'rule_name': rule, 'vault_id': v_id, 'new_version': new_version},
+                )
+
+                # Insert the new calibration row.
+                await session.execute(
+                    text(_INSERT_CALIBRATION_SQL),
+                    {
+                        'rule_name': rule,
+                        'vault_id': v_id,
+                        'version': new_version,
+                        'surprise_threshold': new_threshold,
+                        'polarity_threshold': None,
+                        'learned_from_window_start': trow.window_start,
+                        'learned_from_window_end': trow.window_end,
+                        'frozen': False,
+                        'rationale': _json.dumps(rationale),
+                    },
+                )
+
+                calibrated += 1
+                details.append(
+                    {
+                        'rule': rule,
+                        'status': 'calibrated',
+                        'version': new_version,
+                        'old_threshold': current_threshold,
+                        'new_threshold': new_threshold,
+                        'reason': reason,
+                    }
+                )
+
+            await session.commit()
+
+        return CalibrationResult(
+            rules_calibrated=calibrated,
+            rules_skipped_frozen=skipped_frozen,
+            rules_skipped_insufficient_data=skipped_insufficient,
+            rules_unchanged=unchanged,
+            details=details,
+        )
+
+    async def get_calibrations(
+        self,
+        *,
+        rule_name: str | None = None,
+        vault_id: UUID | None = None,
+    ) -> list[CalibrationDTO]:
+        """Read calibration rows."""
+        async with self.metastore.session() as session:
+            result = await session.execute(
+                text(_LIST_CALIBRATIONS_SQL),
+                {
+                    'rule_name': rule_name,
+                    'vault_id': str(vault_id) if vault_id else None,
+                },
+            )
+            rows = result.mappings().all()
+        return [_cal_dto(dict(r)) for r in rows]
+
+    async def get_threshold(
+        self,
+        rule_name: str,
+        vault_id: UUID | None = None,
+    ) -> float:
+        """Return the active surprise_threshold for a rule.
+
+        Falls back to DEFAULT_SURPRISE_THRESHOLD when no calibration row
+        exists. This is the method LLM checks call at emission time.
+        """
+        async with self.metastore.session() as session:
+            result = await session.execute(
+                text(_GET_LATEST_CALIBRATION_SQL),
+                {'rule_name': rule_name, 'vault_id': str(vault_id) if vault_id else None},
+            )
+            row = result.mappings().first()
+        if row and row['surprise_threshold'] is not None:
+            return float(row['surprise_threshold'])
+        return DEFAULT_SURPRISE_THRESHOLD
+
+    async def freeze_rule(
+        self,
+        rule_name: str,
+        *,
+        vault_id: UUID | None = None,
+        frozen: bool = True,
+    ) -> bool:
+        """Set or clear the frozen flag on the active calibration row."""
+        async with self.metastore.session() as session:
+            result = await session.execute(
+                text(_FREEZE_CALIBRATION_SQL),
+                {
+                    'rule_name': rule_name,
+                    'vault_id': str(vault_id) if vault_id else None,
+                    'frozen': frozen,
+                },
+            )
+            await session.commit()
+        return bool(result.rowcount)
+
+    async def rollback_calibration(
+        self,
+        rule_name: str,
+        version: int,
+        *,
+        vault_id: UUID | None = None,
+    ) -> bool:
+        """Rollback to a specific calibration version.
+
+        Marks all later versions as superseded and un-supersedes the target.
+        """
+        v_id = str(vault_id) if vault_id else None
+        async with self.metastore.session() as session:
+            # Mark everything after `version` as superseded.
+            await session.execute(
+                text(_SUPERSEDE_LATER_VERSIONS_SQL),
+                {'rule_name': rule_name, 'vault_id': v_id, 'version': version},
+            )
+            # Un-supersede the target version.
+            result = await session.execute(
+                text(_ROLLBACK_CALIBRATION_SQL),
+                {'rule_name': rule_name, 'vault_id': v_id, 'version': version},
+            )
+            await session.commit()
+        return bool(result.rowcount)
 
 
 @dataclass
@@ -569,6 +771,10 @@ _ROLLBACK_CALIBRATION_SQL = """
       AND version = :version
 """
 
+# superseded_by_version semantics (three states):
+#   NULL          — active (current calibration row)
+#   positive int  — superseded by that version number
+#   -1            — rolled back (explicitly reverted by operator)
 _SUPERSEDE_LATER_VERSIONS_SQL = """
     UPDATE lint_rule_calibration
     SET superseded_by_version = -1
@@ -628,212 +834,6 @@ def _compute_new_threshold(
     )
 
 
-# Extend LintLearningService with Layer 3 methods.
-# We monkey-patch rather than subclass to keep the single-service wiring
-# in api.py simple. The methods reference self.metastore.
-
-import json as _json  # noqa: E402
-
-
-async def _calibrate_thresholds(
-    self: LintLearningService,
-    *,
-    vault_id: UUID | None = None,
-) -> CalibrationResult:
-    """Read telemetry for every rule, compute new thresholds, write calibration rows.
-
-    Idempotent per run: if telemetry hasn't changed since the last
-    calibration, no new rows are written (the ``reason`` will say
-    'unchanged').
-    """
-    telemetry_rows = await self.get_telemetry(vault_id=vault_id, include_global=vault_id is None)
-
-    details: list[dict[str, Any]] = []
-    calibrated = 0
-    skipped_frozen = 0
-    skipped_insufficient = 0
-    unchanged = 0
-
-    async with self.metastore.session() as session:
-        for trow in telemetry_rows:
-            rule = trow.rule_name
-            v_id = str(trow.vault_id) if trow.vault_id else None
-
-            # Load current calibration for this rule.
-            result = await session.execute(
-                text(_GET_LATEST_CALIBRATION_SQL),
-                {'rule_name': rule, 'vault_id': v_id},
-            )
-            current_row = result.mappings().first()
-
-            if current_row and current_row['frozen']:
-                skipped_frozen += 1
-                details.append({'rule': rule, 'status': 'frozen'})
-                continue
-
-            current_threshold = (
-                float(current_row['surprise_threshold'])
-                if current_row and current_row['surprise_threshold'] is not None
-                else DEFAULT_SURPRISE_THRESHOLD
-            )
-            current_version = int(current_row['version']) if current_row else 0
-
-            if trow.accept_rate is None:
-                skipped_insufficient += 1
-                details.append({'rule': rule, 'status': 'no_labelled_data'})
-                continue
-
-            new_threshold, reason = _compute_new_threshold(
-                current_threshold, trow.accept_rate, trow.labelled_count
-            )
-
-            if new_threshold is None:
-                unchanged += 1
-                details.append({'rule': rule, 'status': 'unchanged', 'reason': reason})
-                continue
-
-            new_version = current_version + 1
-            rationale = {
-                'accept_rate': trow.accept_rate,
-                'labelled_count': trow.labelled_count,
-                'previous_threshold': current_threshold,
-                'new_threshold': new_threshold,
-                'reason': reason,
-            }
-
-            # Supersede all prior unsuperseded rows for this rule.
-            await session.execute(
-                text(_SUPERSEDE_CALIBRATION_SQL),
-                {'rule_name': rule, 'vault_id': v_id, 'new_version': new_version},
-            )
-
-            # Insert the new calibration row.
-            await session.execute(
-                text(_INSERT_CALIBRATION_SQL),
-                {
-                    'rule_name': rule,
-                    'vault_id': v_id,
-                    'version': new_version,
-                    'surprise_threshold': new_threshold,
-                    'polarity_threshold': None,
-                    'learned_from_window_start': trow.window_start,
-                    'learned_from_window_end': trow.window_end,
-                    'frozen': False,
-                    'rationale': _json.dumps(rationale),
-                },
-            )
-
-            calibrated += 1
-            details.append(
-                {
-                    'rule': rule,
-                    'status': 'calibrated',
-                    'version': new_version,
-                    'old_threshold': current_threshold,
-                    'new_threshold': new_threshold,
-                    'reason': reason,
-                }
-            )
-
-        await session.commit()
-
-    return CalibrationResult(
-        rules_calibrated=calibrated,
-        rules_skipped_frozen=skipped_frozen,
-        rules_skipped_insufficient_data=skipped_insufficient,
-        rules_unchanged=unchanged,
-        details=details,
-    )
-
-
-async def _get_calibrations(
-    self: LintLearningService,
-    *,
-    rule_name: str | None = None,
-    vault_id: UUID | None = None,
-) -> list[CalibrationDTO]:
-    """Read calibration rows."""
-    async with self.metastore.session() as session:
-        result = await session.execute(
-            text(_LIST_CALIBRATIONS_SQL),
-            {
-                'rule_name': rule_name,
-                'vault_id': str(vault_id) if vault_id else None,
-            },
-        )
-        rows = result.mappings().all()
-    return [_cal_dto(dict(r)) for r in rows]
-
-
-async def _get_threshold(
-    self: LintLearningService,
-    rule_name: str,
-    vault_id: UUID | None = None,
-) -> float:
-    """Return the active surprise_threshold for a rule.
-
-    Falls back to DEFAULT_SURPRISE_THRESHOLD when no calibration row
-    exists. This is the method LLM checks call at emission time.
-    """
-    async with self.metastore.session() as session:
-        result = await session.execute(
-            text(_GET_LATEST_CALIBRATION_SQL),
-            {'rule_name': rule_name, 'vault_id': str(vault_id) if vault_id else None},
-        )
-        row = result.mappings().first()
-    if row and row['surprise_threshold'] is not None:
-        return float(row['surprise_threshold'])
-    return DEFAULT_SURPRISE_THRESHOLD
-
-
-async def _freeze_rule(
-    self: LintLearningService,
-    rule_name: str,
-    *,
-    vault_id: UUID | None = None,
-    frozen: bool = True,
-) -> bool:
-    """Set or clear the frozen flag on the active calibration row."""
-    async with self.metastore.session() as session:
-        result = await session.execute(
-            text(_FREEZE_CALIBRATION_SQL),
-            {
-                'rule_name': rule_name,
-                'vault_id': str(vault_id) if vault_id else None,
-                'frozen': frozen,
-            },
-        )
-        await session.commit()
-    return bool(result.rowcount)
-
-
-async def _rollback_calibration(
-    self: LintLearningService,
-    rule_name: str,
-    version: int,
-    *,
-    vault_id: UUID | None = None,
-) -> bool:
-    """Rollback to a specific calibration version.
-
-    Marks all later versions as superseded and un-supersedes the target.
-    """
-    v_id = str(vault_id) if vault_id else None
-    async with self.metastore.session() as session:
-        # Mark everything after `version` as superseded.
-        await session.execute(
-            text(_SUPERSEDE_LATER_VERSIONS_SQL),
-            {'rule_name': rule_name, 'vault_id': v_id, 'version': version},
-        )
-        # Un-supersede the target version.
-        result = await session.execute(
-            text(_ROLLBACK_CALIBRATION_SQL),
-            {'rule_name': rule_name, 'vault_id': v_id, 'version': version},
-        )
-        await session.commit()
-    return bool(result.rowcount)
-
-
 def _cal_dto(row: dict[str, Any]) -> CalibrationDTO:
     vault_raw = row.get('vault_id')
     rationale = row.get('rationale')
@@ -856,11 +856,3 @@ def _cal_dto(row: dict[str, Any]) -> CalibrationDTO:
         frozen=bool(row.get('frozen', False)),
         rationale=rationale if isinstance(rationale, dict) else None,
     )
-
-
-# Attach Layer 3 methods to LintLearningService.
-LintLearningService.calibrate_thresholds = _calibrate_thresholds  # type: ignore[attr-defined]
-LintLearningService.get_calibrations = _get_calibrations  # type: ignore[attr-defined]
-LintLearningService.get_threshold = _get_threshold  # type: ignore[attr-defined]
-LintLearningService.freeze_rule = _freeze_rule  # type: ignore[attr-defined]
-LintLearningService.rollback_calibration = _rollback_calibration  # type: ignore[attr-defined]

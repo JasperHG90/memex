@@ -137,10 +137,10 @@ async def lint_findings(
     try:
         if vault_id is not None:
             await check_vault_access(auth, [vault_id], api, permission=Permission.READ)
-        # `clauses` only contains hard-coded predicate fragments (no user input);
-        # the column/operator strings are trusted constants and all values are
-        # bound via :named parameters. SQLAlchemy Core constructs would be more
-        # idiomatic but offer no additional safety here.
+        # `clauses` only contains hard-coded predicate fragments; the
+        # column/operator strings are trusted constants and user-supplied values
+        # are safely bound via :named parameters. SQLAlchemy Core constructs
+        # would be more idiomatic but offer no additional safety here.
         clauses = ['status = :status']
         params: dict[str, Any] = {'status': status}
         if vault_id is not None:
@@ -1257,9 +1257,7 @@ async def lint_calibration_thresholds(
     if vault_id is not None:
         await check_vault_access(auth, [vault_id], api, permission=Permission.READ)
     try:
-        rows = await api.lint_learning.get_calibrations(  # type: ignore[attr-defined]
-            rule_name=rule, vault_id=vault_id
-        )
+        rows = await api.lint_learning.get_calibrations(rule_name=rule, vault_id=vault_id)
     except Exception as e:
         raise _handle_error(e, 'Failed to fetch calibrations')
     return {
@@ -1295,9 +1293,7 @@ async def lint_calibration_calibrate(
     if vault_id is not None:
         await check_vault_access(auth, [vault_id], api, permission=Permission.WRITE)
     try:
-        result = await api.lint_learning.calibrate_thresholds(  # type: ignore[attr-defined]
-            vault_id=vault_id
-        )
+        result = await api.lint_learning.calibrate_thresholds(vault_id=vault_id)
     except Exception as e:
         raise _handle_error(e, 'Failed to calibrate thresholds')
     return {
@@ -1323,9 +1319,7 @@ async def lint_calibration_freeze(
     if vault_id is not None:
         await check_vault_access(auth, [vault_id], api, permission=Permission.WRITE)
     try:
-        ok = await api.lint_learning.freeze_rule(  # type: ignore[attr-defined]
-            rule, vault_id=vault_id, frozen=frozen
-        )
+        ok = await api.lint_learning.freeze_rule(rule, vault_id=vault_id, frozen=frozen)
     except Exception as e:
         raise _handle_error(e, 'Failed to freeze/unfreeze calibration')
     return {'rule': rule, 'frozen': frozen, 'updated': ok}
@@ -1345,9 +1339,7 @@ async def lint_calibration_rollback(
     if vault_id is not None:
         await check_vault_access(auth, [vault_id], api, permission=Permission.WRITE)
     try:
-        ok = await api.lint_learning.rollback_calibration(  # type: ignore[attr-defined]
-            rule, version, vault_id=vault_id
-        )
+        ok = await api.lint_learning.rollback_calibration(rule, version, vault_id=vault_id)
     except Exception as e:
         raise _handle_error(e, 'Failed to rollback calibration')
     return {'rule': rule, 'version': version, 'rolled_back': ok}
