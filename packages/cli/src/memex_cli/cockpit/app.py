@@ -448,6 +448,7 @@ class ProposalCockpitApp(App):
         self.run_worker(
             self._show_proposal_preview_async(proposal),
             name='show_preview',
+            exclusive=True,
         )
 
     async def _show_proposal_preview_async(self, proposal: CockpitProposal) -> None:
@@ -530,6 +531,7 @@ class ProposalCockpitApp(App):
         self.run_worker(
             self._fetch_contradiction_text_async(proposal, contra_id),
             name='fetch_contra_text',
+            exclusive=True,
         )
 
     async def _fetch_contradiction_text_async(
@@ -884,6 +886,7 @@ class ProposalCockpitApp(App):
         self.run_worker(
             self._load_detail_async(unit_id),
             name='load_detail',
+            exclusive=True,
         )
 
     async def _load_detail_async(self, unit_id: str) -> None:
@@ -978,6 +981,7 @@ class ProposalCockpitApp(App):
         self.run_worker(
             self._fetch_source_note_text_async(unit_id),
             name='fetch_source_note',
+            exclusive=True,
         )
 
     async def _fetch_source_note_text_async(self, unit_id: str) -> None:
