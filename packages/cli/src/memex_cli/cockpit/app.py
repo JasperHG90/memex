@@ -401,6 +401,14 @@ class ProposalCockpitApp(App):
     def _update_footer(self) -> None:
         footer = self.query_one(Footer)
         footer.refresh()
+        hints = {
+            'list': '[d] Detail  [Enter] Review  [f] Flag  [?] Help  [q] Quit',
+            'review': '[↑↓] Navigate  [Enter] Confirm  [Esc] Back',
+            'note': '[Enter] Submit  [Shift+Enter] Newline  [Esc] Cancel',
+            'detail': '[n] View note  [Tab] Cycle units  [Esc] Back',
+        }
+        hint = hints.get(self.mode, '')
+        self.query_one('#status-bar', Static).update(f' [dim]{hint}[/dim]')
 
     def _count_selected(self) -> int:
         queue = self.query_one('#queue-list', ListView)
