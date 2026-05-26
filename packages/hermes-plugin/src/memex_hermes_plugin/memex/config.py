@@ -58,6 +58,15 @@ class RetainConfig(BaseModel):
     # ``memex_add_note(name=..., note_key=<session_note_key>)`` directly.
     session_title_template: str = 'Hermes session [{agent_identity}@{platform}] — {date}'
 
+    # Transcript preprocessing — quality gate
+    min_capture_turns: int = 1
+    min_capture_chars: int = 50
+
+    # Transcript preprocessing — content stripping
+    strip_system_prompts: bool = True
+    strip_html_content: bool = True
+    html_content_threshold: int = 500
+
 
 class HermesMemexConfig(BaseModel):
     """Plugin configuration resolved from file + env + MemexConfig fallback."""
