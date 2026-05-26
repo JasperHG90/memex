@@ -12,6 +12,8 @@ from __future__ import annotations
 
 from typing import Any
 
+from rich.markdown import Markdown as RichMarkdown
+
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
@@ -1089,20 +1091,13 @@ class ProposalCockpitApp(App):
             return
 
         self._viewing_source_note = True
-        short_id = unit_id[:8]
         note_label = detail.note_key or detail.note_id
-        lines: list[str] = []
-        lines.append(f'[bold]─── SOURCE NOTE: {note_label} ───[/bold]')
-        lines.append(f'[dim]unit {short_id} · Esc to return to detail[/dim]')
-        lines.append('')
-        lines.append('[dim]' + '─' * 60 + '[/dim]')
-        lines.append('')
-        lines.append(note_text)
 
         self.query_one('#detail-header', Static).update(
             f'[bold]─── SOURCE NOTE: {note_label} ───[/bold]'
         )
-        self.query_one('#detail-body', Static).update('\n'.join(lines))
+        body = self.query_one('#detail-body', Static)
+        body.update(RichMarkdown(note_text))
 
     # ------------------------------------------------------------------
     # REVIEW mode
