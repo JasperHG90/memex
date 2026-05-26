@@ -56,6 +56,19 @@ class _FakeClient:
     async def get_note(self, note_id: Any) -> Any:
         return None
 
+    async def get_note_page_index(self, note_id: Any) -> Any:
+        return None
+
+    async def get_lineage(
+        self,
+        entity_type: str,
+        entity_id: Any,
+        direction: Any = None,
+        depth: int = 3,
+        limit: int = 10,
+    ) -> Any:
+        return None
+
     async def list_vaults(self) -> list[Any]:
         return []
 
@@ -190,3 +203,74 @@ async def test_n_toggles_note_area_in_review() -> None:
         await pilot.pause()
         assert app.mode == 'note'
         assert app.query_one('#note-section').has_class('visible')
+
+
+@pytest.mark.asyncio
+async def test_d_enters_detail_mode_and_esc_returns() -> None:
+    """Press d in LIST to enter DETAIL, Esc to return to LIST."""
+    finding = _finding()
+    client = _FakeClient([finding])
+    controller = CockpitController(client)
+    app = ProposalCockpitApp(controller, limit=5)
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        assert app.mode == 'list'
+
+        await pilot.press('d')
+        await pilot.pause()
+        assert app.mode == 'detail'
+        assert len(app._detail_unit_ids) == 1
+        assert app._detail_unit_ids[0] == finding['target_id']
+
+        await pilot.press('escape')
+        await pilot.pause()
+        assert app.mode == 'list'
+
+
+@pytest.mark.asyncio
+async def test_detail_mode_cycles_units_with_tab() -> None:
+    """Tab cycles through target + related units in DETAIL mode."""
+    target_id = str(uuid4())
+    related_id = str(uuid4())
+    finding = {
+        'id': str(uuid4()),
+        'vault_id': str(uuid4()),
+        'rule_name': 'llm_semantic_contradiction',
+        'lint_type': 'quality',
+        'target_type': 'memory_unit',
+        'target_id': target_id,
+        'target_text': 'target text',
+        'source': 'llm',
+        'created_at': '2026-05-23T00:00:00Z',
+        'evidence': {
+            'related_unit_ids': [related_id],
+            'explanation': 'contradicts',
+        },
+        'suggested_action': None,
+    }
+    client = _FakeClient([finding])
+    controller = CockpitController(client)
+    app = ProposalCockpitApp(controller, limit=5)
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        assert app.mode == 'list'
+
+        await pilot.press('d')
+        await pilot.pause()
+        assert app.mode == 'detail'
+        assert len(app._detail_unit_ids) == 2
+        assert app._detail_unit_index == 0
+
+        await pilot.press('tab')
+        await pilot.pause()
+        assert app._detail_unit_index == 1
+
+        await pilot.press('tab')
+        await pilot.pause()
+        assert app._detail_unit_index == 0  # wraps around
+
+        await pilot.press('escape')
+        await pilot.pause()
+        assert app.mode == 'list'

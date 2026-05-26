@@ -1,10 +1,11 @@
 """Textual TUI cockpit for the maintenance ledger.
 
-Three-mode UX: LIST -> REVIEW -> NOTE.
+Four-mode UX: LIST -> REVIEW -> NOTE, LIST -> DETAIL.
 
-LIST  — browse the queue; Space multi-selects; Enter opens REVIEW.
+LIST   — browse the queue; Space multi-selects; Enter opens REVIEW; d opens DETAIL.
 REVIEW — pick an action from the action list; Enter confirms / opens NOTE.
-NOTE  — inline TextArea for an optional reviewer note; Enter submits.
+NOTE   — inline TextArea for an optional reviewer note; Enter submits.
+DETAIL — drill-down view of a finding's memory units: metadata, lineage, source note.
 """
 
 from __future__ import annotations
@@ -33,6 +34,8 @@ from memex_cli.cockpit.controller import (
     CockpitController,
     CockpitOption,
     CockpitProposal,
+    UnitDetail,
+    UnitLineage,
     UnitMeta,
     options_for_contradiction,
     options_for_rule,
@@ -163,6 +166,7 @@ class HelpScreen(ModalScreen[None]):
             '[bold underline]LIST mode[/bold underline]\n'
             '  [bold]↑ / ↓[/bold]       navigate the queue\n'
             '  [bold]Enter[/bold]       open proposal in REVIEW mode\n'
+            '  [bold]d[/bold]           drill-down into unit DETAIL mode\n'
             '  [bold]Space[/bold]       toggle multi-select checkbox\n'
             '  [bold]Shift+↑/↓[/bold]  toggle-select + move cursor\n'
             '  [bold]Esc[/bold]         deselect all\n'
@@ -171,6 +175,11 @@ class HelpScreen(ModalScreen[None]):
             '  [bold]r[/bold]           reverse a previously-resolved finding\n'
             '  [bold]?[/bold]           this help\n'
             '  [bold]q[/bold]           quit\n'
+            '\n'
+            '[bold underline]DETAIL mode[/bold underline]\n'
+            '  [bold]Tab / ↑ / ↓[/bold] cycle between units in the finding\n'
+            '  [bold]n[/bold]           view source note text\n'
+            '  [bold]Esc[/bold]         back to LIST\n'
             '\n'
             '[bold underline]REVIEW mode[/bold underline]\n'
             '  [bold]↑ / ↓[/bold]       navigate action list\n'
@@ -298,6 +307,9 @@ class ProposalCockpitApp(App):
         self._pending_note: str | None = None
         self._selected_option: CockpitOption | None = None
         self._batch_targets: list[CockpitProposal] = []
+        # DETAIL mode state
+        self._detail_unit_ids: list[str] = []
+        self._detail_unit_index: int = 0
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -348,6 +360,8 @@ class ProposalCockpitApp(App):
             self._pending_note = None
             self._selected_option = None
             self._batch_targets = []
+            self._detail_unit_ids = []
+            self._detail_unit_index = 0
             self.query_one('#queue-list', ListView).focus()
             self._update_footer()
         elif new in ('review', 'batch'):
@@ -364,6 +378,11 @@ class ProposalCockpitApp(App):
             note_input.clear()
             note_input.focus()
             self._update_footer()
+        elif new == 'detail':
+            queue_pane.add_class('dimmed')
+            action_section.remove_class('visible')
+            note_section.remove_class('visible')
+            self._update_footer()
 
         self._update_subtitle()
 
@@ -373,6 +392,10 @@ class ProposalCockpitApp(App):
         mode_label = self.mode.upper()
         if self.mode == 'batch':
             mode_label = f'BATCH ({selected} selected)'
+        elif self.mode == 'detail':
+            n = len(self._detail_unit_ids)
+            idx = self._detail_unit_index + 1
+            mode_label = f'DETAIL (unit {idx}/{n})' if n > 1 else 'DETAIL'
         self.sub_title = f'{mode_label} · {count} pending'
 
     def _update_footer(self) -> None:
@@ -703,6 +726,8 @@ class ProposalCockpitApp(App):
             self._handle_list_key(event)
         elif self.mode in ('review', 'batch'):
             self._handle_review_key(event)
+        elif self.mode == 'detail':
+            self._handle_detail_key(event)
 
     def _handle_list_key(self, event: Any) -> None:  # type: ignore[override]
         key = event.key
@@ -730,6 +755,10 @@ class ProposalCockpitApp(App):
             event.prevent_default()
             event.stop()
             self._toggle_flag_current()
+        elif key == 'd':
+            event.prevent_default()
+            event.stop()
+            self._enter_detail_mode()
 
     def _handle_review_key(self, event: Any) -> None:  # type: ignore[override]
         key = event.key
@@ -791,6 +820,190 @@ class ProposalCockpitApp(App):
                 break
         verb = 'Flagged' if flagged else 'Unflagged'
         self._show_status(f'{verb} {proposal.finding_id[:8]}…')
+
+    # ------------------------------------------------------------------
+    # DETAIL mode
+    # ------------------------------------------------------------------
+
+    def _enter_detail_mode(self) -> None:
+        """Enter DETAIL drill-down for the currently highlighted finding."""
+        proposal = self._current_proposal()
+        if proposal is None:
+            return
+        # Collect all unit IDs from the finding: target first, then related.
+        unit_ids: list[str] = [proposal.target_id]
+        for rid in proposal.related_unit_ids:
+            if rid not in unit_ids:
+                unit_ids.append(rid)
+        self._detail_unit_ids = unit_ids
+        self._detail_unit_index = 0
+        self.mode = 'detail'
+        self._load_detail_for_current_unit()
+
+    def _handle_detail_key(self, event: Any) -> None:
+        key = event.key
+        if key == 'escape':
+            event.prevent_default()
+            event.stop()
+            self.mode = 'list'
+        elif key == 'tab' and len(self._detail_unit_ids) > 1:
+            event.prevent_default()
+            event.stop()
+            self._detail_unit_index = (self._detail_unit_index + 1) % len(self._detail_unit_ids)
+            self._load_detail_for_current_unit()
+            self._update_subtitle()
+        elif key == 'up' and len(self._detail_unit_ids) > 1:
+            event.prevent_default()
+            event.stop()
+            self._detail_unit_index = (self._detail_unit_index - 1) % len(self._detail_unit_ids)
+            self._load_detail_for_current_unit()
+            self._update_subtitle()
+        elif key == 'down' and len(self._detail_unit_ids) > 1:
+            event.prevent_default()
+            event.stop()
+            self._detail_unit_index = (self._detail_unit_index + 1) % len(self._detail_unit_ids)
+            self._load_detail_for_current_unit()
+            self._update_subtitle()
+        elif key == 'n':
+            event.prevent_default()
+            event.stop()
+            self._fetch_source_note_text()
+
+    def _load_detail_for_current_unit(self) -> None:
+        if not self._detail_unit_ids:
+            return
+        unit_id = self._detail_unit_ids[self._detail_unit_index]
+        short_id = unit_id[:8]
+        n = len(self._detail_unit_ids)
+        idx = self._detail_unit_index + 1
+        nav = f'  (unit {idx}/{n})' if n > 1 else ''
+        self.query_one('#detail-header', Static).update(
+            f'[bold]─── UNIT DETAIL: {short_id} ───[/bold]{nav}'
+        )
+        self.query_one('#detail-body', Static).update('[dim]loading…[/dim]')
+        self.run_worker(
+            self._load_detail_async(unit_id),
+            name='load_detail',
+        )
+
+    async def _load_detail_async(self, unit_id: str) -> None:
+        detail = await self._controller.get_unit_detail(unit_id)
+        lineage = await self._controller.get_unit_lineage(unit_id)
+        self._render_detail_panel(unit_id, detail, lineage)
+
+    def _render_detail_panel(
+        self,
+        unit_id: str,
+        detail: UnitDetail | None,
+        lineage: UnitLineage,
+    ) -> None:
+        short_id = unit_id[:8]
+        n = len(self._detail_unit_ids)
+        idx = self._detail_unit_index + 1
+        nav = f'  (unit {idx}/{n})' if n > 1 else ''
+        self.query_one('#detail-header', Static).update(
+            f'[bold]─── UNIT DETAIL: {short_id} ───[/bold]{nav}'
+        )
+
+        if detail is None:
+            self.query_one('#detail-body', Static).update(
+                f'[red]Could not load unit {unit_id}[/red]'
+            )
+            return
+
+        lines: list[str] = []
+
+        # --- Metadata block ---
+        lines.append(f'  [bold]STATUS[/bold]    {detail.status or "unknown"}')
+        if detail.is_deprioritized:
+            lines.append('            [yellow]deprioritized[/yellow]')
+        if detail.created_at:
+            lines.append(f'  [bold]CREATED[/bold]   {detail.created_at}')
+        if detail.fact_type:
+            lines.append(f'  [bold]TYPE[/bold]      {detail.fact_type}')
+        if detail.confidence is not None:
+            lines.append(f'  [bold]CONFID.[/bold]   {detail.confidence:.2f}')
+
+        # Source note
+        if detail.note_key or detail.note_id:
+            note_label = detail.note_key or detail.note_id or '?'
+            created = f' (created: {detail.note_created_at})' if detail.note_created_at else ''
+            lines.append(f'  [bold]SOURCE[/bold]    note: {note_label}{created}')
+        if detail.chunk_index:
+            lines.append(f'  [bold]CHUNK[/bold]     {detail.chunk_index} in source note')
+        if detail.entities:
+            lines.append(f'  [bold]ENTITIES[/bold]  {", ".join(detail.entities)}')
+
+        # --- Full text block ---
+        lines.append('')
+        lines.append('[dim]' + '─' * 60 + '[/dim]')
+        lines.append('[bold]FULL TEXT[/bold]')
+        lines.append('')
+        lines.append(f'  {detail.text}')
+
+        # --- Lineage block ---
+        lines.append('')
+        lines.append('[dim]' + '─' * 60 + '[/dim]')
+        lines.append('[bold]LINEAGE[/bold]')
+        lines.append('')
+        if lineage.upstream:
+            for uid, label in lineage.upstream:
+                lines.append(f'  [dim]upstream:[/dim]  unit {uid} — "{label}"')
+        else:
+            lines.append('  [dim]upstream:   (none)[/dim]')
+        if lineage.downstream:
+            for uid, label in lineage.downstream:
+                lines.append(f'  [dim]downstream:[/dim] unit {uid} — "{label}"')
+        else:
+            lines.append('  [dim]downstream: (none)[/dim]')
+
+        # --- Actions block ---
+        lines.append('')
+        lines.append('[dim]' + '─' * 60 + '[/dim]')
+        lines.append('[bold]ACTIONS[/bold]')
+        lines.append('')
+        action_parts: list[str] = ['  [bold][n][/bold] View source note']
+        if len(self._detail_unit_ids) > 1:
+            action_parts.append('  [bold][Tab/↑/↓][/bold] Navigate units')
+        action_parts.append('  [bold][Esc][/bold] Back to list')
+        lines.append('  '.join(action_parts))
+
+        self.query_one('#detail-body', Static).update('\n'.join(lines))
+
+    def _fetch_source_note_text(self) -> None:
+        """Fetch and display the source note text for the current detail unit."""
+        if not self._detail_unit_ids:
+            return
+        unit_id = self._detail_unit_ids[self._detail_unit_index]
+        self.run_worker(
+            self._fetch_source_note_text_async(unit_id),
+            name='fetch_source_note',
+        )
+
+    async def _fetch_source_note_text_async(self, unit_id: str) -> None:
+        detail = await self._controller.get_unit_detail(unit_id)
+        if detail is None or detail.note_id is None:
+            self._show_status('No source note linked to this unit.', error=True)
+            return
+        note_text = await self._controller.fetch_note_text(detail.note_id)
+        if note_text is None:
+            self._show_status('Could not load source note text.', error=True)
+            return
+
+        short_id = unit_id[:8]
+        note_label = detail.note_key or detail.note_id
+        lines: list[str] = []
+        lines.append(f'[bold]─── SOURCE NOTE: {note_label} ───[/bold]')
+        lines.append(f'[dim]unit {short_id} · press Esc to return to list[/dim]')
+        lines.append('')
+        lines.append('[dim]' + '─' * 60 + '[/dim]')
+        lines.append('')
+        lines.append(note_text)
+
+        self.query_one('#detail-header', Static).update(
+            f'[bold]─── SOURCE NOTE: {note_label} ───[/bold]'
+        )
+        self.query_one('#detail-body', Static).update('\n'.join(lines))
 
     # ------------------------------------------------------------------
     # REVIEW mode
