@@ -1282,3 +1282,91 @@ async def lint_calibration_rollback(
     except Exception as e:
         raise _handle_error(e, 'Failed to rollback calibration')
     return {'rule': rule, 'version': version, 'rolled_back': ok}
+
+
+# ---------------------------------------------------------------------------
+# Layer 4 — DSPy signature optimization
+# ---------------------------------------------------------------------------
+
+
+@router.post('/optimize/run', dependencies=[Depends(require_write)])
+async def lint_optimize_run(
+    api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+    rule: Annotated[str, Query(description='Rule to compile a signature for.')] = '',
+    vault_id: Annotated[UUID | None, Query(description='Vault scope.')] = None,
+) -> dict[str, Any]:
+    """Trigger a DSPy signature compile for a specific rule.
+
+    Pulls labelled verdicts, compiles via BootstrapFewShot, validates against
+    the current champion, and promotes the winner.
+    """
+    if not rule:
+        raise HTTPException(status_code=400, detail='rule is required')
+    if vault_id is not None:
+        await check_vault_access(auth, [vault_id], api, permission=Permission.WRITE)
+    try:
+        result = await api.lint_optimizer.compile(rule, vault_id=vault_id)
+    except Exception as e:
+        raise _handle_error(e, 'Failed to run lint optimizer')
+    return {
+        'rule_name': result.rule_name,
+        'vault_id': str(result.vault_id) if result.vault_id else None,
+        'status': result.status,
+        'new_version': result.new_version,
+        'validation_score': result.validation_score,
+        'champion_score': result.champion_score,
+        'examples_used': result.examples_used,
+        'message': result.message,
+        'warnings': result.warnings,
+    }
+
+
+@router.get('/optimize/history', dependencies=[Depends(require_read)])
+async def lint_optimize_history(
+    api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+    rule: Annotated[str | None, Query(description='Filter to one rule_name.')] = None,
+) -> dict[str, Any]:
+    """List signature versions — compiled DSPy programs with validation scores."""
+    try:
+        sigs = await api.lint_optimizer.list_signatures(rule_name=rule)
+    except Exception as e:
+        raise _handle_error(e, 'Failed to fetch signature history')
+    return {
+        'signatures': [
+            {
+                'id': str(s.id),
+                'rule_name': s.rule_name,
+                'vault_id': str(s.vault_id) if s.vault_id else None,
+                'version': s.version,
+                'base_model': s.base_model,
+                'validation_score': s.validation_score,
+                'validation_examples': s.validation_examples,
+                'promoted_at': s.promoted_at.isoformat() if s.promoted_at else None,
+                'promoted_by': s.promoted_by,
+                'superseded': s.superseded_by_version is not None,
+            }
+            for s in sigs
+        ]
+    }
+
+
+@router.post('/optimize/rollback', dependencies=[Depends(require_write)])
+async def lint_optimize_rollback(
+    api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+    rule: Annotated[str, Query(description='Rule to rollback.')] = '',
+    version: Annotated[int, Query(description='Version to rollback to.')] = 0,
+    vault_id: Annotated[UUID | None, Query(description='Vault scope.')] = None,
+) -> dict[str, Any]:
+    """Rollback a rule's DSPy signature to a specific version."""
+    if not rule or version <= 0:
+        raise HTTPException(status_code=400, detail='rule and version (>0) are required')
+    if vault_id is not None:
+        await check_vault_access(auth, [vault_id], api, permission=Permission.WRITE)
+    try:
+        ok = await api.lint_optimizer.rollback_signature(rule, version, vault_id=vault_id)
+    except Exception as e:
+        raise _handle_error(e, 'Failed to rollback signature')
+    return {'rule': rule, 'version': version, 'rolled_back': ok}

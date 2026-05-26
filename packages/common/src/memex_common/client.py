@@ -1792,6 +1792,44 @@ class RemoteMemexAPI:
             params['vault_id'] = vault_id
         return await self._post('lint/calibration/refresh', {}, params=params)
 
+    # Layer 4 — DSPy signature optimization.
+
+    async def lint_optimize_run(
+        self,
+        *,
+        rule: str,
+        vault_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Trigger a DSPy compile for a rule. Returns the CompileResult fields."""
+        params: dict[str, Any] = {'rule': rule}
+        if vault_id is not None:
+            params['vault_id'] = vault_id
+        return await self._post('lint/optimize/run', {}, params=params)
+
+    async def lint_optimize_history(
+        self,
+        *,
+        rule: str | None = None,
+    ) -> dict[str, Any]:
+        """List signature versions with validation scores."""
+        params: dict[str, Any] = {}
+        if rule is not None:
+            params['rule'] = rule
+        return await self._get('lint/optimize/history', params=params)
+
+    async def lint_optimize_rollback(
+        self,
+        *,
+        rule: str,
+        version: int,
+        vault_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Rollback a rule's DSPy signature to a specific version."""
+        params: dict[str, Any] = {'rule': rule, 'version': version}
+        if vault_id is not None:
+            params['vault_id'] = vault_id
+        return await self._post('lint/optimize/rollback', {}, params=params)
+
     async def lint_get_flags(
         self,
         *,
