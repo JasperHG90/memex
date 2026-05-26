@@ -187,6 +187,7 @@ _ORPHAN_MENTAL_MODEL_SQL = """
         ) AS evidence
     FROM mental_models mm
     WHERE mm.vault_id = :vault_id
+      AND mm.archived_at IS NULL
       AND mm.last_refreshed < (now() - interval '30 days')
       AND NOT EXISTS (
           SELECT 1
