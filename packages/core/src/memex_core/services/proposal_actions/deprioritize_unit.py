@@ -57,7 +57,8 @@ class DeprioritizeUnitAction:
         actor: str,
     ) -> ExecuteResult:
         reason = str(params.get('reason') or 'cockpit: maintenance proposal accepted')
-        unit_id = UUID(target_id)
+        override = params.get('override_target_id')
+        unit_id = UUID(override) if override else UUID(target_id)
         await api.deprioritize_memory_unit(
             unit_id,
             reason,
@@ -80,7 +81,8 @@ class DeprioritizeUnitAction:
         vault_id: UUID,
         actor: str,
     ) -> ReverseResult:
-        unit_id = UUID(target_id)
+        actual_id = applied_state.get('unit_id') or target_id
+        unit_id = UUID(actual_id)
         await api.restore_memory_unit(unit_id, vault_id=vault_id, actor=actor)
         return ReverseResult(restored_state={'unit_id': str(unit_id), 'is_deprioritized': False})
 
