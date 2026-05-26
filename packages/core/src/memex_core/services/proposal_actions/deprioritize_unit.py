@@ -45,6 +45,10 @@ class DeprioritizeUnitAction:
             raise ActionValidationError(
                 f'deprioritize_unit applies to memory_unit targets, not {target_type!r}.'
             )
+        try:
+            UUID(target_id)
+        except (ValueError, AttributeError):
+            raise ActionValidationError(f'target_id {target_id!r} is not a valid UUID.')
         # `reason` is optional; the proposal's evidence supplies a default when absent.
 
     async def execute(

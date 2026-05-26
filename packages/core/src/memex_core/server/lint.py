@@ -270,6 +270,12 @@ async def lint_resolve(
 ) -> dict[str, Any]:
     """Flip a pending finding to ``resolved``. Idempotent.
 
+    Idempotency mechanism: the service-layer ``set_status`` call uses a CAS
+    guard (``WHERE status = 'pending'``) so duplicate / replayed requests
+    harmlessly return ``ok=False`` (surfaced as 404 "not pending"). No
+    separate idempotency key or dedup table is needed — the status column
+    itself is the single-writer gate.
+
     Per vault-scoping invariant: looks up the finding's vault and
     gates the auth context BEFORE mutating, so a vault-A scoped key with a
     leaked vault-B finding_id cannot resolve the vault-B row (cross-vault check).

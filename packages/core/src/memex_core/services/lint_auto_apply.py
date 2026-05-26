@@ -11,6 +11,10 @@ resolves the finding via the proposal-action registry with
 registry enforces ``action.reversible == True``).
 
 Default state: **OFF**. Must be explicitly enabled per rule in config.
+
+TODO: add unit test coverage for LintAutoApplyService — the sweep logic,
+  cap enforcement, and FOR UPDATE lock guard are currently exercised only
+  via integration-level paths. Known gap tracked in PR #177 review.
 """
 
 from __future__ import annotations
@@ -126,6 +130,15 @@ class LintAutoApplyService(BaseService):
                 continue
 
             # Check daily cap.
+            # NOTE: The cap check runs in a separate session from the
+            # resolution UPDATE below. This is acceptable because the
+            # auto-apply sweep is driven by a single scheduler thread —
+            # there is no concurrent caller that could interleave between
+            # the count read and the resolution write. If we ever move to
+            # concurrent auto-apply workers, this must be made atomic.
+            # TODO: enforce the cap atomically via a Postgres advisory lock
+            # (pg_advisory_xact_lock) scoped to (vault_id, rule_name, date)
+            # so concurrent workers cannot over-apply.
             async with self.metastore.session() as session:
                 cap_row = (
                     await session.execute(
@@ -206,6 +219,29 @@ class LintAutoApplyService(BaseService):
                     action.validate({}, target_type=target_type, target_id=target_id)
                 except Exception:
                     continue
+
+                # Guard: lock the proposal row and re-verify it is still
+                # pending before executing the side-effecting action. Without
+                # this, a concurrent resolution (or a prior sweep whose status
+                # flip failed) could cause re-execution of the action on a
+                # proposal that is no longer pending.
+                async with self.metastore.session() as session:
+                    lock_row = (
+                        await session.execute(
+                            text(
+                                'SELECT status FROM maintenance_proposals '
+                                'WHERE id = CAST(:id AS uuid) '
+                                'FOR UPDATE'
+                            ),
+                            {'id': finding_id},
+                        )
+                    ).first()
+                    if lock_row is None or lock_row.status != 'pending':
+                        logger.debug(
+                            'auto_apply: skipping %s (status no longer pending)',
+                            finding_id[:8],
+                        )
+                        continue
 
                 actor = 'system:auto-learn'
                 try:

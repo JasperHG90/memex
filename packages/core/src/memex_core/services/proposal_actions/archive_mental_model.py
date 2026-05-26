@@ -78,6 +78,10 @@ class ArchiveMentalModelAction:
             raise ActionValidationError(
                 f'archive_mental_model applies to mental_model targets, not {target_type!r}.'
             )
+        try:
+            UUID(target_id)
+        except (ValueError, AttributeError):
+            raise ActionValidationError(f'target_id {target_id!r} is not a valid UUID.')
 
     async def execute(
         self,
