@@ -49,6 +49,12 @@ class DeprioritizeUnitAction:
             UUID(target_id)
         except (ValueError, AttributeError):
             raise ActionValidationError(f'target_id {target_id!r} is not a valid UUID.')
+        override = params.get('override_target_id')
+        if override:
+            try:
+                UUID(override)
+            except (ValueError, AttributeError):
+                raise ActionValidationError(f'override_target_id {override!r} is not a valid UUID.')
         # `reason` is optional; the proposal's evidence supplies a default when absent.
 
     async def execute(

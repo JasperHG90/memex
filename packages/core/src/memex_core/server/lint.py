@@ -809,10 +809,12 @@ async def _reverse_via_registry(
                 WHERE id = :id
                   AND status = 'resolved'
                   AND (evidence -> 'resolution' -> 'reversal') IS NULL
+                  AND (CAST(:vault_id AS text) IS NULL OR vault_id = CAST(:vault_id AS uuid))
                 """
             ),
             {
                 'id': str(finding_id),
+                'vault_id': str(finding_vault) if finding_vault else None,
                 'resolution_json': _json.dumps(new_resolution),
             },
         )
