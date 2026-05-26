@@ -17,10 +17,12 @@ import json
 import logging
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
+from enum import StrEnum
 from typing import Any
 from uuid import UUID
 
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from memex_core.services.base import BaseService
 
@@ -35,13 +37,22 @@ CHAMPION_MARGIN = 0.05
 MAX_DEMOS = 8
 
 
+class CompileStatus(StrEnum):
+    """Terminal states for a ``compile()`` invocation."""
+
+    promoted = 'promoted'
+    rejected = 'rejected'
+    insufficient_data = 'insufficient_data'
+    error = 'error'
+
+
 @dataclass(frozen=True)
 class CompileResult:
     """Outcome of one ``compile()`` invocation."""
 
     rule_name: str
     vault_id: UUID | None
-    status: str  # 'promoted' | 'rejected' | 'insufficient_data' | 'error'
+    status: CompileStatus
     new_version: int | None = None
     validation_score: float | None = None
     champion_score: float | None = None
@@ -166,7 +177,13 @@ _ROLLBACK_SIGNATURE_UNSUPERSEDE_SQL = """
 # superseded_by_version semantics (three states):
 #   NULL          — active (current signature row)
 #   positive int  — superseded by that version number
-#   -1            — rolled back (explicitly reverted by operator)
+#   -1            — rolled back by operator. The -1 sentinel means "explicitly
+#                   reverted regardless of how it was originally superseded" —
+#                   a version that was previously superseded by a higher version
+#                   (positive int) gets overwritten to -1 on rollback, collapsing
+#                   the original supersession chain into a single "operator said no"
+#                   marker. This is intentional: the audit trail cares about the
+#                   operator's final decision, not the intermediate promotion history.
 _ROLLBACK_SIGNATURE_SUPERSEDE_LATER_SQL = """
     UPDATE lint_llm_signature
     SET superseded_by_version = -1
@@ -252,7 +269,7 @@ class LintLLMOptimizer(BaseService):
             return CompileResult(
                 rule_name=rule_name,
                 vault_id=vault_id,
-                status='insufficient_data',
+                status=CompileStatus.insufficient_data,
                 examples_used=len(examples),
                 message='Zero training examples after split — nothing to compile.',
                 warnings=compile_warnings,
@@ -263,7 +280,7 @@ class LintLLMOptimizer(BaseService):
 
         # 4. Run the optimizer — produces a compiled program + demos.
         try:
-            compiled_program, demos, new_score = await self._run_bootstrap(
+            compiled_program, demos, new_score, validation_error_count = await self._run_bootstrap(
                 rule_name, train, validation
             )
         except Exception as exc:
@@ -271,9 +288,15 @@ class LintLLMOptimizer(BaseService):
             return CompileResult(
                 rule_name=rule_name,
                 vault_id=vault_id,
-                status='error',
+                status=CompileStatus.error,
                 message=str(exc),
                 warnings=compile_warnings,
+            )
+
+        if validation_error_count > 0:
+            compile_warnings.append(
+                f'validation_errors: {validation_error_count} of '
+                f'{len(validation)} validation examples raised exceptions'
             )
 
         # 5. Load champion.
@@ -308,7 +331,7 @@ class LintLLMOptimizer(BaseService):
             return CompileResult(
                 rule_name=rule_name,
                 vault_id=vault_id,
-                status='rejected',
+                status=CompileStatus.rejected,
                 validation_score=new_score,
                 champion_score=champion_score,
                 examples_used=len(examples),
@@ -321,26 +344,48 @@ class LintLLMOptimizer(BaseService):
 
         # 7. Promote.
         new_version = current_version + 1
-        async with self.metastore.session() as session:
-            await session.execute(
-                text(_SUPERSEDE_SIGNATURE_SQL),
-                {'rule_name': rule_name, 'vault_id': v_id, 'new_version': new_version},
+        try:
+            async with self.metastore.session() as session:
+                await session.execute(
+                    text(_SUPERSEDE_SIGNATURE_SQL),
+                    {'rule_name': rule_name, 'vault_id': v_id, 'new_version': new_version},
+                )
+                await session.execute(
+                    text(_INSERT_SIGNATURE_SQL),
+                    {
+                        'rule_name': rule_name,
+                        'vault_id': v_id,
+                        'version': new_version,
+                        'compiled_program': json.dumps(compiled_program),
+                        'demos': json.dumps(demos),
+                        'base_model': 'default',
+                        'validation_score': new_score,
+                        'validation_examples': len(validation),
+                        'promoted_by': actor,
+                    },
+                )
+                await session.commit()
+        except IntegrityError:
+            # Concurrent compile() for the same rule raced us to the same
+            # version number. Gracefully report rather than propagate as 500.
+            logger.warning(
+                'Version %d for rule %s lost promotion race (IntegrityError)',
+                new_version,
+                rule_name,
             )
-            await session.execute(
-                text(_INSERT_SIGNATURE_SQL),
-                {
-                    'rule_name': rule_name,
-                    'vault_id': v_id,
-                    'version': new_version,
-                    'compiled_program': json.dumps(compiled_program),
-                    'demos': json.dumps(demos),
-                    'base_model': 'default',
-                    'validation_score': new_score,
-                    'validation_examples': len(validation),
-                    'promoted_by': actor,
-                },
+            return CompileResult(
+                rule_name=rule_name,
+                vault_id=vault_id,
+                status=CompileStatus.error,
+                validation_score=new_score,
+                champion_score=champion_score,
+                examples_used=len(examples),
+                message=(
+                    f'Version race: v{new_version} already exists '
+                    f'(concurrent compile). Retry to pick up the next version.'
+                ),
+                warnings=compile_warnings,
             )
-            await session.commit()
 
         logger.info(
             'Promoted signature v%d for rule %s (score: %.3f → %.3f)',
@@ -353,7 +398,7 @@ class LintLLMOptimizer(BaseService):
         return CompileResult(
             rule_name=rule_name,
             vault_id=vault_id,
-            status='promoted',
+            status=CompileStatus.promoted,
             new_version=new_version,
             validation_score=new_score,
             champion_score=champion_score,
@@ -367,10 +412,10 @@ class LintLLMOptimizer(BaseService):
         rule_name: str,
         train: list[dict[str, Any]],
         validation: list[dict[str, Any]],
-    ) -> tuple[dict[str, Any], list[dict[str, Any]], float]:
+    ) -> tuple[dict[str, Any], list[dict[str, Any]], float, int]:
         """Run DSPy BootstrapFewShot to produce a compiled program.
 
-        Returns (compiled_program_dict, demos_list, validation_score).
+        Returns (compiled_program_dict, demos_list, validation_score, validation_errors).
 
         The actual DSPy invocation requires ``dspy`` + a language model
         configured in the environment. When DSPy is not installed or the
@@ -417,6 +462,7 @@ class LintLLMOptimizer(BaseService):
 
             # Validate.
             correct = 0
+            validation_errors = 0
             for ex in validation:
                 try:
                     pred = compiled(
@@ -428,7 +474,12 @@ class LintLLMOptimizer(BaseService):
                     if getattr(pred, 'verdict', '') == ex['verdict']:
                         correct += 1
                 except Exception:
-                    pass
+                    validation_errors += 1
+                    logger.warning(
+                        'DSPy validation example failed for rule %s',
+                        rule_name,
+                        exc_info=True,
+                    )
             val_score = correct / len(validation) if validation else 0.0
 
             # Serialise the compiled program's demos.
@@ -445,7 +496,12 @@ class LintLLMOptimizer(BaseService):
                         }
                     )
 
-            return ({'type': 'dspy_bootstrap', 'version': 1}, demos_list, val_score)
+            return (
+                {'type': 'dspy_bootstrap', 'version': 1},
+                demos_list,
+                val_score,
+                validation_errors,
+            )
 
         except ImportError:
             logger.warning('DSPy not installed; using majority-class baseline.')
@@ -460,6 +516,7 @@ class LintLLMOptimizer(BaseService):
                 {'type': 'majority_baseline', 'majority_class': majority},
                 [],
                 val_score,
+                0,
             )
 
     async def get_signature_detail(

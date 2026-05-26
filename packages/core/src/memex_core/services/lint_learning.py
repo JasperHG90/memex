@@ -29,9 +29,14 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID
 
+import logging
+
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from memex_core.services.base import BaseService
+
+logger = logging.getLogger('memex.core.services.lint_learning')
 
 
 @dataclass(frozen=True)
@@ -208,7 +213,7 @@ _SELECT_SQL = """
       AND (
         (CAST(:vault_id AS uuid) IS NULL AND :include_global = TRUE AND vault_id IS NULL)
         OR (CAST(:vault_id AS uuid) IS NOT NULL AND vault_id = CAST(:vault_id AS uuid))
-        OR (CAST(:vault_id AS uuid) IS NULL AND :include_global = FALSE)
+        OR (CAST(:vault_id AS uuid) IS NULL AND :include_global = FALSE AND vault_id IS NOT NULL)
       )
     ORDER BY window_end DESC, rule_name ASC
 """
@@ -425,21 +430,40 @@ class LintLearningService(BaseService):
                     {'rule_name': rule, 'vault_id': v_id, 'new_version': new_version},
                 )
 
-                # Insert the new calibration row.
-                await session.execute(
-                    text(_INSERT_CALIBRATION_SQL),
-                    {
-                        'rule_name': rule,
-                        'vault_id': v_id,
-                        'version': new_version,
-                        'surprise_threshold': new_threshold,
-                        'polarity_threshold': None,
-                        'learned_from_window_start': trow.window_start,
-                        'learned_from_window_end': trow.window_end,
-                        'frozen': False,
-                        'rationale': _json.dumps(rationale),
-                    },
-                )
+                # Insert the new calibration row. A concurrent
+                # calibrate_thresholds() call may race us to the same version
+                # number — catch the unique violation and report gracefully
+                # rather than propagating as 500.
+                try:
+                    await session.execute(
+                        text(_INSERT_CALIBRATION_SQL),
+                        {
+                            'rule_name': rule,
+                            'vault_id': v_id,
+                            'version': new_version,
+                            'surprise_threshold': new_threshold,
+                            'polarity_threshold': None,
+                            'learned_from_window_start': trow.window_start,
+                            'learned_from_window_end': trow.window_end,
+                            'frozen': False,
+                            'rationale': _json.dumps(rationale),
+                        },
+                    )
+                except IntegrityError:
+                    logger.warning(
+                        'Calibration version %d for rule %s lost race (IntegrityError)',
+                        new_version,
+                        rule,
+                    )
+                    details.append(
+                        {
+                            'rule': rule,
+                            'status': 'version_race',
+                            'version': new_version,
+                            'reason': 'concurrent calibration wrote this version first',
+                        }
+                    )
+                    continue
 
                 calibrated += 1
                 details.append(
@@ -626,9 +650,15 @@ def _median_int(values: list[int]) -> int | None:
 
 def _dto_from_row(row: dict[str, Any]) -> LintRuleTelemetryDTO:
     vault_raw = row.get('vault_id')
+    vault_id: UUID | None = None
+    if vault_raw:
+        try:
+            vault_id = UUID(vault_raw) if isinstance(vault_raw, str) else vault_raw
+        except (ValueError, AttributeError):
+            vault_id = None
     return LintRuleTelemetryDTO(
         rule_name=row['rule_name'],
-        vault_id=UUID(vault_raw) if vault_raw else None,
+        vault_id=vault_id,
         window_start=row['window_start'],
         window_end=row['window_end'],
         accept_count=int(row.get('accept_count') or 0),
