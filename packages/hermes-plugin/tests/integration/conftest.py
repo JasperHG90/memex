@@ -339,7 +339,15 @@ def server_url_env(memex_server_url: str, monkeypatch: pytest.MonkeyPatch) -> st
 
 @pytest.fixture(scope='session')
 def hermes_home(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    return tmp_path_factory.mktemp('hermes-home')
+    home = tmp_path_factory.mktemp('hermes-home')
+    import json
+
+    cfg_dir = home / 'memex'
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    (cfg_dir / 'config.json').write_text(
+        json.dumps({'retain': {'min_capture_turns': 0, 'min_capture_chars': 0}})
+    )
+    return home
 
 
 @pytest.fixture(scope='session')

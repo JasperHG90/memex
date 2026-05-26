@@ -49,7 +49,6 @@ def is_system_prompt(text: str) -> bool:
 
 _SYSTEM_METADATA_RE = re.compile(
     r'^\s*\[(?:Note|System)\s*[:]\s*.+\]\s*$',
-    re.DOTALL,
 )
 
 
@@ -116,6 +115,9 @@ def _normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
 
     for m in messages:
         if 'user' in m or 'assistant' in m:
+            if pending_user is not None:
+                pairs.append({'user': pending_user, 'assistant': ''})
+                pending_user = None
             pairs.append(
                 {
                     'user': m.get('user', ''),
@@ -124,7 +126,7 @@ def _normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
             )
             continue
 
-        role = str(m.get('role', '')).strip().lower()
+        role = str(m.get('role', 'user')).strip().lower() or 'user'
         content = m.get('content', '')
         if isinstance(content, list):
             content = '\n'.join(
@@ -154,6 +156,7 @@ def preprocess_turns(
     turns: list[dict[str, Any]],
     *,
     strip_system_prompts: bool = True,
+    strip_system_metadata: bool = True,
     strip_html_content: bool = True,
     html_content_threshold: int = 500,
 ) -> list[dict[str, str]]:
@@ -173,7 +176,7 @@ def preprocess_turns(
             logger.debug('Stripped system prompt from turn %d (%d chars)', i, len(user))
             user = '[system prompt omitted]'
 
-        if user and is_system_metadata(user):
+        if strip_system_metadata and user and is_system_metadata(user):
             logger.debug('Stripped system metadata from turn %d', i)
             user = ''
 

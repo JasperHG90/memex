@@ -35,7 +35,12 @@ from .project import derive_project_id, resolve_vault
 from .session import make_session_note_key
 from .templates import HERMES_SESSION_TEMPLATE
 from .tools import ALL_SCHEMAS, TOOLS_MODE_SCHEMAS, dispatch
-from .transcript import format_transcript, passes_quality_gate, preprocess_turns
+from .transcript import (
+    _content_chars,
+    format_transcript,
+    passes_quality_gate,
+    preprocess_turns,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -458,6 +463,7 @@ class MemexMemoryProvider(MemoryProvider):
             cleaned = preprocess_turns(
                 messages,
                 strip_system_prompts=retain.strip_system_prompts,
+                strip_system_metadata=retain.strip_system_metadata,
                 strip_html_content=retain.strip_html_content,
                 html_content_threshold=retain.html_content_threshold,
             )
@@ -627,6 +633,7 @@ class MemexMemoryProvider(MemoryProvider):
             cleaned = preprocess_turns(
                 unflushed,
                 strip_system_prompts=retain.strip_system_prompts if retain else True,
+                strip_system_metadata=retain.strip_system_metadata if retain else True,
                 strip_html_content=retain.strip_html_content if retain else True,
                 html_content_threshold=retain.html_content_threshold if retain else 500,
             )
@@ -636,9 +643,9 @@ class MemexMemoryProvider(MemoryProvider):
                 min_content_chars=retain.min_capture_chars if retain else 50,
             ):
                 logger.info(
-                    'Transcript quality gate rejected session (%d turns, %d chars)',
+                    'Transcript quality gate rejected session (%d turns, %d content chars)',
                     len(cleaned),
-                    sum(len(t.get('user', '')) + len(t.get('assistant', '')) for t in cleaned),
+                    _content_chars(cleaned),
                 )
                 self._flushed_index = len(self._turn_buffer)
                 return ''

@@ -64,6 +64,7 @@ class RetainConfig(BaseModel):
 
     # Transcript preprocessing — content stripping
     strip_system_prompts: bool = True
+    strip_system_metadata: bool = True
     strip_html_content: bool = True
     html_content_threshold: int = 500
 

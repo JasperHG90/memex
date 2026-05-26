@@ -154,6 +154,15 @@ class TestIsSystemMetadata:
         text = '  [Note: something happened]  '
         assert is_system_metadata(text) is True
 
+    def test_does_not_flag_multiline_content(self) -> None:
+        """Multi-line user content starting with [Note: must not false-positive."""
+        text = (
+            '[Note: here is my analysis\n'
+            'of the deployment pipeline.\n'
+            'It covers many topics and ends with a summary]'
+        )
+        assert is_system_metadata(text) is False
+
 
 # ===================================================================
 # C. sanitize_html_content
@@ -285,6 +294,38 @@ class TestPreprocessTurns:
         turns = [{'user': 'Make it', 'assistant': html}]
         result = preprocess_turns(turns, strip_html_content=False)
         assert result[0]['assistant'] == html
+
+    def test_strip_system_metadata_toggle_off(self) -> None:
+        turns = [
+            {
+                'user': '[Note: model was just switched from X to Y]',
+                'assistant': 'Hello!',
+            }
+        ]
+        result = preprocess_turns(turns, strip_system_metadata=False)
+        assert result[0]['user'] == '[Note: model was just switched from X to Y]'
+
+    def test_missing_role_defaults_to_user(self) -> None:
+        """Messages with no 'role' key should be treated as user turns."""
+        messages: list[dict[str, Any]] = [
+            {'content': 'orphaned text'},
+            {'role': 'assistant', 'content': 'response'},
+        ]
+        result = preprocess_turns(messages)
+        assert result[0]['user'] == 'orphaned text'
+        assert result[0]['assistant'] == 'response'
+
+    def test_pending_user_flushed_before_pair_dict(self) -> None:
+        """A pending {role:'user'} must be flushed before a {user,assistant} dict."""
+        messages: list[dict[str, Any]] = [
+            {'role': 'user', 'content': 'Q1'},
+            {'user': 'Q2', 'assistant': 'A2'},
+        ]
+        result = preprocess_turns(messages)
+        assert result[0]['user'] == 'Q1'
+        assert result[0]['assistant'] == ''
+        assert result[1]['user'] == 'Q2'
+        assert result[1]['assistant'] == 'A2'
 
     def test_empty_turns(self) -> None:
         assert preprocess_turns([]) == []
