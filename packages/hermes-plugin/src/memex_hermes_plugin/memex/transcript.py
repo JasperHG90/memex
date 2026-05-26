@@ -128,8 +128,13 @@ def _normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
         content = m.get('content', '')
         if isinstance(content, list):
             content = '\n'.join(
-                c.get('text', '') if isinstance(c, dict) else str(c) for c in content
+                c.get('text', '') if isinstance(c, dict) else str(c)
+                for c in content
+                if not isinstance(c, dict) or c.get('type', 'text') == 'text'
             )
+
+        if role == 'tool':
+            continue
 
         if role == 'user':
             if pending_user is not None:
