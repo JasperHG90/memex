@@ -234,9 +234,7 @@ def main(
                 banner_kwargs['server_connected'] = False
 
         print_banner(Console(stderr=True), **banner_kwargs)  # type: ignore[arg-type]
-        import click
-
-        click.echo(ctx.get_help())
+        typer.echo(ctx.get_help())
         raise typer.Exit(0)
 
 

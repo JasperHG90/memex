@@ -9,7 +9,6 @@ from typing import Any, Callable, Coroutine, NoReturn, TypeVar, AsyncGenerator
 from contextlib import asynccontextmanager
 from uuid import UUID
 
-import click
 import httpx
 import typer
 from box import Box
@@ -70,12 +69,12 @@ class LazyTyperGroup(TyperGroup):
     Adapted from memex_core.
     """
 
-    def list_commands(self, ctx: click.Context) -> list[str]:
+    def list_commands(self, ctx: Any) -> list[str]:
         """List available commands, including lazy-loaded ones."""
         base = super().list_commands(ctx)
         return list(sorted(base + list(LAZY_SUBCOMMANDS.keys())))
 
-    def get_command(self, ctx: click.Context, cmd_name: str) -> Any | None:
+    def get_command(self, ctx: Any, cmd_name: str) -> Any | None:
         """Get a command, loading it if it's in the lazy map."""
         if cmd_name in LAZY_SUBCOMMANDS:
             return self._lazy_load(cmd_name)
