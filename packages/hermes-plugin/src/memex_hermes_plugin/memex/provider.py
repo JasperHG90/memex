@@ -36,7 +36,7 @@ from .session import make_session_note_key
 from .templates import HERMES_SESSION_TEMPLATE
 from .tools import ALL_SCHEMAS, TOOLS_MODE_SCHEMAS, dispatch
 from .transcript import (
-    _content_chars,
+    content_chars,
     format_transcript,
     passes_quality_gate,
     preprocess_turns,
@@ -470,7 +470,7 @@ class MemexMemoryProvider(MemoryProvider):
             if passes_quality_gate(
                 cleaned,
                 min_turns=retain.min_capture_turns,
-                min_content_chars=retain.min_capture_chars,
+                min_capture_chars=retain.min_capture_chars,
             ):
                 chunk = format_transcript(cleaned)
             else:
@@ -629,29 +629,35 @@ class MemexMemoryProvider(MemoryProvider):
             unflushed = self._turn_buffer[self._flushed_index :]
             if not unflushed:
                 return ''
+            snapshot = list(unflushed)
             retain = self._config.retain if self._config else None
-            cleaned = preprocess_turns(
-                unflushed,
-                strip_system_prompts=retain.strip_system_prompts if retain else True,
-                strip_system_metadata=retain.strip_system_metadata if retain else True,
-                strip_html_content=retain.strip_html_content if retain else True,
-                html_content_threshold=retain.html_content_threshold if retain else 500,
+
+        cleaned = preprocess_turns(
+            snapshot,
+            strip_system_prompts=retain.strip_system_prompts if retain else True,
+            strip_system_metadata=retain.strip_system_metadata if retain else True,
+            strip_html_content=retain.strip_html_content if retain else True,
+            html_content_threshold=retain.html_content_threshold if retain else 500,
+        )
+        if not passes_quality_gate(
+            cleaned,
+            min_turns=retain.min_capture_turns if retain else 1,
+            min_capture_chars=retain.min_capture_chars if retain else 50,
+        ):
+            logger.info(
+                'Transcript quality gate rejected session (%d turns, %d content chars)',
+                len(cleaned),
+                content_chars(cleaned),
             )
-            if not passes_quality_gate(
-                cleaned,
-                min_turns=retain.min_capture_turns if retain else 1,
-                min_content_chars=retain.min_capture_chars if retain else 50,
-            ):
-                logger.info(
-                    'Transcript quality gate rejected session (%d turns, %d content chars)',
-                    len(cleaned),
-                    _content_chars(cleaned),
-                )
+            with self._state_lock:
                 self._flushed_index = len(self._turn_buffer)
-                return ''
-            formatted = format_transcript(cleaned)
-            if not formatted.strip():
-                return ''
+            return ''
+        formatted = format_transcript(cleaned)
+        if not formatted.strip():
+            with self._state_lock:
+                self._flushed_index = len(self._turn_buffer)
+            return ''
+        with self._state_lock:
             self._flushed_index = len(self._turn_buffer)
         return formatted
 

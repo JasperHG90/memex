@@ -375,9 +375,9 @@ class TestPassesQualityGate:
 
     def test_custom_thresholds(self) -> None:
         turns = [{'user': 'x', 'assistant': 'y'}]
-        assert passes_quality_gate(turns, min_turns=1, min_content_chars=1) is True
-        assert passes_quality_gate(turns, min_turns=1, min_content_chars=100) is False
-        assert passes_quality_gate(turns, min_turns=2, min_content_chars=1) is False
+        assert passes_quality_gate(turns, min_turns=1, min_capture_chars=1) is True
+        assert passes_quality_gate(turns, min_turns=1, min_capture_chars=100) is False
+        assert passes_quality_gate(turns, min_turns=2, min_capture_chars=1) is False
 
     def test_placeholder_strings_not_counted(self) -> None:
         turns = [{'user': '[system prompt omitted]', 'assistant': '[HTML content removed]'}]
@@ -385,7 +385,7 @@ class TestPassesQualityGate:
 
     def test_zero_thresholds_pass_everything(self) -> None:
         turns = [{'user': '', 'assistant': 'x'}]
-        assert passes_quality_gate(turns, min_turns=0, min_content_chars=0) is True
+        assert passes_quality_gate(turns, min_turns=0, min_capture_chars=0) is True
 
 
 # ===================================================================

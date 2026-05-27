@@ -47,6 +47,7 @@ def is_system_prompt(text: str) -> bool:
 # B. System-metadata detector
 # ---------------------------------------------------------------------------
 
+# Single-line only: no DOTALL (would let .+ span newlines) or MULTILINE.
 _SYSTEM_METADATA_RE = re.compile(
     r'^\s*\[(?:Note|System)\s*[:]\s*.+\]\s*$',
 )
@@ -78,7 +79,8 @@ _HTML_INDICATORS: tuple[str, ...] = (
     "style='",
 )
 
-_HTML_PLACEHOLDER = '[HTML content removed]'
+HTML_PLACEHOLDER = '[HTML content removed]'
+SYSTEM_PROMPT_PLACEHOLDER = '[system prompt omitted]'
 
 
 def sanitize_html_content(text: str, threshold: int = 500) -> str:
@@ -93,12 +95,12 @@ def sanitize_html_content(text: str, threshold: int = 500) -> str:
     """
     tag_chars = sum(len(m.group()) for m in _HTML_TAG_RE.finditer(text))
     if tag_chars > threshold:
-        return _HTML_PLACEHOLDER
+        return HTML_PLACEHOLDER
 
     lower = text.lower()
     indicator_hits = sum(1 for ind in _HTML_INDICATORS if ind in lower)
     if indicator_hits >= 3 and len(text) > threshold:
-        return _HTML_PLACEHOLDER
+        return HTML_PLACEHOLDER
 
     return text
 
@@ -174,7 +176,7 @@ def preprocess_turns(
 
         if strip_system_prompts and user and is_system_prompt(user):
             logger.debug('Stripped system prompt from turn %d (%d chars)', i, len(user))
-            user = '[system prompt omitted]'
+            user = SYSTEM_PROMPT_PLACEHOLDER
 
         if strip_system_metadata and user and is_system_metadata(user):
             logger.debug('Stripped system metadata from turn %d', i)
@@ -197,13 +199,13 @@ def preprocess_turns(
 
 _PLACEHOLDER_STRINGS = frozenset(
     {
-        '[system prompt omitted]',
-        _HTML_PLACEHOLDER,
+        SYSTEM_PROMPT_PLACEHOLDER,
+        HTML_PLACEHOLDER,
     }
 )
 
 
-def _content_chars(turns: list[dict[str, str]]) -> int:
+def content_chars(turns: list[dict[str, str]]) -> int:
     """Sum of non-placeholder content characters across all turns."""
     total = 0
     for turn in turns:
@@ -218,7 +220,7 @@ def passes_quality_gate(
     turns: list[dict[str, str]],
     *,
     min_turns: int = 1,
-    min_content_chars: int = 50,
+    min_capture_chars: int = 50,
 ) -> bool:
     """Return False when the preprocessed transcript is too thin to capture."""
     substantive_turns = sum(
@@ -229,7 +231,7 @@ def passes_quality_gate(
     if substantive_turns < min_turns:
         return False
 
-    if _content_chars(turns) < min_content_chars:
+    if content_chars(turns) < min_capture_chars:
         return False
 
     return True
@@ -267,6 +269,9 @@ def format_transcript(messages: list[dict[str, Any]]) -> str:
 
 
 __all__ = [
+    'HTML_PLACEHOLDER',
+    'SYSTEM_PROMPT_PLACEHOLDER',
+    'content_chars',
     'format_transcript',
     'is_system_metadata',
     'is_system_prompt',
