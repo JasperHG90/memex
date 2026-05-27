@@ -437,13 +437,15 @@ def test_session_title_uses_template_against_real_server(
 
     cfg_dir = hermes_home / 'memex'
     cfg_dir.mkdir(parents=True, exist_ok=True)
-    (cfg_dir / 'memex' / 'config.json' if False else cfg_dir / 'config.json').write_text(
+    (cfg_dir / 'config.json').write_text(
         json.dumps(
             {
                 'server_url': memex_server_url,
                 'vault_id': vault_name,
                 'retain': {
                     'session_title_template': ('IntegrationTitle [{agent_identity}@{platform}]'),
+                    'min_capture_turns': 0,
+                    'min_capture_chars': 0,
                 },
             }
         )
