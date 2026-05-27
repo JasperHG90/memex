@@ -1224,7 +1224,15 @@ async def memex_append_note(
             joiner=joiner,
             user_notes=user_notes,
         )
-        response = await api.append_to_note(request)
+        response = await api.append_to_note(
+            note_id=request.note_id,
+            note_key=request.note_key,
+            vault_id=request.vault_id,
+            delta=request.delta,
+            append_id=request.append_id,
+            joiner=request.joiner,
+            user_notes=request.user_notes,
+        )
 
         return McpAppendNoteResult(
             note_id=response.note_id,
