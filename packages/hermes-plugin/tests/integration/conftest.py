@@ -359,9 +359,26 @@ def installed_plugin(hermes_home: Path) -> Path:
     return plugin_dir
 
 
+def _ensure_quality_gate_disabled(hermes_home: Path) -> None:
+    """Write or merge quality-gate-off config so short test turns pass."""
+    import json
+
+    cfg_path = hermes_home / 'memex' / 'config.json'
+    cfg_path.parent.mkdir(parents=True, exist_ok=True)
+    existing = json.loads(cfg_path.read_text()) if cfg_path.exists() else {}
+    existing.setdefault('retain', {}).update(
+        {
+            'min_capture_turns': 0,
+            'min_capture_chars': 0,
+        }
+    )
+    cfg_path.write_text(json.dumps(existing))
+
+
 @pytest.fixture(autouse=True)
 def _hermes_env(hermes_home: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv('HERMES_HOME', str(hermes_home))
+    _ensure_quality_gate_disabled(hermes_home)
 
 
 # ---------------------------------------------------------------------------

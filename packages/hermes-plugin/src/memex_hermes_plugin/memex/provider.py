@@ -29,12 +29,19 @@ from memex_common.note_utils import derive_note_uuid_from_key
 
 from .async_bridge import run_sync
 from .briefing import BriefingCache, format_briefing_block
-from .config import HermesMemexConfig, load_config, save_config
+from .config import HermesMemexConfig, RetainConfig, load_config, save_config
 from .prefetch import PrefetchCache
 from .project import derive_project_id, resolve_vault
 from .session import make_session_note_key
 from .templates import HERMES_SESSION_TEMPLATE
 from .tools import ALL_SCHEMAS, TOOLS_MODE_SCHEMAS, dispatch
+from .transcript import (
+    render_pairs,
+    content_chars,
+    format_transcript,
+    passes_quality_gate,
+    preprocess_turns,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -453,7 +460,22 @@ class MemexMemoryProvider(MemoryProvider):
             # Degenerate case: ``sync_turn`` was never called this session
             # (some Hermes deployments only fire on_session_end). Trust
             # Hermes' history as the fallback source.
-            chunk = _format_transcript(messages)
+            retain = self._config.retain if self._config else RetainConfig()
+            cleaned = preprocess_turns(
+                messages,
+                strip_system_prompts=retain.strip_system_prompts,
+                strip_system_metadata=retain.strip_system_metadata,
+                strip_html_content=retain.strip_html_content,
+                html_content_threshold=retain.html_content_threshold,
+            )
+            if passes_quality_gate(
+                cleaned,
+                min_turns=retain.min_capture_turns,
+                min_capture_chars=retain.min_capture_chars,
+            ):
+                chunk = render_pairs(cleaned)
+            else:
+                chunk = ''
         if chunk:
             self._enqueue_chunk(chunk, title=self._format_session_title())
         with self._state_lock:
@@ -600,15 +622,49 @@ class MemexMemoryProvider(MemoryProvider):
         watermark moves on capture, not on successful flush — the pending
         queue handles retries via stable ``append_id``s, so we never need to
         reread the same buffer slice twice.
+
+        The raw turns are preprocessed (system-prompt stripping, HTML
+        sanitization) and quality-gated before formatting.
         """
         with self._state_lock:
             unflushed = self._turn_buffer[self._flushed_index :]
             if not unflushed:
                 return ''
-            formatted = _format_transcript(unflushed)
-            if not formatted.strip():
+            snapshot = list(unflushed)
+            # Pin the watermark target to the snapshot range so concurrent
+            # sync_turn appends are not silently skipped.
+            end_index = self._flushed_index + len(snapshot)
+            retain = self._config.retain if self._config else RetainConfig()
+
+        cleaned = preprocess_turns(
+            snapshot,
+            strip_system_prompts=retain.strip_system_prompts,
+            strip_system_metadata=retain.strip_system_metadata,
+            strip_html_content=retain.strip_html_content,
+            html_content_threshold=retain.html_content_threshold,
+        )
+        if not passes_quality_gate(
+            cleaned,
+            min_turns=retain.min_capture_turns,
+            min_capture_chars=retain.min_capture_chars,
+        ):
+            logger.info(
+                'Transcript quality gate rejected session (%d turns, %d content chars)',
+                len(cleaned),
+                content_chars(cleaned),
+            )
+            with self._state_lock:
+                self._flushed_index = max(self._flushed_index, end_index)
+            return ''
+        formatted = render_pairs(cleaned)
+        if not formatted.strip():
+            with self._state_lock:
+                self._flushed_index = max(self._flushed_index, end_index)
+            return ''
+        with self._state_lock:
+            if self._flushed_index >= end_index:
                 return ''
-            self._flushed_index = len(self._turn_buffer)
+            self._flushed_index = end_index
         return formatted
 
     def _enqueue_chunk(self, content: str, *, title: str) -> None:
@@ -808,29 +864,11 @@ class MemexMemoryProvider(MemoryProvider):
 
 
 def _format_transcript(messages: list[dict[str, Any]]) -> str:
-    """Render a list of turn dicts as a flat markdown transcript.
+    """Render a list of turn dicts as a structured markdown transcript.
 
-    Accepts both ``{user, assistant}`` pairs (our sync_turn buffer format) and
-    Hermes' own ``{role, content}`` message objects.
+    Delegates to ``transcript.format_transcript``.
     """
-    lines: list[str] = []
-    for m in messages:
-        if 'user' in m or 'assistant' in m:
-            if m.get('user'):
-                lines.append(f'**User:** {m["user"]}')
-            if m.get('assistant'):
-                lines.append(f'**Assistant:** {m["assistant"]}')
-        else:
-            role = str(m.get('role', 'user')).strip() or 'user'
-            content = m.get('content', '')
-            if isinstance(content, list):
-                content = '\n'.join(
-                    c.get('text', '') if isinstance(c, dict) else str(c) for c in content
-                )
-            if content:
-                lines.append(f'**{role.capitalize()}:** {content}')
-        lines.append('')
-    return '\n'.join(lines).strip()
+    return format_transcript(messages)
 
 
 __all__ = ['MemexMemoryProvider']

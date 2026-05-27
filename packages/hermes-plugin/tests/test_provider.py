@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -13,11 +14,27 @@ import pytest
 from memex_hermes_plugin.memex.provider import MemexMemoryProvider
 
 
+def _write_test_config(tmp_path: Path) -> None:
+    """Write a config that disables the quality gate so short test turns pass."""
+    cfg_dir = tmp_path / 'memex'
+    cfg_dir.mkdir(parents=True, exist_ok=True)
+    cfg = cfg_dir / 'config.json'
+    existing = json.loads(cfg.read_text()) if cfg.exists() else {}
+    existing.setdefault('retain', {}).update(
+        {
+            'min_capture_turns': 0,
+            'min_capture_chars': 0,
+        }
+    )
+    cfg.write_text(json.dumps(existing))
+
+
 @pytest.fixture
 def provider_with_stubbed_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv('HERMES_HOME', str(tmp_path))
     monkeypatch.setenv('MEMEX_SERVER_URL', 'http://test:8000')
     monkeypatch.setenv('MEMEX_VAULT', 'test-vault')
+    _write_test_config(tmp_path)
 
     fake_api = Mock()
     vault_uuid = uuid4()
@@ -347,6 +364,7 @@ def provider_with_append_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setenv('HERMES_HOME', str(tmp_path))
     monkeypatch.setenv('MEMEX_SERVER_URL', 'http://test:8000')
     monkeypatch.setenv('MEMEX_VAULT', 'test-vault')
+    _write_test_config(tmp_path)
 
     fake_api = Mock()
     vault_uuid = uuid4()
@@ -769,7 +787,14 @@ def test_vault_rebind_after_note_initialized_is_ignored(
 
     cfg_dir = tmp_path / 'memex'
     cfg_dir.mkdir(parents=True, exist_ok=True)
-    (cfg_dir / 'config.json').write_text(json.dumps({'briefing_refresh_cadence': 1}))
+    (cfg_dir / 'config.json').write_text(
+        json.dumps(
+            {
+                'briefing_refresh_cadence': 1,
+                'retain': {'min_capture_turns': 0, 'min_capture_chars': 0},
+            }
+        )
+    )
 
     fake_api = Mock()
     vault_a = uuid4()
@@ -865,7 +890,14 @@ def test_vault_rebind_with_pending_create_is_ignored(
 
     cfg_dir = tmp_path / 'memex'
     cfg_dir.mkdir(parents=True, exist_ok=True)
-    (cfg_dir / 'config.json').write_text(json.dumps({'briefing_refresh_cadence': 1}))
+    (cfg_dir / 'config.json').write_text(
+        json.dumps(
+            {
+                'briefing_refresh_cadence': 1,
+                'retain': {'min_capture_turns': 0, 'min_capture_chars': 0},
+            }
+        )
+    )
 
     fake_api = Mock()
     vault_a = uuid4()
@@ -919,7 +951,14 @@ def test_vault_rebind_toctou_reverify_under_lock(tmp_path: Path, monkeypatch: py
 
     cfg_dir = tmp_path / 'memex'
     cfg_dir.mkdir(parents=True, exist_ok=True)
-    (cfg_dir / 'config.json').write_text(json.dumps({'briefing_refresh_cadence': 1}))
+    (cfg_dir / 'config.json').write_text(
+        json.dumps(
+            {
+                'briefing_refresh_cadence': 1,
+                'retain': {'min_capture_turns': 0, 'min_capture_chars': 0},
+            }
+        )
+    )
 
     fake_api = Mock()
     vault_a = uuid4()
@@ -1024,7 +1063,14 @@ def test_vault_rebind_reresolves_on_cadence(tmp_path: Path, monkeypatch: pytest.
 
     cfg_dir = tmp_path / 'memex'
     cfg_dir.mkdir(parents=True, exist_ok=True)
-    (cfg_dir / 'config.json').write_text(json.dumps({'briefing_refresh_cadence': 2}))
+    (cfg_dir / 'config.json').write_text(
+        json.dumps(
+            {
+                'briefing_refresh_cadence': 2,
+                'retain': {'min_capture_turns': 0, 'min_capture_chars': 0},
+            }
+        )
+    )
 
     fake_api = Mock()
     vault_a = uuid4()
@@ -1119,14 +1165,15 @@ class TestSessionTitle:
         monkeypatch.setenv('MEMEX_SERVER_URL', 'http://test:8000')
         monkeypatch.setenv('MEMEX_VAULT', 'v')
 
+        retain: dict[str, Any] = {
+            'min_capture_turns': 0,
+            'min_capture_chars': 0,
+        }
         if template is not None:
-            import json
-
-            cfg_dir = tmp_path / 'memex'
-            cfg_dir.mkdir(parents=True, exist_ok=True)
-            (cfg_dir / 'config.json').write_text(
-                json.dumps({'retain': {'session_title_template': template}})
-            )
+            retain['session_title_template'] = template
+        cfg_dir = tmp_path / 'memex'
+        cfg_dir.mkdir(parents=True, exist_ok=True)
+        (cfg_dir / 'config.json').write_text(json.dumps({'retain': retain}))
 
         fake_api = Mock()
         note_uuid = uuid4()
