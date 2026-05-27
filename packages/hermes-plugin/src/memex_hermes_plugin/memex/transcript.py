@@ -139,10 +139,10 @@ def _normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
         elif not isinstance(content, str):
             content = str(content)
 
-        if role == 'tool':
+        if role in ('tool', 'system'):
             continue
 
-        if role in ('user', 'system'):
+        if role == 'user':
             if pending_user is not None:
                 pairs.append({'user': pending_user, 'assistant': ''})
             pending_user = content
