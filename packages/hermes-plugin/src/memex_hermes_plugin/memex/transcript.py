@@ -142,7 +142,7 @@ def _normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
         if role == 'tool':
             continue
 
-        if role == 'user':
+        if role in ('user', 'system'):
             if pending_user is not None:
                 pairs.append({'user': pending_user, 'assistant': ''})
             pending_user = content
@@ -244,7 +244,7 @@ def passes_quality_gate(
 # ---------------------------------------------------------------------------
 
 
-def _render_pairs(pairs: list[dict[str, str]]) -> str:
+def render_pairs(pairs: list[dict[str, str]]) -> str:
     """Render already-normalized ``{user, assistant}`` pairs as markdown."""
     blocks: list[str] = []
     for turn in pairs:
@@ -270,7 +270,7 @@ def format_transcript(messages: list[dict[str, Any]]) -> str:
     Produces ``### Role`` headers with content on separate lines and ``---``
     horizontal rules between turns.
     """
-    return _render_pairs(_normalize_messages(messages))
+    return render_pairs(_normalize_messages(messages))
 
 
 __all__ = [
@@ -278,6 +278,7 @@ __all__ = [
     'SYSTEM_PROMPT_PLACEHOLDER',
     'content_chars',
     'format_transcript',
+    'render_pairs',
     'is_system_metadata',
     'is_system_prompt',
     'passes_quality_gate',
