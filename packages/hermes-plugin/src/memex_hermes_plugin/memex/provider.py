@@ -36,6 +36,7 @@ from .session import make_session_note_key
 from .templates import HERMES_SESSION_TEMPLATE
 from .tools import ALL_SCHEMAS, TOOLS_MODE_SCHEMAS, dispatch
 from .transcript import (
+    _render_pairs,
     content_chars,
     format_transcript,
     passes_quality_gate,
@@ -459,20 +460,20 @@ class MemexMemoryProvider(MemoryProvider):
             # Degenerate case: ``sync_turn`` was never called this session
             # (some Hermes deployments only fire on_session_end). Trust
             # Hermes' history as the fallback source.
-            retain = self._config.retain
+            retain = self._config.retain if self._config else None
             cleaned = preprocess_turns(
                 messages,
-                strip_system_prompts=retain.strip_system_prompts,
-                strip_system_metadata=retain.strip_system_metadata,
-                strip_html_content=retain.strip_html_content,
-                html_content_threshold=retain.html_content_threshold,
+                strip_system_prompts=retain.strip_system_prompts if retain else True,
+                strip_system_metadata=retain.strip_system_metadata if retain else True,
+                strip_html_content=retain.strip_html_content if retain else True,
+                html_content_threshold=retain.html_content_threshold if retain else 500,
             )
             if passes_quality_gate(
                 cleaned,
-                min_turns=retain.min_capture_turns,
-                min_capture_chars=retain.min_capture_chars,
+                min_turns=retain.min_capture_turns if retain else 1,
+                min_capture_chars=retain.min_capture_chars if retain else 50,
             ):
-                chunk = format_transcript(cleaned)
+                chunk = _render_pairs(cleaned)
             else:
                 chunk = ''
         if chunk:
@@ -655,7 +656,7 @@ class MemexMemoryProvider(MemoryProvider):
             with self._state_lock:
                 self._flushed_index = end_index
             return ''
-        formatted = format_transcript(cleaned)
+        formatted = _render_pairs(cleaned)
         if not formatted.strip():
             with self._state_lock:
                 self._flushed_index = end_index

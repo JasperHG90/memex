@@ -136,6 +136,8 @@ def _normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
                 for c in content
                 if not isinstance(c, dict) or c.get('type', 'text') == 'text'
             )
+        elif not isinstance(content, str):
+            content = str(content)
 
         if role == 'tool':
             continue
@@ -242,17 +244,10 @@ def passes_quality_gate(
 # ---------------------------------------------------------------------------
 
 
-def format_transcript(messages: list[dict[str, Any]]) -> str:
-    """Render turn dicts as a structured markdown transcript.
-
-    Accepts both ``{user, assistant}`` pairs and ``{role, content}`` messages.
-    Produces ``### Role`` headers with content on separate lines and ``---``
-    horizontal rules between turns.
-    """
-    normalized = _normalize_messages(messages)
+def _render_pairs(pairs: list[dict[str, str]]) -> str:
+    """Render already-normalized ``{user, assistant}`` pairs as markdown."""
     blocks: list[str] = []
-
-    for turn in normalized:
+    for turn in pairs:
         parts: list[str] = []
         user = turn.get('user', '').strip()
         assistant = turn.get('assistant', '').strip()
@@ -266,6 +261,16 @@ def format_transcript(messages: list[dict[str, Any]]) -> str:
             blocks.append('\n\n'.join(parts))
 
     return '\n\n---\n\n'.join(blocks)
+
+
+def format_transcript(messages: list[dict[str, Any]]) -> str:
+    """Render turn dicts as a structured markdown transcript.
+
+    Accepts both ``{user, assistant}`` pairs and ``{role, content}`` messages.
+    Produces ``### Role`` headers with content on separate lines and ``---``
+    horizontal rules between turns.
+    """
+    return _render_pairs(_normalize_messages(messages))
 
 
 __all__ = [
