@@ -49,7 +49,7 @@ def is_system_prompt(text: str) -> bool:
 
 # Single-line only: no DOTALL (would let .+ span newlines) or MULTILINE.
 _SYSTEM_METADATA_RE = re.compile(
-    r'^\s*\[(?:Note|System)\s*[:]\s*.+\]\s*$',
+    r'^\s*\[(?:Note|System)\s*:\s*.+\]\s*$',
 )
 
 

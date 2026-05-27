@@ -662,7 +662,9 @@ class MemexMemoryProvider(MemoryProvider):
                 self._flushed_index = max(self._flushed_index, end_index)
             return ''
         with self._state_lock:
-            self._flushed_index = max(self._flushed_index, end_index)
+            if self._flushed_index >= end_index:
+                return ''
+            self._flushed_index = end_index
         return formatted
 
     def _enqueue_chunk(self, content: str, *, title: str) -> None:
