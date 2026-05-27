@@ -630,6 +630,9 @@ class MemexMemoryProvider(MemoryProvider):
             if not unflushed:
                 return ''
             snapshot = list(unflushed)
+            # Pin the watermark target to the snapshot range so concurrent
+            # sync_turn appends are not silently skipped.
+            end_index = self._flushed_index + len(snapshot)
             retain = self._config.retain if self._config else None
 
         cleaned = preprocess_turns(
@@ -650,15 +653,15 @@ class MemexMemoryProvider(MemoryProvider):
                 content_chars(cleaned),
             )
             with self._state_lock:
-                self._flushed_index = len(self._turn_buffer)
+                self._flushed_index = end_index
             return ''
         formatted = format_transcript(cleaned)
         if not formatted.strip():
             with self._state_lock:
-                self._flushed_index = len(self._turn_buffer)
+                self._flushed_index = end_index
             return ''
         with self._state_lock:
-            self._flushed_index = len(self._turn_buffer)
+            self._flushed_index = end_index
         return formatted
 
     def _enqueue_chunk(self, content: str, *, title: str) -> None:
