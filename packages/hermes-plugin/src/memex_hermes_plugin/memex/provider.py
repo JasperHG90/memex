@@ -29,7 +29,7 @@ from memex_common.note_utils import derive_note_uuid_from_key
 
 from .async_bridge import run_sync
 from .briefing import BriefingCache, format_briefing_block
-from .config import HermesMemexConfig, load_config, save_config
+from .config import HermesMemexConfig, RetainConfig, load_config, save_config
 from .prefetch import PrefetchCache
 from .project import derive_project_id, resolve_vault
 from .session import make_session_note_key
@@ -460,18 +460,18 @@ class MemexMemoryProvider(MemoryProvider):
             # Degenerate case: ``sync_turn`` was never called this session
             # (some Hermes deployments only fire on_session_end). Trust
             # Hermes' history as the fallback source.
-            retain = self._config.retain if self._config else None
+            retain = self._config.retain if self._config else RetainConfig()
             cleaned = preprocess_turns(
                 messages,
-                strip_system_prompts=retain.strip_system_prompts if retain else True,
-                strip_system_metadata=retain.strip_system_metadata if retain else True,
-                strip_html_content=retain.strip_html_content if retain else True,
-                html_content_threshold=retain.html_content_threshold if retain else 500,
+                strip_system_prompts=retain.strip_system_prompts,
+                strip_system_metadata=retain.strip_system_metadata,
+                strip_html_content=retain.strip_html_content,
+                html_content_threshold=retain.html_content_threshold,
             )
             if passes_quality_gate(
                 cleaned,
-                min_turns=retain.min_capture_turns if retain else 1,
-                min_capture_chars=retain.min_capture_chars if retain else 50,
+                min_turns=retain.min_capture_turns,
+                min_capture_chars=retain.min_capture_chars,
             ):
                 chunk = render_pairs(cleaned)
             else:
@@ -634,19 +634,19 @@ class MemexMemoryProvider(MemoryProvider):
             # Pin the watermark target to the snapshot range so concurrent
             # sync_turn appends are not silently skipped.
             end_index = self._flushed_index + len(snapshot)
-            retain = self._config.retain if self._config else None
+            retain = self._config.retain if self._config else RetainConfig()
 
         cleaned = preprocess_turns(
             snapshot,
-            strip_system_prompts=retain.strip_system_prompts if retain else True,
-            strip_system_metadata=retain.strip_system_metadata if retain else True,
-            strip_html_content=retain.strip_html_content if retain else True,
-            html_content_threshold=retain.html_content_threshold if retain else 500,
+            strip_system_prompts=retain.strip_system_prompts,
+            strip_system_metadata=retain.strip_system_metadata,
+            strip_html_content=retain.strip_html_content,
+            html_content_threshold=retain.html_content_threshold,
         )
         if not passes_quality_gate(
             cleaned,
-            min_turns=retain.min_capture_turns if retain else 1,
-            min_capture_chars=retain.min_capture_chars if retain else 50,
+            min_turns=retain.min_capture_turns,
+            min_capture_chars=retain.min_capture_chars,
         ):
             logger.info(
                 'Transcript quality gate rejected session (%d turns, %d content chars)',
