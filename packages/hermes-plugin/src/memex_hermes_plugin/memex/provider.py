@@ -36,8 +36,7 @@ from .session import make_session_note_key
 from .templates import HERMES_SESSION_TEMPLATE
 from .tools import ALL_SCHEMAS, TOOLS_MODE_SCHEMAS, dispatch
 from .transcript import (
-    render_pairs,
-    content_chars,
+    _content_chars,
     format_transcript,
     passes_quality_gate,
     preprocess_turns,
@@ -464,16 +463,15 @@ class MemexMemoryProvider(MemoryProvider):
             cleaned = preprocess_turns(
                 messages,
                 strip_system_prompts=retain.strip_system_prompts,
-                strip_system_metadata=retain.strip_system_metadata,
                 strip_html_content=retain.strip_html_content,
                 html_content_threshold=retain.html_content_threshold,
             )
             if passes_quality_gate(
                 cleaned,
                 min_turns=retain.min_capture_turns,
-                min_capture_chars=retain.min_capture_chars,
+                min_content_chars=retain.min_capture_chars,
             ):
-                chunk = render_pairs(cleaned)
+                chunk = format_transcript(cleaned)
             else:
                 chunk = ''
         if chunk:
@@ -639,24 +637,23 @@ class MemexMemoryProvider(MemoryProvider):
         cleaned = preprocess_turns(
             snapshot,
             strip_system_prompts=retain.strip_system_prompts,
-            strip_system_metadata=retain.strip_system_metadata,
             strip_html_content=retain.strip_html_content,
             html_content_threshold=retain.html_content_threshold,
         )
         if not passes_quality_gate(
             cleaned,
             min_turns=retain.min_capture_turns,
-            min_capture_chars=retain.min_capture_chars,
+            min_content_chars=retain.min_capture_chars,
         ):
             logger.info(
                 'Transcript quality gate rejected session (%d turns, %d content chars)',
                 len(cleaned),
-                content_chars(cleaned),
+                _content_chars(cleaned),
             )
             with self._state_lock:
                 self._flushed_index = max(self._flushed_index, end_index)
             return ''
-        formatted = render_pairs(cleaned)
+        formatted = format_transcript(cleaned)
         if not formatted.strip():
             with self._state_lock:
                 self._flushed_index = max(self._flushed_index, end_index)
