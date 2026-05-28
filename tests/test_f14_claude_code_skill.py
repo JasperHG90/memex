@@ -32,7 +32,10 @@ def _read(slug: str) -> str:
 def test_remember_documents_procedure_namespace_and_kv_put_path():
     text = _read('remember')
     # Procedure key shape MUST be named so an agent can self-discover the contract.
-    assert 'procedure:<verb>:<context-tag>' in text
+    # New design: procedures live UNDER a scope namespace.
+    assert '<scope>:procedure:<verb>:<context-tag>' in text
+    assert 'global:procedure:<verb>:<context-tag>' in text
+    assert 'project:<id>:procedure:<verb>:<context-tag>' in text
     # Write side: kv_put is the path for capturing a learned procedure.
     assert 'memex_kv_put' in text
 
@@ -64,9 +67,9 @@ def test_remember_does_not_advertise_kv_get_include_history():
 
 def test_recall_documents_procedure_namespace_and_kv_get_include_history():
     text = _read('recall')
-    # Procedure namespace MUST be referenced (full template lives in /remember).
+    # Procedures live under scope namespaces — recall surface must point at the new prefix.
     assert 'procedure:' in text
-    assert 'memex_kv_list(namespaces=["procedure"])' in text
+    assert 'memex_kv_list(prefix="global:procedure:")' in text
 
 
 def test_recall_does_not_advertise_kv_put_for_procedures():
