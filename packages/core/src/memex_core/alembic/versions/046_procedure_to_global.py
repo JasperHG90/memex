@@ -12,7 +12,7 @@ only when no row with the target ``global:`` form already exists for
 that key (avoids unique-constraint violations when a manual rewrite
 already happened).
 
-Revision ID: 046_rename_procedure_to_global_scope
+Revision ID: 046_procedure_to_global
 Revises: 045_drop_procedure_outcomes
 Create Date: 2026-05-29
 """
@@ -20,7 +20,7 @@ Create Date: 2026-05-29
 import sqlalchemy as sa
 from alembic import op
 
-revision: str = '046_rename_procedure_to_global_scope'
+revision: str = '046_procedure_to_global'
 down_revision: str | None = '045_drop_procedure_outcomes'
 branch_labels: str | list[str] | None = None
 depends_on: str | list[str] | None = None
