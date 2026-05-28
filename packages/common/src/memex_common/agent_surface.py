@@ -186,7 +186,9 @@ Namespace by scope cue (NOT grammatical person). `app:`/`project:`/`global:` ALL
 | procedure scoped to a project (EXPLICIT cue) | `project:<id>:procedure:<verb>:<context-tag>` |
 
 <critical_constraint name="procedure_scope_default">
-Procedures live UNDER a scope namespace, never bare `procedure:*`. Default `global:procedure:<v>:<c>`. Project cue ("for this project", "in this repo") → `project:<id>:procedure:<v>:<c>`. Ambiguous? ASK — never infer scope from cwd or vault.
+Procedures live UNDER a scope, never bare `procedure:*`. Default `global:procedure:<v>:<c>`. Project cue → `project:<id>:procedure:<v>:<c>`. Ambiguous? ASK.
+
+**Imperatives = procedures.** "Always X / never X / from now on / must Y / via Z / use Y not Z" → `<scope>:procedure:<verb>:<context>` (with the `procedure:` infix). Plain facts ("Python 3.10") → `<scope>:<field>` (no infix). Rule about HOW = procedure; static fact = preference.
 </critical_constraint>
 
 Ambiguous? ASK before writing.
