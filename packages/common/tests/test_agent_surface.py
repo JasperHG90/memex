@@ -22,7 +22,7 @@ from memex_common import agent_surface as ags
 # ---------------------------------------------------------------------------
 
 
-_UNIVERSAL_CHAR_CAP = 9_600  # ~2,743 tokens at 3.5 chars/token (empirical cl100k)
+_UNIVERSAL_CHAR_CAP = 9_800  # ~2,800 tokens at 3.5 chars/token (empirical cl100k)
 # Bumped 5,500 → 6,000 when CRITICAL_HEADER / VIRTUAL_UNIT / CRITICAL_FOOTER
 # adopted `<critical_constraint name="…">` XML tags (Anthropic best practice:
 # XML disambiguates load-bearing constraints; the model attends more reliably
@@ -58,6 +58,11 @@ _UNIVERSAL_CHAR_CAP = 9_600  # ~2,743 tokens at 3.5 chars/token (empirical cl100
 # cwd / git remote / active vault, producing project keys the user didn't
 # ask for. The 300-char additions also condensed existing KV table cells
 # and examples — net delta is ~250 chars, hence the modest cap bump.
+# Bumped 9,600 → 9,800 when two `Store procedure: ...` wake-words were
+# added to the KV-routing line. These bypass scope-inference reasoning
+# and force the agent to emit the exact `<scope>:procedure:<verb>:<context>`
+# key the user typed — the deterministic escape hatch when the routing
+# rule's classification is unreliable.
 # Bumped 9,400 → 9,600 when the procedure_scope_default constraint gained
 # an imperatives-vs-preferences clause. Eval traces on glm-5.1 showed the
 # agent writing `project:<id>:git:pr-only` and `project:<id>:package-manager`
