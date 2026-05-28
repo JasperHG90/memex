@@ -36,8 +36,13 @@ async def kv(metastore, filestore, memex_config):
 
 
 def _unique_proc_key() -> str:
-    """A unique procedure key per test run (verb + uuid-derived context-tag)."""
+    """A unique global procedure key per test run."""
     return f'procedure:write_pr:tag-{uuid4().hex[:8]}'
+
+
+def _unique_project_proc_key(project_id: str = 'memex') -> str:
+    """A unique project-scoped procedure key per test run."""
+    return f'project:{project_id}:procedure:write_pr:tag-{uuid4().hex[:8]}'
 
 
 @pytest.mark.asyncio
@@ -175,3 +180,77 @@ async def test_non_procedure_key_get_shape_unchanged(kv: KVService) -> None:
     entry = await kv.get(key=key)
     assert entry is not None
     assert entry.value == 'plain-text'
+
+
+# ---------------------------------------------------------------------------
+# Project-scoped procedure round-trip — pins that the new
+# `project:<id>:procedure:<verb>:<context>` form uses the same envelope
+# wrap-on-write + unwrap-on-read as the global form. Per Hermes review on
+# PR #182: `_procedure_put` is opaque to the key shape, but no test
+# previously exercised the project form end-to-end through put → get.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_project_scoped_first_write_creates_envelope_at_v1(kv: KVService) -> None:
+    """First write of a project-scoped procedure key wraps in the same v=1
+    envelope as the global form."""
+    key = _unique_project_proc_key()
+    await kv.put(key=key, value='initial-project-procedure')
+
+    entry = await kv.get(key=key, include_history=True)
+    assert entry is not None
+    assert isinstance(entry.value, dict)
+    assert entry.value['value'] == 'initial-project-procedure'
+    assert entry.value['version'] == 1
+    assert entry.value['history'] == []
+
+
+@pytest.mark.asyncio
+async def test_project_scoped_versioning_and_history_round_trip(kv: KVService) -> None:
+    """Subsequent writes to a project-scoped procedure key increment the
+    version + append to history identically to the global form."""
+    key = _unique_project_proc_key()
+    await kv.put(key=key, value='v1-text')
+    await kv.put(key=key, value='v2-text')
+    await kv.put(key=key, value='v3-text')
+
+    entry = await kv.get(key=key, include_history=True)
+    assert entry is not None
+    assert isinstance(entry.value, dict)
+    assert entry.value['value'] == 'v3-text'
+    assert entry.value['version'] == 3
+    history = entry.value['history']
+    assert [h['v'] for h in history] == [1, 2]
+    assert [h['value'] for h in history] == ['v1-text', 'v2-text']
+
+
+@pytest.mark.asyncio
+async def test_project_scoped_default_get_unwraps_active_value(kv: KVService) -> None:
+    """Default `get` on a project-scoped procedure unwraps the envelope —
+    callers see the active string, not the JSON envelope."""
+    key = _unique_project_proc_key()
+    await kv.put(key=key, value='active-text')
+    await kv.put(key=key, value='updated-text')
+
+    entry = await kv.get(key=key)
+    assert entry is not None
+    assert entry.value == 'updated-text'
+
+
+@pytest.mark.asyncio
+async def test_project_scoped_with_ssh_form_project_id(kv: KVService) -> None:
+    """Project IDs from SSH-form git remotes (containing `@` and embedded `:`)
+    must round-trip through put → get without the rsplit-based parser
+    mis-segmenting the key."""
+    # `git@github.com:acme/foo-{uuid}` — SSH form with embedded colon
+    project_id = f'git@github.com:acme/foo-{uuid4().hex[:8]}'
+    key = f'project:{project_id}:procedure:write_pr:tag-{uuid4().hex[:8]}'
+
+    await kv.put(key=key, value='ssh-form-procedure')
+
+    entry = await kv.get(key=key, include_history=True)
+    assert entry is not None
+    assert isinstance(entry.value, dict)
+    assert entry.value['value'] == 'ssh-form-procedure'
+    assert entry.value['version'] == 1
