@@ -39,7 +39,12 @@ _HERMES_HARNESS_TOKEN_CAP = 400
 # Claude Code. Current measured block: 9,970 chars (~230 char headroom).
 # The cap is a tripwire: further growth requires deliberate decision about
 # trimming vs. raising vs. re-sharding into agent-specific harnesses.
-_TOTAL_STATIC_PREFIX_CHAR_CAP = 10_200
+# Bumped 10,200 → 10,800 when the project-scoped procedure pattern landed
+# in agent_surface.KV_NAMESPACE + the procedure_scope_default critical
+# constraint + the matching write_routing entries in CLAUDE_CODE_HARNESS.
+# Net delta ~250 chars; the routing rule prevents silent miscategorization
+# (agent auto-scoping procedures by cwd / git remote / active vault).
+_TOTAL_STATIC_PREFIX_CHAR_CAP = 10_800
 
 
 def _approx_tokens(text: str) -> int:

@@ -43,7 +43,7 @@ _PROTOCOL_RE = re.compile(r'[a-zA-Z][a-zA-Z0-9+\-.]*://')
 
 VALID_NAMESPACES = ('global', 'user', 'project', 'app', 'procedure')
 
-PROCEDURE_KEY_RE = re.compile(r'^procedure:[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$')
+_VERB_CONTEXT_RE = re.compile(r'^[a-z][a-z0-9_-]*$')
 
 PROCEDURE_HISTORY_CAP = 5
 PROCEDURE_RETRY_BUDGET = 5
@@ -60,22 +60,101 @@ class ProcedureKVConcurrencyError(RuntimeError):
         self.retries = retries
 
 
-def validate_procedure_key(key: str) -> None:
-    """Validate a ``procedure:<verb>:<context-tag>`` KV key.
+def parse_procedure_key(key: str) -> tuple[str | None, str, str] | None:
+    """Return ``(project_id_or_None, verb, context)`` if ``key`` is a procedure key.
 
-    Raises :class:`ValueError` if the key does not match the strict
-    namespace format. The regex only permits lowercase letters, digits,
-    hyphens, and underscores in segments, with a leading lowercase letter
-    on each of the verb and context-tag segments. Exactly two colons.
+    Accepts both forms:
+    - ``procedure:<verb>:<context>`` → ``(None, verb, context)`` (global)
+    - ``project:<id>:procedure:<verb>:<context>`` → ``(id, verb, context)``
 
-    See the procedure key contract for details.
+    Uses ``rsplit`` to peel ``:procedure:<verb>:<context>`` from the right so
+    ``<id>`` may contain arbitrary characters (slashes, dots, ``@``, ``:``) —
+    necessary because git remote URLs (e.g. ``git@github.com:acme/foo``) flow
+    in unmodified. Returns ``None`` if the key is not a procedure key, the
+    verb/context segments are malformed, or the project_id segment itself
+    contains ``:procedure:`` (ambiguous; refuse rather than guess).
     """
-    if not PROCEDURE_KEY_RE.match(key):
+    # Global form.
+    if key.startswith('procedure:'):
+        parts = key.split(':')
+        if len(parts) != 3:
+            return None
+        _, verb, context = parts
+        if not (_VERB_CONTEXT_RE.match(verb) and _VERB_CONTEXT_RE.match(context)):
+            return None
+        return (None, verb, context)
+
+    # Project form.
+    if not key.startswith('project:'):
+        return None
+    rest = key[len('project:') :]
+    split = rest.rsplit(':procedure:', 1)
+    if len(split) != 2:
+        return None
+    project_id, suffix = split
+    if not project_id or ':procedure:' in project_id:
+        return None
+    suffix_parts = suffix.split(':')
+    if len(suffix_parts) != 2:
+        return None
+    verb, context = suffix_parts
+    if not (_VERB_CONTEXT_RE.match(verb) and _VERB_CONTEXT_RE.match(context)):
+        return None
+    return (project_id, verb, context)
+
+
+def is_procedure_key(key: str) -> bool:
+    """True if ``key`` is a global or project-scoped procedure key."""
+    return parse_procedure_key(key) is not None
+
+
+def _looks_like_procedure_key(key: str) -> bool:
+    """True if the key is shaped like a procedure key (valid or not).
+
+    Used at write-time to route candidates through ``validate_procedure_key``
+    so a malformed procedure-shaped key (e.g. uppercase verb) is REJECTED
+    rather than silently written as a plain KV entry.
+    """
+    if key.startswith('procedure:'):
+        return True
+    if key.startswith('project:') and ':procedure:' in key:
+        return True
+    return False
+
+
+def validate_procedure_key(key: str) -> None:
+    """Validate a procedure KV key (global or project-scoped form).
+
+    Raises :class:`ValueError` if the key does not match either:
+    - ``procedure:<verb>:<context-tag>`` (global), or
+    - ``project:<id>:procedure:<verb>:<context-tag>`` (project-scoped).
+
+    Verb and context-tag must match ``[a-z][a-z0-9_-]*``. The ``<id>`` is
+    permissive (anything except ``:procedure:`` substring).
+    """
+    if parse_procedure_key(key) is None:
         raise ValueError(
             f'Invalid procedure key: {key!r}. '
-            'Expected procedure:<verb>:<context-tag> with each segment '
+            'Expected procedure:<verb>:<context-tag> or '
+            'project:<id>:procedure:<verb>:<context-tag> with verb/context '
             'matching [a-z][a-z0-9_-]*.'
         )
+
+
+def format_procedure_display_name(key: str) -> str:
+    """Render a procedure key for human display.
+
+    Global: ``"<verb>:<context>"``.
+    Project-scoped: ``"[project:<id>] <verb>:<context>"``.
+    Non-procedure key: returns the key unchanged (defensive fallback).
+    """
+    parsed = parse_procedure_key(key)
+    if parsed is None:
+        return key
+    project_id, verb, context = parsed
+    if project_id is None:
+        return f'{verb}:{context}'
+    return f'[project:{project_id}] {verb}:{context}'
 
 
 def _pattern_to_prefix(pattern: str) -> str | None:
@@ -135,7 +214,7 @@ class KVService(BaseService):
         key = _normalize_key(key)
         _validate_namespace(key)
 
-        if key.startswith('procedure:'):
+        if _looks_like_procedure_key(key):
             validate_procedure_key(key)
             return await self._procedure_put(key, value, embedding=embedding)
 
@@ -318,7 +397,7 @@ class KVService(BaseService):
                 await session.commit()
                 return None
 
-            if key.startswith('procedure:'):
+            if is_procedure_key(key):
                 try:
                     parsed = json.loads(entry.value)
                 except (ValueError, TypeError):

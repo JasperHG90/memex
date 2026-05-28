@@ -989,10 +989,50 @@ class TestProcedures:
         assert '## Procedures' not in result
 
     @pytest.mark.asyncio
+    async def test_project_scoped_procedure_renders_under_procedures_section(self):
+        """A `project:<id>:procedure:<verb>:<context>` key must render in the
+        ## Procedures section alongside global procedures, prefixed with the
+        project tag so the scope is visible to the agent."""
+        svc = _make_service(
+            summary=_make_vault_summary(),
+            kv_entries=[
+                _make_kv_entry('procedure:commit:lint-first', self._wrap('global rule')),
+                _make_kv_entry(
+                    'project:memex:procedure:commit:pr-workflow',
+                    self._wrap('project rule'),
+                ),
+            ],
+        )
+        result = await svc.generate(uuid4(), budget=2000)
+        assert '## Procedures' in result
+        # Global procedure: bare verb:context label.
+        assert '**commit:lint-first**' in result
+        assert 'global rule' in result
+        # Project procedure: bracketed scope prefix.
+        assert '**\\[project:memex\\] commit:pr-workflow**' in result
+        assert 'project rule' in result
+
+    @pytest.mark.asyncio
+    async def test_project_procedure_envelope_unwrap(self):
+        """Project procedures use the same JSON envelope as global ones —
+        the active value must be extracted via `parsed['value']`."""
+        svc = _make_service(
+            summary=_make_vault_summary(),
+            kv_entries=[
+                _make_kv_entry(
+                    'project:memex:procedure:deploy:gitops',
+                    self._wrap('use ArgoCD'),
+                ),
+            ],
+        )
+        result = await svc.generate(uuid4(), budget=2000)
+        assert 'use ArgoCD' in result
+
+    @pytest.mark.asyncio
     async def test_envelope_unwrap_extracts_value_field(self):
         svc = _make_service(
             summary=_make_vault_summary(),
-            kv_entries=[_make_kv_entry('procedure:x', self._wrap('hello'))],
+            kv_entries=[_make_kv_entry('procedure:do:x', self._wrap('hello'))],
         )
         result = await svc.generate(uuid4(), budget=2000)
         assert 'hello' in result
@@ -1002,7 +1042,7 @@ class TestProcedures:
     async def test_envelope_fallback_on_malformed_json(self):
         svc = _make_service(
             summary=_make_vault_summary(),
-            kv_entries=[_make_kv_entry('procedure:x', 'raw text not json')],
+            kv_entries=[_make_kv_entry('procedure:do:x', 'raw text not json')],
         )
         result = await svc.generate(uuid4(), budget=2000)
         assert 'raw text not json' in result
@@ -1011,7 +1051,7 @@ class TestProcedures:
     async def test_envelope_fallback_on_non_dict_json(self):
         svc = _make_service(
             summary=_make_vault_summary(),
-            kv_entries=[_make_kv_entry('procedure:x', json.dumps([1, 2, 3]))],
+            kv_entries=[_make_kv_entry('procedure:do:x', json.dumps([1, 2, 3]))],
         )
         result = await svc.generate(uuid4(), budget=2000)
         assert '[1, 2, 3]' in result
@@ -1022,12 +1062,12 @@ class TestProcedures:
             summary=_make_vault_summary(),
             kv_entries=[
                 _make_kv_entry('global:foo', 'bar'),
-                _make_kv_entry('procedure:x', self._wrap('proc text')),
+                _make_kv_entry('procedure:do:x', self._wrap('proc text')),
             ],
         )
         result = await svc.generate(uuid4(), budget=2000)
         kv_section = result.split('## Key-Value Facts')[1].split('##')[0]
-        assert 'procedure:x' not in kv_section
+        assert 'procedure:do:x' not in kv_section
         assert 'proc text' not in kv_section
         assert 'global:foo' in kv_section
 
@@ -1050,7 +1090,7 @@ class TestProcedures:
         long_text = 'x' * (_PROCEDURE_VALUE_MAX_CHARS + 500)
         svc = _make_service(
             summary=_make_vault_summary(),
-            kv_entries=[_make_kv_entry('procedure:x', self._wrap(long_text))],
+            kv_entries=[_make_kv_entry('procedure:do:x', self._wrap(long_text))],
         )
         result = await svc.generate(uuid4(), budget=2000)
         assert '…' in result
@@ -1062,7 +1102,7 @@ class TestProcedures:
         """A `\\n##` in the stored value must NOT create a fake briefing heading."""
         svc = _make_service(
             summary=_make_vault_summary(),
-            kv_entries=[_make_kv_entry('procedure:x', self._wrap('intro\n## fake heading'))],
+            kv_entries=[_make_kv_entry('procedure:do:x', self._wrap('intro\n## fake heading'))],
         )
         result = await svc.generate(uuid4(), budget=2000)
         # The injected `\n## fake heading` becomes `\n  ## fake heading` (indented),
@@ -1073,7 +1113,7 @@ class TestProcedures:
     @pytest.mark.asyncio
     async def test_procedures_render_in_every_vaults_briefing(self):
         """KV has no vault_id; the same procedure row surfaces in any vault's briefing."""
-        entries = [_make_kv_entry('procedure:shared', self._wrap('global rule'))]
+        entries = [_make_kv_entry('procedure:do:shared', self._wrap('global rule'))]
         svc_a = _make_service(summary=_make_vault_summary(), kv_entries=entries)
         svc_b = _make_service(summary=_make_vault_summary(), kv_entries=entries)
         result_a = await svc_a.generate(uuid4(), budget=2000)
@@ -1121,7 +1161,7 @@ class TestProcedures:
 
         # Many procedure rows, each near the per-row cap, to ensure they're the
         # largest droppable section after vault overview + KV trim.
-        entries = [_make_kv_entry(f'procedure:p{i}', self._wrap('y ' * 200)) for i in range(15)]
+        entries = [_make_kv_entry(f'procedure:do:p{i}', self._wrap('y ' * 200)) for i in range(15)]
         svc = _make_service(summary=large_summary, kv_entries=entries)
         result = await svc.generate(uuid4(), budget=1000)
         # After overflow, the procedure section MUST be slimmer than the input —
@@ -1131,5 +1171,5 @@ class TestProcedures:
         # typically 2-8 survive after Step 5 trims oldest-first. If this test flips
         # to `present == 0` after touching _build_sections / header overhead, audit
         # the budget-arithmetic before relaxing this assertion.
-        present = sum(1 for i in range(15) if f'**p{i}**' in result)
+        present = sum(1 for i in range(15) if f'**do:p{i}**' in result)
         assert 0 < present < 15, f'expected partial trim, got present={present}'

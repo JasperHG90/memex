@@ -82,9 +82,19 @@ def test_kv_put_specifies_namespace_regex() -> None:
         'project:<id>:',
         'app:<app-id>:',
         'procedure:<verb>:<context-tag>',
+        'project:<id>:procedure:<verb>:<context-tag>',
     ):
         assert prefix in desc
     assert '400' in desc  # rejection on invalid prefix
+
+
+def test_kv_put_carries_procedure_scope_default_directive() -> None:
+    """Without this directive the agent silently project-scopes procedures
+    by cwd / git remote / active vault. Pin the routing rule + ASK escape."""
+    desc = td.MEMEX_KV_PUT_DESC
+    assert 'PROCEDURES default to GLOBAL' in desc or 'procedures default to global' in desc.lower()
+    assert 'explicit cue' in desc.lower() or 'EXPLICIT cue' in desc
+    assert 'ASK' in desc
 
 
 def test_kv_put_rejects_content_facts() -> None:

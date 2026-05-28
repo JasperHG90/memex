@@ -15,7 +15,13 @@ from __future__ import annotations
 
 from memex_common.agent_harnesses import CLAUDE_CODE_HARNESS, HERMES_HARNESS
 
-_TIER_2_CHAR_CAP = 5_600
+_TIER_2_CHAR_CAP = 5_900
+# Bumped 5,600 → 5,900 when the write_routing constraint gained two
+# procedure entries: global default (`procedure:<verb>:<context>`) and
+# the project-scoped variant gated on an explicit cue
+# (`project:<id>:procedure:*`). Without the explicit ASK directive the
+# agent silently project-scopes by cwd, producing keys the user didn't
+# ask for. The +214 chars buys the routing rule + ambiguity escape.
 # Hermes has a tighter natural ceiling — its harness only needs the
 # outcome lexicon + capture cadence. Pin its cap separately so the CC
 # harness's expansion doesn't relax the Hermes budget.

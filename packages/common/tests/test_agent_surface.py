@@ -22,7 +22,7 @@ from memex_common import agent_surface as ags
 # ---------------------------------------------------------------------------
 
 
-_UNIVERSAL_CHAR_CAP = 9_100  # ~2,600 tokens at 3.5 chars/token (empirical cl100k)
+_UNIVERSAL_CHAR_CAP = 9_400  # ~2,690 tokens at 3.5 chars/token (empirical cl100k)
 # Bumped 5,500 → 6,000 when CRITICAL_HEADER / VIRTUAL_UNIT / CRITICAL_FOOTER
 # adopted `<critical_constraint name="…">` XML tags (Anthropic best practice:
 # XML disambiguates load-bearing constraints; the model attends more reliably
@@ -51,6 +51,13 @@ _UNIVERSAL_CHAR_CAP = 9_100  # ~2,600 tokens at 3.5 chars/token (empirical cl100
 # `memex_list_notes`, `memex_list_entities`) accept `slim=True` to drop
 # heavy per-row fields, keeping responses under Claude Code's hook-output
 # cap on realistic vault sizes.
+# Bumped 9,100 → 9,400 when KV_NAMESPACE added the project-scoped procedure
+# pattern (`project:<id>:procedure:<verb>:<context>`) + the
+# `procedure_scope_default` critical constraint. The directive prevents
+# silent miscategorization: without it the agent auto-scopes procedures by
+# cwd / git remote / active vault, producing project keys the user didn't
+# ask for. The 300-char additions also condensed existing KV table cells
+# and examples — net delta is ~250 chars, hence the modest cap bump.
 
 
 def _approx_tokens(text: str) -> int:
@@ -106,6 +113,9 @@ _REQUIRED_KEYWORDS: tuple[str, ...] = (
     'global:',
     'app:<app-id>:',
     'procedure:<verb>:<context-tag>',
+    # Project-scoped procedure pattern + default-to-global directive.
+    'project:<id>:procedure:<verb>:<context-tag>',
+    'procedure_scope_default',
     # KV scope-qualifier rule.
     'scope qualifier',
     # 5-step flow anchors.

@@ -17,6 +17,7 @@ from memex_common.schemas import (
 
 from memex_core.api import MemexAPI
 from memex_core.server.common import _handle_error, get_api
+from memex_core.services.kv import is_procedure_key
 
 router = APIRouter(prefix='/api/v1')
 
@@ -91,7 +92,7 @@ async def kv_get(
         entry = await api.kv_get(key=key, include_history=include_history)
         if entry is None:
             raise HTTPException(status_code=404, detail=f'KV entry not found: {key}')
-        if include_history and key.startswith('procedure:') and isinstance(entry.value, dict):
+        if include_history and is_procedure_key(key) and isinstance(entry.value, dict):
             return KVProcedureEntryDTO(
                 id=entry.id,
                 key=entry.key,

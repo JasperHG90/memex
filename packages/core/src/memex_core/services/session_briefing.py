@@ -16,7 +16,7 @@ from uuid import UUID
 from sqlmodel import col, select
 
 from memex_core.memory.sql_models import MentalModel
-from memex_core.services.kv import KVService
+from memex_core.services.kv import KVService, format_procedure_display_name, is_procedure_key
 from memex_core.services.vault_summary import VaultSummaryService
 from memex_core.services.vaults import VaultService
 from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
@@ -189,9 +189,10 @@ class SessionBriefingService:
         # 1. Header (always included)
         sections.append(('header', self._build_header(summary, len(mental_models))))
 
-        # 2. KV facts (priority 1) — procedure rows render in their own section below
-        non_proc = [e for e in kv_entries if not e.key.startswith('procedure:')]
-        proc = [e for e in kv_entries if e.key.startswith('procedure:')]
+        # 2. KV facts (priority 1) — procedure rows (global + project-scoped)
+        # render in their own section below.
+        non_proc = [e for e in kv_entries if not is_procedure_key(e.key)]
+        proc = [e for e in kv_entries if is_procedure_key(e.key)]
         sections.append(('kv', self._build_kv_section(non_proc)))
 
         # 2b. Procedures (priority 1b — behavioural rules; high signal)
@@ -322,8 +323,13 @@ class SessionBriefingService:
             return ''
         lines = ['\n## Procedures\n']
         for entry in entries:
+            # Defensive: callers normally filter via is_procedure_key, but
+            # this method also runs against degenerate fixtures in tests —
+            # skip anything that isn't a valid procedure key.
+            if not is_procedure_key(entry.key):
+                continue
             text = self._sanitize_procedure_value(entry.value)
-            name = entry.key.removeprefix('procedure:')
+            name = format_procedure_display_name(entry.key)
             if not name or not text:
                 continue
             lines.append(f'- **{self._defang_procedure_name(name)}** — {text}')
@@ -458,7 +464,7 @@ class SessionBriefingService:
         # Step 5's oldest-first trim. This is the intended degradation order.
         _ts_floor = datetime.min.replace(tzinfo=timezone.utc)
         procs_initial = sorted(
-            [e for e in kv_entries if e.key.startswith('procedure:')],
+            [e for e in kv_entries if is_procedure_key(e.key)],
             key=lambda e: getattr(e, 'updated_at', None) or _ts_floor,
         )
         # Steps 1/1b only apply at budget>=2000 where initial build used 10 models + trends.
@@ -502,7 +508,7 @@ class SessionBriefingService:
         # at the top of this method). Strip them from `kv_entries` once up-front
         # so any subsequent consumer sees a procedure-free list; Step 5 below
         # trims procedures from the snapshot, not from `kv_entries`.
-        kv_entries = [e for e in kv_entries if not e.key.startswith('procedure:')]
+        kv_entries = [e for e in kv_entries if not is_procedure_key(e.key)]
         for drop_prefix in ('app:', 'user:', 'project:'):
             kv_entries = [e for e in kv_entries if not e.key.startswith(drop_prefix)]
             sections = self._replace_section(

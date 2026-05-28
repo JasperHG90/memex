@@ -58,3 +58,36 @@ def test_universal_block_surfaces_kv_namespace() -> None:
         f'`compose_universal()` does not surface KV prefixes: {missing}. '
         'Check that KV_NAMESPACE is included in the composition order.'
     )
+
+
+def test_project_procedure_pattern_documented() -> None:
+    """The project-scoped procedure pattern must appear in the SSOT and
+    the universal block — otherwise agents won't know it exists.
+
+    Without explicit documentation, agents fall back to either:
+    - inventing keys under `project:<id>:<field>` (loses procedure envelope
+      versioning), or
+    - writing global procedures when the user clearly scoped to a project.
+    """
+    pattern = 'project:<id>:procedure:<verb>:<context-tag>'
+    assert pattern in KV_NAMESPACE, (
+        f'`agent_surface.KV_NAMESPACE` missing the project-scoped procedure '
+        f'pattern: {pattern!r}. Add a row to the namespace table.'
+    )
+    text = compose_universal()
+    assert pattern in text, (
+        '`compose_universal()` does not surface the project-procedure pattern. '
+        'Check that KV_NAMESPACE is included in the composition order.'
+    )
+
+
+def test_procedure_scope_default_directive_present() -> None:
+    """The default-to-global directive must be present as a critical
+    constraint, not buried in prose. Agents must default to global
+    procedures and ASK before project-scoping on ambiguous input."""
+    text = compose_universal()
+    assert 'procedure_scope_default' in text, (
+        '`procedure_scope_default` critical_constraint missing from compose_universal(). '
+        'Without it, agents silently project-scope procedures by cwd / git remote / '
+        'active vault.'
+    )

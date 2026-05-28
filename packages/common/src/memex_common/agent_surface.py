@@ -178,19 +178,25 @@ Namespace by scope cue (NOT grammatical person). `app:`/`project:`/`global:` ALL
 
 | Scope cue | Namespace |
 |---|---|
-| no scope, identity-shaped ("about me", "I prefer X" with no other qualifier) | `user:` |
-| "this repo/project", "in this codebase", "on <project>" | `project:<id>:` |
-| "across our projects", "company-wide", "we standardise on" | `global:` |
-| "when I use <app>", "in Claude Code/Hermes", "for <app> sessions" | `app:<app-id>:` |
-| learned procedure | `procedure:<verb>:<context-tag>` |
+| identity ("about me", "I prefer X") | `user:` |
+| "this repo/project", "in this codebase" | `project:<id>:` |
+| "company-wide", "we standardise on" | `global:` |
+| "when I use <app>", "in Claude Code/Hermes" | `app:<app-id>:` |
+| learned procedure (default — GLOBAL) | `procedure:<verb>:<context-tag>` |
+| procedure scoped to a project (EXPLICIT cue only) | `project:<id>:procedure:<verb>:<context-tag>` |
+
+<critical_constraint name="procedure_scope_default">
+Procedures default to global. Use `project:<id>:procedure:*` only on explicit cue ("for this project", "in this repo"). Ambiguous? ASK — never infer scope from cwd or active vault.
+</critical_constraint>
 
 Ambiguous? ASK before writing.
 
-<example>"I prefer Neovim" → key=`user:editor`</example>
-<example>"For this project, Python 3.10" → key=`project:<id>:lang:python` (NOT `user:`)</example>
-<example>"7-character indent in this repo" → key=`project:<id>:style:indent`</example>
-<example>"Company-wide: Python 3.12 minimum" → key=`global:lang:python:min`</example>
-<example>"When I use Claude Code: dark theme" / "For Claude Code sessions: line numbers" → key=`app:claude-code:*` (NOT `user:claude-code:*`, NOT `user:ui` — "<app>" cue wins over "I"/"my")</example>"""
+<example>"I prefer Neovim" → `user:editor`</example>
+<example>"For this project: Python 3.10" → `project:<id>:lang:python`</example>
+<example>"Company-wide: Python 3.12 min" → `global:lang:python:min`</example>
+<example>"When I use Claude Code: dark theme" → `app:claude-code:theme` (<app> cue wins over "I"/"my")</example>
+<example>"Always lint before commit" → `procedure:commit:lint-first` (no project cue → global)</example>
+<example>"For this repo: commits via PR only" → `project:<id>:procedure:commit:pr-only`</example>"""
 
 
 CITATIONS = """## Citations
