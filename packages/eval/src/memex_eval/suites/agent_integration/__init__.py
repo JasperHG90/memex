@@ -1042,6 +1042,168 @@ suite.register(
 )
 
 
+# --- Procedure scoping: default-to-global + ASK-on-ambiguity ---
+#
+# Pin the routing rule encoded in `agent_surface.KV_NAMESPACE`
+# ("procedure_scope_default" critical_constraint) + `CLAUDE_CODE_HARNESS`
+# write_routing entries. Procedures default to GLOBAL; project scope only
+# applies on an EXPLICIT cue ("for this project", "in this repo"); ambiguous
+# inputs MUST trigger a clarifying question, NOT a guessed kv_put.
+#
+# Why these scenarios exist (per .claude/rules/eval-suites.md): the rule is
+# behavioral prose in the agent surface — no unit test can catch a regression
+# in the routing decision. Real-LLM scenarios with `ToolCallArgMatches` +
+# `LLMJudge` are the only gate.
+
+suite.register(
+    id='procedure_defaults_global_no_project_cue',
+    group='kv',
+    description=(
+        "User states a procedure ('always lint before commit') with no project "
+        'cue. The agent MUST write under `procedure:` (global default), NOT '
+        '`project:<id>:procedure:` — there is no explicit project scope cue.'
+    ),
+    query='From now on, always run lint before commit.',
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_kv_put'],
+                min_count=1,
+                match_mode='any',
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_kv_put',
+                arg_name='key',
+                regex=r'^procedure:[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$',
+                min_count=1,
+            ),
+        ],
+    ),
+    replicates_override=3,
+    mutating_scenario=True,
+)
+
+suite.register(
+    id='procedure_explicit_project_cue_scopes_to_project',
+    group='kv',
+    description=(
+        'Explicit project cue ("for the memex repo") MUST route to '
+        '`project:<id>:procedure:*` rather than the global `procedure:*` form. '
+        'This is the only path that produces a project-scoped procedure key.'
+    ),
+    query='For the memex repo, all commits land via PR — never a direct push.',
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_kv_put'],
+                min_count=1,
+                match_mode='any',
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_kv_put',
+                arg_name='key',
+                regex=r'^project:[^:]+:procedure:[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$',
+                min_count=1,
+            ),
+        ],
+    ),
+    replicates_override=3,
+    mutating_scenario=True,
+)
+
+suite.register(
+    id='procedure_in_this_codebase_cue_scopes_to_project',
+    group='kv',
+    description=(
+        '"In this codebase / in this repo" is an explicit project cue and '
+        'MUST route to `project:<id>:procedure:*`, not the global `procedure:*` '
+        'form. Tests the in-this-codebase wording variant.'
+    ),
+    query='In this codebase, always use uv — never pip.',
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_kv_put'],
+                min_count=1,
+                match_mode='any',
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_kv_put',
+                arg_name='key',
+                regex=r'^project:[^:]+:procedure:[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$',
+                min_count=1,
+            ),
+        ],
+    ),
+    replicates_override=3,
+    mutating_scenario=True,
+)
+
+suite.register(
+    id='procedure_ambiguous_no_explicit_scope_asks_first',
+    group='kv',
+    description=(
+        'Procedure-shaped intent ("remember to bump rc tags after green CI") '
+        'with NO explicit project cue. The agent MUST ask whether to scope to '
+        'the project or save globally — never auto-scope from cwd / active '
+        'vault. Pins the ASK-on-ambiguity escape in the procedure_scope_default '
+        'critical_constraint.'
+    ),
+    query='Remember to bump rc tags after green CI.',
+    max_duration_ms=_DUR_MS,
+    expected=LLMJudge(
+        type='llm_judge',
+        rubric=(
+            'The answer asks the user a clarifying question about whether this '
+            'procedure should be global or scoped to a specific project (or '
+            'asks for the project name / scope), AND the answer does NOT claim '
+            'to have already saved the procedure. The answer should NOT silently '
+            'scope to a project based on context the user did not provide.'
+        ),
+        threshold=0.7,
+    ),
+    replicates_override=3,
+    mutating_scenario=False,
+)
+
+suite.register(
+    id='procedure_standard_practice_ambiguous_asks_first',
+    group='kv',
+    description=(
+        '"Standard practice: every PR gets adversarial review" is procedure-'
+        'shaped but ambiguous — "standard practice" could be global ("our team\'s '
+        'practice") or project-scoped ("standard for this repo"). The agent '
+        'MUST ask before writing.'
+    ),
+    query='Standard practice: every PR gets adversarial review.',
+    max_duration_ms=_DUR_MS,
+    expected=LLMJudge(
+        type='llm_judge',
+        rubric=(
+            'The answer asks the user whether this is a global procedure or '
+            'scoped to a specific project (or asks for the project name), AND '
+            'does NOT claim to have already saved the procedure. The answer '
+            'should NOT silently guess project scope.'
+        ),
+        threshold=0.7,
+    ),
+    replicates_override=3,
+    mutating_scenario=False,
+)
+
+
 # --- Lifecycle ---
 
 suite.register(
