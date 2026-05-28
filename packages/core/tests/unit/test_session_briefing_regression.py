@@ -243,7 +243,7 @@ class TestProceduresRendering:
         svc = _make_briefing_service()
         entries = [
             self._kv(
-                'procedure:answer:briefing',
+                'global:procedure:answer:briefing',
                 json.dumps({'v': 1, 'value': 'cite briefing first', 'tags': {}, 'history': []}),
             )
         ]

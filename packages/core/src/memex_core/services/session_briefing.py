@@ -72,13 +72,15 @@ def _compute_importance(mm: MentalModel) -> float:
 def _build_kv_namespaces(project_id: str | None) -> list[str]:
     """Build the list of KV namespaces to include in the briefing.
 
-    `procedure` is fetched alongside the namespaced prefixes; rows are split
-    out of `kv_entries` in `_build_sections` and render in their own
-    ``## Procedures`` section. Step 4 of `_apply_overflow` only drops
-    `app:/user:/project:` — `procedure:` rows are degraded separately in
-    Step 5.
+    Procedures are NOT a top-level namespace — they live UNDER ``global:``,
+    ``user:``, ``project:<id>:``, or ``app:<id>:`` as
+    ``<scope>:procedure:<verb>:<context>`` keys. Rows whose key matches
+    that shape are split out of ``kv_entries`` in ``_build_sections`` and
+    render in their own ``## Procedures`` section. Step 4 of
+    ``_apply_overflow`` drops only non-procedure KV under
+    ``app:/user:/project:`` — procedure rows degrade separately in Step 5.
     """
-    ns = ['global', 'user', 'app:claude-code', 'procedure']
+    ns = ['global', 'user', 'app:claude-code']
     if project_id:
         ns.append(f'project:{project_id}')
     return ns

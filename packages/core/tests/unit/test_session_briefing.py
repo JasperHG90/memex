@@ -279,7 +279,8 @@ class TestTrendSorting:
 class TestKVNamespaces:
     def test_without_project(self):
         ns = _build_kv_namespaces(None)
-        assert ns == ['global', 'user', 'app:claude-code', 'procedure']
+        # Procedures are NOT a top-level namespace — they live under global:/user:/project:/app:.
+        assert ns == ['global', 'user', 'app:claude-code']
 
     def test_with_project(self):
         ns = _build_kv_namespaces('my-project')
@@ -287,7 +288,6 @@ class TestKVNamespaces:
             'global',
             'user',
             'app:claude-code',
-            'procedure',
             'project:my-project',
         ]
 
@@ -337,7 +337,7 @@ class TestSessionBriefingGenerate:
             kv_entries=[
                 _make_kv_entry('global:test', 'value'),
                 _make_kv_entry(
-                    'procedure:answer:test',
+                    'global:procedure:answer:test',
                     json.dumps({'v': 1, 'value': 'sample procedure', 'tags': {}, 'history': []}),
                 ),
             ],
@@ -968,8 +968,8 @@ class TestProcedures:
         svc = _make_service(
             summary=_make_vault_summary(),
             kv_entries=[
-                _make_kv_entry('procedure:answer:foo', self._wrap('answer like X')),
-                _make_kv_entry('procedure:format:bar', self._wrap('format like Y')),
+                _make_kv_entry('global:procedure:answer:foo', self._wrap('answer like X')),
+                _make_kv_entry('global:procedure:format:bar', self._wrap('format like Y')),
             ],
         )
         result = await svc.generate(uuid4(), budget=2000)
@@ -996,7 +996,7 @@ class TestProcedures:
         svc = _make_service(
             summary=_make_vault_summary(),
             kv_entries=[
-                _make_kv_entry('procedure:commit:lint-first', self._wrap('global rule')),
+                _make_kv_entry('global:procedure:commit:lint-first', self._wrap('global rule')),
                 _make_kv_entry(
                     'project:memex:procedure:commit:pr-workflow',
                     self._wrap('project rule'),
@@ -1032,7 +1032,7 @@ class TestProcedures:
     async def test_envelope_unwrap_extracts_value_field(self):
         svc = _make_service(
             summary=_make_vault_summary(),
-            kv_entries=[_make_kv_entry('procedure:do:x', self._wrap('hello'))],
+            kv_entries=[_make_kv_entry('global:procedure:do:x', self._wrap('hello'))],
         )
         result = await svc.generate(uuid4(), budget=2000)
         assert 'hello' in result
@@ -1042,7 +1042,7 @@ class TestProcedures:
     async def test_envelope_fallback_on_malformed_json(self):
         svc = _make_service(
             summary=_make_vault_summary(),
-            kv_entries=[_make_kv_entry('procedure:do:x', 'raw text not json')],
+            kv_entries=[_make_kv_entry('global:procedure:do:x', 'raw text not json')],
         )
         result = await svc.generate(uuid4(), budget=2000)
         assert 'raw text not json' in result
@@ -1051,7 +1051,7 @@ class TestProcedures:
     async def test_envelope_fallback_on_non_dict_json(self):
         svc = _make_service(
             summary=_make_vault_summary(),
-            kv_entries=[_make_kv_entry('procedure:do:x', json.dumps([1, 2, 3]))],
+            kv_entries=[_make_kv_entry('global:procedure:do:x', json.dumps([1, 2, 3]))],
         )
         result = await svc.generate(uuid4(), budget=2000)
         assert '[1, 2, 3]' in result
@@ -1062,12 +1062,12 @@ class TestProcedures:
             summary=_make_vault_summary(),
             kv_entries=[
                 _make_kv_entry('global:foo', 'bar'),
-                _make_kv_entry('procedure:do:x', self._wrap('proc text')),
+                _make_kv_entry('global:procedure:do:x', self._wrap('proc text')),
             ],
         )
         result = await svc.generate(uuid4(), budget=2000)
         kv_section = result.split('## Key-Value Facts')[1].split('##')[0]
-        assert 'procedure:do:x' not in kv_section
+        assert 'global:procedure:do:x' not in kv_section
         assert 'proc text' not in kv_section
         assert 'global:foo' in kv_section
 
@@ -1090,7 +1090,7 @@ class TestProcedures:
         long_text = 'x' * (_PROCEDURE_VALUE_MAX_CHARS + 500)
         svc = _make_service(
             summary=_make_vault_summary(),
-            kv_entries=[_make_kv_entry('procedure:do:x', self._wrap(long_text))],
+            kv_entries=[_make_kv_entry('global:procedure:do:x', self._wrap(long_text))],
         )
         result = await svc.generate(uuid4(), budget=2000)
         assert '…' in result
@@ -1102,7 +1102,9 @@ class TestProcedures:
         """A `\\n##` in the stored value must NOT create a fake briefing heading."""
         svc = _make_service(
             summary=_make_vault_summary(),
-            kv_entries=[_make_kv_entry('procedure:do:x', self._wrap('intro\n## fake heading'))],
+            kv_entries=[
+                _make_kv_entry('global:procedure:do:x', self._wrap('intro\n## fake heading'))
+            ],
         )
         result = await svc.generate(uuid4(), budget=2000)
         # The injected `\n## fake heading` becomes `\n  ## fake heading` (indented),
@@ -1113,7 +1115,7 @@ class TestProcedures:
     @pytest.mark.asyncio
     async def test_procedures_render_in_every_vaults_briefing(self):
         """KV has no vault_id; the same procedure row surfaces in any vault's briefing."""
-        entries = [_make_kv_entry('procedure:do:shared', self._wrap('global rule'))]
+        entries = [_make_kv_entry('global:procedure:do:shared', self._wrap('global rule'))]
         svc_a = _make_service(summary=_make_vault_summary(), kv_entries=entries)
         svc_b = _make_service(summary=_make_vault_summary(), kv_entries=entries)
         result_a = await svc_a.generate(uuid4(), budget=2000)
@@ -1128,7 +1130,7 @@ class TestProcedures:
             summary=_make_vault_summary(),
             kv_entries=[
                 _make_kv_entry(
-                    'procedure:answer:session-briefing',
+                    'global:procedure:answer:session-briefing',
                     self._wrap(
                         'When the SessionStart briefing already contains the data, answer from it.'
                     ),
@@ -1161,7 +1163,9 @@ class TestProcedures:
 
         # Many procedure rows, each near the per-row cap, to ensure they're the
         # largest droppable section after vault overview + KV trim.
-        entries = [_make_kv_entry(f'procedure:do:p{i}', self._wrap('y ' * 200)) for i in range(15)]
+        entries = [
+            _make_kv_entry(f'global:procedure:do:p{i}', self._wrap('y ' * 200)) for i in range(15)
+        ]
         svc = _make_service(summary=large_summary, kv_entries=entries)
         result = await svc.generate(uuid4(), budget=1000)
         # After overflow, the procedure section MUST be slimmer than the input —

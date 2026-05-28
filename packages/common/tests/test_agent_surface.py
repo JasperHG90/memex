@@ -112,8 +112,8 @@ _REQUIRED_KEYWORDS: tuple[str, ...] = (
     'project:<id>:',
     'global:',
     'app:<app-id>:',
-    'procedure:<verb>:<context-tag>',
-    # Project-scoped procedure pattern + default-to-global directive.
+    # Procedures live UNDER a scope namespace, never bare.
+    'global:procedure:<verb>:<context-tag>',
     'project:<id>:procedure:<verb>:<context-tag>',
     'procedure_scope_default',
     # KV scope-qualifier rule.

@@ -182,11 +182,11 @@ Namespace by scope cue (NOT grammatical person). `app:`/`project:`/`global:` ALL
 | "this repo/project", "in this codebase" | `project:<id>:` |
 | "company-wide", "we standardise on" | `global:` |
 | "when I use <app>", "in Claude Code/Hermes" | `app:<app-id>:` |
-| learned procedure (default — GLOBAL) | `procedure:<verb>:<context-tag>` |
-| procedure scoped to a project (EXPLICIT cue only) | `project:<id>:procedure:<verb>:<context-tag>` |
+| procedure (default — global) | `global:procedure:<verb>:<context-tag>` |
+| procedure scoped to a project (EXPLICIT cue) | `project:<id>:procedure:<verb>:<context-tag>` |
 
 <critical_constraint name="procedure_scope_default">
-Procedures default to global. Use `project:<id>:procedure:*` only on explicit cue ("for this project", "in this repo"). Ambiguous? ASK — never infer scope from cwd or active vault.
+Procedures live UNDER a scope namespace, never bare `procedure:*`. Default `global:procedure:<v>:<c>`. Project cue ("for this project", "in this repo") → `project:<id>:procedure:<v>:<c>`. Ambiguous? ASK — never infer scope from cwd or vault.
 </critical_constraint>
 
 Ambiguous? ASK before writing.
@@ -195,8 +195,8 @@ Ambiguous? ASK before writing.
 <example>"For this project: Python 3.10" → `project:<id>:lang:python`</example>
 <example>"Company-wide: Python 3.12 min" → `global:lang:python:min`</example>
 <example>"When I use Claude Code: dark theme" → `app:claude-code:theme` (<app> cue wins over "I"/"my")</example>
-<example>"Always lint before commit" → `procedure:commit:lint-first` (no project cue → global)</example>
-<example>"For this repo: commits via PR only" → `project:<id>:procedure:commit:pr-only`</example>"""
+<example>"Always lint before commit" → `global:procedure:commit:lint-first` (no project cue → global)</example>
+<example>"For this repo: PRs only" → `project:<id>:procedure:commit:pr-only`</example>"""
 
 
 CITATIONS = """## Citations

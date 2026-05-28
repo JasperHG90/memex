@@ -1078,7 +1078,7 @@ suite.register(
                 type='tool_call_arg_matches',
                 tool='memex_kv_put',
                 arg_name='key',
-                regex=r'^procedure:[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$',
+                regex=r'^global:procedure:[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$',
                 min_count=1,
             ),
         ],

@@ -37,7 +37,7 @@ async def kv(metastore, filestore, memex_config):
 
 def _unique_proc_key() -> str:
     """A unique global procedure key per test run."""
-    return f'procedure:write_pr:tag-{uuid4().hex[:8]}'
+    return f'global:procedure:write_pr:tag-{uuid4().hex[:8]}'
 
 
 def _unique_project_proc_key(project_id: str = 'memex') -> str:
