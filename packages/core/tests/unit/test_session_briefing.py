@@ -1029,6 +1029,30 @@ class TestProcedures:
         assert 'use ArgoCD' in result
 
     @pytest.mark.asyncio
+    async def test_user_and_app_procedures_render_with_scope_prefix(self):
+        """`user:procedure:*` and `app:<id>:procedure:*` must also render in
+        the Procedures section with their scope prefix — closes the
+        coverage gap noted in PR #183 review."""
+        svc = _make_service(
+            summary=_make_vault_summary(),
+            kv_entries=[
+                _make_kv_entry(
+                    'user:procedure:greeting:friendly', self._wrap('Friendly, no honorifics.')
+                ),
+                _make_kv_entry(
+                    'app:claude-code:procedure:capture:terse',
+                    self._wrap('Hard max 300 tokens; no per-file changelogs.'),
+                ),
+            ],
+        )
+        result = await svc.generate(uuid4(), budget=2000)
+        assert '## Procedures' in result
+        assert '**\\[user\\] greeting:friendly**' in result
+        assert 'Friendly, no honorifics.' in result
+        assert '**\\[app:claude-code\\] capture:terse**' in result
+        assert 'Hard max 300 tokens' in result
+
+    @pytest.mark.asyncio
     async def test_envelope_unwrap_extracts_value_field(self):
         svc = _make_service(
             summary=_make_vault_summary(),

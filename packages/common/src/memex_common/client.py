@@ -1470,18 +1470,23 @@ class RemoteMemexAPI:
     ) -> KVEntryDTO | KVProcedureEntryDTO | None:
         """Get a KV entry by exact key. Returns None if not found.
 
-        For ``procedure:`` keys, ``include_history=True`` returns a
-        :class:`KVProcedureEntryDTO` whose ``value`` field is the
-        structured envelope ({value, version, history}).
+        For procedure keys (``<scope>:procedure:<verb>:<context>`` where
+        scope is one of `global`, `user`, `project:<id>`, `app:<id>`),
+        ``include_history=True`` returns a :class:`KVProcedureEntryDTO`
+        whose ``value`` field is the structured envelope
+        ({value, version, history}).
         """
         params: dict[str, Any] = {'key': key, 'include_history': include_history}
         try:
             result = await self._get('kv/get', params=params)
-            if (
-                include_history
-                and key.startswith('procedure:')
-                and isinstance(result.get('value'), dict)
-            ):
+            # Procedure keys are detected by the `:procedure:` infix under a
+            # valid scope namespace. Inlined here to avoid a memex_core
+            # dependency from memex_common; mirrors `is_procedure_key`.
+            is_procedure = ':procedure:' in key and any(
+                key.startswith(f'{ns}:') or key.startswith(f'{ns}:procedure:')
+                for ns in ('global', 'user', 'project', 'app')
+            )
+            if include_history and is_procedure and isinstance(result.get('value'), dict):
                 return KVProcedureEntryDTO(**result)
             return KVEntryDTO(**result)
         except httpx.HTTPStatusError as e:

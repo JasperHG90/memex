@@ -43,6 +43,12 @@ _PROTOCOL_RE = re.compile(r'[a-zA-Z][a-zA-Z0-9+\-.]*://')
 
 VALID_NAMESPACES = ('global', 'user', 'project', 'app')
 
+# Which namespaces accept a sub-id segment in their scope prefix.
+# `project:<id>:procedure:*` and `app:<id>:procedure:*` are valid;
+# `global:foo:procedure:*` and `user:foo:procedure:*` are NOT — `global`
+# and `user` are flat namespaces with no id segment.
+_NAMESPACES_WITH_ID = ('project', 'app')
+
 _VERB_CONTEXT_RE = re.compile(r'^[a-z][a-z0-9_-]*$')
 
 PROCEDURE_HISTORY_CAP = 5
@@ -84,17 +90,23 @@ def parse_procedure_key(key: str) -> tuple[str, str, str] | None:
     scope, suffix = rsplit
     if not scope or ':procedure:' in scope:
         return None
-    # Scope must start with a valid top-level namespace, AND if it carries
-    # an id segment after the namespace, that id must be non-empty.
+    # Scope must start with a valid top-level namespace.
+    # - `global` and `user`: flat — scope MUST equal the namespace exactly,
+    #   no sub-id allowed (rejects `global:foo:procedure:*`).
+    # - `project` and `app`: scope MUST carry a non-empty id segment
+    #   (`project:<id>` / `app:<id>`), so the bare namespace alone is invalid.
     matched_ns = None
     for ns in VALID_NAMESPACES:
         if scope == ns:
+            if ns in _NAMESPACES_WITH_ID:
+                return None  # 'project' / 'app' need an id segment
             matched_ns = ns
             break
         if scope.startswith(f'{ns}:'):
-            # Reject empty id segment (e.g. 'project::procedure:...').
+            if ns not in _NAMESPACES_WITH_ID:
+                return None  # 'global:foo' / 'user:foo' not allowed
             if scope == f'{ns}:':
-                return None
+                return None  # empty id segment
             matched_ns = ns
             break
     if matched_ns is None:

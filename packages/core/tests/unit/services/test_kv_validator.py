@@ -76,6 +76,10 @@ def test_validate_procedure_key_accepts_global_user_app(
         'global:procedure:',  # single-colon
         'global:procedure:verb:9tag',  # leading digit on context-tag
         'global:lang:python',  # not a procedure (no :procedure: infix)
+        'global:foo:procedure:verb:context',  # `global` is flat — no sub-id
+        'user:foo:procedure:verb:context',  # `user` is flat — no sub-id
+        'project:procedure:verb:context',  # bare `project` — needs id
+        'app:procedure:verb:context',  # bare `app` — needs id
     ],
 )
 def test_validate_procedure_key_rejects_malformed(malformed_key: str) -> None:
