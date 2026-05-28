@@ -1106,6 +1106,10 @@ suite.register(
                 min_count=1,
                 match_mode='any',
             ),
+            # `[^:]+` intentionally excludes colons here even though the parser
+            # supports them in project IDs (for SSH-form git remotes). The eval
+            # query says "the memex repo" — agents pick a simple identifier
+            # like `memex`; pinning the regex looser would weaken the test.
             ToolCallArgMatches(
                 type='tool_call_arg_matches',
                 tool='memex_kv_put',
