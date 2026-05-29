@@ -239,23 +239,31 @@ async def test_session_context_manager_silent_on_memex_error(
 
 
 @pytest.mark.asyncio
-async def test_session_context_manager_silent_on_generic_exception(
-    engine_instance: AsyncPostgresMetaStoreEngine, mock_session_factory: MagicMock
+@pytest.mark.parametrize(
+    'exc',
+    [RuntimeError('boom'), ValueError('bad'), TypeError('wrong-shape')],
+    ids=['RuntimeError', 'ValueError', 'TypeError'],
+)
+async def test_session_context_manager_logs_non_memex_exceptions(
+    engine_instance: AsyncPostgresMetaStoreEngine,
+    mock_session_factory: MagicMock,
+    exc: Exception,
 ) -> None:
-    """Non-DB, non-Memex exceptions also re-raise silently — caller logs.
+    """Unexpected non-Memex exceptions log at ERROR before re-raise.
 
-    Defensive: only SQLAlchemyError/DBAPIError are treated as DB-layer signal.
+    Silencing only MemexError (business class) means non-HTTP callers of
+    session() (CLI tools, background tasks, scripts) still see a trace when
+    a TypeError / RuntimeError / similar slips through — they no longer
+    swallow unexpected errors without any signal.
     """
     engine_instance._session_factory = mock_session_factory
     mock_session_ctx = AsyncMock()
     mock_session_factory.return_value = mock_session_ctx
 
     with patch.object(engine_instance, '_logger') as mock_logger:
-        with pytest.raises(ValueError):
+        with pytest.raises(type(exc)):
             async with engine_instance.session():
-                raise ValueError('arbitrary')
+                raise exc
 
-        # Strict: NO log method should fire on the silent path.
-        # mock_logger.assert_not_called() would only check the mock-as-callable;
-        # use method_calls to catch any attribute method invocation.
-        assert mock_logger.method_calls == []
+        mock_logger.error.assert_called_once()
+        assert 'Session error' in mock_logger.error.call_args[0][0]

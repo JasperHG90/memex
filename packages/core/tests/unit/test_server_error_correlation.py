@@ -114,11 +114,11 @@ class TestHandleErrorLogLevels:
         Hybrid class below simulates the future-refactor case Hermes flagged.
         """
 
-        class HybridReadOnlyMissing(ResourceNotFoundError, ObservationReadOnlyError):
+        class HybridReadOnlyExcluded(ResourceNotFoundError, ObservationReadOnlyError):
             def to_http_detail(self) -> dict:  # type: ignore[override]
                 return {'error': 'observation_read_only', 'source_memory_units': []}
 
-        exc = HybridReadOnlyMissing('observation x is read-only')
+        exc = HybridReadOnlyExcluded('observation x is read-only')
         with patch('memex_core.server.common.logger') as mock_logger:
             _handle_error(exc, 'test context')
 

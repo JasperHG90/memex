@@ -39,6 +39,20 @@ from memex_core.metrics import DTO_ENUM_COERCION_TOTAL
 
 logger = logging.getLogger('memex.core.server')
 
+# Exception types whose 4xx responses ride a high-volume polling pattern
+# (hermes-plugin's 10 Hz readback). Logging these at ERROR with full
+# tracebacks floods the log and obscures real incidents; demote to INFO.
+# ObservationReadOnlyError is intentionally excluded by the inline guard
+# in `_handle_error` — defense in depth so an inheritance refactor doesn't
+# silently demote a typed 400-detail response. Add a new type here only
+# after confirming its volume and that an INFO-level log is sufficient
+# for ops visibility.
+_DEMOTE_TO_INFO_TYPES: tuple[type[Exception], ...] = (
+    ResourceNotFoundError,
+    VaultNotFoundError,
+    AmbiguousResourceError,
+)
+
 
 def get_api(request: Request) -> MemexAPI:
     """Dependency to get the MemexAPI instance."""
@@ -57,20 +71,12 @@ def _handle_error(e: Exception, context: str) -> HTTPException:
     if isinstance(e, HTTPException):
         raise e
 
-    # Client-side "not found" / "ambiguous" errors are not server incidents.
-    # Logging them at ERROR with full tracebacks floods the log under
-    # readback-poll patterns (hermes-plugin polls a not-yet-materialised note
-    # ID at 10 Hz → 200+ tracebacks per minute) and hides real issues.
-    # Demote to INFO. Catch-all 500 path keeps ERROR + traceback.
-    # `exc_info=e` (vs True) pulls the traceback from the passed exception
-    # rather than `sys.exc_info()`, so the log line carries the right stack
-    # even if a future caller routes here outside an active `except` block.
-    # ObservationReadOnlyError is intentionally excluded — defense in depth
-    # so an inheritance refactor (making it a subclass of one of the
-    # demoted three) doesn't silently demote a typed 400-detail response.
-    if isinstance(
-        e, (ResourceNotFoundError, VaultNotFoundError, AmbiguousResourceError)
-    ) and not isinstance(e, ObservationReadOnlyError):
+    # Log-level: demote high-volume client errors to INFO (see
+    # _DEMOTE_TO_INFO_TYPES). `exc_info=e` (vs True) pulls the traceback from
+    # the passed exception rather than `sys.exc_info()`, so the log line
+    # carries the right stack even if a future caller routes here outside
+    # an active `except` block.
+    if isinstance(e, _DEMOTE_TO_INFO_TYPES) and not isinstance(e, ObservationReadOnlyError):
         logger.info(f'{context}: {e}')
     else:
         logger.error(f'{context}: {e}', exc_info=e)

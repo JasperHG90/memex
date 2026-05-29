@@ -4,7 +4,6 @@ from abc import abstractmethod, ABCMeta
 from contextlib import asynccontextmanager
 
 from pydantic import BaseModel
-from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.ext.asyncio import (
     create_async_engine,
     AsyncEngine,
@@ -13,6 +12,7 @@ from sqlalchemy.ext.asyncio import (
 from sqlmodel import text
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from memex_common.exceptions import MemexError
 from memex_core.config import PostgresMetaStoreConfig
 
 T = TypeVar('T', bound=BaseModel)
@@ -70,13 +70,14 @@ class AsyncBaseMetaStoreEngine(Generic[T], metaclass=ABCMeta):
                 yield session
                 # NB: user should commit/rollback explicitly
             except Exception as e:
-                # Real database errors log at ERROR. MemexError and other
-                # business-class exceptions are the caller's responsibility
-                # to log at the appropriate level (e.g. server/common.py
-                # _handle_error demotes 404s to INFO). Silent re-raise here.
-                # SQLAlchemyError covers DBAPIError (subclass) and all
-                # SQLAlchemy-routed driver errors (asyncpg, psycopg, etc.).
-                if isinstance(e, SQLAlchemyError):
+                # MemexError + subclasses (business-class signals) re-raise
+                # silently — the HTTP caller's _handle_error logs at the
+                # right level (404s demote to INFO; 5xx stays ERROR).
+                # Everything else — SQLAlchemyError, DBAPIError, RuntimeError,
+                # TypeError, asyncio.CancelledError — logs at ERROR here so
+                # non-HTTP callers (CLI, background tasks, scripts) don't
+                # swallow unexpected errors without a trace.
+                if not isinstance(e, MemexError):
                     self._logger.error(f'Session error: {e}.')
                 raise
 
