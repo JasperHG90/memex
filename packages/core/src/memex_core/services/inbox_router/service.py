@@ -184,16 +184,25 @@ class InboxRouterService(BaseService):
 
     # ------------------------------------------------------------------ bootstrap
     async def ensure_inbox_vault(self) -> UUID | None:
-        """Create the inbox vault if missing; return its id (None on failure)."""
+        """Create the inbox vault if missing; return its id (None on failure).
+
+        Query-first: only attempt creation when the vault is genuinely absent,
+        so the ValueError/IntegrityError catch is scoped to the create-time race
+        window (another worker created it between our check and ours) rather than
+        masking validation failures.
+        """
         from sqlalchemy.exc import IntegrityError
 
+        existing = await self._inbox_vault_id()
+        if existing is not None:
+            return existing
         try:
             await self._vaults.create_vault(
                 INBOX_VAULT_NAME,
                 description='Holding vault for notes awaiting routing by the inbox router.',
             )
         except (ValueError, IntegrityError):
-            pass  # already exists (non-locking SELECT race or prior creation)
+            pass  # created concurrently between the check above and here
         except Exception:
             logger.exception('inbox_router: failed to bootstrap inbox vault')
         return await self._inbox_vault_id()
@@ -395,26 +404,30 @@ class InboxRouterService(BaseService):
         for nid in note_ids:
             decision = decide(nid, scored.get(nid, []), thresholds=thresholds, warmed_up=warmed_up)
             try:
-                if decision.kind is DecisionKind.AUTO_ROUTE:
+                if decision.kind == DecisionKind.AUTO_ROUTE:
                     if dry_run:
                         result.auto_routed += 1
                     elif remaining_budget <= 0:
                         # Over the daily budget — fall through to a proposal.
-                        await self._emit_route(inbox_vault_id=inbox_id, decision=decision)
                         result.skipped_cap += 1
-                        result.proposed += 1
+                        if await self._emit_route(inbox_vault_id=inbox_id, decision=decision):
+                            result.proposed += 1
                     else:
                         await self._auto_apply(inbox_id, decision)
                         result.auto_routed += 1
                         remaining_budget -= 1
-                elif decision.kind is DecisionKind.PROPOSE_CANDIDATES:
-                    if not dry_run:
-                        await self._emit_route(inbox_vault_id=inbox_id, decision=decision)
-                    result.proposed += 1
+                elif decision.kind == DecisionKind.PROPOSE_CANDIDATES:
+                    # Count only proposals that actually landed (the cooldown guard
+                    # in _EMIT_PENDING_SQL can skip the insert).
+                    if dry_run:
+                        result.proposed += 1
+                    elif await self._emit_route(inbox_vault_id=inbox_id, decision=decision):
+                        result.proposed += 1
                 else:  # PROPOSE_NO_FIT
-                    if not dry_run:
-                        await self._emit_no_fit(inbox_id, decision)
-                    result.no_fit += 1
+                    if dry_run:
+                        result.no_fit += 1
+                    elif await self._emit_no_fit(inbox_id, decision):
+                        result.no_fit += 1
             except Exception:
                 logger.exception('inbox_router: failed to act on note %s', nid)
                 result.errors += 1
@@ -531,13 +544,15 @@ class InboxRouterService(BaseService):
         for cand in decision.candidates[1:TOP_CANDIDATES]:
             await self.record_feedback(decision.note_id, cand.vault_id, 0)
 
-    async def _emit_route(self, *, inbox_vault_id: UUID, decision: RouterDecision) -> None:
+    async def _emit_route(self, *, inbox_vault_id: UUID, decision: RouterDecision) -> bool:
+        """Emit a pending route proposal. Returns True iff a row was inserted
+        (the cooldown guard can skip it)."""
         top = decision.top
         if top is None:
-            return
+            return False
         evidence = self._route_evidence(inbox_vault_id, decision)
         async with self.metastore.session() as session:
-            await session.execute(
+            res = await session.execute(
                 text(_EMIT_PENDING_SQL),
                 {
                     'vault_id': str(inbox_vault_id),
@@ -548,8 +563,10 @@ class InboxRouterService(BaseService):
                 },
             )
             await session.commit()
+        return res.rowcount > 0
 
-    async def _emit_no_fit(self, inbox_id: UUID, decision: RouterDecision) -> None:
+    async def _emit_no_fit(self, inbox_id: UUID, decision: RouterDecision) -> bool:
+        """Emit / refresh a no-fit proposal. Returns True iff a row landed."""
         best = decision.candidates[0].p_match_raw if decision.candidates else 0.0
         now = datetime.now(timezone.utc)
         # Read the existing retry counter and upsert in ONE transaction. The
@@ -600,6 +617,7 @@ class InboxRouterService(BaseService):
                     'inbox_router: no-fit upsert skipped (backoff not due) for note %s',
                     decision.note_id,
                 )
+        return upsert.rowcount > 0
 
     def _route_evidence(self, inbox_id: UUID, decision: RouterDecision) -> RouteEvidence:
         return RouteEvidence(

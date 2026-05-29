@@ -99,7 +99,7 @@ async def _seed_vault_with_note(session, name: str, embedding: list[float]) -> V
     return vault
 
 
-async def _seed_inbox_note(session, inbox: Vault, embedding: list[float]) -> str:
+async def _seed_inbox_note(session, inbox: Vault, embedding: list[float]) -> UUID:
     note_id = uuid4()
     session.add(
         Note(
@@ -123,7 +123,7 @@ async def _seed_inbox_note(session, inbox: Vault, embedding: list[float]) -> str
         )
     )
     await session.commit()
-    return str(note_id)
+    return note_id
 
 
 async def test_score_ranks_topically_closest_vault_first(api, session, router_schema):
@@ -137,7 +137,7 @@ async def test_score_ranks_topically_closest_vault_first(api, session, router_sc
     await api.inbox_router.populate_note_cache(note_id)
     scored = await api.inbox_router.score_notes([note_id])
 
-    cands = scored[UUID(note_id)]
+    cands = scored[note_id]
     names = [c.vault_name for c in sorted(cands, key=lambda c: -c.p_match)]
     assert 'vault-a' in names and 'vault-b' in names
     # vault-a shares the note's embedding direction; it must outrank vault-b.
@@ -162,7 +162,7 @@ async def test_triage_tick_emits_routing_proposal(api, session, router_schema):
                     'SELECT COUNT(*) FROM maintenance_proposals '
                     "WHERE lint_type = 'routing' AND target_id = :tid"
                 ),
-                {'tid': note_id},
+                {'tid': str(note_id)},
             )
         ).scalar()
     # Cold start (seed match-count=1 < 50) → a pending route proposal, not auto-route.
@@ -182,7 +182,7 @@ async def test_record_feedback_updates_sufficient_stats(api, session, router_sch
             await s.execute(text('SELECT n FROM inbox_router_nb_class_counts WHERE label = 1'))
         ).scalar()
 
-    await api.inbox_router.record_feedback(UUID(note_id), vault_a.id, 1)
+    await api.inbox_router.record_feedback(note_id, vault_a.id, 1)
 
     async with api.metastore.session() as s:
         after = (
@@ -191,6 +191,39 @@ async def test_record_feedback_updates_sufficient_stats(api, session, router_sch
     # With EWMA gamma<1: n_after = gamma*n_before + 1.
     gamma = api.config.server.memory.inbox_router.ewma_gamma
     assert after == pytest.approx(gamma * float(before) + 1.0, rel=1e-6)
+
+
+async def test_ensure_inbox_vault_is_idempotent(api, session):
+    """Calling ensure_inbox_vault twice returns the same vault id."""
+    first = await api.inbox_router.ensure_inbox_vault()
+    second = await api.inbox_router.ensure_inbox_vault()
+    assert first is not None
+    assert first == second
+
+
+async def test_daily_cap_falls_through_to_proposal(api, session, router_schema):
+    """When the daily auto-apply budget is exhausted, an otherwise-auto-routable
+    note falls through to a proposal (skipped_cap increments, not auto_routed)."""
+    inbox = await _seed_vault_with_note(session, 'inbox', _VEC_A)
+    await _seed_vault_with_note(session, 'vault-a', _VEC_A)
+    await _seed_vault_with_note(session, 'vault-b', _VEC_B)
+    await _seed_inbox_note(session, inbox, _VEC_A)
+
+    # Warm up the model and relax the gates so the decision is AUTO_ROUTE...
+    async with api.metastore.session() as s:
+        await s.execute(text('UPDATE inbox_router_nb_class_counts SET n = 100 WHERE label = 1'))
+        await s.commit()
+    cfg = api.config.server.memory.inbox_router
+    cfg.auto_apply_min_p_match = 0.0
+    cfg.t_margin = 0.0
+    cfg.t_low = 0.0
+    # ...but zero the daily budget so nothing may actually auto-route.
+    cfg.max_auto_applies_per_day = 0
+
+    result = await api.inbox_router.triage_tick()
+    assert result.errors == 0
+    assert result.auto_routed == 0
+    assert result.skipped_cap >= 1
 
 
 async def test_route_rule_name_constant():

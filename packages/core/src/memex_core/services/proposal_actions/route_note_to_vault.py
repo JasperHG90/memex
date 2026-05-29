@@ -73,12 +73,21 @@ class RouteNoteToVaultAction:
         # confirmations count toward the warm-up gate.
         try:
             await api.inbox_router.record_feedback(note_id, target_vault_id, 1)
-            # The other candidates the user did NOT pick are negatives — same
-            # learning signal an auto-route records for its runners-up.
-            for other in params.get('other_vault_ids') or []:
-                await api.inbox_router.record_feedback(note_id, UUID(str(other)), 0)
         except Exception:  # noqa: BLE001 - learning is best-effort
-            logger.warning('route_note_to_vault: record_feedback failed', exc_info=True)
+            logger.warning('route_note_to_vault: positive record_feedback failed', exc_info=True)
+        # The other candidates the user did NOT pick are negatives — same learning
+        # signal an auto-route records for its runners-up. Per-candidate try so a
+        # stale candidate (vault renamed/removed since the proposal was created)
+        # doesn't drop the rest of the negative signal.
+        for other in params.get('other_vault_ids') or []:
+            try:
+                await api.inbox_router.record_feedback(note_id, UUID(str(other)), 0)
+            except Exception:  # noqa: BLE001 - learning is best-effort
+                logger.warning(
+                    'route_note_to_vault: negative record_feedback failed for vault %s',
+                    other,
+                    exc_info=True,
+                )
         source_vault_id = result.get('source_vault_id')
         if source_vault_id is None:
             # migrate_note is a no-op when source == target; nothing to reverse.

@@ -94,7 +94,7 @@ def decide(
     margin = top.p_match - (ordered[1].p_match if len(ordered) > 1 else 0.0)
 
     auto_ok = (
-        routing_state is RoutingState.WARMED_UP
+        routing_state == RoutingState.WARMED_UP
         and top.p_match >= thresholds.auto_apply_min_p_match
         and margin >= thresholds.t_margin
     )
