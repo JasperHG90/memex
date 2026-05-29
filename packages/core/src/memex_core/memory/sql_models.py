@@ -1641,10 +1641,13 @@ class KVEntry(SQLModel, table=True):  # type: ignore
     Function: Provides simple, named storage for configuration, preferences,
     and structured data that doesn't fit the note/memory model.
     Key Features:
-        - Keys must start with a namespace prefix: global:, user:, project:, app:, or procedure:.
+        - Keys must start with a namespace prefix: global:, user:, project:, or app:.
+          Procedures live UNDER a scope namespace as <scope>:procedure:<verb>:<context>
+          (bare `procedure:` is no longer a valid top-level namespace — see migration 046).
         - Unique constraint on key.
         - btree index with text_pattern_ops for efficient prefix queries.
-        - Optional embedding for semantic search over values.
+        - Optional embedding for semantic search over values (generated from `value`,
+          not `key` — key rewrites do not invalidate embeddings).
     """
 
     __tablename__ = 'kv_entries'
@@ -1656,7 +1659,10 @@ class KVEntry(SQLModel, table=True):  # type: ignore
 
     key: str = Field(
         sa_column=Column(Text, nullable=False),
-        description='The key for this entry. Must start with global:, user:, project:, or app:.',
+        description=(
+            'The key for this entry. Must start with global:, user:, project:, or app:. '
+            'Procedures use <scope>:procedure:<verb>:<context>; bare procedure:* is rejected.'
+        ),
     )
 
     value: str = Field(

@@ -12,6 +12,12 @@ only when no row with the target ``global:`` form already exists for
 that key (avoids unique-constraint violations when a manual rewrite
 already happened).
 
+Embeddings & indexes: ``KVEntry.embedding`` is a column on the SAME row
+as ``key`` and is generated from ``value`` (not from ``key``), so key
+rewrites leave embeddings semantically valid and physically attached.
+The ``idx_kv_key_prefix`` btree index updates automatically on row
+UPDATE — no REINDEX required.
+
 Revision ID: 046_procedure_to_global
 Revises: 045_drop_procedure_outcomes
 Create Date: 2026-05-29

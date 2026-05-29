@@ -30,6 +30,9 @@ def _is_procedure_for_briefing(key: str) -> bool:
     in the ``## Procedures`` section during the migration-046 deploy
     window. Once 046 sweeps the bare rows to ``global:procedure:*`` the
     legacy branch no-ops.
+
+    TODO(remove-after-046-deployed): drop the legacy bare-form branch
+    and collapse this back to a direct call to ``is_procedure_key``.
     """
     if is_procedure_key(key):
         return True
@@ -42,7 +45,12 @@ def _is_procedure_for_briefing(key: str) -> bool:
 def _format_procedure_display_for_briefing(key: str) -> str:
     """Display name for both new (`<scope>:procedure:*`) and legacy
     (`procedure:*`) procedure keys. Legacy keys keep their bare form so
-    the operator sees they haven't been migrated yet."""
+    the operator sees they haven't been migrated yet.
+
+    TODO(remove-after-046-deployed): drop the legacy bare-form branch
+    and collapse this back to a direct call to
+    ``format_procedure_display_name``.
+    """
     if is_procedure_key(key):
         return format_procedure_display_name(key)
     if key.startswith('procedure:') and key.count(':') == 2:
@@ -118,6 +126,9 @@ def _build_kv_namespaces(project_id: str | None) -> list[str]:
     # TODO(remove-after-046-deployed): drop 'procedure' from this list once
     # migration 046 has been applied across all live deployments. The bare
     # namespace will be empty and the back-compat fetch is no longer needed.
+    # BACK-COMPAT: the trailing 'procedure' entry is the ONLY bare
+    # `procedure` string that survives the refactor — it's a query-side
+    # back-compat for unmigrated rows, not a writable namespace.
     ns = ['global', 'user', 'app:claude-code', 'procedure']
     if project_id:
         ns.append(f'project:{project_id}')
