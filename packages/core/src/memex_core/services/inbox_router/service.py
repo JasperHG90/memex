@@ -54,6 +54,9 @@ NO_FIT_RULE = 'inbox_vault_no_fit'
 ROUTER_ACTOR = 'system:inbox-router'
 TOP_CANDIDATES = 3  # surfaced in route-proposal evidence
 MAX_NOTES_PER_TICK = 500  # bound the scoring batch
+# Session-level advisory lock key serialising live triage ticks (distinct from
+# the scheduler leader lock).
+_ROUTER_LOCK_ID = 5432789123456790
 
 
 @dataclass
@@ -259,15 +262,20 @@ class InboxRouterService(BaseService):
                 )
             ).all()
         out: dict[UUID, list[CandidateScore]] = {}
-        for r in rows:
-            note_id = r[0] if isinstance(r[0], UUID) else UUID(str(r[0]))
+        for row in rows:
+            m = row._mapping  # access by column name, not position
+            nid = m['note_id']
+            note_id = nid if isinstance(nid, UUID) else UUID(str(nid))
+            vid = m['vault_id']
             out.setdefault(note_id, []).append(
                 CandidateScore(
-                    vault_id=r[1] if isinstance(r[1], UUID) else UUID(str(r[1])),
-                    vault_name=r[2],
-                    p_match=float(r[3]) if r[3] is not None else 0.0,
-                    p_match_raw=float(r[4]) if r[4] is not None else 0.0,
-                    ci_half_width=float(r[6]) if r[6] is not None else 0.0,
+                    vault_id=vid if isinstance(vid, UUID) else UUID(str(vid)),
+                    vault_name=m['vault_name'],
+                    p_match=float(m['p_match']) if m['p_match'] is not None else 0.0,
+                    p_match_raw=float(m['p_match_raw']) if m['p_match_raw'] is not None else 0.0,
+                    ci_half_width=float(m['ci_half_width'])
+                    if m['ci_half_width'] is not None
+                    else 0.0,
                 )
             )
         return out
@@ -289,7 +297,34 @@ class InboxRouterService(BaseService):
 
     # ------------------------------------------------------------------ tick
     async def triage_tick(self, *, dry_run: bool = False) -> TriageResult:
-        """Run one full triage pass over the inbox vault."""
+        """Run one full triage pass over the inbox vault.
+
+        Live ticks take a session-level advisory lock so a manual
+        ``memex inbox triage`` racing the scheduler can't run concurrently and
+        double the daily auto-apply budget. Dry runs don't mutate, so they skip
+        the lock. If the lock is held, this tick is a no-op.
+        """
+        if dry_run:
+            return await self._run_tick(dry_run=True)
+
+        async with self.metastore.session() as lock_session:
+            got = (
+                await lock_session.execute(
+                    text('SELECT pg_try_advisory_lock(:k)'), {'k': _ROUTER_LOCK_ID}
+                )
+            ).scalar()
+            if not got:
+                logger.info('inbox_router: another triage holds the lock; skipping tick')
+                return TriageResult()
+            try:
+                return await self._run_tick(dry_run=False)
+            finally:
+                await lock_session.execute(
+                    text('SELECT pg_advisory_unlock(:k)'), {'k': _ROUTER_LOCK_ID}
+                )
+                await lock_session.commit()
+
+    async def _run_tick(self, *, dry_run: bool) -> TriageResult:
         result = TriageResult()
         inbox_id = await self._inbox_vault_id()
         if inbox_id is None:
@@ -422,7 +457,9 @@ class InboxRouterService(BaseService):
         if top is None:  # AUTO_ROUTE always has a top; defensive, not assert (-O strips asserts).
             return
         await self._notes.migrate_note(decision.note_id, top.vault_id)
-        evidence = self._route_evidence(inbox_id, decision).model_dump()
+        # Serialize through Pydantic's JSON serializer (consistent with _emit_route)
+        # then graft the resolution block on the parsed dict.
+        evidence = json.loads(self._route_evidence(inbox_id, decision).model_dump_json())
         evidence['resolution'] = {
             'verb': 'auto_route',
             'target_vault_id': str(top.vault_id),

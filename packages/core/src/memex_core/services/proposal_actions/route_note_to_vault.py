@@ -9,6 +9,7 @@ Reverse migrates the note back to the vault it came from (captured in
 
 from __future__ import annotations
 
+import logging
 from typing import TYPE_CHECKING, Any, ClassVar
 from uuid import UUID
 
@@ -22,6 +23,8 @@ from memex_core.services.proposal_actions.base import (
 
 if TYPE_CHECKING:
     from memex_core.api import MemexAPI
+
+logger = logging.getLogger(__name__)
 
 
 class RouteNoteToVaultAction:
@@ -63,6 +66,15 @@ class RouteNoteToVaultAction:
         note_id = UUID(target_id)
         target_vault_id = UUID(str(params['target_vault_id']))
         result = await api.migrate_note(note_id, target_vault_id)
+        # Feed the human confirmation back into the router's online model — a
+        # manually-accepted route is a positive (label=1) for the chosen vault,
+        # the same signal an auto-route records. Best-effort: never fail the
+        # migration because learning hiccuped. This is what lets cockpit
+        # confirmations count toward the warm-up gate.
+        try:
+            await api.inbox_router.record_feedback(note_id, target_vault_id, 1)
+        except Exception:  # noqa: BLE001 - learning is best-effort
+            logger.warning('route_note_to_vault: record_feedback failed', exc_info=True)
         source_vault_id = result.get('source_vault_id')
         if source_vault_id is None:
             # migrate_note is a no-op when source == target; nothing to reverse.
