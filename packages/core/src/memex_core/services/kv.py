@@ -141,6 +141,15 @@ def _normalize_key(key: str) -> str:
 def _validate_namespace(key: str) -> None:
     """Ensure key starts with a valid namespace prefix."""
     if not any(key.startswith(f'{ns}:') for ns in VALID_NAMESPACES):
+        # Bare `procedure:*` is a common stale form (pre-migration 046).
+        # Give a targeted hint rather than the generic "must start with" message.
+        if key.startswith('procedure:'):
+            raise ValueError(
+                f'Invalid KV key {key!r}. Bare `procedure:*` is no longer a '
+                'top-level namespace — procedures live under a scope as '
+                '`<scope>:procedure:<verb>:<context>`, e.g. '
+                f'`global:{key}` for a global procedure.'
+            )
         raise ValueError(
             f'KV key must start with a namespace prefix: '
             f'{", ".join(f"{ns}:" for ns in VALID_NAMESPACES)}'

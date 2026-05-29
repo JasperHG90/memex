@@ -279,8 +279,11 @@ class TestTrendSorting:
 class TestKVNamespaces:
     def test_without_project(self):
         ns = _build_kv_namespaces(None)
-        # Procedures are NOT a top-level namespace — they live under global:/user:/project:/app:.
-        assert ns == ['global', 'user', 'app:claude-code']
+        # Procedures live UNDER global:/user:/project:/app:, but `procedure`
+        # is kept in the fetch list as migration-046 back-compat (any
+        # unmigrated bare `procedure:*` rows must remain visible until the
+        # DB sweep rewrites them to `global:procedure:*`).
+        assert ns == ['global', 'user', 'app:claude-code', 'procedure']
 
     def test_with_project(self):
         ns = _build_kv_namespaces('my-project')
@@ -288,6 +291,7 @@ class TestKVNamespaces:
             'global',
             'user',
             'app:claude-code',
+            'procedure',
             'project:my-project',
         ]
 

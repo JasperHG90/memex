@@ -79,8 +79,14 @@ def _build_kv_namespaces(project_id: str | None) -> list[str]:
     render in their own ``## Procedures`` section. Step 4 of
     ``_apply_overflow`` drops only non-procedure KV under
     ``app:/user:/project:`` — procedure rows degrade separately in Step 5.
+
+    ``'procedure'`` is kept in the fetch list for back-compat during the
+    migration 046 deployment window: any unmigrated bare ``procedure:*``
+    rows would otherwise become invisible until the DB sweep completes.
+    After 046 runs they disappear from the bare namespace (they live under
+    ``global:procedure:*``) and this entry no-ops.
     """
-    ns = ['global', 'user', 'app:claude-code']
+    ns = ['global', 'user', 'app:claude-code', 'procedure']
     if project_id:
         ns.append(f'project:{project_id}')
     return ns
