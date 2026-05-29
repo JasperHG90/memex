@@ -1488,9 +1488,12 @@ class RemoteMemexAPI:
             # this back-compat covers the deployment window where
             # client code is upgraded before the DB migration has run.
             if include_history and isinstance(result.get('value'), dict):
-                if is_procedure_key(key) or (
-                    key.startswith('procedure:') and ':procedure:' not in key[len('procedure:') :]
-                ):
+                # Legacy bare-form check uses `count(':') == 2` to require
+                # the exact `procedure:<verb>:<context>` 3-segment shape,
+                # matching `_is_procedure_for_briefing` on the server side.
+                # The looser `':procedure:' not in suffix` check would
+                # misroute multi-segment keys like `procedure:foo:bar:baz`.
+                if is_procedure_key(key) or (key.startswith('procedure:') and key.count(':') == 2):
                     return KVProcedureEntryDTO(**result)
             return KVEntryDTO(**result)
         except httpx.HTTPStatusError as e:

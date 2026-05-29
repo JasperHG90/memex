@@ -96,6 +96,43 @@ async def test_kv_get_legacy_bare_procedure_without_history_returns_kv_entry(moc
 
 
 @pytest.mark.asyncio
+async def test_kv_get_legacy_routing_rejects_multi_segment_bare_key(mock_client):
+    """Bare `procedure:foo:bar:baz` (4+ segments) is NOT a valid legacy
+    procedure key — only 3-segment `procedure:<verb>:<context>` was ever
+    valid pre-refactor. The back-compat check uses `count(':') == 2` to
+    match `_is_procedure_for_briefing` on the server side; a looser
+    substring check would misroute these to `KVProcedureEntryDTO` and
+    fail at envelope-decode time. This test pins the count-based check
+    so future "simplifications" don't reintroduce the misroute."""
+    api = RemoteMemexAPI(mock_client)
+
+    multi_segment_key = 'procedure:foo:bar:baz'
+    plain_payload = {
+        'id': str(uuid4()),
+        'key': multi_segment_key,
+        'value': {'arbitrary': 'dict', 'not': 'envelope'},
+        'expires_at': None,
+        'created_at': '2026-01-01T00:00:00Z',
+        'updated_at': '2026-01-01T00:00:00Z',
+    }
+    mock_client.get = AsyncMock(return_value=_make_response(plain_payload))
+
+    # Should fall through to KVEntryDTO (plain), NOT KVProcedureEntryDTO.
+    # KVEntryDTO expects a str value, so this currently raises a
+    # ValidationError — the important invariant is that the routing
+    # check does NOT identify it as a procedure key.
+    with pytest.raises(Exception) as excinfo:
+        await api.kv_get(key=multi_segment_key, include_history=True)
+    # Either KVEntryDTO validation fails (str expected, got dict), or
+    # it succeeds as a plain entry — what we're guarding against is the
+    # WRONG-TYPE routing to KVProcedureEntryDTO, which would attempt
+    # to decode `{arbitrary, not}` as the envelope and fail differently.
+    # The misroute would mention `version` (envelope field); the correct
+    # plain-DTO path mentions `str` (the expected value type).
+    assert 'version' not in str(excinfo.value).lower() or 'str' in str(excinfo.value).lower()
+
+
+@pytest.mark.asyncio
 async def test_kv_get_legacy_routing_does_not_match_global_procedure_when_bare(mock_client):
     """The legacy fallback's substring check (``':procedure:' not in
     key[len('procedure:'):]``) excludes the new ``<scope>:procedure:*``
