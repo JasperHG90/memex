@@ -647,7 +647,7 @@ Get a KV entry by exact key. <code-ref path="packages/core/src/memex_core/server
 
 - **Auth.** `require_read`.
 - **Query params.** `key` (required), `include_history` (bool, default `false`).
-- **Returns.** `KVEntryDTO`. For `procedure:` keys with `include_history=true`, the server returns `KVProcedureEntryDTO` carrying the active value plus version + history.
+- **Returns.** `KVEntryDTO`. For procedure keys (`<scope>:procedure:<verb>:<context-tag>`) with `include_history=true`, the server returns `KVProcedureEntryDTO` carrying the active value plus version + history.
 - **Errors.** 404 unknown key.
 
 ### POST /api/v1/kv/search

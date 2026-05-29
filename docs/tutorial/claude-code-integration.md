@@ -151,7 +151,7 @@ You can run `/recall` with no arguments at all. A `UserPromptExpansion` hook rea
 /recall what is our minimum Python version on this project?
 ```
 
-The skill should now also check the `procedure:` and `project:` KV namespaces and surface the value you wrote.
+The skill should now also check the `project:` KV namespace (and any `<scope>:procedure:*` rows under it) and surface the value you wrote.
 
 ## Step 6: Record an outcome
 

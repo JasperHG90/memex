@@ -279,11 +279,11 @@ class TestTrendSorting:
 class TestKVNamespaces:
     def test_without_project(self):
         ns = _build_kv_namespaces(None)
-        # Procedures live UNDER global:/user:/project:/app:, but `procedure`
-        # is kept in the fetch list as migration-046 back-compat (any
-        # unmigrated bare `procedure:*` rows must remain visible until the
-        # DB sweep rewrites them to `global:procedure:*`).
-        assert ns == ['global', 'user', 'app:claude-code', 'procedure']
+        # Procedures live UNDER global:/user:/project:/app: as
+        # `<scope>:procedure:*` rows, so they are covered by the scope
+        # prefixes already in the fetch list — there is no bare `procedure`
+        # namespace.
+        assert ns == ['global', 'user', 'app:claude-code']
 
     def test_with_project(self):
         ns = _build_kv_namespaces('my-project')
@@ -291,7 +291,6 @@ class TestKVNamespaces:
             'global',
             'user',
             'app:claude-code',
-            'procedure',
             'project:my-project',
         ]
 
@@ -1035,10 +1034,13 @@ class TestProcedures:
         assert 'use ArgoCD' in result
 
     @pytest.mark.asyncio
-    async def test_legacy_bare_procedure_renders_during_migration_window(self):
-        """During the migration 046 deploy window, bare `procedure:*` rows
-        that haven't been swept yet must still render in the Procedures
-        section — `_is_procedure_for_briefing` accepts the legacy form."""
+    async def test_bare_procedure_does_not_render_as_procedure(self):
+        """Bare `procedure:*` rows (no scope prefix) are not a valid procedure
+        key post-046 — `is_procedure_key` rejects the legacy bare form, so it
+        must NOT render in the ## Procedures section nor get a procedure
+        display label. (In production such rows are never fetched, since the
+        bare `procedure` namespace was dropped from the briefing fetch list;
+        injected directly here they degrade to a plain KV fact.)"""
         svc = _make_service(
             summary=_make_vault_summary(),
             kv_entries=[
@@ -1046,9 +1048,10 @@ class TestProcedures:
             ],
         )
         result = await svc.generate(uuid4(), budget=2000)
-        assert '## Procedures' in result
-        assert '**commit:lint-first**' in result
-        assert 'legacy bare key' in result
+        assert '## Procedures' not in result
+        # Not formatted as a procedure bullet (which would strip the prefix to
+        # `**commit:lint-first**`); the raw key survives as a plain KV fact.
+        assert '**commit:lint-first**' not in result
 
     @pytest.mark.asyncio
     async def test_user_and_app_procedures_render_with_scope_prefix(self):

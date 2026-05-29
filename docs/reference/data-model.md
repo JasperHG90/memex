@@ -454,7 +454,7 @@ Indices:
 
 ## `kv_entries`
 
-Namespaced key-value store. Keys MUST start with one of five namespace prefixes: `global:`, `user:`, `project:`, `app:`, or `procedure:`. The btree index uses `text_pattern_ops` so prefix queries (`WHERE key LIKE 'project:abc:%'`) hit the index. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="1638-1696" />
+Namespaced key-value store. Keys MUST start with one of four namespace prefixes: `global:`, `user:`, `project:`, or `app:`. The btree index uses `text_pattern_ops` so prefix queries (`WHERE key LIKE 'project:abc:%'`) hit the index. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="1638-1696" /> Procedural observations live UNDER one of these four scopes as `<scope>:procedure:<verb>:<context-tag>` — bare `procedure:` is rejected (see migration `046_procedure_to_global` which rewrites any legacy bare keys on upgrade).
 
 | Column | Type | Nullable | Default | Notes |
 |--------|------|----------|---------|-------|
@@ -472,7 +472,7 @@ Indices:
 - `idx_kv_key_prefix` btree on `(key)` with `text_pattern_ops` — drives prefix-range scans.
 - `idx_kv_expires_at` btree on `(expires_at)` partial, `WHERE expires_at IS NOT NULL`.
 
-KV entries are not vault-scoped at the table level. Scope lives in the key namespace: `user:`, `project:<id>:`, `app:<app-id>:`, `global:`, `procedure:<verb>:<context-tag>`.
+KV entries are not vault-scoped at the table level. Scope lives in the key namespace: `user:`, `project:<id>:`, `app:<app-id>:`, or `global:`. Procedure keys are scoped under one of those four namespaces as `<scope>:procedure:<verb>:<context-tag>` (e.g. `global:procedure:deploy:staging`, `project:<id>:procedure:commit:pr-only`).
 
 ## `vault_summaries`
 
