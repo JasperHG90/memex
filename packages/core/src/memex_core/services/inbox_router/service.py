@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -68,6 +68,10 @@ class TriageResult:
     no_fit: int = 0
     skipped_cap: int = 0
     errors: int = 0
+    # Populated only on a dry run: one entry per scored note with the would-be
+    # decision + top candidate. Lets callers (e.g. the eval suite) read per-note
+    # predictions without mutating anything.
+    decisions: list[dict[str, Any]] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -78,6 +82,7 @@ class TriageResult:
             'no_fit': self.no_fit,
             'skipped_cap': self.skipped_cap,
             'errors': self.errors,
+            'decisions': self.decisions,
         }
 
 
@@ -417,6 +422,19 @@ class InboxRouterService(BaseService):
 
         for nid in note_ids:
             decision = decide(nid, scored.get(nid, []), thresholds=thresholds, warmed_up=warmed_up)
+            if dry_run:
+                top = decision.top
+                result.decisions.append(
+                    {
+                        'note_id': str(nid),
+                        'kind': decision.kind.value,
+                        'routing_state': decision.routing_state.value,
+                        'margin': decision.margin,
+                        'top_vault_id': str(top.vault_id) if top else None,
+                        'top_vault_name': top.vault_name if top else None,
+                        'top_p_match': top.p_match if top else None,
+                    }
+                )
             try:
                 if decision.kind == DecisionKind.AUTO_ROUTE:
                     if dry_run:
