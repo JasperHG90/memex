@@ -22,15 +22,15 @@ Also extends the ``maintenance_proposals`` lint_type CHECK to allow
 ``'routing'`` (the router emits ``inbox_vault_route`` / ``inbox_vault_no_fit``
 proposals).
 
-Revision ID: 054_inbox_router
-Revises: 053_merge_heads
+Revision ID: 055_inbox_router
+Revises: 054_nodes_vault_active
 Create Date: 2026-05-29
 """
 
 from alembic import op
 
-revision: str = '054_inbox_router'
-down_revision: str | None = '053_merge_heads'
+revision: str = '055_inbox_router'
+down_revision: str | None = '054_nodes_vault_active'
 branch_labels: str | list[str] | None = None
 depends_on: str | list[str] | None = None
 
