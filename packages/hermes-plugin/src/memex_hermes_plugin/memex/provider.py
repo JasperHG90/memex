@@ -930,8 +930,13 @@ class MemexMemoryProvider(MemoryProvider):
             except _PROPAGATE_EXCEPTIONS:
                 # A.6: cancellation/shutdown — propagate, don't retry.
                 raise
-            except Exception:
-                pass  # transient — back off and retry
+            except Exception as poll_exc:
+                # Treat as transient and back off. Log at DEBUG so a hidden
+                # programming error (e.g. AttributeError from a refactor of
+                # the API client) is visible to ops who flip the level —
+                # the previous bare-pass made these invisible for the
+                # full 120s poll window.
+                logger.debug('Note-row poll attempt %d failed: %s', attempt, poll_exc)
             # Bound the sleep so we don't overrun the deadline.
             remaining = deadline - time.monotonic()
             if remaining <= 0:
