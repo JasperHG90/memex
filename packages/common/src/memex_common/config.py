@@ -24,6 +24,7 @@ from pydantic import (
     model_validator,
 )
 from pydantic_settings import BaseSettings, SettingsConfigDict, PydanticBaseSettingsSource
+from pydantic_settings.sources import EnvSettingsSource
 
 from memex_common.types import ReasoningEffort
 
@@ -2377,6 +2378,33 @@ class ServerConfig(BaseModel):
         return self
 
 
+class _BareVaultEnvSettingsSource(EnvSettingsSource):
+    """EnvSettingsSource that accepts bare-string env values for the
+    `vault` field of `MemexConfig`.
+
+    The hermes plugin's `HermesMemexConfig` reads `MEMEX_VAULT` from
+    `os.environ` as a flat string into `vault_id`, and the plugin's
+    README documents `MEMEX_VAULT` as alias for that flat field. The
+    same env var, fed to `MemexConfig`'s pydantic-settings chain, is
+    treated as the JSON encoding of a `VaultConfig` dict — bare strings
+    fail JSON parsing and raise `SettingsError: error parsing value for
+    field "vault"` before any `mode='before'` field validator can
+    intercept (see `pydantic_settings.sources.base.SettingsSourceBase
+    .prepare_field_value`).
+
+    This subclass overrides the complex-value decode step so a bare
+    string for the `vault` field is treated as the shorthand
+    `{'active': value}`, falling back to the default JSON decode for any
+    other shape.
+    """
+
+    def decode_complex_value(self, field_name: str, field: Any, value: Any) -> Any:
+        if field_name == 'vault' and isinstance(value, str):
+            # `MEMEX_VAULT=hermes` → `{'active': 'hermes'}`.
+            return {'active': value}
+        return super().decode_complex_value(field_name, field, value)
+
+
 class VaultConfig(BaseModel):
     """Client-side vault preferences.
 
@@ -2392,6 +2420,21 @@ class VaultConfig(BaseModel):
         default=None,
         description='Vaults to search/read. Falls back to [active] or server default if None.',
     )
+
+    @field_validator('search', mode='before')
+    @classmethod
+    def _coerce_csv_search(cls, v: Any) -> Any:
+        """Accept `MEMEX_VAULT__SEARCH=a,b,c` as shorthand for `[a, b, c]`.
+
+        Pydantic-settings already supports JSON list env values
+        (`["a","b"]`) and index-suffixed env vars (`__SEARCH__0=a`), but
+        CSV is what operators reach for in HCL / Dockerfile env_passthrough
+        lists. Empty entries are dropped so trailing commas and whitespace
+        don't leak in.
+        """
+        if isinstance(v, str):
+            return [s.strip() for s in v.split(',') if s.strip()]
+        return v
 
 
 class MemexConfig(BaseSettings):
@@ -2419,6 +2462,28 @@ class MemexConfig(BaseSettings):
         default_factory=ServerConfig,
         description='Configuration for the API server.',
     )
+
+    @field_validator('vault', mode='before')
+    @classmethod
+    def _coerce_bare_vault_string(cls, v: Any) -> Any:
+        """Accept `MEMEX_VAULT=foo` as shorthand for `MEMEX_VAULT__ACTIVE=foo`.
+
+        C.1: the hermes-plugin's `HermesMemexConfig` reads `MEMEX_VAULT`
+        manually as a flat string into its `vault_id` field, and the
+        deployment side (hermes.hcl) sets `MEMEX_VAULT=<name>` per the
+        plugin README. But `MemexConfig.vault` is the nested `VaultConfig`,
+        so pydantic-settings tries to JSON-parse the bare string as a
+        VaultConfig dict and raises
+        `ValidationError: error parsing value for field "vault"` —
+        the exact text seen in the 2026-05-29 watcher post-mortems.
+
+        Coercing here closes the deployment env-var footgun: bare-string
+        env / YAML values become `{'active': v}`; dict inputs (existing
+        nested env / YAML / direct kwargs) pass through unchanged.
+        """
+        if isinstance(v, str):
+            return {'active': v}
+        return v
 
     @property
     def write_vault(self) -> str:
@@ -2450,6 +2515,13 @@ class MemexConfig(BaseSettings):
         dotenv_settings: PydanticBaseSettingsSource,
         file_secret_settings: PydanticBaseSettingsSource,
     ) -> tuple[PydanticBaseSettingsSource, ...]:
+        # C.1: replace the default EnvSettingsSource with one that accepts
+        # a bare-string `MEMEX_VAULT=foo` as shorthand for the nested
+        # `MEMEX_VAULT__ACTIVE=foo`. The default source tries to
+        # JSON-parse complex-type env values BEFORE `mode='before'`
+        # field validators run, so the field validator alone can't fix
+        # this — see `_BareVaultEnvSettingsSource` for details.
+        env_settings = _BareVaultEnvSettingsSource(settings_cls)
         return (
             init_settings,
             env_settings,

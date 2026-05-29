@@ -133,6 +133,93 @@ class TestVaultConfigResolution:
         config = MemexConfig(vault=VaultConfig(search=[]))
         assert config.read_vaults == []
 
+
+class TestVaultBareStringCoercion:
+    """C.1: MemexConfig.vault accepts bare-string env / YAML shorthand
+    in addition to the nested form. Closes the deployment env-var footgun
+    where MEMEX_VAULT=hermes (per the hermes-plugin README) was crashing
+    the CLI with `ValidationError: error parsing value for field "vault"`.
+    """
+
+    @pytest.fixture(autouse=True)
+    def _isolate_config(self):
+        with patch.dict(
+            os.environ,
+            {
+                'MEMEX_LOAD_LOCAL_CONFIG': 'false',
+                'MEMEX_LOAD_GLOBAL_CONFIG': 'false',
+            },
+        ):
+            yield
+
+    def test_bare_string_env_promotes_to_active(self):
+        """`MEMEX_VAULT=hermes` → `vault.active='hermes'`. THE regression test."""
+        with patch.dict(os.environ, {'MEMEX_VAULT': 'hermes'}):
+            cfg = MemexConfig()
+        assert cfg.vault.active == 'hermes'
+        assert cfg.vault.search is None
+
+    def test_nested_env_form_still_works(self):
+        """`MEMEX_VAULT__ACTIVE=memex` keeps working (backwards compat)."""
+        with patch.dict(os.environ, {'MEMEX_VAULT__ACTIVE': 'memex'}):
+            cfg = MemexConfig()
+        assert cfg.vault.active == 'memex'
+
+    def test_dict_kwarg_form_still_works(self):
+        """Direct kwarg with a dict still works."""
+        cfg = MemexConfig(vault={'active': 'kw'})
+        assert cfg.vault.active == 'kw'
+
+    def test_bare_string_kwarg_promotes_to_active(self):
+        """`MemexConfig(vault='kw')` is also accepted as shorthand."""
+        cfg = MemexConfig(vault='kw')
+        assert cfg.vault.active == 'kw'
+
+    def test_vault_search_csv_env_form(self):
+        """`MEMEX_VAULT__SEARCH=a,b,c` → `['a', 'b', 'c']`."""
+        with patch.dict(
+            os.environ,
+            {'MEMEX_VAULT__ACTIVE': 'main', 'MEMEX_VAULT__SEARCH': 'a,b,c'},
+        ):
+            cfg = MemexConfig()
+        assert cfg.vault.search == ['a', 'b', 'c']
+
+    def test_vault_search_csv_strips_whitespace_and_empties(self):
+        """CSV parser drops empty entries (trailing commas, extra whitespace)."""
+        with patch.dict(
+            os.environ,
+            {'MEMEX_VAULT__ACTIVE': 'main', 'MEMEX_VAULT__SEARCH': 'a, b ,, c'},
+        ):
+            cfg = MemexConfig()
+        assert cfg.vault.search == ['a', 'b', 'c']
+
+    def test_vault_search_json_env_form_still_works(self):
+        """JSON list env value `["a","b"]` still parses as a list."""
+        with patch.dict(
+            os.environ,
+            {'MEMEX_VAULT__ACTIVE': 'main', 'MEMEX_VAULT__SEARCH': '["a","b"]'},
+        ):
+            cfg = MemexConfig()
+        assert cfg.vault.search == ['a', 'b']
+
+    def test_vault_search_list_kwarg_passes_through(self):
+        """Direct list kwarg is unchanged."""
+        cfg = MemexConfig(vault=VaultConfig(search=['x', 'y']))
+        assert cfg.vault.search == ['x', 'y']
+
+    def test_nested_env_wins_over_bare_string_when_both_set(self):
+        """If somehow both MEMEX_VAULT and MEMEX_VAULT__ACTIVE are set,
+        pydantic-settings resolves the nested form last → it wins."""
+        with patch.dict(
+            os.environ,
+            {'MEMEX_VAULT': 'bare', 'MEMEX_VAULT__ACTIVE': 'nested'},
+        ):
+            cfg = MemexConfig()
+        # The nested form is more explicit; document whichever wins.
+        # Empirically pydantic-settings v2 resolves __ACTIVE after the
+        # bare form, so 'nested' should be the resolved value.
+        assert cfg.vault.active == 'nested'
+
     def test_full_resolution_chain(self):
         """vault.search > vault.active > server defaults."""
         config = MemexConfig(
