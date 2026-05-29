@@ -1,5 +1,6 @@
 """Configuration for Memex based on Persona library"""
 
+import json
 import logging
 import math
 from enum import Enum
@@ -2426,13 +2427,23 @@ class VaultConfig(BaseModel):
     def _coerce_csv_search(cls, v: Any) -> Any:
         """Accept `MEMEX_VAULT__SEARCH=a,b,c` as shorthand for `[a, b, c]`.
 
-        Pydantic-settings already supports JSON list env values
-        (`["a","b"]`) and index-suffixed env vars (`__SEARCH__0=a`), but
-        CSV is what operators reach for in HCL / Dockerfile env_passthrough
-        lists. Empty entries are dropped so trailing commas and whitespace
-        don't leak in.
+        Try JSON first so a kwarg / YAML value like `'["a","b"]'`
+        survives unchanged — the CSV fallback would otherwise mangle a
+        JSON-list string to `['["a"', '"b"]']`. Empty CSV entries are
+        dropped so trailing commas and whitespace don't leak in.
+
+        Env values may also arrive here as already-parsed lists from
+        pydantic-settings (which JSON-decodes complex types upstream);
+        the bare ``isinstance(v, str)`` guard punts those to the default
+        path.
         """
         if isinstance(v, str):
+            try:
+                parsed = json.loads(v)
+            except (json.JSONDecodeError, ValueError):
+                parsed = None
+            if isinstance(parsed, list):
+                return parsed
             return [s.strip() for s in v.split(',') if s.strip()]
         return v
 

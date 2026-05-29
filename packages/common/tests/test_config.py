@@ -207,18 +207,22 @@ class TestVaultBareStringCoercion:
         cfg = MemexConfig(vault=VaultConfig(search=['x', 'y']))
         assert cfg.vault.search == ['x', 'y']
 
-    def test_nested_env_wins_over_bare_string_when_both_set(self):
+    def test_bare_and_nested_env_both_set_resolves_to_one(self):
         """If somehow both MEMEX_VAULT and MEMEX_VAULT__ACTIVE are set,
-        pydantic-settings resolves the nested form last → it wins."""
+        ONE of them resolves and the loader does not raise.
+
+        Pydantic-settings v2 currently resolves the nested form after
+        the bare form, so `nested` wins empirically — but that priority
+        is undocumented and could flip on a minor bump. Asserting the
+        looser invariant keeps the test useful while not pinning us to
+        an upstream implementation detail.
+        """
         with patch.dict(
             os.environ,
             {'MEMEX_VAULT': 'bare', 'MEMEX_VAULT__ACTIVE': 'nested'},
         ):
             cfg = MemexConfig()
-        # The nested form is more explicit; document whichever wins.
-        # Empirically pydantic-settings v2 resolves __ACTIVE after the
-        # bare form, so 'nested' should be the resolved value.
-        assert cfg.vault.active == 'nested'
+        assert cfg.vault.active in ('bare', 'nested')
 
     def test_full_resolution_chain(self):
         """vault.search > vault.active > server defaults."""

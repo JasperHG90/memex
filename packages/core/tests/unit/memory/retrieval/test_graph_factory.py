@@ -204,6 +204,29 @@ class TestBuildSeedEntityCte:
             f'Expected escaped al\\_ce in params: {params}'
         )
 
+    def test_fallback_path_escapes_wildcards_in_query(self) -> None:
+        """Followup to PR #188: the no-NER fallback path takes the raw
+        user `query` string straight to LIKE; `find 100% match` would
+        otherwise widen the match if the `%` weren't escaped. PR #188
+        only had an NER-path escape test.
+        """
+        cte = build_seed_entity_cte('find 100% match', ner_model=None)
+        params = cte.compile().params
+        # Pre-lowered + escaped form for both 100% and the underscore-style
+        # wildcards should appear in at least one bound parameter.
+        bound_strs = [v for v in params.values() if isinstance(v, str)]
+        assert any('100\\%' in v for v in bound_strs), (
+            f'Expected escaped 100\\% in fallback-path params: {params}'
+        )
+
+        # And confirm a raw `_` in the query is also escaped on the
+        # fallback path.
+        cte2 = build_seed_entity_cte('Al_ce', ner_model=None)
+        bound_strs2 = [v for v in cte2.compile().params.values() if isinstance(v, str)]
+        assert any('al\\_ce' in v for v in bound_strs2), (
+            f'Expected escaped al\\_ce in fallback-path params: {cte2.compile().params}'
+        )
+
     def test_trgm_rhs_lowered_at_python_level(self) -> None:
         """The parameter side of similarity / ilike is pre-lowered in
         Python (passed to SQLAlchemy as the bound value), not via SQL's

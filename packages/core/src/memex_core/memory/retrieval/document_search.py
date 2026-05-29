@@ -447,9 +447,12 @@ class NoteSearchEngine:
         # entire chunks table. Canonical pgvector HNSW pattern is plain
         # `ORDER BY distance LIMIT k` in the inner subquery, with the rank
         # assigned in an outer SELECT via `row_number() OVER ()` (no
-        # ORDER BY — relies on the subquery ordering, which CTEs preserve
-        # in Postgres). Gate validated via EXPLAIN ANALYZE per the tech
-        # report — planner is fickle on HNSW + filters.
+        # ORDER BY in the window spec — explicit `order_by=inner_cte.c.distance`
+        # so the rank is well-defined even if a future planner choice changes
+        # the inner CTE's materialisation order. Postgres preserves CTE
+        # output order in practice, but it isn't SQL-standard guaranteed.
+        # Gate validated via EXPLAIN ANALYZE per the tech report —
+        # planner is fickle on HNSW + filters.
         inner = select(Chunk.id, distance.label('distance')).select_from(Chunk)
         if request.vault_ids:
             inner = inner.where(col(Chunk.vault_id).in_(request.vault_ids))
@@ -458,7 +461,7 @@ class NoteSearchEngine:
 
         cte = select(
             inner_cte.c.id,
-            func.row_number().over().label('rnk'),
+            func.row_number().over(order_by=inner_cte.c.distance.asc()).label('rnk'),
             literal(weight).label('weight'),
         ).cte('chunk_semantic')
         return select(cte.c.id, cte.c.rnk, cte.c.weight)
