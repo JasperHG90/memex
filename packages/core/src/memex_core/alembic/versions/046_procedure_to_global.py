@@ -83,18 +83,29 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Asymmetric: upgrade rewrites bare `procedure:*` → `global:procedure:*`,
-    # but only `global:procedure:*` is stripped back here. Any
-    # `user:procedure:*`, `project:<id>:procedure:*`, or `app:<id>:procedure:*`
-    # keys created AFTER the upgrade (these scopes are newly introduced
-    # in this PR) are left in place — they have no pre-upgrade bare-form
-    # equivalent. Strict reversibility would require deleting them, but
-    # that's destructive; leave the orphans for the operator to triage.
+    # Asymmetric in two ways:
+    #
+    # 1. `global:procedure:*` rows are indiscriminately stripped back to
+    #    bare `procedure:*` — this includes rows freshly created AFTER the
+    #    upgrade, not just rows the upgrade migrated. The downgrade has no
+    #    way to distinguish "migrated from bare" vs. "born scoped". For
+    #    pure DB-rollback this is correct (the old code accepts bare). For
+    #    DB-rollback WITHOUT code-rollback, the resulting bare keys are
+    #    rejected by `_validate_namespace` on write — operators must roll
+    #    back the application code together with this migration. There is
+    #    no schema column to track migration provenance.
+    #
+    # 2. `user:procedure:*`, `project:<id>:procedure:*`, and
+    #    `app:<id>:procedure:*` keys created after the upgrade are left
+    #    in place — they have no pre-upgrade bare-form equivalent.
+    #    Strict reversibility would require deleting them; that's
+    #    destructive, so they're left for operator triage.
     logger.warning(
-        'Migration 046 downgrade only strips global:procedure:* -> procedure:*. '
-        'user:procedure:*, project:<id>:procedure:*, and app:<id>:procedure:* '
-        'keys created after the upgrade are left in place (no pre-upgrade '
-        'bare-form equivalent). Triage manually if a strict downgrade is needed.'
+        'Migration 046 downgrade: strips ALL global:procedure:* -> procedure:* '
+        '(including rows BORN scoped after the upgrade). The bare form is only '
+        'valid under pre-migration application code — roll back the application '
+        'together with this migration. user:procedure:*, project:<id>:procedure:*, '
+        'and app:<id>:procedure:* rows are left in place (no pre-upgrade equivalent).'
     )
     conn = op.get_bind()
     table_exists = conn.execute(

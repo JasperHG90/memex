@@ -38,6 +38,20 @@ def parse_procedure_key(key: str) -> tuple[str, str, str] | None:
     so arbitrary characters in the scope prefix (slashes, dots, ``@``,
     embedded ``:`` — e.g. SSH-form git remotes ``git@github.com:acme/foo``)
     flow through unmodified.
+
+    .. note::
+        **Breaking change vs. the pre-refactor signature.** Before the
+        procedure-under-scope refactor, this helper lived in
+        ``memex_core.services.kv`` and returned
+        ``tuple[str | None, str, str]`` where the first element was
+        ``project_id`` (``None`` for the global default form). It now
+        returns ``tuple[str, str, str]`` where the first element is the
+        always-populated ``scope`` (``'global'``, ``'user'``,
+        ``'project:<id>'``, or ``'app:<id>'``). External consumers that
+        unpacked ``(project_id, verb, ctx)`` and tested ``if project_id
+        is None`` will silently take the wrong branch — ``scope`` is
+        never ``None``. Update such call sites to test ``if scope ==
+        'global'`` instead.
     """
     rsplit = key.rsplit(':procedure:', 1)
     if len(rsplit) != 2:

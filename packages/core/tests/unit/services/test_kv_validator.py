@@ -42,6 +42,29 @@ def test_valid_namespaces_identity_with_kv_utils() -> None:
     assert VALID_NAMESPACES is COMMON_VALID_NAMESPACES
 
 
+def test_validate_namespace_bare_procedure_gives_targeted_error() -> None:
+    """The write-path gate `_validate_namespace` runs on EVERY KV write
+    (not just procedures). When a user writes a bare `procedure:*` key,
+    the targeted error must explain that procedures need a scope prefix
+    and suggest the `global:` fix — not the generic 'must start with
+    namespace prefix' message."""
+    from memex_core.services.kv import _validate_namespace
+
+    with pytest.raises(ValueError, match='Bare `procedure:\\*` is no longer'):
+        _validate_namespace('procedure:commit:lint')
+
+    # The suggestion should mention prepending `global:` so the operator
+    # has a one-line fix.
+    try:
+        _validate_namespace('procedure:commit:lint-first')
+    except ValueError as e:
+        msg = str(e)
+        assert 'global:' in msg
+        assert 'procedure:commit:lint-first' in msg
+    else:
+        raise AssertionError('expected ValueError on bare procedure key')
+
+
 @pytest.mark.parametrize(
     'valid_key,expected_scope',
     [
