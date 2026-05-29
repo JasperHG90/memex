@@ -247,10 +247,15 @@ def test_format_procedure_display_name_passthrough_for_non_procedure() -> None:
         ('app:claude-code:procedure:remember:terse', True),
         # Malformed procedure-shaped keys — looks_like = True so the
         # validator rejects them rather than silently storing as plain KV.
-        ('global:procedure:Verb:ctx', True),  # uppercase verb
-        ('global:procedure:verb', True),  # missing context
-        ('project:procedure:verb:ctx', True),  # bare project — no id
-        ('global:foo:procedure:verb:ctx', True),  # global with sub-id
+        # The gate is intentionally LOOSER than the parser: it catches
+        # everything procedure-shaped under a recognized scope, including
+        # malformed forms, and routes them to `validate_procedure_key`
+        # for the final accept/reject decision. Do NOT "fix" these to
+        # `False` — the parser test below pins their rejection there.
+        ('global:procedure:Verb:ctx', True),  # uppercase verb (validator rejects)
+        ('global:procedure:verb', True),  # missing context (validator rejects)
+        ('project:procedure:verb:ctx', True),  # bare project — no id (validator rejects)
+        ('global:foo:procedure:verb:ctx', True),  # global with sub-id (validator rejects)
         # NOT procedure-shaped — looks_like = False so writes pass through
         # as plain KV entries without invoking the procedure validator.
         ('global:lang:python', False),
