@@ -85,11 +85,17 @@ def upgrade() -> None:
         )
     ).scalar()
     if orphan_count:
+        # NOTE: these rows are VALID under the new schema — not orphans in
+        # the usual sense. The variable name and log message preserve the
+        # operator's mental model that the downgrade path will not reverse
+        # them (so a future rollback would leave them in place). They are
+        # working procedure keys today; the warning exists only to surface
+        # the downgrade asymmetry, not to suggest they need fixing.
         logger.warning(
             'Migration 046 upgrade: %d scoped-procedure rows already exist '
             '(user:procedure:*, project:<id>:procedure:*, or '
-            'app:<id>:procedure:*). These are kept as-is; the downgrade is '
-            'asymmetric and will leave them in place. Triage with: '
+            'app:<id>:procedure:*). These are kept as-is; downgrade will NOT '
+            'reverse them. List them with: '
             "SELECT key FROM kv_entries WHERE key LIKE 'user:procedure:%%:%%' "
             "OR key LIKE 'project:%%:procedure:%%:%%' OR key LIKE 'app:%%:procedure:%%:%%';",
             orphan_count,
@@ -138,12 +144,18 @@ def downgrade() -> None:
     # key. PostgreSQL substring(x from n) is 1-indexed and includes
     # position n; `char_length('global:') + 1` is the first position
     # AFTER the prefix, so the result is `procedure:...`.
+    #
+    # Pattern is `global:procedure:%:%` (not `global:procedure:%`) so we
+    # only strip keys with the two-segment <verb>:<context> suffix.
+    # Defends against operator-injected oddities like
+    # `global:procedure:malformed_single_segment` getting silently
+    # rewritten to a bare form the post-migration code can't accept.
     conn.execute(
         sa.text(
             'UPDATE kv_entries '
             "SET key = substring(key from char_length('global:') + 1), "
             '    updated_at = now() '
-            "WHERE key LIKE 'global:procedure:%' "
+            "WHERE key LIKE 'global:procedure:%:%' "
             '  AND NOT EXISTS ('
             '    SELECT 1 FROM kv_entries inner_e '
             "    WHERE inner_e.key = substring(kv_entries.key from char_length('global:') + 1)"
