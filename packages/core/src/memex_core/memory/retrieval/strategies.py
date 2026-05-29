@@ -357,14 +357,25 @@ def _build_ner_seeds(
     if extracted_names:
         logger.info(f'NER found entities: {extracted_names}')
 
+        # B.1: align trgm-fuzzy queries to the existing functional GIN-trgm
+        # indexes on `lower(canonical_name)` and `lower(name)` (see
+        # sql_models.py:_GIN_TRGM_CANONICAL_NAME / _GIN_TRGM_ALIAS_NAME).
+        # Without the `func.lower()` wrapper Postgres cannot match the query
+        # expression to the indexed expression and falls back to a seqscan
+        # over `entities` + `entity_aliases` per NER token — the root cause
+        # of the ~18s `statement_timeout` documented in the 2026-05-29 tech
+        # report. RHS is lowered once at the Python level so the planner
+        # doesn't have to call lower() per row.
         conds_canonical: list[Any] = [col(Entity.canonical_name).in_(extracted_names)]
         if extracted_phonetics:
             conds_canonical.append(col(Entity.phonetic_code).in_(extracted_phonetics))
         if include_ilike:
             for name in extracted_names:
-                conds_canonical.append(col(Entity.canonical_name).ilike(f'%{name}%'))
+                lowered = name.lower()
+                conds_canonical.append(func.lower(col(Entity.canonical_name)).ilike(f'%{lowered}%'))
                 conds_canonical.append(
-                    func.similarity(col(Entity.canonical_name), name) > similarity_threshold
+                    func.similarity(func.lower(col(Entity.canonical_name)), lowered)
+                    > similarity_threshold
                 )
 
         seed_from_canonical = select(col(Entity.id).label('id')).where(or_(*conds_canonical))
@@ -374,24 +385,30 @@ def _build_ner_seeds(
             conds_alias.append(col(EntityAlias.phonetic_code).in_(extracted_phonetics))
         if include_ilike:
             for name in extracted_names:
-                conds_alias.append(col(EntityAlias.name).ilike(f'%{name}%'))
+                lowered = name.lower()
+                conds_alias.append(func.lower(col(EntityAlias.name)).ilike(f'%{lowered}%'))
                 conds_alias.append(
-                    func.similarity(col(EntityAlias.name), name) > similarity_threshold
+                    func.similarity(func.lower(col(EntityAlias.name)), lowered)
+                    > similarity_threshold
                 )
 
         seed_from_alias = select(col(EntityAlias.canonical_id).label('id')).where(or_(*conds_alias))
     else:
         logger.info('No entities found by NER. Using fallback similarity search.')
+        # Same B.1 fix on the no-NER fallback path.
+        query_lower = query.lower()
         seed_from_canonical = select(col(Entity.id).label('id')).where(
             or_(
-                col(Entity.canonical_name).ilike(f'%{query}%'),
-                func.similarity(col(Entity.canonical_name), query) > similarity_threshold,
+                func.lower(col(Entity.canonical_name)).ilike(f'%{query_lower}%'),
+                func.similarity(func.lower(col(Entity.canonical_name)), query_lower)
+                > similarity_threshold,
             )
         )
         seed_from_alias = select(col(EntityAlias.canonical_id).label('id')).where(
             or_(
-                col(EntityAlias.name).ilike(f'%{query}%'),
-                func.similarity(col(EntityAlias.name), query) > similarity_threshold,
+                func.lower(col(EntityAlias.name)).ilike(f'%{query_lower}%'),
+                func.similarity(func.lower(col(EntityAlias.name)), query_lower)
+                > similarity_threshold,
             )
         )
 

@@ -141,6 +141,71 @@ class TestBuildSeedEntityCte:
         sql = str(cte.compile())
         assert 'similarity' in sql or 'LIKE' in sql
 
+    def test_trgm_queries_wrap_columns_in_lower(self) -> None:
+        """B.1 regression: trgm-fuzzy queries (`ilike` + `similarity`) must
+        wrap the indexed columns in `lower(...)` to match the functional GIN
+        indexes (`gin (lower(canonical_name) gin_trgm_ops)` on entities,
+        `gin (lower(name) gin_trgm_ops)` on entity_aliases). Without the
+        wrapper Postgres can't use the index and falls back to a seq scan
+        per NER token — the ~18s statement_timeout from the 2026-05-29
+        tech report.
+        """
+
+        # NER path
+        class MockNER:
+            def predict(self, text: str) -> list[dict[str, str]]:
+                return [{'word': 'Alice'}]
+
+        cte = build_seed_entity_cte(
+            'Tell me about Alice',
+            ner_model=MockNER(),  # type: ignore[arg-type]
+            include_ilike=True,
+        )
+        sql = str(cte.compile())
+        assert 'lower(entities.canonical_name)' in sql, (
+            f'Expected `lower(entities.canonical_name)` in NER-path SQL, got: {sql}'
+        )
+        assert 'lower(entity_aliases.name)' in sql, (
+            f'Expected `lower(entity_aliases.name)` in NER-path SQL, got: {sql}'
+        )
+
+    def test_fallback_path_also_wraps_columns_in_lower(self) -> None:
+        """Same B.1 wrap on the no-NER fallback. Without the wrapper the
+        fallback similarity search misses the GIN-trgm index too.
+        """
+        cte = build_seed_entity_cte('chimera', ner_model=None)
+        sql = str(cte.compile())
+        assert 'lower(entities.canonical_name)' in sql
+        assert 'lower(entity_aliases.name)' in sql
+
+    def test_trgm_rhs_lowered_at_python_level(self) -> None:
+        """The parameter side of similarity / ilike is pre-lowered in
+        Python (passed to SQLAlchemy as the bound value), not via SQL's
+        `lower()` on the param — that would force Postgres to call lower()
+        once per row pair, defeating the index alignment.
+        """
+
+        class MockNER:
+            def predict(self, text: str) -> list[dict[str, str]]:
+                # Title-Case so we can tell pre-lowering from post-lowering.
+                return [{'word': 'AliceWonder'}]
+
+        cte = build_seed_entity_cte(
+            'q',
+            ner_model=MockNER(),  # type: ignore[arg-type]
+            include_ilike=True,
+        )
+        params = cte.compile().params
+        # Bound parameters should be lowercase; no Title-Case leaks through.
+        bound_values = [v for v in params.values() if isinstance(v, str)]
+        for v in bound_values:
+            if 'alicewonder' in v.lower():
+                # Either the bare lowercase or the %lower% pattern, never the
+                # original Title-Case spelling.
+                assert 'AliceWonder' not in v, (
+                    f'Bound parameter still contains Title-Case spelling: {v!r}'
+                )
+
 
 # ---------------------------------------------------------------------------
 # Default behavior unchanged
