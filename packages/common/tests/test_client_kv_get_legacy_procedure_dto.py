@@ -123,13 +123,15 @@ async def test_kv_get_legacy_routing_rejects_multi_segment_bare_key(mock_client)
     # check does NOT identify it as a procedure key.
     with pytest.raises(Exception) as excinfo:
         await api.kv_get(key=multi_segment_key, include_history=True)
-    # Either KVEntryDTO validation fails (str expected, got dict), or
-    # it succeeds as a plain entry — what we're guarding against is the
-    # WRONG-TYPE routing to KVProcedureEntryDTO, which would attempt
-    # to decode `{arbitrary, not}` as the envelope and fail differently.
-    # The misroute would mention `version` (envelope field); the correct
-    # plain-DTO path mentions `str` (the expected value type).
-    assert 'version' not in str(excinfo.value).lower() or 'str' in str(excinfo.value).lower()
+    # The WRONG-TYPE routing path would attempt to decode `{arbitrary,
+    # not: envelope}` as KVProcedureValueDTO, whose required `version`
+    # field would appear in the pydantic error message. The correct
+    # plain-DTO path raises on the str/dict mismatch and does NOT
+    # mention `version`. Asserting solely on the ABSENCE of `version`
+    # is the tight invariant — adding an `or 'str' in ...` weakens it
+    # because a future schema change that happens to include `'str'`
+    # in the KVProcedureEntryDTO error wording would silently re-pass.
+    assert 'version' not in str(excinfo.value).lower()
 
 
 @pytest.mark.asyncio
