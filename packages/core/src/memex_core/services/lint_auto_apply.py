@@ -328,6 +328,40 @@ class LintAutoApplyService(BaseService):
                                 'applied_state': execute_result.applied_state,
                             },
                         )
+                        # The action's side effect already committed (in its own
+                        # session), but the CAS status flip matched 0 rows — the
+                        # finding was resolved/changed concurrently between the
+                        # FOR UPDATE check and this UPDATE. Leaving it as-is leaks
+                        # an applied action against a finding this sweep did not
+                        # resolve (and a later tick could re-apply). Compensate by
+                        # reversing the side effect. Best-effort: log if the
+                        # reversal itself fails so it can be reconciled manually.
+                        if getattr(action, 'reversible', False):
+                            try:
+                                await action.reverse(
+                                    api,
+                                    {},
+                                    execute_result.applied_state,
+                                    execute_result.prior_state,
+                                    target_id=target_id,
+                                    vault_id=vault_id,
+                                    actor=actor,
+                                )
+                                logger.info(
+                                    'auto_apply.side_effect_reversed',
+                                    extra={
+                                        'finding_id': finding_id,
+                                        'action': config.action,
+                                    },
+                                )
+                            except Exception:
+                                logger.exception(
+                                    'auto_apply.side_effect_reverse_failed',
+                                    extra={
+                                        'finding_id': finding_id,
+                                        'action': config.action,
+                                    },
+                                )
                 except Exception:
                     logger.exception('auto_apply: failed to resolve %s', finding_id[:8])
                     result.errors += 1
