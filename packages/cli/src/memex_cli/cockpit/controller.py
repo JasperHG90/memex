@@ -395,19 +395,20 @@ def options_for_inbox_route(proposal: CockpitProposal) -> list[CockpitOption]:
     knows where to migrate the note.
     """
     candidates = proposal.raw_evidence.get('top_candidates') or []
+    valid = [c for c in candidates if isinstance(c, dict) and c.get('vault_id')]
+    all_vault_ids = [str(c['vault_id']) for c in valid]
     options: list[CockpitOption] = []
-    for i, cand in enumerate(candidates):
-        if not isinstance(cand, dict):
-            continue
-        vault_id = cand.get('vault_id')
+    for i, cand in enumerate(valid):
+        vault_id = str(cand['vault_id'])
         vault_name = cand.get('vault_name') or vault_id
         p_match = cand.get('p_match')
-        if not vault_id:
-            continue
         try:
             p_str = f'{float(p_match):.2f}' if p_match is not None else '?'
         except (TypeError, ValueError):
             p_str = '?'
+        # Pass the other candidates so the router can record them as negatives —
+        # a human confirmation is the same learning signal as an auto-route.
+        other_vault_ids = [v for v in all_vault_ids if v != vault_id]
         options.append(
             CockpitOption(
                 action_id='route_note_to_vault',
@@ -416,7 +417,7 @@ def options_for_inbox_route(proposal: CockpitProposal) -> list[CockpitOption]:
                 effect='Moves the note + its units, chunks, and links to the target vault.',
                 reversible=True,
                 recommended=(i == 0),
-                params={'target_vault_id': str(vault_id)},
+                params={'target_vault_id': vault_id, 'other_vault_ids': other_vault_ids},
             )
         )
     options.append(

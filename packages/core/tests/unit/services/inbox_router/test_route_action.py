@@ -45,23 +45,25 @@ def test_validate_accepts_well_formed():
 
 
 @pytest.mark.asyncio
-async def test_execute_migrates_and_records_feedback():
-    note_id, target_vault, source_vault = uuid4(), uuid4(), uuid4()
+async def test_execute_migrates_and_records_positive_and_negative_feedback():
+    note_id, target_vault, source_vault, other = uuid4(), uuid4(), uuid4(), uuid4()
     api = MagicMock()
     api.migrate_note = AsyncMock(return_value={'source_vault_id': str(source_vault)})
     api.inbox_router.record_feedback = AsyncMock()
 
     res = await ACTION.execute(
         api,
-        {'target_vault_id': str(target_vault)},
+        {'target_vault_id': str(target_vault), 'other_vault_ids': [str(other)]},
         target_id=str(note_id),
         vault_id=source_vault,
         actor='tester',
     )
 
     api.migrate_note.assert_awaited_once_with(note_id, target_vault)
-    # Manual confirmation feeds the model as a positive for the chosen vault.
-    api.inbox_router.record_feedback.assert_awaited_once_with(note_id, target_vault, 1)
+    # Chosen vault is a positive; the unchosen candidate is a negative.
+    calls = api.inbox_router.record_feedback.await_args_list
+    assert (note_id, target_vault, 1) in [c.args for c in calls]
+    assert (note_id, other, 0) in [c.args for c in calls]
     assert res.prior_state['source_vault_id'] == str(source_vault)
     assert res.applied_state['target_vault_id'] == str(target_vault)
 

@@ -138,7 +138,9 @@ _SELECT_INBOX_NOTES_SQL = """
 SELECT n.id
   FROM notes n
  WHERE n.vault_id = :inbox_id ::uuid
-   AND EXISTS (SELECT 1 FROM chunks c WHERE c.note_id = n.id)
+   -- Require at least one EMBEDDED chunk: a note still awaiting embeddings has
+   -- no centroid to score, and must be deferred rather than scored as no-fit.
+   AND EXISTS (SELECT 1 FROM chunks c WHERE c.note_id = n.id AND c.embedding IS NOT NULL)
    AND NOT EXISTS (
         SELECT 1 FROM maintenance_proposals mp
          WHERE mp.rule_name = :route_rule
@@ -486,30 +488,43 @@ class InboxRouterService(BaseService):
             'margin': decision.margin,
             'applied_at': datetime.now(timezone.utc).isoformat(),
         }
-        async with self.metastore.session() as session:
-            # Dismiss any pending routing proposal for this note — the note has
-            # moved, so a leftover cockpit action would be stale.
-            await session.execute(
-                text(
-                    'UPDATE maintenance_proposals '
-                    "SET status = 'dismissed', resolved_at = now(), resolved_by = :actor "
-                    "WHERE lint_type = 'routing' AND target_type = 'note' "
-                    "AND target_id = :target_id AND status = 'pending'"
-                ),
-                {'target_id': str(decision.note_id), 'actor': ROUTER_ACTOR},
+        # migrate_note has already committed (its own transaction). This audit
+        # write runs in a separate transaction; on failure the note is correctly
+        # moved but the audit row is missing. We log a structured reconciliation
+        # record and re-raise (the tick counts it as an error) rather than losing
+        # it silently. The note is out of the inbox, so it won't be re-triaged.
+        try:
+            async with self.metastore.session() as session:
+                # Dismiss any pending routing proposal for this note — the note has
+                # moved, so a leftover cockpit action would be stale.
+                await session.execute(
+                    text(
+                        'UPDATE maintenance_proposals '
+                        "SET status = 'dismissed', resolved_at = now(), resolved_by = :actor "
+                        "WHERE lint_type = 'routing' AND target_type = 'note' "
+                        "AND target_id = :target_id AND status = 'pending'"
+                    ),
+                    {'target_id': str(decision.note_id), 'actor': ROUTER_ACTOR},
+                )
+                await session.execute(
+                    text(_INSERT_RESOLVED_SQL),
+                    {
+                        'vault_id': str(inbox_id),
+                        'target_id': str(decision.note_id),
+                        'rule_name': ROUTE_RULE,
+                        'evidence': json.dumps(evidence),
+                        'suggested_action': f'Auto-routed to {top.vault_name}',
+                        'actor': ROUTER_ACTOR,
+                    },
+                )
+                await session.commit()
+        except Exception:
+            logger.exception(
+                'auto_route.audit_write_failed: note %s migrated to %s without audit row',
+                decision.note_id,
+                top.vault_id,
             )
-            await session.execute(
-                text(_INSERT_RESOLVED_SQL),
-                {
-                    'vault_id': str(inbox_id),
-                    'target_id': str(decision.note_id),
-                    'rule_name': ROUTE_RULE,
-                    'evidence': json.dumps(evidence),
-                    'suggested_action': f'Auto-routed to {top.vault_name}',
-                    'actor': ROUTER_ACTOR,
-                },
-            )
-            await session.commit()
+            raise
         # Learn: the chosen vault is a positive, the other candidates negatives.
         await self.record_feedback(decision.note_id, top.vault_id, 1)
         for cand in decision.candidates[1:TOP_CANDIDATES]:
@@ -562,7 +577,7 @@ class InboxRouterService(BaseService):
                 next_retry_at=next_retry.isoformat(),
                 last_evaluated_at=now.isoformat(),
             )
-            await session.execute(
+            upsert = await session.execute(
                 text(_UPSERT_NO_FIT_SQL),
                 {
                     'vault_id': str(inbox_id),
@@ -575,6 +590,15 @@ class InboxRouterService(BaseService):
                 },
             )
             await session.commit()
+            if upsert.rowcount == 0 and row is not None:
+                # An existing pending no-fit wasn't due yet, so the UPSERT's WHERE
+                # guard skipped the evidence refresh. Expected only if a manual
+                # tick raced the backoff window (the SELECT guard normally filters
+                # these out); log for visibility rather than silently dropping.
+                logger.debug(
+                    'inbox_router: no-fit upsert skipped (backoff not due) for note %s',
+                    decision.note_id,
+                )
 
     def _route_evidence(self, inbox_id: UUID, decision: RouterDecision) -> RouteEvidence:
         return RouteEvidence(

@@ -73,6 +73,10 @@ class RouteNoteToVaultAction:
         # confirmations count toward the warm-up gate.
         try:
             await api.inbox_router.record_feedback(note_id, target_vault_id, 1)
+            # The other candidates the user did NOT pick are negatives — same
+            # learning signal an auto-route records for its runners-up.
+            for other in params.get('other_vault_ids') or []:
+                await api.inbox_router.record_feedback(note_id, UUID(str(other)), 0)
         except Exception:  # noqa: BLE001 - learning is best-effort
             logger.warning('route_note_to_vault: record_feedback failed', exc_info=True)
         source_vault_id = result.get('source_vault_id')

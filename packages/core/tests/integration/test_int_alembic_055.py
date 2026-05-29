@@ -1,4 +1,4 @@
-"""Migration round-trip test for the inbox-router schema (054).
+"""Migration round-trip test for the inbox-router schema (055).
 
 Verifies via a real ``alembic upgrade`` (not create_all) that:
 - The four router tables + two views are created.
