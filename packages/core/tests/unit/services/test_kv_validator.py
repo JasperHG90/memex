@@ -20,6 +20,7 @@ import pytest
 
 from memex_core.services.kv import (
     VALID_NAMESPACES,
+    _looks_like_procedure_key,
     format_procedure_display_name,
     is_procedure_key,
     parse_procedure_key,
@@ -196,3 +197,42 @@ def test_format_procedure_display_name_user_app_scopes() -> None:
 
 def test_format_procedure_display_name_passthrough_for_non_procedure() -> None:
     assert format_procedure_display_name('user:editor') == 'user:editor'
+
+
+# ---------------------------------------------------------------------------
+# `_looks_like_procedure_key` — gate between "reject as malformed procedure"
+# (raise ValueError on write) vs "accept as plain KV write" (no validator).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    'key,expected',
+    [
+        # Well-formed procedure-shaped keys — looks_like = True so that
+        # validate_procedure_key actually runs on the write path.
+        ('global:procedure:commit:lint', True),
+        ('user:procedure:greeting:friendly', True),
+        ('project:memex:procedure:commit:pr', True),
+        ('app:claude-code:procedure:remember:terse', True),
+        # Malformed procedure-shaped keys — looks_like = True so the
+        # validator rejects them rather than silently storing as plain KV.
+        ('global:procedure:Verb:ctx', True),  # uppercase verb
+        ('global:procedure:verb', True),  # missing context
+        ('project:procedure:verb:ctx', True),  # bare project — no id
+        ('global:foo:procedure:verb:ctx', True),  # global with sub-id
+        # NOT procedure-shaped — looks_like = False so writes pass through
+        # as plain KV entries without invoking the procedure validator.
+        ('global:lang:python', False),
+        ('user:editor', False),
+        ('project:memex:vault', False),
+        ('procedure:commit:lint', False),  # bare — wrong namespace
+        ('foo:procedure:verb:ctx', False),  # unknown namespace
+        ('', False),
+    ],
+)
+def test_looks_like_procedure_key_routing(key: str, expected: bool) -> None:
+    """Pins the routing decision: only keys under a recognized scope WITH
+    `:procedure:` infix are routed through `validate_procedure_key`.
+    Malformed-but-procedure-shaped keys are still routed there (and rejected)
+    rather than silently stored as plain KV."""
+    assert _looks_like_procedure_key(key) is expected

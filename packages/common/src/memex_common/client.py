@@ -1480,11 +1480,20 @@ class RemoteMemexAPI:
         try:
             result = await self._get('kv/get', params=params)
             # Procedure keys are detected by the `:procedure:` infix under a
-            # valid scope namespace. Inlined here to avoid a memex_core
-            # dependency from memex_common; mirrors `is_procedure_key`.
-            is_procedure = ':procedure:' in key and any(
-                key.startswith(f'{ns}:') for ns in ('global', 'user', 'project', 'app')
-            )
+            # valid scope namespace. Inlined here (mirrors `is_procedure_key`
+            # in memex_core.services.kv) to avoid pulling a core dependency
+            # into memex_common. Scope rules: global/user are flat (no id
+            # segment); project/app require an id segment.
+            is_procedure = False
+            if ':procedure:' in key:
+                scope = key.rsplit(':procedure:', 1)[0]
+                if scope in ('global', 'user'):
+                    is_procedure = True
+                elif scope.startswith(('project:', 'app:')) and scope not in (
+                    'project:',
+                    'app:',
+                ):
+                    is_procedure = True
             if include_history and is_procedure and isinstance(result.get('value'), dict):
                 return KVProcedureEntryDTO(**result)
             return KVEntryDTO(**result)

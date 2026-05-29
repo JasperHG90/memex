@@ -17,8 +17,12 @@ Revises: 045_drop_procedure_outcomes
 Create Date: 2026-05-29
 """
 
+import logging
+
 import sqlalchemy as sa
 from alembic import op
+
+logger = logging.getLogger('alembic.046_procedure_to_global')
 
 revision: str = '046_procedure_to_global'
 down_revision: str | None = '045_drop_procedure_outcomes'
@@ -62,6 +66,12 @@ def downgrade() -> None:
     # in this PR) are left in place — they have no pre-upgrade bare-form
     # equivalent. Strict reversibility would require deleting them, but
     # that's destructive; leave the orphans for the operator to triage.
+    logger.warning(
+        'Migration 046 downgrade only strips global:procedure:* -> procedure:*. '
+        'user:procedure:*, project:<id>:procedure:*, and app:<id>:procedure:* '
+        'keys created after the upgrade are left in place (no pre-upgrade '
+        'bare-form equivalent). Triage manually if a strict downgrade is needed.'
+    )
     conn = op.get_bind()
     table_exists = conn.execute(
         sa.text(
@@ -74,16 +84,20 @@ def downgrade() -> None:
     if not table_exists:
         return
 
-    # Strip the leading 'global:' from any global:procedure:* keys, but only
-    # if a bare procedure:* row doesn't already exist for that key.
+    # Strip the leading 'global:' prefix from any global:procedure:* keys,
+    # but only if a bare procedure:* row doesn't already exist for that
+    # key. PostgreSQL substring(x from n) is 1-indexed and includes
+    # position n; `char_length('global:') + 1` is the first position
+    # AFTER the prefix, so the result is `procedure:...`.
     conn.execute(
         sa.text(
             'UPDATE kv_entries '
-            'SET key = substring(key from 8), updated_at = now() '
+            "SET key = substring(key from char_length('global:') + 1), "
+            '    updated_at = now() '
             "WHERE key LIKE 'global:procedure:%' "
             '  AND NOT EXISTS ('
             '    SELECT 1 FROM kv_entries inner_e '
-            '    WHERE inner_e.key = substring(kv_entries.key from 8)'
+            "    WHERE inner_e.key = substring(kv_entries.key from char_length('global:') + 1)"
             '  )'
         )
     )
