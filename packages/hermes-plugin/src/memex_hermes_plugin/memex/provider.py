@@ -12,8 +12,10 @@ All async calls are marshalled onto the shared event loop in ``async_bridge``.
 
 from __future__ import annotations
 
+import asyncio
 import atexit
 import base64
+import concurrent.futures
 import logging
 import os
 import threading
@@ -51,7 +53,58 @@ _PENDING_MAX = 256
 # Non-transient HTTP statuses. The append/create will never succeed if
 # resent verbatim, so we drop the failing entry and continue draining the
 # rest of the queue. 5xx, 408, 429, and network errors are transient.
+#
+# Asymmetry on 409:
+# - 409 on CREATE is the server's overlap detector signalling an in-flight
+#   ingest of the same note_key. The note row WILL materialise once that
+#   job completes, so `_drain_pending` special-cases this branch and waits
+#   on `_wait_for_note_row` instead of dropping.
+# - 409 on APPEND has different semantics (note status / id conflict) and
+#   is final — drop and let the next append carry on. Append idempotency
+#   is keyed on `append_id`; re-POSTing the same body without a new id
+#   would only re-trigger the same 409.
 _NON_TRANSIENT_HTTP_STATUSES: frozenset[int] = frozenset({400, 404, 409, 410, 422})
+
+# Exceptions that must NEVER be silently swallowed by the drain loop:
+# - KeyboardInterrupt / SystemExit — shell-level cooperative shutdown.
+# - asyncio.CancelledError — direct asyncio cancellation (would surface
+#   here only if code is refactored to await directly).
+# - concurrent.futures.CancelledError — `run_sync` translates cancellation
+#   of the bridged asyncio Task into this on the calling thread (via
+#   `_chain_future` recognising the asyncio Task entered cancelled state).
+#   Importantly: concurrent.futures.CancelledError inherits from Exception
+#   (NOT BaseException), so a bare `except Exception` clause would absorb
+#   it and turn cooperative cancellation into "warn + retry on next flush"
+#   — exactly the swallow A.6 is meant to prevent.
+_PROPAGATE_EXCEPTIONS: tuple[type[BaseException], ...] = (
+    KeyboardInterrupt,
+    SystemExit,
+    asyncio.CancelledError,
+    concurrent.futures.CancelledError,
+)
+
+# Default deadline for _wait_for_note_row — sized for the p99 of
+# background ingest (LLM extraction) on resource-constrained hardware
+# (e.g. Jetson Orin Nano). The previous 10s deadline expired before
+# extraction completed on most session notes, which combined with the
+# overlap-409 drop produced the orphaned-session-note storm documented
+# in the 2026-05-29 tech report.
+_WAIT_FOR_NOTE_ROW_DEFAULT_TIMEOUT = 120.0
+
+# Exponential backoff schedule for _wait_for_note_row attempts (seconds
+# between attempts). After the schedule is exhausted, attempts space at
+# _WAIT_FOR_NOTE_ROW_BACKOFF_PLATEAU until the deadline. Keeps the early
+# cycles snappy (fast happy-path return) while bounding poll volume for
+# multi-minute extractions.
+_WAIT_FOR_NOTE_ROW_BACKOFF: tuple[float, ...] = (0.1, 0.2, 0.5, 1.0, 2.0, 5.0)
+_WAIT_FOR_NOTE_ROW_BACKOFF_PLATEAU = 10.0
+
+
+def _backoff_delay(attempt: int) -> float:
+    """Return the delay (seconds) to sleep before the next poll attempt."""
+    if attempt < len(_WAIT_FOR_NOTE_ROW_BACKOFF):
+        return _WAIT_FOR_NOTE_ROW_BACKOFF[attempt]
+    return _WAIT_FOR_NOTE_ROW_BACKOFF_PLATEAU
 
 
 def _resolve_hermes_home(kwargs: dict[str, Any]) -> Path:
@@ -755,11 +808,39 @@ class MemexMemoryProvider(MemoryProvider):
                             if self._pending and self._pending[0] is head:
                                 self._pending.pop(0)
                 except httpx.HTTPStatusError as e:
-                    if e.response.status_code in _NON_TRANSIENT_HTTP_STATUSES:
+                    code = e.response.status_code
+                    # A.1: 409 on create means the server's overlap detector
+                    # found an in-flight ingest for the same note_key (see
+                    # packages/core/.../processing/batch.py overlap probe).
+                    # The note row WILL materialise once the in-flight job
+                    # finishes — wait for it rather than dropping the head
+                    # (which would orphan the session note and break every
+                    # subsequent append). The Location header on 409 points
+                    # to the job; we poll the note row instead (deterministic
+                    # id from note_key) since that's the materialisation
+                    # signal we actually need.
+                    if head['kind'] == 'create' and code == 409:
+                        logger.info(
+                            'Session note create returned 409 (overlap); '
+                            'waiting for in-flight job at %s',
+                            e.response.headers.get('Location', '<unknown>'),
+                        )
+                        if self._wait_for_note_row():
+                            with self._state_lock:
+                                self._note_initialized = True
+                                if self._pending and self._pending[0] is head:
+                                    self._pending.pop(0)
+                            continue
+                        logger.warning(
+                            'Session note create overlap did not resolve '
+                            'before deadline; will retry on next flush.',
+                        )
+                        return
+                    if code in _NON_TRANSIENT_HTTP_STATUSES:
                         logger.error(
                             'Session note %s rejected (HTTP %d); dropping entry: %s',
                             head['kind'],
-                            e.response.status_code,
+                            code,
                             e,
                         )
                         with self._state_lock:
@@ -769,10 +850,13 @@ class MemexMemoryProvider(MemoryProvider):
                     logger.warning(
                         'Session note %s transient error (HTTP %d); will retry: %s',
                         head['kind'],
-                        e.response.status_code,
+                        code,
                         e,
                     )
                     return
+                except _PROPAGATE_EXCEPTIONS:
+                    # A.6: see _PROPAGATE_EXCEPTIONS docstring for rationale.
+                    raise
                 except Exception as e:
                     logger.warning(
                         'Session note %s failed; will retry on next flush: %s',
@@ -806,7 +890,7 @@ class MemexMemoryProvider(MemoryProvider):
         )
         run_sync(self._api.ingest(dto, background=True), timeout=30.0)
 
-    def _wait_for_note_row(self, *, timeout: float = 10.0) -> bool:
+    def _wait_for_note_row(self, *, timeout: float = _WAIT_FOR_NOTE_ROW_DEFAULT_TIMEOUT) -> bool:
         """Poll for the session note row to appear server-side.
 
         Returns True if the row is visible, False on timeout. The id is
@@ -820,25 +904,40 @@ class MemexMemoryProvider(MemoryProvider):
           won't change the outcome.
         - Everything else (5xx, 408, 429, network errors) is transient —
           retry within the deadline.
+
+        A.2: exponential backoff between attempts (`_backoff_delay`). The
+        previous flat 0.1s sleep produced 100 polls per 10s window, which
+        was both too aggressive (burning CPU on tight loops) and too short
+        (LLM extraction p99 well above 10s on resource-constrained hosts).
+        New default timeout is 120s; backoff plateaus at 10s/attempt for
+        the long tail.
         """
         if self._api is None:
             return False
         note_id = derive_note_uuid_from_key(self._session_note_key)
         deadline = time.monotonic() + timeout
+        attempt = 0
         while time.monotonic() < deadline:
             try:
                 run_sync(self._api.get_note(note_id), timeout=1.0)
                 return True
             except httpx.HTTPStatusError as e:
                 code = e.response.status_code
-                if code == 404:
-                    time.sleep(0.1)
-                    continue
-                if code in _NON_TRANSIENT_HTTP_STATUSES:
+                if code in _NON_TRANSIENT_HTTP_STATUSES and code != 404:
                     return False
-                time.sleep(0.1)  # transient
+                # 404 = not yet visible; other codes (5xx, 408, 429, etc.)
+                # = transient — both fall through to backoff.
+            except _PROPAGATE_EXCEPTIONS:
+                # A.6: cancellation/shutdown — propagate, don't retry.
+                raise
             except Exception:
-                time.sleep(0.1)
+                pass  # transient — back off and retry
+            # Bound the sleep so we don't overrun the deadline.
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                break
+            time.sleep(min(_backoff_delay(attempt), remaining))
+            attempt += 1
         return False
 
     def _do_append(self, content: str, *, append_id: UUID, vault_id: str | None) -> None:

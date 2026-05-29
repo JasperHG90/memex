@@ -871,6 +871,197 @@ def test_wait_for_note_row_bails_on_definitive_4xx(provider_with_append_api):
     assert api.get_note.await_count == 1
 
 
+# ---- A.1: 409-on-create overlap path --------------------------------------
+
+
+def test_create_409_waits_for_note_row_and_pops_on_success(provider_with_append_api):
+    """A.1: 409 on create means an in-flight ingest of the same note_key is
+    already running on the server (overlap detector). The note row will
+    materialise once that job finishes — wait for it rather than dropping
+    the head and orphaning every subsequent append.
+    """
+    import httpx
+
+    provider, api, _ = provider_with_append_api
+
+    # First ingest raises 409 + Location, second poll resolves.
+    fake_409 = httpx.Response(
+        status_code=409,
+        text='overlap',
+        headers={'Location': '/api/v1/ingestions/in-flight-id'},
+    )
+    fake_409._request = httpx.Request('POST', 'http://test/ingest')
+    overlap = httpx.HTTPStatusError('409', request=fake_409._request, response=fake_409)
+    api.ingest = AsyncMock(side_effect=overlap)
+    provider._api.ingest = api.ingest
+    # get_note (already AsyncMock returning SimpleNamespace) resolves the wait.
+
+    provider.sync_turn('q', 'a')
+    provider.on_pre_compress([])
+
+    # Head popped, _note_initialized flipped, no orphaned create stays queued.
+    assert provider._pending == []
+    assert provider._note_initialized is True
+    api.get_note.assert_awaited()
+
+
+def test_create_409_keeps_head_queued_if_wait_times_out(provider_with_append_api):
+    """A.1: if the in-flight ingest never materialises before the
+    _wait_for_note_row deadline, leave the head in the queue. The next
+    flush will retry — the alternative (dropping silently) is exactly the
+    bug that caused the orphaned-session-note storm.
+    """
+    import httpx
+
+    provider, api, _ = provider_with_append_api
+
+    fake_409 = httpx.Response(
+        status_code=409,
+        text='overlap',
+        headers={'Location': '/api/v1/ingestions/in-flight-id'},
+    )
+    fake_409._request = httpx.Request('POST', 'http://test/ingest')
+    overlap = httpx.HTTPStatusError('409', request=fake_409._request, response=fake_409)
+    api.ingest = AsyncMock(side_effect=overlap)
+    provider._api.ingest = api.ingest
+
+    # Force the wait to fail — make every get_note raise a non-transient 400
+    # so the wait bails immediately rather than burning the default 120s.
+    fake_400 = httpx.Response(status_code=400, text='nope')
+    fake_400._request = httpx.Request('GET', 'http://test/notes/x')
+    fail = httpx.HTTPStatusError('400', request=fake_400._request, response=fake_400)
+    api.get_note = AsyncMock(side_effect=fail)
+    provider._api.get_note = api.get_note
+
+    provider.sync_turn('q', 'a')
+    provider.on_pre_compress([])
+
+    # Head MUST stay; _note_initialized must NOT flip.
+    assert len(provider._pending) == 1
+    assert provider._pending[0]['kind'] == 'create'
+    assert provider._note_initialized is False
+
+
+def test_append_409_still_drops(provider_with_append_api):
+    """A.1's special-case is scoped to create. A 409 on append is still
+    non-transient (an append should be idempotent on append_id; if the
+    server rejects with 409 it won't accept a literal replay), so the
+    drop-and-continue path is preserved.
+    """
+    import httpx
+
+    provider, api, _ = provider_with_append_api
+
+    # First flush succeeds (create).
+    provider.sync_turn('q1', 'a1')
+    provider.on_pre_compress([])
+    api.ingest.assert_awaited_once()
+
+    # Next append: 409.
+    fake_409 = httpx.Response(status_code=409, text='append conflict')
+    fake_409._request = httpx.Request('POST', 'http://test/append')
+    conflict = httpx.HTTPStatusError('409', request=fake_409._request, response=fake_409)
+    api.append_to_note = AsyncMock(side_effect=conflict)
+    provider._api.append_to_note = api.append_to_note
+
+    provider.sync_turn('q2', 'a2')
+    provider.on_pre_compress([])
+
+    # Append entry dropped (current contract — not the 409-create special case).
+    assert provider._pending == []
+
+
+# ---- A.2: exponential backoff in _wait_for_note_row -----------------------
+
+
+def test_wait_for_note_row_uses_exponential_backoff(provider_with_append_api):
+    """A.2: poll attempts space out per the backoff schedule (0.1, 0.2, 0.5,
+    1.0, 2.0, 5.0) and then plateau at 10s. Previously a flat 0.1s sleep
+    burned CPU + bounded the wait to 10s of attempts; new schedule keeps
+    the early cycles snappy while bounding poll volume for multi-minute
+    background extractions.
+    """
+    import httpx
+
+    provider, api, _ = provider_with_append_api
+
+    fake_503 = httpx.Response(status_code=503, text='busy')
+    fake_503._request = httpx.Request('GET', 'http://test/notes/x')
+    transient = httpx.HTTPStatusError('503', request=fake_503._request, response=fake_503)
+    # Five transients then success — exercise the first five backoff steps.
+    api.get_note = AsyncMock(
+        side_effect=[transient, transient, transient, transient, transient, Mock()]
+    )
+    provider._api.get_note = api.get_note
+
+    sleeps: list[float] = []
+    with patch(
+        'memex_hermes_plugin.memex.provider.time.sleep',
+        side_effect=lambda s: sleeps.append(s),
+    ):
+        assert provider._wait_for_note_row(timeout=60.0) is True
+
+    # Schedule: 0.1, 0.2, 0.5, 1.0, 2.0 — verify the prefix.
+    assert sleeps[:5] == [0.1, 0.2, 0.5, 1.0, 2.0]
+
+
+def test_backoff_delay_plateaus_after_schedule():
+    """_backoff_delay returns the schedule values then plateaus."""
+    from memex_hermes_plugin.memex.provider import (
+        _WAIT_FOR_NOTE_ROW_BACKOFF,
+        _WAIT_FOR_NOTE_ROW_BACKOFF_PLATEAU,
+        _backoff_delay,
+    )
+
+    for i, expected in enumerate(_WAIT_FOR_NOTE_ROW_BACKOFF):
+        assert _backoff_delay(i) == expected
+    # Past the schedule end, return plateau.
+    assert _backoff_delay(len(_WAIT_FOR_NOTE_ROW_BACKOFF)) == _WAIT_FOR_NOTE_ROW_BACKOFF_PLATEAU
+    assert _backoff_delay(len(_WAIT_FOR_NOTE_ROW_BACKOFF) + 100) == (
+        _WAIT_FOR_NOTE_ROW_BACKOFF_PLATEAU
+    )
+
+
+def test_wait_for_note_row_default_timeout_is_extended():
+    """A.2: the default _wait_for_note_row deadline must comfortably exceed
+    LLM-extraction p99 on the target hardware (Jetson Orin Nano, ~60s).
+    """
+    from memex_hermes_plugin.memex.provider import _WAIT_FOR_NOTE_ROW_DEFAULT_TIMEOUT
+
+    assert _WAIT_FOR_NOTE_ROW_DEFAULT_TIMEOUT >= 60.0
+
+
+# ---- A.6: CancelledError propagates ---------------------------------------
+
+
+def test_drain_pending_propagates_cancelled_error(provider_with_append_api):
+    """A.6: cooperative cancellation must not be swallowed.
+
+    Gotcha: `run_sync` uses `asyncio.run_coroutine_threadsafe`, which
+    translates `asyncio.CancelledError` raised inside the bridged
+    coroutine into `concurrent.futures.CancelledError` on the calling
+    thread (via `_chain_future` recognising the asyncio Task entered the
+    cancelled state). `concurrent.futures.CancelledError` inherits from
+    `Exception`, so the bare `except Exception` clause would swallow it
+    without the explicit re-raise added by A.6.
+    """
+    import asyncio
+    import concurrent.futures
+
+    provider, api, _ = provider_with_append_api
+    api.ingest = AsyncMock(side_effect=asyncio.CancelledError())
+    provider._api.ingest = api.ingest
+
+    provider.sync_turn('q', 'a')
+    # run_sync surfaces concurrent.futures.CancelledError on the caller
+    # thread, which is what _drain_pending must propagate.
+    with pytest.raises(concurrent.futures.CancelledError):
+        provider.on_pre_compress([])
+    # Head still queued; future flush can retry once cancellation is handled.
+    assert len(provider._pending) == 1
+    assert provider._pending[0]['kind'] == 'create'
+
+
 def test_vault_rebind_with_pending_create_is_ignored(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ):
