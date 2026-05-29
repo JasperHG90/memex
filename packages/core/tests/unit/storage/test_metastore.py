@@ -1,8 +1,10 @@
 from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
+from sqlalchemy.exc import OperationalError
 from sqlmodel.ext.asyncio.session import AsyncSession
 from pydantic import SecretStr
 
+from memex_common.exceptions import ResourceNotFoundError
 from memex_core.config import PostgresMetaStoreConfig, PostgresInstanceConfig
 from memex_core.storage.metastore import AsyncPostgresMetaStoreEngine
 
@@ -195,19 +197,73 @@ async def test_session_context_manager(
 
 
 @pytest.mark.asyncio
-async def test_session_context_manager_error_logging(
+async def test_session_context_manager_logs_sqlalchemy_errors(
     engine_instance: AsyncPostgresMetaStoreEngine, mock_session_factory: MagicMock
 ) -> None:
-    """Test that errors in session context are logged and re-raised."""
+    """Real DB errors (SQLAlchemyError / DBAPIError) log at ERROR and re-raise."""
     engine_instance._session_factory = mock_session_factory
     mock_session_ctx = AsyncMock()
     mock_session_factory.return_value = mock_session_ctx
 
-    # Setup logger mock
     with patch.object(engine_instance, '_logger') as mock_logger:
-        with pytest.raises(ValueError, match='Test error'):
+        with pytest.raises(OperationalError):
             async with engine_instance.session():
-                raise ValueError('Test error')
+                # OperationalError is DBAPIError → SQLAlchemyError
+                raise OperationalError('SELECT 1', {}, Exception('connection refused'))
+
+        mock_logger.error.assert_called_once()
+        assert 'Session error' in mock_logger.error.call_args[0][0]
+
+
+@pytest.mark.asyncio
+async def test_session_context_manager_silent_on_memex_error(
+    engine_instance: AsyncPostgresMetaStoreEngine, mock_session_factory: MagicMock
+) -> None:
+    """Business-class exceptions (MemexError + subclasses) re-raise silently.
+
+    The caller (e.g. server/common.py _handle_error) chooses the log level.
+    Logging here at ERROR would duplicate and flood the log under 404 storms.
+    """
+    engine_instance._session_factory = mock_session_factory
+    mock_session_ctx = AsyncMock()
+    mock_session_factory.return_value = mock_session_ctx
+
+    with patch.object(engine_instance, '_logger') as mock_logger:
+        with pytest.raises(ResourceNotFoundError):
+            async with engine_instance.session():
+                raise ResourceNotFoundError('note xyz not found')
+
+        # Strict: NO log method (error/warning/info/debug) should fire.
+        # Catches future drift if someone adds e.g. a WARNING here.
+        assert mock_logger.method_calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    'exc',
+    [RuntimeError('boom'), ValueError('bad'), TypeError('wrong-shape')],
+    ids=['RuntimeError', 'ValueError', 'TypeError'],
+)
+async def test_session_context_manager_logs_non_memex_exceptions(
+    engine_instance: AsyncPostgresMetaStoreEngine,
+    mock_session_factory: MagicMock,
+    exc: Exception,
+) -> None:
+    """Unexpected non-Memex exceptions log at ERROR before re-raise.
+
+    Silencing only MemexError (business class) means non-HTTP callers of
+    session() (CLI tools, background tasks, scripts) still see a trace when
+    a TypeError / RuntimeError / similar slips through — they no longer
+    swallow unexpected errors without any signal.
+    """
+    engine_instance._session_factory = mock_session_factory
+    mock_session_ctx = AsyncMock()
+    mock_session_factory.return_value = mock_session_ctx
+
+    with patch.object(engine_instance, '_logger') as mock_logger:
+        with pytest.raises(type(exc)):
+            async with engine_instance.session():
+                raise exc
 
         mock_logger.error.assert_called_once()
         assert 'Session error' in mock_logger.error.call_args[0][0]
