@@ -374,6 +374,32 @@ async def periodic_consolidation_task(api: 'MemexAPI', units_per_tick: int):
             logger.error(f'Scheduler: Consolidation failed: {e}', exc_info=True)
 
 
+async def periodic_inbox_router_task(api: 'MemexAPI'):
+    """Bootstrap the inbox vault (idempotent) then run one triage tick.
+
+    Runs under MEMEX_LEADER_LOCK_ID (only the leader serves the clock), so the
+    ``ensure_inbox_vault`` create is single-flighted and the
+    ``VaultService.create_vault`` ValueError/IntegrityError race is caught
+    inside the service. Failures are error-logged and never raise.
+    """
+    async with background_session('bg-sched-inbox-router'):
+        try:
+            await api.inbox_router.ensure_inbox_vault()
+            result = await api.inbox_router.triage_tick()
+            if result.scored:
+                logger.info(
+                    'Scheduler: Inbox router scored %d note(s): '
+                    'auto_routed=%d proposed=%d no_fit=%d errors=%d',
+                    result.scored,
+                    result.auto_routed,
+                    result.proposed,
+                    result.no_fit,
+                    result.errors,
+                )
+        except (OSError, RuntimeError, ValueError) as e:
+            logger.error(f'Scheduler: Inbox router tick failed: {e}', exc_info=True)
+
+
 async def periodic_lint_llm_task(api: 'MemexAPI'):
     """Per-vault surprise-gated LLM lint under MEMEX_LEADER_LOCK_ID.
 
@@ -583,6 +609,21 @@ async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI
             await periodic_entity_maintenance_task(api)
     else:
         logger.info('Scheduler: Entity-maintenance scan DISABLED (scan_enabled=False).')
+
+    # --- Inbox router ---
+    inbox_router_cfg = config.server.memory.inbox_router
+    if inbox_router_cfg.enabled:
+        logger.info(
+            'Scheduler: Inbox router ENABLED. Interval: %ds. auto_apply=%s.',
+            inbox_router_cfg.interval_seconds,
+            inbox_router_cfg.auto_apply_enabled,
+        )
+
+        @clock.task(trigger=Every(seconds=inbox_router_cfg.interval_seconds))
+        async def run_inbox_router_job():
+            await periodic_inbox_router_task(api)
+    else:
+        logger.info('Scheduler: Inbox router DISABLED (enabled=False).')
 
     # --- Consolidation ---
     consolidation_cfg = config.server.memory.consolidation

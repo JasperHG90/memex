@@ -123,6 +123,18 @@ _DEFAULT_OPTIONS_BY_RULE: dict[str, list[CockpitOption]] = {
         FLAG_OPTION,
         DISMISS_OPTION,
     ],
+    'inbox_vault_no_fit': [
+        CockpitOption(
+            action_id='no_op',
+            label='Leave in inbox',
+            summary='No vault fits this note; keep it in the inbox for now.',
+            effect='No mutation; the router backs off and re-evaluates later.',
+            reversible=True,
+            recommended=True,
+        ),
+        FLAG_OPTION,
+        DISMISS_OPTION,
+    ],
     'cold_low_mw_unit': [
         CockpitOption(
             action_id='deprioritize_unit',
@@ -369,6 +381,52 @@ def options_for_contradiction(
             effect='No mutation; the contradiction signal persists in audit.',
             reversible=True,
         ),
+    )
+    options.append(FLAG_OPTION)
+    options.append(DISMISS_OPTION)
+    return options
+
+
+def options_for_inbox_route(proposal: CockpitProposal) -> list[CockpitOption]:
+    """Build one route option per candidate vault from ``evidence.top_candidates``.
+
+    The router proposes the top-K vaults; the user picks which (or dismisses).
+    Each option carries ``params.target_vault_id`` so ``route_note_to_vault``
+    knows where to migrate the note.
+    """
+    candidates = proposal.raw_evidence.get('top_candidates') or []
+    options: list[CockpitOption] = []
+    for i, cand in enumerate(candidates):
+        if not isinstance(cand, dict):
+            continue
+        vault_id = cand.get('vault_id')
+        vault_name = cand.get('vault_name') or vault_id
+        p_match = cand.get('p_match')
+        if not vault_id:
+            continue
+        try:
+            p_str = f'{float(p_match):.2f}' if p_match is not None else '?'
+        except (TypeError, ValueError):
+            p_str = '?'
+        options.append(
+            CockpitOption(
+                action_id='route_note_to_vault',
+                label=f'Route to {vault_name} (p={p_str})',
+                summary=f'Migrate this note from the inbox to {vault_name}.',
+                effect='Moves the note + its units, chunks, and links to the target vault.',
+                reversible=True,
+                recommended=(i == 0),
+                params={'target_vault_id': str(vault_id)},
+            )
+        )
+    options.append(
+        CockpitOption(
+            action_id='no_op',
+            label='Leave in inbox',
+            summary='Record review; the note stays in the inbox vault.',
+            effect='No mutation; the router may re-propose at the next tick.',
+            reversible=True,
+        )
     )
     options.append(FLAG_OPTION)
     options.append(DISMISS_OPTION)

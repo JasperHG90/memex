@@ -1616,6 +1616,103 @@ class LintConfig(BaseModel):
     )
 
 
+class InboxRouterConfig(BaseModel):
+    """Configuration for the inbox router.
+
+    The router scores notes in the ``inbox`` vault against every other vault
+    using a pairwise Gaussian Naive Bayes model evaluated entirely in Postgres,
+    then either auto-applies a high-confidence route or emits a maintenance
+    proposal for the cockpit. Off by default; opt in via ``enabled``.
+    """
+
+    enabled: bool = Field(
+        default=False,
+        description='Enable the periodic inbox-router triage task (opt-in).',
+    )
+    interval_seconds: int = Field(
+        default=3600,
+        ge=60,
+        description='Seconds between inbox-router triage ticks. Default: 1 hour.',
+    )
+    top_k_entities: int = Field(
+        default=100,
+        ge=1,
+        description=(
+            'Per-vault entity-set cap (top-K by mention count) used for the '
+            "entity_jaccard feature. K=100 is the POC sweep's knee."
+        ),
+    )
+    auto_apply_enabled: bool = Field(
+        default=True,
+        description=(
+            'Allow the router to migrate notes automatically when confidence '
+            'clears the gate. When False the router only ever proposes.'
+        ),
+    )
+    auto_apply_min_p_match: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description='Minimum normalised top-1 P(match) required to auto-apply.',
+    )
+    t_margin: float = Field(
+        default=0.4,
+        ge=0.0,
+        le=1.0,
+        description=(
+            'Minimum P(match) margin between the top-1 and top-2 candidate '
+            'required to auto-apply. POC: correct routes had median margin '
+            '0.81, wrong 0.10.'
+        ),
+    )
+    t_low: float = Field(
+        default=0.10,
+        ge=0.0,
+        le=1.0,
+        description=(
+            'Minimum raw P(match) for the top candidate to be proposed at all. '
+            'Below this the note is treated as no-fit.'
+        ),
+    )
+    min_decisions_before_auto_apply: int = Field(
+        default=50,
+        ge=0,
+        description=(
+            'Match-class observation count required before auto-apply is '
+            'eligible. Below this the router proposes only (cold-start gate).'
+        ),
+    )
+    ewma_gamma: float = Field(
+        default=0.99,
+        gt=0.0,
+        le=1.0,
+        description=(
+            'Exponential-decay factor applied to the sufficient statistics on '
+            'each online update. <1 lets the model forget stale vault state as '
+            'vaults drift; 1.0 freezes (never forgets).'
+        ),
+    )
+    backoff_base_days: float = Field(
+        default=1.0,
+        gt=0.0,
+        description='Base retry delay for no-fit proposals (exponential backoff).',
+    )
+    backoff_cap_days: float = Field(
+        default=32.0,
+        gt=0.0,
+        description='Maximum retry delay for no-fit proposals.',
+    )
+    max_auto_applies_per_tick: int = Field(
+        default=10,
+        ge=0,
+        description=(
+            'Safety cap on notes auto-routed per triage tick. Excess notes fall '
+            'through to proposals so a mis-scoring run cannot reshuffle the '
+            'whole inbox at once.'
+        ),
+    )
+
+
 class EntityMaintenanceConfig(BaseModel):
     """Configuration for the cross-batch entity-cluster collapse loop.
 
@@ -1998,6 +2095,14 @@ class MemoryConfig(BaseModel):
     lint_llm: LintLLMConfig = Field(
         default_factory=LintLLMConfig,
         description='Configuration for surprise-gated LLM-assisted lint.',
+    )
+
+    inbox_router: InboxRouterConfig = Field(
+        default_factory=InboxRouterConfig,
+        description=(
+            'Configuration for the inbox router (per-vault note triage). '
+            'Off by default; operators opt in via enabled.'
+        ),
     )
 
     entity_maintenance: EntityMaintenanceConfig = Field(

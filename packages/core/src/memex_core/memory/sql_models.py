@@ -1859,6 +1859,7 @@ class LintType(str, Enum):
     QUALITY = 'quality'
     GOVERNANCE = 'governance'
     SCHEMA = 'schema'
+    ROUTING = 'routing'
 
 
 class LintStatus(str, Enum):
@@ -1954,7 +1955,7 @@ class MaintenanceProposal(SQLModel, table=True):  # type: ignore
 
     __table_args__ = (
         CheckConstraint(
-            "lint_type IN ('structural', 'quality', 'governance', 'schema')",
+            "lint_type IN ('structural', 'quality', 'governance', 'schema', 'routing')",
             name='ck_maintenance_proposals_lint_type',
         ),
         CheckConstraint(
