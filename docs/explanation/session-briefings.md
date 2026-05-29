@@ -123,7 +123,7 @@ Inside the server, `SessionBriefingService.generate()` fetches four things in pa
 
 - the `VaultSummary` row,
 - the vault's mental models, sorted by trend-weighted importance,
-- KV entries across the briefing's namespaces (`global`, `user`, `app:claude-code`, `procedure`, and `project:<id>` when scoped),
+- KV entries across the briefing's namespaces (`global`, `user`, `app:claude-code`, and `project:<id>` when scoped) — procedure rows live UNDER those scopes as `<scope>:procedure:<verb>:<context-tag>` and render in their own section,
 - and the list of available vaults.
 
 <code-ref path="packages/core/src/memex_core/services/session_briefing.py" lines="143-165" />
@@ -162,7 +162,7 @@ The Hermes path is similar in spirit but in-process. `BriefingCache` in the Herm
 The six sections of a briefing aren't computed at briefing time. Each one is a projection of state that already exists in the database:
 
 - The **header** stats come from the `VaultSummary.inventory` JSONB column — note counts, entity counts, the 7-day recent-activity window. The vault-summary service computes those as SQL aggregates over `Note`, `MemoryUnit`, and `Entity` on its scheduled tick.
-- The **KV facts** and **procedures** come from the `KVEntry` table, filtered to the briefing's namespaces (`global`, `user`, `app:claude-code`, `procedure`, and `project:<id>`). Procedure rows live alongside other KV rows but render in their own section because they encode behavioural rules the agent must follow.
+- The **KV facts** and **procedures** come from the `KVEntry` table, filtered to the briefing's namespaces (`global`, `user`, `app:claude-code`, and `project:<id>`). Procedure rows — keys shaped like `<scope>:procedure:<verb>:<context-tag>` — live alongside other KV rows but render in their own section because they encode behavioural rules the agent must follow. (A back-compat fetch for legacy bare `procedure:*` keys persists for the migration 046 deployment window; once the migration is complete it can be dropped.)
 - The **vault overview** narrative is the LLM-synthesised text in `VaultSummary.narrative`, produced by the `SummarizeVaultSignature` DSPy signature. The **themes** below it come from `VaultSummary.themes`, each carrying a name, note count, description, and trend (growing / stable / dormant).
 - The **top entities** are `MentalModel` rows, sorted by trend-weighted importance — observations with `trend='new'` count 3.0, `strengthening` 2.0, `weakening` 1.5, `stable` 0.5, and `stale` 0.0. <code-ref path="packages/core/src/memex_core/services/session_briefing.py" lines="34-40" /> A model with three new observations outranks one with five stable observations.
 - The **available vaults** section is `VaultService.list_vaults_with_counts()` — the same query that powers `memex vault list`.
@@ -260,7 +260,7 @@ Two things to look for:
 **Procedures are the high-leverage section.**
 Of everything in the briefing, the `## Procedures` section is the most directly behaviour-shaping.
 
-A KV row under `procedure:answer:session-briefing` becomes a bullet that tells the agent how to handle a class of question.
+A KV row under `global:procedure:answer:session-briefing` becomes a bullet that tells the agent how to handle a class of question.
 Because it renders in every session for the vault, the agent reads it on every cold start.
 
 If you want to change how an agent behaves across your team's sessions without touching any code, write a procedure KV row.

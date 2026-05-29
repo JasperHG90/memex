@@ -2,7 +2,7 @@
 
 Memex's key-value store is where preferences, conventions, and procedures live — things you want every future session to remember without re-reading a note. Vaults isolate your notes; the KV store does not. A preference you save once is available across every project.
 
-This guide covers picking a namespace, writing a value, reading it back, and listing what's stored. The `procedure:` namespace has its own short section at the end because it behaves a little differently.
+This guide covers picking a namespace, writing a value, reading it back, and listing what's stored. Procedures live UNDER a scope namespace as `<scope>:procedure:<verb>:<context-tag>` (not as a top-level `procedure:` namespace) — they have their own short section at the end because they behave a little differently.
 
 ## Prerequisites
 
@@ -19,7 +19,7 @@ KV keys are namespaced. The prefix tells Memex (and your future self) what scope
 | One project or repo | `project:<id>:` | `project:github.com/acme/api:lang:python` |
 | Every project you touch (a company-wide standard) | `global:` | `global:lang:python:min_version` |
 | One app you use | `app:<app-id>:` | `app:claude-code:theme` |
-| A learned procedure | `procedure:<verb>:<tag>` | `procedure:deploy:staging` |
+| A learned procedure | `<scope>:procedure:<verb>:<tag>` | `global:procedure:deploy:staging`, `project:<id>:procedure:commit:pr-only` |
 
 The most common mistake is reaching for `user:` for everything. If the value is tied to a specific project or app, use `project:` or `app:` — `user:` is for things that follow *you*, not your work.
 
@@ -41,7 +41,7 @@ From an MCP client (Claude Code, Hermes, Claude Desktop), the tool takes named a
 memex_kv_put(key="user:editor", value="neovim")
 ```
 
-Values are stored as strings. For structured values, encode JSON yourself. The latest write is the active value; for the `procedure:` namespace, older versions stay in a capped history (see the section below). For other namespaces, the write is a plain upsert.
+Values are stored as strings. For structured values, encode JSON yourself. The latest write is the active value; for procedure keys (`<scope>:procedure:*`), older versions stay in a capped history (see the section below). For other keys, the write is a plain upsert.
 
 Attach a TTL — in seconds — when the value should expire on its own:
 
@@ -84,24 +84,36 @@ memex kv list -p "project:github.com/acme/api:*"
 
 `--namespace` is repeatable: `-n user -n global` lists both. `--pattern` accepts standard `*` globs.
 
-## The `procedure:` namespace
+## Procedure keys
 
-Procedures are short steps you've learned and want to reuse — *"to deploy to staging, run X then Y"*, *"to debug the auth service, tail logs at Z"*. They live under `procedure:` with two extra rules:
+Procedures are short steps you've learned and want to reuse — *"to deploy to staging, run X then Y"*, *"to debug the auth service, tail logs at Z"*. They live UNDER one of the four scope namespaces as `<scope>:procedure:<verb>:<context-tag>` with two extra rules:
 
 - **Last writer wins.** Overwriting a procedure is the normal update path; Memex keeps the prior versions in capped history.
-- **Naming convention.** The shape `procedure:<verb>:<context-tag>` keeps procedures findable when you search later. `procedure:deploy:staging` and `procedure:debug:auth_service` are clearer than `procedure:1`.
+- **Naming convention.** The shape `<scope>:procedure:<verb>:<context-tag>` keeps procedures findable when you search later. `global:procedure:deploy:staging` and `global:procedure:debug:auth_service` are clearer than `global:procedure:foo:bar`.
 
-Set one the same way as any KV entry. The key must match `procedure:<verb>:<context-tag>` where each segment is lowercase letters, digits, hyphens, or underscores:
+Pick the scope the same way you pick it for any other KV value:
+
+| Scope cue | Scope prefix |
+|---|---|
+| no cue, identity-shaped, or general practice | `global:` (default) |
+| "this repo / project", "in this codebase" | `project:<id>:` |
+| "about me", "I prefer / always" | `user:` |
+| "when I use Claude Code / Hermes" | `app:<app-id>:` |
+
+Set one the same way as any KV entry. The verb and context-tag segments must be lowercase letters, digits, hyphens, or underscores:
 
 ```bash
-memex kv put "procedure:deploy:staging" "1) git push origin staging  2) await CI green  3) flip the flag"
+memex kv put "global:procedure:deploy:staging" "1) git push origin staging  2) await CI green  3) flip the flag"
+memex kv put "project:github.com/acme/api:procedure:commit:pr-only" "All commits via PR; no direct pushes"
 ```
+
+Bare `procedure:<verb>:<context>` (no scope prefix) is REJECTED at write time. If you have legacy bare keys, migration `046_procedure_to_global` rewrites them to `global:procedure:*` on the next `db-upgrade`.
 
 When you search procedures, prefer the semantic search — you remember what you wanted to *do*, not the exact key you chose:
 
 ```bash
 memex kv search "how do I deploy"
-# → procedure:deploy:staging = 1) git push origin staging...  (score 0.94)
+# → global:procedure:deploy:staging = 1) git push origin staging...  (score 0.94)
 ```
 
 ## Verification
