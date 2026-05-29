@@ -42,6 +42,26 @@ def test_valid_namespaces_identity_with_kv_utils() -> None:
     assert VALID_NAMESPACES is COMMON_VALID_NAMESPACES
 
 
+def test_validate_procedure_key_flat_namespace_with_sub_id_gives_targeted_error() -> None:
+    """`global:foo:procedure:*` and `user:foo:procedure:*` are a common
+    misshape (operator assumed all 4 scopes accept an id segment). The
+    error message must surface the rule on the specific input — naming
+    the flat namespace, showing the spurious sub-id, and pointing to
+    project:/app: as the alternative if scoping was intentional."""
+    with pytest.raises(ValueError) as excinfo:
+        validate_procedure_key('global:foo:procedure:verb:ctx')
+    msg = str(excinfo.value)
+    assert "'global' is a FLAT namespace" in msg
+    assert "'foo'" in msg  # spurious sub-id shown back
+    assert 'project:<id>:procedure:' in msg  # alternative suggested
+
+    with pytest.raises(ValueError) as excinfo:
+        validate_procedure_key('user:somebody:procedure:greet:friendly')
+    msg = str(excinfo.value)
+    assert "'user' is a FLAT namespace" in msg
+    assert "'somebody'" in msg
+
+
 def test_validate_namespace_bare_procedure_gives_targeted_error() -> None:
     """The write-path gate `_validate_namespace` runs on EVERY KV write
     (not just procedures). When a user writes a bare `procedure:*` key,

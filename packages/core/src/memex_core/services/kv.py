@@ -103,6 +103,23 @@ def validate_procedure_key(key: str) -> None:
     ``<verb>`` and ``<context-tag>`` must match ``[a-z][a-z0-9_-]*``.
     """
     if parse_procedure_key(key) is None:
+        # Targeted error for the "flat-namespace-with-sub-id" class —
+        # `global:foo:procedure:*` and `user:foo:procedure:*` are common
+        # misshapes (the user assumed all 4 scopes take an id segment).
+        # The generic message below mentions the rule abstractly; this
+        # surfaces it on the specific input.
+        if ':procedure:' in key:
+            scope = key.rsplit(':procedure:', 1)[0]
+            for flat_ns in ('global', 'user'):
+                if scope.startswith(f'{flat_ns}:'):
+                    raise ValueError(
+                        f'Invalid procedure key: {key!r}. '
+                        f'{flat_ns!r} is a FLAT namespace — it does not take '
+                        f'an id segment. Use {flat_ns}:procedure:<verb>:<context> '
+                        f'directly (drop the {scope[len(flat_ns) + 1 :]!r} segment), '
+                        f'OR switch to project:<id>:procedure:* / '
+                        f'app:<id>:procedure:* if scoping was intentional.'
+                    )
         raise ValueError(
             f'Invalid procedure key: {key!r}. '
             'Expected <scope>:procedure:<verb>:<context-tag> where scope is '
