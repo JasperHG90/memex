@@ -10,7 +10,7 @@ argument-hint: "[what to remember]"
 
 2. **Route by shape, NOT by trigger word** — this is the most important step. Pick the storage layer first:
    - **Preferences / conventions / settings** ("I prefer X", "we use Y in this repo", "for Claude Code: dark theme", "company-wide: Python 3.12") → `memex_kv_put` with the scope-qualifier-derived namespace (`user:`, `project:<id>:`, `app:<app-id>:`, `global:`). See KV-namespace rules in the system prompt. **Do NOT save these as notes.**
-   - **Learned how-tos / procedures** → `memex_kv_put` with `procedure:<verb>:<context-tag>` key. Each write appends a new version; prior versions remain queryable via `memex_kv_get(key, include_history=true)`.
+   - **Learned how-tos / procedures** → `memex_kv_put` with `<scope>:procedure:<verb>:<context-tag>` key (scope = `global` default, or `project:<id>` on explicit project cue). Each write appends a new version; prior versions remain queryable via `memex_kv_get(key, include_history=true)`.
    - **Facts / decisions / context / observations** that belong as a paragraph → `memex_add_note` (or `memex_append_note` to extend an existing note). Use the note-format guidance below.
 
 3. **Note format** (only when step 2 picked `memex_add_note`):
@@ -59,8 +59,8 @@ Bare `success=true`/`success=false` without `units` returns HTTP 400.
 
 ## Procedure KV
 
-For how-tos, write to `procedure:<verb>:<context-tag>`:
-- Save: `memex_kv_put(value=..., key="procedure:<verb>:<context-tag>")` — each write appends a new version; prior versions remain in the history envelope.
+For how-tos, write to `<scope>:procedure:<verb>:<context-tag>` (scope = `global` default, `project:<id>` on explicit project cue):
+- Save: `memex_kv_put(value=..., key="global:procedure:<verb>:<context-tag>")` or `memex_kv_put(value=..., key="project:<id>:procedure:<verb>:<context-tag>")` — each write appends a new version; prior versions remain in the history envelope.
 - Read: `memex_kv_get(key)` for the active value; `memex_kv_get(key, include_history=true)` for the full envelope.
 
 ## Consolidation

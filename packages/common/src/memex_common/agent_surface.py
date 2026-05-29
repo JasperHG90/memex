@@ -41,7 +41,7 @@ Memex stores four memory layers. Pick the right tool for the layer you need:
 | **Episodic** ("what happened, when") | Timestamped, source-attributed Notes — sessions, reflections, decisions | `memex_note_search` / `memex_recent_notes` / `memex_find_note` | "Find yesterday's reflection about the deploy regression" |
 | **Semantic** ("decontextualised facts") | MemoryUnits — short fact/observation/event statements extracted from notes | `memex_memory_search` / `memex_get_memory_units` / `memex_get_entity_mentions` | "What does v2 use for auth?" |
 | **Conceptual** ("synthesised mental models") | MentalModels — reflection output bundling per-entity observations with trend tracking (new/strengthening/stable/weakening/stale) | `memex_survey` / `memex_get_entities` (with `mental_models=True`) | "What do you know about Project X overall?" |
-| **Procedural-observations** ("adaptations to context") | KV entries under `procedure:<verb>:<context-tag>` — observations about how to adapt your existing skills to a context, NOT the procedures themselves | `memex_kv_search` / `memex_kv_get` with `prefix='procedure:'` | "For this user, `deploy` means staging — never prod after 6pm" |
+| **Procedural-observations** ("adaptations to context") | KV entries under `<scope>:procedure:<verb>:<context-tag>` (scope = `global` / `user` / `project:<id>` / `app:<id>`) — observations about how to adapt your existing skills to a context, NOT the procedures themselves | `memex_kv_search` / `memex_kv_get` with `prefix='global:procedure:'` (or scoped equivalent) | "For this user, `deploy` means staging — never prod after 6pm" |
 
 **Rule of thumb.** If unsure, default to `memex_memory_search` for content-shaped
 questions ("what about X?") and `memex_note_search` for source-shaped questions
@@ -60,7 +60,8 @@ LAYER_ROUTING_PRIMER_FRAGMENT = (
     '  - Conceptual ("synthesised mental models") → memex_survey /\n'
     '    memex_get_entities(mental_models=True). Source: MentalModels.\n'
     '  - Procedural-observations ("adaptations to context") → memex_kv_search /\n'
-    "    memex_kv_get(prefix='procedure:'). Source: KV `procedure:<verb>:<tag>`.\n"
+    "    memex_kv_get(prefix='global:procedure:'). Source: KV "
+    '`<scope>:procedure:<verb>:<tag>`.\n'
     '\n'
     'Default: memex_memory_search for content-shaped questions; memex_note_search\n'
     'for source-shaped questions. The agent owns the verb; Memex owns the adverb.'
@@ -108,7 +109,7 @@ RETRIEVAL_ROUTING = """## Retrieval routing
 - **Content lookup** (specific fact, single question) → `memex_memory_search` AND `memex_note_search` in parallel. Retry `expand_query=true` if insufficient.
 - **Comprehensive view of a topic/entity**. Triggers: "give me everything about X", "comprehensive picture of X", "overview of X", "everything you know about Y", "tell me all about Z". REQUIRED: call `memex_survey(query)` FIRST, OR run ≥3 targeted `memex_memory_search` calls (one per facet). A single search result is NEVER enough. <example>User: "Tell me everything about Topic-X" → WRONG: one `memex_memory_search("Topic-X")` + answer. RIGHT: `memex_survey("Topic-X")` → synthesise. Or: three `memex_memory_search` calls scoped to different aspects → consolidate.</example>
 - **Broad/panoramic** (vault-wide, no specific topic) → `memex_get_vault_summary` first; escalate to `memex_survey(query)` if too coarse.
-- **KV** — "what's our X?" / "what convention?" / "what do I prefer?" / "what setting?" → call `memex_kv_get(key)` / `memex_kv_search(query)` / `memex_kv_list()` FIRST. DO NOT `ls`, `Glob`, `Read`, `Bash`, or otherwise inspect the local filesystem before checking KV — preferences/conventions/settings live in KV, not on disk. Wake words that force this route unconditionally: `KV: get <key>`, `KV: search <query>`, `Store in KV: <key>=<value>` → execute the matching `memex_kv_*` call verbatim, no other routing.
+- **KV** — "what's our X?" / "what convention?" / "what do I prefer?" / "what setting?" → call `memex_kv_get(key)` / `memex_kv_search(query)` / `memex_kv_list()` FIRST. DO NOT `ls`, `Glob`, `Read`, `Bash`, or otherwise inspect the local filesystem before checking KV — preferences/conventions/settings live in KV, not on disk. Wake words that force this route unconditionally: `KV: get <key>`, `KV: search <query>`, `Store in KV: <key>=<value>`, `Store procedure: <text>` (→ `global:procedure:<verb>:<context>`), `Store procedure for this project: <text>` (→ `project:<id>:procedure:<verb>:<context>`) → execute the matching `memex_kv_*` call verbatim, no other routing.
 
 After `memory_search`: call `memex_get_notes_metadata`. After `note_search`: metadata inline — do NOT call `memex_get_notes_metadata` again. `memex_read_note` only when `total_tokens < 500`.
 
@@ -182,11 +183,12 @@ Namespace by scope cue (NOT grammatical person). `app:`/`project:`/`global:` ALL
 | "this repo/project", "in this codebase" | `project:<id>:` |
 | "company-wide", "we standardise on" | `global:` |
 | "when I use <app>", "in Claude Code/Hermes" | `app:<app-id>:` |
-| learned procedure (default — GLOBAL) | `procedure:<verb>:<context-tag>` |
-| procedure scoped to a project (EXPLICIT cue only) | `project:<id>:procedure:<verb>:<context-tag>` |
+| learned procedure (any scope; default `global`) | `<scope>:procedure:<verb>:<context-tag>` |
 
 <critical_constraint name="procedure_scope_default">
-Procedures default to global. Use `project:<id>:procedure:*` only on explicit cue ("for this project", "in this repo"). Ambiguous? ASK — never infer scope from cwd or active vault.
+Procedures live UNDER a scope, never bare `procedure:*`. Scope picks the SAME way as preferences — cue wins: `user:` / `project:<id>:` / `app:<id>:` / `global:` (default). Ambiguous? ASK.
+
+**Imperatives = procedures.** "Always X / never X / from now on / must Y / via Z / use Y not Z" → `<scope>:procedure:<verb>:<context>` (with the `procedure:` infix). Plain facts ("Python 3.10") → `<scope>:<field>` (no infix). Rule about HOW = procedure; static fact = preference.
 </critical_constraint>
 
 Ambiguous? ASK before writing.
@@ -195,8 +197,10 @@ Ambiguous? ASK before writing.
 <example>"For this project: Python 3.10" → `project:<id>:lang:python`</example>
 <example>"Company-wide: Python 3.12 min" → `global:lang:python:min`</example>
 <example>"When I use Claude Code: dark theme" → `app:claude-code:theme` (<app> cue wins over "I"/"my")</example>
-<example>"Always lint before commit" → `procedure:commit:lint-first` (no project cue → global)</example>
-<example>"For this repo: commits via PR only" → `project:<id>:procedure:commit:pr-only`</example>"""
+<example>"Always lint before commit" → `global:procedure:commit:lint-first` (no cue → global)</example>
+<example>"For this repo: PRs only" → `project:<id>:procedure:commit:pr-only`</example>
+<example>"From now on: greet me casually" → `user:procedure:greet:casual` ("I/me" → user)</example>
+<example>"When I use Claude Code: always cite" → `app:claude-code:procedure:respond:cite` (app cue)</example>"""
 
 
 CITATIONS = """## Citations

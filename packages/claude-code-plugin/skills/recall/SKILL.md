@@ -18,8 +18,8 @@ argument-hint: "[search query]"
 
 3. **Present results**: summarize clearly, include source Note IDs.
 
-4. **Procedure recall**: for "how do I X?" queries, check `procedure:` KV namespace first:
-   - `memex_kv_list(namespaces=["procedure"])` → `memex_kv_get(key)` for active value
+4. **Procedure recall**: for "how do I X?" queries, check the `<scope>:procedure:*` KV keys first:
+   - `memex_kv_list(namespaces=["global:procedure"])` for global procedures; `memex_kv_list(namespaces=["project:<id>:procedure"])` for project-scoped (the trailing `:` is appended server-side) → `memex_kv_get(key)` for active value
 
 5. **Memory hygiene**: when asked about stale facts, call `memex_get_lint_flags(vault_id=...)`. Act autonomously on low-risk findings. When a finding has `rule_name='propose_contradiction_winner'`, call `memex_lint_apply_winner` after surfacing the proposal to the user.
 

@@ -19,7 +19,7 @@ from uuid import UUID
 import httpx
 
 from memex_common.client import RemoteMemexAPI
-from memex_common.schemas import CreateVaultRequest, NoteCreateDTO
+from memex_common.schemas import NoteCreateDTO
 
 from memex_eval.helpers import wait_for_extraction
 from memex_eval.judge import Judge
@@ -115,7 +115,7 @@ async def _setup_vault(api: RemoteMemexAPI, name: str, description: str) -> UUID
             with contextlib.suppress(Exception):
                 await api.truncate_vault(vault.id)
             return vault.id
-    vault = await api.create_vault(CreateVaultRequest(name=name, description=description))
+    vault = await api.create_vault(name=name, description=description)
     return vault.id
 
 

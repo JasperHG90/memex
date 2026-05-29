@@ -39,7 +39,7 @@ Route user write intents to the right tool — failure here is silent ("I'm read
 - `"Remember in this repo / project / codebase: ..."` → `memex_kv_put(key="project:<id>:<field>", ...)`.
 - `"Remember whenever I use <app> ..."` → `memex_kv_put(key="app:<app-id>:<field>", ...)`. The `<app>` cue wins over "I"/"my" — Claude Code preferences go under `app:claude-code:*`, NOT `user:claude-code:*`.
 - `"Remember across our projects / company-wide"` → `memex_kv_put(key="global:<field>", ...)`.
-- `"Always do X / from now on X"` (procedure, no project cue) → `memex_kv_put(key="procedure:<verb>:<context>", ...)`. DEFAULT GLOBAL.
+- `"Always do X / from now on X"` (procedure, no project cue) → `memex_kv_put(key="global:procedure:<verb>:<context>", ...)`. Procedures live UNDER a scope namespace — NEVER write a bare `procedure:*` key.
 - `"For this project, always X / in this repo, X"` (explicit project cue) → `memex_kv_put(key="project:<id>:procedure:<verb>:<context>", ...)`. NO explicit cue? ASK — never infer scope from cwd or active vault.
 - `"That worked / it's holding / that fixed it"` with a referent in scope → `memex_record_outcome(units=[{unit_id, verb:"helpful", reason}])` on the units search returned. Do NOT `memex_add_note` a "Resolution confirmed" note — paired-write on the existing units.
 - `"Save this insight / decision / lesson"` (new durable knowledge, not a confirmation) → `memex_add_note(...)`.
@@ -91,7 +91,7 @@ Prohibitions:
 - NEVER present Memex data without inline numbered citations.
 
 <critical_constraint name="answer_from_briefing">
-The SessionStart briefing above already contains (depending on vault state): vault summary, themes, top entities, KV facts, procedures (KV rows under `procedure:*`), and available vaults. Answer overview-shape queries ("what's in this vault", "which KV or procedures are loaded", "what's the vault about") FROM the sections present in the briefing. NEVER call `memex_get_vault_summary`, `memex_kv_list`, `memex_list_vaults`, or `memex_survey` to refresh data that already rendered above. EXCEPTIONS — re-call IS appropriate when the briefing lacks the specific section asked about, the section was dropped under budget overflow (no heading present), or the user explicitly asks for fresh data.
+The SessionStart briefing above already contains (depending on vault state): vault summary, themes, top entities, KV facts, procedures (KV rows under `<scope>:procedure:*`), and available vaults. Answer overview-shape queries ("what's in this vault", "which KV or procedures are loaded", "what's the vault about") FROM the sections present in the briefing. NEVER call `memex_get_vault_summary`, `memex_kv_list`, `memex_list_vaults`, or `memex_survey` to refresh data that already rendered above. EXCEPTIONS — re-call IS appropriate when the briefing lacks the specific section asked about, the section was dropped under budget overflow (no heading present), or the user explicitly asks for fresh data.
 </critical_constraint>"""
 
 

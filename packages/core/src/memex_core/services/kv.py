@@ -41,9 +41,12 @@ logger = logging.getLogger('memex.core.services.kv')
 
 _PROTOCOL_RE = re.compile(r'[a-zA-Z][a-zA-Z0-9+\-.]*://')
 
-VALID_NAMESPACES = ('global', 'user', 'project', 'app', 'procedure')
-
-_VERB_CONTEXT_RE = re.compile(r'^[a-z][a-z0-9_-]*$')
+# Re-exported from the cross-package SSOT in memex_common.kv_utils so
+# this module's VALID_NAMESPACES can't drift from the SSOT.
+# noqa: E402 is intentional — these imports sit mid-file (rather than at
+# top) so the surrounding back-compat re-exports stay grouped with the
+# explanatory comments, keeping the SSOT story readable.
+from memex_common.kv_utils import VALID_NAMESPACES  # noqa: E402
 
 PROCEDURE_HISTORY_CAP = 5
 PROCEDURE_RETRY_BUDGET = 5
@@ -60,52 +63,10 @@ class ProcedureKVConcurrencyError(RuntimeError):
         self.retries = retries
 
 
-def parse_procedure_key(key: str) -> tuple[str | None, str, str] | None:
-    """Return ``(project_id_or_None, verb, context)`` if ``key`` is a procedure key.
-
-    Accepts both forms:
-    - ``procedure:<verb>:<context>`` → ``(None, verb, context)`` (global)
-    - ``project:<id>:procedure:<verb>:<context>`` → ``(id, verb, context)``
-
-    Uses ``rsplit`` to peel ``:procedure:<verb>:<context>`` from the right so
-    ``<id>`` may contain arbitrary characters (slashes, dots, ``@``, ``:``) —
-    necessary because git remote URLs (e.g. ``git@github.com:acme/foo``) flow
-    in unmodified. Returns ``None`` if the key is not a procedure key, the
-    verb/context segments are malformed, or the project_id segment itself
-    contains ``:procedure:`` (ambiguous; refuse rather than guess).
-    """
-    # Global form.
-    if key.startswith('procedure:'):
-        parts = key.split(':')
-        if len(parts) != 3:
-            return None
-        _, verb, context = parts
-        if not (_VERB_CONTEXT_RE.match(verb) and _VERB_CONTEXT_RE.match(context)):
-            return None
-        return (None, verb, context)
-
-    # Project form.
-    if not key.startswith('project:'):
-        return None
-    rest = key[len('project:') :]
-    split = rest.rsplit(':procedure:', 1)
-    if len(split) != 2:
-        return None
-    project_id, suffix = split
-    if not project_id or ':procedure:' in project_id:
-        return None
-    suffix_parts = suffix.split(':')
-    if len(suffix_parts) != 2:
-        return None
-    verb, context = suffix_parts
-    if not (_VERB_CONTEXT_RE.match(verb) and _VERB_CONTEXT_RE.match(context)):
-        return None
-    return (project_id, verb, context)
-
-
-def is_procedure_key(key: str) -> bool:
-    """True if ``key`` is a global or project-scoped procedure key."""
-    return parse_procedure_key(key) is not None
+# Procedure key detection lives in the cross-package SSOT so the HTTP
+# client (memex_common) and the server (memex_core) can't drift.
+# Re-exported here for back-compat with existing memex_core imports.
+from memex_common.kv_utils import is_procedure_key, parse_procedure_key  # noqa: E402
 
 
 def _looks_like_procedure_key(key: str) -> bool:
@@ -114,47 +75,85 @@ def _looks_like_procedure_key(key: str) -> bool:
     Used at write-time to route candidates through ``validate_procedure_key``
     so a malformed procedure-shaped key (e.g. uppercase verb) is REJECTED
     rather than silently written as a plain KV entry.
+
+    Uses ``split`` (FIRST occurrence) — intentionally LOOSER than
+    ``parse_procedure_key`` which uses ``rsplit`` (LAST occurrence). This is
+    the gate; we want to catch everything that *looks* procedure-shaped and
+    let ``validate_procedure_key`` make the final call. Do not "fix" this
+    asymmetry without considering that the gate would then miss malformed
+    keys like ``global:procedure:bad:procedure:verb:context``.
     """
-    if key.startswith('procedure:'):
-        return True
-    if key.startswith('project:') and ':procedure:' in key:
-        return True
-    return False
+    if ':procedure:' not in key:
+        return False
+    scope = key.split(':procedure:', 1)[0]
+    return any(scope == ns or scope.startswith(f'{ns}:') for ns in VALID_NAMESPACES)
 
 
 def validate_procedure_key(key: str) -> None:
-    """Validate a procedure KV key (global or project-scoped form).
+    """Validate a procedure KV key.
 
-    Raises :class:`ValueError` if the key does not match either:
-    - ``procedure:<verb>:<context-tag>`` (global), or
-    - ``project:<id>:procedure:<verb>:<context-tag>`` (project-scoped).
+    Raises :class:`ValueError` if the key does not match
+    ``<scope>:procedure:<verb>:<context-tag>``. Valid scopes:
 
-    Verb and context-tag must match ``[a-z][a-z0-9_-]*``. The ``<id>`` is
-    permissive (anything except ``:procedure:`` substring).
+    - ``global`` (flat — no id segment)
+    - ``user`` (flat — no id segment)
+    - ``project:<id>`` (id segment required)
+    - ``app:<app-id>`` (id segment required)
+
+    ``<verb>`` and ``<context-tag>`` must match ``[a-z][a-z0-9_-]*``.
     """
     if parse_procedure_key(key) is None:
+        # Targeted error for keys with MULTIPLE `:procedure:` infixes —
+        # the parser refuses these as ambiguous (which split should win?).
+        # Hit when a project_id legitimately contains `:procedure:` OR
+        # when the operator double-pasted the infix.
+        if key.count(':procedure:') > 1:
+            raise ValueError(
+                f'Invalid procedure key: {key!r}. The key contains the '
+                '`:procedure:` infix more than once, which is ambiguous '
+                '(unclear which occurrence splits scope from verb:context). '
+                'If your project_id legitimately contains `:procedure:`, '
+                'pick a different segment to avoid the collision.'
+            )
+        # Targeted error for the "flat-namespace-with-sub-id" class —
+        # `global:foo:procedure:*` and `user:foo:procedure:*` are common
+        # misshapes (the user assumed all 4 scopes take an id segment).
+        # The generic message below mentions the rule abstractly; this
+        # surfaces it on the specific input.
+        if ':procedure:' in key:
+            scope = key.rsplit(':procedure:', 1)[0]
+            for flat_ns in ('global', 'user'):
+                if scope.startswith(f'{flat_ns}:'):
+                    raise ValueError(
+                        f'Invalid procedure key: {key!r}. '
+                        f'{flat_ns!r} is a FLAT namespace — it does not take '
+                        f'an id segment. Use {flat_ns}:procedure:<verb>:<context> '
+                        f'directly (drop the {scope[len(flat_ns) + 1 :]!r} segment), '
+                        f'OR switch to project:<id>:procedure:* / '
+                        f'app:<id>:procedure:* if scoping was intentional.'
+                    )
         raise ValueError(
             f'Invalid procedure key: {key!r}. '
-            'Expected procedure:<verb>:<context-tag> or '
-            'project:<id>:procedure:<verb>:<context-tag> with verb/context '
-            'matching [a-z][a-z0-9_-]*.'
+            'Expected <scope>:procedure:<verb>:<context-tag> where scope is '
+            'one of: global, user, project:<id>, or app:<app-id>; verb and '
+            'context-tag must match [a-z][a-z0-9_-]*.'
         )
 
 
 def format_procedure_display_name(key: str) -> str:
     """Render a procedure key for human display.
 
-    Global: ``"<verb>:<context>"``.
-    Project-scoped: ``"[project:<id>] <verb>:<context>"``.
+    ``global:procedure:<v>:<c>`` → ``"<v>:<c>"``.
+    Any other scope → ``"[<scope>] <v>:<c>"``.
     Non-procedure key: returns the key unchanged (defensive fallback).
     """
     parsed = parse_procedure_key(key)
     if parsed is None:
         return key
-    project_id, verb, context = parsed
-    if project_id is None:
+    scope, verb, context = parsed
+    if scope == 'global':
         return f'{verb}:{context}'
-    return f'[project:{project_id}] {verb}:{context}'
+    return f'[{scope}] {verb}:{context}'
 
 
 def _pattern_to_prefix(pattern: str) -> str | None:
@@ -174,6 +173,15 @@ def _normalize_key(key: str) -> str:
 def _validate_namespace(key: str) -> None:
     """Ensure key starts with a valid namespace prefix."""
     if not any(key.startswith(f'{ns}:') for ns in VALID_NAMESPACES):
+        # Bare `procedure:*` is a common stale form (pre-migration 046).
+        # Give a targeted hint rather than the generic "must start with" message.
+        if key.startswith('procedure:'):
+            raise ValueError(
+                f'Invalid KV key {key!r}. Bare `procedure:*` is no longer a '
+                'top-level namespace — procedures live under a scope as '
+                '`<scope>:procedure:<verb>:<context>`, e.g. '
+                f'`global:{key}` for a global procedure.'
+            )
         raise ValueError(
             f'KV key must start with a namespace prefix: '
             f'{", ".join(f"{ns}:" for ns in VALID_NAMESPACES)}'

@@ -1042,6 +1042,81 @@ suite.register(
 )
 
 
+# --- Procedure wake-words: deterministic write under explicit scope ---
+#
+# `Store procedure: ...` and `Store procedure for this project: ...` are
+# hard wake-words documented in agent_surface.RETRIEVAL_ROUTING. They
+# bypass any scope-inference reasoning and force the agent to write the
+# exact `<scope>:procedure:<verb>:<context>` key with verb/context picked
+# from the user's text. These two scenarios pin the routing pass rate at
+# 100% — if either fails, an agent surface edit broke the wake-word
+# escape hatch.
+
+suite.register(
+    id='procedure_wakeword_store_global',
+    group='kv',
+    description=(
+        'Hard wake-word write — `Store procedure: <text>` forces the agent '
+        'to call `memex_kv_put` with a `global:procedure:<verb>:<context>` '
+        'key (no scope inference, no ASK).'
+    ),
+    query='Store procedure: always run prek before committing.',
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_kv_put'],
+                min_count=1,
+                match_mode='any',
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_kv_put',
+                arg_name='key',
+                regex=r'^global:procedure:[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$',
+                min_count=1,
+            ),
+        ],
+    ),
+    replicates_override=3,
+    mutating_scenario=True,
+)
+
+suite.register(
+    id='procedure_wakeword_store_project',
+    group='kv',
+    description=(
+        'Hard wake-word write — `Store procedure for this project: <text>` '
+        'forces the agent to call `memex_kv_put` with a '
+        '`project:<id>:procedure:<verb>:<context>` key.'
+    ),
+    query='Store procedure for this project: all commits land via PR — never direct push.',
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_kv_put'],
+                min_count=1,
+                match_mode='any',
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_kv_put',
+                arg_name='key',
+                regex=r'^project:[^:]+:procedure:[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$',
+                min_count=1,
+            ),
+        ],
+    ),
+    replicates_override=3,
+    mutating_scenario=True,
+)
+
+
 # --- Procedure scoping: default-to-global + ASK-on-ambiguity ---
 #
 # Pin the routing rule encoded in `agent_surface.KV_NAMESPACE`
@@ -1078,7 +1153,7 @@ suite.register(
                 type='tool_call_arg_matches',
                 tool='memex_kv_put',
                 arg_name='key',
-                regex=r'^procedure:[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$',
+                regex=r'^global:procedure:[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$',
                 min_count=1,
             ),
         ],

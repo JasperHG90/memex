@@ -28,7 +28,7 @@ def _put_proc_key(client: TestClient, key: str, value: str) -> None:
 
 @pytest.fixture
 def proc_key() -> str:
-    return f'procedure:write_pr:tag-{uuid4().hex[:8]}'
+    return f'global:procedure:write_pr:tag-{uuid4().hex[:8]}'
 
 
 def test_kv_get_default_shape_unchanged_for_procedure_key(
@@ -94,6 +94,6 @@ def test_kv_get_returns_404_when_missing(client: TestClient) -> None:
     """Unknown key still 404s — F14 didn't change this."""
     response = client.get(
         '/api/v1/kv/get',
-        params={'key': f'procedure:run_tests:does-not-exist-{uuid4().hex[:8]}'},
+        params={'key': f'global:procedure:run_tests:does-not-exist-{uuid4().hex[:8]}'},
     )
     assert response.status_code == 404

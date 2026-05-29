@@ -81,11 +81,12 @@ def test_kv_put_specifies_namespace_regex() -> None:
         'user:',
         'project:<id>:',
         'app:<app-id>:',
-        'procedure:<verb>:<context-tag>',
-        'project:<id>:procedure:<verb>:<context-tag>',
+        '<scope>:procedure:<verb>:<context-tag>',
     ):
         assert prefix in desc
     assert '400' in desc  # rejection on invalid prefix
+    # Bare `procedure:*` is NOT a valid namespace — procedures live UNDER a scope.
+    assert 'never bare' in desc.lower() or 'never write a bare' in desc.lower()
 
 
 def test_kv_put_carries_procedure_scope_default_directive() -> None:

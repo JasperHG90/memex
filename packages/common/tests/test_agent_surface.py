@@ -22,7 +22,7 @@ from memex_common import agent_surface as ags
 # ---------------------------------------------------------------------------
 
 
-_UNIVERSAL_CHAR_CAP = 9_400  # ~2,690 tokens at 3.5 chars/token (empirical cl100k)
+_UNIVERSAL_CHAR_CAP = 10_000  # ~2,860 tokens at 3.5 chars/token (empirical cl100k)
 # Bumped 5,500 → 6,000 when CRITICAL_HEADER / VIRTUAL_UNIT / CRITICAL_FOOTER
 # adopted `<critical_constraint name="…">` XML tags (Anthropic best practice:
 # XML disambiguates load-bearing constraints; the model attends more reliably
@@ -58,6 +58,26 @@ _UNIVERSAL_CHAR_CAP = 9_400  # ~2,690 tokens at 3.5 chars/token (empirical cl100
 # cwd / git remote / active vault, producing project keys the user didn't
 # ask for. The 300-char additions also condensed existing KV table cells
 # and examples — net delta is ~250 chars, hence the modest cap bump.
+# Bumped 9,600 → 9,800 when two `Store procedure: ...` wake-words were
+# added to the KV-routing line. These bypass scope-inference reasoning
+# and force the agent to emit the exact `<scope>:procedure:<verb>:<context>`
+# key the user typed — the deterministic escape hatch when the routing
+# rule's classification is unreliable.
+# Bumped 9,400 → 9,600 when the procedure_scope_default constraint gained
+# an imperatives-vs-preferences clause. Eval traces on glm-5.1 showed the
+# agent writing `project:<id>:git:pr-only` and `project:<id>:package-manager`
+# for imperative statements ("commits via PR", "use uv") — classifying them
+# as preferences instead of procedures. The new clause pins
+# "always/never/must/via/use Y not Z" as procedure-shaped and forces the
+# `:procedure:` infix. ~190 chars; lifts pass rate on the project-scope
+# scenarios from ~0% to a measurable signal.
+# Bumped 9,800 → 10,000 when KV_NAMESPACE collapsed the two scope-specific
+# procedure rows ("global default" + "project EXPLICIT cue") into one
+# general row (`<scope>:procedure:<verb>:<context-tag>`), and added two
+# examples covering `user:procedure:*` and `app:<id>:procedure:*` — Hermes
+# review flagged that those scopes were valid in code but never modeled
+# in the agent-facing surface, so the agent would never emit them even
+# when the scope cue ("I" / "when I use <app>") was unambiguous.
 
 
 def _approx_tokens(text: str) -> int:
@@ -112,9 +132,14 @@ _REQUIRED_KEYWORDS: tuple[str, ...] = (
     'project:<id>:',
     'global:',
     'app:<app-id>:',
-    'procedure:<verb>:<context-tag>',
-    # Project-scoped procedure pattern + default-to-global directive.
-    'project:<id>:procedure:<verb>:<context-tag>',
+    # Procedures live UNDER a scope namespace, never bare. The table cell
+    # uses `<scope>:procedure:*` as the general form; per-scope examples
+    # ground each of the four valid scopes (global / project / user / app).
+    '<scope>:procedure:<verb>:<context-tag>',
+    'global:procedure:',
+    'project:<id>:procedure:',
+    'user:procedure:',
+    'app:claude-code:procedure:',
     'procedure_scope_default',
     # KV scope-qualifier rule.
     'scope qualifier',

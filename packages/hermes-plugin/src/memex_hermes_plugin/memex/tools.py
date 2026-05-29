@@ -1328,10 +1328,10 @@ KV_GET_SCHEMA: dict[str, Any] = {
             'include_history': {
                 'type': 'boolean',
                 'description': (
-                    'For procedure: keys (RFC-007), return the full '
-                    'envelope (value, version, capped history of 5 prior '
-                    'versions) instead of just the active value. Ignored '
-                    'for non-procedure keys.'
+                    'For procedure keys (`<scope>:procedure:<verb>:<context>`), '
+                    'return the full envelope (value, version, capped history '
+                    'of 5 prior versions) instead of just the active value. '
+                    'Ignored for non-procedure keys.'
                 ),
             },
         },
