@@ -1033,6 +1033,22 @@ class TestProcedures:
         assert 'use ArgoCD' in result
 
     @pytest.mark.asyncio
+    async def test_legacy_bare_procedure_renders_during_migration_window(self):
+        """During the migration 046 deploy window, bare `procedure:*` rows
+        that haven't been swept yet must still render in the Procedures
+        section — `_is_procedure_for_briefing` accepts the legacy form."""
+        svc = _make_service(
+            summary=_make_vault_summary(),
+            kv_entries=[
+                _make_kv_entry('procedure:commit:lint-first', self._wrap('legacy bare key')),
+            ],
+        )
+        result = await svc.generate(uuid4(), budget=2000)
+        assert '## Procedures' in result
+        assert '**commit:lint-first**' in result
+        assert 'legacy bare key' in result
+
+    @pytest.mark.asyncio
     async def test_user_and_app_procedures_render_with_scope_prefix(self):
         """`user:procedure:*` and `app:<id>:procedure:*` must also render in
         the Procedures section with their scope prefix — closes the

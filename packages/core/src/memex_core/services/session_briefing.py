@@ -21,6 +21,35 @@ from memex_core.services.vault_summary import VaultSummaryService
 from memex_core.services.vaults import VaultService
 from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
 
+
+def _is_procedure_for_briefing(key: str) -> bool:
+    """Briefing-side procedure classifier.
+
+    Mirrors :func:`is_procedure_key` but also recognises the legacy bare
+    ``procedure:<verb>:<context>`` form so unmigrated rows still render
+    in the ``## Procedures`` section during the migration-046 deploy
+    window. Once 046 sweeps the bare rows to ``global:procedure:*`` the
+    legacy branch no-ops.
+    """
+    if is_procedure_key(key):
+        return True
+    # Legacy bare form: `procedure:<verb>:<context>` (no scope prefix).
+    if key.startswith('procedure:') and key.count(':') == 2:
+        return True
+    return False
+
+
+def _format_procedure_display_for_briefing(key: str) -> str:
+    """Display name for both new (`<scope>:procedure:*`) and legacy
+    (`procedure:*`) procedure keys. Legacy keys keep their bare form so
+    the operator sees they haven't been migrated yet."""
+    if is_procedure_key(key):
+        return format_procedure_display_name(key)
+    if key.startswith('procedure:') and key.count(':') == 2:
+        return key.removeprefix('procedure:')
+    return key
+
+
 logger = logging.getLogger('memex.core.services.session_briefing')
 
 _TREND_PRIORITY: dict[str, int] = {
@@ -199,8 +228,8 @@ class SessionBriefingService:
 
         # 2. KV facts (priority 1) — procedure rows (global + project-scoped)
         # render in their own section below.
-        non_proc = [e for e in kv_entries if not is_procedure_key(e.key)]
-        proc = [e for e in kv_entries if is_procedure_key(e.key)]
+        non_proc = [e for e in kv_entries if not _is_procedure_for_briefing(e.key)]
+        proc = [e for e in kv_entries if _is_procedure_for_briefing(e.key)]
         sections.append(('kv', self._build_kv_section(non_proc)))
 
         # 2b. Procedures (priority 1b — behavioural rules; high signal)
@@ -331,13 +360,14 @@ class SessionBriefingService:
             return ''
         lines = ['\n## Procedures\n']
         for entry in entries:
-            # Defensive: callers normally filter via is_procedure_key, but
-            # this method also runs against degenerate fixtures in tests —
-            # skip anything that isn't a valid procedure key.
-            if not is_procedure_key(entry.key):
+            # Defensive: callers normally filter via _is_procedure_for_briefing
+            # (which accepts both new <scope>:procedure:* and legacy bare
+            # procedure:* during the 046 migration window). Skip anything
+            # else.
+            if not _is_procedure_for_briefing(entry.key):
                 continue
             text = self._sanitize_procedure_value(entry.value)
-            name = format_procedure_display_name(entry.key)
+            name = _format_procedure_display_for_briefing(entry.key)
             if not name or not text:
                 continue
             lines.append(f'- **{self._defang_procedure_name(name)}** — {text}')
@@ -472,7 +502,7 @@ class SessionBriefingService:
         # Step 5's oldest-first trim. This is the intended degradation order.
         _ts_floor = datetime.min.replace(tzinfo=timezone.utc)
         procs_initial = sorted(
-            [e for e in kv_entries if is_procedure_key(e.key)],
+            [e for e in kv_entries if _is_procedure_for_briefing(e.key)],
             key=lambda e: getattr(e, 'updated_at', None) or _ts_floor,
         )
         # Steps 1/1b only apply at budget>=2000 where initial build used 10 models + trends.
@@ -516,7 +546,7 @@ class SessionBriefingService:
         # at the top of this method). Strip them from `kv_entries` once up-front
         # so any subsequent consumer sees a procedure-free list; Step 5 below
         # trims procedures from the snapshot, not from `kv_entries`.
-        kv_entries = [e for e in kv_entries if not is_procedure_key(e.key)]
+        kv_entries = [e for e in kv_entries if not _is_procedure_for_briefing(e.key)]
         for drop_prefix in ('app:', 'user:', 'project:'):
             kv_entries = [e for e in kv_entries if not e.key.startswith(drop_prefix)]
             sections = self._replace_section(
