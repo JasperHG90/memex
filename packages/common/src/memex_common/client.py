@@ -1487,13 +1487,17 @@ class RemoteMemexAPI:
             is_procedure = False
             if ':procedure:' in key:
                 scope = key.rsplit(':procedure:', 1)[0]
-                if scope in ('global', 'user'):
-                    is_procedure = True
-                elif scope.startswith(('project:', 'app:')) and scope not in (
-                    'project:',
-                    'app:',
-                ):
-                    is_procedure = True
+                # Reject ambiguous keys where the scope itself contains
+                # `:procedure:` (e.g. project:foo:procedure:bar:procedure:v:c).
+                # parse_procedure_key in core enforces the same rule.
+                if ':procedure:' not in scope:
+                    if scope in ('global', 'user'):
+                        is_procedure = True
+                    elif scope.startswith(('project:', 'app:')) and scope not in (
+                        'project:',
+                        'app:',
+                    ):
+                        is_procedure = True
             if include_history and is_procedure and isinstance(result.get('value'), dict):
                 return KVProcedureEntryDTO(**result)
             return KVEntryDTO(**result)
