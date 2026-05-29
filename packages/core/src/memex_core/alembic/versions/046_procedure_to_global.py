@@ -51,11 +51,20 @@ def upgrade() -> None:
     if not table_exists:
         return
 
+    # Match only well-formed 3-segment bare procedure keys
+    # (`procedure:<verb>:<context>`) — i.e. exactly two colons after
+    # `procedure:`. A multi-segment legacy key like `procedure:foo:bar:baz`
+    # (4+ segments) shouldn't exist (the old validator rejected it) but
+    # if it does via direct DB manipulation, rewriting it to
+    # `global:procedure:foo:bar:baz` would create a row that the new
+    # parser rejects — silently unreachable. Leave such rows for operator
+    # triage instead.
     conn.execute(
         sa.text(
             'UPDATE kv_entries '
             "SET key = 'global:' || key, updated_at = now() "
-            "WHERE key LIKE 'procedure:%' "
+            "WHERE key LIKE 'procedure:%:%' "
+            "  AND key NOT LIKE 'procedure:%:%:%' "
             '  AND NOT EXISTS ('
             '    SELECT 1 FROM kv_entries inner_e '
             "    WHERE inner_e.key = 'global:' || kv_entries.key"
@@ -121,11 +130,13 @@ def downgrade() -> None:
     #    Strict reversibility would require deleting them; that's
     #    destructive, so they're left for operator triage.
     logger.warning(
-        'Migration 046 downgrade: strips ALL global:procedure:* -> procedure:* '
-        '(including rows BORN scoped after the upgrade). The bare form is only '
-        'valid under pre-migration application code — roll back the application '
-        'together with this migration. user:procedure:*, project:<id>:procedure:*, '
-        'and app:<id>:procedure:* rows are left in place (no pre-upgrade equivalent).'
+        'Migration 046 downgrade: strips global:procedure:<verb>:<context> -> '
+        'procedure:<verb>:<context> (3-segment suffix only; the SQL pattern '
+        'is `global:procedure:%%:%%`). Rows BORN scoped after the upgrade '
+        'are stripped too. The bare form is only valid under pre-migration '
+        'application code — roll back the application together with this '
+        'migration. user:procedure:*, project:<id>:procedure:*, and '
+        'app:<id>:procedure:* rows are left in place (no pre-upgrade equivalent).'
     )
     conn = op.get_bind()
     table_exists = conn.execute(
