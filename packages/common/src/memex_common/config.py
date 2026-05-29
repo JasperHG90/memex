@@ -1684,12 +1684,14 @@ class InboxRouterConfig(BaseModel):
     )
     ewma_gamma: float = Field(
         default=0.99,
-        gt=0.0,
+        ge=0.5,
         le=1.0,
         description=(
             'Exponential-decay factor applied to the sufficient statistics on '
             'each online update. <1 lets the model forget stale vault state as '
-            'vaults drift; 1.0 freezes (never forgets).'
+            'vaults drift; 1.0 freezes (never forgets). Floored at 0.5 so the '
+            'running count cannot decay below 1 and degrade the variance estimate '
+            '(the params view would otherwise inflate σ² near a zero denominator).'
         ),
     )
     backoff_base_days: float = Field(
