@@ -1053,9 +1053,14 @@ def test_drain_pending_propagates_cancelled_error(provider_with_append_api):
     provider._api.ingest = api.ingest
 
     provider.sync_turn('q', 'a')
-    # run_sync surfaces concurrent.futures.CancelledError on the caller
-    # thread, which is what _drain_pending must propagate.
-    with pytest.raises(concurrent.futures.CancelledError):
+    # Empirically run_sync surfaces concurrent.futures.CancelledError on the
+    # caller thread (verified via a standalone repro: an asyncio Task whose
+    # coroutine raises CancelledError enters the cancelled state, and
+    # `_chain_future` translates that into concurrent.Future cancellation,
+    # whose .result() raises concurrent.futures.CancelledError). The tuple
+    # below admits the asyncio variant too — defensive against future
+    # Python changes that unify the two classes, at zero cost.
+    with pytest.raises((concurrent.futures.CancelledError, asyncio.CancelledError)):
         provider.on_pre_compress([])
     # Head still queued; future flush can retry once cancellation is handled.
     assert len(provider._pending) == 1
