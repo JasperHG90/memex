@@ -550,6 +550,17 @@ class Node(SQLModel, table=True):  # type: ignore
             sql_text("to_tsvector('english', text)"),
             postgresql_using='gin',
         ),
+        # B.2 — partial covering index for the document_search nodes-keyword
+        # CTE (filters `tsvector @@ ts_query AND block_id IS NOT NULL AND
+        # status='active' AND vault_id IN (...)`). The tsvector GIN covers
+        # the fulltext predicate; this index covers the remaining
+        # vault-scope + liveness checks so they don't bitmap-recheck.
+        # Mirrors alembic migration 054_nodes_vault_active.
+        Index(
+            'idx_nodes_vault_active',
+            'vault_id',
+            postgresql_where=sql_text("status = 'active' AND block_id IS NOT NULL"),
+        ),
     )
 
 
