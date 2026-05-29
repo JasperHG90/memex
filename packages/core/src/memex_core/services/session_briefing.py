@@ -115,6 +115,9 @@ def _build_kv_namespaces(project_id: str | None) -> list[str]:
     After 046 runs they disappear from the bare namespace (they live under
     ``global:procedure:*``) and this entry no-ops.
     """
+    # TODO(remove-after-046-deployed): drop 'procedure' from this list once
+    # migration 046 has been applied across all live deployments. The bare
+    # namespace will be empty and the back-compat fetch is no longer needed.
     ns = ['global', 'user', 'app:claude-code', 'procedure']
     if project_id:
         ns.append(f'project:{project_id}')

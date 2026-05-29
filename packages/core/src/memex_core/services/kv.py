@@ -43,6 +43,9 @@ _PROTOCOL_RE = re.compile(r'[a-zA-Z][a-zA-Z0-9+\-.]*://')
 
 # Re-exported from the cross-package SSOT in memex_common.kv_utils so
 # this module's VALID_NAMESPACES can't drift from the SSOT.
+# noqa: E402 is intentional — these imports sit mid-file (rather than at
+# top) so the surrounding back-compat re-exports stay grouped with the
+# explanatory comments, keeping the SSOT story readable.
 from memex_common.kv_utils import VALID_NAMESPACES  # noqa: E402
 
 PROCEDURE_HISTORY_CAP = 5

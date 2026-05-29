@@ -1013,7 +1013,9 @@ class TestProcedures:
         assert '**commit:lint-first**' in result
         assert 'global rule' in result
         # Project procedure: bracketed scope prefix.
-        assert '**\\[project:memex\\] commit:pr-workflow**' in result
+        # Brackets are escaped by `_defang_procedure_name`. Use a raw
+        # string so the `\[...\]` intent is visually explicit.
+        assert r'**\[project:memex\] commit:pr-workflow**' in result
         assert 'project rule' in result
 
     @pytest.mark.asyncio
@@ -1067,9 +1069,12 @@ class TestProcedures:
         )
         result = await svc.generate(uuid4(), budget=2000)
         assert '## Procedures' in result
-        assert '**\\[user\\] greeting:friendly**' in result
+        # Brackets are escaped by `_defang_procedure_name` (see the
+        # project-scoped sibling test above). Raw strings make the `\[...\]`
+        # intent visually explicit.
+        assert r'**\[user\] greeting:friendly**' in result
         assert 'Friendly, no honorifics.' in result
-        assert '**\\[app:claude-code\\] capture:terse**' in result
+        assert r'**\[app:claude-code\] capture:terse**' in result
         assert 'Hard max 300 tokens' in result
 
     @pytest.mark.asyncio
