@@ -63,6 +63,18 @@ def _warn_mental_model_filters_skipped(intent_class: str | None, risk_class: str
 _MAX_DECAY_EXPONENT = -996
 
 
+def _escape_like_pattern(s: str) -> str:
+    """Escape `%`, `_`, and `\\` so `s` matches as a literal in ILIKE.
+
+    NER outputs are nominally proper nouns, but the query-side fallback
+    accepts raw user input. Without this, an input like `Al_ce` would
+    match `Alice` (`_` = "any single char"); `%` would widen the match
+    arbitrarily. Pair with `ilike(pattern, escape='\\\\')` at the call site
+    so the backslash itself is treated literally.
+    """
+    return s.replace('\\', '\\\\').replace('%', r'\%').replace('_', r'\_')
+
+
 def apply_date_filters(statement: Select, date_column: Any, **kwargs: Any) -> Select:
     """Applies start_date and end_date filters to a SQLAlchemy statement."""
     start_date = kwargs.get('start_date')
@@ -357,14 +369,28 @@ def _build_ner_seeds(
     if extracted_names:
         logger.info(f'NER found entities: {extracted_names}')
 
+        # B.1: align trgm-fuzzy queries to the existing functional GIN-trgm
+        # indexes on `lower(canonical_name)` and `lower(name)` (see
+        # sql_models.py:_GIN_TRGM_CANONICAL_NAME / _GIN_TRGM_ALIAS_NAME).
+        # Without the `func.lower()` wrapper Postgres cannot match the query
+        # expression to the indexed expression and falls back to a seqscan
+        # over `entities` + `entity_aliases` per NER token — the root cause
+        # of the ~18s `statement_timeout` documented in the 2026-05-29 tech
+        # report. RHS is lowered once at the Python level so the planner
+        # doesn't have to call lower() per row.
         conds_canonical: list[Any] = [col(Entity.canonical_name).in_(extracted_names)]
         if extracted_phonetics:
             conds_canonical.append(col(Entity.phonetic_code).in_(extracted_phonetics))
         if include_ilike:
             for name in extracted_names:
-                conds_canonical.append(col(Entity.canonical_name).ilike(f'%{name}%'))
+                lowered = name.lower()
+                escaped = _escape_like_pattern(lowered)
                 conds_canonical.append(
-                    func.similarity(col(Entity.canonical_name), name) > similarity_threshold
+                    func.lower(col(Entity.canonical_name)).ilike(f'%{escaped}%', escape='\\')
+                )
+                conds_canonical.append(
+                    func.similarity(func.lower(col(Entity.canonical_name)), lowered)
+                    > similarity_threshold
                 )
 
         seed_from_canonical = select(col(Entity.id).label('id')).where(or_(*conds_canonical))
@@ -374,24 +400,35 @@ def _build_ner_seeds(
             conds_alias.append(col(EntityAlias.phonetic_code).in_(extracted_phonetics))
         if include_ilike:
             for name in extracted_names:
-                conds_alias.append(col(EntityAlias.name).ilike(f'%{name}%'))
+                lowered = name.lower()
+                escaped = _escape_like_pattern(lowered)
                 conds_alias.append(
-                    func.similarity(col(EntityAlias.name), name) > similarity_threshold
+                    func.lower(col(EntityAlias.name)).ilike(f'%{escaped}%', escape='\\')
+                )
+                conds_alias.append(
+                    func.similarity(func.lower(col(EntityAlias.name)), lowered)
+                    > similarity_threshold
                 )
 
         seed_from_alias = select(col(EntityAlias.canonical_id).label('id')).where(or_(*conds_alias))
     else:
         logger.info('No entities found by NER. Using fallback similarity search.')
+        # Same B.1 fix on the no-NER fallback path. Escape LIKE wildcards
+        # because `query` is user-supplied free text.
+        query_lower = query.lower()
+        query_escaped = _escape_like_pattern(query_lower)
         seed_from_canonical = select(col(Entity.id).label('id')).where(
             or_(
-                col(Entity.canonical_name).ilike(f'%{query}%'),
-                func.similarity(col(Entity.canonical_name), query) > similarity_threshold,
+                func.lower(col(Entity.canonical_name)).ilike(f'%{query_escaped}%', escape='\\'),
+                func.similarity(func.lower(col(Entity.canonical_name)), query_lower)
+                > similarity_threshold,
             )
         )
         seed_from_alias = select(col(EntityAlias.canonical_id).label('id')).where(
             or_(
-                col(EntityAlias.name).ilike(f'%{query}%'),
-                func.similarity(col(EntityAlias.name), query) > similarity_threshold,
+                func.lower(col(EntityAlias.name)).ilike(f'%{query_escaped}%', escape='\\'),
+                func.similarity(func.lower(col(EntityAlias.name)), query_lower)
+                > similarity_threshold,
             )
         )
 
