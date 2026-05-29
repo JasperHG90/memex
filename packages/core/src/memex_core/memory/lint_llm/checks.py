@@ -85,6 +85,7 @@ _LOAD_TOP_K_RELATED_SQL = text("""
       AND m.id != :unit_id
       AND m.status = 'active'
       AND m.embedding IS NOT NULL
+      AND (m.metadata->>'virtual' IS NULL OR m.metadata->>'virtual' != 'true')
       AND (SELECT embedding FROM memory_units WHERE id = :unit_id) IS NOT NULL
     ORDER BY m.embedding <=> (SELECT embedding FROM memory_units WHERE id = :unit_id)
     LIMIT :k
@@ -201,6 +202,16 @@ def make_semantic_contradiction_check(
             str(related_ids[i]) for i in contradicting_indices if 0 <= i < len(related_ids)
         ]
 
+        # --- Deduplicate A↔B contradiction pairs (Issue #7) ---
+        # When unit A contradicts unit B, both the A-check (target=A, related=B) and the
+        # B-check (target=B, related=A) would emit a finding for the same pair. Normalize
+        # by keeping only cited units whose UUID is lexicographically greater than unit_id;
+        # the reverse direction will be (or was) emitted when the smaller UUID is the target.
+        unit_id_str = str(unit_id)
+        cited_unit_ids = [cid for cid in cited_unit_ids if unit_id_str < cid]
+        if not cited_unit_ids:
+            return None
+
         extra_evidence: dict[str, Any] = {}
         if polarity_result is not None:
             extra_evidence['polarity_label'] = polarity_result.label.value
@@ -212,7 +223,7 @@ def make_semantic_contradiction_check(
             rule_name=_RULE_LLM_SEMANTIC_CONTRADICTION,
             check_type='semantic_contradiction',
             target_type='memory_unit',
-            target_id=str(unit_id),
+            target_id=unit_id_str,
             suggested_action=_SUGGESTED_ACTION_CONTRADICTION,
             surprise_score=score,
             explanation=str(getattr(prediction, 'explanation', '') or ''),

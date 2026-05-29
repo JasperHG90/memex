@@ -168,9 +168,18 @@ class SessionBriefingService:
         return summary, mental_models, kv_entries, vaults
 
     async def _fetch_mental_models(self, vault_id: UUID) -> list[MentalModel]:
-        """Fetch mental models for the vault, sorted by importance score."""
+        """Fetch active mental models for the vault, sorted by importance score.
+
+        Archived models (``archived_at IS NOT NULL`` — set by the
+        archive_mental_model proposal action) are excluded so the briefing
+        only surfaces the entities reflection still maintains.
+        """
         async with self._metastore.session() as session:
-            stmt = select(MentalModel).where(col(MentalModel.vault_id) == vault_id)
+            stmt = (
+                select(MentalModel)
+                .where(col(MentalModel.vault_id) == vault_id)
+                .where(col(MentalModel.archived_at).is_(None))
+            )
             result = await session.exec(stmt)
             models = list(result.all())
         models.sort(key=_compute_importance, reverse=True)

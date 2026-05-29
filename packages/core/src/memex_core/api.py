@@ -72,6 +72,9 @@ from memex_core.services.ingestion import IngestionService
 from memex_core.services.kv import KVService
 from memex_core.services.lineage import LineageService
 from memex_core.services.lint import LintService
+from memex_core.services.lint_learning import LintLearningService
+from memex_core.services.lint_optimizer import LintLLMOptimizer
+from memex_core.services.lint_auto_apply import LintAutoApplyService
 from memex_core.services.locks import LocksService
 from memex_core.services.notes import NoteService
 from memex_core.services.deprioritize_score import DeprioritizeScorer, ScoreBreakdown
@@ -555,6 +558,21 @@ class MemexAPI:
             filestore=self.filestore,
             config=self.config,
         )
+        self._lint_learning = LintLearningService(
+            metastore=self.metastore,
+            filestore=self.filestore,
+            config=self.config,
+        )
+        self._lint_optimizer = LintLLMOptimizer(
+            metastore=self.metastore,
+            filestore=self.filestore,
+            config=self.config,
+        )
+        self._lint_auto_apply = LintAutoApplyService(
+            metastore=self.metastore,
+            filestore=self.filestore,
+            config=self.config,
+        )
         self._consolidation = ConsolidationService(
             metastore=self.metastore,
             config=self.config,
@@ -634,6 +652,21 @@ class MemexAPI:
     @property
     def lint(self) -> LintService:
         return self._lint
+
+    @property
+    def lint_learning(self) -> LintLearningService:
+        """Telemetry rollup service — Layer 2 of the auto-learning loop."""
+        return self._lint_learning
+
+    @property
+    def lint_optimizer(self) -> LintLLMOptimizer:
+        """DSPy signature optimizer — Layer 4 of the auto-learning loop."""
+        return self._lint_optimizer
+
+    @property
+    def lint_auto_apply(self) -> LintAutoApplyService:
+        """Auto-solve service — Layer 5 of the auto-learning loop."""
+        return self._lint_auto_apply
 
     @property
     def entities(self) -> EntityService:

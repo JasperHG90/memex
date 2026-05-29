@@ -606,8 +606,9 @@ class RawFact(BaseFact):
         'What | When | Where | Involving: Who | Why'
         """
         parts = [self.what]
-        if self.when and str(self.when).upper() != 'N/A':
-            parts.append(f'When: {self.when}')
+        when_value = self.occurred_start or self.when
+        if when_value and str(when_value).upper() != 'N/A':
+            parts.append(f'When: {when_value}')
         if self.where and str(self.where).upper() != 'N/A':
             parts.append(f'Where: {self.where}')
         if self.who and str(self.who).upper() != 'N/A':

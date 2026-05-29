@@ -795,10 +795,14 @@ class ReflectionEngine:
             surviving_context: list[ReflectMemoryContext] = []
 
             async with self._entity_session() as session:
+                # Skip archived models — the archive_mental_model proposal
+                # action freezes the row's content; we don't refresh it on
+                # incoming observations.
                 mm_stmt = (
                     select(MentalModel)
                     .where(col(MentalModel.entity_id) == item.entity_id)
                     .where(col(MentalModel.vault_id) == item.vault_id)
+                    .where(col(MentalModel.archived_at).is_(None))
                 )
                 mm_result = await session.exec(mm_stmt)
                 mm = mm_result.first()
@@ -1330,11 +1334,18 @@ class ReflectionEngine:
     async def _batch_get_or_create_models(
         self, entity_ids: list[UUID], vault_id: UUID = GLOBAL_VAULT_ID
     ) -> dict[UUID, MentalModel]:
-        """Fetch or create mental models for a batch of entities."""
+        """Fetch or create mental models for a batch of entities.
+
+        Archived models (``archived_at IS NOT NULL``) are excluded so the
+        reflection engine never resurrects content that an operator has
+        soft-deleted via the ``archive_mental_model`` proposal action.
+        Entities whose only model is archived get a new row created here.
+        """
         query = (
             select(MentalModel)
             .where(col(MentalModel.entity_id).in_(entity_ids))
             .where(col(MentalModel.vault_id) == vault_id)
+            .where(col(MentalModel.archived_at).is_(None))
         )
 
         results = (await self.session.exec(query)).all()
@@ -1459,6 +1470,7 @@ class ReflectionEngine:
             select(MentalModel)
             .where(col(MentalModel.entity_id) == entity_id)
             .where(col(MentalModel.vault_id) == vault_id)
+            .where(col(MentalModel.archived_at).is_(None))
         )
 
         result = await self.session.exec(query)

@@ -1051,9 +1051,9 @@ class NoteService:
         """
         from sqlmodel import select, update
 
+        from memex_core.memory.entity_resolver import recompute_cooccurrences_for_entities
         from memex_core.memory.sql_models import (
             Chunk,
-            EntityCooccurrence,
             MentalModel,
             MemoryLink,
             MemoryUnit,
@@ -1147,18 +1147,21 @@ class NoteService:
                     .values(vault_id=target_vault_id)
                 )
 
-            # --- Cleanup EntityCooccurrence in source vault for affected entities ---
-            # Skip destructive cleanup when source == target (note isn't leaving)
+            # --- Recompute EntityCooccurrence in BOTH vaults for affected entities ---
+            # Cooccurrence is tracked per-vault (PK includes vault_id). Moving a note
+            # subtracts its contribution from the source vault and adds it to the target.
+            # We recompute from ground truth (post-move unit_entities/memory_units) for
+            # every pair touching the note's entities, in both vaults, so edges that
+            # OTHER notes still support are preserved rather than blanket-deleted.
+            # Skip when source == target (note isn't leaving).
             if not same_vault and entity_ids_for_cleanup:
-                for eid in entity_ids_for_cleanup:
-                    co_stmt = select(EntityCooccurrence).where(
-                        col(EntityCooccurrence.vault_id) == source_vault_id,
-                        (col(EntityCooccurrence.entity_id_1) == eid)
-                        | (col(EntityCooccurrence.entity_id_2) == eid),
+                # Units have already been re-pointed to the target vault above, so the
+                # recompute below sees the correct post-move state on both sides.
+                await session.flush()
+                for recompute_vault_id in (source_vault_id, target_vault_id):
+                    await recompute_cooccurrences_for_entities(
+                        session, recompute_vault_id, entity_ids_for_cleanup
                     )
-                    co_result = await session.exec(co_stmt)
-                    for co in co_result.all():
-                        await session.delete(co)
 
             # --- Cleanup orphaned MentalModels in source vault ---
             # --- Prune cross-vault evidence from surviving models ---

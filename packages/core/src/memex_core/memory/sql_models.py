@@ -186,6 +186,16 @@ class MentalModel(SQLModel, table=True):  # type: ignore
         ),
     )
 
+    archived_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
+        description=(
+            'Soft-delete timestamp set by the archive_mental_model proposal action; '
+            'rows with a non-NULL archived_at are hidden from retrieval, survey, and '
+            'reflection enumeration. Reversed by clearing the column.'
+        ),
+    )
+
     __table_args__ = (
         # Enforce uniqueness for Entity + Vault (Global or Specific)
         Index(
@@ -203,6 +213,13 @@ class MentalModel(SQLModel, table=True):  # type: ignore
             'observations',
             postgresql_using='gin',
             postgresql_ops={'observations': 'jsonb_path_ops'},
+        ),
+        # Partial index on archived rows — query path filters WHERE archived_at IS NULL,
+        # which the planner short-circuits using this index when populated.
+        Index(
+            'idx_mental_models_archived_at',
+            'archived_at',
+            postgresql_where=sql_text('archived_at IS NOT NULL'),
         ),
     )
 
@@ -1095,7 +1112,7 @@ class EntityCooccurrence(SQLModel, table=True):  # type: ignore
         description='UUID of the second entity (lexicographically larger).',
     )
 
-    vault_id: UUID = vault_id_field()
+    vault_id: UUID = vault_id_field(primary_key=True)
 
     cooccurrence_count: int = Field(
         default=1,
@@ -1929,6 +1946,11 @@ class MaintenanceProposal(SQLModel, table=True):  # type: ignore
             'alongside resolved_at when status flips to resolved/dismissed.'
         ),
     )
+    flagged_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
+        description='Set when the finding is flagged for later review; NULL when unflagged.',
+    )
 
     __table_args__ = (
         CheckConstraint(
@@ -2049,6 +2071,111 @@ class ConsolidationTick(SQLModel, table=True):  # type: ignore
 # ---------------------------------------------------------------------------
 
 
+class LintRuleTelemetry(SQLModel, table=True):  # type: ignore
+    """Rolled-up per-rule verdict counters — feeds the auto-learning loop.
+
+    Layer 2 of the lint auto-learning architecture: nightly (or on-demand)
+    the ``LintLearningService`` reads resolved ``maintenance_proposals`` for a
+    trailing window and writes one row here per ``(rule_name, vault_id)``.
+    ``vault_id IS NULL`` means a global rollup across vaults.
+
+    Layers 3 and 4 (threshold calibration, DSPy compile) read this table to
+    decide whether they have enough labelled data to act. ``memex lint stats``
+    renders it directly.
+    """
+
+    __tablename__ = 'lint_rule_telemetry'
+
+    id: UUID = Field(
+        default_factory=uuid4,
+        sa_column=Column(
+            SA_UUID(),
+            primary_key=True,
+            server_default=sql_text('gen_random_uuid()'),
+        ),
+    )
+    rule_name: str = Field(
+        sa_column=Column(Text, nullable=False),
+        description='Rule that produced the verdicts in this rollup.',
+    )
+    vault_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(SA_UUID(), nullable=True),
+        description='Vault scope; NULL = global rollup across vaults.',
+    )
+    window_start: datetime = Field(
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=False),
+        description='Start of the rolling window this row aggregates (inclusive).',
+    )
+    window_end: datetime = Field(
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=False),
+        description='End of the rolling window this row aggregates (exclusive).',
+    )
+    accept_count: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default='0'),
+        description=(
+            'Verdicts where a canned action ran (resolution.followup.action set, '
+            "action_id != 'no_op'). Counts as 'the rule's signal was useful'."
+        ),
+    )
+    no_op_count: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default='0'),
+        description=(
+            'Verdicts where the operator chose no_op — they reviewed the proposal '
+            'and chose not to mutate state. The rule was valid but did not warrant '
+            'action this time.'
+        ),
+    )
+    dismiss_count: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default='0'),
+        description='Verdicts where the operator dismissed the proposal as noise.',
+    )
+    legacy_count: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default='0'),
+        description=(
+            'Pre-cockpit rows: resolved without a resolution.followup block. '
+            'Cannot be classified as accept / no_op; counted separately so '
+            'operators can see how much history is unlabelled.'
+        ),
+    )
+    median_surprise: float | None = Field(
+        default=None,
+        sa_column=Column(Float, nullable=True),
+        description='Median evidence.surprise_score across rows in the window.',
+    )
+    median_time_to_resolve_seconds: int | None = Field(
+        default=None,
+        sa_column=Column(Integer, nullable=True),
+        description=(
+            'Median seconds between created_at and resolved_at. Slow verdicts are '
+            'higher-signal for later learning phases.'
+        ),
+    )
+    refreshed_at: datetime = Field(
+        sa_column=Column(
+            TIMESTAMP(timezone=True),
+            server_default=sql_text('now()'),
+            nullable=False,
+        ),
+        description='When this row was last (re)written by the rollup service.',
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            'rule_name',
+            'vault_id',
+            'window_start',
+            name='uq_lint_rule_telemetry_rule_vault_window',
+        ),
+        Index('idx_lint_rule_telemetry_rule_window', 'rule_name', 'window_end'),
+        Index('idx_lint_rule_telemetry_vault_window', 'vault_id', 'window_end'),
+    )
+
+
 class LintLLMQuota(SQLModel, table=True):  # type: ignore
     """Hour-bucket counter for the 24h-rolling cost cap.
 
@@ -2090,4 +2217,202 @@ class LintLLMQuota(SQLModel, table=True):  # type: ignore
         UniqueConstraint('vault_id', 'hour_bucket', name='uq_lint_llm_quota_vault_hour'),
         CheckConstraint('count >= 0', name='ck_lint_llm_quota_count_non_negative'),
         Index('idx_lint_llm_quota_vault_hour', 'vault_id', 'hour_bucket'),
+    )
+
+
+class LintRuleCalibration(SQLModel, table=True):  # type: ignore
+    """Versioned per-rule emission thresholds learned from operator verdicts.
+
+    Layer 3 of the lint auto-learning architecture. The calibration job reads
+    ``lint_rule_telemetry`` (Layer 2), applies an accept-rate rule, and writes
+    a new row here. LLM checks read the latest unsuperseded row per
+    ``(rule_name, vault_id)`` at emission time.
+    """
+
+    __tablename__ = 'lint_rule_calibration'
+
+    id: UUID = Field(
+        default_factory=uuid4,
+        sa_column=Column(
+            SA_UUID(),
+            primary_key=True,
+            server_default=sql_text('gen_random_uuid()'),
+        ),
+    )
+    rule_name: str = Field(
+        sa_column=Column(Text, nullable=False),
+        description='Rule whose thresholds are calibrated.',
+    )
+    vault_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(SA_UUID(), nullable=True),
+        description='Vault scope; NULL = global calibration.',
+    )
+    version: int = Field(
+        sa_column=Column(Integer, nullable=False),
+        description='Monotonically increasing version within (rule_name, vault_id).',
+    )
+    surprise_threshold: float | None = Field(
+        default=None,
+        sa_column=Column(Float, nullable=True),
+        description='Learned surprise_score emission threshold.',
+    )
+    polarity_threshold: float | None = Field(
+        default=None,
+        sa_column=Column(Float, nullable=True),
+        description='Learned polarity emission threshold.',
+    )
+    learned_at: datetime = Field(
+        sa_column=Column(
+            TIMESTAMP(timezone=True),
+            server_default=sql_text('now()'),
+            nullable=False,
+        ),
+        description='When this calibration row was written.',
+    )
+    learned_from_window_start: datetime | None = Field(
+        default=None,
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
+        description='Start of the telemetry window this row was derived from.',
+    )
+    learned_from_window_end: datetime | None = Field(
+        default=None,
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
+        description='End of the telemetry window this row was derived from.',
+    )
+    # Three states: NULL (active), positive int (superseded by that
+    # version), -1 (rolled back by operator).
+    superseded_by_version: int | None = Field(
+        default=None,
+        sa_column=Column(Integer, nullable=True),
+        description='Version that superseded this row; NULL = active.',
+    )
+    frozen: bool = Field(
+        default=False,
+        sa_column=Column(Boolean, server_default='false', nullable=False),
+        description='When true, auto-calibration skips this rule.',
+    )
+    rationale: dict[str, Any] | None = Field(
+        default=None,
+        sa_column=Column(JSONB, nullable=True),
+        description='JSON blob explaining the calibration decision.',
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            'rule_name',
+            'vault_id',
+            'version',
+            name='uq_lint_calibration_rule_vault_version',
+        ),
+        Index(
+            'idx_lint_calibration_active',
+            'rule_name',
+            'vault_id',
+            postgresql_where=sql_text('superseded_by_version IS NULL'),
+        ),
+        CheckConstraint(
+            'superseded_by_version IS NULL OR superseded_by_version = -1'
+            ' OR superseded_by_version > 0',
+            name='ck_lint_rule_calibration_superseded_valid',
+        ),
+    )
+
+
+class LintLLMSignature(SQLModel, table=True):  # type: ignore
+    """Versioned compiled DSPy signatures for LLM lint checks.
+
+    Layer 4 of the lint auto-learning architecture. The optimizer reads
+    labelled verdicts, compiles a DSPy signature, validates against the
+    champion, and promotes the winner here. LLM checks load the latest
+    unsuperseded row per ``(rule_name, vault_id)`` at server startup.
+    """
+
+    __tablename__ = 'lint_llm_signature'
+
+    id: UUID = Field(
+        default_factory=uuid4,
+        sa_column=Column(
+            SA_UUID(),
+            primary_key=True,
+            server_default=sql_text('gen_random_uuid()'),
+        ),
+    )
+    rule_name: str = Field(
+        sa_column=Column(Text, nullable=False),
+        description='Rule this signature was compiled for.',
+    )
+    vault_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(SA_UUID(), nullable=True),
+        description='Vault scope; NULL = global signature.',
+    )
+    version: int = Field(
+        sa_column=Column(Integer, nullable=False),
+        description='Monotonically increasing version within (rule_name, vault_id).',
+    )
+    compiled_program: dict[str, Any] | None = Field(
+        default=None,
+        sa_column=Column(JSONB, nullable=True),
+        description='Serialised compiled DSPy program.',
+    )
+    demos: list[dict[str, Any]] | None = Field(
+        default=None,
+        sa_column=Column(JSONB, nullable=True),
+        description='Serialised few-shot demos from the bootstrap.',
+    )
+    base_model: str | None = Field(
+        default=None,
+        sa_column=Column(Text, nullable=True),
+        description='LM identifier used during compilation.',
+    )
+    validation_score: float | None = Field(
+        default=None,
+        sa_column=Column(Float, nullable=True),
+        description='Accuracy on the temporal validation split.',
+    )
+    validation_examples: int | None = Field(
+        default=None,
+        sa_column=Column(Integer, nullable=True),
+        description='Number of examples in the validation split.',
+    )
+    promoted_at: datetime = Field(
+        sa_column=Column(
+            TIMESTAMP(timezone=True),
+            server_default=sql_text('now()'),
+            nullable=False,
+        ),
+        description='When this signature was promoted.',
+    )
+    promoted_by: str | None = Field(
+        default=None,
+        sa_column=Column(Text, nullable=True),
+        description='Actor that promoted this signature.',
+    )
+    # Three states: NULL (active), positive int (superseded by that
+    # version), -1 (rolled back by operator).
+    superseded_by_version: int | None = Field(
+        default=None,
+        sa_column=Column(Integer, nullable=True),
+        description='Version that superseded this row; NULL = active.',
+    )
+
+    __table_args__ = (
+        UniqueConstraint(
+            'rule_name',
+            'vault_id',
+            'version',
+            name='uq_lint_llm_signature_rule_vault_version',
+        ),
+        Index(
+            'idx_lint_llm_signature_active',
+            'rule_name',
+            'vault_id',
+            postgresql_where=sql_text('superseded_by_version IS NULL'),
+        ),
+        CheckConstraint(
+            'superseded_by_version IS NULL OR superseded_by_version = -1'
+            ' OR superseded_by_version > 0',
+            name='ck_lint_llm_signature_superseded_valid',
+        ),
     )

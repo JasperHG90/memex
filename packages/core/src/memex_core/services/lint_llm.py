@@ -182,9 +182,17 @@ _INSERT_LLM_FINDING_SQL = text("""
         vault_id, lint_type, target_type, target_id,
         rule_name, evidence, suggested_action, status, source
     )
-    VALUES (
+    SELECT
         :vault_id, :lint_type, :target_type, :target_id,
         :rule_name, CAST(:evidence AS jsonb), :suggested_action, 'pending', 'llm'
+    WHERE NOT EXISTS (
+        SELECT 1 FROM maintenance_proposals mp
+        WHERE mp.rule_name = :rule_name
+          AND mp.target_type = :target_type
+          AND mp.target_id = :target_id
+          AND mp.vault_id = CAST(:vault_id AS uuid)
+          AND mp.status IN ('resolved', 'dismissed')
+          AND mp.resolved_at > now() - interval '30 days'
     )
     ON CONFLICT (rule_name, target_type, target_id, vault_id)
     WHERE status = 'pending'
@@ -192,16 +200,22 @@ _INSERT_LLM_FINDING_SQL = text("""
 """)
 
 
-# Same partial-unique-index dependency as _INSERT_LLM_FINDING_SQL above —
-# see note there. Index lives in migration 025_maintenance_proposals.py.
 _INSERT_DEFERRED_SQL = text("""
     INSERT INTO maintenance_proposals (
         vault_id, lint_type, target_type, target_id,
         rule_name, evidence, suggested_action, status, source
     )
-    VALUES (
+    SELECT
         :vault_id, 'quality', 'memory_unit', :target_id,
         :rule_name, CAST(:evidence AS jsonb), :suggested_action, 'pending', 'llm'
+    WHERE NOT EXISTS (
+        SELECT 1 FROM maintenance_proposals mp
+        WHERE mp.rule_name = :rule_name
+          AND mp.target_type = 'memory_unit'
+          AND mp.target_id = :target_id
+          AND mp.vault_id = CAST(:vault_id AS uuid)
+          AND mp.status IN ('resolved', 'dismissed')
+          AND mp.resolved_at > now() - interval '30 days'
     )
     ON CONFLICT (rule_name, target_type, target_id, vault_id)
     WHERE status = 'pending'
@@ -226,6 +240,25 @@ _SELECT_DEFERRED_FIFO_SQL = text("""
       AND status = 'pending'
     ORDER BY created_at ASC, id ASC
     LIMIT :limit
+""")
+
+
+# Check whether a reverse-pair contradiction finding already exists (pending or
+# recently resolved/dismissed). Used to suppress the A→B finding when B→A already
+# exists, eliminating duplicate contradiction reports.
+_REVERSE_CONTRADICTION_EXISTS_SQL = text("""
+    SELECT 1 FROM maintenance_proposals mp
+    WHERE mp.rule_name = :rule_name
+      AND mp.target_type = :target_type
+      AND mp.vault_id = CAST(:vault_id AS uuid)
+      AND mp.target_id = :related_id
+      AND mp.evidence->'related_unit_ids' @> CAST(:target_id_json AS jsonb)
+      AND (
+          mp.status = 'pending'
+          OR (mp.status IN ('resolved', 'dismissed')
+              AND mp.resolved_at > now() - interval '30 days')
+      )
+    LIMIT 1
 """)
 
 
@@ -266,6 +299,7 @@ _LOAD_UNIT_AND_TOP_PEER_TEXT_SQL = text("""
               AND m.id != :unit_id
               AND m.status = 'active'
               AND m.embedding IS NOT NULL
+              AND (m.metadata->>'virtual' IS NULL OR m.metadata->>'virtual' != 'true')
               AND self.embedding IS NOT NULL
             ORDER BY (m.embedding <=> self.embedding)
             LIMIT 1
@@ -279,6 +313,7 @@ _SELECT_TICK_CANDIDATES_SQL = text("""
     WHERE m.vault_id = :vault_id
       AND m.status = 'active'
       AND m.embedding IS NOT NULL
+      AND (m.metadata->>'virtual' IS NULL OR m.metadata->>'virtual' != 'true')
       AND NOT EXISTS (
           SELECT 1 FROM maintenance_proposals p
           WHERE p.target_type = 'memory_unit'
@@ -364,7 +399,7 @@ async def _invoke_check(
     unit_id: UUID,
     vault_id: UUID,
     session: AsyncSession,
-    context: CheckContext,
+    context: CheckContext | None,
 ) -> LLMLintFinding | None:
     """Invoke ``run_llm_check`` with backward-compatible context plumbing.
 
@@ -394,9 +429,63 @@ class LintLLMService(BaseService):
     ``(vault_id, hour_bucket)``).
     """
 
+    _calibrated_cache: dict[tuple[str, str | None], float | None]
+
+    def __init__(self, **kwargs: Any) -> None:
+        super().__init__(**kwargs)
+        self._calibrated_cache = {}
+
     @property
     def _settings(self):
         return self.config.server.memory.lint_llm
+
+    async def _get_calibrated_surprise_threshold(
+        self,
+        check_name: str,
+        vault_id: UUID,
+        session: AsyncSession,
+    ) -> float:
+        """Return the surprise threshold from lint_rule_calibration if one
+        exists, otherwise fall back to the static config default.
+
+        Caches per (check_name, vault_id) for the lifetime of the tick so
+        we don't re-query for every unit.
+        """
+        cache_key = (check_name, str(vault_id))
+        if cache_key in self._calibrated_cache:
+            cached = self._calibrated_cache[cache_key]
+            if cached is not None:
+                return cached
+            return float(self._settings.surprise_threshold)
+
+        try:
+            row = (
+                await session.execute(
+                    text(
+                        'SELECT surprise_threshold '
+                        'FROM lint_rule_calibration '
+                        'WHERE rule_name = :rule_name '
+                        '  AND (vault_id = CAST(:vault_id AS uuid) OR vault_id IS NULL) '
+                        '  AND superseded_by_version IS NULL '
+                        'ORDER BY vault_id IS NULL ASC, version DESC '
+                        'LIMIT 1'
+                    ),
+                    {'rule_name': check_name, 'vault_id': str(vault_id)},
+                )
+            ).first()
+        except Exception:
+            row = None
+
+        if row is not None and row.surprise_threshold is not None:
+            val = float(row.surprise_threshold)
+            self._calibrated_cache[cache_key] = val
+            return val
+        self._calibrated_cache[cache_key] = None
+        return float(self._settings.surprise_threshold)
+
+    def clear_calibration_cache(self) -> None:
+        """Call at the start of each tick to pick up new calibrations."""
+        self._calibrated_cache.clear()
 
     # -- quota -----------------------------------------------------------
 
@@ -569,7 +658,30 @@ class LintLLMService(BaseService):
 
         Returns True if a new row was inserted, False if a duplicate pending
         finding already existed for the same target + rule + vault.
+
+        For ``llm_semantic_contradiction`` findings, also checks whether a
+        reverse-pair finding (B→A) already exists before inserting A→B. This
+        is a belt-and-suspenders guard complementing the emission-time UUID
+        normalization in ``make_semantic_contradiction_check``.
         """
+        # Reverse-pair dedup for contradiction findings.
+        if finding.rule_name == 'llm_semantic_contradiction' and finding.related_unit_ids:
+            for related_id in finding.related_unit_ids:
+                row = (
+                    await session.execute(
+                        _REVERSE_CONTRADICTION_EXISTS_SQL,
+                        {
+                            'rule_name': finding.rule_name,
+                            'target_type': finding.target_type,
+                            'vault_id': str(vault_id),
+                            'related_id': related_id,
+                            'target_id_json': json.dumps(finding.target_id),
+                        },
+                    )
+                ).first()
+                if row is not None:
+                    return False
+
         evidence = {
             'check_type': finding.check_type,
             'surprise_score': finding.surprise_score,
@@ -599,9 +711,11 @@ class LintLLMService(BaseService):
         vault_id: UUID,
         *,
         run_llm_check: RunLLMCheck,
+        check_name: str = 'llm_semantic_contradiction',
         session: AsyncSession,
         polarity_classifier: PolarityClassifier | None = None,
         confidence_map: dict[str, tuple[float, int]] | None = None,
+        skip_quota: bool = False,
     ) -> MaybeRunOutcome:
         """Surprise-gate → quota → LLM check → write finding (or defer).
 
@@ -649,9 +763,13 @@ class LintLLMService(BaseService):
         score = await compute_unit_surprise(unit_id, vault_id, session, k=settings.surprise_k)
         outcome.surprise_score = score
 
+        effective_threshold = await self._get_calibrated_surprise_threshold(
+            check_name, vault_id, session
+        )
+
         polarity_result: PolarityResult | None = None
         polarity_contra_prob: float | None = None
-        if polarity_classifier is not None and score < settings.surprise_threshold:
+        if polarity_classifier is not None and score < effective_threshold:
             row = (
                 await session.execute(
                     _LOAD_UNIT_AND_TOP_PEER_TEXT_SQL,
@@ -677,7 +795,7 @@ class LintLLMService(BaseService):
         cleared = gate_passes(
             score,
             polarity_contra_prob,
-            surprise_threshold=settings.surprise_threshold,
+            surprise_threshold=effective_threshold,
             polarity_threshold=(
                 polarity_classifier.polarity_threshold
                 if polarity_classifier is not None
@@ -688,17 +806,18 @@ class LintLLMService(BaseService):
             outcome.skipped_below_threshold = True
             return outcome
 
-        admitted = await self.check_and_increment_quota(vault_id, session=session)
-        if not admitted:
-            await self.defer(
-                unit_id,
-                vault_id,
-                reason=_DEFER_REASON_COST_CAP,
-                surprise_score=score,
-                session=session,
-            )
-            outcome.deferred = True
-            return outcome
+        if not skip_quota:
+            admitted = await self.check_and_increment_quota(vault_id, session=session)
+            if not admitted:
+                await self.defer(
+                    unit_id,
+                    vault_id,
+                    reason=_DEFER_REASON_COST_CAP,
+                    surprise_score=score,
+                    session=session,
+                )
+                outcome.deferred = True
+                return outcome
 
         context = CheckContext(polarity=polarity_result)
         finding = await _invoke_check(run_llm_check, unit_id, vault_id, session, context)
@@ -797,7 +916,9 @@ class LintLLMService(BaseService):
         vault_id: UUID,
         *,
         run_llm_check: RunLLMCheck,
+        check_name: str = 'llm_semantic_contradiction',
         polarity_classifier: PolarityClassifier | None = None,
+        skip_quota: bool = False,
     ) -> LintLLMTickSummary:
         """Single scheduler-tick for ``vault_id``.
 
@@ -857,9 +978,11 @@ class LintLLMService(BaseService):
                         unit_id,
                         vault_id,
                         run_llm_check=run_llm_check,
+                        check_name=check_name,
                         session=session,
                         polarity_classifier=polarity_classifier,
                         confidence_map=confidence_map,
+                        skip_quota=skip_quota,
                     )
                     await session.commit()
                 except Exception:

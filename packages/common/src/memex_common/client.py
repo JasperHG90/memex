@@ -113,9 +113,14 @@ class RemoteMemexAPI:
             return [json.loads(line) for line in response.text.strip().split('\n') if line]
         return response.json()
 
-    async def _post(self, path: str, data: BaseModel | dict[str, Any]) -> Any:
+    async def _post(
+        self,
+        path: str,
+        data: BaseModel | dict[str, Any],
+        params: dict[str, Any] | None = None,
+    ) -> Any:
         payload = data.model_dump(mode='json') if isinstance(data, BaseModel) else data
-        response = await self.client.post(path, json=payload)
+        response = await self.client.post(path, json=payload, params=params)
         return await self._handle_response(response)
 
     async def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
@@ -1591,6 +1596,7 @@ class RemoteMemexAPI:
         vault_id: str | None = None,
         lint_type: str | None = None,
         status: str = 'pending',
+        flagged: bool | None = None,
         limit: int = 50,
         offset: int = 0,
     ) -> dict[str, Any]:
@@ -1600,45 +1606,95 @@ class RemoteMemexAPI:
             params['vault_id'] = vault_id
         if lint_type is not None:
             params['lint_type'] = lint_type
+        if flagged is not None:
+            params['flagged'] = str(flagged).lower()
         return await self._get('lint/findings', params=params)
 
-    async def lint_dismiss(self, finding_id: str) -> dict[str, Any]:
-        """Flip a pending finding to ``dismissed``."""
-        return await self._post(f'lint/findings/{finding_id}/dismiss', {})
+    async def lint_dismiss(
+        self,
+        finding_id: str,
+        *,
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        """Flip a pending finding to ``dismissed``.
+
+        ``note`` (optional) is stored at ``evidence.resolution.note`` for
+        the audit trail. Dismiss is non-destructive; no attended-mode gate.
+        """
+        body: dict[str, Any] = {}
+        if note is not None:
+            body['note'] = note
+        return await self._post(f'lint/findings/{finding_id}/dismiss', body)
 
     async def lint_resolve(
         self,
         finding_id: str,
         *,
+        action: str | None = None,
         params: dict[str, Any] | None = None,
+        note: str | None = None,
+        legacy_params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Flip a pending finding to ``resolved``.
 
-        ``params`` is forwarded to the server as the JSON request body and is
-        rule-specific. For ``entity_collapse_cluster`` findings, pass
-        ``{"winner_id": "<uuid>"}`` (or ``"winner_canonical_name"``) to
-        override the suggested winner; otherwise the server defaults to the
-        suggested winner recorded in the finding's evidence.
+        New cockpit shape — optional ``action`` (action_id), ``params``
+        (forwarded to ``action.execute``), and ``note`` (reviewer's
+        free-form text stored at ``evidence.resolution.note``). When
+        ``action`` is supplied the server runs the canned action via the
+        proposal_actions registry, captures ``prior_state`` /
+        ``applied_state`` under ``evidence.resolution.followup``, and
+        flips status atomically. Gates on attended-mode.
+
+        Legacy shape — for ``entity_collapse_cluster`` findings, the
+        server still accepts ``{"winner_id": ...}`` or
+        ``{"winner_canonical_name": ...}`` at the top level of the body;
+        pass these via ``legacy_params`` to keep them out of the new
+        ``params`` slot.
         """
-        body: dict[str, Any] = params or {}
+        body: dict[str, Any] = {}
+        if action is not None:
+            body['action'] = action
+        if params is not None:
+            body['params'] = params
+        if note is not None:
+            body['note'] = note
+        if legacy_params:
+            for key, value in legacy_params.items():
+                body[key] = value
         return await self._post(f'lint/findings/{finding_id}/resolve', body)
 
     async def lint_apply_winner(self, finding_id: str) -> dict[str, Any]:
         """Apply a winner-proposal finding's recorded action.
 
-        The finding's ``evidence.action`` literal drives the mutation —
-        mark a unit stale, mark a note superseded, or rewrite a contradicts
-        link as refines. Returns the applied details; raises on conflict.
+        Legacy entry point — the finding's ``evidence.action`` literal
+        drives the mutation (mark a unit stale, mark a note superseded,
+        rewrite a contradicts link as refines). New cockpit code should
+        prefer :meth:`lint_resolve` with an ``action`` argument so the
+        action registry's reversibility contract applies.
         """
         return await self._post(f'lint/findings/{finding_id}/apply', {})
 
-    async def lint_reverse_winner(self, finding_id: str) -> dict[str, Any]:
-        """Reverse a previously applied winner-proposal.
+    async def lint_reverse(self, finding_id: str) -> dict[str, Any]:
+        """Reverse a previously applied resolution.
 
-        Restores the row(s) recorded under ``evidence.resolution.prior_state``
-        and writes a paired audit row. The original finding stays resolved.
+        Server dispatches on ``evidence.resolution.followup.action`` (new
+        cockpit shape) when present, falling back to the legacy
+        winner-proposal path otherwise. Forward-only actions return 409
+        with ``detail.reason='forward_only'`` and no audit row.
         """
         return await self._post(f'lint/findings/{finding_id}/reverse', {})
+
+    # Back-compat alias — old call sites bound to lint_reverse_winner.
+    lint_reverse_winner = lint_reverse
+
+    async def lint_flag(self, finding_id: str) -> dict[str, Any]:
+        """Toggle the flagged_at bookmark on a finding.
+
+        Sets ``flagged_at = now()`` when currently NULL; clears to NULL
+        when already flagged. Flagging is orthogonal to status — any
+        finding can be flagged or unflagged.
+        """
+        return await self._post(f'lint/findings/{finding_id}/flag', {})
 
     async def run_lint_rules(self, vault_id: str | UUID) -> dict[str, Any]:
         """Synchronously run the V1 lint rule registry for ``vault_id``.
@@ -1650,6 +1706,34 @@ class RemoteMemexAPI:
         """
         return await self._post(f'lint/run/{vault_id}', {})
 
+    async def lint_seed_finding(
+        self,
+        *,
+        vault_id: str | UUID,
+        rule_name: str = 'llm_semantic_contradiction',
+        source: str = 'llm',
+        evidence: dict[str, Any] | None = None,
+        target_id: str | None = None,
+        suggested_action: str | None = None,
+    ) -> dict[str, Any]:
+        """Insert a single synthetic maintenance_proposals row.
+
+        Eval-only — requires ``MEMEX_EVAL_MODE=1`` on the server.
+        Returns ``{'id': ..., 'target_id': ..., 'status': 'pending'}``.
+        """
+        body: dict[str, Any] = {
+            'vault_id': str(vault_id),
+            'rule_name': rule_name,
+            'source': source,
+        }
+        if evidence is not None:
+            body['evidence'] = evidence
+        if target_id is not None:
+            body['target_id'] = target_id
+        if suggested_action is not None:
+            body['suggested_action'] = suggested_action
+        return await self._post('lint/findings/seed', body)
+
     async def run_lint_llm(self, vault_id: str | UUID) -> dict[str, Any]:
         """Synchronously run the LLM-gated lint pass for ``vault_id``.
 
@@ -1659,6 +1743,156 @@ class RemoteMemexAPI:
         this call lazy-loads NLI on first invocation.
         """
         return await self._post(f'lint/llm/run/{vault_id}', {})
+
+    async def lint_telemetry(
+        self,
+        *,
+        rule: str | None = None,
+        vault_id: str | None = None,
+        include_global: bool = True,
+    ) -> dict[str, Any]:
+        """Fetch per-rule telemetry rollups (Layer 2 of the auto-learning loop).
+
+        Returns ``{'rows': [...]}`` where each row carries ``rule_name``,
+        ``accept_count`` / ``no_op_count`` / ``dismiss_count`` /
+        ``legacy_count``, derived ``accept_rate`` and totals, the
+        ``window_start`` / ``window_end`` boundaries, and any median
+        summary stats. Read-only.
+        """
+        params: dict[str, Any] = {'include_global': include_global}
+        if rule is not None:
+            params['rule'] = rule
+        if vault_id is not None:
+            params['vault_id'] = vault_id
+        return await self._get('lint/calibration/telemetry', params=params)
+
+    # Layer 3 — threshold calibration.
+
+    async def lint_calibration_list(
+        self,
+        *,
+        rule: str | None = None,
+        vault_id: str | None = None,
+    ) -> dict[str, Any]:
+        """List calibration rows — versioned per-rule thresholds."""
+        params: dict[str, Any] = {}
+        if rule is not None:
+            params['rule'] = rule
+        if vault_id is not None:
+            params['vault_id'] = vault_id
+        return await self._get('lint/calibration/thresholds', params=params)
+
+    async def lint_calibration_run(
+        self,
+        *,
+        vault_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Run threshold calibration now."""
+        params: dict[str, Any] = {}
+        if vault_id is not None:
+            params['vault_id'] = vault_id
+        return await self._post('lint/calibration/calibrate', {}, params=params)
+
+    async def lint_calibration_freeze(
+        self,
+        *,
+        rule: str,
+        vault_id: str | None = None,
+        frozen: bool = True,
+    ) -> dict[str, Any]:
+        """Freeze or unfreeze auto-calibration for a rule."""
+        params: dict[str, Any] = {'rule': rule, 'frozen': frozen}
+        if vault_id is not None:
+            params['vault_id'] = vault_id
+        return await self._post('lint/calibration/freeze', {}, params=params)
+
+    async def lint_calibration_rollback(
+        self,
+        *,
+        rule: str,
+        version: int,
+        vault_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Rollback a rule's calibration to a specific version."""
+        params: dict[str, Any] = {'rule': rule, 'version': version}
+        if vault_id is not None:
+            params['vault_id'] = vault_id
+        return await self._post('lint/calibration/rollback', {}, params=params)
+
+    async def lint_telemetry_refresh(
+        self,
+        *,
+        vault_id: str | None = None,
+        window_days: int = 30,
+    ) -> dict[str, Any]:
+        """Recompute ``lint_rule_telemetry`` for the trailing window.
+
+        Idempotent — same window produces the same rollup. Returns the
+        rows-written / rules-seen / proposals-aggregated counts.
+        """
+        params: dict[str, Any] = {'window_days': window_days}
+        if vault_id is not None:
+            params['vault_id'] = vault_id
+        return await self._post('lint/calibration/refresh', {}, params=params)
+
+    # Layer 4 — DSPy signature optimization.
+
+    async def lint_signature_detail(
+        self,
+        rule: str,
+        version: int,
+        *,
+        vault_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """Fetch full signature detail including demos and compiled_program.
+
+        Returns ``None`` on 404 (signature not found).
+        """
+        params: dict[str, Any] = {'rule': rule, 'version': version}
+        if vault_id is not None:
+            params['vault_id'] = vault_id
+        try:
+            return await self._get('lint/optimize/signature', params=params)
+        except httpx.HTTPStatusError as e:
+            if e.response.status_code == 404:
+                return None
+            raise
+
+    async def lint_optimize_run(
+        self,
+        *,
+        rule: str,
+        vault_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Trigger a DSPy compile for a rule. Returns the CompileResult fields."""
+        params: dict[str, Any] = {'rule': rule}
+        if vault_id is not None:
+            params['vault_id'] = vault_id
+        return await self._post('lint/optimize/run', {}, params=params)
+
+    async def lint_optimize_history(
+        self,
+        *,
+        rule: str | None = None,
+    ) -> dict[str, Any]:
+        """List signature versions with validation scores."""
+        params: dict[str, Any] = {}
+        if rule is not None:
+            params['rule'] = rule
+        return await self._get('lint/optimize/history', params=params)
+
+    async def lint_optimize_rollback(
+        self,
+        *,
+        rule: str,
+        version: int,
+        vault_id: str | None = None,
+    ) -> dict[str, Any]:
+        """Rollback a rule's DSPy signature to a specific version."""
+        params: dict[str, Any] = {'rule': rule, 'version': version}
+        if vault_id is not None:
+            params['vault_id'] = vault_id
+        return await self._post('lint/optimize/rollback', {}, params=params)
 
     async def lint_get_flags(
         self,

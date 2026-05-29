@@ -65,3 +65,23 @@ def test_each_rule_projects_target_id_and_evidence(spec) -> None:
     norm = _normalize(spec.select_sql)
     assert 'as target_id' in norm, f'Rule {spec.name} does not alias a column to `target_id`'
     assert 'as evidence' in norm, f'Rule {spec.name} does not alias a column to `evidence`'
+
+
+# ---------------------------------------------------------------------------
+# Orphan mental model SQL — entity_name inclusion
+# ---------------------------------------------------------------------------
+
+
+def test_orphan_mental_model_sql_includes_entity_name() -> None:
+    """The orphan_mental_model rule SQL must project ``entity_name`` for cockpit display.
+
+    The cockpit's preview panel shows the entity name prominently for
+    orphan_mental_model findings. If the SQL stops including ``mm.name``
+    aliased to ``entity_name`` in the evidence jsonb, the cockpit will
+    render a blank entity header.
+    """
+    from memex_core.services.lint import _ORPHAN_MENTAL_MODEL_SQL
+
+    norm = _normalize(_ORPHAN_MENTAL_MODEL_SQL)
+    assert 'entity_name' in norm, '_ORPHAN_MENTAL_MODEL_SQL evidence must include entity_name'
+    assert 'mm.name' in norm, '_ORPHAN_MENTAL_MODEL_SQL must reference mm.name for the entity name'

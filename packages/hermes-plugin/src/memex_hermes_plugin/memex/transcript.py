@@ -47,9 +47,9 @@ def is_system_prompt(text: str) -> bool:
 # B. System-metadata detector
 # ---------------------------------------------------------------------------
 
-# Single-line only: no DOTALL (would let .+ span newlines) or MULTILINE.
 _SYSTEM_METADATA_RE = re.compile(
-    r'^\s*\[(?:Note|System)\s*:\s*.+\]\s*$',
+    r'^\s*\[(?:Note|System)\s*[:]\s*.+\]\s*$',
+    re.DOTALL,
 )
 
 
@@ -79,8 +79,7 @@ _HTML_INDICATORS: tuple[str, ...] = (
     "style='",
 )
 
-HTML_PLACEHOLDER = '[HTML content removed]'
-SYSTEM_PROMPT_PLACEHOLDER = '[system prompt omitted]'
+_HTML_PLACEHOLDER = '[HTML content removed]'
 
 
 def sanitize_html_content(text: str, threshold: int = 500) -> str:
@@ -95,12 +94,12 @@ def sanitize_html_content(text: str, threshold: int = 500) -> str:
     """
     tag_chars = sum(len(m.group()) for m in _HTML_TAG_RE.finditer(text))
     if tag_chars > threshold:
-        return HTML_PLACEHOLDER
+        return _HTML_PLACEHOLDER
 
     lower = text.lower()
     indicator_hits = sum(1 for ind in _HTML_INDICATORS if ind in lower)
     if indicator_hits >= 3 and len(text) > threshold:
-        return HTML_PLACEHOLDER
+        return _HTML_PLACEHOLDER
 
     return text
 
@@ -117,9 +116,6 @@ def _normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
 
     for m in messages:
         if 'user' in m or 'assistant' in m:
-            if pending_user is not None:
-                pairs.append({'user': pending_user, 'assistant': ''})
-                pending_user = None
             pairs.append(
                 {
                     'user': m.get('user', ''),
@@ -128,7 +124,7 @@ def _normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
             )
             continue
 
-        role = str(m.get('role', 'user')).strip().lower() or 'user'
+        role = str(m.get('role', '')).strip().lower()
         content = m.get('content', '')
         if isinstance(content, list):
             content = '\n'.join(
@@ -136,10 +132,8 @@ def _normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
                 for c in content
                 if not isinstance(c, dict) or c.get('type', 'text') == 'text'
             )
-        elif not isinstance(content, str):
-            content = str(content)
 
-        if role in ('tool', 'system'):
+        if role == 'tool':
             continue
 
         if role == 'user':
@@ -160,7 +154,6 @@ def preprocess_turns(
     turns: list[dict[str, Any]],
     *,
     strip_system_prompts: bool = True,
-    strip_system_metadata: bool = True,
     strip_html_content: bool = True,
     html_content_threshold: int = 500,
 ) -> list[dict[str, str]]:
@@ -178,9 +171,9 @@ def preprocess_turns(
 
         if strip_system_prompts and user and is_system_prompt(user):
             logger.debug('Stripped system prompt from turn %d (%d chars)', i, len(user))
-            user = SYSTEM_PROMPT_PLACEHOLDER
+            user = '[system prompt omitted]'
 
-        if strip_system_metadata and user and is_system_metadata(user):
+        if user and is_system_metadata(user):
             logger.debug('Stripped system metadata from turn %d', i)
             user = ''
 
@@ -201,13 +194,13 @@ def preprocess_turns(
 
 _PLACEHOLDER_STRINGS = frozenset(
     {
-        SYSTEM_PROMPT_PLACEHOLDER,
-        HTML_PLACEHOLDER,
+        '[system prompt omitted]',
+        _HTML_PLACEHOLDER,
     }
 )
 
 
-def content_chars(turns: list[dict[str, str]]) -> int:
+def _content_chars(turns: list[dict[str, str]]) -> int:
     """Sum of non-placeholder content characters across all turns."""
     total = 0
     for turn in turns:
@@ -222,7 +215,7 @@ def passes_quality_gate(
     turns: list[dict[str, str]],
     *,
     min_turns: int = 1,
-    min_capture_chars: int = 50,
+    min_content_chars: int = 50,
 ) -> bool:
     """Return False when the preprocessed transcript is too thin to capture."""
     substantive_turns = sum(
@@ -233,7 +226,7 @@ def passes_quality_gate(
     if substantive_turns < min_turns:
         return False
 
-    if content_chars(turns) < min_capture_chars:
+    if _content_chars(turns) < min_content_chars:
         return False
 
     return True
@@ -244,10 +237,17 @@ def passes_quality_gate(
 # ---------------------------------------------------------------------------
 
 
-def render_pairs(pairs: list[dict[str, str]]) -> str:
-    """Render already-normalized ``{user, assistant}`` pairs as markdown."""
+def format_transcript(messages: list[dict[str, Any]]) -> str:
+    """Render turn dicts as a structured markdown transcript.
+
+    Accepts both ``{user, assistant}`` pairs and ``{role, content}`` messages.
+    Produces ``### Role`` headers with content on separate lines and ``---``
+    horizontal rules between turns.
+    """
+    normalized = _normalize_messages(messages)
     blocks: list[str] = []
-    for turn in pairs:
+
+    for turn in normalized:
         parts: list[str] = []
         user = turn.get('user', '').strip()
         assistant = turn.get('assistant', '').strip()
@@ -263,22 +263,8 @@ def render_pairs(pairs: list[dict[str, str]]) -> str:
     return '\n\n---\n\n'.join(blocks)
 
 
-def format_transcript(messages: list[dict[str, Any]]) -> str:
-    """Render turn dicts as a structured markdown transcript.
-
-    Accepts both ``{user, assistant}`` pairs and ``{role, content}`` messages.
-    Produces ``### Role`` headers with content on separate lines and ``---``
-    horizontal rules between turns.
-    """
-    return render_pairs(_normalize_messages(messages))
-
-
 __all__ = [
-    'HTML_PLACEHOLDER',
-    'SYSTEM_PROMPT_PLACEHOLDER',
-    'content_chars',
     'format_transcript',
-    'render_pairs',
     'is_system_metadata',
     'is_system_prompt',
     'passes_quality_gate',
