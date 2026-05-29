@@ -141,14 +141,15 @@ class RemoteMemexAPI:
         response = await self.client.patch(path, json=payload)
         return await self._handle_response(response)
 
-    async def _head(self, path: str) -> int:
-        """Issue HEAD and return the raw status code (no body parsing).
+    async def _head(self, path: str) -> httpx.Response:
+        """Issue HEAD and return the response (no body parsing).
 
-        Used by callers like `head_note` that only need a 200/404 decision
-        without paying the response-body deserialisation cost.
+        Returns the full ``httpx.Response`` so callers raising
+        ``HTTPStatusError`` from an unexpected code can pass the real
+        response object (with proper headers/request/stream internals)
+        rather than a fabricated one.
         """
-        response = await self.client.head(path)
-        return response.status_code
+        return await self.client.head(path)
 
     # --- Vaults ---
     async def list_vaults(self) -> list[VaultDTO]:
@@ -587,24 +588,25 @@ class RemoteMemexAPI:
         """Cheap existence check via HEAD /notes/{id}. True iff 200.
 
         404 returns False (note doesn't exist yet). Any other non-2xx
-        status raises via `httpx.Response.raise_for_status()` upstream
-        — the hermes-plugin's `_wait_for_note_row` distinguishes those
-        per `_NON_TRANSIENT_HTTP_STATUSES`.
+        status raises ``httpx.HTTPStatusError`` carrying the real response
+        and request — the hermes-plugin's ``_wait_for_note_row``
+        distinguishes those per ``_NON_TRANSIENT_HTTP_STATUSES``.
         """
-        status = await self._head(f'notes/{note_id}')
-        if status == 200:
+        response = await self._head(f'notes/{note_id}')
+        if response.status_code == 200:
             return True
-        if status == 404:
+        if response.status_code == 404:
             return False
-        # Anything else is unexpected — surface via raise_for_status
-        # by re-issuing? No — just raise httpx.HTTPStatusError directly.
-        import httpx
-
-        raise httpx.HTTPStatusError(
-            f'Unexpected HEAD status {status}',
-            request=httpx.Request('HEAD', f'notes/{note_id}'),
-            response=httpx.Response(status_code=status),
-        )
+        # Use the real response so downstream callers that read .headers
+        # / .text / .reason_phrase get the actual server values, not
+        # synthesised stand-ins. raise_for_status() raises HTTPStatusError
+        # for any 4xx/5xx; we know it's non-2xx here because 200 was
+        # already handled above.
+        response.raise_for_status()
+        # raise_for_status only raises on 4xx/5xx; an unexpected 3xx /
+        # 1xx ends up here. Treat as not-exists to keep the contract
+        # ``bool``.
+        return False
 
     async def get_note_metadata(self, note_id: UUID) -> dict[str, Any] | None:
         """Get just the metadata from a note's page index."""

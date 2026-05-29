@@ -402,6 +402,72 @@ async def test_get_note_metadata_returns_none_for_legacy_list_format(note_servic
 
 
 # ---------------------------------------------------------------------------
+# note_exists — cheap pk-existence check used by HEAD /notes/{id}
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_note_exists_returns_true_when_pk_lookup_hits(note_service):
+    """note_exists returns True when the pk-index lookup returns a row.
+
+    Followup to PR #191 Medium — the service-layer method has a distinct
+    query shape (`select(Note.id) … LIMIT 1`) that wasn't covered by the
+    existing get_note tests.
+    """
+    note_id = uuid4()
+
+    mock_result = MagicMock()
+    mock_result.first = MagicMock(return_value=note_id)
+
+    mock_session = AsyncMock()
+    mock_session.exec = AsyncMock(return_value=mock_result)
+    note_service.metastore.session.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+    note_service.metastore.session.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    assert await note_service.note_exists(note_id) is True
+    mock_session.exec.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_note_exists_returns_false_when_pk_lookup_misses(note_service):
+    """note_exists returns False when the pk-index lookup yields no row."""
+    note_id = uuid4()
+
+    mock_result = MagicMock()
+    mock_result.first = MagicMock(return_value=None)
+
+    mock_session = AsyncMock()
+    mock_session.exec = AsyncMock(return_value=mock_result)
+    note_service.metastore.session.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+    note_service.metastore.session.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    assert await note_service.note_exists(note_id) is False
+
+
+@pytest.mark.asyncio
+async def test_note_exists_does_not_hydrate_full_note(note_service):
+    """note_exists uses session.exec (lightweight query), NOT session.get
+    (full model hydration). Regression guard: a refactor that swapped to
+    session.get would silently regress the perf win on the hot
+    _wait_for_note_row poll path.
+    """
+    note_id = uuid4()
+
+    mock_result = MagicMock()
+    mock_result.first = MagicMock(return_value=note_id)
+
+    mock_session = AsyncMock()
+    mock_session.exec = AsyncMock(return_value=mock_result)
+    mock_session.get = AsyncMock()
+    note_service.metastore.session.return_value.__aenter__ = AsyncMock(return_value=mock_session)
+    note_service.metastore.session.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    await note_service.note_exists(note_id)
+
+    mock_session.get.assert_not_awaited()
+
+
+# ---------------------------------------------------------------------------
 # set_note_status — memory unit cascade tests
 # ---------------------------------------------------------------------------
 

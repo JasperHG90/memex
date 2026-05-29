@@ -386,7 +386,7 @@ def _build_ner_seeds(
                 lowered = name.lower()
                 escaped = _escape_like_pattern(lowered)
                 conds_canonical.append(
-                    func.lower(col(Entity.canonical_name)).ilike(f'%{escaped}%', escape='\\')
+                    func.lower(col(Entity.canonical_name)).like(f'%{escaped}%', escape='\\')
                 )
                 conds_canonical.append(
                     func.similarity(func.lower(col(Entity.canonical_name)), lowered)
@@ -403,7 +403,7 @@ def _build_ner_seeds(
                 lowered = name.lower()
                 escaped = _escape_like_pattern(lowered)
                 conds_alias.append(
-                    func.lower(col(EntityAlias.name)).ilike(f'%{escaped}%', escape='\\')
+                    func.lower(col(EntityAlias.name)).like(f'%{escaped}%', escape='\\')
                 )
                 conds_alias.append(
                     func.similarity(func.lower(col(EntityAlias.name)), lowered)
@@ -419,14 +419,14 @@ def _build_ner_seeds(
         query_escaped = _escape_like_pattern(query_lower)
         seed_from_canonical = select(col(Entity.id).label('id')).where(
             or_(
-                func.lower(col(Entity.canonical_name)).ilike(f'%{query_escaped}%', escape='\\'),
+                func.lower(col(Entity.canonical_name)).like(f'%{query_escaped}%', escape='\\'),
                 func.similarity(func.lower(col(Entity.canonical_name)), query_lower)
                 > similarity_threshold,
             )
         )
         seed_from_alias = select(col(EntityAlias.canonical_id).label('id')).where(
             or_(
-                func.lower(col(EntityAlias.name)).ilike(f'%{query_escaped}%', escape='\\'),
+                func.lower(col(EntityAlias.name)).like(f'%{query_escaped}%', escape='\\'),
                 func.similarity(func.lower(col(EntityAlias.name)), query_lower)
                 > similarity_threshold,
             )
@@ -851,6 +851,13 @@ class EntityCooccurrenceNoteGraphStrategy:
         # cooccurrence rows before the outer LIMIT 60. Split into
         # UNION ALL of two single-side joins — each branch uses its own
         # btree, and the planner sees the small per-side cardinality.
+        #
+        # `UNION ALL` (vs `UNION`) is safe here because EntityCooccurrence
+        # enforces `CHECK (entity_id_1 < entity_id_2)` at
+        # `sql_models.py:1164` — each unordered pair {X, Y} appears in
+        # exactly one row, so for any given seed S the left branch
+        # (entity_id_1 = S) and the right branch (entity_id_2 = S) match
+        # disjoint sets of rows. No (neighbor_id, link_strength) duplicates.
         link_strength_expr = (
             func.ln(col(EntityCooccurrence.cooccurrence_count) + 1)
             / func.ln(col(Entity.mention_count) + 2)
