@@ -178,6 +178,32 @@ class TestBuildSeedEntityCte:
         assert 'lower(entities.canonical_name)' in sql
         assert 'lower(entity_aliases.name)' in sql
 
+    def test_like_wildcards_in_input_are_escaped(self) -> None:
+        """Wildcard chars in NER / query inputs must not widen the match.
+        `Al_ce` should be treated literally, not as `Al<any-char>ce`.
+        """
+        from memex_core.memory.retrieval.strategies import _escape_like_pattern
+
+        assert _escape_like_pattern('Al_ce') == 'Al\\_ce'
+        assert _escape_like_pattern('100%') == '100\\%'
+        assert _escape_like_pattern('a\\b') == 'a\\\\b'
+        assert _escape_like_pattern('clean') == 'clean'
+
+        # End-to-end: compiled SQL params contain the escaped form.
+        class MockNER:
+            def predict(self, text: str) -> list[dict[str, str]]:
+                return [{'word': 'Al_ce'}]
+
+        cte = build_seed_entity_cte(
+            'find Al_ce',
+            ner_model=MockNER(),  # type: ignore[arg-type]
+            include_ilike=True,
+        )
+        params = cte.compile().params
+        assert any('al\\_ce' in v for v in params.values() if isinstance(v, str)), (
+            f'Expected escaped al\\_ce in params: {params}'
+        )
+
     def test_trgm_rhs_lowered_at_python_level(self) -> None:
         """The parameter side of similarity / ilike is pre-lowered in
         Python (passed to SQLAlchemy as the bound value), not via SQL's
