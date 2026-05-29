@@ -377,13 +377,25 @@ class EntityResolver:
                 FROM entity_cooccurrences
                 WHERE entity_id_2 = ANY(:candidate_ids :: uuid[])
             ),
+            aggregated AS (
+                -- Cooccurrence is stored per-vault (PK includes vault_id), but entity
+                -- resolution is global: collapse the per-vault rows back to one total
+                -- per (source, neighbor) so a neighbor appearing in several vaults
+                -- doesn't consume multiple rank slots below.
+                SELECT
+                    source_id,
+                    neighbor_id,
+                    SUM(cooccurrence_count) AS cooccurrence_count
+                FROM combined
+                GROUP BY source_id, neighbor_id
+            ),
             ranked AS (
                 SELECT
                     source_id,
                     neighbor_id,
                     cooccurrence_count,
                     ROW_NUMBER() OVER(PARTITION BY source_id ORDER BY cooccurrence_count DESC) as rank
-                FROM combined
+                FROM aggregated
             )
             SELECT
                 r.source_id,
@@ -646,7 +658,7 @@ class EntityResolver:
         # On conflict, keep the earliest valid_from (do NOT overwrite with a later value).
         stmt = pg_insert(EntityCooccurrence).values(co_pairs_data)
         stmt = stmt.on_conflict_do_update(
-            index_elements=['entity_id_1', 'entity_id_2'],
+            index_elements=['entity_id_1', 'entity_id_2', 'vault_id'],
             set_={
                 # Magic: DB Count + Batch Count
                 'cooccurrence_count': EntityCooccurrence.cooccurrence_count
@@ -705,3 +717,64 @@ class EntityResolver:
         entity_id = result.first()
 
         return str(entity_id) if entity_id else None
+
+
+async def recompute_cooccurrences_for_entities(
+    session: AsyncSession,
+    vault_id: PyUUID,
+    entity_ids: set[PyUUID] | list[PyUUID],
+) -> None:
+    """Rebuild ``EntityCooccurrence`` rows for every pair touching ``entity_ids`` in ``vault_id``.
+
+    Deletes the affected rows in this vault, then recomputes them from ground truth
+    (``unit_entities`` joined to ``memory_units`` scoped to the vault). The rebuilt
+    count is the number of distinct units in the vault that co-mention each pair —
+    matching the ingest-time semantics in :meth:`EntityResolver` (one increment per
+    unit per pair). ``valid_from`` is the earliest unit ``event_date``; ``valid_to``
+    stays open.
+
+    Idempotent: re-running against the same ground truth yields identical rows. Used
+    by ``migrate_note`` to keep per-vault cooccurrence counts correct on both sides of
+    a move, where one note's contribution must be subtracted from the source vault and
+    added to the target without disturbing edges other notes still support.
+    """
+    eids = [str(e) for e in entity_ids]
+    if not eids:
+        return
+
+    params = {'vault_id': str(vault_id), 'eids': eids}
+
+    # 1. Drop the affected pairs in this vault (they will be rebuilt below; pairs with
+    #    no surviving co-mentions simply do not reappear).
+    await session.exec(
+        text(
+            """
+            DELETE FROM entity_cooccurrences
+            WHERE vault_id = :vault_id
+              AND (entity_id_1 = ANY(:eids ::uuid[]) OR entity_id_2 = ANY(:eids ::uuid[]))
+            """
+        ),
+        params=params,
+    )
+
+    # 2. Recompute from ground truth. Canonical ordering (entity_id_1 < entity_id_2) is
+    #    enforced by the self-join condition, matching the table CHECK constraint.
+    await session.exec(
+        text(
+            """
+            INSERT INTO entity_cooccurrences
+                (entity_id_1, entity_id_2, vault_id, cooccurrence_count,
+                 last_cooccurred, valid_from)
+            SELECT a.entity_id, b.entity_id, mu.vault_id,
+                   COUNT(DISTINCT a.unit_id), now(), MIN(mu.event_date)
+            FROM unit_entities a
+            JOIN unit_entities b
+              ON a.unit_id = b.unit_id AND a.entity_id < b.entity_id
+            JOIN memory_units mu ON mu.id = a.unit_id
+            WHERE mu.vault_id = :vault_id
+              AND (a.entity_id = ANY(:eids ::uuid[]) OR b.entity_id = ANY(:eids ::uuid[]))
+            GROUP BY a.entity_id, b.entity_id, mu.vault_id
+            """
+        ),
+        params=params,
+    )

@@ -461,7 +461,7 @@ class EntityService(BaseService):
                         valid_to=row.valid_to,
                     )
                     upsert = upsert.on_conflict_do_update(
-                        index_elements=['entity_id_1', 'entity_id_2'],
+                        index_elements=['entity_id_1', 'entity_id_2', 'vault_id'],
                         set_={
                             'cooccurrence_count': (
                                 EntityCooccurrence.cooccurrence_count + row.cooccurrence_count

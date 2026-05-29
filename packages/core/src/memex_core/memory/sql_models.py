@@ -1112,7 +1112,7 @@ class EntityCooccurrence(SQLModel, table=True):  # type: ignore
         description='UUID of the second entity (lexicographically larger).',
     )
 
-    vault_id: UUID = vault_id_field()
+    vault_id: UUID = vault_id_field(primary_key=True)
 
     cooccurrence_count: int = Field(
         default=1,

@@ -5,11 +5,20 @@ from sqlmodel import Field
 from memex_core.config import GLOBAL_VAULT_ID
 
 
-def vault_id_field():
-    """Returns a new Field for vault_id to avoid sharing Column objects."""
+def vault_id_field(*, primary_key: bool = False):
+    """Returns a new Field for vault_id to avoid sharing Column objects.
+
+    Pass ``primary_key=True`` for tables whose grain includes the vault (e.g.
+    EntityCooccurrence, where the same entity pair is tracked per-vault).
+    """
     return Field(
         default=GLOBAL_VAULT_ID,
-        sa_column=Column(SA_UUID(), ForeignKey('vaults.id', ondelete='CASCADE'), index=True),
+        sa_column=Column(
+            SA_UUID(),
+            ForeignKey('vaults.id', ondelete='CASCADE'),
+            primary_key=primary_key,
+            index=True,
+        ),
         description='The UUID of the vault this record belongs to. Defaults to Global Vault.',
     )
 
