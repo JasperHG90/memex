@@ -103,6 +103,18 @@ def validate_procedure_key(key: str) -> None:
     ``<verb>`` and ``<context-tag>`` must match ``[a-z][a-z0-9_-]*``.
     """
     if parse_procedure_key(key) is None:
+        # Targeted error for keys with MULTIPLE `:procedure:` infixes —
+        # the parser refuses these as ambiguous (which split should win?).
+        # Hit when a project_id legitimately contains `:procedure:` OR
+        # when the operator double-pasted the infix.
+        if key.count(':procedure:') > 1:
+            raise ValueError(
+                f'Invalid procedure key: {key!r}. The key contains the '
+                '`:procedure:` infix more than once, which is ambiguous '
+                '(unclear which occurrence splits scope from verb:context). '
+                'If your project_id legitimately contains `:procedure:`, '
+                'pick a different segment to avoid the collision.'
+            )
         # Targeted error for the "flat-namespace-with-sub-id" class —
         # `global:foo:procedure:*` and `user:foo:procedure:*` are common
         # misshapes (the user assumed all 4 scopes take an id segment).

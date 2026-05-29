@@ -42,6 +42,20 @@ def test_valid_namespaces_identity_with_kv_utils() -> None:
     assert VALID_NAMESPACES is COMMON_VALID_NAMESPACES
 
 
+def test_validate_procedure_key_ambiguous_double_infix_gives_targeted_error() -> None:
+    """A key with multiple `:procedure:` infixes is ambiguous (which
+    occurrence splits scope from verb:context?). The targeted error
+    must name the ambiguity rather than the generic "Invalid procedure
+    key" message — the operator's mental model needs the specific cue
+    that the infix is duplicated."""
+    with pytest.raises(ValueError) as excinfo:
+        validate_procedure_key('project:bad:procedure:scoped:procedure:verb:ctx')
+    msg = str(excinfo.value)
+    assert ':procedure:' in msg
+    assert 'more than once' in msg
+    assert 'ambiguous' in msg
+
+
 def test_validate_procedure_key_flat_namespace_with_sub_id_gives_targeted_error() -> None:
     """`global:foo:procedure:*` and `user:foo:procedure:*` are a common
     misshape (operator assumed all 4 scopes accept an id segment). The
