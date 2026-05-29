@@ -9,7 +9,7 @@ has its tables. Distinct per-vault chunk embeddings give a real ranking signal
 
 from __future__ import annotations
 
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
@@ -137,8 +137,6 @@ async def test_score_ranks_topically_closest_vault_first(api, session, router_sc
     await api.inbox_router.populate_note_cache(note_id)
     scored = await api.inbox_router.score_notes([note_id])
 
-    from uuid import UUID
-
     cands = scored[UUID(note_id)]
     names = [c.vault_name for c in sorted(cands, key=lambda c: -c.p_match)]
     assert 'vault-a' in names and 'vault-b' in names
@@ -178,8 +176,6 @@ async def test_record_feedback_updates_sufficient_stats(api, session, router_sch
     note_id = await _seed_inbox_note(session, inbox, _VEC_A)
     await api.inbox_router.refresh_anchors()
     await api.inbox_router.populate_note_cache(note_id)
-
-    from uuid import UUID
 
     async with api.metastore.session() as s:
         before = (

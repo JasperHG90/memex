@@ -129,13 +129,23 @@ VALUES (:vault_id ::uuid, 'routing', 'note', :target_id, :rule_name,
         now(), :actor)
 """
 
-# Inbox notes due for triage: in the inbox vault, with chunks, and not currently
-# parked behind a not-yet-due no-fit proposal.
+# Inbox notes due for triage: in the inbox vault, with chunks, NOT already
+# awaiting a cockpit decision on a pending route proposal, and not currently
+# parked behind a not-yet-due no-fit backoff window. Skipping notes that already
+# have a pending route proposal avoids re-scoring (and re-proposing with stale
+# evidence) a note the user simply hasn't actioned yet.
 _SELECT_INBOX_NOTES_SQL = """
 SELECT n.id
   FROM notes n
  WHERE n.vault_id = :inbox_id ::uuid
    AND EXISTS (SELECT 1 FROM chunks c WHERE c.note_id = n.id)
+   AND NOT EXISTS (
+        SELECT 1 FROM maintenance_proposals mp
+         WHERE mp.rule_name = :route_rule
+           AND mp.target_type = 'note'
+           AND mp.target_id = n.id::text
+           AND mp.status = 'pending'
+   )
    AND NOT EXISTS (
         SELECT 1 FROM maintenance_proposals mp
          WHERE mp.rule_name = :no_fit_rule
@@ -245,8 +255,17 @@ class InboxRouterService(BaseService):
 
     async def populate_note_cache(self, note_id: UUID) -> None:
         """(Re)compute the cached features for one note. Idempotent upsert."""
+        await self.populate_note_caches([note_id])
+
+    async def populate_note_caches(self, note_ids: list[UUID]) -> None:
+        """(Re)compute cached features for many notes in one statement."""
+        if not note_ids:
+            return
         async with self.metastore.session() as session:
-            await session.execute(text(_sql.POPULATE_NOTE_CACHE_SQL), {'note_id': str(note_id)})
+            await session.execute(
+                text(_sql.POPULATE_NOTE_CACHE_SQL),
+                {'note_ids': [str(n) for n in note_ids]},
+            )
             await session.commit()
 
     # ------------------------------------------------------------------ scoring
@@ -340,6 +359,7 @@ class InboxRouterService(BaseService):
                     text(_SELECT_INBOX_NOTES_SQL),
                     {
                         'inbox_id': str(inbox_id),
+                        'route_rule': ROUTE_RULE,
                         'no_fit_rule': NO_FIT_RULE,
                         'limit': MAX_NOTES_PER_TICK,
                     },
@@ -349,8 +369,7 @@ class InboxRouterService(BaseService):
         if not note_ids:
             return result
 
-        for nid in note_ids:
-            await self.populate_note_cache(nid)
+        await self.populate_note_caches(note_ids)
 
         scored = await self.score_notes(note_ids)
         result.scored = len(scored)
@@ -468,6 +487,17 @@ class InboxRouterService(BaseService):
             'applied_at': datetime.now(timezone.utc).isoformat(),
         }
         async with self.metastore.session() as session:
+            # Dismiss any pending routing proposal for this note — the note has
+            # moved, so a leftover cockpit action would be stale.
+            await session.execute(
+                text(
+                    'UPDATE maintenance_proposals '
+                    "SET status = 'dismissed', resolved_at = now(), resolved_by = :actor "
+                    "WHERE lint_type = 'routing' AND target_type = 'note' "
+                    "AND target_id = :target_id AND status = 'pending'"
+                ),
+                {'target_id': str(decision.note_id), 'actor': ROUTER_ACTOR},
+            )
             await session.execute(
                 text(_INSERT_RESOLVED_SQL),
                 {
@@ -506,31 +536,9 @@ class InboxRouterService(BaseService):
     async def _emit_no_fit(self, inbox_id: UUID, decision: RouterDecision) -> None:
         best = decision.candidates[0].p_match_raw if decision.candidates else 0.0
         now = datetime.now(timezone.utc)
-        retry_n, next_retry = await self._next_backoff(inbox_id, decision.note_id, now)
-        evidence = NoFitEvidence(
-            routing_state=decision.routing_state.value,
-            best_p_match_raw=best,
-            retry_n=retry_n,
-            next_retry_at=next_retry.isoformat(),
-            last_evaluated_at=now.isoformat(),
-        )
-        async with self.metastore.session() as session:
-            await session.execute(
-                text(_UPSERT_NO_FIT_SQL),
-                {
-                    'vault_id': str(inbox_id),
-                    'target_id': str(decision.note_id),
-                    'rule_name': NO_FIT_RULE,
-                    'evidence': evidence.model_dump_json(),
-                    'suggested_action': 'No vault fits this note; leave in inbox or migrate manually.',
-                },
-            )
-            await session.commit()
-
-    async def _next_backoff(
-        self, inbox_id: UUID, note_id: UUID, now: datetime
-    ) -> tuple[int, datetime]:
-        """Compute the next (retry_n, next_retry_at) from any existing no-fit row."""
+        # Read the existing retry counter and upsert in ONE transaction. The
+        # SELECT ... FOR UPDATE locks any existing pending row so a concurrent
+        # writer can't read the same retry_n and clobber the increment.
         async with self.metastore.session() as session:
             row = (
                 await session.execute(
@@ -538,15 +546,35 @@ class InboxRouterService(BaseService):
                         "SELECT (evidence->>'retry_n')::int FROM maintenance_proposals "
                         "WHERE rule_name = :rule AND target_type = 'note' "
                         'AND target_id = :tid AND vault_id = :vid ::uuid '
-                        "AND status = 'pending'"
+                        "AND status = 'pending' FOR UPDATE"
                     ),
-                    {'rule': NO_FIT_RULE, 'tid': str(note_id), 'vid': str(inbox_id)},
+                    {'rule': NO_FIT_RULE, 'tid': str(decision.note_id), 'vid': str(inbox_id)},
                 )
             ).first()
-        prev = int(row[0]) if row and row[0] is not None else -1
-        retry_n = prev + 1
-        delay_days = min(self._cfg.backoff_base_days * (2**retry_n), self._cfg.backoff_cap_days)
-        return retry_n, now + timedelta(days=delay_days)
+            prev = int(row[0]) if row and row[0] is not None else -1
+            retry_n = prev + 1
+            delay_days = min(self._cfg.backoff_base_days * (2**retry_n), self._cfg.backoff_cap_days)
+            next_retry = now + timedelta(days=delay_days)
+            evidence = NoFitEvidence(
+                routing_state=decision.routing_state.value,
+                best_p_match_raw=best,
+                retry_n=retry_n,
+                next_retry_at=next_retry.isoformat(),
+                last_evaluated_at=now.isoformat(),
+            )
+            await session.execute(
+                text(_UPSERT_NO_FIT_SQL),
+                {
+                    'vault_id': str(inbox_id),
+                    'target_id': str(decision.note_id),
+                    'rule_name': NO_FIT_RULE,
+                    'evidence': evidence.model_dump_json(),
+                    'suggested_action': (
+                        'No vault fits this note; leave in inbox or migrate manually.'
+                    ),
+                },
+            )
+            await session.commit()
 
     def _route_evidence(self, inbox_id: UUID, decision: RouterDecision) -> RouteEvidence:
         return RouteEvidence(

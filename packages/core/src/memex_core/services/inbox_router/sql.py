@@ -65,13 +65,15 @@ ON CONFLICT (vault_id) DO UPDATE SET
 """
 
 
-# Per-note feature cache. tsq = top-50 lexemes of the note's tsvector, OR-joined
-# (robust to long notes that AND-semantics plainto_tsquery would zero out).
+# Per-note feature cache, batched over many notes in one statement (one DB
+# round-trip per tick rather than one per note). tsq = top-50 lexemes of the
+# note's tsvector, OR-joined (robust to long notes that AND-semantics
+# plainto_tsquery would zero out). Pass a single-element array for one note.
 POPULATE_NOTE_CACHE_SQL = """
 INSERT INTO inbox_router_note_cache (note_id, chunk_centroid, tsq, entity_ids, updated_at)
 SELECT
-    :note_id ::uuid,
-    (SELECT AVG(c.embedding) FROM chunks c WHERE c.note_id = :note_id ::uuid),
+    n.id,
+    (SELECT AVG(c.embedding) FROM chunks c WHERE c.note_id = n.id),
     (
         SELECT CASE WHEN q.s IS NULL OR q.s = '' THEN NULL::tsquery
                     ELSE to_tsquery('simple', q.s) END
@@ -81,7 +83,7 @@ SELECT
                   FROM unnest(tsvector_to_array(to_tsvector('english',
                        left(COALESCE(
                            (SELECT string_agg(c.text, ' ')
-                              FROM chunks c WHERE c.note_id = :note_id ::uuid),
+                              FROM chunks c WHERE c.note_id = n.id),
                            ''), 1000000)))) AS lex
                  WHERE lex ~ '^[a-z][a-z0-9_]{1,}$'
                  LIMIT 50
@@ -92,9 +94,10 @@ SELECT
         SELECT array_agg(DISTINCT ue.entity_id)
           FROM memory_units mu
           JOIN unit_entities ue ON ue.unit_id = mu.id
-         WHERE mu.note_id = :note_id ::uuid
+         WHERE mu.note_id = n.id
     ), '{}'::uuid[]),
     now()
+FROM unnest(:note_ids ::uuid[]) AS n(id)
 ON CONFLICT (note_id) DO UPDATE SET
     chunk_centroid = EXCLUDED.chunk_centroid,
     tsq            = EXCLUDED.tsq,
