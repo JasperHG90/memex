@@ -441,16 +441,26 @@ class NoteSearchEngine:
         weight = weights.get('semantic', 1.0)
         distance = cast(Any, col(Chunk.embedding)).cosine_distance(query_embedding)
 
-        stmt = select(
-            Chunk.id,
-            func.rank().over(order_by=distance.asc()).label('rnk'),
-            literal(weight).label('weight'),
-        ).select_from(Chunk)
-
+        # B.3: previous shape was `rank() OVER (ORDER BY distance) ... LIMIT k`
+        # — the window function wrapping prevented the planner from pushing
+        # LIMIT into the HNSW index scan, forcing an exact KNN over the
+        # entire chunks table. Canonical pgvector HNSW pattern is plain
+        # `ORDER BY distance LIMIT k` in the inner subquery, with the rank
+        # assigned in an outer SELECT via `row_number() OVER ()` (no
+        # ORDER BY — relies on the subquery ordering, which CTEs preserve
+        # in Postgres). Gate validated via EXPLAIN ANALYZE per the tech
+        # report — planner is fickle on HNSW + filters.
+        inner = select(Chunk.id, distance.label('distance')).select_from(Chunk)
         if request.vault_ids:
-            stmt = stmt.where(col(Chunk.vault_id).in_(request.vault_ids))
+            inner = inner.where(col(Chunk.vault_id).in_(request.vault_ids))
+        inner = inner.order_by(distance.asc()).limit(pool_size)
+        inner_cte = inner.cte('chunk_semantic_inner')
 
-        cte = stmt.limit(pool_size).cte('chunk_semantic')
+        cte = select(
+            inner_cte.c.id,
+            func.row_number().over().label('rnk'),
+            literal(weight).label('weight'),
+        ).cte('chunk_semantic')
         return select(cte.c.id, cte.c.rnk, cte.c.weight)
 
     def _keyword_cte(

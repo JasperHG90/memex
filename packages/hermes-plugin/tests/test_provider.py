@@ -44,6 +44,7 @@ def provider_with_stubbed_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     fake_api.get_session_briefing = AsyncMock(return_value='# Briefing')
     fake_api.ingest = AsyncMock(return_value=SimpleNamespace(status='ok', note_id=str(note_uuid)))
     fake_api.get_note = AsyncMock(return_value=SimpleNamespace(id=note_uuid))
+    fake_api.head_note = AsyncMock(return_value=True)
     fake_api.kv_put = AsyncMock()
 
     with patch('memex_common.client.RemoteMemexAPI', return_value=fake_api):
@@ -374,6 +375,7 @@ def provider_with_append_api(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     fake_api.get_session_briefing = AsyncMock(return_value='# Briefing')
     fake_api.ingest = AsyncMock(return_value=SimpleNamespace(status='ok', note_id=str(note_uuid)))
     fake_api.get_note = AsyncMock(return_value=SimpleNamespace(id=note_uuid))
+    fake_api.head_note = AsyncMock(return_value=True)
     fake_api.append_to_note = AsyncMock(
         return_value=SimpleNamespace(
             status='success',
@@ -805,6 +807,7 @@ def test_vault_rebind_after_note_initialized_is_ignored(
     fake_api.get_session_briefing = AsyncMock(return_value='')
     fake_api.ingest = AsyncMock(return_value=SimpleNamespace(status='ok', note_id=str(note_uuid)))
     fake_api.get_note = AsyncMock(return_value=SimpleNamespace(id=note_uuid))
+    fake_api.head_note = AsyncMock(return_value=True)
 
     with patch('memex_common.client.RemoteMemexAPI', return_value=fake_api):
         with patch(
@@ -837,17 +840,17 @@ def test_wait_for_note_row_retries_on_transient_5xx(provider_with_append_api):
     import httpx
 
     provider, api, _ = provider_with_append_api
-    note_id = uuid4()
 
     fake_503 = httpx.Response(status_code=503, text='busy')
-    fake_503._request = httpx.Request('GET', 'http://test/notes/x')
+    fake_503._request = httpx.Request('HEAD', 'http://test/notes/x')
     transient = httpx.HTTPStatusError('503', request=fake_503._request, response=fake_503)
 
-    api.get_note = AsyncMock(side_effect=[transient, transient, SimpleNamespace(id=note_id)])
-    provider._api.get_note = api.get_note
+    # A.5: wait loop polls head_note now (cheap existence check).
+    api.head_note = AsyncMock(side_effect=[transient, transient, True])
+    provider._api.head_note = api.head_note
 
     assert provider._wait_for_note_row(timeout=5.0) is True
-    assert api.get_note.await_count == 3
+    assert api.head_note.await_count == 3
 
 
 def test_wait_for_note_row_bails_on_definitive_4xx(provider_with_append_api):
@@ -860,15 +863,15 @@ def test_wait_for_note_row_bails_on_definitive_4xx(provider_with_append_api):
     provider, api, _ = provider_with_append_api
 
     fake_400 = httpx.Response(status_code=400, text='bad request')
-    fake_400._request = httpx.Request('GET', 'http://test/notes/x')
+    fake_400._request = httpx.Request('HEAD', 'http://test/notes/x')
     bad = httpx.HTTPStatusError('400', request=fake_400._request, response=fake_400)
 
-    api.get_note = AsyncMock(side_effect=bad)
-    provider._api.get_note = api.get_note
+    api.head_note = AsyncMock(side_effect=bad)
+    provider._api.head_note = api.head_note
 
     assert provider._wait_for_note_row(timeout=10.0) is False
     # Bailed early — only one call, not the full poll-loop count.
-    assert api.get_note.await_count == 1
+    assert api.head_note.await_count == 1
 
 
 # ---- A.1: 409-on-create overlap path --------------------------------------
@@ -894,7 +897,7 @@ def test_create_409_waits_for_note_row_and_pops_on_success(provider_with_append_
     overlap = httpx.HTTPStatusError('409', request=fake_409._request, response=fake_409)
     api.ingest = AsyncMock(side_effect=overlap)
     provider._api.ingest = api.ingest
-    # get_note (already AsyncMock returning SimpleNamespace) resolves the wait.
+    # head_note (already AsyncMock returning True) resolves the wait.
 
     provider.sync_turn('q', 'a')
     # Defensive: confirm the flip happens via the 409→wait path, not from
@@ -907,7 +910,7 @@ def test_create_409_waits_for_note_row_and_pops_on_success(provider_with_append_
     # Head popped, _note_initialized flipped, no orphaned create stays queued.
     assert provider._pending == []
     assert provider._note_initialized is True
-    api.get_note.assert_awaited()
+    api.head_note.assert_awaited()
 
 
 def test_create_409_keeps_head_queued_if_wait_times_out(provider_with_append_api):
@@ -930,13 +933,13 @@ def test_create_409_keeps_head_queued_if_wait_times_out(provider_with_append_api
     api.ingest = AsyncMock(side_effect=overlap)
     provider._api.ingest = api.ingest
 
-    # Force the wait to fail — make every get_note raise a non-transient 400
+    # Force the wait to fail — make every head_note raise a non-transient 400
     # so the wait bails immediately rather than burning the default 120s.
     fake_400 = httpx.Response(status_code=400, text='nope')
-    fake_400._request = httpx.Request('GET', 'http://test/notes/x')
+    fake_400._request = httpx.Request('HEAD', 'http://test/notes/x')
     fail = httpx.HTTPStatusError('400', request=fake_400._request, response=fake_400)
-    api.get_note = AsyncMock(side_effect=fail)
-    provider._api.get_note = api.get_note
+    api.head_note = AsyncMock(side_effect=fail)
+    provider._api.head_note = api.head_note
 
     provider.sync_turn('q', 'a')
     provider.on_pre_compress([])
@@ -991,13 +994,13 @@ def test_wait_for_note_row_uses_exponential_backoff(provider_with_append_api):
     provider, api, _ = provider_with_append_api
 
     fake_503 = httpx.Response(status_code=503, text='busy')
-    fake_503._request = httpx.Request('GET', 'http://test/notes/x')
+    fake_503._request = httpx.Request('HEAD', 'http://test/notes/x')
     transient = httpx.HTTPStatusError('503', request=fake_503._request, response=fake_503)
     # Five transients then success — exercise the first five backoff steps.
-    api.get_note = AsyncMock(
-        side_effect=[transient, transient, transient, transient, transient, Mock()]
+    api.head_note = AsyncMock(
+        side_effect=[transient, transient, transient, transient, transient, True]
     )
-    provider._api.get_note = api.get_note
+    provider._api.head_note = api.head_note
 
     sleeps: list[float] = []
     with patch(
@@ -1385,6 +1388,7 @@ class TestSessionTitle:
             return_value=SimpleNamespace(status='ok', note_id=str(note_uuid))
         )
         fake_api.get_note = AsyncMock(return_value=SimpleNamespace(id=note_uuid))
+        fake_api.head_note = AsyncMock(return_value=True)
         fake_api.kv_put = AsyncMock()
 
         with patch('memex_common.client.RemoteMemexAPI', return_value=fake_api):
