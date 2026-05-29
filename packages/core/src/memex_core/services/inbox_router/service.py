@@ -89,6 +89,11 @@ class TriageResult:
 # Emit a pending proposal, idempotent on the pending tuple AND respecting the
 # 30-day post-resolution/dismissal cooldown (mirrors LintService's guard) so a
 # dismissed route isn't immediately re-proposed.
+# The ON CONFLICT arbiter is the existing partial unique index
+# ``uq_maintenance_proposals_pending`` on
+# (rule_name, target_type, target_id, vault_id) WHERE status='pending'
+# (MaintenanceProposal.__table_args__ in sql_models.py) — shared with the lint
+# system, exercised by the integration tests.
 _EMIT_PENDING_SQL = """
 INSERT INTO maintenance_proposals
     (vault_id, lint_type, target_type, target_id, rule_name, evidence,
@@ -416,9 +421,9 @@ class InboxRouterService(BaseService):
         # already-resolved router routes today so concurrent invocations (a
         # manual `memex inbox triage` racing the scheduler) share one cap rather
         # than each getting a fresh allowance.
-        remaining_budget = self._cfg.max_auto_applies_per_day
-        if not dry_run:
-            remaining_budget = max(0, remaining_budget - await self._auto_applied_today(inbox_id))
+        remaining_budget = max(
+            0, self._cfg.max_auto_applies_per_day - await self._auto_applied_today(inbox_id)
+        )
 
         for nid in note_ids:
             decision = decide(nid, scored.get(nid, []), thresholds=thresholds, warmed_up=warmed_up)
@@ -437,15 +442,17 @@ class InboxRouterService(BaseService):
                 )
             try:
                 if decision.kind == DecisionKind.AUTO_ROUTE:
-                    if dry_run:
-                        result.auto_routed += 1
-                    elif remaining_budget <= 0:
-                        # Over the daily budget — fall through to a proposal.
+                    # The daily cap applies to the count in both modes so a dry run
+                    # previews the same auto/skipped split a live tick would produce.
+                    if remaining_budget <= 0:
                         result.skipped_cap += 1
-                        if await self._emit_route(inbox_vault_id=inbox_id, decision=decision):
+                        if dry_run:
+                            result.proposed += 1
+                        elif await self._emit_route(inbox_vault_id=inbox_id, decision=decision):
                             result.proposed += 1
                     else:
-                        await self._auto_apply(inbox_id, decision)
+                        if not dry_run:
+                            await self._auto_apply(inbox_id, decision)
                         result.auto_routed += 1
                         remaining_budget -= 1
                 elif decision.kind == DecisionKind.PROPOSE_CANDIDATES:
@@ -572,9 +579,24 @@ class InboxRouterService(BaseService):
             )
             raise
         # Learn: the chosen vault is a positive, the other candidates negatives.
-        await self.record_feedback(decision.note_id, top.vault_id, 1)
+        # Best-effort and per-call (matching the cockpit path) — the route is
+        # already applied + audited, so a learning hiccup must not surface as a
+        # routing failure, and one failed update must not drop the rest.
+        await self._record_feedback_safe(decision.note_id, top.vault_id, 1)
         for cand in decision.candidates[1:TOP_CANDIDATES]:
-            await self.record_feedback(decision.note_id, cand.vault_id, 0)
+            await self._record_feedback_safe(decision.note_id, cand.vault_id, 0)
+
+    async def _record_feedback_safe(self, note_id: UUID, vault_id: UUID, label: int) -> None:
+        try:
+            await self.record_feedback(note_id, vault_id, label)
+        except Exception:
+            logger.warning(
+                'inbox_router: record_feedback failed (note=%s vault=%s label=%s)',
+                note_id,
+                vault_id,
+                label,
+                exc_info=True,
+            )
 
     async def _emit_route(self, *, inbox_vault_id: UUID, decision: RouterDecision) -> bool:
         """Emit a pending route proposal. Returns True iff a row was inserted
