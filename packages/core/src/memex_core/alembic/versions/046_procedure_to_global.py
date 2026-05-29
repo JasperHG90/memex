@@ -68,12 +68,20 @@ def upgrade() -> None:
     # — they belong to user/project/app scopes that have no pre-upgrade
     # bare equivalent — but they're worth flagging so a follow-up
     # downgrade doesn't leave silently-orphaned rows.
+    #
+    # Patterns use `:procedure:` infix with a `%` tail covering BOTH
+    # `<verb>:<context>` segments (no extra `:` in the middle) so they
+    # avoid matching unrelated keys like `user:procedure-settings`
+    # (no `:procedure:` infix) or `project:foo:procedure_v2:bar`
+    # (different infix). This is a diagnostic count; a stray match
+    # is non-destructive — but tighter patterns make the orphan count
+    # more meaningful to the operator.
     orphan_count = conn.execute(
         sa.text(
             'SELECT COUNT(*) FROM kv_entries '
-            "WHERE key LIKE 'user:procedure:%' "
-            "   OR key LIKE 'project:%:procedure:%' "
-            "   OR key LIKE 'app:%:procedure:%'"
+            "WHERE key LIKE 'user:procedure:%:%' "
+            "   OR key LIKE 'project:%:procedure:%:%' "
+            "   OR key LIKE 'app:%:procedure:%:%'"
         )
     ).scalar()
     if orphan_count:
@@ -82,8 +90,8 @@ def upgrade() -> None:
             '(user:procedure:*, project:<id>:procedure:*, or '
             'app:<id>:procedure:*). These are kept as-is; the downgrade is '
             'asymmetric and will leave them in place. Triage with: '
-            "SELECT key FROM kv_entries WHERE key LIKE 'user:procedure:%%' "
-            "OR key LIKE 'project:%%:procedure:%%' OR key LIKE 'app:%%:procedure:%%';",
+            "SELECT key FROM kv_entries WHERE key LIKE 'user:procedure:%%:%%' "
+            "OR key LIKE 'project:%%:procedure:%%:%%' OR key LIKE 'app:%%:procedure:%%:%%';",
             orphan_count,
         )
 
