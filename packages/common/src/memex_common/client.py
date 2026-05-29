@@ -12,6 +12,7 @@ from uuid import UUID
 import httpx
 from pydantic import BaseModel
 
+from memex_common.kv_utils import is_procedure_key
 from memex_common.vault_utils import resolve_vault_list
 from memex_common.schemas import (
     RetrievalRequest,
@@ -1479,26 +1480,7 @@ class RemoteMemexAPI:
         params: dict[str, Any] = {'key': key, 'include_history': include_history}
         try:
             result = await self._get('kv/get', params=params)
-            # Procedure keys are detected by the `:procedure:` infix under a
-            # valid scope namespace. Inlined here (mirrors `is_procedure_key`
-            # in memex_core.services.kv) to avoid pulling a core dependency
-            # into memex_common. Scope rules: global/user are flat (no id
-            # segment); project/app require an id segment.
-            is_procedure = False
-            if ':procedure:' in key:
-                scope = key.rsplit(':procedure:', 1)[0]
-                # Reject ambiguous keys where the scope itself contains
-                # `:procedure:` (e.g. project:foo:procedure:bar:procedure:v:c).
-                # parse_procedure_key in core enforces the same rule.
-                if ':procedure:' not in scope:
-                    if scope in ('global', 'user'):
-                        is_procedure = True
-                    elif scope.startswith(('project:', 'app:')) and scope not in (
-                        'project:',
-                        'app:',
-                    ):
-                        is_procedure = True
-            if include_history and is_procedure and isinstance(result.get('value'), dict):
+            if include_history and is_procedure_key(key) and isinstance(result.get('value'), dict):
                 return KVProcedureEntryDTO(**result)
             return KVEntryDTO(**result)
         except httpx.HTTPStatusError as e:

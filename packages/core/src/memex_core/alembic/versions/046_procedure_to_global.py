@@ -57,6 +57,30 @@ def upgrade() -> None:
         )
     )
 
+    # Surface any non-`global:procedure:*` scoped-procedure rows the
+    # operator may want to triage. These cannot be touched automatically
+    # — they belong to user/project/app scopes that have no pre-upgrade
+    # bare equivalent — but they're worth flagging so a follow-up
+    # downgrade doesn't leave silently-orphaned rows.
+    orphan_count = conn.execute(
+        sa.text(
+            'SELECT COUNT(*) FROM kv_entries '
+            "WHERE key LIKE 'user:procedure:%' "
+            "   OR key LIKE 'project:%:procedure:%' "
+            "   OR key LIKE 'app:%:procedure:%'"
+        )
+    ).scalar()
+    if orphan_count:
+        logger.warning(
+            'Migration 046 upgrade: %d scoped-procedure rows already exist '
+            '(user:procedure:*, project:<id>:procedure:*, or '
+            'app:<id>:procedure:*). These are kept as-is; the downgrade is '
+            'asymmetric and will leave them in place. Triage with: '
+            "SELECT key FROM kv_entries WHERE key LIKE 'user:procedure:%%' "
+            "OR key LIKE 'project:%%:procedure:%%' OR key LIKE 'app:%%:procedure:%%';",
+            orphan_count,
+        )
+
 
 def downgrade() -> None:
     # Asymmetric: upgrade rewrites bare `procedure:*` → `global:procedure:*`,

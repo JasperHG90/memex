@@ -43,14 +43,6 @@ _PROTOCOL_RE = re.compile(r'[a-zA-Z][a-zA-Z0-9+\-.]*://')
 
 VALID_NAMESPACES = ('global', 'user', 'project', 'app')
 
-# Which namespaces accept a sub-id segment in their scope prefix.
-# `project:<id>:procedure:*` and `app:<id>:procedure:*` are valid;
-# `global:foo:procedure:*` and `user:foo:procedure:*` are NOT — `global`
-# and `user` are flat namespaces with no id segment.
-_NAMESPACES_WITH_ID = ('project', 'app')
-
-_VERB_CONTEXT_RE = re.compile(r'^[a-z][a-z0-9_-]*$')
-
 PROCEDURE_HISTORY_CAP = 5
 PROCEDURE_RETRY_BUDGET = 5
 
@@ -66,63 +58,10 @@ class ProcedureKVConcurrencyError(RuntimeError):
         self.retries = retries
 
 
-def parse_procedure_key(key: str) -> tuple[str, str, str] | None:
-    """Return ``(scope, verb, context)`` if ``key`` is a procedure key.
-
-    Procedures live under existing scope namespaces (NOT a top-level
-    ``procedure:`` namespace). Accepted forms:
-    - ``global:procedure:<verb>:<context>`` → ``('global', verb, context)``
-    - ``project:<id>:procedure:<verb>:<context>`` → ``('project:<id>', verb, context)``
-    - ``user:procedure:<verb>:<context>`` → ``('user', verb, context)``
-    - ``app:<app-id>:procedure:<verb>:<context>`` → ``('app:<app-id>', verb, context)``
-
-    Uses ``rsplit`` to peel ``:procedure:<verb>:<context>`` from the right so
-    arbitrary characters in the scope prefix (slashes, dots, ``@``, ``:`` —
-    e.g. SSH-form git remotes ``git@github.com:acme/foo``) flow in
-    unmodified. Returns ``None`` if the key does not start with a valid
-    scope namespace, lacks a ``:procedure:`` infix, has malformed
-    verb/context, or the scope prefix itself contains ``:procedure:``
-    (ambiguous; refuse rather than guess).
-    """
-    rsplit = key.rsplit(':procedure:', 1)
-    if len(rsplit) != 2:
-        return None
-    scope, suffix = rsplit
-    if not scope or ':procedure:' in scope:
-        return None
-    # Scope must start with a valid top-level namespace.
-    # - `global` and `user`: flat — scope MUST equal the namespace exactly,
-    #   no sub-id allowed (rejects `global:foo:procedure:*`).
-    # - `project` and `app`: scope MUST carry a non-empty id segment
-    #   (`project:<id>` / `app:<id>`), so the bare namespace alone is invalid.
-    matched_ns = None
-    for ns in VALID_NAMESPACES:
-        if scope == ns:
-            if ns in _NAMESPACES_WITH_ID:
-                return None  # 'project' / 'app' need an id segment
-            matched_ns = ns
-            break
-        if scope.startswith(f'{ns}:'):
-            if ns not in _NAMESPACES_WITH_ID:
-                return None  # 'global:foo' / 'user:foo' not allowed
-            if scope == f'{ns}:':
-                return None  # empty id segment
-            matched_ns = ns
-            break
-    if matched_ns is None:
-        return None
-    suffix_parts = suffix.split(':')
-    if len(suffix_parts) != 2:
-        return None
-    verb, context = suffix_parts
-    if not (_VERB_CONTEXT_RE.match(verb) and _VERB_CONTEXT_RE.match(context)):
-        return None
-    return (scope, verb, context)
-
-
-def is_procedure_key(key: str) -> bool:
-    """True if ``key`` is a valid procedure key under any scope namespace."""
-    return parse_procedure_key(key) is not None
+# Procedure key detection lives in the cross-package SSOT so the HTTP
+# client (memex_common) and the server (memex_core) can't drift.
+# Re-exported here for back-compat with existing memex_core imports.
+from memex_common.kv_utils import is_procedure_key, parse_procedure_key  # noqa: E402
 
 
 def _looks_like_procedure_key(key: str) -> bool:
