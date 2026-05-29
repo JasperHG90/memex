@@ -57,7 +57,18 @@ def _handle_error(e: Exception, context: str) -> HTTPException:
     if isinstance(e, HTTPException):
         raise e
 
-    logger.error(f'{context}: {e}', exc_info=True)
+    # Client-side "not found" / "ambiguous" errors are not server incidents.
+    # Logging them at ERROR with full tracebacks floods the log under
+    # readback-poll patterns (hermes-plugin polls a not-yet-materialised note
+    # ID at 10 Hz → 200+ tracebacks per minute) and hides real issues.
+    # Demote to INFO. Catch-all 500 path keeps ERROR + traceback.
+    # `exc_info=e` (vs True) pulls the traceback from the passed exception
+    # rather than `sys.exc_info()`, so the log line carries the right stack
+    # even if a future caller routes here outside an active `except` block.
+    if isinstance(e, (ResourceNotFoundError, VaultNotFoundError, AmbiguousResourceError)):
+        logger.info(f'{context}: {e}')
+    else:
+        logger.error(f'{context}: {e}', exc_info=e)
 
     # ObservationReadOnlyError must precede every other isinstance check.
     # It is a MemexError subclass; the generic `isinstance(e, MemexError)`

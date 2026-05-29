@@ -4,6 +4,7 @@ from abc import abstractmethod, ABCMeta
 from contextlib import asynccontextmanager
 
 from pydantic import BaseModel
+from sqlalchemy.exc import DBAPIError, SQLAlchemyError
 from sqlalchemy.ext.asyncio import (
     create_async_engine,
     AsyncEngine,
@@ -69,7 +70,12 @@ class AsyncBaseMetaStoreEngine(Generic[T], metaclass=ABCMeta):
                 yield session
                 # NB: user should commit/rollback explicitly
             except Exception as e:
-                self._logger.error(f'Session error: {e}.')
+                # Real database errors log at ERROR. MemexError and other
+                # business-class exceptions are the caller's responsibility
+                # to log at the appropriate level (e.g. server/common.py
+                # _handle_error demotes 404s to INFO). Silent re-raise here.
+                if isinstance(e, (SQLAlchemyError, DBAPIError)):
+                    self._logger.error(f'Session error: {e}.')
                 raise
 
     @property
