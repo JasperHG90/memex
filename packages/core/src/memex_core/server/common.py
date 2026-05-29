@@ -65,7 +65,12 @@ def _handle_error(e: Exception, context: str) -> HTTPException:
     # `exc_info=e` (vs True) pulls the traceback from the passed exception
     # rather than `sys.exc_info()`, so the log line carries the right stack
     # even if a future caller routes here outside an active `except` block.
-    if isinstance(e, (ResourceNotFoundError, VaultNotFoundError, AmbiguousResourceError)):
+    # ObservationReadOnlyError is intentionally excluded — defense in depth
+    # so an inheritance refactor (making it a subclass of one of the
+    # demoted three) doesn't silently demote a typed 400-detail response.
+    if isinstance(
+        e, (ResourceNotFoundError, VaultNotFoundError, AmbiguousResourceError)
+    ) and not isinstance(e, ObservationReadOnlyError):
         logger.info(f'{context}: {e}')
     else:
         logger.error(f'{context}: {e}', exc_info=e)

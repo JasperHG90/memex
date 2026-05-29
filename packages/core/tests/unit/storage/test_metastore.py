@@ -256,4 +256,6 @@ async def test_session_context_manager_silent_on_generic_exception(
                 raise ValueError('arbitrary')
 
         # Strict: NO log method should fire on the silent path.
-        mock_logger.assert_not_called()
+        # mock_logger.assert_not_called() would only check the mock-as-callable;
+        # use method_calls to catch any attribute method invocation.
+        assert mock_logger.method_calls == []

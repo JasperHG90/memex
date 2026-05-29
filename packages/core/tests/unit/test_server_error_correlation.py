@@ -7,6 +7,7 @@ import pytest
 from memex_common.exceptions import (
     AmbiguousResourceError,
     MemexError,
+    ObservationReadOnlyError,
     ResourceNotFoundError,
     VaultNotFoundError,
 )
@@ -99,6 +100,29 @@ class TestHandleErrorLogLevels:
         with patch('memex_core.server.common.logger') as mock_logger:
             _handle_error(exc, 'test context')
 
+        mock_logger.error.assert_called_once()
+        mock_logger.info.assert_not_called()
+        assert mock_logger.error.call_args.kwargs.get('exc_info') is exc
+
+    def test_observation_read_only_excluded_from_demote_even_if_hybrid(self) -> None:
+        """ObservationReadOnlyError stays at ERROR even if a future refactor
+        makes it inherit from one of the demoted types.
+
+        Defensive: ObservationReadOnlyError carries a structured 400-detail
+        shape (source_memory_units). A silent demote to INFO would lose
+        traceback visibility for a real "agent misused the API" signal.
+        Hybrid class below simulates the future-refactor case Hermes flagged.
+        """
+
+        class HybridReadOnlyMissing(ResourceNotFoundError, ObservationReadOnlyError):
+            def to_http_detail(self) -> dict:  # type: ignore[override]
+                return {'error': 'observation_read_only', 'source_memory_units': []}
+
+        exc = HybridReadOnlyMissing('observation x is read-only')
+        with patch('memex_core.server.common.logger') as mock_logger:
+            _handle_error(exc, 'test context')
+
+        # Demotion exclusion fires: ERROR with traceback, not INFO.
         mock_logger.error.assert_called_once()
         mock_logger.info.assert_not_called()
         assert mock_logger.error.call_args.kwargs.get('exc_info') is exc
