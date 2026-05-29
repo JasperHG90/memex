@@ -20,10 +20,8 @@ from __future__ import annotations
 
 import re
 
-# Mirrors memex_core.services.kv.VALID_NAMESPACES + _NAMESPACES_WITH_ID.
-# Kept in sync via the identity tests in test_kv_utils.py.
-_VALID_NAMESPACES = ('global', 'user', 'project', 'app')
-_NAMESPACES_WITH_ID = ('project', 'app')
+VALID_NAMESPACES = ('global', 'user', 'project', 'app')
+NAMESPACES_WITH_ID = ('project', 'app')
 
 _VERB_CONTEXT_RE = re.compile(r'^[a-z][a-z0-9_-]*$')
 
@@ -49,14 +47,14 @@ def parse_procedure_key(key: str) -> tuple[str, str, str] | None:
         return None
 
     matched_ns = None
-    for ns in _VALID_NAMESPACES:
+    for ns in VALID_NAMESPACES:
         if scope == ns:
-            if ns in _NAMESPACES_WITH_ID:
+            if ns in NAMESPACES_WITH_ID:
                 return None  # bare project / app — id segment required
             matched_ns = ns
             break
         if scope.startswith(f'{ns}:'):
-            if ns not in _NAMESPACES_WITH_ID:
+            if ns not in NAMESPACES_WITH_ID:
                 return None  # global:foo / user:foo — flat namespaces
             if scope == f'{ns}:':
                 return None  # empty id segment
@@ -79,4 +77,9 @@ def is_procedure_key(key: str) -> bool:
     return parse_procedure_key(key) is not None
 
 
-__all__ = ['is_procedure_key', 'parse_procedure_key']
+__all__ = [
+    'NAMESPACES_WITH_ID',
+    'VALID_NAMESPACES',
+    'is_procedure_key',
+    'parse_procedure_key',
+]

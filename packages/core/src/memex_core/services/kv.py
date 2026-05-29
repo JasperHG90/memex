@@ -41,7 +41,9 @@ logger = logging.getLogger('memex.core.services.kv')
 
 _PROTOCOL_RE = re.compile(r'[a-zA-Z][a-zA-Z0-9+\-.]*://')
 
-VALID_NAMESPACES = ('global', 'user', 'project', 'app')
+# Re-exported from the cross-package SSOT in memex_common.kv_utils so
+# this module's VALID_NAMESPACES can't drift from the SSOT.
+from memex_common.kv_utils import VALID_NAMESPACES  # noqa: E402
 
 PROCEDURE_HISTORY_CAP = 5
 PROCEDURE_RETRY_BUDGET = 5

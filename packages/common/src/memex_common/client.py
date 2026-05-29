@@ -1480,8 +1480,18 @@ class RemoteMemexAPI:
         params: dict[str, Any] = {'key': key, 'include_history': include_history}
         try:
             result = await self._get('kv/get', params=params)
-            if include_history and is_procedure_key(key) and isinstance(result.get('value'), dict):
-                return KVProcedureEntryDTO(**result)
+            # Procedure DTO routing: any key shaped like a procedure (new
+            # `<scope>:procedure:*` form OR legacy bare `procedure:*` form
+            # that hasn't been swept by migration 046 yet) carries an
+            # envelope dict when `include_history=True`. The legacy form
+            # is detected by `:procedure:` infix + dict-shaped value;
+            # this back-compat covers the deployment window where
+            # client code is upgraded before the DB migration has run.
+            if include_history and isinstance(result.get('value'), dict):
+                if is_procedure_key(key) or (
+                    key.startswith('procedure:') and ':procedure:' not in key[len('procedure:') :]
+                ):
+                    return KVProcedureEntryDTO(**result)
             return KVEntryDTO(**result)
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:

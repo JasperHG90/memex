@@ -34,6 +34,14 @@ def test_valid_namespaces_does_not_include_procedure() -> None:
     assert 'procedure' not in VALID_NAMESPACES
 
 
+def test_valid_namespaces_identity_with_kv_utils() -> None:
+    """Core's VALID_NAMESPACES is re-exported from memex_common.kv_utils —
+    identity check prevents drift between the two."""
+    from memex_common.kv_utils import VALID_NAMESPACES as COMMON_VALID_NAMESPACES
+
+    assert VALID_NAMESPACES is COMMON_VALID_NAMESPACES
+
+
 @pytest.mark.parametrize(
     'valid_key,expected_scope',
     [
