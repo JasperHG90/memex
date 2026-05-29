@@ -770,6 +770,15 @@ class MemexMemoryProvider(MemoryProvider):
         place for retry; non-transient failures (4xx HTTP statuses)
         drop the failing entry so a poisoned item can't block the rest of
         the queue.
+
+        Latency profile (A.2 trade-off): the 409-on-create branch waits
+        up to ``_WAIT_FOR_NOTE_ROW_DEFAULT_TIMEOUT`` (120s) for the
+        in-flight ingest to materialise. Callers on latency-sensitive
+        paths (UI threads, outer timeouts) should be aware that
+        ``on_pre_compress`` / ``on_session_end`` / ``shutdown`` can
+        therefore block for up to 2 minutes when the overlap branch
+        fires. The previous 10s ceiling was the root cause of the
+        404+409 storm — see tech report Bug A for the trade-off.
         """
         if self._api is None or self._config is None:
             return

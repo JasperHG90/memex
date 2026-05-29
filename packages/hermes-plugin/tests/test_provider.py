@@ -897,6 +897,11 @@ def test_create_409_waits_for_note_row_and_pops_on_success(provider_with_append_
     # get_note (already AsyncMock returning SimpleNamespace) resolves the wait.
 
     provider.sync_turn('q', 'a')
+    # Defensive: confirm the flip happens via the 409→wait path, not from
+    # leaked fixture state. Fixtures are function-scoped so this should be
+    # impossible today, but a future refactor that shares state across
+    # tests would silently turn this assertion into a no-op.
+    assert provider._note_initialized is False
     provider.on_pre_compress([])
 
     # Head popped, _note_initialized flipped, no orphaned create stays queued.
