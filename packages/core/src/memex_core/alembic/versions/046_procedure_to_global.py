@@ -55,6 +55,13 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    # Asymmetric: upgrade rewrites bare `procedure:*` → `global:procedure:*`,
+    # but only `global:procedure:*` is stripped back here. Any
+    # `user:procedure:*`, `project:<id>:procedure:*`, or `app:<id>:procedure:*`
+    # keys created AFTER the upgrade (these scopes are newly introduced
+    # in this PR) are left in place — they have no pre-upgrade bare-form
+    # equivalent. Strict reversibility would require deleting them, but
+    # that's destructive; leave the orphans for the operator to triage.
     conn = op.get_bind()
     table_exists = conn.execute(
         sa.text(

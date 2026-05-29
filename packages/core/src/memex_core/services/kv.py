@@ -142,16 +142,20 @@ def validate_procedure_key(key: str) -> None:
     """Validate a procedure KV key.
 
     Raises :class:`ValueError` if the key does not match
-    ``<scope>:procedure:<verb>:<context-tag>`` where ``<scope>`` is one of
-    the valid namespace prefixes (``global``, ``user:<id>``,
-    ``project:<id>``, ``app:<app-id>``) and ``<verb>``/``<context-tag>``
-    match ``[a-z][a-z0-9_-]*``.
+    ``<scope>:procedure:<verb>:<context-tag>``. Valid scopes:
+
+    - ``global`` (flat — no id segment)
+    - ``user`` (flat — no id segment)
+    - ``project:<id>`` (id segment required)
+    - ``app:<app-id>`` (id segment required)
+
+    ``<verb>`` and ``<context-tag>`` must match ``[a-z][a-z0-9_-]*``.
     """
     if parse_procedure_key(key) is None:
         raise ValueError(
             f'Invalid procedure key: {key!r}. '
             'Expected <scope>:procedure:<verb>:<context-tag> where scope is '
-            'global, user[:<id>], project:<id>, or app:<app-id>; verb and '
+            'one of: global, user, project:<id>, or app:<app-id>; verb and '
             'context-tag must match [a-z][a-z0-9_-]*.'
         )
 

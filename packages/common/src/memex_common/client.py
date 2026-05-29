@@ -1483,8 +1483,7 @@ class RemoteMemexAPI:
             # valid scope namespace. Inlined here to avoid a memex_core
             # dependency from memex_common; mirrors `is_procedure_key`.
             is_procedure = ':procedure:' in key and any(
-                key.startswith(f'{ns}:') or key.startswith(f'{ns}:procedure:')
-                for ns in ('global', 'user', 'project', 'app')
+                key.startswith(f'{ns}:') for ns in ('global', 'user', 'project', 'app')
             )
             if include_history and is_procedure and isinstance(result.get('value'), dict):
                 return KVProcedureEntryDTO(**result)
