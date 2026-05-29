@@ -59,34 +59,8 @@ async def status(
 ):
     """Show inbox-router readiness and pending routing proposals."""
     config: MemexConfig = ctx.obj
-    cfg = config.server.memory.inbox_router
-    from sqlalchemy import text
-
     async with get_api_context(config) as api:
-        async with api.metastore.session() as session:
-            match_n = (
-                await session.execute(
-                    text('SELECT n FROM inbox_router_nb_class_counts WHERE label = 1')
-                )
-            ).scalar()
-            rows = (
-                await session.execute(
-                    text(
-                        'SELECT rule_name, COUNT(*) FROM maintenance_proposals '
-                        "WHERE lint_type = 'routing' AND status = 'pending' GROUP BY rule_name"
-                    )
-                )
-            ).all()
-    pending = {r[0]: int(r[1]) for r in rows}
-    match_count = float(match_n or 0.0)
-    payload = {
-        'enabled': cfg.enabled,
-        'auto_apply_enabled': cfg.auto_apply_enabled,
-        'warmed_up': match_count >= cfg.min_decisions_before_auto_apply,
-        'match_observations': match_count,
-        'pending_route': pending.get('inbox_vault_route', 0),
-        'pending_no_fit': pending.get('inbox_vault_no_fit', 0),
-    }
+        payload = await api.inbox_router.status()
     if json_output:
         console.print_json(json.dumps(payload))
         return

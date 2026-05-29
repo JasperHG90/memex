@@ -38,6 +38,7 @@ from memex_core.services.inbox_router.evidence import (
 )
 
 if TYPE_CHECKING:
+    from memex_common.config import InboxRouterConfig
     from memex_core.config import MemexConfig
     from memex_core.memory.models.embedding import EmbeddingsModel
     from memex_core.services.notes import NoteService
@@ -163,7 +164,7 @@ class InboxRouterService(BaseService):
         self._vaults = vaults
 
     @property
-    def _cfg(self):  # noqa: ANN202 - InboxRouterConfig
+    def _cfg(self) -> InboxRouterConfig:
         return self.config.server.memory.inbox_router
 
     # ------------------------------------------------------------------ bootstrap
@@ -327,23 +328,32 @@ class InboxRouterService(BaseService):
             t_low=self._cfg.t_low,
         )
 
+        # Auto-apply budget is a per-day-per-vault ceiling, counted from the
+        # already-resolved router routes today so concurrent invocations (a
+        # manual `memex inbox triage` racing the scheduler) share one cap rather
+        # than each getting a fresh allowance.
+        remaining_budget = self._cfg.max_auto_applies_per_tick
+        if not dry_run:
+            remaining_budget = max(0, remaining_budget - await self._auto_applied_today(inbox_id))
+
         for nid in note_ids:
             decision = decide(nid, scored.get(nid, []), thresholds=thresholds, warmed_up=warmed_up)
             try:
                 if decision.kind is DecisionKind.AUTO_ROUTE:
                     if dry_run:
                         result.auto_routed += 1
-                    elif result.auto_routed >= self._cfg.max_auto_applies_per_tick:
-                        # Over the per-tick budget — fall through to a proposal.
-                        await self._emit_route(session_vault=inbox_id, decision=decision)
+                    elif remaining_budget <= 0:
+                        # Over the daily budget — fall through to a proposal.
+                        await self._emit_route(inbox_vault_id=inbox_id, decision=decision)
                         result.skipped_cap += 1
                         result.proposed += 1
                     else:
                         await self._auto_apply(inbox_id, decision)
                         result.auto_routed += 1
+                        remaining_budget -= 1
                 elif decision.kind is DecisionKind.PROPOSE_CANDIDATES:
                     if not dry_run:
-                        await self._emit_route(session_vault=inbox_id, decision=decision)
+                        await self._emit_route(inbox_vault_id=inbox_id, decision=decision)
                     result.proposed += 1
                 else:  # PROPOSE_NO_FIT
                     if not dry_run:
@@ -355,15 +365,53 @@ class InboxRouterService(BaseService):
 
         return result
 
+    # ------------------------------------------------------------------ status
+    async def status(self) -> dict[str, Any]:
+        """Router readiness + pending routing-proposal counts (CLI + HTTP share this)."""
+        match_count = await self._match_count()
+        async with self.metastore.session() as session:
+            rows = (
+                await session.execute(
+                    text(
+                        'SELECT rule_name, COUNT(*) FROM maintenance_proposals '
+                        "WHERE lint_type = 'routing' AND status = 'pending' GROUP BY rule_name"
+                    )
+                )
+            ).all()
+        pending = {r[0]: int(r[1]) for r in rows}
+        return {
+            'enabled': self._cfg.enabled,
+            'auto_apply_enabled': self._cfg.auto_apply_enabled,
+            'warmed_up': match_count >= self._cfg.min_decisions_before_auto_apply,
+            'match_observations': match_count,
+            'min_decisions_before_auto_apply': self._cfg.min_decisions_before_auto_apply,
+            'pending_route': pending.get(ROUTE_RULE, 0),
+            'pending_no_fit': pending.get(NO_FIT_RULE, 0),
+        }
+
     # ------------------------------------------------------------------ helpers
-    async def _is_warmed_up(self) -> bool:
+    async def _match_count(self) -> float:
         async with self.metastore.session() as session:
             n = (
                 await session.execute(
                     text('SELECT n FROM inbox_router_nb_class_counts WHERE label = 1')
                 )
             ).scalar()
-        return float(n or 0.0) >= self._cfg.min_decisions_before_auto_apply
+        return float(n or 0.0)
+
+    async def _is_warmed_up(self) -> bool:
+        return await self._match_count() >= self._cfg.min_decisions_before_auto_apply
+
+    async def _auto_applied_today(self, inbox_id: UUID) -> int:
+        today_start = datetime.now(timezone.utc).replace(hour=0, minute=0, second=0, microsecond=0)
+        async with self.metastore.session() as session:
+            n = (
+                await session.execute(
+                    text(_sql.COUNT_AUTO_APPLIED_TODAY_SQL),
+                    {'vault_id': str(inbox_id), 'today_start': today_start},
+                )
+            ).scalar()
+        return int(n or 0)
 
     def _excluded_vault_names(self) -> list[str]:
         # The inbox is the source; 'global' is a catch-all that dilutes routing.
@@ -371,7 +419,8 @@ class InboxRouterService(BaseService):
 
     async def _auto_apply(self, inbox_id: UUID, decision: RouterDecision) -> None:
         top = decision.top
-        assert top is not None
+        if top is None:  # AUTO_ROUTE always has a top; defensive, not assert (-O strips asserts).
+            return
         await self._notes.migrate_note(decision.note_id, top.vault_id)
         evidence = self._route_evidence(inbox_id, decision).model_dump()
         evidence['resolution'] = {
@@ -399,15 +448,16 @@ class InboxRouterService(BaseService):
         for cand in decision.candidates[1:TOP_CANDIDATES]:
             await self.record_feedback(decision.note_id, cand.vault_id, 0)
 
-    async def _emit_route(self, *, session_vault: UUID, decision: RouterDecision) -> None:
+    async def _emit_route(self, *, inbox_vault_id: UUID, decision: RouterDecision) -> None:
         top = decision.top
-        assert top is not None
-        evidence = self._route_evidence(session_vault, decision)
+        if top is None:
+            return
+        evidence = self._route_evidence(inbox_vault_id, decision)
         async with self.metastore.session() as session:
             await session.execute(
                 text(_EMIT_PENDING_SQL),
                 {
-                    'vault_id': str(session_vault),
+                    'vault_id': str(inbox_vault_id),
                     'target_id': str(decision.note_id),
                     'rule_name': ROUTE_RULE,
                     'evidence': evidence.model_dump_json(),
