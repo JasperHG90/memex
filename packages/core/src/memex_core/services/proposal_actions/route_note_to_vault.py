@@ -110,6 +110,14 @@ class RouteNoteToVaultAction:
                 'cannot reverse route_note_to_vault: prior_state has no source_vault_id.'
             )
         await api.migrate_note(note_id, UUID(str(source_vault_id)))
+        # A reversal is a strong negative: the route we applied was wrong, so
+        # record label=0 for the vault we (incorrectly) routed to. Best-effort.
+        applied_target = applied_state.get('target_vault_id')
+        if applied_target:
+            try:
+                await api.inbox_router.record_feedback(note_id, UUID(str(applied_target)), 0)
+            except Exception:  # noqa: BLE001 - learning is best-effort
+                logger.warning('route_note_to_vault: reverse record_feedback failed', exc_info=True)
         return ReverseResult(
             restored_state={'note_id': str(note_id), 'vault_id': str(source_vault_id)}
         )

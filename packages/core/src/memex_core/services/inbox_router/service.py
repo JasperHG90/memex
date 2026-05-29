@@ -388,7 +388,7 @@ class InboxRouterService(BaseService):
         # already-resolved router routes today so concurrent invocations (a
         # manual `memex inbox triage` racing the scheduler) share one cap rather
         # than each getting a fresh allowance.
-        remaining_budget = self._cfg.max_auto_applies_per_tick
+        remaining_budget = self._cfg.max_auto_applies_per_day
         if not dry_run:
             remaining_budget = max(0, remaining_budget - await self._auto_applied_today(inbox_id))
 
@@ -470,8 +470,9 @@ class InboxRouterService(BaseService):
         return int(n or 0)
 
     def _excluded_vault_names(self) -> list[str]:
-        # The inbox is the source; 'global' is a catch-all that dilutes routing.
-        return [INBOX_VAULT_NAME, 'global']
+        # The inbox is always the source; the rest is operator-configurable
+        # (defaults to the catch-all 'global' vault, which dilutes routing).
+        return [INBOX_VAULT_NAME, *self._cfg.excluded_vaults]
 
     async def _auto_apply(self, inbox_id: UUID, decision: RouterDecision) -> None:
         top = decision.top

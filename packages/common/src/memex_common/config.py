@@ -1702,13 +1702,21 @@ class InboxRouterConfig(BaseModel):
         gt=0.0,
         description='Maximum retry delay for no-fit proposals.',
     )
-    max_auto_applies_per_tick: int = Field(
+    max_auto_applies_per_day: int = Field(
         default=10,
         ge=0,
         description=(
-            'Safety cap on notes auto-routed per triage tick. Excess notes fall '
-            'through to proposals so a mis-scoring run cannot reshuffle the '
-            'whole inbox at once.'
+            'Safety cap on notes auto-routed per vault per day (counted from '
+            'already-resolved router routes, so it is shared across concurrent '
+            'ticks). Excess notes fall through to proposals so a mis-scoring run '
+            'cannot reshuffle the whole inbox at once.'
+        ),
+    )
+    excluded_vaults: list[str] = Field(
+        default_factory=lambda: ['global'],
+        description=(
+            'Vault names never offered as routing targets, in addition to the '
+            'inbox vault itself. Defaults to the catch-all global vault.'
         ),
     )
 

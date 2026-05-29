@@ -239,9 +239,14 @@ stats_update AS (
      WHERE s.feature_name = nfr.feat AND s.label = :label ::smallint
     RETURNING 1
 )
+-- Only advance the class count when the per-feature stats actually updated
+-- (i.e. the note had a cache row AND the vault had an anchor, so new_feature_rows
+-- was non-empty). Otherwise the class prior would drift relative to the
+-- per-feature stats and skew toward the match class.
 UPDATE inbox_router_nb_class_counts c
    SET n = :gamma ::float8 * c.n + 1, updated_at = now()
  WHERE c.label = :label ::smallint
+   AND EXISTS (SELECT 1 FROM stats_update)
 """
 
 

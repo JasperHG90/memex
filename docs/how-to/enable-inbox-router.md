@@ -63,7 +63,7 @@ Set any of these (env var form shown) and restart:
 | Confidence floor | `…_AUTO_APPLY_MIN_P_MATCH` | `0.5` | Minimum top-vault probability to auto-route. Raise to route less, more safely. |
 | Margin gate | `…_T_MARGIN` | `0.4` | How far the top vault must beat the runner-up to auto-route. |
 | Warm-up gate | `…_MIN_DECISIONS_BEFORE_AUTO_APPLY` | `50` | Auto-route stays off until this many confirmed routes accumulate. |
-| Per-tick cap | `…_MAX_AUTO_APPLIES_PER_TICK` | `10` | Most notes the router will move in one tick. |
+| Daily cap | `…_MAX_AUTO_APPLIES_PER_DAY` | `10` | Most notes the router will move per vault per day (shared across ticks). |
 | Tick interval | `…_INTERVAL_SECONDS` | `3600` | Seconds between automatic passes. |
 
 ## Turn it off
