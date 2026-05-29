@@ -22,7 +22,7 @@ from memex_common import agent_surface as ags
 # ---------------------------------------------------------------------------
 
 
-_UNIVERSAL_CHAR_CAP = 9_800  # ~2,800 tokens at 3.5 chars/token (empirical cl100k)
+_UNIVERSAL_CHAR_CAP = 10_000  # ~2,860 tokens at 3.5 chars/token (empirical cl100k)
 # Bumped 5,500 → 6,000 when CRITICAL_HEADER / VIRTUAL_UNIT / CRITICAL_FOOTER
 # adopted `<critical_constraint name="…">` XML tags (Anthropic best practice:
 # XML disambiguates load-bearing constraints; the model attends more reliably
@@ -71,6 +71,13 @@ _UNIVERSAL_CHAR_CAP = 9_800  # ~2,800 tokens at 3.5 chars/token (empirical cl100
 # "always/never/must/via/use Y not Z" as procedure-shaped and forces the
 # `:procedure:` infix. ~190 chars; lifts pass rate on the project-scope
 # scenarios from ~0% to a measurable signal.
+# Bumped 9,800 → 10,000 when KV_NAMESPACE collapsed the two scope-specific
+# procedure rows ("global default" + "project EXPLICIT cue") into one
+# general row (`<scope>:procedure:<verb>:<context-tag>`), and added two
+# examples covering `user:procedure:*` and `app:<id>:procedure:*` — Hermes
+# review flagged that those scopes were valid in code but never modeled
+# in the agent-facing surface, so the agent would never emit them even
+# when the scope cue ("I" / "when I use <app>") was unambiguous.
 
 
 def _approx_tokens(text: str) -> int:
@@ -125,9 +132,14 @@ _REQUIRED_KEYWORDS: tuple[str, ...] = (
     'project:<id>:',
     'global:',
     'app:<app-id>:',
-    # Procedures live UNDER a scope namespace, never bare.
-    'global:procedure:<verb>:<context-tag>',
-    'project:<id>:procedure:<verb>:<context-tag>',
+    # Procedures live UNDER a scope namespace, never bare. The table cell
+    # uses `<scope>:procedure:*` as the general form; per-scope examples
+    # ground each of the four valid scopes (global / project / user / app).
+    '<scope>:procedure:<verb>:<context-tag>',
+    'global:procedure:',
+    'project:<id>:procedure:',
+    'user:procedure:',
+    'app:claude-code:procedure:',
     'procedure_scope_default',
     # KV scope-qualifier rule.
     'scope qualifier',
