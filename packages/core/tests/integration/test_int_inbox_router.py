@@ -1,10 +1,10 @@
 """Integration tests for InboxRouterService against real Postgres.
 
-The shared test harness builds schema via ``SQLModel.metadata.create_all``,
-which does not create the router's migration-only tables/views. The
-``router_schema`` fixture below runs the migration's DDL + seed so the service
-has its tables. Distinct per-vault chunk embeddings give a real ranking signal
-(the mock embedding model returns a constant vector for narratives).
+The router tables + views are SQLModel models, so the shared ``create_all``
+harness provisions them like any other table; the NB prior is seeded by the
+service (``ensure_prior_seeded`` via ``refresh_anchors``). Distinct per-vault
+chunk embeddings give a real ranking signal (the mock embedding model returns a
+constant vector for narratives).
 """
 
 from __future__ import annotations
@@ -12,7 +12,6 @@ from __future__ import annotations
 from uuid import UUID, uuid4
 
 import pytest
-import pytest_asyncio
 from sqlalchemy import text
 
 from memex_core.memory.sql_models import Chunk, ContentStatus, Note, Vault
@@ -23,51 +22,6 @@ pytestmark = [pytest.mark.integration, pytest.mark.asyncio]
 # Two orthogonal embedding directions so cosine cleanly separates the vaults.
 _VEC_A = [1.0] * 192 + [0.0] * 192
 _VEC_B = [0.0] * 192 + [1.0] * 192
-
-
-def _import_migration_ddl() -> tuple[str, str, str]:
-    import importlib.util
-    import pathlib as plb
-
-    path = (
-        plb.Path(__file__).resolve().parents[2]
-        / 'src/memex_core/alembic/versions/055_inbox_router.py'
-    )
-    spec = importlib.util.spec_from_file_location('mig054_ddl', path)
-    assert spec and spec.loader
-    mod = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(mod)
-    return mod._CREATE, mod._SEED_STATS, mod._SEED_CLASS
-
-
-@pytest_asyncio.fixture
-async def router_schema(api):
-    """Create + seed the router tables/views (idempotent per test)."""
-    create_sql, seed_stats, seed_class = _import_migration_ddl()
-    drop_sql = (
-        'DROP TABLE IF EXISTS inbox_router_note_cache CASCADE;'
-        'DROP TABLE IF EXISTS inbox_router_vault_anchors CASCADE;'
-        'DROP VIEW IF EXISTS inbox_router_nb_prior CASCADE;'
-        'DROP VIEW IF EXISTS inbox_router_nb_params CASCADE;'
-        'DROP TABLE IF EXISTS inbox_router_nb_class_counts CASCADE;'
-        'DROP TABLE IF EXISTS inbox_router_nb_stats CASCADE;'
-    )
-
-    async def _run_script(session, script: str) -> None:
-        for stmt in (s.strip() for s in script.split(';')):
-            if stmt:
-                await session.execute(text(stmt))
-
-    async with api.metastore.session() as session:
-        await _run_script(session, drop_sql)
-        await _run_script(session, create_sql)
-        await _run_script(session, seed_stats)
-        await _run_script(session, seed_class)
-        await session.commit()
-    yield
-    async with api.metastore.session() as session:
-        await _run_script(session, drop_sql)
-        await session.commit()
 
 
 async def _seed_vault_with_note(session, name: str, embedding: list[float]) -> Vault:
@@ -126,7 +80,7 @@ async def _seed_inbox_note(session, inbox: Vault, embedding: list[float]) -> UUI
     return note_id
 
 
-async def test_score_ranks_topically_closest_vault_first(api, session, router_schema):
+async def test_score_ranks_topically_closest_vault_first(api, session):
     """An inbox note embedded like vault-a should rank vault-a above vault-b."""
     inbox = await _seed_vault_with_note(session, 'inbox', _VEC_A)
     await _seed_vault_with_note(session, 'vault-a', _VEC_A)
@@ -144,7 +98,7 @@ async def test_score_ranks_topically_closest_vault_first(api, session, router_sc
     assert names.index('vault-a') < names.index('vault-b')
 
 
-async def test_triage_tick_emits_routing_proposal(api, session, router_schema):
+async def test_triage_tick_emits_routing_proposal(api, session):
     """A full tick scores the inbox note and records a routing proposal."""
     inbox = await _seed_vault_with_note(session, 'inbox', _VEC_A)
     await _seed_vault_with_note(session, 'vault-a', _VEC_A)
@@ -169,7 +123,7 @@ async def test_triage_tick_emits_routing_proposal(api, session, router_schema):
     assert n >= 1
 
 
-async def test_record_feedback_updates_sufficient_stats(api, session, router_schema):
+async def test_record_feedback_updates_sufficient_stats(api, session):
     """An online update increments the match class count and a feature's n."""
     inbox = await _seed_vault_with_note(session, 'inbox', _VEC_A)
     vault_a = await _seed_vault_with_note(session, 'vault-a', _VEC_A)
@@ -201,7 +155,7 @@ async def test_ensure_inbox_vault_is_idempotent(api, session):
     assert first == second
 
 
-async def test_daily_cap_falls_through_to_proposal(api, session, router_schema):
+async def test_daily_cap_falls_through_to_proposal(api, session):
     """When the daily auto-apply budget is exhausted, an otherwise-auto-routable
     note falls through to a proposal (skipped_cap increments, not auto_routed)."""
     inbox = await _seed_vault_with_note(session, 'inbox', _VEC_A)

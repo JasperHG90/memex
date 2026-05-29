@@ -260,3 +260,30 @@ SELECT COUNT(*) FROM maintenance_proposals
    AND resolved_by = 'system:inbox-router'
    AND resolved_at >= :today_start
 """
+
+
+# Idempotent prior seed. Migration 055 seeds existing DBs on upgrade; this seeds
+# create_all-provisioned DBs (fresh servers, the eval harness, tests) where the
+# migration body never runs. ON CONFLICT DO NOTHING makes it a no-op once seeded.
+# Values are the POC v12 per-feature (μ, σ²) at n=5 (sum_x = n·μ,
+# sum_x_sq = σ²·(n-1) + n·μ²) so day-1 rankings are sensible, not uniform-random.
+SEED_NB_STATS_SQL = """
+INSERT INTO inbox_router_nb_stats (feature_name, label, n, sum_x, sum_x_sq) VALUES
+    ('sem_summary_sim',  0, 5.0, 1.159000, 0.319136),
+    ('sem_summary_sim',  1, 5.0, 1.873000, 0.748826),
+    ('sem_centroid_sim', 0, 5.0, 1.693000, 0.635090),
+    ('sem_centroid_sim', 1, 5.0, 3.278500, 2.256592),
+    ('mm_centroid_sim',  0, 5.0, 1.358500, 0.464984),
+    ('mm_centroid_sim',  1, 5.0, 1.970500, 0.979054),
+    ('entity_jaccard',   0, 5.0, 0.054000, 0.001223),
+    ('entity_jaccard',   1, 5.0, 0.307000, 0.024650),
+    ('keyword_ts_rank',  0, 5.0, 4.737500, 4.500701),
+    ('keyword_ts_rank',  1, 5.0, 4.919000, 4.839872)
+ON CONFLICT (feature_name, label) DO NOTHING
+"""
+
+# Class prior ~1:6 (match:no_match) — the POC's measured base rate (P(match)≈0.14).
+SEED_NB_CLASS_COUNTS_SQL = """
+INSERT INTO inbox_router_nb_class_counts (label, n) VALUES (1, 1.0), (0, 6.0)
+ON CONFLICT (label) DO NOTHING
+"""

@@ -220,6 +220,19 @@ class InboxRouterService(BaseService):
             ).first()
         return row[0] if row else None
 
+    async def ensure_prior_seeded(self) -> None:
+        """Seed the NB sufficient-statistics prior if absent (idempotent).
+
+        Migration 055 seeds DBs upgraded via Alembic; this covers
+        create_all-provisioned DBs (fresh servers, the eval harness, tests)
+        where the migration body never runs. ``ON CONFLICT DO NOTHING`` makes
+        it a no-op once seeded.
+        """
+        async with self.metastore.session() as session:
+            await session.execute(text(_sql.SEED_NB_STATS_SQL))
+            await session.execute(text(_sql.SEED_NB_CLASS_COUNTS_SQL))
+            await session.commit()
+
     # ------------------------------------------------------------------ anchors
     async def refresh_anchors(self) -> int:
         """Refresh per-vault anchors for every candidate (non-inbox) vault.
@@ -227,6 +240,7 @@ class InboxRouterService(BaseService):
         Embeds each vault's narrative in Python (for ``summary_embedding``); the
         remaining anchors are computed in SQL. Returns the number refreshed.
         """
+        await self.ensure_prior_seeded()
         excluded = set(self._excluded_vault_names())
         async with self.metastore.session() as session:
             rows = (
