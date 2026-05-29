@@ -131,6 +131,13 @@ def _looks_like_procedure_key(key: str) -> bool:
     Used at write-time to route candidates through ``validate_procedure_key``
     so a malformed procedure-shaped key (e.g. uppercase verb) is REJECTED
     rather than silently written as a plain KV entry.
+
+    Uses ``split`` (FIRST occurrence) — intentionally LOOSER than
+    ``parse_procedure_key`` which uses ``rsplit`` (LAST occurrence). This is
+    the gate; we want to catch everything that *looks* procedure-shaped and
+    let ``validate_procedure_key`` make the final call. Do not "fix" this
+    asymmetry without considering that the gate would then miss malformed
+    keys like ``global:procedure:bad:procedure:verb:context``.
     """
     if ':procedure:' not in key:
         return False

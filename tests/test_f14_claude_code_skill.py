@@ -69,7 +69,7 @@ def test_recall_documents_procedure_namespace_and_kv_get_include_history():
     text = _read('recall')
     # Procedures live under scope namespaces — recall surface must point at the new prefix.
     assert 'procedure:' in text
-    assert 'memex_kv_list(prefix="global:procedure:")' in text
+    assert 'memex_kv_list(namespaces=["global:procedure"])' in text
 
 
 def test_recall_does_not_advertise_kv_put_for_procedures():
