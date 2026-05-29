@@ -593,6 +593,27 @@ class NoteService:
 
             return doc.model_dump()
 
+    async def note_exists(self, note_id: UUID) -> bool:
+        """Return True iff a note with this id exists.
+
+        A.5: cheap existence check used by the HEAD /notes/{id} route.
+        Issues a single primary-key index lookup with `select(Note.id)
+        ... LIMIT 1`, so the row is never hydrated into a model instance
+        (unlike `get_note`, which loads the full Note + relationships).
+        The hermes-plugin's `_wait_for_note_row` polls this rather than
+        get_note so the readback-loop doesn't pay the full hydration cost
+        once per attempt under a 120s deadline.
+        """
+        from sqlmodel import select
+
+        from memex_core.memory.sql_models import Note
+
+        async with self.metastore.session() as session:
+            result = await session.exec(
+                select(col(Note.id)).where(col(Note.id) == note_id).limit(1)
+            )
+            return result.first() is not None
+
     async def get_note_metadata(self, note_id: UUID) -> dict[str, Any] | None:
         """Return just the metadata portion of the page index."""
         from memex_core.memory.sql_models import Note

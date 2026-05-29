@@ -10,6 +10,7 @@ from fastapi import (
     File,
     HTTPException,
     Query,
+    Response,
     UploadFile,
 )
 from pydantic import BaseModel
@@ -256,6 +257,21 @@ async def get_note(note_id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
         return build_note_dto(doc)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to get note')
+
+
+@router.head('/notes/{note_id}', dependencies=[Depends(require_read)])
+async def head_note(note_id: UUID, api: Annotated[MemexAPI, Depends(get_api)]) -> Response:
+    """Cheap existence check — 200 if the note exists, 404 otherwise.
+
+    A.5: hermes-plugin polls this at 10 Hz (now backoff-paced, default
+    deadline 120s — see provider.py:_wait_for_note_row) to confirm a
+    background-ingested session note has materialised. Goes through a
+    pk-index lookup + LIMIT 1 in NoteService.note_exists, so we don't
+    hydrate the full Note model on every poll.
+    """
+    if await api.note_exists(note_id):
+        return Response(status_code=200)
+    return Response(status_code=404)
 
 
 class BatchNodeRequest(BaseModel):

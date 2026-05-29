@@ -1245,6 +1245,10 @@ class MemexAPI:
         """Retrieve a single document by ID. Delegates to NoteService."""
         return await self._notes.get_note(note_id)
 
+    async def note_exists(self, note_id: UUID) -> bool:
+        """Return True iff a note with this id exists. Delegates to NoteService."""
+        return await self._notes.note_exists(note_id)
+
     async def get_note_metadata(self, note_id: UUID) -> dict[str, Any] | None:
         """Retrieve just the metadata from the page index. Delegates to NoteService."""
         return await self._notes.get_note_metadata(note_id)

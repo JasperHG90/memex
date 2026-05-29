@@ -220,6 +220,30 @@ def test_get_note_page_index_not_found(client, mock_api):
     assert response.status_code == 404
 
 
+def test_head_note_returns_200_when_present(client, mock_api):
+    """A.5: HEAD /notes/{id} returns 200 with no body when the note exists."""
+    doc_id = UUID('00000000-0000-0000-0000-000000000077')
+    mock_api.note_exists.return_value = True
+
+    response = client.head(f'/api/v1/notes/{doc_id}')
+
+    assert response.status_code == 200
+    # HEAD must not return a body.
+    assert response.content == b''
+    mock_api.note_exists.assert_awaited_once_with(doc_id)
+
+
+def test_head_note_returns_404_when_absent(client, mock_api):
+    """A.5: HEAD /notes/{id} returns 404 when the note doesn't exist."""
+    doc_id = UUID('00000000-0000-0000-0000-000000000078')
+    mock_api.note_exists.return_value = False
+
+    response = client.head(f'/api/v1/notes/{doc_id}')
+
+    assert response.status_code == 404
+    assert response.content == b''
+
+
 def test_get_note_metadata_with_data(client, mock_api):
     """GET /notes/{note_id}/metadata returns metadata when present."""
     doc_id = UUID('00000000-0000-0000-0000-000000000099')

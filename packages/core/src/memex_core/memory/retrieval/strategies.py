@@ -841,32 +841,50 @@ class EntityCooccurrenceNoteGraphStrategy:
         first_order = apply_vault_filters(first_order, Chunk.vault_id, **kwargs)
         first_order = apply_context_filter(first_order, **kwargs)
 
-        # 2nd Order: Co-occurrence expansion
-        neighbor_id_expr = func.coalesce(
-            func.nullif(col(EntityCooccurrence.entity_id_2), seed_entities.c.id),
-            col(EntityCooccurrence.entity_id_1),
-        ).label('neighbor_id')
+        # 2nd Order: Co-occurrence expansion.
+        # B.4: the previous shape used a single SELECT joined on
+        # `entity_id_1 = seed.id OR entity_id_2 = seed.id`. The `OR` defeats
+        # single-index use — Postgres can't push either side into the
+        # `(entity_id_1, …)` or `(entity_id_2, …)` btrees independently, so
+        # it fell back to a sequential / bitmap-or path that exploded for
+        # hub entities (e.g. `Memex`, `Claude`) with tens of thousands of
+        # cooccurrence rows before the outer LIMIT 60. Split into
+        # UNION ALL of two single-side joins — each branch uses its own
+        # btree, and the planner sees the small per-side cardinality.
+        link_strength_expr = (
+            func.ln(col(EntityCooccurrence.cooccurrence_count) + 1)
+            / func.ln(col(Entity.mention_count) + 2)
+        ).label('link_strength')
 
-        co_occur_stmt = (
+        left_co = (
             select(
-                neighbor_id_expr,
-                (
-                    func.ln(col(EntityCooccurrence.cooccurrence_count) + 1)
-                    / func.ln(col(Entity.mention_count) + 2)
-                ).label('link_strength'),
+                col(EntityCooccurrence.entity_id_2).label('neighbor_id'),
+                link_strength_expr,
             )
             .join(
                 seed_entities,
-                or_(
-                    col(EntityCooccurrence.entity_id_1) == seed_entities.c.id,
-                    col(EntityCooccurrence.entity_id_2) == seed_entities.c.id,
-                ),
+                col(EntityCooccurrence.entity_id_1) == seed_entities.c.id,
             )
-            .join(Entity, col(Entity.id) == neighbor_id_expr)
+            .join(Entity, col(Entity.id) == col(EntityCooccurrence.entity_id_2))
         )
-        co_occur_stmt = apply_vault_filters(co_occur_stmt, EntityCooccurrence.vault_id, **kwargs)
-        co_occur_stmt = _apply_as_of_filter(co_occur_stmt, **kwargs)
-        co_occurrences = co_occur_stmt.cte('doc_graph_related_entities')
+        left_co = apply_vault_filters(left_co, EntityCooccurrence.vault_id, **kwargs)
+        left_co = _apply_as_of_filter(left_co, **kwargs)
+
+        right_co = (
+            select(
+                col(EntityCooccurrence.entity_id_1).label('neighbor_id'),
+                link_strength_expr,
+            )
+            .join(
+                seed_entities,
+                col(EntityCooccurrence.entity_id_2) == seed_entities.c.id,
+            )
+            .join(Entity, col(Entity.id) == col(EntityCooccurrence.entity_id_1))
+        )
+        right_co = apply_vault_filters(right_co, EntityCooccurrence.vault_id, **kwargs)
+        right_co = _apply_as_of_filter(right_co, **kwargs)
+
+        co_occurrences = union_all(left_co, right_co).cte('doc_graph_related_entities')
 
         second_order = (
             select(Chunk.id)

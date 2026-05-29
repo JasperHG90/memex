@@ -928,8 +928,15 @@ class MemexMemoryProvider(MemoryProvider):
         attempt = 0
         while time.monotonic() < deadline:
             try:
-                run_sync(self._api.get_note(note_id), timeout=1.0)
-                return True
+                # A.5: HEAD instead of GET so each poll is a pk-index hit
+                # without hydrating the full Note model. Returns bool —
+                # True for 200 (exists), False for 404 (not yet visible).
+                # Other status codes raise httpx.HTTPStatusError via the
+                # client and route through the branches below.
+                if run_sync(self._api.head_note(note_id), timeout=1.0):
+                    return True
+                # head_note → False means 404 (still materialising) —
+                # fall through to backoff.
             except httpx.HTTPStatusError as e:
                 code = e.response.status_code
                 if code in _NON_TRANSIENT_HTTP_STATUSES and code != 404:
