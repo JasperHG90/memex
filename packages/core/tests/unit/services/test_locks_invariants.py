@@ -24,6 +24,11 @@ CORE_SRC_ROOT = pathlib.Path(__file__).resolve().parents[3] / 'src' / 'memex_cor
 EXPECTED_PG_TRY_ADVISORY_LOCK_FILES = {
     'scheduler.py',  # LEADER lock
     'services/locks.py',  # F9 per-entity lock
+    # Inbox router (design review AC-X-4): a session-level advisory lock on a
+    # fixed key (_ROUTER_LOCK_ID) serialises triage ticks so a manual trigger
+    # can't race the scheduled tick. It is a global serialisation lock (like the
+    # leader lock), not a per-entity F9 lock — a legitimate third caller.
+    'services/inbox_router/service.py',
 }
 
 

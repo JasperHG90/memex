@@ -35,19 +35,20 @@ async def triage(
 ):
     """Run one inbox-router triage tick."""
     config: MemexConfig = ctx.obj
+    # The CLI talks to the server over HTTP (RemoteMemexAPI); the inbox_router
+    # service lives in-process on the server side. The /inbox/triage endpoint
+    # ensures the inbox vault and runs the tick — we just call it and render.
     async with get_api_context(config) as api:
-        await api.inbox_router.ensure_inbox_vault()
-        result = await api.inbox_router.triage_tick(dry_run=dry_run)
-    payload = {'dry_run': dry_run, **result.as_dict()}
+        result = await api.trigger_inbox_triage(dry_run=dry_run)
     if json_output:
-        console.print_json(json.dumps(payload))
+        console.print_json(json.dumps(result))
         return
     verb = 'Would route' if dry_run else 'Routed'
     console.print(
         f'[bold]Inbox triage[/bold] ({"dry-run" if dry_run else "live"}): '
-        f'scored={result.scored}  {verb.lower()}/auto={result.auto_routed}  '
-        f'proposed={result.proposed}  no_fit={result.no_fit}  '
-        f'skipped_cap={result.skipped_cap}  errors={result.errors}'
+        f'scored={result["scored"]}  {verb.lower()}/auto={result["auto_routed"]}  '
+        f'proposed={result["proposed"]}  no_fit={result["no_fit"]}  '
+        f'skipped_cap={result["skipped_cap"]}  errors={result["errors"]}'
     )
 
 
@@ -60,7 +61,7 @@ async def status(
     """Show inbox-router readiness and pending routing proposals."""
     config: MemexConfig = ctx.obj
     async with get_api_context(config) as api:
-        payload = await api.inbox_router.status()
+        payload = await api.inbox_status()
     if json_output:
         console.print_json(json.dumps(payload))
         return

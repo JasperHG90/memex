@@ -134,7 +134,6 @@ candidates AS (
       JOIN inbox_router_vault_anchors va ON va.vault_id = v.id
       CROSS JOIN note_data nd
      WHERE v.name <> ALL(:excluded ::text[])
-       AND v.archived_at IS NULL
 ),
 features_long AS (
     SELECT note_id, vault_id, vault_name, 'sem_summary_sim' AS feat,
