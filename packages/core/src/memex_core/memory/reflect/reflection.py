@@ -592,6 +592,19 @@ class ReflectionEngine:
                     entity_name=entity_name,
                 )
 
+                # Phase 4 returns an empty summary when there were no NEW
+                # observations to synthesise from (validated == []), and the LLM
+                # can also return a blank ``entity_summary``. In either case,
+                # preserve the description built by the most recent full cycle
+                # rather than clobbering it with '' — the same rule the
+                # no-recent-memories prune path applies above. (An entity with
+                # observations but a blanked description is the user-visible bug
+                # this guards against.) Also keeps Phase 6 enrichment meaningful.
+                if not entity_summary:
+                    entity_summary = (mental_model.entity_metadata or {}).get(
+                        'description', ''
+                    ) or ''
+
                 # Phase 5: Finalize Model (CAS UPDATE — may abandon on version
                 # conflict). Opens its own short DB tx and commits per-entity.
                 async with self._entity_session() as ph5_session:
@@ -665,8 +678,13 @@ class ReflectionEngine:
         active_session = session if session is not None else self.session
         claimed_version = mental_model.version
         new_observations = [obs.model_dump(mode='json') for obs in final_obs]
+        # Defensive sink-level guard: never overwrite an existing non-empty
+        # description with an empty one. Callers should already pass a preserved
+        # prior summary on no-new-observation cycles, but this protects every
+        # current and future path from silently blanking the description.
+        description = entity_summary or (mental_model.entity_metadata or {}).get('description', '')
         new_entity_metadata = {
-            'description': entity_summary,
+            'description': description,
             'category': entity_type,
             'observation_count': len(final_obs),
         }

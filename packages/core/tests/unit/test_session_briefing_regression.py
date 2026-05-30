@@ -249,12 +249,27 @@ class TestProceduresRendering:
         ]
         rendered = svc._build_procedures_section(entries)
         assert rendered.startswith('\n## Procedures\n')
-        assert '**answer:briefing**' in rendered
+        # Scope is always shown — global included — so the rule is never ambiguous.
+        # Brackets are markdown-defanged by _defang_procedure_name.
+        assert r'**\[global\] answer:briefing**' in rendered
         assert 'cite briefing first' in rendered
 
     def test_procedures_section_suppressed_when_no_rows(self):
         svc = _make_briefing_service()
         assert svc._build_procedures_section([]) == ''
+
+    def test_operational_app_project_kv_excluded_from_facts(self):
+        # app:<app>:project:*:vault routing config is plumbing, not a fact, and
+        # must not pollute the Key-Value Facts section.
+        from memex_core.services.session_briefing import _is_operational_kv
+
+        assert _is_operational_kv('app:claude-code:project:github.com/x/y:vault')
+        assert _is_operational_kv('app:hermes:project:foo:vault')
+        # Real facts / preferences / procedures are NOT operational.
+        assert not _is_operational_kv('user:name')
+        assert not _is_operational_kv('app:claude-code:theme')
+        assert not _is_operational_kv('global:procedure:commit:pr-first')
+        assert not _is_operational_kv('project:memex:lang:python')
 
     def test_procedures_section_suppressed_when_all_degenerate(self):
         import json

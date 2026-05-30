@@ -87,6 +87,17 @@ def _build_kv_namespaces(project_id: str | None) -> list[str]:
     return ns
 
 
+def _is_operational_kv(key: str) -> bool:
+    """Per-app, per-project routing config — plumbing, not a briefing fact.
+
+    The Claude Code plugin records each project's default vault under
+    ``app:<app>:project:<project-id>:vault``. These are operational mappings
+    the agent never acts on directly; surfacing them as "Key-Value Facts"
+    just clutters the briefing with one row per project the user has touched.
+    """
+    return key.startswith('app:') and ':project:' in key
+
+
 def _sort_observations(observations: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Sort observations by trend priority: new > strengthening > weakening > stable > stale."""
     return sorted(observations, key=lambda o: _TREND_PRIORITY.get(o.get('trend', 'stable'), 3))
@@ -202,8 +213,12 @@ class SessionBriefingService:
         sections.append(('header', self._build_header(summary, len(mental_models))))
 
         # 2. KV facts (priority 1) — procedure rows (global + project-scoped)
-        # render in their own section below.
-        non_proc = [e for e in kv_entries if not is_procedure_key(e.key)]
+        # render in their own section below. Operational routing config (the
+        # plugin's per-project default-vault mappings, ``app:<app>:project:*``)
+        # is excluded — it is plumbing the agent doesn't act on, not a fact.
+        non_proc = [
+            e for e in kv_entries if not is_procedure_key(e.key) and not _is_operational_kv(e.key)
+        ]
         proc = [e for e in kv_entries if is_procedure_key(e.key)]
         sections.append(('kv', self._build_kv_section(non_proc)))
 

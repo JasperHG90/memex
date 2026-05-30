@@ -85,6 +85,41 @@ async def test_phase_5_with_empty_summary_and_none_type(engine):
     }
 
 
+@pytest.mark.asyncio
+async def test_phase_5_preserves_prior_description_when_summary_empty(engine):
+    """An empty incoming summary must NOT blank an existing description.
+
+    Regression: a no-new-observation reflection cycle yields entity_summary=''
+    (Phase 4 short-circuit). Without this guard Phase 5 overwrote the
+    description built by the last full cycle, leaving entities with many
+    observations but a blank description (the user-reported MCP/CLI bug).
+    """
+    model = MentalModel(
+        id=uuid4(),
+        entity_id=uuid4(),
+        vault_id=uuid4(),
+        name='MCP',
+        observations=[],
+        version=0,
+        entity_metadata={
+            'description': 'The Model Context Protocol.',
+            'category': 'Technology',
+            'observation_count': 14,
+        },
+    )
+
+    applied = await engine._phase_5_finalize(
+        model,
+        [],
+        entity_summary='',
+        entity_type='Technology',
+    )
+
+    assert applied is True
+    # Prior description preserved rather than clobbered with ''.
+    assert model.entity_metadata['description'] == 'The Model Context Protocol.'
+
+
 class TestCASBehavior:
     @pytest.mark.asyncio
     async def test_cas_success_returns_true_and_mutates_model(self):

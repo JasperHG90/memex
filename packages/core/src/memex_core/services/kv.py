@@ -143,16 +143,16 @@ def validate_procedure_key(key: str) -> None:
 def format_procedure_display_name(key: str) -> str:
     """Render a procedure key for human display.
 
-    ``global:procedure:<v>:<c>`` → ``"<v>:<c>"``.
-    Any other scope → ``"[<scope>] <v>:<c>"``.
-    Non-procedure key: returns the key unchanged (defensive fallback).
+    Always prefixes the scope so a procedure is never ambiguous about whether
+    it is global, user, project, or app-scoped:
+    ``<scope>:procedure:<v>:<c>`` → ``"[<scope>] <v>:<c>"`` (including
+    ``[global]``). Non-procedure key: returns the key unchanged (defensive
+    fallback).
     """
     parsed = parse_procedure_key(key)
     if parsed is None:
         return key
     scope, verb, context = parsed
-    if scope == 'global':
-        return f'{verb}:{context}'
     return f'[{scope}] {verb}:{context}'
 
 
