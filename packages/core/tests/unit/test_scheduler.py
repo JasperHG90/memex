@@ -77,11 +77,16 @@ async def test_scheduler_task_execution(mock_api):
     """
     Test the task execution logic directly.
     """
-    from memex_common.schemas import ReflectionQueueDTO
+    from memex_core.memory.sql_models import ReflectionQueue
     from uuid import uuid4
 
-    # 1. Setup mock data
-    item1 = ReflectionQueueDTO(entity_id=uuid4(), vault_id=uuid4(), priority_score=1.0)
+    # 1. Setup mock data. ``claim_reflection_queue_batch`` returns
+    # ``ReflectionQueue`` SQLModel rows (not the wire DTO); the scheduler
+    # partitions them on ``task_type`` ('reflect' vs 'refresh_observation')
+    # before dispatching, so the fixture must carry that field.
+    item1 = ReflectionQueue(
+        entity_id=uuid4(), vault_id=uuid4(), priority_score=1.0, task_type='reflect'
+    )
     mock_api.claim_reflection_queue_batch.return_value = [item1]
 
     # 2. Run task

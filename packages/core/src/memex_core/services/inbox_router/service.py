@@ -221,10 +221,10 @@ class InboxRouterService(BaseService):
         async with self.metastore.session() as session:
             row = (
                 await session.execute(
-                    text(
-                        'SELECT id FROM vaults WHERE name = :name AND archived_at IS NULL '
-                        'ORDER BY created_at LIMIT 1'
-                    ),
+                    # NB: the vaults table has no soft-delete column — only
+                    # mental_models/notes carry archived_at. Do NOT filter on
+                    # vaults.archived_at (it does not exist).
+                    text('SELECT id FROM vaults WHERE name = :name ORDER BY created_at LIMIT 1'),
                     {'name': INBOX_VAULT_NAME},
                 )
             ).first()
@@ -255,11 +255,11 @@ class InboxRouterService(BaseService):
         async with self.metastore.session() as session:
             rows = (
                 await session.execute(
+                    # vaults has no archived_at column (no soft-delete); select all.
                     text(
                         "SELECT v.id, v.name, COALESCE(vs.narrative, v.description, '') "
                         'FROM vaults v '
-                        'LEFT JOIN vault_summaries vs ON vs.vault_id = v.id '
-                        'WHERE v.archived_at IS NULL'
+                        'LEFT JOIN vault_summaries vs ON vs.vault_id = v.id'
                     )
                 )
             ).all()
@@ -270,7 +270,18 @@ class InboxRouterService(BaseService):
             return 0
 
         narratives = [narrative or '(empty)' for (_, _, narrative) in targets]
-        vecs = await asyncio.to_thread(self.embedding_model.encode, narratives)
+        # Shared embedding cap across api.py + document_search.py + retrieval/engine.py
+        # — one model, one capacity budget. Thread keeps running on timeout.
+        from memex_core.memory.retrieval._offload import (
+            get_embedding_call_timeout,
+            get_embedding_semaphore,
+        )
+
+        async with get_embedding_semaphore():
+            vecs = await asyncio.wait_for(
+                asyncio.to_thread(self.embedding_model.encode, narratives),
+                timeout=get_embedding_call_timeout(),
+            )
 
         refreshed = 0
         async with self.metastore.session() as session:

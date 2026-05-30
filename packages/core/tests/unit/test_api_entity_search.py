@@ -56,9 +56,11 @@ async def test_server_entity_search(api, mock_metastore, mock_filestore):
     mock_config.server.reranker_max_concurrency = 4
     mock_config.server.embedding_max_concurrency = 4
     mock_config.server.ner_max_concurrency = 4
+    mock_config.server.nli_max_concurrency = 4
     mock_config.server.reranker_call_timeout = 30
     mock_config.server.embedding_call_timeout = 30
     mock_config.server.ner_call_timeout = 30
+    mock_config.server.nli_call_timeout = 30
 
     # Configure mock_metastore to support lifespan initialization
     mock_metastore.connect = AsyncMock()
@@ -120,9 +122,11 @@ def _make_server_test_client(api, mock_metastore, mock_filestore):
     mock_config.server.reranker_max_concurrency = 4
     mock_config.server.embedding_max_concurrency = 4
     mock_config.server.ner_max_concurrency = 4
+    mock_config.server.nli_max_concurrency = 4
     mock_config.server.reranker_call_timeout = 30
     mock_config.server.embedding_call_timeout = 30
     mock_config.server.ner_call_timeout = 30
+    mock_config.server.nli_call_timeout = 30
 
     mock_metastore.connect = AsyncMock()
     mock_metastore.close = AsyncMock()
@@ -248,7 +252,7 @@ async def test_entity_listing_without_query_returns_ranked(api, mock_metastore, 
 
     api.search_entities = AsyncMock()
 
-    async def _ranked(limit=100, vault_ids=None, entity_type=None):
+    async def _ranked(limit=100, vault_ids=None, entity_type=None, slim=False, **kwargs):
         e = Entity(id=uuid4(), canonical_name='User', mention_count=2368)
         yield EntityWithMetadata(entity=e, metadata={})
 

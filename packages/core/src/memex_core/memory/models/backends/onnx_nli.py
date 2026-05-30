@@ -150,4 +150,8 @@ class OnnxNLIClassifier(BaseOnnxModel):
         return {label: float(probs[i]) for i, label in enumerate(self._label_order)}
 
     async def classify(self, premise: str, hypothesis: str) -> dict[str, float]:
+        # NLI inference concurrency is bounded by the per-instance
+        # `_inference_lock` (serialises session.run) and, on the lint hot path,
+        # by the NLI rate limiter / get_nli_semaphore() at the call sites.
+        # exempt: bounded by inference lock + NLI rate limiter, not the offload semaphore.
         return await asyncio.to_thread(self._score_pair, premise, hypothesis)

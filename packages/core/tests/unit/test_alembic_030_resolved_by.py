@@ -20,7 +20,7 @@ def _load_migration_030() -> Any:
 
     package_dir = plb.Path(memex_core.__file__).resolve().parent
     migration_path = (
-        package_dir / 'alembic' / 'versions' / '030_maintenance_proposals_resolved_by.py'
+        package_dir / 'alembic' / 'versions' / '031_maintenance_proposals_resolved_by.py'
     )
     spec = importlib.util.spec_from_file_location('migration_030', migration_path)
     assert spec is not None and spec.loader is not None
@@ -34,7 +34,7 @@ def _migration_030_source() -> str:
 
     package_dir = plb.Path(memex_core.__file__).resolve().parent
     migration_path = (
-        package_dir / 'alembic' / 'versions' / '030_maintenance_proposals_resolved_by.py'
+        package_dir / 'alembic' / 'versions' / '031_maintenance_proposals_resolved_by.py'
     )
     return migration_path.read_text(encoding='utf-8')
 
@@ -46,11 +46,13 @@ class TestMigration030Metadata:
         assert len(m.revision) <= 32, (
             'revision id must fit in alembic_version.version_num (varchar(32))'
         )
-        assert m.revision == '030_proposal_resolved_by'
+        assert m.revision == '031_proposal_resolved_by'
 
-    def test_down_revision_chains_from_029(self):
+    def test_down_revision_chains_from_030(self):
+        # Renumbered 030 → 031 when 030_revisit_last_reviewed_at was inserted
+        # between 029_lint_llm_quota and this migration.
         m = _load_migration_030()
-        assert m.down_revision == '029_lint_llm_quota'
+        assert m.down_revision == '030_revisit_last_reviewed_at'
 
 
 class TestMigration030AddsNullableColumn:

@@ -106,6 +106,25 @@ jobs:
           uv_version: ${{ env.UV_VERSION }}
           python_version: ${{ matrix.python-version }}
           markers: "integration and not llm"
+      # packages/core has its own unit + integration suites (incl. the alembic
+      # migration round-trip tests) that previously ran in NO CI job — a broken
+      # 055 migration shipped green because of it. Run them here. Target the
+      # unit/ and integration/ subdirs directly: the integration conftest spins
+      # a Postgres testcontainer at import, so the unit step must not collect it.
+      - name: Run core package unit tests
+        uses: JasperHG90/toiminnot/actions/pytest@main
+        with:
+          directory: packages/core/tests/unit
+          uv_version: ${{ env.UV_VERSION }}
+          python_version: ${{ matrix.python-version }}
+          markers: "not llm"
+      - name: Run core package integration tests
+        uses: JasperHG90/toiminnot/actions/pytest@main
+        with:
+          directory: packages/core/tests/integration
+          uv_version: ${{ env.UV_VERSION }}
+          python_version: ${{ matrix.python-version }}
+          markers: "integration and not llm"
 
   mcp-import-check:
     needs: changes

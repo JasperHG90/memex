@@ -977,9 +977,9 @@ class TestProcedures:
         )
         result = await svc.generate(uuid4(), budget=2000)
         assert '## Procedures' in result
-        assert '**answer:foo**' in result
+        assert r'**\[global\] answer:foo**' in result
         assert 'answer like X' in result
-        assert '**format:bar**' in result
+        assert r'**\[global\] format:bar**' in result
         assert 'format like Y' in result
 
     @pytest.mark.asyncio
@@ -1008,8 +1008,8 @@ class TestProcedures:
         )
         result = await svc.generate(uuid4(), budget=2000)
         assert '## Procedures' in result
-        # Global procedure: bare verb:context label.
-        assert '**commit:lint-first**' in result
+        # Global procedure: scope is shown too — [global] verb:context.
+        assert r'**\[global\] commit:lint-first**' in result
         assert 'global rule' in result
         # Project procedure: bracketed scope prefix.
         # Brackets are escaped by `_defang_procedure_name`. Use a raw
@@ -1190,7 +1190,7 @@ class TestProcedures:
             ],
         )
         result = await svc.generate(uuid4(), budget=2000)
-        assert '**answer:session-briefing**' in result
+        assert r'**\[global\] answer:session-briefing**' in result
         assert 'answer from it' in result
 
     @pytest.mark.asyncio
@@ -1227,5 +1227,5 @@ class TestProcedures:
         # typically 2-8 survive after Step 5 trims oldest-first. If this test flips
         # to `present == 0` after touching _build_sections / header overhead, audit
         # the budget-arithmetic before relaxing this assertion.
-        present = sum(1 for i in range(15) if f'**do:p{i}**' in result)
+        present = sum(1 for i in range(15) if rf'**\[global\] do:p{i}**' in result)
         assert 0 < present < 15, f'expected partial trim, got present={present}'

@@ -167,7 +167,10 @@ async def test_refresh_telemetry_aggregates_per_rule_and_vault(
     assert row.dismiss_count == 2
     assert row.legacy_count == 0
     assert row.accept_rate is not None
-    assert abs(row.accept_rate - 3 / 6) < 1e-9
+    # accept_rate counts no_op as positive engagement: (accept + no_op)/labelled
+    # = (3 + 1) / 6. no_op is the intended action for rules like
+    # sensitive_unreviewed_unit, so it must not read as negative.
+    assert abs(row.accept_rate - 4 / 6) < 1e-9
     assert row.median_surprise is not None
     assert abs(row.median_surprise - 0.6) < 0.1
     assert row.median_time_to_resolve_seconds is not None

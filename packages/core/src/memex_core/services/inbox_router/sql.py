@@ -134,7 +134,6 @@ candidates AS (
       JOIN inbox_router_vault_anchors va ON va.vault_id = v.id
       CROSS JOIN note_data nd
      WHERE v.name <> ALL(:excluded ::text[])
-       AND v.archived_at IS NULL
 ),
 features_long AS (
     SELECT note_id, vault_id, vault_name, 'sem_summary_sim' AS feat,
@@ -170,12 +169,22 @@ per_pair_posterior AS (
      GROUP BY note_id, vault_id, vault_name
 ),
 p_match_raw AS (
+    -- ``p_match_raw`` is the absolute pairwise sigmoid P(match|x) — used by the
+    -- t_low gate to decide "does ANY vault clear minimum confidence?".
+    -- ``log_p`` carries the per-vault ranking signal forward to the softmax
+    -- across vaults. We use ``log_post_match`` directly (not the sigmoid's log)
+    -- because the sigmoid saturates at ±700 when feature likelihoods are
+    -- extreme — and when it saturates for every vault (e.g. a note whose
+    -- keyword_ts_rank is far from the tight POC match distribution), the
+    -- ``ln(p_match_raw)`` path collapses every vault to the same floor and the
+    -- softmax returns a uniform tie. ``log_post_match`` keeps the relative
+    -- per-vault ranking through saturation; softmax-of-log_post_match is the
+    -- standard NB ranking form. Note that the cross-vault normalisation
+    -- constant cancels out inside the softmax's max-subtraction below.
     SELECT note_id, vault_id, vault_name,
         1.0 / (1.0 + exp(LEAST(GREATEST(log_post_no_match - log_post_match, -700.0), 700.0)))
             AS p_match_raw,
-        ln(GREATEST(
-            1.0 / (1.0 + exp(LEAST(GREATEST(log_post_no_match - log_post_match, -700.0), 700.0))),
-            1e-12)) AS log_p
+        log_post_match AS log_p
       FROM per_pair_posterior
 ),
 note_log_max AS (

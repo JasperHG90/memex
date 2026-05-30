@@ -55,23 +55,24 @@ def test_seed_chain_is_linear_and_correct() -> None:
     sd = ScriptDirectory.from_config(cfg)
 
     heads = sd.get_heads()
-    assert heads == ['045_drop_procedure_outcomes'], (
-        f'Expected single head 045_drop_procedure_outcomes, got {heads}'
-    )
+    assert heads == ['055_inbox_router'], f'Expected single head 055_inbox_router, got {heads}'
 
     walk = list(sd.walk_revisions())
     top10 = [(r.revision, r.down_revision) for r in walk[:10]]
+    # 053 is a merge node (down_revision is a tuple) — the cockpit/lint chain
+    # (…→052) and the procedure-to-global chain (046_procedure_to_global) were
+    # merged, then 054 (nodes index) and 055 (inbox router) extend from there.
     expected_top10 = [
-        ('045_drop_procedure_outcomes', '044_mm_observations_gin_index'),
-        ('044_mm_observations_gin_index', '043_refl_queue_refresh_task'),
-        ('043_refl_queue_refresh_task', '042_drop_note_status_appended'),
-        ('042_drop_note_status_appended', '041_archived_fsfm'),
-        ('041_archived_fsfm', '040_outcome_per_unit_schema'),
-        ('040_outcome_per_unit_schema', '039_memory_unit_claim_type'),
-        ('039_memory_unit_claim_type', '038_link_type_refines'),
-        ('038_link_type_refines', '037_entity_last_merge_scan_at'),
-        ('037_entity_last_merge_scan_at', '036_fsfm_cooldown_index'),
-        ('036_fsfm_cooldown_index', '035_drop_fsrs_revisit_columns'),
+        ('055_inbox_router', '054_nodes_vault_active'),
+        ('054_nodes_vault_active', '053_merge_heads'),
+        ('053_merge_heads', ('046_procedure_to_global', '052_entity_cooccurrence_vault_pk')),
+        ('046_procedure_to_global', '045_drop_procedure_outcomes'),
+        ('052_entity_cooccurrence_vault_pk', '051_fix_telemetry_pk'),
+        ('051_fix_telemetry_pk', '050_mp_flagged_at'),
+        ('050_mp_flagged_at', '049_lint_llm_signature'),
+        ('049_lint_llm_signature', '048_lint_rule_calibration'),
+        ('048_lint_rule_calibration', '047_lint_rule_telemetry'),
+        ('047_lint_rule_telemetry', '046_mental_models_archived_at'),
     ]
     assert top10 == expected_top10, f'Tier A chain mismatch: got {top10}'
 

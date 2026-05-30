@@ -142,15 +142,31 @@ _CHECK_WITHOUT_ROUTING = (
 )
 
 
+def _exec_each(sql: str) -> None:
+    """Execute a ``;``-separated SQL block one statement at a time.
+
+    The metastore's async driver (asyncpg) sends every statement over the
+    extended query protocol as a prepared statement, and Postgres permits only
+    one command per prepared statement — a multi-statement string raises
+    ``cannot insert multiple commands into a prepared statement``. (psycopg2's
+    simple-query path tolerated ``;``-joined batches; asyncpg does not.) So we
+    split and run each statement individually. Relies on no statement containing
+    a ``;`` inside a string literal or body, which holds for every block here.
+    """
+    for statement in (s.strip() for s in sql.split(';')):
+        if statement:
+            op.execute(statement)
+
+
 def upgrade() -> None:
-    op.execute(_CHECK_WITH_ROUTING)
-    op.execute(_CREATE)
-    op.execute(_SEED_STATS)
-    op.execute(_SEED_CLASS)
+    _exec_each(_CHECK_WITH_ROUTING)
+    _exec_each(_CREATE)
+    _exec_each(_SEED_STATS)
+    _exec_each(_SEED_CLASS)
 
 
 def downgrade() -> None:
-    op.execute(_DROP)
+    _exec_each(_DROP)
     # Revert the CHECK; any 'routing' rows must be cleared first to satisfy it.
     op.execute("DELETE FROM maintenance_proposals WHERE lint_type = 'routing'")
-    op.execute(_CHECK_WITHOUT_ROUTING)
+    _exec_each(_CHECK_WITHOUT_ROUTING)

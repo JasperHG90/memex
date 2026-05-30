@@ -26,6 +26,29 @@ class EntityWithMetadata:
     observations: list[dict[str, Any]] = field(default_factory=list)
 
 
+@dataclass
+class AggregatedCooccurrence:
+    """A cooccurrence edge summed across vaults.
+
+    Since ``052_entity_cooccurrence_vault_pk`` the cooccurrence grain is
+    ``(entity_id_1, entity_id_2, vault_id)`` — one row per vault. Read paths
+    that present "related entities" globally (CLI ``entity related``, the MCP /
+    Hermes ``get_entity_cooccurrences`` tools) must collapse the per-vault rows
+    for a counterpart into a single edge, or the same entity shows up once per
+    vault with un-summed counts. This carries the summed count; ``vault_id`` is
+    ``None`` because the edge spans vaults. Exposes the same attribute surface
+    (``entity_1``/``entity_2`` ORM Entities, ids, count) the server serializer
+    and CLI already consume, so it is a drop-in for the prior ORM rows.
+    """
+
+    entity_id_1: UUID
+    entity_id_2: UUID
+    entity_1: Any
+    entity_2: Any
+    cooccurrence_count: int
+    vault_id: UUID | None = None
+
+
 def _wrap_with_metadata(entity: Any, mental_model: Any | None) -> EntityWithMetadata:
     """Wrap an entity with mental model entity_metadata."""
     metadata = (mental_model.entity_metadata if mental_model else None) or {}
@@ -173,47 +196,102 @@ class EntityService(BaseService):
         vault_ids: list[UUID] | None = None,
         limit: int = 50,
     ) -> list[Any]:
-        """Get co-occurrence edges for an entity."""
-        from sqlalchemy.orm import selectinload
+        """Get co-occurrence edges for an entity, summed across vaults.
+
+        The cooccurrence grain is per-vault (``052_entity_cooccurrence_vault_pk``),
+        so a counterpart that co-occurs in N vaults has N rows. We GROUP BY the
+        counterpart and SUM the counts so each related entity appears exactly
+        once with its global strength; ``vault_ids`` narrows which vaults the
+        sum spans. Returns :class:`AggregatedCooccurrence` rows (drop-in for the
+        prior ORM rows: same ``entity_1``/``entity_2``/id/count attributes).
+        """
+        from sqlalchemy import case, func
         from sqlmodel import desc, or_, select
 
-        from memex_core.memory.sql_models import EntityCooccurrence
+        from memex_core.memory.sql_models import Entity, EntityCooccurrence
 
         eid = UUID(str(entity_id))
+        # The counterpart is whichever side of the edge is not the queried entity.
+        counterpart = case(
+            (EntityCooccurrence.entity_id_1 == eid, EntityCooccurrence.entity_id_2),
+            else_=EntityCooccurrence.entity_id_1,
+        ).label('counterpart_id')
+        total = func.sum(EntityCooccurrence.cooccurrence_count).label('total')
+
         async with self.metastore.session() as session:
-            stmt = (
-                select(EntityCooccurrence)
-                .options(
-                    selectinload(EntityCooccurrence.entity_1),  # type: ignore[arg-type]
-                    selectinload(EntityCooccurrence.entity_2),  # type: ignore[arg-type]
-                )
-                .where(
-                    or_(
-                        EntityCooccurrence.entity_id_1 == eid,
-                        EntityCooccurrence.entity_id_2 == eid,
-                    )
+            stmt = select(counterpart, total).where(
+                or_(
+                    EntityCooccurrence.entity_id_1 == eid,
+                    EntityCooccurrence.entity_id_2 == eid,
                 )
             )
             if vault_ids:
                 stmt = stmt.where(col(EntityCooccurrence.vault_id).in_(vault_ids))
-            stmt = stmt.order_by(desc(EntityCooccurrence.cooccurrence_count)).limit(limit)
-            return list((await session.exec(stmt)).all())
+            stmt = stmt.group_by(counterpart).order_by(desc(total)).limit(limit)
+            rows = (await session.exec(stmt)).all()
+            if not rows:
+                return []
+
+            # Resolve names/types for the queried entity + every counterpart in
+            # one round-trip so the server serializer can read entity_*.name.
+            counterpart_ids = [r.counterpart_id for r in rows]
+            entities = {
+                e.id: e
+                for e in (
+                    await session.exec(
+                        select(Entity).where(col(Entity.id).in_([eid, *counterpart_ids]))
+                    )
+                ).all()
+            }
+            queried = entities.get(eid)
+            return [
+                AggregatedCooccurrence(
+                    entity_id_1=eid,
+                    entity_id_2=r.counterpart_id,
+                    entity_1=queried,
+                    entity_2=entities.get(r.counterpart_id),
+                    cooccurrence_count=int(r.total),
+                )
+                for r in rows
+            ]
 
     async def get_bulk_cooccurrences(
         self, entity_ids: list[UUID], vault_ids: list[UUID] | None = None
     ) -> list[Any]:
-        """Get co-occurrences between a set of entities."""
-        from memex_core.memory.sql_models import EntityCooccurrence
+        """Get co-occurrences between a set of entities, summed across vaults.
+
+        Like :meth:`get_entity_cooccurrences`, this collapses the per-vault grain
+        (``052_entity_cooccurrence_vault_pk``): one edge per ``(entity_id_1,
+        entity_id_2)`` pair with the count summed over the vaults in scope, so a
+        pair that co-occurs in several vaults is not returned as duplicate rows.
+        """
+        from sqlalchemy import func
         from sqlmodel import col, select
 
+        from memex_core.memory.sql_models import EntityCooccurrence
+
         async with self.metastore.session() as session:
-            stmt = select(EntityCooccurrence).where(
+            total = func.sum(EntityCooccurrence.cooccurrence_count).label('total')
+            stmt = select(
+                EntityCooccurrence.entity_id_1, EntityCooccurrence.entity_id_2, total
+            ).where(
                 (col(EntityCooccurrence.entity_id_1).in_(entity_ids))
                 & (col(EntityCooccurrence.entity_id_2).in_(entity_ids))
             )
             if vault_ids:
                 stmt = stmt.where(col(EntityCooccurrence.vault_id).in_(vault_ids))
-            return list((await session.exec(stmt)).all())
+            stmt = stmt.group_by(EntityCooccurrence.entity_id_1, EntityCooccurrence.entity_id_2)
+            rows = (await session.exec(stmt)).all()
+            return [
+                AggregatedCooccurrence(
+                    entity_id_1=r.entity_id_1,
+                    entity_id_2=r.entity_id_2,
+                    entity_1=None,
+                    entity_2=None,
+                    cooccurrence_count=int(r.total),
+                )
+                for r in rows
+            ]
 
     async def get_entity_mentions(
         self,

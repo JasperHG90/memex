@@ -84,6 +84,9 @@ async def test_warm_after_compute_returns_ready(
     memex_config: MemexConfig,
 ):
     """After compute completes, second call returns ('ready', cached_payload)."""
+    # Manifold compute needs umap-learn (the optional [diagnostics] extra); when
+    # it isn't installed the background compute can't write the cache. Gate on it.
+    pytest.importorskip('umap', reason='requires memex[diagnostics] (umap-learn)')
     vault = await _seed_minimal_vault(session)
     service = DiagnosticsService(metastore=metastore, filestore=filestore, config=memex_config)
     try:
@@ -111,6 +114,7 @@ async def test_status_returns_ready_after_compute(
     memex_config: MemexConfig,
 ):
     """status endpoint backing returns 'ready' once compute is done."""
+    pytest.importorskip('umap', reason='requires memex[diagnostics] (umap-learn)')
     vault = await _seed_minimal_vault(session)
     service = DiagnosticsService(metastore=metastore, filestore=filestore, config=memex_config)
     try:

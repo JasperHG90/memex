@@ -359,6 +359,9 @@ class TestMaybeRunConfidenceMapFastPath:
         from memex_core.services.lint_llm import LintLLMService
 
         service = LintLLMService.__new__(LintLLMService)
+        # __new__ bypasses __init__; this test reaches the calibration path
+        # which reads self._calibrated_cache (normally set in __init__).
+        service._calibrated_cache = {}
         # Stronger gate that the map's well-evidenced unit clears.
         settings = LintLLMConfig(
             enabled=True,
@@ -373,7 +376,14 @@ class TestMaybeRunConfidenceMapFastPath:
         session = MagicMock()
         # ``compute_unit_surprise`` is reached past the gate; stub it so the
         # rest of ``maybe_run`` (cost-cap + LLM call) is irrelevant for this test.
-        session.execute = AsyncMock()
+        # ``_get_calibrated_surprise_threshold`` runs ``(await session.execute(
+        # ...)).first()`` — return a non-async result whose ``.first()`` yields
+        # None (calibration miss) so the threshold falls back to the config
+        # default (0.7). A bare ``AsyncMock()`` would make ``.first()`` itself
+        # return a coroutine and the threshold read would explode.
+        _calib_result = MagicMock()
+        _calib_result.first.return_value = None
+        session.execute = AsyncMock(return_value=_calib_result)
 
         async def _stub_surprise(*_args, **_kwargs):
             # Below-threshold → maybe_run will skip the LLM call and return

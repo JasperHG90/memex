@@ -420,11 +420,16 @@ EXPECTED_GATED_SITES = [
     ('memory/retrieval/engine.py', '_EMBEDDING'),
     ('memory/retrieval/engine.py', '_NER'),
     ('memory/retrieval/engine.py', '_RERANKER'),
+    ('services/inbox_router/service.py', '_EMBEDDING'),
 ]
 
 EXPECTED_EXEMPT_SITES = [
     'memory/extraction/core.py',
     'memory/extraction/engine.py',
+    # NLI backend offload — concurrency bounded by the per-instance inference
+    # lock + NLI rate limiter at the polarity call site, not the offload
+    # semaphore (warmup gates via get_nli_semaphore() at the call site).
+    'memory/models/backends/onnx_nli.py',
     'processing/files.py',  # 2 calls in this file
     'processing/web.py',
     'templates.py',
@@ -435,7 +440,7 @@ DEAD_FALLBACK_FILES = ['llm.py']
 
 
 class TestToThreadAudit:
-    """AC-009 (d): grep -rn 'asyncio.to_thread' produces 18 calls; this
+    """AC-009 (d): grep -rn 'asyncio.to_thread' produces 20 calls; this
     test re-runs the audit at test time so any *new* call added without
     classification fails the build.
     """
@@ -470,14 +475,17 @@ class TestToThreadAudit:
         return lines
 
     def test_total_call_count_matches_audit(self) -> None:
-        """RFC-001 §"Step 1.5.1" verified 18 actual calls on 8e59301.
+        """RFC-001 §"Step 1.5.1" verified 18 actual calls on 8e59301; two
+        further sites landed since (the NLI backend offload from the F10b
+        polarity work and the inbox-router vault-anchor embedding offload),
+        bringing the classified total to 20.
         AC-009 (d): if origin/main adds a new asyncio.to_thread between
         this AC and merge it must be classified — this test catches a
         silent addition.
         """
         lines = self._all_call_lines()
-        assert len(lines) == 18, (
-            f'Expected 18 asyncio.to_thread calls per AC-009 four-bucket '
+        assert len(lines) == 20, (
+            f'Expected 20 asyncio.to_thread calls per AC-009 four-bucket '
             f'audit; found {len(lines)}. New calls must be classified into '
             f'gated / dead / exempt / warmup.'
         )

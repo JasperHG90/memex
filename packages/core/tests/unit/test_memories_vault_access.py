@@ -14,12 +14,36 @@ sentinel).
 
 from __future__ import annotations
 
+import contextlib
+import logging
 from types import SimpleNamespace
 from unittest.mock import AsyncMock
 from uuid import UUID, uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+
+
+@contextlib.contextmanager
+def _capture_logger(caplog, logger_name: str, level: int):
+    """Capture records from ``logger_name`` even when an earlier test ran
+    ``configure_logging`` (which sets ``logging.getLogger('memex').propagate
+    = False``). With propagation disabled the records never reach the root
+    logger caplog's handler is attached to, so ``caplog.at_level(...)`` alone
+    silently captures nothing. Attaching caplog's own handler directly to the
+    target logger restores capture regardless of propagation state.
+    """
+    target = logging.getLogger(logger_name)
+    prev_level = target.level
+    target.setLevel(level)
+    target.addHandler(caplog.handler)
+    caplog.handler.setLevel(level)
+    try:
+        yield
+    finally:
+        target.removeHandler(caplog.handler)
+        target.setLevel(prev_level)
+
 
 from memex_common.config import Permission, Policy, POLICY_PERMISSIONS
 from memex_core.server import app
@@ -406,7 +430,7 @@ class TestReconsolidateLockTimeoutEnvelope:
             side_effect=EntityLockTimeoutError(f'could not acquire {self._INTERNAL_LEAK_NEEDLE}')
         )
         client = _make_client(mock_api, _unrestricted_writer())
-        with caplog.at_level('WARNING', logger='memex.core.server'):
+        with _capture_logger(caplog, 'memex.core.server', logging.WARNING):
             resp = client.post(
                 '/api/v1/memory/reconsolidate',
                 json={
@@ -506,7 +530,7 @@ class TestReconsolidateResponseSchemaDrift:
             }
         )
         client = _make_client(mock_api, _unrestricted_writer())
-        with caplog.at_level('CRITICAL', logger='memex.core.server'):
+        with _capture_logger(caplog, 'memex.core.server', logging.CRITICAL):
             resp = client.post(
                 '/api/v1/memory/reconsolidate',
                 json={

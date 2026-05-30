@@ -236,9 +236,12 @@ def test_is_procedure_key_recognizes_all_scopes() -> None:
     assert not is_procedure_key('procedure:commit:pr')  # bare form rejected
 
 
-def test_format_procedure_display_name_global_strips_prefix() -> None:
+def test_format_procedure_display_name_global_shows_scope() -> None:
+    # Global procedures must be labelled too — a bare "verb:context" reads as
+    # scopeless and hides whether the rule is global or project-scoped.
     assert (
-        format_procedure_display_name('global:procedure:commit:pr-workflow') == 'commit:pr-workflow'
+        format_procedure_display_name('global:procedure:commit:pr-workflow')
+        == '[global] commit:pr-workflow'
     )
 
 

@@ -489,9 +489,15 @@ class LintLLMService(BaseService):
 
     # -- quota -----------------------------------------------------------
 
-    async def quota_used(self, vault_id: UUID, *, session: AsyncSession) -> int:
-        """Return the rolling-24h LLM lint call count for ``vault_id``."""
-        cutoff = datetime.now(timezone.utc) - timedelta(hours=24)
+    async def quota_used(
+        self, vault_id: UUID, *, session: AsyncSession, now: datetime | None = None
+    ) -> int:
+        """Return the rolling-24h LLM lint call count for ``vault_id``.
+
+        ``now`` defaults to the current UTC time; tests inject a fixed value so
+        the rolling-window boundary is deterministic regardless of run time.
+        """
+        cutoff = (now or datetime.now(timezone.utc)) - timedelta(hours=24)
         result = await session.execute(
             _SUM_LAST_24H_SQL,
             {'vault_id': str(vault_id), 'cutoff': cutoff},

@@ -27,6 +27,11 @@ dependencies = [
     "langchain-text-splitters>=1.1.0",
     "onnxruntime>=1.23.2",
     "pgvector>=0.4.2",
+    # Synchronous driver used ONLY by alembic migrations (env.py swaps the
+    # asyncpg URL to psycopg). The runtime app uses asyncpg; psycopg (v3) runs
+    # the (parameterless) multi-statement op.execute() blocks the migration
+    # history relies on, which asyncpg's prepared-statement protocol rejects.
+    "psycopg[binary]>=3.2.0",
     "python-dateutil>=2.9.0.post0",
     "python-frontmatter>=1.1.0",
     "pytz>=2025.2",

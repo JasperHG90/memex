@@ -80,8 +80,14 @@ async def _seed_unit(
     vault_id: UUID,
     text_content: str,
     embedding: list[float],
+    unit_id: UUID | None = None,
 ) -> UUID:
-    unit_id = uuid4()
+    # The contradiction check normalizes A<->B pairs by emitting only the
+    # finding whose target UUID sorts BEFORE the cited peer's UUID (see
+    # tests/unit/test_lint_llm_dedup.py). The audited unit is seeded with an
+    # explicit minimal UUID so it sorts before its random peers and the
+    # single-direction finding survives deterministically.
+    unit_id = unit_id if unit_id is not None else uuid4()
     note_id = uuid4()
     await session.execute(
         text("""
@@ -163,6 +169,10 @@ async def _seed_corpus_with_polarity_inversion(
         vault_id=vault_id,
         text_content=polarity_inverter,
         embedding=embeddings[-1].tolist(),
+        # Force the audited UUID to the minimum so it sorts before every
+        # random peer UUID; the contradiction-dedup then keeps the finding
+        # on this (smaller) target deterministically.
+        unit_id=UUID(int=1),
     )
     return audited_id, peer_ids
 

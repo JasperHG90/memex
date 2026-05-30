@@ -317,7 +317,13 @@ async def test_no_calendar_day_reset(
             session, vault_id, hour_bucket=midnight + timedelta(hours=h), count=1
         )
 
-    used = await svc.quota_used(vault_id, session=session)
+    # Evaluate the rolling window from a FIXED reference 5h after midnight so the
+    # boundary is deterministic regardless of wall-clock run time. The window is
+    # [ref-24h, ref] = [midnight-19h, midnight+5h], which contains all 10 buckets
+    # (midnight-5h .. midnight+4h) — proving the sum is rolling-24h, not reset at
+    # the calendar midnight the buckets straddle. (Without a fixed ref, a late-in-
+    # the-day run drops the oldest buckets and the sum reads 8.)
+    used = await svc.quota_used(vault_id, session=session, now=midnight + timedelta(hours=5))
     assert used == 10
 
 

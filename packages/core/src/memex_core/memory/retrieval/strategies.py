@@ -639,26 +639,31 @@ class EntityCooccurrenceGraphStrategy:
             col(EntityCooccurrence.entity_id_1),
         ).label('neighbor_id')
 
-        co_occur_stmt = (
-            select(
-                neighbor_id_expr,
-                (
-                    func.ln(col(EntityCooccurrence.cooccurrence_count) + 1)
-                    / func.ln(col(Entity.mention_count) + 2)
-                ).label('link_strength'),
-            )
-            .join(
-                seed_entities,
-                or_(
-                    col(EntityCooccurrence.entity_id_1) == seed_entities.c.id,
-                    col(EntityCooccurrence.entity_id_2) == seed_entities.c.id,
-                ),
-            )
-            .join(Entity, col(Entity.id) == neighbor_id_expr)
+        # Sum co-occurrence counts across vaults per neighbour BEFORE scoring.
+        # Since 052 the grain is (entity_id_1, entity_id_2, vault_id): a seed↔
+        # neighbour pair has one row per vault, so scoring raw rows would emit a
+        # duplicate neighbour per vault and double-count it in the 2nd-order
+        # join below. Aggregate first, then derive link_strength from the sum.
+        neighbor_cooc = select(
+            neighbor_id_expr,
+            func.sum(col(EntityCooccurrence.cooccurrence_count)).label('cooc_count'),
+        ).join(
+            seed_entities,
+            or_(
+                col(EntityCooccurrence.entity_id_1) == seed_entities.c.id,
+                col(EntityCooccurrence.entity_id_2) == seed_entities.c.id,
+            ),
         )
+        neighbor_cooc = apply_vault_filters(neighbor_cooc, EntityCooccurrence.vault_id, **kwargs)
+        neighbor_cooc = _apply_as_of_filter(neighbor_cooc, **kwargs)
+        neighbor_cooc = neighbor_cooc.group_by(neighbor_id_expr).subquery('neighbor_cooc')
 
-        co_occur_stmt = apply_vault_filters(co_occur_stmt, EntityCooccurrence.vault_id, **kwargs)
-        co_occur_stmt = _apply_as_of_filter(co_occur_stmt, **kwargs)
+        co_occur_stmt = select(
+            neighbor_cooc.c.neighbor_id,
+            (
+                func.ln(neighbor_cooc.c.cooc_count + 1) / func.ln(col(Entity.mention_count) + 2)
+            ).label('link_strength'),
+        ).join(Entity, col(Entity.id) == neighbor_cooc.c.neighbor_id)
         co_occurrences = co_occur_stmt.cte('related_entities')
 
         # 4. 2nd Order Memories (Indirect Link)
