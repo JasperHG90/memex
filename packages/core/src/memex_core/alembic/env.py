@@ -1,20 +1,20 @@
 """Alembic async migration environment for Memex.
 
 Supports:
-- Async SQLAlchemy engine (asyncpg)
+- Synchronous SQLAlchemy engine (psycopg v3) — alembic is sync; the runtime app
+  uses asyncpg, but migrations swap to psycopg so multi-statement op.execute()
+  blocks work (see ``_sync_url``).
 - SQLModel metadata (pgvector Vector columns)
 - Advisory locking to prevent concurrent migration races
 - pgvector autogenerate (render_item / compare_type)
 """
 
-import asyncio
 import logging
 from logging.config import fileConfig
 
 from alembic import context
 from pgvector.sqlalchemy import Vector
 from sqlalchemy import pool, text
-from sqlalchemy.ext.asyncio import create_async_engine
 from sqlmodel import SQLModel
 
 # Import all models so SQLModel.metadata is fully populated.
@@ -189,33 +189,49 @@ def do_run_migrations(connection):
     SQLModel.metadata.create_all(bind=connection, checkfirst=True)
 
 
-async def run_async_migrations() -> None:
-    """Run migrations in 'online' mode with an async engine.
+def _sync_url(url: str) -> str:
+    """Convert the runtime asyncpg URL to its synchronous psycopg (v3) sibling.
+
+    Alembic is synchronous and is not designed to run under an async driver.
+    asyncpg sends every statement over the extended query protocol as a
+    prepared statement, and Postgres forbids more than one command per
+    prepared statement — so a migration that batches multiple statements in a
+    single ``op.execute()`` (an idiom used across the migration history)
+    raises ``cannot insert multiple commands into a prepared statement``.
+    psycopg (v3) executes such parameterless multi-statement blocks fine.
+    The runtime app keeps using asyncpg — only the migration engine swaps
+    drivers.
+    """
+    prefix = 'postgresql+asyncpg://'
+    if url.startswith(prefix):
+        return 'postgresql+psycopg://' + url[len(prefix) :]
+    return url
+
+
+def run_migrations_online() -> None:
+    """Run migrations in 'online' mode with a synchronous (psycopg2) engine.
 
     Acquires a PostgreSQL advisory lock first to prevent concurrent
     migration execution across multiple workers.
     """
-    connectable = create_async_engine(
-        _resolve_url(),
+    from sqlalchemy import create_engine
+
+    connectable = create_engine(
+        _sync_url(_resolve_url()),
         poolclass=pool.NullPool,
     )
-
-    async with connectable.connect() as connection:
-        # Acquire session-level advisory lock to serialize migrations.
-        # Released automatically when the connection/session closes.
-        await connection.execute(text(f'SELECT pg_advisory_lock({MIGRATION_LOCK_ID})'))
-        await connection.run_sync(do_run_migrations)
-        # Alembic's begin_transaction() creates a SAVEPOINT inside the
-        # implicit transaction from connect(). Releasing the savepoint
-        # does NOT commit the outer transaction — we must do it explicitly.
-        await connection.commit()
-
-    await connectable.dispose()
-
-
-def run_migrations_online() -> None:
-    """Entry point for online migrations — delegates to async runner."""
-    asyncio.run(run_async_migrations())
+    try:
+        with connectable.connect() as connection:
+            # Session-level advisory lock to serialize migrations; released
+            # when the connection closes.
+            connection.execute(text(f'SELECT pg_advisory_lock({MIGRATION_LOCK_ID})'))
+            do_run_migrations(connection)
+            # do_run_migrations opens its own transaction(s) via
+            # context.begin_transaction(); commit the outer connection so the
+            # advisory-lock session and any DDL run outside that block persist.
+            connection.commit()
+    finally:
+        connectable.dispose()
 
 
 if context.is_offline_mode():

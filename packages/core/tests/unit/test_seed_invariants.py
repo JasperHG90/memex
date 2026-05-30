@@ -20,11 +20,26 @@ _TEST_DIRS = [
 ]
 
 
+def _mentions_leader_lock_in_code(path: plb.Path) -> bool:
+    """True iff the file references MEMEX_LEADER_LOCK_ID on a non-comment line.
+
+    Comment-only mentions (docstrings, ``# … MEMEX_LEADER_LOCK_ID …`` cross-
+    references) are not call sites and must not count toward the invariant —
+    only api.py / entity_maintenance.py point at it explanatorily; only
+    scheduler.py actually defines and acquires the lock.
+    """
+    for raw in path.read_text(encoding='utf-8').splitlines():
+        if 'MEMEX_LEADER_LOCK_ID' not in raw:
+            continue
+        if raw.lstrip().startswith('#'):
+            continue
+        return True
+    return False
+
+
 def test_runtime_advisory_lock_invariant_pre_f9() -> None:
     runtime_files = [p for p in _CORE_RUNTIME.rglob('*.py') if 'alembic' not in p.parts]
-    leader_sites = [
-        p for p in runtime_files if 'MEMEX_LEADER_LOCK_ID' in p.read_text(encoding='utf-8')
-    ]
+    leader_sites = [p for p in runtime_files if _mentions_leader_lock_in_code(p)]
     assert len(leader_sites) == 1, (
         f'Expected exactly 1 leader-lock call site pre-F9, got {len(leader_sites)}: '
         f'{[str(p.relative_to(_REPO_ROOT)) for p in leader_sites]}'
