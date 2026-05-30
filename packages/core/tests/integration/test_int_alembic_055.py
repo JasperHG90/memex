@@ -67,7 +67,9 @@ async def test_upgrade_creates_router_objects_and_seeds_prior(fresh_db_url: str)
         async with engine.connect() as conn:
             tables = await _relkinds(conn, _ROUTER_TABLES)
             assert set(tables) == set(_ROUTER_TABLES), f'missing router tables: {tables}'
-            assert all(k == 'r' for k in tables.values())
+            assert all(k == 'r' for k in tables.values()), (
+                f'non-table relkind among router tables: {tables}'
+            )
 
             views = await _relkinds(conn, _ROUTER_VIEWS)
             assert set(views) == set(_ROUTER_VIEWS), f'missing router views: {views}'

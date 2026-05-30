@@ -194,7 +194,9 @@ async def test_daily_cap_falls_through_to_proposal(api, session):
     result = await api.inbox_router.triage_tick()
     assert result.errors == 0
     assert result.auto_routed == 0
-    assert result.skipped_cap >= 1
+    assert result.skipped_cap >= 1, (
+        f'expected an AUTO_ROUTE capped to a proposal; got {result.as_dict()}'
+    )
 
 
 async def test_route_rule_name_constant():
