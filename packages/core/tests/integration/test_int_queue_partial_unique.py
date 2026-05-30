@@ -63,8 +63,16 @@ async def test_priority_reflect_upsert_resolves_partial_unique_arbiter(
     async with metastore.session() as session:
         # Re-enqueue same entity: ON CONFLICT path; partial UNIQUE arbiter
         # must resolve, and the row must become priority_lane=True.
+        #
+        # enqueue_priority_reflect counts ONLY true INSERTs (via the
+        # ``RETURNING (xmax = 0)`` idiom): the existing PENDING row's
+        # priority_lane flip is an ON CONFLICT DO UPDATE, not an enqueue, so
+        # the second call returns 0. (The arbiter resolving is asserted
+        # implicitly: a mismatch would raise InvalidColumnReference, and an
+        # un-fired conflict would insert a second row — caught by the
+        # single-row assertion below.)
         second = await qs.enqueue_priority_reflect(session, {entity_id}, vault_id)
-        assert second == 1
+        assert second == 0
         await session.commit()
 
     async with metastore.session() as session:

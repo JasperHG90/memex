@@ -52,8 +52,14 @@ async def _seed_unit(
     vault_id: UUID,
     text_content: str,
     embedding: list[float] | None = None,
+    unit_id: UUID | None = None,
 ) -> UUID:
-    unit_id = uuid4()
+    # The contradiction check normalizes A<->B pairs by emitting only the
+    # finding whose target UUID sorts BEFORE the cited peer's UUID (see
+    # tests/unit/test_lint_llm_dedup.py). When seeding the audited unit,
+    # callers pass an explicit minimal UUID so it sorts before its random
+    # peers and the single-direction finding survives deterministically.
+    unit_id = unit_id if unit_id is not None else uuid4()
     note_id = uuid4()
     await session.execute(
         text("""
@@ -105,8 +111,14 @@ async def test_semantic_contradiction_emits_finding_when_llm_says_yes(
     vault_id = await _make_vault(session)
 
     # Audited unit + 8 peers — embeddings stable so top-k is deterministic.
+    # Audited UUID is forced to the minimum so it sorts before every random
+    # peer UUID; the contradiction-dedup keeps the finding on the smaller
+    # target (see tests/unit/test_lint_llm_dedup.py).
     audited_id = await _seed_unit(
-        session, vault_id=vault_id, text_content='User prefers production environment.'
+        session,
+        vault_id=vault_id,
+        text_content='User prefers production environment.',
+        unit_id=UUID(int=1),
     )
     peer_ids = []
     for i in range(8):
