@@ -27,6 +27,10 @@ _VEC_B = [0.0] * 192 + [1.0] * 192
 async def _seed_vault_with_note(session, name: str, embedding: list[float]) -> Vault:
     vault = Vault(id=uuid4(), name=name, description=f'{name} vault')
     session.add(vault)
+    # autoflush is off on the integration session and ORM batched inserts can
+    # reorder across classes (SA_UUID + asyncpg insertmanyvalues), so flush the
+    # vault before the note/chunk that FK to it — otherwise notes_vault_id_fkey.
+    await session.flush()
     note_id = uuid4()
     session.add(
         Note(
@@ -37,6 +41,7 @@ async def _seed_vault_with_note(session, name: str, embedding: list[float]) -> V
             title=f'{name} note',
         )
     )
+    await session.flush()
     session.add(
         Chunk(
             id=uuid4(),
@@ -64,6 +69,8 @@ async def _seed_inbox_note(session, inbox: Vault, embedding: list[float]) -> UUI
             title='inbox note',
         )
     )
+    # Flush the note before the chunk that FKs to it (see _seed_vault_with_note).
+    await session.flush()
     session.add(
         Chunk(
             id=uuid4(),

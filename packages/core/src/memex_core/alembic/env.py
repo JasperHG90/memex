@@ -160,23 +160,35 @@ def do_run_migrations(connection):
     ``create_all`` + stamp HEAD. On an existing database, runs the
     normal alembic migration chain.
 
-    Either way, ``create_all`` runs as the final step. It is idempotent
-    (``checkfirst=True`` is the default) — creates any tables that exist
-    in the SQLModel metadata but not yet in the database, and skips
-    tables that already exist. This catches SQLModel classes added
-    between the DB's last ``create_all`` and now — the user should never
-    have to manually create tables that the code already declares.
-    """
-    if _is_fresh_db(connection):
-        _bootstrap_fresh_db(connection)
-        return
+    When migrating to HEAD, ``create_all`` runs as the final step
+    (idempotent via ``checkfirst``) so SQLModel classes added since the DB's
+    last ``create_all`` exist without manual intervention.
 
-    # Widen alembic_version.version_num if it's still the default varchar(32).
-    # Our migration revision IDs can exceed 32 chars; this prevents silent
-    # truncation or INSERT failures on existing databases.
-    connection.execute(
-        text('ALTER TABLE alembic_version ALTER COLUMN version_num TYPE varchar(128)')
-    )
+    Both shortcuts are gated on the destination being HEAD. A TARGETED
+    migration (``upgrade <rev>`` / ``downgrade <rev>`` — only tests do this)
+    must run the real chain step by step and leave the schema exactly at that
+    revision: the fresh-DB create_all+stamp-HEAD fast-path would jump straight
+    to HEAD, and a trailing ``create_all`` would both add HEAD-only columns to
+    an earlier revision AND re-create tables a downgrade just dropped.
+    """
+    try:
+        target = context.get_revision_argument()
+    except Exception:
+        target = None
+    to_head = target is None or target in ('head', 'heads')
+
+    if _is_fresh_db(connection):
+        if to_head:
+            _bootstrap_fresh_db(connection)
+            return
+        # Fresh DB + targeted upgrade: run the real chain from base. alembic
+        # creates alembic_version itself; don't widen a table that's absent.
+    else:
+        # Widen alembic_version.version_num if it's still the default
+        # varchar(32) — revision ids can exceed 32 chars.
+        connection.execute(
+            text('ALTER TABLE alembic_version ALTER COLUMN version_num TYPE varchar(128)')
+        )
 
     context.configure(
         connection=connection,
@@ -186,7 +198,8 @@ def do_run_migrations(connection):
     with context.begin_transaction():
         context.run_migrations()
 
-    SQLModel.metadata.create_all(bind=connection, checkfirst=True)
+    if to_head:
+        SQLModel.metadata.create_all(bind=connection, checkfirst=True)
 
 
 def _sync_url(url: str) -> str:
