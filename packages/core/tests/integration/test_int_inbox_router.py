@@ -180,6 +180,11 @@ async def test_daily_cap_falls_through_to_proposal(api, session):
     await _seed_vault_with_note(session, 'vault-b', _VEC_B)
     await _seed_inbox_note(session, inbox, _VEC_A)
 
+    # Seed the NB prior FIRST so the UPDATE below targets an existing row.
+    # ensure_prior_seeded uses INSERT ... ON CONFLICT DO NOTHING, so a later
+    # refresh_anchors call from triage_tick is a no-op and leaves n=100 alone.
+    await api.inbox_router.ensure_prior_seeded()
+
     # Warm up the model and relax the gates so the decision is AUTO_ROUTE...
     async with api.metastore.session() as s:
         await s.execute(text('UPDATE inbox_router_nb_class_counts SET n = 100 WHERE label = 1'))

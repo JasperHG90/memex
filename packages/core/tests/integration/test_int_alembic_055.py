@@ -54,7 +54,14 @@ async def _relkinds(conn, names: tuple[str, ...]) -> dict[str, str]:
             {'names': list(names)},
         )
     ).all()
-    return {r[0]: r[1] for r in rows}
+
+    # pg_class.relkind is Postgres's ``"char"`` type — asyncpg surfaces it as
+    # ``bytes`` (b'r'/b'v') rather than ``str``. Normalise so plain == checks
+    # against 'r'/'v' work below regardless of the driver's char-type binding.
+    def _norm(v: object) -> str:
+        return v.decode() if isinstance(v, (bytes, bytearray)) else str(v)
+
+    return {r[0]: _norm(r[1]) for r in rows}
 
 
 @pytest.mark.asyncio
