@@ -9,8 +9,11 @@ from sqlalchemy import (
     Boolean,
     Column,
     Computed,
+    DDL,
+    event,
     ForeignKey,
     Integer,
+    SmallInteger,
     String,
     Text,
     Float,
@@ -21,7 +24,7 @@ from sqlalchemy import (
     ForeignKeyConstraint,
     UniqueConstraint,
 )
-from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, ARRAY, TSVECTOR
+from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, ARRAY, TSQUERY, TSVECTOR
 from sqlalchemy.types import Uuid as SA_UUID
 from sqlmodel import SQLModel, Field, Relationship
 
@@ -1870,6 +1873,7 @@ class LintType(str, Enum):
     QUALITY = 'quality'
     GOVERNANCE = 'governance'
     SCHEMA = 'schema'
+    ROUTING = 'routing'
 
 
 class LintStatus(str, Enum):
@@ -1965,7 +1969,7 @@ class MaintenanceProposal(SQLModel, table=True):  # type: ignore
 
     __table_args__ = (
         CheckConstraint(
-            "lint_type IN ('structural', 'quality', 'governance', 'schema')",
+            "lint_type IN ('structural', 'quality', 'governance', 'schema', 'routing')",
             name='ck_maintenance_proposals_lint_type',
         ),
         CheckConstraint(
@@ -2427,3 +2431,178 @@ class LintLLMSignature(SQLModel, table=True):  # type: ignore
             name='ck_lint_llm_signature_superseded_valid',
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# Inbox router (per-vault note triage)
+# ---------------------------------------------------------------------------
+
+
+class InboxRouterNbStats(SQLModel, table=True):  # type: ignore
+    """Sufficient statistics ``(n, Σx, Σx²)`` per (feature, label) for the
+    pairwise Gaussian Naive Bayes router model.
+
+    The model is "fit" entirely in SQL: online conjugate updates land here and
+    the ``inbox_router_nb_params`` view derives ``(μ̂, σ̂²)`` from these columns.
+    Seeded from POC empirics at enable-time (see ``InboxRouterService``).
+    """
+
+    __tablename__ = 'inbox_router_nb_stats'
+
+    feature_name: str = Field(sa_column=Column(Text, primary_key=True))
+    label: int = Field(
+        sa_column=Column(SmallInteger, primary_key=True),
+        description='1 = match, 0 = no-match.',
+    )
+    n: float = Field(
+        sa_column=Column(Float, nullable=False, server_default=sql_text('1.0')),
+        description='Effective observation count (EWMA-decayed).',
+    )
+    sum_x: float = Field(
+        sa_column=Column(Float, nullable=False, server_default=sql_text('0.0')),
+    )
+    sum_x_sq: float = Field(
+        sa_column=Column(Float, nullable=False, server_default=sql_text('0.0')),
+    )
+    updated_at: datetime = updated_at_field()
+
+
+class InboxRouterNbClassCounts(SQLModel, table=True):  # type: ignore
+    """Per-class observation counts; the ``inbox_router_nb_prior`` view derives
+    the log-priors from these."""
+
+    __tablename__ = 'inbox_router_nb_class_counts'
+
+    label: int = Field(sa_column=Column(SmallInteger, primary_key=True))
+    n: float = Field(
+        sa_column=Column(Float, nullable=False, server_default=sql_text('1.0')),
+    )
+    updated_at: datetime = updated_at_field()
+
+
+class InboxRouterVaultAnchor(SQLModel, table=True):  # type: ignore
+    """Per-vault scoring anchors, refreshed each triage tick.
+
+    Caches the vault's chunk centroid, reflected-summary embedding, mental-model
+    centroid, full-text document, and top-K entity ids so scoring never has to
+    re-aggregate the whole vault.
+    """
+
+    __tablename__ = 'inbox_router_vault_anchors'
+
+    vault_id: UUID = Field(
+        sa_column=Column(
+            SA_UUID(),
+            ForeignKey('vaults.id', ondelete='CASCADE'),
+            primary_key=True,
+        ),
+    )
+    chunk_centroid: list[float] = Field(
+        sa_column=Column(Vector(EMBEDDING_DIMENSION), nullable=False),
+        description='Mean of the vault notes’ chunk embeddings.',
+    )
+    summary_embedding: list[float] | None = Field(
+        default=None,
+        sa_column=Column(Vector(EMBEDDING_DIMENSION), nullable=True),
+        description='Embedding of the vault’s reflected narrative.',
+    )
+    mm_centroid: list[float] | None = Field(
+        default=None,
+        sa_column=Column(Vector(EMBEDDING_DIMENSION), nullable=True),
+        description='Mean of the vault’s mental-model embeddings.',
+    )
+    tsvector_doc: Any = Field(
+        default=None,
+        sa_column=Column(TSVECTOR, nullable=False, server_default=sql_text("''::tsvector")),
+        description='Full-text document built from the vault’s chunk text.',
+    )
+    entity_ids: list[UUID] = Field(
+        default_factory=list,
+        sa_column=Column(
+            ARRAY(SA_UUID()),
+            nullable=False,
+            server_default=sql_text('ARRAY[]::uuid[]'),
+        ),
+        description='Top-K entity ids by within-vault mention count.',
+    )
+    n_notes: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default=sql_text('0')),
+    )
+    updated_at: datetime = updated_at_field()
+
+    __table_args__ = (Index('idx_inbox_router_va_tsv', 'tsvector_doc', postgresql_using='gin'),)
+
+
+class InboxRouterNoteCache(SQLModel, table=True):  # type: ignore
+    """Per-note cached features, populated on inbox-note ingest / first triage."""
+
+    __tablename__ = 'inbox_router_note_cache'
+
+    note_id: UUID = Field(
+        sa_column=Column(
+            SA_UUID(),
+            ForeignKey('notes.id', ondelete='CASCADE'),
+            primary_key=True,
+        ),
+    )
+    chunk_centroid: list[float] | None = Field(
+        default=None,
+        sa_column=Column(Vector(EMBEDDING_DIMENSION), nullable=True),
+    )
+    tsq: Any = Field(
+        default=None,
+        sa_column=Column(TSQUERY, nullable=True),
+        description='Top-50 note lexemes OR-joined into a tsquery.',
+    )
+    entity_ids: list[UUID] = Field(
+        default_factory=list,
+        sa_column=Column(
+            ARRAY(SA_UUID()),
+            nullable=False,
+            server_default=sql_text('ARRAY[]::uuid[]'),
+        ),
+    )
+    updated_at: datetime = updated_at_field()
+
+
+# The two derived views can't be SQLModel tables, but they belong to the same
+# schema. Attach their DDL to ``create_all`` / ``drop_all`` so every
+# provisioning path (fresh-server create_all, tests, eval harness) builds them
+# alongside the tables — the same shape migration 055 creates for the upgrade
+# path. ``CREATE OR REPLACE`` keeps re-runs idempotent.
+_INBOX_ROUTER_PARAMS_VIEW = DDL(
+    """
+    CREATE OR REPLACE VIEW inbox_router_nb_params AS
+    SELECT feature_name, label,
+           sum_x / NULLIF(n, 0) AS mu,
+           GREATEST(
+               (sum_x_sq - sum_x * sum_x / NULLIF(n, 0)) / NULLIF(GREATEST(n - 1, 1e-6), 0),
+               1e-9
+           ) AS sigma_sq
+    FROM inbox_router_nb_stats
+    """
+).execute_if(dialect='postgresql')
+
+_INBOX_ROUTER_PRIOR_VIEW = DDL(
+    """
+    CREATE OR REPLACE VIEW inbox_router_nb_prior AS
+    SELECT label,
+           ln(GREATEST(n / NULLIF((SELECT SUM(n) FROM inbox_router_nb_class_counts), 0),
+                       1e-12)) AS log_prior
+    FROM inbox_router_nb_class_counts
+    """
+).execute_if(dialect='postgresql')
+
+event.listen(SQLModel.metadata, 'after_create', _INBOX_ROUTER_PARAMS_VIEW)
+event.listen(SQLModel.metadata, 'after_create', _INBOX_ROUTER_PRIOR_VIEW)
+event.listen(
+    SQLModel.metadata,
+    'before_drop',
+    DDL('DROP VIEW IF EXISTS inbox_router_nb_prior').execute_if(dialect='postgresql'),
+)
+event.listen(
+    SQLModel.metadata,
+    'before_drop',
+    DDL('DROP VIEW IF EXISTS inbox_router_nb_params').execute_if(dialect='postgresql'),
+)

@@ -24,6 +24,7 @@ from memex_core.services.proposal_actions import (  # noqa: F401  (registration 
     archive_mental_model,
     deprioritize_unit,
     no_op,
+    route_note_to_vault,
 )
 
 __all__ = [

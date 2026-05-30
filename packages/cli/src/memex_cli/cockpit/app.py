@@ -40,6 +40,7 @@ from memex_cli.cockpit.controller import (
     UnitLineage,
     UnitMeta,
     options_for_contradiction,
+    options_for_inbox_route,
     options_for_rule,
 )
 
@@ -689,6 +690,8 @@ class ProposalCockpitApp(App):
     def _populate_actions(self, proposal: CockpitProposal) -> None:
         if proposal.rule_name == 'llm_semantic_contradiction':
             options = options_for_contradiction(proposal)
+        elif proposal.rule_name == 'inbox_vault_route':
+            options = options_for_inbox_route(proposal)
         else:
             options = options_for_rule(proposal.rule_name, proposal.target_type)
         action_list = self.query_one('#action-list', ListView)
