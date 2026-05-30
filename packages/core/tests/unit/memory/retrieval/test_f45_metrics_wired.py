@@ -28,16 +28,25 @@ def test_f45_histograms_importable() -> None:
 
 
 def test_f45_metrics_registered_to_default_registry() -> None:
-    """The four F45 metrics are scraped by the default Prometheus
+    """The four F45 metrics are registered with the default Prometheus
     registry (i.e., available on the server's ``/metrics`` endpoint
-    without any extra wiring)."""
-    found: set[str] = set()
-    for collector in REGISTRY.collect():
-        for sample in collector.samples:
-            for name in F45_METRIC_NAMES:
-                if sample.name.startswith(name):
-                    found.add(name)
-    missing = F45_METRIC_NAMES - found
+    without any extra wiring).
+
+    Registration — not sample emission — is the invariant under test.
+    ``memex_exploration_injected_total`` is a *labelled* Counter (``mode``);
+    prometheus_client emits no samples for it until a label combination is
+    first observed, so iterating ``collector.samples`` would spuriously miss
+    a correctly-registered metric. The registry's name index does carry it
+    from construction. (prometheus_client also strips the redundant trailing
+    ``_total`` from the Counter name to form the base collector name and
+    re-appends it for the sample series, so the registered series name is
+    ``memex_exploration_injected_total`` as intended.)
+    """
+    # Force the metrics module to import so its collectors register.
+    from memex_core import metrics  # noqa: F401
+
+    registered = set(REGISTRY._names_to_collectors)
+    missing = {name for name in F45_METRIC_NAMES if name not in registered}
     assert not missing, f'F45 metric(s) not registered: {missing}'
 
 

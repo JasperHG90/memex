@@ -20,14 +20,22 @@ _REPO_ROOT = plb.Path(__file__).resolve().parents[4]
 # remember/SKILL.md and recall/SKILL.md entries were also rewritten by
 # earlier "compress agent surfaces" refactors which dropped the labelled
 # headers — they now hold only behavioural content, not Tier A scaffolding.
+#
+# mcp/server.py is a user/agent-facing surface; #156 (and the later
+# "strip ticket/RFC/Hermes refs" refactor) deliberately replaced its F-code
+# span markers with semantic section anchors so no ticket IDs leak into the
+# MCP surface. The internal hermes-plugin scaffolding (tools.py / templates.py)
+# keeps the F-code markers. The anchors below label the SAME Tier A spans the
+# F-codes used to: Deprioritize/Restore=F4, Summarize=F5, Lint=F8,
+# Consolidation=F9, Diagnostics=F32.
 _FILE_MARKERS: dict[str, list[str]] = {
     'packages/mcp/src/memex_mcp/server.py': [
         '# Tier A — Tool registry',
-        '# --- F4 ---',
-        '# --- F5 ---',
-        '# --- F8 ---',
-        '# --- F9 ---',
-        '# --- F32 ---',
+        '# --- Deprioritize / Restore ---',
+        '# --- Summarize ---',
+        '# --- Lint ---',
+        '# --- Consolidation ---',
+        '# --- Diagnostics ---',
     ],
     'packages/core/src/memex_core/scheduler.py': [
         '# Tier A — Scheduler tasks (under MEMEX_LEADER_LOCK_ID)',

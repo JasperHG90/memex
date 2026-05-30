@@ -33,6 +33,7 @@ nav = [
       "how-to/configuring-server/deployment.md",
     ]},
     { "Working with content" = [
+      "how-to/memory-budget.md",
       "how-to/ingesting-data.md",
       "how-to/asset-attachments.md",
       "how-to/retrieve-data.md",
