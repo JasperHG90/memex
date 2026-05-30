@@ -56,12 +56,16 @@ async def test_priority_reflect_upsert_resolves_partial_unique_arbiter(
     async with metastore.session() as session:
         first = await qs.enqueue_priority_reflect(session, {entity_id}, vault_id)
         assert first == 1
+        # enqueue_priority_reflect leaves the commit to the caller; metastore
+        # sessions roll back on exit, so commit or the rows never persist.
+        await session.commit()
 
     async with metastore.session() as session:
         # Re-enqueue same entity: ON CONFLICT path; partial UNIQUE arbiter
         # must resolve, and the row must become priority_lane=True.
         second = await qs.enqueue_priority_reflect(session, {entity_id}, vault_id)
         assert second == 1
+        await session.commit()
 
     async with metastore.session() as session:
         rows = (
@@ -109,11 +113,11 @@ async def test_partial_unique_dedupes_concurrent_enqueue_during_processing(metas
                 INSERT INTO reflection_queue (
                     id, entity_id, vault_id, task_type, observation_id,
                     status, priority_lane, priority_score, retry_count,
-                    max_retries, created_at, updated_at
+                    max_retries, last_queued_at
                 ) VALUES (
                     :id, :eid, :vid, 'refresh_observation', :obs,
                     'pending', TRUE, 1.0, 0,
-                    3, now(), now()
+                    3, now()
                 )
                 ON CONFLICT (entity_id, vault_id, observation_id)
                 WHERE task_type = 'refresh_observation'

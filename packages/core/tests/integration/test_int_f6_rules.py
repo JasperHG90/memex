@@ -165,7 +165,10 @@ async def _make_audit_review(session: AsyncSession, *, unit_id: UUID, days_ago: 
     """Insert an audit_logs row marking unit as reviewed N days ago."""
     when = datetime.now(timezone.utc) - timedelta(days=days_ago)
     al = AuditLog(
-        action='memory_review',
+        # The recently-reviewed predicate counts memory_deprioritize /
+        # memory_restore / lint_finding_resolved (lint.py); 'memory_review' is
+        # never emitted by product code, so it never marked the unit reviewed.
+        action='memory_restore',
         resource_type='memory_unit',
         resource_id=str(unit_id),
         timestamp=when,

@@ -252,12 +252,17 @@ class LintLearningService(BaseService):
         start = end - timedelta(days=window_days)
 
         async with self.metastore.session() as session:
+            # Always fetch ALL vaults in the window: the global cross-vault
+            # rollup needs every vault's rows (per the docstring), and the
+            # per-vault bucket is filtered in Python below (row_vault == vault_id).
+            # Passing vault_id into the fetch scoped the "global" row to a single
+            # vault, so the cross-vault rollup silently dropped other vaults.
             result = await session.execute(
                 text(_FETCH_SQL),
                 {
                     'window_start': start,
                     'window_end': end,
-                    'vault_id': str(vault_id) if vault_id is not None else None,
+                    'vault_id': None,
                 },
             )
             rows = [dict(row) for row in result.mappings().all()]

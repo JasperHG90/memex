@@ -86,7 +86,7 @@ async def test_record_outcome_emits_audit_row(metastore):
     )
     row = rows[0]
     assert row.resource_type == 'memory_unit'
-    assert row.details == {'vault_id': str(vault_id), 'outcome': 'success'}
+    assert row.details == {'vault_id': str(vault_id), 'verb': 'helpful', 'outcome': 'success'}
 
 
 @pytest.mark.asyncio
