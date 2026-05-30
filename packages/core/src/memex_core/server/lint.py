@@ -100,23 +100,28 @@ async def lint_status(
     - ``scope=global``: count for findings with vault_id NULL.
     """
     try:
-        if scope == 'global':
-            count = await api.lint.count_pending(None)
-            return {'scope': 'global', 'pending': count}
-        if scope == 'all':
-            async with api.metastore.session() as session:
-                row = await session.execute(
-                    text("SELECT count(*) FROM maintenance_proposals WHERE status = 'pending'")
-                )
-                return {'scope': 'all', 'pending': int(row.scalar() or 0)}
-        if vault_id is None:
+        # A vault_id makes this a vault-scoped query regardless of the (default)
+        # scope=all — enforce vault access BEFORE returning any count, so a
+        # scoped key cannot probe a vault it lacks access to. (Mirrors the
+        # /findings and /flags endpoints.)
+        if vault_id is not None:
+            await check_vault_access(auth, [vault_id], api, permission=Permission.READ)
+            count = await api.lint.count_pending(vault_id)
+            return {'scope': 'vault', 'vault_id': str(vault_id), 'pending': count}
+        if scope == 'vault':
             raise HTTPException(
                 status_code=400,
                 detail='vault_id is required when scope=vault',
             )
-        await check_vault_access(auth, [vault_id], api, permission=Permission.READ)
-        count = await api.lint.count_pending(vault_id)
-        return {'scope': 'vault', 'vault_id': str(vault_id), 'pending': count}
+        if scope == 'global':
+            count = await api.lint.count_pending(None)
+            return {'scope': 'global', 'pending': count}
+        # scope == 'all': aggregate across every vault + global.
+        async with api.metastore.session() as session:
+            row = await session.execute(
+                text("SELECT count(*) FROM maintenance_proposals WHERE status = 'pending'")
+            )
+            return {'scope': 'all', 'pending': int(row.scalar() or 0)}
     except HTTPException:
         raise
     except Exception as e:
