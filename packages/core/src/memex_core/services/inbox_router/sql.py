@@ -195,6 +195,13 @@ p_match_raw AS (
     --   * ``exp(-LEAST(|x|, 700))`` in the softplus — beyond |x|≈37 the term is
     --     already negligible, so the cap changes nothing numerically.
     --   * the softmax exponent is floored at -700 below.
+    --
+    -- NOTE: ``p_match_raw`` clamps ``x`` to ±700 while ``log_p`` does not, so
+    -- the two columns are intentionally NOT numerically consistent for extreme
+    -- logits (``exp(log_p) ≠ p_match_raw`` once the sigmoid saturates). They
+    -- serve different jobs — ``p_match_raw`` is the absolute t_low gate,
+    -- ``log_p`` is the relative cross-vault ranking input — and must not be
+    -- treated as interchangeable by downstream consumers.
     SELECT note_id, vault_id, vault_name,
         1.0 / (1.0 + exp(LEAST(GREATEST(log_post_no_match - log_post_match, -700.0), 700.0)))
             AS p_match_raw,
