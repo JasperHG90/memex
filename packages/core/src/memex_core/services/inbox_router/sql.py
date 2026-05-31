@@ -171,20 +171,36 @@ per_pair_posterior AS (
 p_match_raw AS (
     -- ``p_match_raw`` is the absolute pairwise sigmoid P(match|x) — used by the
     -- t_low gate to decide "does ANY vault clear minimum confidence?".
+    --
     -- ``log_p`` carries the per-vault ranking signal forward to the softmax
-    -- across vaults. We use ``log_post_match`` directly (not the sigmoid's log)
-    -- because the sigmoid saturates at ±700 when feature likelihoods are
-    -- extreme — and when it saturates for every vault (e.g. a note whose
-    -- keyword_ts_rank is far from the tight POC match distribution), the
-    -- ``ln(p_match_raw)`` path collapses every vault to the same floor and the
-    -- softmax returns a uniform tie. ``log_post_match`` keeps the relative
-    -- per-vault ranking through saturation; softmax-of-log_post_match is the
-    -- standard NB ranking form. Note that the cross-vault normalisation
-    -- constant cancels out inside the softmax's max-subtraction below.
+    -- across vaults. We need ``ln(p_match_raw)`` — i.e. ``ln(sigmoid(x))`` with
+    -- ``x = log_post_match - log_post_no_match`` — but computed *without* going
+    -- through the saturating sigmoid intermediate. The naive
+    -- ``ln(GREATEST(p_match_raw, 1e-12))`` form collapses every vault to the
+    -- same -27.6 floor once the sigmoid clamps for all of them (which the POC's
+    -- tight keyword distribution — σ²=0.00014 for label=1 — triggers on any
+    -- note whose keyword_ts_rank lands far from μ≈0.98). When that happens the
+    -- softmax returns a uniform tie and the ranking signal is destroyed.
+    --
+    -- The branch-free numerically-stable identity
+    --   ln(sigmoid(x)) = -softplus(-x) = min(x, 0) - ln(1 + exp(-|x|))
+    -- preserves the POC's validated pairwise-log-odds ranking exactly in the
+    -- non-saturating regime AND keeps the per-vault rank ordering through
+    -- saturation: at x → +∞ it returns 0 (the sigmoid's true ceiling), at
+    -- x → −∞ it returns x itself (a linear descent that retains relative
+    -- differences across vaults).
+    --
+    -- Two clamps keep it inside float8's exp() domain (Postgres raises
+    -- ``value out of range: underflow`` rather than flushing to zero):
+    --   * ``exp(-LEAST(|x|, 700))`` in the softplus — beyond |x|≈37 the term is
+    --     already negligible, so the cap changes nothing numerically.
+    --   * the softmax exponent is floored at -700 below.
     SELECT note_id, vault_id, vault_name,
         1.0 / (1.0 + exp(LEAST(GREATEST(log_post_no_match - log_post_match, -700.0), 700.0)))
             AS p_match_raw,
-        log_post_match AS log_p
+        (LEAST(log_post_match - log_post_no_match, 0.0)
+            - ln(1 + exp(-LEAST(ABS(log_post_match - log_post_no_match), 700.0))))::float8
+            AS log_p
       FROM per_pair_posterior
 ),
 note_log_max AS (
@@ -192,9 +208,13 @@ note_log_max AS (
         MAX(log_p) OVER (PARTITION BY note_id) AS log_max FROM p_match_raw
 ),
 note_exp_sum AS (
+    -- Standard stable softmax: subtract the per-note max before exp. Floor the
+    -- exponent at -700 so a vault whose log_p is astronomically below the best
+    -- (a strong non-match under the linear tail above) contributes ~0 instead
+    -- of underflowing exp().
     SELECT note_id, vault_id, vault_name, p_match_raw,
-        exp(log_p - log_max) AS num,
-        SUM(exp(log_p - log_max)) OVER (PARTITION BY note_id) AS denom
+        exp(GREATEST(log_p - log_max, -700.0)) AS num,
+        SUM(exp(GREATEST(log_p - log_max, -700.0))) OVER (PARTITION BY note_id) AS denom
       FROM note_log_max
 )
 SELECT

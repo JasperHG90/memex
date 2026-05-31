@@ -1,4 +1,7 @@
-"""Unit tests for migration 030_proposal_resolved_by (issue #34).
+"""Unit tests for migration 031_proposal_resolved_by (issue #34).
+
+Renumbered from 030 → 031 when 030_revisit_last_reviewed_at landed between
+029_lint_llm_quota and this migration; identifiers below were renamed to match.
 
 Static checks that don't need a database. The behavioural round-trip
 assertion (column appears on upgrade, disappears on downgrade) lives in the
@@ -15,21 +18,21 @@ import re
 from typing import Any
 
 
-def _load_migration_030() -> Any:
+def _load_migration_031() -> Any:
     import memex_core
 
     package_dir = plb.Path(memex_core.__file__).resolve().parent
     migration_path = (
         package_dir / 'alembic' / 'versions' / '031_maintenance_proposals_resolved_by.py'
     )
-    spec = importlib.util.spec_from_file_location('migration_030', migration_path)
+    spec = importlib.util.spec_from_file_location('migration_031', migration_path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-def _migration_030_source() -> str:
+def _migration_031_source() -> str:
     import memex_core
 
     package_dir = plb.Path(memex_core.__file__).resolve().parent
@@ -39,9 +42,9 @@ def _migration_030_source() -> str:
     return migration_path.read_text(encoding='utf-8')
 
 
-class TestMigration030Metadata:
+class TestMigration031Metadata:
     def test_revision_id_fits_in_alembic_version_column(self):
-        m = _load_migration_030()
+        m = _load_migration_031()
         # alembic_version.version_num is varchar(32) by default — keep ids short.
         assert len(m.revision) <= 32, (
             'revision id must fit in alembic_version.version_num (varchar(32))'
@@ -51,15 +54,15 @@ class TestMigration030Metadata:
     def test_down_revision_chains_from_030(self):
         # Renumbered 030 → 031 when 030_revisit_last_reviewed_at was inserted
         # between 029_lint_llm_quota and this migration.
-        m = _load_migration_030()
+        m = _load_migration_031()
         assert m.down_revision == '030_revisit_last_reviewed_at'
 
 
-class TestMigration030AddsNullableColumn:
+class TestMigration031AddsNullableColumn:
     """The schema patch is purely additive: nullable resolved_by TEXT column."""
 
     def test_upgrade_adds_resolved_by_column(self):
-        source = _migration_030_source()
+        source = _migration_031_source()
         pattern = re.compile(
             r"add_column\(\s*'maintenance_proposals'\s*,\s*"
             r"sa\.Column\(\s*'resolved_by'\s*,\s*sa\.Text\(\)\s*,\s*nullable=True",
@@ -71,7 +74,7 @@ class TestMigration030AddsNullableColumn:
         )
 
     def test_downgrade_drops_resolved_by_column(self):
-        source = _migration_030_source()
+        source = _migration_031_source()
         pattern = re.compile(
             r"drop_column\(\s*'maintenance_proposals'\s*,\s*'resolved_by'\s*\)",
             re.DOTALL,

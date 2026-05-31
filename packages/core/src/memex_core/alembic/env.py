@@ -171,9 +171,24 @@ def do_run_migrations(connection):
     to HEAD, and a trailing ``create_all`` would both add HEAD-only columns to
     an earlier revision AND re-create tables a downgrade just dropped.
     """
+    # ``context.get_revision_argument()`` returns the destination revision when
+    # alembic was invoked with one (``upgrade <rev>`` / ``downgrade <rev>``), or
+    # ``None`` for ``upgrade head`` / programmatic invocations. AttributeError
+    # is the documented failure when the call site has no command-args context
+    # (e.g. some programmatic alembic.command flows pre-3.0). Anything else is
+    # unexpected and we surface it via a warning so it isn't silently masked as
+    # ``target = None`` → ``to_head = True``.
     try:
         target = context.get_revision_argument()
+    except AttributeError:
+        target = None
     except Exception:
+        logger.warning(
+            'alembic.env: get_revision_argument() raised unexpectedly; '
+            'falling back to target=None (treated as HEAD). '
+            'This may mask a misconfigured alembic context.',
+            exc_info=True,
+        )
         target = None
     to_head = target is None or target in ('head', 'heads')
 
@@ -222,7 +237,7 @@ def _sync_url(url: str) -> str:
 
 
 def run_migrations_online() -> None:
-    """Run migrations in 'online' mode with a synchronous (psycopg2) engine.
+    """Run migrations in 'online' mode with a synchronous psycopg (v3) engine.
 
     Acquires a PostgreSQL advisory lock first to prevent concurrent
     migration execution across multiple workers.
