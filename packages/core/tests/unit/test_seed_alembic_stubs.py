@@ -55,14 +55,16 @@ def test_seed_chain_is_linear_and_correct() -> None:
     sd = ScriptDirectory.from_config(cfg)
 
     heads = sd.get_heads()
-    assert heads == ['055_inbox_router'], f'Expected single head 055_inbox_router, got {heads}'
+    assert heads == ['056_node_assets'], f'Expected single head 056_node_assets, got {heads}'
 
     walk = list(sd.walk_revisions())
     top10 = [(r.revision, r.down_revision) for r in walk[:10]]
     # 053 is a merge node (down_revision is a tuple) — the cockpit/lint chain
     # (…→052) and the procedure-to-global chain (046_procedure_to_global) were
-    # merged, then 054 (nodes index) and 055 (inbox router) extend from there.
+    # merged, then 054 (nodes index), 055 (inbox router), and 056 (node assets)
+    # extend linearly from there.
     expected_top10 = [
+        ('056_node_assets', '055_inbox_router'),
         ('055_inbox_router', '054_nodes_vault_active'),
         ('054_nodes_vault_active', '053_merge_heads'),
         ('053_merge_heads', ('046_procedure_to_global', '052_entity_cooccurrence_vault_pk')),
@@ -72,7 +74,6 @@ def test_seed_chain_is_linear_and_correct() -> None:
         ('050_mp_flagged_at', '049_lint_llm_signature'),
         ('049_lint_llm_signature', '048_lint_rule_calibration'),
         ('048_lint_rule_calibration', '047_lint_rule_telemetry'),
-        ('047_lint_rule_telemetry', '046_mental_models_archived_at'),
     ]
     assert top10 == expected_top10, f'Tier A chain mismatch: got {top10}'
 

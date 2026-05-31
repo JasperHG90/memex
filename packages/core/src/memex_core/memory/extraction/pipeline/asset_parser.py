@@ -19,9 +19,14 @@ import re
 from os.path import basename
 from typing import Any
 
-# A fence runs to its matching closer OR end-of-text (unterminated fences,
-# common in truncated/streamed content, still suppress their body).
-_FENCED_CODE_RE = re.compile(r'(```|~~~).*?(?:\1|\Z)', re.DOTALL)
+# A fence opener/closer must sit on its own line (optionally indented), so a
+# stray ``` token inside prose is not mistaken for a code block. An
+# unterminated fence (common in truncated/streamed content) still suppresses
+# its body to end-of-text.
+_FENCED_CODE_RE = re.compile(
+    r'^[ \t]*(```|~~~).*?(?:^[ \t]*\1[ \t]*$|\Z)',
+    re.DOTALL | re.MULTILINE,
+)
 _INLINE_CODE_RE = re.compile(r'`[^`\n]*`')
 
 _MARKDOWN_IMG_RE = re.compile(r'!\[([^\]]*)\]\(([^)\s]+)(?:\s+"[^"]*")?\)')
@@ -69,7 +74,14 @@ def extract_image_refs(text: str) -> list[dict[str, Any]]:
     for m in _MARKDOWN_IMG_RE.finditer(scanned):
         candidates.append((m.start(), m.group(2), m.group(1)))
     for m in _WIKI_IMG_RE.finditer(scanned):
-        candidates.append((m.start(), m.group(1), None))
+        # Obsidian embeds allow an alias: ![[path|alias]] — left of the pipe
+        # is the path, right is alt text.
+        raw = m.group(1)
+        if '|' in raw:
+            path, _, alias = raw.partition('|')
+            candidates.append((m.start(), path, alias))
+        else:
+            candidates.append((m.start(), raw, None))
     for m in _HTML_IMG_RE.finditer(scanned):
         tag = m.group(0)
         src_match = _HTML_SRC_RE.search(tag)

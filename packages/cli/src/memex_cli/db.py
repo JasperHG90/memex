@@ -145,10 +145,13 @@ def revision(
 async def _backfill_section_assets(config: MemexConfig, vault: str | None) -> tuple[int, int]:
     """Parse embedded image refs into ``nodes.assets`` for nodes missing them.
 
-    Idempotent: only nodes whose ``assets`` is currently empty are touched,
-    and the parser is deterministic for fixed text. Returns
-    ``(nodes_scanned, nodes_updated)``.
+    Only nodes whose ``assets`` is still empty are fetched (server-side filter,
+    so the scan stays bounded on large vaults) and the parser is deterministic
+    for fixed text — so the command is idempotent. Returns
+    ``(nodes_scanned, nodes_updated)`` where *scanned* counts only the
+    empty-asset candidates considered.
     """
+    from sqlalchemy import func
     from sqlmodel import col, select
 
     from memex_core.memory.extraction.pipeline.asset_parser import extract_image_refs
@@ -169,18 +172,16 @@ async def _backfill_section_assets(config: MemexConfig, vault: str | None) -> tu
                 except ValueError:
                     row = (await session.exec(select(Vault).where(Vault.name == vault))).first()
                     if row is None:
-                        raise typer.BadParameter(f'No vault named {vault!r}.')
+                        raise ValueError(f'No vault named {vault!r}.')
                     vault_id = row.id
 
-            stmt = select(Node)
+            stmt = select(Node).where(func.jsonb_array_length(col(Node.assets)) == 0)
             if vault_id is not None:
                 stmt = stmt.where(col(Node.vault_id) == vault_id)
 
             nodes = (await session.exec(stmt)).all()
             for node in nodes:
                 scanned += 1
-                if node.assets:
-                    continue
                 refs = extract_image_refs(node.text or '')
                 if refs:
                     node.assets = refs
@@ -189,7 +190,7 @@ async def _backfill_section_assets(config: MemexConfig, vault: str | None) -> tu
 
             await session.commit()
     finally:
-        await engine.disconnect()
+        await engine.close()
 
     return scanned, updated
 
@@ -211,5 +212,9 @@ def backfill_section_assets(
     _check_core_installed()
     scope = f'vault [bold]{vault}[/bold]' if vault else '[bold]all vaults[/bold]'
     console.print(f'Backfilling section assets for {scope} ...')
-    scanned, updated = asyncio.run(_backfill_section_assets(ctx.obj, vault))
+    try:
+        scanned, updated = asyncio.run(_backfill_section_assets(ctx.obj, vault))
+    except ValueError as e:
+        console.print(f'[bold red]Error:[/bold red] {e}')
+        raise typer.Exit(1)
     console.print(f'[green]Done.[/green] Scanned {scanned} nodes, updated {updated}.')

@@ -46,6 +46,12 @@ class TestWikiImages:
         assert ref['alt_text'] is None
         assert ref['filename'] == 'e.jpg'
 
+    def test_alias_splits_path_and_alt(self):
+        (ref,) = extract_image_refs('![[diagram.png|My diagram]]')
+        assert ref['path'] == 'diagram.png'
+        assert ref['filename'] == 'diagram.png'
+        assert ref['alt_text'] == 'My diagram'
+
 
 class TestHtmlImages:
     def test_src_then_alt(self):
@@ -109,6 +115,12 @@ class TestCodeRegionsSkipped:
 
     def test_tilde_fence(self):
         assert extract_image_refs('~~~\n![x](in.png)\n~~~') == []
+
+    def test_inline_fence_token_in_prose_is_not_a_code_block(self):
+        # A ``` token mid-sentence must not be treated as a fence opener and
+        # swallow a real image that follows.
+        text = 'type three backticks ``` to open code, then ![real](r.png)'
+        assert _paths(text) == ['r.png']
 
 
 class TestDataUrisSkipped:
