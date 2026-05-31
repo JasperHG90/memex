@@ -44,6 +44,118 @@ def is_system_prompt(text: str) -> bool:
 
 
 # ---------------------------------------------------------------------------
+# A2. Context-compaction summary detector / stripper
+# ---------------------------------------------------------------------------
+
+_COMPACTION_START_ANCHOR = '[CONTEXT COMPACTION — REFERENCE ONLY]'
+_COMPACTION_END_ANCHOR = (
+    '--- END OF CONTEXT SUMMARY — respond to the message below, not the summary above ---'
+)
+
+
+def is_compaction_summary(text: str) -> bool:
+    """Detect a Hermes context-compaction summary by its literal anchors.
+
+    Requires BOTH anchors — a lone start anchor (truncated content) is not a
+    complete, strippable block.
+    """
+    return _COMPACTION_START_ANCHOR in text and _COMPACTION_END_ANCHOR in text
+
+
+def strip_compaction_summary(text: str) -> str:
+    """Remove the anchored compaction-summary region, keeping surrounding text.
+
+    No-ops (returns input unchanged) when either anchor is absent, so a future
+    wording change fails safe rather than corrupting content.
+    """
+    start = text.find(_COMPACTION_START_ANCHOR)
+    if start < 0:
+        return text
+    end = text.find(_COMPACTION_END_ANCHOR, start)
+    if end < 0:
+        return text
+    return (text[:start] + text[end + len(_COMPACTION_END_ANCHOR) :]).strip()
+
+
+# ---------------------------------------------------------------------------
+# A3. Inline tool-output block stripper
+# ---------------------------------------------------------------------------
+
+_TOOL_OUTPUT_LINE_PREFIX = 'Tool: '
+
+
+def is_tool_output_line(line: str) -> bool:
+    """True only for ``Tool: `` lines whose payload is a structured object.
+
+    Hermes serializes tool results as ``Tool: {...}`` / ``Tool: [...]``.
+    Requiring the ``{``/``[`` opener avoids deleting organic prose that merely
+    happens to begin a line with ``Tool: ``.
+    """
+    if not line.startswith(_TOOL_OUTPUT_LINE_PREFIX):
+        return False
+    payload = line[len(_TOOL_OUTPUT_LINE_PREFIX) :].lstrip()
+    return payload[:1] in ('{', '[')
+
+
+def _payload_end(text: str, open_idx: int) -> int:
+    """Index just past the bracket-balanced JSON payload starting at *open_idx*.
+
+    String-aware (braces inside quoted strings don't count). Returns
+    ``len(text)`` for an unterminated payload.
+    """
+    depth = 0
+    in_str = False
+    esc = False
+    for i in range(open_idx, len(text)):
+        c = text[i]
+        if esc:
+            esc = False
+        elif c == '\\':
+            esc = True
+        elif in_str:
+            if c == '"':
+                in_str = False
+        elif c == '"':
+            in_str = True
+        elif c in '{[':
+            depth += 1
+        elif c in '}]':
+            depth -= 1
+            if depth == 0:
+                return i + 1
+    return len(text)
+
+
+def strip_tool_output_blocks(text: str) -> tuple[str, int]:
+    """Strip ``Tool: <structured-payload>`` blocks serialized inline as text.
+
+    A block starts at a ``Tool: {`` / ``Tool: [`` line; only the
+    bracket-balanced payload (which may span lines) plus the remainder of its
+    final line is removed, so prose that follows the payload survives. Returns
+    ``(stripped_text, dropped_block_count)``.
+    """
+    out: list[str] = []
+    i = 0
+    n = len(text)
+    dropped = 0
+    while i < n:
+        nl = text.find('\n', i)
+        line_end = n if nl == -1 else nl + 1
+        if is_tool_output_line(text[i:line_end]):
+            dropped += 1
+            bracket = i + len(_TOOL_OUTPUT_LINE_PREFIX)
+            while bracket < line_end and text[bracket] not in '{[':
+                bracket += 1
+            end = _payload_end(text, bracket)
+            nl2 = text.find('\n', end)
+            i = n if nl2 == -1 else nl2 + 1
+        else:
+            out.append(text[i:line_end])
+            i = line_end
+    return ''.join(out).rstrip(), dropped
+
+
+# ---------------------------------------------------------------------------
 # B. System-metadata detector
 # ---------------------------------------------------------------------------
 
@@ -150,6 +262,39 @@ def _normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
     return pairs
 
 
+def _strip_agent_artifacts(text: str, turn_index: int, field: str) -> str:
+    """Remove compaction summaries and inline tool-output blocks from one field.
+
+    Both strips run unconditionally — these are agent-internal artifacts that
+    have no place in a durable session note. Emits a log line per strip so the
+    volume removed is observable (and a sudden drop to zero signals that an
+    upstream wording change has outrun the anchors).
+    """
+    if not text:
+        return text
+
+    if is_compaction_summary(text):
+        stripped = strip_compaction_summary(text)
+        logger.info(
+            'hermes.transcript.compaction_stripped field=%s turn=%d bytes=%d',
+            field,
+            turn_index,
+            len(text) - len(stripped),
+        )
+        text = stripped
+
+    text, dropped = strip_tool_output_blocks(text)
+    if dropped:
+        logger.info(
+            'hermes.transcript.tool_output_stripped field=%s turn=%d blocks=%d',
+            field,
+            turn_index,
+            dropped,
+        )
+
+    return text
+
+
 def preprocess_turns(
     turns: list[dict[str, Any]],
     *,
@@ -176,6 +321,9 @@ def preprocess_turns(
         if user and is_system_metadata(user):
             logger.debug('Stripped system metadata from turn %d', i)
             user = ''
+
+        user = _strip_agent_artifacts(user, i, 'user')
+        assistant = _strip_agent_artifacts(assistant, i, 'assistant')
 
         if strip_html_content:
             if user:
@@ -265,9 +413,13 @@ def format_transcript(messages: list[dict[str, Any]]) -> str:
 
 __all__ = [
     'format_transcript',
+    'is_compaction_summary',
     'is_system_metadata',
     'is_system_prompt',
+    'is_tool_output_line',
     'passes_quality_gate',
     'preprocess_turns',
     'sanitize_html_content',
+    'strip_compaction_summary',
+    'strip_tool_output_blocks',
 ]

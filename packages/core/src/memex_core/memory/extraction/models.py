@@ -10,7 +10,15 @@ from uuid import UUID
 
 import tiktoken
 from sqlmodel import SQLModel, Field
-from pydantic import BaseModel, field_serializer, field_validator, model_validator
+from pydantic import (
+    BaseModel,
+    computed_field,
+    field_serializer,
+    field_validator,
+    model_validator,
+)
+
+from memex_core.memory.extraction.pipeline.asset_parser import extract_image_refs
 
 from memex_core.types import CausalRelationshipTypes, FactTypes, FactKindTypes
 from memex_core.config import GLOBAL_VAULT_ID
@@ -158,6 +166,16 @@ class TOCNode(BaseModel):
         None,
         description="The hash ID of the Block this section's content was merged into.",
     )
+
+    @computed_field  # type: ignore[prop-decorator]
+    @property
+    def assets(self) -> list[dict[str, Any]]:
+        """Embedded image refs parsed from this section's content.
+
+        Derived from ``content`` so the page-index thin tree (which excludes
+        ``content``) still carries per-section assets after ``model_dump``.
+        """
+        return extract_image_refs(self.content or '')
 
     @property
     def content_hash(self) -> str | None:

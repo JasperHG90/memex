@@ -354,6 +354,7 @@ def flatten_toc_to_node_rows(
                     'node_hash': node_hash,
                     'title': node.title,
                     'text': node.content or '',
+                    'assets': node.assets,
                     'summary': summary_dict,
                     'summary_formatted': summary_fmt,
                     'level': node.level,

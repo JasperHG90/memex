@@ -1,8 +1,10 @@
 """Database migration and maintenance commands (wraps Alembic)."""
 
+import asyncio
 import logging
 import os
 from typing import Annotated
+from uuid import UUID
 
 import typer
 from rich.console import Console
@@ -138,3 +140,76 @@ def revision(
     console.print(f'Generating migration: [bold]{message}[/bold] ...')
     command.revision(cfg, message=message, autogenerate=autogenerate)
     console.print('[green]Done.[/green]')
+
+
+async def _backfill_section_assets(config: MemexConfig, vault: str | None) -> tuple[int, int]:
+    """Parse embedded image refs into ``nodes.assets`` for nodes missing them.
+
+    Idempotent: only nodes whose ``assets`` is currently empty are touched,
+    and the parser is deterministic for fixed text. Returns
+    ``(nodes_scanned, nodes_updated)``.
+    """
+    from sqlmodel import col, select
+
+    from memex_core.memory.extraction.pipeline.asset_parser import extract_image_refs
+    from memex_core.memory.sql_models import Node, Vault
+    from memex_core.storage.metastore import AsyncPostgresMetaStoreEngine
+
+    engine = AsyncPostgresMetaStoreEngine(config=config.server.meta_store)
+    await engine.connect(create_schema=False)
+
+    scanned = 0
+    updated = 0
+    try:
+        async with engine.session() as session:
+            vault_id: UUID | None = None
+            if vault is not None:
+                try:
+                    vault_id = UUID(vault)
+                except ValueError:
+                    row = (await session.exec(select(Vault).where(Vault.name == vault))).first()
+                    if row is None:
+                        raise typer.BadParameter(f'No vault named {vault!r}.')
+                    vault_id = row.id
+
+            stmt = select(Node)
+            if vault_id is not None:
+                stmt = stmt.where(col(Node.vault_id) == vault_id)
+
+            nodes = (await session.exec(stmt)).all()
+            for node in nodes:
+                scanned += 1
+                if node.assets:
+                    continue
+                refs = extract_image_refs(node.text or '')
+                if refs:
+                    node.assets = refs
+                    session.add(node)
+                    updated += 1
+
+            await session.commit()
+    finally:
+        await engine.disconnect()
+
+    return scanned, updated
+
+
+@app.command(name='backfill-section-assets')
+def backfill_section_assets(
+    ctx: typer.Context,
+    vault: Annotated[
+        str | None,
+        typer.Option('--vault', '-v', help='Vault UUID or name. Omit to scan all vaults.'),
+    ] = None,
+) -> None:
+    """Populate ``nodes.assets`` for existing nodes by parsing their text.
+
+    Walks node rows whose ``assets`` is empty, extracts embedded image
+    references (markdown / wiki-link / HTML ``<img>``), and stores them.
+    Safe to re-run — nodes that already carry assets are skipped.
+    """
+    _check_core_installed()
+    scope = f'vault [bold]{vault}[/bold]' if vault else '[bold]all vaults[/bold]'
+    console.print(f'Backfilling section assets for {scope} ...')
+    scanned, updated = asyncio.run(_backfill_section_assets(ctx.obj, vault))
+    console.print(f'[green]Done.[/green] Scanned {scanned} nodes, updated {updated}.')

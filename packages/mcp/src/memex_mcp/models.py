@@ -14,7 +14,7 @@ from pydantic import BaseModel, Field, PrivateAttr, field_validator
 from memex_common.asset_cache import SessionAssetCache
 from memex_common.client import RemoteMemexAPI
 from memex_common.config import MemexConfig
-from memex_common.schemas import TOCNodeDTO
+from memex_common.schemas import SectionAssetDTO, TOCNodeDTO
 
 
 class Staleness(str, Enum):
@@ -280,6 +280,8 @@ class McpNode(BaseModel):
     title: str
     text: str | None = None
     level: int
+    block_id: UUID | None = None
+    assets: list[SectionAssetDTO] = Field(default_factory=list)
 
 
 # ── Note listing ──

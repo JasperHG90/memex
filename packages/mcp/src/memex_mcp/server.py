@@ -2071,7 +2071,8 @@ async def _get_single_page_index(
         'Expensive for large notes — only call AFTER memex_get_notes_metadata confirms relevance. '
         'For large notes (total_tokens > 3000): use depth=0 to get top-level sections (H1+H2) first, '
         'then drill into specific sections with parent_node_id. '
-        'Pass leaf node IDs (nodes without children) to memex_get_nodes to read content.'
+        'Pass leaf node IDs (nodes without children) to memex_get_nodes to read content. '
+        'Each node carries assets[] — embedded image refs (path, alt_text, filename) parsed at ingest.'
     ),
     tags={'read'},
     annotations={'readOnlyHint': True},
@@ -2223,7 +2224,8 @@ async def memex_get_notes_metadata(
     name='memex_get_nodes',
     description=(
         'Read note sections by node IDs. Get node IDs from memex_get_page_indices. '
-        'Accepts 1 or more IDs — use for single and batch reads.'
+        'Accepts 1 or more IDs — use for single and batch reads. '
+        'Each node carries block_id (pass to memex_get_memory_units) and assets[] (alt_text + path per section).'
     ),
     tags={'read'},
     annotations={'readOnlyHint': True},
@@ -2275,6 +2277,8 @@ async def memex_get_nodes(
                     title=node.title,
                     text=node.text,
                     level=node.level,
+                    block_id=node.block_id,
+                    assets=node.assets,
                 )
             )
 

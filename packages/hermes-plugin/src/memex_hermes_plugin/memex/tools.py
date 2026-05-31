@@ -704,7 +704,8 @@ GET_PAGE_INDICES_SCHEMA: dict[str, Any] = {
     'description': (
         'Get the table of contents (section titles, node IDs, token counts) '
         'for a single note. Pass leaf node IDs to memex_get_nodes to read the '
-        'content of specific sections.'
+        'content of specific sections. Each node carries assets[] — embedded '
+        'image refs (path, alt_text, filename) parsed at ingest.'
     ),
     'parameters': {
         'type': 'object',
@@ -722,7 +723,9 @@ GET_NODES_SCHEMA: dict[str, Any] = {
     'name': 'memex_get_nodes',
     'description': (
         'Batch-read note sections by node IDs. Get node IDs from '
-        'memex_get_page_indices. Accepts 1 or more IDs.'
+        'memex_get_page_indices. Accepts 1 or more IDs. Each node carries '
+        'block_id (pass to memex_get_memory_units) and assets[] (alt_text + '
+        'path per section).'
     ),
     'parameters': {
         'type': 'object',
@@ -2094,18 +2097,28 @@ def _serialize_note_dto(note: Any) -> dict[str, Any]:
     }
 
 
+def _serialize_section_asset(asset: Any) -> dict[str, Any]:
+    return {
+        'path': getattr(asset, 'path', ''),
+        'alt_text': getattr(asset, 'alt_text', None),
+        'filename': getattr(asset, 'filename', ''),
+    }
+
+
 def _serialize_node_dto(node: Any) -> dict[str, Any]:
     created_at = getattr(node, 'created_at', None)
     return {
         'id': str(getattr(node, 'id', '')),
         'note_id': str(n) if (n := getattr(node, 'note_id', None)) else None,
         'vault_id': str(v) if (v := getattr(node, 'vault_id', None)) else None,
+        'block_id': str(b) if (b := getattr(node, 'block_id', None)) else None,
         'title': getattr(node, 'title', ''),
         'text': getattr(node, 'text', ''),
         'level': getattr(node, 'level', 0),
         'seq': getattr(node, 'seq', 0),
         'status': getattr(node, 'status', None),
         'created_at': created_at.isoformat() if created_at else None,
+        'assets': [_serialize_section_asset(a) for a in getattr(node, 'assets', []) or []],
     }
 
 
