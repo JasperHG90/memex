@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
-from typing import Any, AsyncGenerator
+from typing import TYPE_CHECKING, Any, AsyncGenerator
 from uuid import UUID
 
 from sqlmodel import col
@@ -13,6 +13,9 @@ from memex_common.exceptions import EntityNotFoundError, ResourceNotFoundError
 
 from memex_core.services.audit import audit_event
 from memex_core.services.base import BaseService
+
+if TYPE_CHECKING:
+    from memex_core.memory.sql_models import Entity
 
 logger = logging.getLogger('memex.core.services.entities')
 
@@ -36,15 +39,23 @@ class AggregatedCooccurrence:
     Hermes ``get_entity_cooccurrences`` tools) must collapse the per-vault rows
     for a counterpart into a single edge, or the same entity shows up once per
     vault with un-summed counts. This carries the summed count; ``vault_id`` is
-    ``None`` because the edge spans vaults. Exposes the same attribute surface
-    (``entity_1``/``entity_2`` ORM Entities, ids, count) the server serializer
-    and CLI already consume, so it is a drop-in for the prior ORM rows.
+    ``None`` because the edge spans vaults.
+
+    ``entity_1`` / ``entity_2`` are populated by
+    :meth:`EntityService.get_entity_cooccurrences` (the per-entity endpoint
+    serialiser at ``server/entities.py:get_entity_cooccurrences`` reads
+    ``.canonical_name`` / ``.entity_type`` off them) but are intentionally left
+    ``None`` by :meth:`EntityService.get_bulk_cooccurrences`, whose only caller
+    (the bulk endpoint at ``server/entities.py:get_bulk_cooccurrences``) emits
+    just ids + counts and never dereferences them. Callers introducing new bulk
+    consumers must either resolve the entities themselves or use the per-entity
+    method.
     """
 
     entity_id_1: UUID
     entity_id_2: UUID
-    entity_1: Any
-    entity_2: Any
+    entity_1: 'Entity | None'
+    entity_2: 'Entity | None'
     cooccurrence_count: int
     vault_id: UUID | None = None
 
