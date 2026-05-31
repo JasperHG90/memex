@@ -159,14 +159,15 @@ def strip_tool_output_blocks(text: str) -> tuple[str, int]:
 # B. System-metadata detector
 # ---------------------------------------------------------------------------
 
-_SYSTEM_METADATA_RE = re.compile(
-    r'^\s*\[(?:Note|System)\s*[:]\s*.+\]\s*$',
-    re.DOTALL,
-)
+_SYSTEM_METADATA_RE = re.compile(r'^\s*\[(?:Note|System)\s*[:]\s*.+\]\s*$')
 
 
 def is_system_metadata(text: str) -> bool:
-    """Detect bracketed system-injected metadata lines."""
+    """Detect single-line bracketed system-injected metadata.
+
+    Single-line only (no ``re.DOTALL``): a multi-line user message that merely
+    opens with ``[Note:`` is real content, not an injected metadata line.
+    """
     return bool(_SYSTEM_METADATA_RE.match(text.strip()))
 
 
@@ -228,6 +229,9 @@ def _normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
 
     for m in messages:
         if 'user' in m or 'assistant' in m:
+            if pending_user is not None:
+                pairs.append({'user': pending_user, 'assistant': ''})
+                pending_user = None
             pairs.append(
                 {
                     'user': m.get('user', ''),
@@ -236,7 +240,8 @@ def _normalize_messages(messages: list[dict[str, Any]]) -> list[dict[str, str]]:
             )
             continue
 
-        role = str(m.get('role', '')).strip().lower()
+        # A message with no role is treated as a user turn, not dropped.
+        role = str(m.get('role') or 'user').strip().lower()
         content = m.get('content', '')
         if isinstance(content, list):
             content = '\n'.join(
@@ -318,7 +323,7 @@ def preprocess_turns(
             logger.debug('Stripped system prompt from turn %d (%d chars)', i, len(user))
             user = '[system prompt omitted]'
 
-        if user and is_system_metadata(user):
+        if strip_system_prompts and user and is_system_metadata(user):
             logger.debug('Stripped system metadata from turn %d', i)
             user = ''
 
