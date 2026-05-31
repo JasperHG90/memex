@@ -52,7 +52,12 @@ def _handle_error(e: Exception, context: str) -> HTTPException:
     if isinstance(e, HTTPException):
         raise e
 
-    logger.error(f'{context}: {e}', exc_info=True)
+    # Log 404s (not-found) at info level without traceback — these are expected
+    # client paths, not server errors (e.g. GET /notes/{id} before note is visible)
+    if isinstance(e, (VaultNotFoundError, ResourceNotFoundError)):
+        logger.info(f'{context}: {e}')
+    else:
+        logger.error(f'{context}: {e}', exc_info=True)
 
     if isinstance(e, VaultNotFoundError):
         return HTTPException(status_code=404, detail=str(e))
