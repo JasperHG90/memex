@@ -311,6 +311,7 @@ def preprocess_turns(
     turns: list[dict[str, Any]],
     *,
     strip_system_prompts: bool = True,
+    strip_system_metadata: bool = True,
     strip_html_content: bool = True,
     html_content_threshold: int = 500,
 ) -> list[dict[str, str]]:
@@ -330,7 +331,7 @@ def preprocess_turns(
             logger.debug('Stripped system prompt from turn %d (%d chars)', i, len(user))
             user = '[system prompt omitted]'
 
-        if strip_system_prompts and user and is_system_metadata(user):
+        if strip_system_metadata and user and is_system_metadata(user):
             logger.debug('Stripped system metadata from turn %d', i)
             user = ''
 

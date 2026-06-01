@@ -516,6 +516,7 @@ class MemexMemoryProvider(MemoryProvider):
             cleaned = preprocess_turns(
                 messages,
                 strip_system_prompts=retain.strip_system_prompts,
+                strip_system_metadata=retain.strip_system_metadata,
                 strip_html_content=retain.strip_html_content,
                 html_content_threshold=retain.html_content_threshold,
             )
@@ -690,6 +691,7 @@ class MemexMemoryProvider(MemoryProvider):
         cleaned = preprocess_turns(
             snapshot,
             strip_system_prompts=retain.strip_system_prompts,
+            strip_system_metadata=retain.strip_system_metadata,
             strip_html_content=retain.strip_html_content,
             html_content_threshold=retain.html_content_threshold,
         )

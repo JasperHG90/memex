@@ -302,8 +302,15 @@ class TestPreprocessTurns:
                 'assistant': 'Hello!',
             }
         ]
-        result = preprocess_turns(turns, strip_system_prompts=False)
+        result = preprocess_turns(turns, strip_system_metadata=False)
         assert result[0]['user'] == '[Note: model was just switched from X to Y]'
+
+    def test_metadata_stripped_independently_of_system_prompt_flag(self) -> None:
+        # The two strips are decoupled: turning off prompt stripping does NOT
+        # leak bracketed metadata (that has its own flag, default on).
+        turns = [{'user': '[Note: model switched]', 'assistant': 'Hi'}]
+        result = preprocess_turns(turns, strip_system_prompts=False)
+        assert result[0]['user'] == ''
 
     def test_missing_role_defaults_to_user(self) -> None:
         """Messages with no 'role' key should be treated as user turns."""
@@ -566,6 +573,17 @@ class TestStripToolOutputBlocks:
         assert dropped == 1
         assert 'A: answer' in out
         assert 'brace' not in out
+
+    def test_same_line_trailing_text_after_payload_is_removed(self) -> None:
+        # Deliberate contract: Hermes serializes a tool result as a whole line
+        # (`Tool: {json}`), so the entire Tool: line — including anything after
+        # the closing bracket — is removed. Prose on a SUBSEQUENT line survives
+        # (see test_prose_after_tool_block_preserved).
+        text = 'Tool: {"a": 1} trailing on same line\nA: next line kept'
+        out, dropped = strip_tool_output_blocks(text)
+        assert dropped == 1
+        assert 'trailing on same line' not in out
+        assert 'A: next line kept' in out
 
 
 class TestPreprocessStripsArtifacts:
