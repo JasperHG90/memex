@@ -142,14 +142,19 @@ def revision(
     console.print('[green]Done.[/green]')
 
 
+_BACKFILL_BATCH_SIZE = 500
+
+
 async def _backfill_section_assets(config: MemexConfig, vault: str | None) -> tuple[int, int]:
     """Parse embedded image refs into ``nodes.assets`` for nodes missing them.
 
-    Only nodes whose ``assets`` is still empty are fetched (server-side filter,
-    so the scan stays bounded on large vaults) and the parser is deterministic
-    for fixed text — so the command is idempotent. Returns
-    ``(nodes_scanned, nodes_updated)`` where *scanned* counts only the
-    empty-asset candidates considered.
+    Only empty-asset nodes are fetched (server-side filter), and they are
+    streamed in keyset-paginated batches with a commit per batch — so memory
+    stays bounded regardless of vault size. Keyset cursor is the node ``id``
+    (not the asset filter), so image-less nodes that stay empty don't get
+    re-fetched into an infinite loop. The parser is deterministic for fixed
+    text, so the command is idempotent. Returns ``(nodes_scanned,
+    nodes_updated)`` where *scanned* counts only the empty-asset candidates.
     """
     from sqlalchemy import func
     from sqlmodel import col, select
@@ -175,20 +180,29 @@ async def _backfill_section_assets(config: MemexConfig, vault: str | None) -> tu
                         raise ValueError(f'No vault named {vault!r}.')
                     vault_id = row.id
 
-            stmt = select(Node).where(func.jsonb_array_length(col(Node.assets)) == 0)
-            if vault_id is not None:
-                stmt = stmt.where(col(Node.vault_id) == vault_id)
+            last_id: UUID | None = None
+            while True:
+                stmt = select(Node).where(func.jsonb_array_length(col(Node.assets)) == 0)
+                if vault_id is not None:
+                    stmt = stmt.where(col(Node.vault_id) == vault_id)
+                if last_id is not None:
+                    stmt = stmt.where(col(Node.id) > last_id)
+                stmt = stmt.order_by(col(Node.id)).limit(_BACKFILL_BATCH_SIZE)
 
-            nodes = (await session.exec(stmt)).all()
-            for node in nodes:
-                scanned += 1
-                refs = extract_image_refs(node.text or '')
-                if refs:
-                    node.assets = refs
-                    session.add(node)
-                    updated += 1
+                batch = (await session.exec(stmt)).all()
+                if not batch:
+                    break
 
-            await session.commit()
+                for node in batch:
+                    scanned += 1
+                    refs = extract_image_refs(node.text or '')
+                    if refs:
+                        node.assets = refs
+                        session.add(node)
+                        updated += 1
+
+                last_id = batch[-1].id  # read before commit expires the row
+                await session.commit()
     finally:
         await engine.close()
 

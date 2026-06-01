@@ -190,13 +190,15 @@ async def test_backfill_section_assets_populates_and_is_idempotent(client: TestC
 
             # Simulate pre-feature nodes: clear the assets the ingest populated.
             nodes = (await db_session.exec(select(Node).where(Node.note_id == doc_id))).all()
+            vault_id = str(nodes[0].vault_id)
             for node in nodes:
                 node.assets = []
                 db_session.add(node)
             await db_session.commit()
 
-            # Backfill re-derives them from the stored section text.
-            scanned, updated = await _backfill_section_assets(config, None)
+            # Backfill re-derives them. Scope to this note's vault so the
+            # idempotency assertion below isn't perturbed by other vaults.
+            scanned, updated = await _backfill_section_assets(config, vault_id)
             assert updated >= 1
 
             await db_session.commit()  # release the read snapshot
@@ -206,8 +208,8 @@ async def test_backfill_section_assets_populates_and_is_idempotent(client: TestC
             assert diagram.assets[0]['path'] == 'img/schema.png'
             assert diagram.assets[0]['alt_text'] == 'the schema'
 
-            # Idempotent: a second run finds nothing left to populate.
-            _, updated_again = await _backfill_section_assets(config, None)
+            # Idempotent: a second run over the same vault finds nothing to populate.
+            _, updated_again = await _backfill_section_assets(config, vault_id)
             assert updated_again == 0
         finally:
             config.server.memory.extraction.text_splitting.strategy = original
