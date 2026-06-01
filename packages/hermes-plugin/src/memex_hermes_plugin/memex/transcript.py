@@ -102,6 +102,13 @@ def _payload_end(text: str, open_idx: int) -> int:
 
     String-aware (braces inside quoted strings don't count). Returns
     ``len(text)`` for an unterminated payload.
+
+    Tracks a single depth counter rather than a typed bracket stack: any
+    closer (``}`` or ``]``) decrements depth regardless of the matching
+    opener, so a *malformed* payload like ``[}`` would be treated as balanced.
+    This is intentional — the input is JSON serialized by the agent runtime,
+    which is well-formed by construction; a typed stack would only change
+    behaviour on malformed input, where running to EOF is no safer.
     """
     depth = 0
     in_str = False
