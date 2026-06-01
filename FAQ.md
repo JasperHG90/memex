@@ -57,3 +57,14 @@ Memex stores data in two places:
 ## Can multiple agents share the same Memex instance?
 
 Yes. The server supports concurrent access, vault-scoped API keys, and policy-based access control (reader/writer/admin). Each agent can be scoped to its own vault or share a common one.
+
+## Why does `memex_get_memory_units` return empty when I pass a page-index ID?
+
+Page-index section IDs and memory-unit chunk IDs live in different identifier
+spaces. `memex_get_page_indices` returns each section's `node_hash` (an MD5 of
+its text); memory units join on a *chunk* ID. Passing the section ID straight
+to `memex_get_memory_units` matches nothing and returns `[]` silently.
+
+Pivot through one call: read the section with `memex_get_nodes`, take its
+`block_id`, and pass that to `memex_get_memory_units`. See
+[Node identifiers](explanation/identifiers.md) for the full picture.

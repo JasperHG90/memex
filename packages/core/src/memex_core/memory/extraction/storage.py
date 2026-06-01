@@ -667,6 +667,7 @@ async def insert_nodes_batch(
             set_={
                 'title': pg_insert(Node).excluded.title,
                 'text': pg_insert(Node).excluded.text,
+                'assets': pg_insert(Node).excluded.assets,
                 'summary': pg_insert(Node).excluded.summary,
                 'summary_formatted': pg_insert(Node).excluded.summary_formatted,
                 'level': pg_insert(Node).excluded.level,

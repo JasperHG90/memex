@@ -7,7 +7,7 @@ from uuid import uuid4
 import pytest
 from helpers import parse_tool_result
 from fastmcp.exceptions import ToolError
-from memex_common.schemas import NodeDTO
+from memex_common.schemas import NodeDTO, SectionAssetDTO
 
 
 def _make_node(
@@ -137,6 +137,37 @@ async def test_memex_get_nodes_returns_formatted_content(mock_api, mcp_client):
     assert data[0]['note_id'] == str(node.note_id)
     assert data[0]['text'] == 'Some background text.'
     mock_api.get_nodes.assert_called_once()
+
+
+@pytest.mark.asyncio
+async def test_memex_get_nodes_surfaces_block_id_and_assets(mock_api, mcp_client):
+    """get_nodes exposes block_id (chunk join key) and per-section assets."""
+    block_id = uuid4()
+    node = _make_node(title='Architecture', text='See ![diagram](img/a.png).')
+    node.block_id = block_id
+    node.assets = [
+        SectionAssetDTO(path='img/a.png', alt_text='diagram', filename='a.png'),
+    ]
+    mock_api.get_nodes.return_value = [node]
+
+    result = await mcp_client.call_tool('memex_get_nodes', {'node_ids': [str(node.id)]})
+    data = parse_tool_result(result)
+
+    assert data[0]['block_id'] == str(block_id)
+    assert data[0]['assets'] == [{'path': 'img/a.png', 'alt_text': 'diagram', 'filename': 'a.png'}]
+
+
+@pytest.mark.asyncio
+async def test_memex_get_nodes_assets_default_empty(mock_api, mcp_client):
+    """A node with no images reports an empty assets list and null block_id."""
+    node = _make_node()
+    mock_api.get_nodes.return_value = [node]
+
+    result = await mcp_client.call_tool('memex_get_nodes', {'node_ids': [str(node.id)]})
+    data = parse_tool_result(result)
+
+    assert data[0]['assets'] == []
+    assert data[0]['block_id'] is None
 
 
 @pytest.mark.asyncio

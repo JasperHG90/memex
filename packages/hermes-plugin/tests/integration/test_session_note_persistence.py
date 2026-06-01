@@ -120,6 +120,59 @@ async def test_full_lifecycle_persists_every_turn_verbatim(
     assert note.vault_id == live_vault
 
 
+_COMPACTION_START = '[CONTEXT COMPACTION — REFERENCE ONLY]'
+_COMPACTION_END = (
+    '--- END OF CONTEXT SUMMARY — respond to the message below, not the summary above ---'
+)
+
+
+@pytest.mark.asyncio
+async def test_compaction_block_does_not_reach_persisted_note(
+    initialized_provider, live_api, live_vault: UUID
+):
+    """A compaction summary embedded in a turn is stripped before persistence."""
+    p = initialized_provider
+    block = (
+        f'{_COMPACTION_START}\n## Active Task\nrebuild index\n'
+        f'## Goal\nship the feature\n{_COMPACTION_END}'
+    )
+
+    p.sync_turn('user-q1', 'kept-a1')
+    p.sync_turn('user-q2', f'{block}\nkept-a2')
+    p.sync_turn('user-q3', 'kept-a3')
+    p.on_session_end([])
+
+    body = await _wait_until_body_contains(
+        live_api, p._session_note_key, 'kept-a1', 'kept-a2', 'kept-a3'
+    )
+    assert _COMPACTION_START not in body
+    assert _COMPACTION_END not in body
+    assert 'Active Task' not in body
+    assert 'rebuild index' not in body
+
+
+@pytest.mark.asyncio
+async def test_tool_output_blocks_do_not_reach_persisted_note(
+    initialized_provider, live_api, live_vault: UUID
+):
+    """Inline ``Tool: <payload>`` blocks are stripped before persistence."""
+    p = initialized_provider
+
+    p.sync_turn(
+        'run the migration',
+        'Tool: {"output": "applied 056", "exit_code": 0}\nA: migration applied cleanly',
+    )
+    p.sync_turn('verify', 'all green now')
+    p.on_session_end([])
+
+    body = await _wait_until_body_contains(
+        live_api, p._session_note_key, 'migration applied cleanly', 'all green now'
+    )
+    assert 'applied 056' not in body
+    for line in body.splitlines():
+        assert not line.startswith('Tool: '), f'tool-output line survived: {line!r}'
+
+
 @pytest.mark.asyncio
 async def test_session_end_only_path_creates_note(initialized_provider, live_api, live_vault: UUID):
     """Sessions without compression: single ingest, full body present."""

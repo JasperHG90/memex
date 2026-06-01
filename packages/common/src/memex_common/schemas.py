@@ -1036,6 +1036,16 @@ class SystemStatsCountsDTO(BaseModel):
     reflection_queue: int = Field(description='Number of items in the reflection queue.')
 
 
+class SectionAssetDTO(BaseModel):
+    """An image reference embedded in a single note section (node)."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    path: str
+    alt_text: str | None = None
+    filename: str
+
+
 class NodeDTO(BaseModel):
     """DTO for a note node (section produced by PageIndex)."""
 
@@ -1045,12 +1055,14 @@ class NodeDTO(BaseModel):
     note_id: UUID
     vault_id: UUID
     node_hash: str | None = None
+    block_id: UUID | None = None
     title: str
     text: str
     level: int
     seq: int
     status: str
     created_at: dt.datetime
+    assets: list[SectionAssetDTO] = Field(default_factory=list)
 
 
 class NoteDTO(BaseModel):
@@ -1336,6 +1348,7 @@ class TOCNodeDTO(BaseModel):
     summary: SectionSummaryDTO | None = None
     token_estimate: int | None = None
     subtree_tokens: int | None = None
+    assets: list[SectionAssetDTO] = Field(default_factory=list)
     children: list['TOCNodeDTO'] = Field(default_factory=list)
 
 

@@ -302,8 +302,15 @@ class TestPreprocessTurns:
                 'assistant': 'Hello!',
             }
         ]
-        result = preprocess_turns(turns, strip_system_prompts=False)
+        result = preprocess_turns(turns, strip_system_metadata=False)
         assert result[0]['user'] == '[Note: model was just switched from X to Y]'
+
+    def test_metadata_stripped_independently_of_system_prompt_flag(self) -> None:
+        # The two strips are decoupled: turning off prompt stripping does NOT
+        # leak bracketed metadata (that has its own flag, default on).
+        turns = [{'user': '[Note: model switched]', 'assistant': 'Hi'}]
+        result = preprocess_turns(turns, strip_system_prompts=False)
+        assert result[0]['user'] == ''
 
     def test_missing_role_defaults_to_user(self) -> None:
         """Messages with no 'role' key should be treated as user turns."""
@@ -441,3 +448,159 @@ class TestFormatTranscript:
         ]
         result = format_transcript(messages)
         assert 'From a list' in result
+
+
+# ---------------------------------------------------------------------------
+# Compaction-summary strip
+# ---------------------------------------------------------------------------
+
+from memex_hermes_plugin.memex.transcript import (  # noqa: E402
+    is_compaction_summary,
+    strip_compaction_summary,
+    strip_tool_output_blocks,
+)
+
+_C_START = '[CONTEXT COMPACTION — REFERENCE ONLY]'
+_C_END = '--- END OF CONTEXT SUMMARY — respond to the message below, not the summary above ---'
+_C_BLOCK = f'{_C_START}\n## Active Task\nbuild\n## Goal\nship\n{_C_END}'
+
+
+class TestIsCompactionSummary:
+    def test_both_anchors_present(self) -> None:
+        assert is_compaction_summary(_C_BLOCK) is True
+
+    def test_only_start_anchor(self) -> None:
+        assert is_compaction_summary(f'{_C_START}\n## Active Task\ntruncated') is False
+
+    def test_only_end_anchor(self) -> None:
+        assert is_compaction_summary(f'tail\n{_C_END}') is False
+
+    def test_empty_or_short(self) -> None:
+        assert is_compaction_summary('') is False
+        assert is_compaction_summary('a short message') is False
+
+
+class TestStripCompactionSummary:
+    def test_removes_anchored_region(self) -> None:
+        out = strip_compaction_summary(f'prefix {_C_BLOCK} suffix')
+        assert _C_START not in out
+        assert _C_END not in out
+        assert 'prefix' in out and 'suffix' in out
+
+    def test_anchors_missing_is_noop(self) -> None:
+        assert strip_compaction_summary('no anchors here') == 'no anchors here'
+
+    def test_preserves_pre_and_post_content(self) -> None:
+        out = strip_compaction_summary(f'BEFORE\n{_C_BLOCK}\nAFTER')
+        assert 'BEFORE' in out and 'AFTER' in out
+        assert 'Active Task' not in out
+
+
+# ---------------------------------------------------------------------------
+# Tool-output strip
+# ---------------------------------------------------------------------------
+
+
+class TestStripToolOutputBlocks:
+    def test_single_block(self) -> None:
+        text = 'Tool: {"output": "x", "exit_code": 0}\nA: response'
+        out, dropped = strip_tool_output_blocks(text)
+        assert dropped == 1
+        assert 'Tool:' not in out
+        assert 'A: response' in out
+
+    def test_multi_line_payload(self) -> None:
+        text = 'Tool: {"output": "x",\n"exit_code": 0,\n"error": null}\nA: done'
+        out, dropped = strip_tool_output_blocks(text)
+        assert dropped == 1
+        assert 'exit_code' not in out
+        assert 'A: done' in out
+
+    def test_back_to_back(self) -> None:
+        text = 'Tool: {"a": 1}\nTool: {"b": 2}\nA: answer'
+        out, dropped = strip_tool_output_blocks(text)
+        assert dropped == 2
+        assert 'Tool:' not in out
+        assert 'A: answer' in out
+
+    def test_no_blocks_verbatim(self) -> None:
+        text = 'A: just a normal answer\nwith two lines'
+        out, dropped = strip_tool_output_blocks(text)
+        assert dropped == 0
+        assert out == text.rstrip()
+
+    def test_payload_runs_to_eof(self) -> None:
+        text = 'A: intro\nTool: {"output": "x",\n"more": "lines",\n"end": true}'
+        out, dropped = strip_tool_output_blocks(text)
+        assert dropped == 1
+        assert 'A: intro' in out
+        assert 'Tool:' not in out and 'more' not in out
+
+    def test_returns_drop_count(self) -> None:
+        text = 'Tool: {"a": 1}\nU: q\nTool: {"b": 2}\nA: r'
+        _, dropped = strip_tool_output_blocks(text)
+        assert dropped == 2
+
+    def test_organic_tool_prose_preserved(self) -> None:
+        # "Tool: " prose that is NOT a structured payload must survive intact —
+        # no role-prefix terminator follows in a single turn body, so a naive
+        # strip would eat the whole turn.
+        text = 'Tool: ripgrep is a great tool\nI use it daily\nand recommend it'
+        out, dropped = strip_tool_output_blocks(text)
+        assert dropped == 0
+        assert out == text.rstrip()
+
+    def test_array_payload_stripped(self) -> None:
+        text = 'Tool: [1, 2, 3]\nA: done'
+        out, dropped = strip_tool_output_blocks(text)
+        assert dropped == 1
+        assert 'A: done' in out and 'Tool:' not in out
+
+    def test_prose_after_tool_block_preserved(self) -> None:
+        # Only the bracket-balanced payload is removed; prose that follows the
+        # payload (with no role prefix) must survive.
+        text = 'Here is the result:\nTool: {"output": "x", "exit_code": 0}\nAnd then I continued.'
+        out, dropped = strip_tool_output_blocks(text)
+        assert dropped == 1
+        assert 'Here is the result:' in out
+        assert 'And then I continued.' in out
+        assert 'exit_code' not in out
+
+    def test_brace_in_string_payload(self) -> None:
+        # A literal brace inside a JSON string must not end the payload early.
+        text = 'Tool: {"output": "has } a brace"}\nA: answer'
+        out, dropped = strip_tool_output_blocks(text)
+        assert dropped == 1
+        assert 'A: answer' in out
+        assert 'brace' not in out
+
+    def test_same_line_trailing_text_after_payload_is_removed(self) -> None:
+        # Deliberate contract: Hermes serializes a tool result as a whole line
+        # (`Tool: {json}`), so the entire Tool: line — including anything after
+        # the closing bracket — is removed. Prose on a SUBSEQUENT line survives
+        # (see test_prose_after_tool_block_preserved).
+        text = 'Tool: {"a": 1} trailing on same line\nA: next line kept'
+        out, dropped = strip_tool_output_blocks(text)
+        assert dropped == 1
+        assert 'trailing on same line' not in out
+        assert 'A: next line kept' in out
+
+
+class TestPreprocessStripsArtifacts:
+    def test_compaction_stripped_in_assistant(self) -> None:
+        turns = [{'user': 'q', 'assistant': f'pre {_C_BLOCK} post'}]
+        out = preprocess_turns(turns)
+        assert _C_START not in out[0]['assistant']
+        assert _C_END not in out[0]['assistant']
+
+    def test_tool_output_stripped_in_assistant(self) -> None:
+        turns = [{'user': 'q', 'assistant': 'Tool: {"x": 1}\nA: real answer'}]
+        out = preprocess_turns(turns)
+        assert 'Tool:' not in out[0]['assistant']
+        assert 'real answer' in out[0]['assistant']
+
+    def test_normal_content_preserved(self) -> None:
+        turns = [{'user': 'what is x?', 'assistant': 'x is the answer'}]
+        out = preprocess_turns(turns)
+        assert out[0]['user'] == 'what is x?'
+        assert out[0]['assistant'] == 'x is the answer'

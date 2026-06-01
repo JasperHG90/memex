@@ -192,3 +192,76 @@ class TestSharedClassificationCoercers:
         garbage_inputs: list[object] = [None, 0, [], {}, b'none']
         for garbage in garbage_inputs:
             assert coerce_risk_class(garbage) == RiskClass.NONE.value
+
+
+class TestSectionAssetAndNodeDTO:
+    """V5: NodeDTO/TOCNodeDTO carry block_id + per-section assets."""
+
+    def test_section_asset_dto_roundtrip(self) -> None:
+        from memex_common.schemas import SectionAssetDTO
+
+        a = SectionAssetDTO(path='img/x.png', alt_text='a cat', filename='x.png')
+        assert a.model_dump() == {'path': 'img/x.png', 'alt_text': 'a cat', 'filename': 'x.png'}
+
+    def test_section_asset_alt_optional(self) -> None:
+        from memex_common.schemas import SectionAssetDTO
+
+        a = SectionAssetDTO(path='x.png', filename='x.png')
+        assert a.alt_text is None
+
+    def test_node_dto_defaults(self) -> None:
+        import datetime as dt
+        from uuid import uuid4
+
+        from memex_common.schemas import NodeDTO
+
+        node = NodeDTO(
+            id=uuid4(),
+            note_id=uuid4(),
+            vault_id=uuid4(),
+            title='T',
+            text='body',
+            level=1,
+            seq=0,
+            status='active',
+            created_at=dt.datetime.now(dt.timezone.utc),
+        )
+        assert node.block_id is None
+        assert node.assets == []
+
+    def test_node_dto_validates_assets_from_dicts(self) -> None:
+        import datetime as dt
+        from uuid import uuid4
+
+        from memex_common.schemas import NodeDTO, SectionAssetDTO
+
+        block = uuid4()
+        node = NodeDTO(
+            id=uuid4(),
+            note_id=uuid4(),
+            vault_id=uuid4(),
+            block_id=block,
+            title='T',
+            text='body',
+            level=1,
+            seq=0,
+            status='active',
+            created_at=dt.datetime.now(dt.timezone.utc),
+            assets=[{'path': 'a.png', 'alt_text': 'cap', 'filename': 'a.png'}],
+        )
+        assert node.block_id == block
+        assert node.assets == [SectionAssetDTO(path='a.png', alt_text='cap', filename='a.png')]
+
+    def test_toc_node_dto_assets(self) -> None:
+        from memex_common.schemas import TOCNodeDTO
+
+        toc = TOCNodeDTO.model_validate(
+            {
+                'id': 'abc',
+                'title': 'Section',
+                'level': 2,
+                'assets': [{'path': 'p.png', 'alt_text': None, 'filename': 'p.png'}],
+            }
+        )
+        assert toc.assets[0].path == 'p.png'
+        assert TOCNodeDTO(id='x', title='y', level=1).assets == []

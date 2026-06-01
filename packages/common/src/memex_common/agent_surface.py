@@ -184,6 +184,7 @@ Namespace by scope cue (NOT grammatical person). `app:`/`project:`/`global:` ALL
 | "company-wide", "we standardise on" | `global:` |
 | "when I use <app>", "in Claude Code/Hermes" | `app:<app-id>:` |
 | learned procedure (any scope; default `global`) | `<scope>:procedure:<verb>:<context-tag>` |
+| repo/project-scoped procedure | `project:<id>:procedure:<verb>:<context-tag>` |
 
 <critical_constraint name="procedure_scope_default">
 Procedures live UNDER a scope, never bare `procedure:*`. Scope picks the SAME way as preferences — cue wins: `user:` / `project:<id>:` / `app:<id>:` / `global:` (default). Ambiguous? ASK.
@@ -198,7 +199,6 @@ Ambiguous? ASK before writing.
 <example>"Company-wide: Python 3.12 min" → `global:lang:python:min`</example>
 <example>"When I use Claude Code: dark theme" → `app:claude-code:theme` (<app> cue wins over "I"/"my")</example>
 <example>"Always lint before commit" → `global:procedure:commit:lint-first` (no cue → global)</example>
-<example>"For this repo: PRs only" → `project:<id>:procedure:commit:pr-only`</example>
 <example>"From now on: greet me casually" → `user:procedure:greet:casual` ("I/me" → user)</example>
 <example>"When I use Claude Code: always cite" → `app:claude-code:procedure:respond:cite` (app cue)</example>"""
 
