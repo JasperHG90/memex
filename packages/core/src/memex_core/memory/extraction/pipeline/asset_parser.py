@@ -59,9 +59,11 @@ def _norm_alt(alt: str | None) -> str | None:
 def extract_image_refs(text: str) -> list[dict[str, Any]]:
     """Return structured metadata for every Memex-stored image reference.
 
-    Each entry is ``{path, alt_text, filename, scope: 'node'}``. Order follows
-    first appearance in the text; duplicate paths are collapsed (first alt-text
-    wins). Returns ``[]`` for empty input.
+    Each entry is ``{path, alt_text, filename}`` — the exact shape surfaced by
+    ``SectionAssetDTO``. Order follows first appearance in the text; duplicate
+    paths are collapsed (first alt-text wins). Returns ``[]`` for empty input.
+    The column is JSONB, so additional keys can be added later without a
+    migration if a coarser binding scope is ever needed.
     """
     if not text:
         return []
@@ -106,7 +108,6 @@ def extract_image_refs(text: str) -> list[dict[str, Any]]:
                 'path': path,
                 'alt_text': _norm_alt(alt),
                 'filename': basename(path),
-                'scope': 'node',
             }
         )
 

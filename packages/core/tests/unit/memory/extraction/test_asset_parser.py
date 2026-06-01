@@ -16,7 +16,6 @@ class TestMarkdownImages:
             'path': 'img/cat.png',
             'alt_text': 'a cat',
             'filename': 'cat.png',
-            'scope': 'node',
         }
 
     def test_empty_alt_is_none(self):

@@ -526,8 +526,7 @@ class Node(SQLModel, table=True):  # type: ignore
     assets: list[dict[str, Any]] = Field(
         default_factory=list,
         sa_column=Column(JSONB, nullable=False, server_default=sql_text("'[]'::jsonb")),
-        description='Per-section embedded image refs: '
-        '[{"path", "alt_text", "filename", "scope": "node"}].',
+        description='Per-section embedded image refs: [{"path", "alt_text", "filename"}].',
     )
     created_at: datetime = Field(
         sa_column=Column(TIMESTAMP(timezone=True), server_default=func.now()),

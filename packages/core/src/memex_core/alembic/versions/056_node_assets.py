@@ -2,7 +2,7 @@
 
 Page-index nodes (sections) can embed images via markdown / wiki-link /
 HTML ``<img>`` syntax. This column stores structured metadata for each
-ref — ``{"path", "alt_text", "filename", "scope": "node"}`` — parsed at
+ref — ``{"path", "alt_text", "filename"}`` — parsed at
 ingest. It surfaces on ``NodeDTO.assets`` and on the page-index TOC so an
 agent can see which sections own which images without an extra call.
 

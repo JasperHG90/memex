@@ -108,7 +108,6 @@ async def test_section_assets_persist_and_surface(client: TestClient, db_session
                     'path': 'img/arch.png',
                     'alt_text': 'the diagram',
                     'filename': 'arch.png',
-                    'scope': 'node',
                 }
             ]
             assert by_title['Results'].assets[0]['alt_text'] == 'chart'
