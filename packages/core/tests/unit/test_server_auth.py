@@ -346,6 +346,90 @@ class TestSetupAuth:
 
 
 # ---------------------------------------------------------------------------
+# CVE-2026-48710 BadHost regression tests
+# ---------------------------------------------------------------------------
+
+
+class TestBadHostCVE202648710:
+    """Regression tests for CVE-2026-48710 (BadHost) — host-header auth bypass.
+
+    Starlette < 1.0.1 reconstructs ``request.url`` by concatenating the
+    client-supplied ``Host`` header with the request path and re-parsing the
+    result. A ``Host`` value like ``localhost/api/v1/health?`` makes
+    ``request.url.path`` collapse onto ``'/api/v1/health'`` (an exempt path)
+    while ``scope['path']`` — what the router actually dispatches on — stays
+    ``'/api/v1/notes'``. Auth middleware that compares ``request.url.path``
+    against ``exempt_paths`` is therefore bypassed.
+
+    The fix uses ``request.scope['path']`` for security decisions. ``scope['path']``
+    comes from the ASGI server directly, matches what the router uses, and is
+    immune regardless of installed Starlette version.
+
+    These tests assert the property directly. They simulate the Starlette bug
+    by hijacking ``Request.url`` so it returns a different path than
+    ``scope['path']``; a middleware that uses ``request.url.path`` will
+    bypass auth, a middleware that uses ``scope['path']`` will enforce it.
+    """
+
+    @staticmethod
+    def _patch_url_to_exempt_path(monkeypatch, exempt_path: str = '/api/v1/health') -> None:
+        """Make ``Request.url.path`` always return *exempt_path* regardless of scope."""
+        from starlette.datastructures import URL
+        from starlette.requests import Request as StarletteRequest
+
+        def hijacked_url(self):  # type: ignore[no-untyped-def]
+            return URL(f'http://attacker.example{exempt_path}')
+
+        monkeypatch.setattr(StarletteRequest, 'url', property(hijacked_url))
+
+    def test_badhost_path_divergence_does_not_bypass_auth(self, monkeypatch):
+        """Hijacked request.url.path pointing at an exempt route must NOT bypass auth."""
+        self._patch_url_to_exempt_path(monkeypatch, '/api/v1/health')
+
+        config = AuthConfig(enabled=True, keys=[_key(VALID_KEY)])
+        app = _make_app(config)
+        client = TestClient(app)
+
+        # /api/v1/notes is protected. Even though url.path now claims to be
+        # '/api/v1/health' (an exempt path), the dispatcher uses scope['path']
+        # and runs the /notes handler. The middleware must do the same and
+        # require a key.
+        response = client.get('/api/v1/notes')
+        assert response.status_code == 401, (
+            f'CVE-2026-48710 regression: got {response.status_code}; protected '
+            "'/api/v1/notes' was reached without an API key because the middleware "
+            "trusted request.url.path (spoofed) instead of scope['path']."
+        )
+
+    def test_badhost_path_divergence_with_invalid_key_returns_403(self, monkeypatch):
+        """Same attack with a wrong key still hits the validate step → 403, not 200."""
+        self._patch_url_to_exempt_path(monkeypatch, '/api/v1/health')
+
+        config = AuthConfig(enabled=True, keys=[_key(VALID_KEY)])
+        app = _make_app(config)
+        client = TestClient(app)
+
+        response = client.get('/api/v1/notes', headers={'X-API-Key': 'wrong'})
+        assert response.status_code == 403
+
+    def test_clean_host_still_serves_exempt_paths(self):
+        """Regression: legitimate exempt-path requests still work without a key."""
+        config = AuthConfig(enabled=True, keys=[_key(VALID_KEY)])
+        app = _make_app(config)
+        client = TestClient(app)
+        response = client.get('/api/v1/health')
+        assert response.status_code == 200
+
+    def test_clean_host_still_requires_key_on_protected_routes(self):
+        """Regression: protected routes still 401 without a key on clean Host."""
+        config = AuthConfig(enabled=True, keys=[_key(VALID_KEY)])
+        app = _make_app(config)
+        client = TestClient(app)
+        response = client.get('/api/v1/notes')
+        assert response.status_code == 401
+
+
+# ---------------------------------------------------------------------------
 # Policy permissions mapping
 # ---------------------------------------------------------------------------
 
