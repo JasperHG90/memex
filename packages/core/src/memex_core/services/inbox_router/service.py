@@ -61,6 +61,17 @@ _ROUTER_LOCK_ID = 5432789123456790
 
 @dataclass
 class TriageResult:
+    """Per-tick triage counters.
+
+    Every scored note increments at least one terminal-disposition bucket
+    (``auto_routed`` / ``proposed`` / ``no_fit`` / ``blocked_cooldown`` /
+    ``blocked_backoff`` / ``errors``). ``skipped_cap`` is NOT a terminal
+    bucket but an orthogonal reason-tag: an over-budget AUTO_ROUTE increments
+    ``skipped_cap`` AND its terminal bucket (``proposed`` or
+    ``blocked_cooldown``). So the buckets are intentionally non-additive — do
+    not assume they sum to ``scored``.
+    """
+
     vault_id: UUID | None = None
     scored: int = 0
     auto_routed: int = 0
