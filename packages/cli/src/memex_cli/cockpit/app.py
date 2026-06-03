@@ -1186,7 +1186,9 @@ class ProposalCockpitApp(App):
             )
         except Exception as exc:  # noqa: BLE001
             logger.exception('entity-collapse apply failed for finding %s', proposal.finding_id)
-            self._show_status(f'Collapse failed: {exc}', error=True)
+            # Full traceback is logged; keep the status bar terse so it doesn't
+            # leak internal error detail.
+            self._show_status(f'Collapse failed: {str(exc)[:120]}', error=True)
             self.mode = 'list'
             return
         self._show_status(f'Merged {len(member_ids)} entities into "{winner_name}".')
@@ -1205,7 +1207,7 @@ class ProposalCockpitApp(App):
             await self._controller.resolve(proposal, DISMISS_OPTION, note=None)
         except Exception as exc:  # noqa: BLE001
             logger.exception('entity-collapse dismiss failed for finding %s', proposal.finding_id)
-            self._show_status(f'Dismiss failed: {exc}', error=True)
+            self._show_status(f'Dismiss failed: {str(exc)[:120]}', error=True)
             self.mode = 'list'
             return
         self._show_status('Dismissed.')

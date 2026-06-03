@@ -630,10 +630,14 @@ async def _resolve_entity_collapse_cluster(
     else:
         losers = [m for m in cluster_members if m != winner_id]
     if not losers:
-        raise HTTPException(
-            status_code=400,
-            detail='select at least two members (a winner and one entity to merge into it)',
+        # Message reflects the path: a user-chosen subset vs the whole
+        # (degenerate ≤1-member) cluster.
+        detail = (
+            'select at least two members (a winner and one entity to merge into it)'
+            if member_subset
+            else 'cluster has no members to collapse'
         )
+        raise HTTPException(status_code=400, detail=detail)
 
     actor_id = getattr(auth, 'api_key_id', None) if auth else None
     try:

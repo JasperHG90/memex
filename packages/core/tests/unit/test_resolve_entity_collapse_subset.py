@@ -121,3 +121,20 @@ async def test_subset_excluding_winner_rejected():
             )
     assert exc.value.status_code == 400
     api.entities.collapse_cluster.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_no_subset_single_member_cluster_message():
+    """No-subset path on a degenerate ≤1-member cluster reports the cluster has
+    no members — not the subset-selection message."""
+    w = str(uuid4())
+    api = _api()
+    with patch.object(lint_mod, 'check_vault_access', AsyncMock(return_value=None)):
+        with pytest.raises(HTTPException) as exc:
+            await lint_mod._resolve_entity_collapse_cluster(
+                finding=_finding([w], w), api=api, auth=None, params={'winner_id': w}
+            )
+    assert exc.value.status_code == 400
+    assert 'no members' in exc.value.detail
+    assert 'select at least two' not in exc.value.detail
+    api.entities.collapse_cluster.assert_not_called()

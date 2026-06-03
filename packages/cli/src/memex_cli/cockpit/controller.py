@@ -598,7 +598,7 @@ class CockpitProposal:
         snippet, and finally a truncated ``target_id`` — so the reviewer never
         stares at a bare UUID.
         """
-        label: Any = self.target_label
+        label: str | None = self.target_label
         if not label and isinstance(self.raw_evidence, dict):
             names = self.raw_evidence.get('member_canonical_names') or self.raw_evidence.get(
                 'canonical_names'
@@ -611,12 +611,13 @@ class CockpitProposal:
                 shown = ', '.join(str(n) for n in names[:3])
                 label = shown if len(names) <= 3 else f'{shown} +{len(names) - 3} more'
             else:
-                label = self.raw_evidence.get('entity_name')
+                entity_name = self.raw_evidence.get('entity_name')
+                label = str(entity_name) if entity_name else None
         if not label:
             label = self.target_text
         if not label:
             return f'{self.target_id[:8]}…'
-        collapsed = ' '.join(str(label).split())
+        collapsed = ' '.join(label.split())
         return collapsed if len(collapsed) <= 56 else collapsed[:55] + '…'
 
     @property
