@@ -184,7 +184,7 @@ class _ProposalQueueItem(ListItem):
         flag = '[yellow]⚑[/yellow] ' if self.proposal.is_flagged else ''
         return (
             f'{mark}{flag}[{self._badge}] {self.proposal.rule_name}\n'
-            f'    {self.proposal.target_type} · {self.proposal.target_id[:8]}…'
+            f'    {self.proposal.target_type} · {self.proposal.target_display}'
         )
 
     def toggle(self) -> None:
@@ -409,6 +409,9 @@ class ProposalCockpitApp(App):
         self._viewing_source_note: bool = False
         self._detail_unit_ids: list[str] = []
         self._detail_unit_index: int = 0
+        # Set when the highlighted finding targets a note directly (target_id is
+        # a note id, not a unit id) so DETAIL renders the note, not a unit.
+        self._detail_note_id: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -567,6 +570,8 @@ class ProposalCockpitApp(App):
 
         if proposal.rule_name == 'llm_semantic_contradiction':
             body_lines.extend(self._build_contradiction_body(proposal))
+        elif proposal.rule_name == 'entity_collapse_cluster':
+            body_lines.extend(self._build_entity_collapse_body(proposal))
         else:
             label_suffix = (
                 f'  [white]{proposal.target_label}[/white]' if proposal.target_label else ''
@@ -633,6 +638,53 @@ class ProposalCockpitApp(App):
         right = f'  [dim]{" · ".join(right_parts)}[/dim]' if right_parts else ''
         line2 = f' [dim]vault {vault_label} · {proposal.created_at or "?"}[/dim]{right}'
         return f'{line1}\n{line2}'
+
+    def _build_entity_collapse_body(self, proposal: CockpitProposal) -> list[str]:
+        """Detail body for an entity-collapse proposal.
+
+        Lists EVERY member entity by name and marks the winner, so a reviewer
+        can actually see which entities get merged away — the member names live
+        in ``evidence.member_canonical_names`` (a dict the generic evidence
+        renderer drops).
+        """
+        ev = proposal.raw_evidence if isinstance(proposal.raw_evidence, dict) else {}
+        names = ev.get('member_canonical_names')
+        if not isinstance(names, dict):
+            names = {}
+        members = ev.get('cluster_members')
+        if not isinstance(members, list) or not members:
+            members = list(names.keys())
+        winner_id = str(ev.get('suggested_winner_id') or proposal.target_id)
+        winner_name = names.get(winner_id) or proposal.target_label or winner_id[:8]
+
+        lines: list[str] = []
+        lines.append(
+            f'[bold]MERGE {len(members)} entities[/bold] → winner [green]"{winner_name}"[/green]'
+        )
+        lines.append('')
+        for mid in members:
+            mid = str(mid)
+            nm = names.get(mid) or '[dim](name unavailable)[/dim]'
+            if mid == winner_id:
+                lines.append(
+                    f'  [green]★[/green] [white]{nm}[/white]  [dim]{mid[:8]} · winner[/dim]'
+                )
+            else:
+                lines.append(
+                    f'  [red]→[/red] [white]{nm}[/white]  [dim]{mid[:8]} · merged into winner[/dim]'
+                )
+
+        vaults = ev.get('vaults_affected')
+        if isinstance(vaults, list) and vaults:
+            lines.append('')
+            lines.append(f'[dim]Affects {len(vaults)} vault(s).[/dim]')
+        pmin, pmax = ev.get('pair_min_similarity'), ev.get('pair_max_similarity')
+        try:
+            if pmin is not None and pmax is not None:
+                lines.append(f'[dim]Pairwise similarity {float(pmin):.2f}–{float(pmax):.2f}.[/dim]')
+        except (TypeError, ValueError):
+            pass
+        return lines
 
     def _build_contradiction_body(self, proposal: CockpitProposal) -> list[str]:
         lines: list[str] = []
@@ -962,6 +1014,18 @@ class ProposalCockpitApp(App):
         proposal = self._current_proposal()
         if proposal is None:
             return
+        self._viewing_source_note = False
+        # Note-target findings (e.g. inbox routing) carry a NOTE id in target_id,
+        # not a unit id — render the note directly instead of a unit lookup that
+        # would 404.
+        if proposal.target_type == 'note':
+            self._detail_note_id = proposal.target_id
+            self._detail_unit_ids = []
+            self._detail_unit_index = 0
+            self.mode = 'detail'
+            self._load_note_detail()
+            return
+        self._detail_note_id = None
         # Collect all unit IDs from the finding: target first, then related.
         unit_ids: list[str] = [proposal.target_id]
         for rid in proposal.related_unit_ids:
@@ -971,6 +1035,48 @@ class ProposalCockpitApp(App):
         self._detail_unit_index = 0
         self.mode = 'detail'
         self._load_detail_for_current_unit()
+
+    def _load_note_detail(self) -> None:
+        if not self._detail_note_id:
+            return
+        self.query_one('#detail-header', Static).update(
+            f'[bold]─── NOTE DETAIL: {self._detail_note_id[:8]} ───[/bold]'
+        )
+        self.query_one('#detail-body', Static).update('[dim]loading…[/dim]')
+        self.run_worker(
+            self._load_note_detail_async(self._detail_note_id),
+            name='load_note_detail',
+            exclusive=True,
+        )
+
+    async def _load_note_detail_async(self, note_id: str) -> None:
+        data = await self._controller.fetch_note_detail(note_id)
+        self._render_note_detail_panel(note_id, data)
+
+    def _render_note_detail_panel(
+        self, note_id: str, data: tuple[str | None, str | None] | None
+    ) -> None:
+        self.query_one('#detail-header', Static).update(
+            f'[bold]─── NOTE DETAIL: {note_id[:8]} ───[/bold]'
+        )
+        if data is None:
+            self.query_one('#detail-body', Static).update(
+                f'[red]Could not load note {note_id}[/red]'
+            )
+            return
+        title, text = data
+        lines: list[str] = []
+        lines.append(f'  [bold]TITLE[/bold]    {title or "[dim](untitled)[/dim]"}')
+        lines.append(f'  [bold]NOTE ID[/bold]  {note_id}')
+        lines.append('')
+        lines.append('[dim]' + '─' * 60 + '[/dim]')
+        lines.append('[bold]TEXT[/bold]')
+        lines.append('')
+        lines.append(f'  {text}' if text else '  [dim](no text)[/dim]')
+        lines.append('')
+        lines.append('[dim]' + '─' * 60 + '[/dim]')
+        lines.append('  [bold][Esc][/bold] Back to list')
+        self.query_one('#detail-body', Static).update('\n'.join(lines))
 
     def _handle_detail_key(self, event: Any) -> None:
         key = event.key

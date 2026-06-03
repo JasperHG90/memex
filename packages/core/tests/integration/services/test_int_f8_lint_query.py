@@ -179,6 +179,10 @@ async def test_findings_endpoint_resolves_target_label_per_type(session: AsyncSe
     ent_fid = await _seed_finding(
         session, vault_id=vault_id, target_type='entity', target_id=str(entity.id)
     )
+    # Note-target finding (e.g. inbox routing): target_id is the NOTE id.
+    note_fid = await _seed_finding(
+        session, vault_id=vault_id, target_type='note', target_id=str(note.id)
+    )
 
     # Pass every param explicitly: FastAPI Query(...) defaults are sentinel
     # objects, not real values, when the route function is called directly.
@@ -199,6 +203,7 @@ async def test_findings_endpoint_resolves_target_label_per_type(session: AsyncSe
     assert by_id[str(unit_fid)]['target_text'] == 'The release captain signs off on staging.'
     assert by_id[str(mm_fid)]['target_label'] == 'Marc de Haas'
     assert by_id[str(ent_fid)]['target_label'] == 'Marc de Haas'
+    assert by_id[str(note_fid)]['target_label'] == 'Quarterly Planning'
 
     # Same enrichment must flow through the service DTO path (the MCP
     # `memex_get_lint_flags` agent surface), not just the HTTP endpoint.
@@ -208,6 +213,7 @@ async def test_findings_endpoint_resolves_target_label_per_type(session: AsyncSe
     assert dto_by_id[unit_fid].target_text == 'The release captain signs off on staging.'
     assert dto_by_id[mm_fid].target_label == 'Marc de Haas'
     assert dto_by_id[ent_fid].target_label == 'Marc de Haas'
+    assert dto_by_id[note_fid].target_label == 'Quarterly Planning'
 
 
 @pytest.mark.asyncio

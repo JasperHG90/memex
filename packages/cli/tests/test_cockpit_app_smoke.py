@@ -12,8 +12,10 @@ from uuid import uuid4
 
 import pytest
 
+from textual.widgets import Static
+
 from memex_cli.cockpit.app import ProposalCockpitApp, _ProposalQueueItem
-from memex_cli.cockpit.controller import CockpitController
+from memex_cli.cockpit.controller import CockpitController, CockpitProposal
 
 
 class _FakeClient:
@@ -274,3 +276,78 @@ async def test_detail_mode_cycles_units_with_tab() -> None:
         await pilot.press('escape')
         await pilot.pause()
         assert app.mode == 'list'
+
+
+def _entity_collapse_finding() -> dict[str, Any]:
+    winner, loser = 'a' * 36, 'b' * 36
+    return {
+        'id': str(uuid4()),
+        'vault_id': None,
+        'rule_name': 'entity_collapse_cluster',
+        'lint_type': 'quality',
+        'target_type': 'entity',
+        'target_id': winner,
+        'target_label': 'Governance team',
+        'source': 'rule',
+        'created_at': '2026-06-03T00:00:00Z',
+        'evidence': {
+            'cluster_members': [winner, loser],
+            'member_canonical_names': {winner: 'Governance team', loser: 'governance team'},
+            'suggested_winner_id': winner,
+            'vaults_affected': ['v1'],
+            'pair_min_similarity': 1.0,
+            'pair_max_similarity': 1.0,
+        },
+        'suggested_action': 'Cluster of near-duplicate entities detected.',
+    }
+
+
+def test_entity_collapse_body_lists_every_member_and_marks_winner() -> None:
+    """A reviewer MUST see which entities merge and which one wins."""
+    app = ProposalCockpitApp(CockpitController(_FakeClient([])), limit=5)
+    proposal = CockpitProposal.from_finding(_entity_collapse_finding())
+    body = '\n'.join(app._build_entity_collapse_body(proposal))
+    assert 'MERGE 2 entities' in body
+    assert 'Governance team' in body  # the winner
+    assert 'governance team' in body  # the member merged away
+    assert 'winner' in body
+    assert 'merged into winner' in body
+
+
+@pytest.mark.asyncio
+async def test_render_note_detail_panel_shows_title_text_and_error() -> None:
+    """Note-target findings render the NOTE (title + body), never a unit 404."""
+    app = ProposalCockpitApp(CockpitController(_FakeClient([])), limit=5)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app._render_note_detail_panel('n0deadbee', ('Quarterly Planning', 'The note body.'))
+        body = str(app.query_one('#detail-body', Static).render())
+        assert 'Quarterly Planning' in body
+        assert 'The note body.' in body
+        assert 'Could not load unit' not in body
+        # Failure path resolves to a note error, not a unit error.
+        app._render_note_detail_panel('n0deadbee', None)
+        assert 'Could not load note' in str(app.query_one('#detail-body', Static).render())
+
+
+@pytest.mark.asyncio
+async def test_note_target_enter_detail_targets_note_not_unit() -> None:
+    """Pressing Detail on a note-target finding records a note id, no unit lookup."""
+    finding = _finding(rule='inbox_vault_no_fit', target_type='note')
+    app = ProposalCockpitApp(CockpitController(_FakeClient([finding])), limit=5)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press('d')
+        await pilot.pause()
+        assert app.mode == 'detail'
+        assert app._detail_note_id == finding['target_id']
+        assert app._detail_unit_ids == []
+
+
+def test_queue_item_label_shows_human_target_not_uuid() -> None:
+    """The queue row renders the human target_display, not the raw UUID."""
+    proposal = CockpitProposal.from_finding(_entity_collapse_finding())
+    item = _ProposalQueueItem(proposal)
+    label = item._render_label()
+    assert 'Governance team' in label
+    assert proposal.target_id not in label  # no full bare UUID

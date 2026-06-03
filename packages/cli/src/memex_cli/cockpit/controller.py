@@ -590,6 +590,33 @@ class CockpitProposal:
         )
 
     @property
+    def target_display(self) -> str:
+        """Compact human-readable target for queue / detail rows.
+
+        Prefers the server-resolved ``target_label`` (note title / entity /
+        mental-model name), then evidence-embedded names, then a unit-text
+        snippet, and finally a truncated ``target_id`` — so the reviewer never
+        stares at a bare UUID.
+        """
+        label: Any = self.target_label
+        if not label and isinstance(self.raw_evidence, dict):
+            names = self.raw_evidence.get('member_canonical_names') or self.raw_evidence.get(
+                'canonical_names'
+            )
+            if isinstance(names, dict):
+                names = list(names.values())
+            if isinstance(names, list) and names:
+                label = ', '.join(str(n) for n in names)
+            else:
+                label = self.raw_evidence.get('entity_name')
+        if not label:
+            label = self.target_text
+        if not label:
+            return f'{self.target_id[:8]}…'
+        collapsed = ' '.join(str(label).split())
+        return collapsed if len(collapsed) <= 56 else collapsed[:55] + '…'
+
+    @property
     def is_llm_source(self) -> bool:
         return self.source == 'llm'
 
@@ -923,6 +950,19 @@ class CockpitController:
             return getattr(note, 'original_text', None)
         except Exception:  # noqa: BLE001
             return None
+
+    async def fetch_note_detail(self, note_id: str) -> tuple[str | None, str | None] | None:
+        """Fetch ``(title, original_text)`` for a note by ID.
+
+        Used by DETAIL mode when a finding targets a note directly (e.g. inbox
+        routing proposals), where ``target_id`` is a note id, not a unit id.
+        Returns ``None`` on any error so the caller can render a load failure.
+        """
+        try:
+            note = await self._client.get_note(note_id)
+        except Exception:  # noqa: BLE001
+            return None
+        return getattr(note, 'title', None), getattr(note, 'original_text', None)
 
 
 def _count_toc_nodes(toc: list[dict[str, Any]]) -> int:
