@@ -189,3 +189,40 @@ class TestAccessLogMiddlewareIntegration:
         entry = entries[0]
         assert entry['session_id'] == custom_session
         assert entry['actor'] == f'{KEY_DESCRIPTION} ({KEY_PREFIX})'
+
+
+@pytest.mark.integration
+class TestBadHostAccessLogCVE202648710:
+    """CVE-2026-48710 (BadHost): the access-log skip decision must use scope['path'].
+
+    Starlette < 1.0.1 reconstructs ``request.url`` from the client-supplied Host
+    header. A spoofed Host can make ``request.url.path`` collapse onto an entry in
+    ``_AUDIT_SKIP_PATHS``, suppressing the ``http.request`` access-log line for the
+    attacker's real (protected) request. The fix keys the skip decision on
+    ``request.scope['path']``, which is unspoofable.
+    """
+
+    def test_spoofed_skip_path_does_not_suppress_access_log(
+        self, audit_client: TestClient, postgres_uri: str, monkeypatch
+    ) -> None:
+        from starlette.datastructures import URL
+        from starlette.requests import Request as StarletteRequest
+
+        # Simulate the BadHost reconstruction: request.url.path collapses onto an
+        # _AUDIT_SKIP_PATHS entry while scope['path'] stays the real dispatched path.
+        monkeypatch.setattr(
+            StarletteRequest,
+            'url',
+            property(lambda self: URL('http://attacker.example/api/v1/health')),
+        )
+
+        resp = audit_client.get('/api/v1/vaults', headers={'X-API-Key': VALID_KEY})
+        assert resp.status_code == 200
+
+        entries = _query_audit_logs(postgres_uri, action='http.request')
+        paths = [e['details']['path'] for e in entries]
+        assert '/api/v1/vaults' in paths, (
+            'CVE-2026-48710 regression: the access-log skip decision trusted the '
+            "spoofed request.url.path (/api/v1/health) instead of scope['path'], so the "
+            'protected request was omitted from the audit access log.'
+        )
