@@ -1765,7 +1765,16 @@ class EntityMaintenanceConfig(BaseModel):
         le=1.0,
         description=(
             'Minimum pairwise similarity to connect two entities in the '
-            'candidate-cluster graph. Placeholder — empirical tuning pending.'
+            'candidate-cluster graph. Names that are identical after '
+            'case-folding + whitespace-stripping always cluster via an exact-name '
+            'fast path (score 1.0), regardless of this threshold. The threshold '
+            'governs only NON-identical near-duplicates; kept high (0.85) because '
+            'at the name-similarity weights a token-insertion variant such as '
+            '"Marc Haas" / "Marc de Haas" only scores ~0.39 while distinct names '
+            'that share a phonetic code ("Robert"/"Roberta") reach ~0.60 — so a '
+            'lower threshold floods proposals with false positives without '
+            'catching the token-insertion case (which needs cooccurrence signal '
+            'or human review instead).'
         ),
     )
     cluster_min_threshold: float = Field(

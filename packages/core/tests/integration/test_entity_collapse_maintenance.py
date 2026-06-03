@@ -561,6 +561,68 @@ async def test_scan_emits_cluster_of_three(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_scan_emits_with_default_thresholds(
+    session: AsyncSession,
+    metastore,
+):
+    """The scan emits under the PRODUCTION default thresholds — no overrides.
+
+    Regression pin for the structural bug where identical/case-variant names
+    capped below the default ``pair_threshold`` so the scan emitted nothing.
+    Every other scan test loosens the thresholds to 0.55/0.4 and thus masks it;
+    this one drives the defaults straight from ``EntityMaintenanceConfig()``.
+    """
+    from memex_common.config import EntityMaintenanceConfig, MemexConfig
+    from memex_core.services.entity_maintenance import scan_collapse_clusters
+
+    suffix = uuid4().hex[:6]
+    a = await _make_entity(
+        session,
+        f'Beacon Labs {suffix}',
+        mention_count=10,
+        first_seen=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    b = await _make_entity(
+        session,
+        f'beacon labs {suffix}',
+        mention_count=4,
+        first_seen=datetime(2026, 2, 1, tzinfo=timezone.utc),
+    )
+
+    config = MemexConfig()
+    # Use the real production defaults for the thresholds; only flip the master
+    # switch on and drop the cooldown so the seeded rows are eligible.
+    config.server.memory.entity_maintenance = EntityMaintenanceConfig(
+        scan_enabled=True,
+        scan_cooldown_days=0,
+    )
+    api_stub = MagicMock()
+    api_stub.metastore = metastore
+    api_stub.config = config
+
+    summary = await scan_collapse_clusters(api_stub)
+    assert summary['clusters_emitted'] >= 1, (
+        f'scan must emit at least one cluster under default thresholds; got {summary}'
+    )
+
+    async with metastore.session() as s:
+        rows = (
+            await s.execute(
+                text(
+                    'SELECT evidence FROM maintenance_proposals '
+                    "WHERE rule_name = 'entity_collapse_cluster' "
+                    "AND status = 'pending' AND target_id = :wid"
+                ),
+                {'wid': str(a.id)},
+            )
+        ).all()
+    assert rows, 'cluster proposal for the suggested winner must exist'
+    members = set(rows[0][0]['cluster_members'])
+    assert {str(a.id), str(b.id)}.issubset(members)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_scan_rescan_updates_evidence_in_place(
     session: AsyncSession,
     metastore,

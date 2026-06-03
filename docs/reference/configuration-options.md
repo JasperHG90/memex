@@ -843,14 +843,14 @@ The model validator accepts the legacy flat `{type: ...}` form and lifts `type` 
 
 Cross-batch entity-cluster collapse. Lives at `server.memory.entity_maintenance`. Off by default.
 
-> Thresholds are literature-precedent — not fine-tuned. The `cluster_min_threshold` must be <= `pair_threshold`; the model validator rejects otherwise.
+> The `cluster_min_threshold` must be <= `pair_threshold`; the model validator rejects otherwise. Two entities whose canonical names are identical after case-folding + whitespace-stripping always cluster via an exact-name fast path (score 1.0), regardless of `pair_threshold` — this is what surfaces `ACME Corp` / `acme corp` and `Marc de haas` / `Marc de Haas`. The threshold governs only non-identical near-duplicates and is kept high (0.85): a token-insertion variant like `Marc Haas` / `Marc de Haas` only scores ~0.39, while distinct names sharing a phonetic code (`Robert`/`Roberta`) reach ~0.60, so lowering it floods proposals with false positives without catching the token-insertion case. Proposals are non-destructive until approved via `memex lint resolve`.
 
 | Key | Type | Default | Env var | Description |
 |---|---|---|---|---|
 | `scan_enabled` | `bool` | `false` | `MEMEX_SERVER__MEMORY__ENTITY_MAINTENANCE__SCAN_ENABLED` | Master switch. Off by default. |
 | `top_n` | `int` (>= 2) | `100` | `…__TOP_N` | Max entities per scan, by `mention_count`. |
 | `scan_cooldown_days` | `int` (>= 0) | `7` | `…__SCAN_COOLDOWN_DAYS` | Per-entity cooldown between scans. |
-| `pair_threshold` | `float` (`[0, 1]`) | `0.85` | `…__PAIR_THRESHOLD` | Min pairwise similarity to connect two entities. |
+| `pair_threshold` | `float` (`[0, 1]`) | `0.85` | `…__PAIR_THRESHOLD` | Min pairwise similarity to connect two non-identical entities (identical names always cluster via the fast path). |
 | `cluster_min_threshold` | `float` (`[0, 1]`) | `0.70` | `…__CLUSTER_MIN_THRESHOLD` | Cohesion guard — min pairwise similarity across every pair in a cluster. |
 
 ---
