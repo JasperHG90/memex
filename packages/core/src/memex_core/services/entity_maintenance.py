@@ -60,6 +60,16 @@ _SUGGESTED_ACTION = (
 )
 
 
+def _like_escape(value: str) -> str:
+    """Escape LIKE/ILIKE metacharacters so a focus string matches literally.
+
+    Without this, ``%`` and ``_`` in an operator-supplied ``--entity`` value
+    act as wildcards (e.g. ``ma_c`` would match ``marc``). The backslash must
+    be escaped first since it is the default LIKE escape character.
+    """
+    return value.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+
+
 def _composition_hash(member_ids: list[str]) -> str:
     """Order-independent fingerprint of a cluster's membership."""
     canonical = sorted(str(m) for m in member_ids)
@@ -211,7 +221,10 @@ async def scan_collapse_clusters(
                     ORDER BY mention_count DESC, first_seen ASC
                     LIMIT :limit
                 """
-                cand_params: dict[str, Any] = {'focus_pattern': f'%{focus}%', 'limit': top_n}
+                cand_params: dict[str, Any] = {
+                    'focus_pattern': f'%{_like_escape(focus)}%',
+                    'limit': top_n,
+                }
             else:
                 cand_sql = """
                     SELECT id::text AS id, canonical_name, phonetic_code,

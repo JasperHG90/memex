@@ -20,10 +20,20 @@ from unittest.mock import MagicMock
 from memex_core.services.entity_maintenance import (
     _composition_hash,
     _connected_components,
+    _like_escape,
     _min_pairwise_similarity,
     _suggested_winner,
     scan_collapse_clusters,
 )
+
+
+def test_like_escape_neutralizes_wildcards():
+    """``--entity`` focus metacharacters must match literally, not as wildcards."""
+    assert _like_escape('ma_c') == 'ma\\_c'
+    assert _like_escape('50%') == '50\\%'
+    # Backslash escaped first so it can't swallow a following metachar.
+    assert _like_escape('a\\b') == 'a\\\\b'
+    assert _like_escape('Marc') == 'Marc'  # plain text untouched
 
 
 def test_connected_components_groups_three_pairs_into_one_cluster():
