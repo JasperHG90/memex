@@ -606,7 +606,10 @@ class CockpitProposal:
             if isinstance(names, dict):
                 names = list(names.values())
             if isinstance(names, list) and names:
-                label = ', '.join(str(n) for n in names)
+                # Cap to a few names + "+N more" so a many-member cluster reads
+                # as a deliberate summary, not a mid-name truncation.
+                shown = ', '.join(str(n) for n in names[:3])
+                label = shown if len(names) <= 3 else f'{shown} +{len(names) - 3} more'
             else:
                 label = self.raw_evidence.get('entity_name')
         if not label:

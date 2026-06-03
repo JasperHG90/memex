@@ -472,3 +472,42 @@ async def test_collapse_apply_rejects_single_member() -> None:
         await app.workers.wait_for_complete()
         await pilot.pause()
     assert client.resolves == [], 'apply must be blocked with fewer than 2 members'
+
+
+@pytest.mark.asyncio
+async def test_note_detail_escapes_rich_markup_in_content() -> None:
+    """Note titles/bodies containing [..] must render literally, not as tags."""
+    app = ProposalCockpitApp(CockpitController(_FakeClient([])), limit=5)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        app._render_note_detail_panel(
+            'n0deadbee', ('[ALERT] Q3 plan', 'see [section 2] for detail')
+        )
+        body = str(app.query_one('#detail-body', Static).render())
+        # Bracketed body content survives as visible text — if it were parsed as
+        # markup, "[section 2]" would be eaten as an (invalid) tag and dropped.
+        assert '[section 2]' in body
+        assert 'Q3 plan' in body
+
+
+@pytest.mark.asyncio
+async def test_collapse_mode_empty_cluster_bounces_to_list() -> None:
+    """A finding with no members must not strand the user in an empty selector."""
+    finding: dict[str, Any] = {
+        'id': str(uuid4()),
+        'vault_id': None,
+        'rule_name': 'entity_collapse_cluster',
+        'lint_type': 'quality',
+        'target_type': 'entity',
+        'target_id': 'a' * 36,
+        'source': 'rule',
+        'created_at': '2026-06-03T00:00:00Z',
+        'evidence': {'cluster_members': [], 'member_canonical_names': {}},
+        'suggested_action': 'x',
+    }
+    app = ProposalCockpitApp(CockpitController(_FakeClient([finding])), limit=5)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press('enter')
+        await pilot.pause()
+        assert app.mode == 'list'  # bounced back, not stuck in 'collapse'

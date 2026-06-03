@@ -13,6 +13,7 @@ from __future__ import annotations
 from typing import Any
 
 from rich.markdown import Markdown as RichMarkdown
+from rich.markup import escape as _esc
 
 from textual.app import App, ComposeResult
 from textual.binding import Binding
@@ -184,7 +185,7 @@ class _ProposalQueueItem(ListItem):
         flag = '[yellow]⚑[/yellow] ' if self.proposal.is_flagged else ''
         return (
             f'{mark}{flag}[{self._badge}] {self.proposal.rule_name}\n'
-            f'    {self.proposal.target_type} · {self.proposal.target_display}'
+            f'    {self.proposal.target_type} · {_esc(self.proposal.target_display)}'
         )
 
     def toggle(self) -> None:
@@ -245,7 +246,8 @@ class _CollapseMemberItem(ListItem):
     def _render_label(self, highlighted: bool = False) -> str:
         cursor = '[bold]▸[/bold] ' if highlighted else '  '
         box = '[green]✓[/green]' if self.included else '[red]✗[/red]'
-        name = f'[bold]{self.member_name}[/bold]' if highlighted else self.member_name
+        safe_name = _esc(self.member_name)
+        name = f'[bold]{safe_name}[/bold]' if highlighted else safe_name
         if self.is_winner:
             tag = '  [yellow]★ winner[/yellow]'
         elif self.included:
@@ -705,7 +707,7 @@ class ProposalCockpitApp(App):
         if not isinstance(members, list) or not members:
             members = list(names.keys())
         winner_id = str(ev.get('suggested_winner_id') or proposal.target_id)
-        winner_name = names.get(winner_id) or proposal.target_label or winner_id[:8]
+        winner_name = _esc(str(names.get(winner_id) or proposal.target_label or winner_id[:8]))
 
         lines: list[str] = []
         lines.append(
@@ -714,7 +716,7 @@ class ProposalCockpitApp(App):
         lines.append('')
         for mid in members:
             mid = str(mid)
-            nm = names.get(mid) or '[dim](name unavailable)[/dim]'
+            nm = _esc(str(names.get(mid))) if names.get(mid) else '[dim](name unavailable)[/dim]'
             if mid == winner_id:
                 lines.append(
                     f'  [green]★[/green] [white]{nm}[/white]  [dim]{mid[:8]} · winner[/dim]'
@@ -1024,9 +1026,15 @@ class ProposalCockpitApp(App):
         if not isinstance(members, list) or not members:
             members = list(names.keys())
         member_ids = [str(m) for m in members]
+        if not member_ids:
+            # Degenerate finding (no members to review) — don't strand the user
+            # in an empty selection screen.
+            self._show_status('This cluster has no members to review.', error=True)
+            self.mode = 'list'
+            return
         winner = str(ev.get('suggested_winner_id') or proposal.target_id)
         if winner not in member_ids:
-            winner = member_ids[0] if member_ids else ''
+            winner = member_ids[0]
 
         self._collapse_proposal = proposal
         self._collapse_winner_id = winner or None
@@ -1072,7 +1080,7 @@ class ProposalCockpitApp(App):
     def _render_collapse_detail(self) -> None:
         items = self._collapse_items()
         included = [it for it in items if it.included]
-        winner_name = self._collapse_member_name(self._collapse_winner_id)
+        winner_name = _esc(self._collapse_member_name(self._collapse_winner_id))
         lines = [
             '[bold]SELECT ENTITIES TO MERGE[/bold]',
             '',
@@ -1307,13 +1315,15 @@ class ProposalCockpitApp(App):
             return
         title, text = data
         lines: list[str] = []
-        lines.append(f'  [bold]TITLE[/bold]    {title or "[dim](untitled)[/dim]"}')
+        # Escape note content — titles/bodies may contain [..] that Rich would
+        # otherwise parse as markup tags.
+        lines.append(f'  [bold]TITLE[/bold]    {_esc(title) if title else "[dim](untitled)[/dim]"}')
         lines.append(f'  [bold]NOTE ID[/bold]  {note_id}')
         lines.append('')
         lines.append('[dim]' + '─' * 60 + '[/dim]')
         lines.append('[bold]TEXT[/bold]')
         lines.append('')
-        lines.append(f'  {text}' if text else '  [dim](no text)[/dim]')
+        lines.append(f'  {_esc(text)}' if text else '  [dim](no text)[/dim]')
         lines.append('')
         lines.append('[dim]' + '─' * 60 + '[/dim]')
         lines.append('  [bold][Esc][/bold] Back to list')
