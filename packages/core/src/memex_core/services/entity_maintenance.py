@@ -217,7 +217,7 @@ async def scan_collapse_clusters(
                     SELECT id::text AS id, canonical_name, phonetic_code,
                            mention_count, first_seen, last_merge_scan_at
                     FROM entities
-                    WHERE canonical_name ILIKE :focus_pattern
+                    WHERE canonical_name ILIKE :focus_pattern ESCAPE '\\'
                     ORDER BY mention_count DESC, first_seen ASC
                     LIMIT :limit
                 """

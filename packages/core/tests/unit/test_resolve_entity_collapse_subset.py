@@ -55,6 +55,31 @@ async def test_subset_merges_only_selected_members():
 
 
 @pytest.mark.asyncio
+async def test_resolve_endpoint_routes_top_level_member_ids_to_subset():
+    """Full route path: the cockpit sends winner_id/member_ids as TOP-LEVEL body
+    keys (via the client's legacy_params); the ``lint_resolve`` endpoint passes
+    the whole body as ``params`` to the carveout, so the subset reaches
+    collapse_cluster. Closes the client→route→function glue gap.
+    """
+    w, l1, l2 = str(uuid4()), str(uuid4()), str(uuid4())
+    finding = _finding([w, l1, l2], w)
+    api = _api()
+    with (
+        patch.object(lint_mod, '_load_finding_or_404', AsyncMock(return_value=finding)),
+        patch.object(lint_mod, 'check_vault_access', AsyncMock(return_value=None)),
+    ):
+        result = await lint_mod.lint_resolve(
+            finding_id=UUID(finding['id']),
+            api=api,
+            auth=None,
+            # Mirrors the on-the-wire body: no 'action', top-level winner/members.
+            payload={'winner_id': w, 'member_ids': [w, l1]},
+        )
+    assert result['status'] == 'resolved'
+    assert api.entities.collapse_cluster.await_args.kwargs['loser_ids'] == [UUID(l1)]
+
+
+@pytest.mark.asyncio
 async def test_no_subset_merges_whole_cluster():
     w, l1, l2 = str(uuid4()), str(uuid4()), str(uuid4())
     api = _api()

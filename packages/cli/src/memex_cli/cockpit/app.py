@@ -508,8 +508,10 @@ class ProposalCockpitApp(App):
             self._batch_targets = []
             self._detail_unit_ids = []
             self._detail_unit_index = 0
+            self._detail_note_id = None
             self._viewing_source_note = False
             self._collapse_proposal = None
+            self._collapse_winner_id = None
             self.query_one('#queue-list', ListView).focus()
             self._update_footer()
         elif new in ('review', 'batch', 'collapse'):
