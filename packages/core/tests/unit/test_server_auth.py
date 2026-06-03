@@ -5,7 +5,7 @@ import pathlib as plb
 
 import pytest
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
@@ -26,6 +26,7 @@ sys.modules['_auth'] = _auth_mod
 _spec.loader.exec_module(_auth_mod)
 setup_auth = _auth_mod.setup_auth
 auth_middleware = _auth_mod.auth_middleware
+require_admin_auth = _auth_mod.require_admin_auth
 _validate_key = _auth_mod._validate_key
 _resolve_key = _auth_mod._resolve_key
 AuthContext = _auth_mod.AuthContext
@@ -427,6 +428,54 @@ class TestBadHostCVE202648710:
         client = TestClient(app)
         response = client.get('/api/v1/notes')
         assert response.status_code == 401
+
+
+class TestBadHostAdminAuditPath:
+    """CVE-2026-48710 (BadHost): ``require_admin_auth`` records ``scope['path']``.
+
+    ``require_admin_auth`` has no exempt-path branch, so the BadHost spoof
+    cannot bypass it — but it writes the request path into five admin audit
+    events. A spoofed ``request.url.path`` would poison that audit trail. This
+    pins the audit detail to the unspoofable dispatched path.
+    """
+
+    def test_admin_missing_key_audits_scope_path_not_spoofed_url(self, monkeypatch):
+        from starlette.datastructures import URL
+        from starlette.requests import Request as StarletteRequest
+
+        # Simulate the BadHost reconstruction: request.url.path claims an exempt path.
+        monkeypatch.setattr(
+            StarletteRequest,
+            'url',
+            property(lambda self: URL('http://attacker.example/api/v1/health')),
+        )
+
+        # Auth disabled globally → the global middleware passes through, so the
+        # route-level require_admin_auth dependency is what enforces and audits.
+        app = _make_app(AuthConfig(enabled=False))
+
+        captured: list[dict] = []
+
+        class _CapturingAudit:
+            def log(self, **kwargs):
+                captured.append(kwargs)
+
+        app.state.audit_service = _CapturingAudit()
+
+        @app.get('/api/v1/admin/thing', dependencies=[Depends(require_admin_auth)])
+        async def _admin_thing():
+            return {'ok': True}
+
+        client = TestClient(app)
+        response = client.get('/api/v1/admin/thing')  # no X-API-Key
+
+        assert response.status_code == 401
+        events = [e for e in captured if e.get('action') == 'auth.admin.missing_key']
+        assert events, 'expected an auth.admin.missing_key audit event'
+        assert events[0]['details']['path'] == '/api/v1/admin/thing', (
+            'CVE-2026-48710 regression: require_admin_auth wrote the spoofed '
+            "request.url.path into the audit detail instead of scope['path']."
+        )
 
 
 # ---------------------------------------------------------------------------
