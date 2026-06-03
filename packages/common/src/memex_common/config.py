@@ -1716,6 +1716,17 @@ class InboxRouterConfig(BaseModel):
             'cannot reshuffle the whole inbox at once.'
         ),
     )
+    reproposal_cooldown_days: int = Field(
+        default=30,
+        ge=0,
+        description=(
+            'After a route proposal is resolved or dismissed, the router will '
+            'not re-propose the same note for this many days (so a rejected '
+            'route is not immediately re-offered). Set to 0 to bootstrap a fresh '
+            'inbox where notes were dismissed during earlier experimentation and '
+            'should be re-evaluated immediately.'
+        ),
+    )
     excluded_vaults: list[str] = Field(
         default_factory=lambda: ['global'],
         description=(
