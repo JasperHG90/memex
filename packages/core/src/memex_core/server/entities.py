@@ -306,6 +306,7 @@ async def scan_entity_merges(
     scan_cooldown_days: Annotated[int | None, Query(ge=0)] = None,
     pair_threshold: Annotated[float | None, Query(ge=0.0, le=1.0)] = None,
     cluster_min_threshold: Annotated[float | None, Query(ge=0.0, le=1.0)] = None,
+    focus: Annotated[str | None, Query(max_length=200)] = None,
 ):
     """Run a one-shot cross-batch entity-cluster collapse scan.
 
@@ -330,6 +331,7 @@ async def scan_entity_merges(
             scan_cooldown_days=scan_cooldown_days,
             pair_threshold=pair_threshold,
             cluster_min_threshold=cluster_min_threshold,
+            focus=focus,
         )
         return summary
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:

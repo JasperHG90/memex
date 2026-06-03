@@ -695,12 +695,17 @@ class RemoteMemexAPI:
         scan_cooldown_days: int | None = None,
         pair_threshold: float | None = None,
         cluster_min_threshold: float | None = None,
+        focus: str | None = None,
     ) -> dict[str, Any]:
         """Run a one-shot cross-batch entity-cluster collapse scan.
 
         Emits one MaintenanceProposal per surviving cluster (cohesion-guarded);
         on rescan, existing pending findings are UPDATEd in place. Does NOT
         apply the collapse — operators approve via ``memex lint resolve``.
+
+        ``focus`` restricts the scan to entities whose canonical_name contains
+        the given string (case-insensitive) and ignores the cooldown — e.g.
+        ``focus="Marc"`` re-scans the Marc cluster on demand.
         """
         params: dict[str, Any] = {}
         if top_n is not None:
@@ -711,6 +716,8 @@ class RemoteMemexAPI:
             params['pair_threshold'] = pair_threshold
         if cluster_min_threshold is not None:
             params['cluster_min_threshold'] = cluster_min_threshold
+        if focus is not None:
+            params['focus'] = focus
         response = await self.client.post('entities/scan-merges', params=params or None, json={})
         return await self._handle_response(response)
 
