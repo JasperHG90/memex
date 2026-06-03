@@ -610,9 +610,30 @@ async def _resolve_entity_collapse_cluster(
             ),
         )
 
-    losers = [m for m in cluster_members if m != winner_id]
+    # Optional member subset: collapse ONLY the selected members, leaving the
+    # rest as separate entities. Lets a reviewer deselect a member that should
+    # not merge. Defaults to the full cluster when absent.
+    member_subset = params.get('member_ids')
+    if member_subset:
+        selected = [str(m) for m in member_subset]
+        unknown = [m for m in selected if m not in cluster_members]
+        if unknown:
+            raise HTTPException(
+                status_code=400,
+                detail=f'member_ids contains entities outside the cluster: {unknown}',
+            )
+        if winner_id not in selected:
+            raise HTTPException(
+                status_code=400, detail='winner must be among the selected member_ids'
+            )
+        losers = [m for m in selected if m != winner_id]
+    else:
+        losers = [m for m in cluster_members if m != winner_id]
     if not losers:
-        raise HTTPException(status_code=400, detail='cluster has no losers to collapse')
+        raise HTTPException(
+            status_code=400,
+            detail='select at least two members (a winner and one entity to merge into it)',
+        )
 
     actor_id = getattr(auth, 'api_key_id', None) if auth else None
     try:

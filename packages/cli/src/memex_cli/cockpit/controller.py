@@ -649,6 +649,7 @@ class CockpitClient(Protocol):
         action: str | None = None,
         params: dict[str, Any] | None = None,
         note: str | None = None,
+        legacy_params: dict[str, Any] | None = None,
     ) -> dict[str, Any]: ...
 
     async def lint_dismiss(
@@ -735,6 +736,28 @@ class CockpitController:
             action=action_id,
             params=params,
             note=note,
+        )
+
+    async def apply_entity_collapse(
+        self,
+        finding_id: str,
+        *,
+        winner_id: str,
+        member_ids: list[str],
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        """Apply an entity-cluster collapse with a chosen winner + member subset.
+
+        Uses the server's ``entity_collapse_cluster`` carveout (no canned
+        ``action``; ``winner_id`` / ``member_ids`` are read from the top-level
+        body, so they go through ``legacy_params``). Only ``member_ids`` are
+        merged into ``winner_id`` — deselected members stay separate.
+        """
+        return await self._client.lint_resolve(
+            finding_id,
+            action=None,
+            note=note,
+            legacy_params={'winner_id': winner_id, 'member_ids': member_ids},
         )
 
     async def reverse(self, finding_id: str) -> dict[str, Any]:

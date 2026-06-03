@@ -87,6 +87,34 @@ async def test_fetch_note_detail_none_on_error():
     assert await ctrl.fetch_note_detail('n') is None
 
 
+@pytest.mark.asyncio
+async def test_apply_entity_collapse_uses_carveout_with_member_subset():
+    """The collapse apply hits the server carveout (action=None) and sends the
+    chosen winner + member subset via top-level (legacy_params) body keys."""
+    captured: dict[str, Any] = {}
+
+    class _Client:
+        async def lint_resolve(
+            self,
+            finding_id: str,
+            *,
+            action: Any = None,
+            params: Any = None,
+            note: Any = None,
+            legacy_params: Any = None,
+        ) -> dict[str, Any]:
+            captured.update(
+                finding_id=finding_id, action=action, params=params, legacy_params=legacy_params
+            )
+            return {'status': 'resolved'}
+
+    ctrl = CockpitController(_Client())
+    await ctrl.apply_entity_collapse('f1', winner_id='w', member_ids=['w', 'l1'])
+    assert captured['action'] is None  # carveout, not a canned action
+    assert captured['params'] is None
+    assert captured['legacy_params'] == {'winner_id': 'w', 'member_ids': ['w', 'l1']}
+
+
 def test_recommended_resolve_option_inbox_route_carries_vault_param():
     """An inbox route's recommended option must carry its target_vault_id.
 

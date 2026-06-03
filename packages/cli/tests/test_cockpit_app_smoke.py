@@ -34,9 +34,16 @@ class _FakeClient:
         action: str | None = None,
         params: dict[str, Any] | None = None,
         note: str | None = None,
+        legacy_params: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         self.resolves.append(
-            {'finding_id': finding_id, 'action': action, 'params': params, 'note': note}
+            {
+                'finding_id': finding_id,
+                'action': action,
+                'params': params,
+                'note': note,
+                'legacy_params': legacy_params,
+            }
         )
         self._findings = [f for f in self._findings if f['id'] != finding_id]
         return {'finding_id': finding_id, 'status': 'resolved'}
@@ -351,3 +358,117 @@ def test_queue_item_label_shows_human_target_not_uuid() -> None:
     label = item._render_label()
     assert 'Governance team' in label
     assert proposal.target_id not in label  # no full bare UUID
+
+
+def _entity_collapse_finding_3() -> dict[str, Any]:
+    w, l1, l2 = 'a' * 36, 'b' * 36, 'c' * 36
+    return {
+        'id': str(uuid4()),
+        'vault_id': None,
+        'rule_name': 'entity_collapse_cluster',
+        'lint_type': 'quality',
+        'target_type': 'entity',
+        'target_id': w,
+        'target_label': 'Governance team',
+        'source': 'rule',
+        'created_at': '2026-06-03T00:00:00Z',
+        'evidence': {
+            'cluster_members': [w, l1, l2],
+            'member_canonical_names': {w: 'Governance team', l1: 'governance team', l2: 'Gov Team'},
+            'suggested_winner_id': w,
+            'vaults_affected': ['v1'],
+        },
+        'suggested_action': 'Cluster of near-duplicate entities detected.',
+    }
+
+
+@pytest.mark.asyncio
+async def test_collapse_mode_select_deselect_and_apply_subset() -> None:
+    """Enter collapse mode on an entity cluster, exclude one member, apply the
+    chosen winner + subset via the carveout."""
+    finding = _entity_collapse_finding_3()
+    client = _FakeClient([finding])
+    app = ProposalCockpitApp(CockpitController(client), limit=5)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        # Enter review → collapse mode (entity_collapse routes here).
+        await pilot.press('enter')
+        await pilot.pause()
+        assert app.mode == 'collapse'
+        items = app._collapse_items()
+        assert len(items) == 3
+        # All included by default; first member is the suggested winner.
+        assert all(it.included for it in items)
+        assert items[0].is_winner
+
+        # Exclude the third member (navigate down twice, toggle).
+        await pilot.press('down')
+        await pilot.press('down')
+        await pilot.pause()
+        await pilot.press('space')
+        await pilot.pause()
+        excluded_id = items[2].member_id
+        assert not items[2].included
+        assert app._collapse_included_ids() == ['a' * 36, 'b' * 36]
+
+        # Apply.
+        await pilot.press('a')
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+    assert client.resolves, 'apply should issue a resolve carveout call'
+    call = client.resolves[0]
+    assert call['action'] is None  # carveout (no canned action)
+    assert call['legacy_params'] == {
+        'winner_id': 'a' * 36,
+        'member_ids': ['a' * 36, 'b' * 36],
+    }
+    assert excluded_id not in call['legacy_params']['member_ids']
+
+
+@pytest.mark.asyncio
+async def test_collapse_mode_set_winner_then_apply() -> None:
+    """'w' reassigns the winner; apply sends the chosen winner."""
+    finding = _entity_collapse_finding_3()
+    client = _FakeClient([finding])
+    app = ProposalCockpitApp(CockpitController(client), limit=5)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press('enter')
+        await pilot.pause()
+        assert app.mode == 'collapse'
+        # Move to the 2nd member and make it the winner.
+        await pilot.press('down')
+        await pilot.pause()
+        await pilot.press('w')
+        await pilot.pause()
+        assert app._collapse_winner_id == 'b' * 36
+        items = app._collapse_items()
+        assert items[1].is_winner and not items[0].is_winner
+        await pilot.press('a')
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+    assert client.resolves[0]['legacy_params']['winner_id'] == 'b' * 36
+
+
+@pytest.mark.asyncio
+async def test_collapse_apply_rejects_single_member() -> None:
+    """Excluding down to <2 members blocks apply (no resolve call)."""
+    finding = _entity_collapse_finding_3()
+    client = _FakeClient([finding])
+    app = ProposalCockpitApp(CockpitController(client), limit=5)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press('enter')
+        await pilot.pause()
+        # Exclude both losers (members 2 and 3), leaving only the winner.
+        await pilot.press('down')
+        await pilot.press('space')
+        await pilot.press('down')
+        await pilot.press('space')
+        await pilot.pause()
+        assert app._collapse_included_ids() == ['a' * 36]
+        await pilot.press('a')
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+    assert client.resolves == [], 'apply must be blocked with fewer than 2 members'

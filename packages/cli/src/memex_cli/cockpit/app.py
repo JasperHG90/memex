@@ -220,6 +220,47 @@ class _ActionListItem(ListItem):
             pass  # widget not yet mounted
 
 
+class _CollapseMemberItem(ListItem):
+    """One entity in the entity-collapse selection list.
+
+    Holds its own include/exclude + winner state so the reviewer can pick
+    exactly which entities merge into the winner.
+    """
+
+    def __init__(
+        self,
+        member_id: str,
+        name: str,
+        *,
+        included: bool = True,
+        is_winner: bool = False,
+        highlighted: bool = False,
+    ) -> None:
+        self.member_id = member_id
+        self.member_name = name
+        self.included = included
+        self.is_winner = is_winner
+        super().__init__(Label(self._render_label(highlighted)))
+
+    def _render_label(self, highlighted: bool = False) -> str:
+        cursor = '[bold]▸[/bold] ' if highlighted else '  '
+        box = '[green]✓[/green]' if self.included else '[red]✗[/red]'
+        name = f'[bold]{self.member_name}[/bold]' if highlighted else self.member_name
+        if self.is_winner:
+            tag = '  [yellow]★ winner[/yellow]'
+        elif self.included:
+            tag = '  [dim]→ merge[/dim]'
+        else:
+            tag = '  [dim]kept separate[/dim]'
+        return f'{cursor}{box} {name}  [dim]{self.member_id[:8]}[/dim]{tag}'
+
+    def refresh_label(self, highlighted: bool = False) -> None:
+        try:
+            self.query_one(Label).update(self._render_label(highlighted))
+        except Exception:  # noqa: BLE001
+            pass  # widget not yet mounted
+
+
 # ---------------------------------------------------------------------------
 # Inline note widget (Submit on Enter, newline on Shift+Enter)
 # ---------------------------------------------------------------------------
@@ -412,6 +453,9 @@ class ProposalCockpitApp(App):
         # Set when the highlighted finding targets a note directly (target_id is
         # a note id, not a unit id) so DETAIL renders the note, not a unit.
         self._detail_note_id: str | None = None
+        # COLLAPSE mode state (entity_collapse_cluster member selection).
+        self._collapse_proposal: CockpitProposal | None = None
+        self._collapse_winner_id: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -465,9 +509,10 @@ class ProposalCockpitApp(App):
             self._detail_unit_ids = []
             self._detail_unit_index = 0
             self._viewing_source_note = False
+            self._collapse_proposal = None
             self.query_one('#queue-list', ListView).focus()
             self._update_footer()
-        elif new in ('review', 'batch'):
+        elif new in ('review', 'batch', 'collapse'):
             queue_pane.add_class('dimmed')
             action_section.add_class('visible')
             note_section.remove_class('visible')
@@ -499,6 +544,8 @@ class ProposalCockpitApp(App):
             n = len(self._detail_unit_ids)
             idx = self._detail_unit_index + 1
             mode_label = f'DETAIL (unit {idx}/{n})' if n > 1 else 'DETAIL'
+        elif self.mode == 'collapse':
+            mode_label = 'COLLAPSE'
         self.sub_title = f'{mode_label} · {count} pending'
 
     def _update_footer(self) -> None:
@@ -509,6 +556,7 @@ class ProposalCockpitApp(App):
             'review': '[↑↓] Navigate  [Enter] Confirm  [Esc] Back',
             'note': '[Enter] Submit  [Shift+Enter] Newline  [Esc] Cancel',
             'detail': '[n] View note  [Tab] Cycle units  [Esc] Back',
+            'collapse': ('[Space] in/out  [w] winner  [a] apply  [x] dismiss  [Esc] cancel'),
         }
         hint = hints.get(self.mode, '')
         self.query_one('#status-bar', Static).update(f' [dim]{hint}[/dim]')
@@ -881,10 +929,14 @@ class ProposalCockpitApp(App):
         elif event.list_view.id == 'action-list' and self.mode in ('review', 'batch'):
             if isinstance(event.item, _ActionListItem):
                 self._show_action_detail(event.item.option)
+        elif event.list_view.id == 'action-list' and self.mode == 'collapse':
+            self._refresh_collapse_items()
 
     def on_list_view_selected(self, event: ListView.Selected) -> None:
         if event.list_view.id == 'queue-list' and self.mode == 'list':
             self._enter_review_mode()
+        elif event.list_view.id == 'action-list' and self.mode == 'collapse':
+            self._toggle_collapse_current()
         elif event.list_view.id == 'action-list' and self.mode in ('review', 'batch'):
             self._enter_note_mode()
 
@@ -908,6 +960,8 @@ class ProposalCockpitApp(App):
 
         if self.mode == 'list':
             self._handle_list_key(event)
+        elif self.mode == 'collapse':
+            self._handle_collapse_key(event)
         elif self.mode in ('review', 'batch'):
             self._handle_review_key(event)
         elif self.mode == 'detail':
@@ -954,6 +1008,191 @@ class ProposalCockpitApp(App):
             event.prevent_default()
             event.stop()
             self.mode = 'list'
+
+    # ------------------------------------------------------------------
+    # COLLAPSE mode (entity_collapse_cluster member selection)
+    # ------------------------------------------------------------------
+
+    def _enter_collapse_mode(self, proposal: CockpitProposal) -> None:
+        ev = proposal.raw_evidence if isinstance(proposal.raw_evidence, dict) else {}
+        names = ev.get('member_canonical_names')
+        if not isinstance(names, dict):
+            names = {}
+        members = ev.get('cluster_members')
+        if not isinstance(members, list) or not members:
+            members = list(names.keys())
+        member_ids = [str(m) for m in members]
+        winner = str(ev.get('suggested_winner_id') or proposal.target_id)
+        if winner not in member_ids:
+            winner = member_ids[0] if member_ids else ''
+
+        self._collapse_proposal = proposal
+        self._collapse_winner_id = winner or None
+
+        action_list = self.query_one('#action-list', ListView)
+        action_list.clear()
+        for i, mid in enumerate(member_ids):
+            action_list.append(
+                _CollapseMemberItem(
+                    mid,
+                    names.get(mid) or '(name unavailable)',
+                    included=True,
+                    is_winner=(mid == winner),
+                    highlighted=(i == 0),
+                )
+            )
+        if member_ids:
+            action_list.index = 0
+        self.mode = 'collapse'
+        self._render_collapse_detail()
+
+    def _collapse_items(self) -> list[_CollapseMemberItem]:
+        return [
+            c
+            for c in self.query_one('#action-list', ListView).children
+            if isinstance(c, _CollapseMemberItem)
+        ]
+
+    def _collapse_included_ids(self) -> list[str]:
+        return [it.member_id for it in self._collapse_items() if it.included]
+
+    def _collapse_member_name(self, member_id: str | None) -> str:
+        for it in self._collapse_items():
+            if it.member_id == member_id:
+                return it.member_name
+        return (member_id or '?')[:8]
+
+    def _refresh_collapse_items(self) -> None:
+        action_list = self.query_one('#action-list', ListView)
+        for i, it in enumerate(self._collapse_items()):
+            it.refresh_label(highlighted=(i == action_list.index))
+
+    def _render_collapse_detail(self) -> None:
+        items = self._collapse_items()
+        included = [it for it in items if it.included]
+        winner_name = self._collapse_member_name(self._collapse_winner_id)
+        lines = [
+            '[bold]SELECT ENTITIES TO MERGE[/bold]',
+            '',
+            f'Winner: [green]{winner_name}[/green]',
+            f'Merging [bold]{len(included)}[/bold] of {len(items)} entities '
+            'into the winner; the rest stay separate.',
+            '',
+            '[dim][Space] include/exclude · [w] set winner · [a] apply · '
+            '[x] dismiss · [Esc] cancel[/dim]',
+        ]
+        self.query_one('#detail-header', Static).update('[bold]─── ENTITY COLLAPSE ───[/bold]')
+        self.query_one('#detail-body', Static).update('\n'.join(lines))
+
+    def _collapse_current_item(self) -> _CollapseMemberItem | None:
+        action_list = self.query_one('#action-list', ListView)
+        items = self._collapse_items()
+        idx = action_list.index
+        if idx is None or not (0 <= idx < len(items)):
+            return None
+        return items[idx]
+
+    def _toggle_collapse_current(self) -> None:
+        current = self._collapse_current_item()
+        if current is None:
+            return
+        if current.is_winner and current.included:
+            self._show_status(
+                'Cannot exclude the winner — set a different winner first.', error=True
+            )
+            return
+        current.included = not current.included
+        self._refresh_collapse_items()
+        self._render_collapse_detail()
+
+    def _set_collapse_winner(self) -> None:
+        current = self._collapse_current_item()
+        if current is None:
+            return
+        current.included = True  # the winner is always part of the merge
+        self._collapse_winner_id = current.member_id
+        for it in self._collapse_items():
+            it.is_winner = it.member_id == current.member_id
+        self._refresh_collapse_items()
+        self._render_collapse_detail()
+
+    def _handle_collapse_key(self, event: Any) -> None:
+        key = event.key
+        if key == 'space':
+            event.prevent_default()
+            event.stop()
+            self._toggle_collapse_current()
+        elif key == 'w':
+            event.prevent_default()
+            event.stop()
+            self._set_collapse_winner()
+        elif key == 'a':
+            event.prevent_default()
+            event.stop()
+            self._apply_collapse()
+        elif key == 'x':
+            event.prevent_default()
+            event.stop()
+            self._dismiss_collapse()
+        elif key == 'escape':
+            event.prevent_default()
+            event.stop()
+            self.mode = 'list'
+
+    def _apply_collapse(self) -> None:
+        proposal = self._collapse_proposal
+        if proposal is None:
+            return
+        included = self._collapse_included_ids()
+        if len(included) < 2:
+            self._show_status('Select at least 2 entities (a winner + one to merge).', error=True)
+            return
+        if self._collapse_winner_id not in included:
+            self._show_status('The winner must be one of the selected entities.', error=True)
+            return
+        winner_id = self._collapse_winner_id
+        winner_name = self._collapse_member_name(winner_id)
+        self.run_worker(
+            self._apply_collapse_async(proposal, winner_id, included, winner_name),
+            exclusive=True,
+            name='apply_collapse',
+        )
+
+    async def _apply_collapse_async(
+        self,
+        proposal: CockpitProposal,
+        winner_id: str,
+        member_ids: list[str],
+        winner_name: str,
+    ) -> None:
+        try:
+            await self._controller.apply_entity_collapse(
+                proposal.finding_id, winner_id=winner_id, member_ids=member_ids
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._show_status(f'Collapse failed: {exc}', error=True)
+            self.mode = 'list'
+            return
+        self._show_status(f'Merged {len(member_ids)} entities into "{winner_name}".')
+        await self._refresh_queue()
+
+    def _dismiss_collapse(self) -> None:
+        proposal = self._collapse_proposal
+        if proposal is None:
+            return
+        self.run_worker(
+            self._dismiss_collapse_async(proposal), exclusive=True, name='dismiss_collapse'
+        )
+
+    async def _dismiss_collapse_async(self, proposal: CockpitProposal) -> None:
+        try:
+            await self._controller.resolve(proposal, DISMISS_OPTION, note=None)
+        except Exception as exc:  # noqa: BLE001
+            self._show_status(f'Dismiss failed: {exc}', error=True)
+            self.mode = 'list'
+            return
+        self._show_status('Dismissed.')
+        await self._refresh_queue()
 
     # ------------------------------------------------------------------
     # LIST mode actions
@@ -1258,6 +1497,10 @@ class ProposalCockpitApp(App):
             if proposal is None:
                 return
             self._batch_targets = []
+            if proposal.rule_name == 'entity_collapse_cluster':
+                # Interactive member selection instead of the dismiss-only menu.
+                self._enter_collapse_mode(proposal)
+                return
             self._show_proposal_preview(proposal)
             self._populate_actions(proposal)
             self.mode = 'review'
