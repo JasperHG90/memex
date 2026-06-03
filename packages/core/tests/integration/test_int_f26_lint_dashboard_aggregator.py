@@ -227,3 +227,48 @@ async def test_pending_by_type_slice_matches_aggregator(
 
     assert slice_only == full['pending_by_type']
     assert slice_only == {'structural': 1, 'quality': 1}
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_llm_deferred_rows_excluded_from_dashboard(
+    session: AsyncSession,
+    metastore,
+):
+    """Internal ``llm_deferred`` bookkeeping must not inflate the dashboard
+    pivot / pending_by_type / top-5 — it is hidden from the findings list and
+    pending count, so the dashboard must agree (no inconsistent badge)."""
+    vault = Vault(name=f'F26-deferred-{uuid4().hex[:8]}')
+    session.add(vault)
+    await session.commit()
+    await session.refresh(vault)
+
+    session.add_all(
+        [
+            _proposal(
+                vault.id,
+                lint_type=LintType.QUALITY,
+                status=LintStatus.PENDING,
+                rule_name='cold_low_mw_unit',
+            ),
+            _proposal(
+                vault.id,
+                lint_type=LintType.QUALITY,
+                status=LintStatus.PENDING,
+                rule_name='llm_deferred',
+            ),
+        ]
+    )
+    await session.commit()
+
+    agg = await aggregate_lint_findings(metastore, vault.id)
+    assert agg['pending_by_type'] == {'quality': 1}
+    assert await pending_by_type(metastore, vault.id) == {'quality': 1}
+    assert all(r['rule_name'] != 'llm_deferred' for r in agg['top_5_pending'])
+    # The deferred row is also absent from the type/status/source pivot counts.
+    quality_pending = [
+        c
+        for c in agg['counts_by_type_status_source']
+        if c['lint_type'] == 'quality' and c['status'] == 'pending'
+    ]
+    assert sum(c['count'] for c in quality_pending) == 1

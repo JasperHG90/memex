@@ -75,6 +75,28 @@ class LintSubsystemNotInitializedError(RuntimeError):
         )
 
 
+# Correlated-subquery SELECT fragment that resolves a human-readable label
+# (+ a unit-body snippet) for a finding's target, per target_type — so reviewers
+# (and the agent surface) see a title/name instead of an opaque UUID. Each arm
+# is single-row (PK equality) and tolerant (no match → NULL → COALESCE falls
+# through). Assumes the ``maintenance_proposals`` row is aliased ``mp``. Shared
+# verbatim by ``LintService.get_findings`` and the HTTP ``/lint/findings``
+# endpoint so the two never drift.
+TARGET_ENRICHMENT_SQL = (
+    '(SELECT mu.text FROM memory_units mu '
+    "WHERE mp.target_type IN ('memory_unit', 'unit_entity') "
+    'AND mu.id::text = mp.target_id) AS target_text, '
+    'COALESCE('
+    '(SELECT n.title FROM memory_units mu LEFT JOIN notes n ON n.id = mu.note_id '
+    "WHERE mp.target_type IN ('memory_unit', 'unit_entity') AND mu.id::text = mp.target_id), "
+    '(SELECT mm.name FROM mental_models mm '
+    "WHERE mp.target_type = 'mental_model' AND mm.id::text = mp.target_id), "
+    '(SELECT e.canonical_name FROM entities e '
+    "WHERE mp.target_type = 'entity' AND e.id::text = mp.target_id)"
+    ') AS target_label'
+)
+
+
 class LintFindingDTO(BaseModel):
     """Shape-stable read view over a :class:`MaintenanceProposal` row."""
 
@@ -91,9 +113,15 @@ class LintFindingDTO(BaseModel):
     created_at: datetime
     resolved_at: datetime | None
     resolved_by: str | None = None
+    # Human-readable target context (note title / entity / mental-model name and
+    # a unit-body snippet). Optional for shape stability — older rows / callers
+    # that don't select them get None.
+    target_text: str | None = None
+    target_label: str | None = None
 
     @classmethod
     def from_row(cls, row: Any) -> LintFindingDTO:
+        keys = row.keys()
         return cls(
             finding_id=row['id'],
             target_id=row['target_id'],
@@ -107,7 +135,9 @@ class LintFindingDTO(BaseModel):
             vault_id=row['vault_id'],
             created_at=row['created_at'],
             resolved_at=row['resolved_at'],
-            resolved_by=row['resolved_by'] if 'resolved_by' in row.keys() else None,
+            resolved_by=row['resolved_by'] if 'resolved_by' in keys else None,
+            target_text=row['target_text'] if 'target_text' in keys else None,
+            target_label=row['target_label'] if 'target_label' in keys else None,
         )
 
 
@@ -916,16 +946,20 @@ class LintService(BaseService):
         Total-across-everything is intentionally not exposed here; the server
         handles ``scope='all'`` with its own SQL.
         """
+        # Exclude ``llm_deferred`` bookkeeping rows — they are not operator-
+        # actionable findings (see ``lint_llm.process_deferred``).
         if vault_id is None:
             stmt = text(
                 'SELECT count(*) FROM maintenance_proposals '
-                "WHERE status = 'pending' AND vault_id IS NULL"
+                "WHERE status = 'pending' AND vault_id IS NULL "
+                "AND rule_name != 'llm_deferred'"
             )
             params: dict[str, Any] = {}
         else:
             stmt = text(
                 'SELECT count(*) FROM maintenance_proposals '
-                "WHERE status = 'pending' AND vault_id = :v"
+                "WHERE status = 'pending' AND vault_id = :v "
+                "AND rule_name != 'llm_deferred'"
             )
             params = {'v': str(vault_id)}
 
@@ -1063,7 +1097,9 @@ class LintService(BaseService):
         # arithmetic on a bound parameter — `:limit + 1` inside SQL leaves the
         # `+ 1` as a literal addition the driver may reject or interpret oddly.
         fetch_limit = capped_limit + 1
-        clauses: list[str] = ['status = :status']
+        # Exclude ``llm_deferred`` bookkeeping rows — internal cost-cap deferrals
+        # retried by ``process_deferred``, not operator-actionable findings.
+        clauses: list[str] = ['status = :status', "rule_name != 'llm_deferred'"]
         params: dict[str, Any] = {'status': status, 'fetch_limit': fetch_limit}
         if vault_id is not None:
             clauses.append('vault_id = CAST(:vault_id AS uuid)')
@@ -1095,11 +1131,11 @@ class LintService(BaseService):
         # through the closing string.
         where_sql = ' AND '.join(clauses)
         stmt = text(
-            f'SELECT id, vault_id, lint_type, target_type, target_id, rule_name, '  # noqa: S608
-            f'evidence, suggested_action, status, source, created_at, resolved_at, '
-            f'resolved_by '
-            f'FROM maintenance_proposals WHERE {where_sql} '
-            'ORDER BY created_at DESC, id DESC LIMIT :fetch_limit'
+            f'SELECT mp.id, mp.vault_id, mp.lint_type, mp.target_type, mp.target_id, '  # noqa: S608
+            f'mp.rule_name, mp.evidence, mp.suggested_action, mp.status, mp.source, '
+            f'mp.created_at, mp.resolved_at, mp.resolved_by, {TARGET_ENRICHMENT_SQL} '
+            f'FROM maintenance_proposals mp WHERE {where_sql} '
+            'ORDER BY mp.created_at DESC, mp.id DESC LIMIT :fetch_limit'
         )
 
         async with self.metastore.session() as session:

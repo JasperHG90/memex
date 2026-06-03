@@ -1716,6 +1716,17 @@ class InboxRouterConfig(BaseModel):
             'cannot reshuffle the whole inbox at once.'
         ),
     )
+    reproposal_cooldown_days: int = Field(
+        default=30,
+        ge=0,
+        description=(
+            'After a route proposal is resolved or dismissed, the router will '
+            'not re-propose the same note for this many days (so a rejected '
+            'route is not immediately re-offered). Set to 0 to bootstrap a fresh '
+            'inbox where notes were dismissed during earlier experimentation and '
+            'should be re-evaluated immediately.'
+        ),
+    )
     excluded_vaults: list[str] = Field(
         default_factory=lambda: ['global'],
         description=(
@@ -1765,7 +1776,16 @@ class EntityMaintenanceConfig(BaseModel):
         le=1.0,
         description=(
             'Minimum pairwise similarity to connect two entities in the '
-            'candidate-cluster graph. Placeholder — empirical tuning pending.'
+            'candidate-cluster graph. Names that are identical after '
+            'case-folding + whitespace-stripping always cluster via an exact-name '
+            'fast path (score 1.0), regardless of this threshold. The threshold '
+            'governs only NON-identical near-duplicates; kept high (0.85) because '
+            'at the name-similarity weights a token-insertion variant such as '
+            '"Marc Haas" / "Marc de Haas" only scores ~0.39 while distinct names '
+            'that share a phonetic code ("Robert"/"Roberta") reach ~0.60 — so a '
+            'lower threshold floods proposals with false positives without '
+            'catching the token-insertion case (which needs cooccurrence signal '
+            'or human review instead).'
         ),
     )
     cluster_min_threshold: float = Field(

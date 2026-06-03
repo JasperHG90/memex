@@ -44,12 +44,23 @@ async def triage(
         console.print_json(json.dumps(result))
         return
     verb = 'Would route' if dry_run else 'Routed'
+    # ``blocked_*`` keys are absent on responses from an older server; default to 0.
+    blocked_cooldown = result.get('blocked_cooldown', 0)
+    blocked_backoff = result.get('blocked_backoff', 0)
     console.print(
         f'[bold]Inbox triage[/bold] ({"dry-run" if dry_run else "live"}): '
         f'scored={result["scored"]}  {verb.lower()}/auto={result["auto_routed"]}  '
         f'proposed={result["proposed"]}  no_fit={result["no_fit"]}  '
-        f'skipped_cap={result["skipped_cap"]}  errors={result["errors"]}'
+        f'skipped_cap={result["skipped_cap"]}  '
+        f'blocked_cooldown={blocked_cooldown}  blocked_backoff={blocked_backoff}  '
+        f'errors={result["errors"]}'
     )
+    if blocked_cooldown:
+        console.print(
+            f'[dim]{blocked_cooldown} note(s) were not re-proposed because they were '
+            'routed/dismissed recently. To re-evaluate them now, set '
+            'inbox_router.reproposal_cooldown_days=0.[/dim]'
+        )
 
 
 @app.command('status')

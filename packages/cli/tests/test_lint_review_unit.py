@@ -17,6 +17,34 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 from memex_cli.lint import app
+from memex_cli.lint_review import finding_target_label
+
+
+def test_finding_target_label_prefers_server_label():
+    """Server-resolved ``target_label`` (e.g. a note title) wins outright."""
+    assert (
+        finding_target_label({'target_label': 'Q3 Planning Notes', 'target_id': 'x' * 36})
+        == 'Q3 Planning Notes'
+    )
+
+
+def test_finding_target_label_falls_back_to_evidence_names():
+    """When no server label, entity-collapse member names render."""
+    label = finding_target_label(
+        {
+            'target_id': 'e' * 36,
+            'evidence': {'member_canonical_names': {'a': 'Marc Haas', 'b': 'Marc de Haas'}},
+        }
+    )
+    assert 'Marc Haas' in label and 'Marc de Haas' in label
+
+
+def test_finding_target_label_falls_back_to_unit_text_then_id():
+    """Unit snippet beats the raw id; a bare UUID is truncated as a last resort."""
+    assert finding_target_label({'target_id': 'u', 'target_text': 'staging approved'}) == (
+        'staging approved'
+    )
+    assert finding_target_label({'target_id': 'abcdefghijklmnop'}) == 'abcdefgh…'
 
 
 _FINDINGS = [

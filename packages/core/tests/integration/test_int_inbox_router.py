@@ -140,6 +140,72 @@ async def test_triage_tick_emits_routing_proposal(api, session):
     assert n >= 1
 
 
+async def test_blocked_backoff_counts_suppressed_no_fit(api, session):
+    """A no-fit emission suppressed by the backoff window (``_emit_no_fit``
+    returns False) is counted in ``blocked_backoff`` — not silently dropped."""
+    from unittest.mock import AsyncMock
+
+    inbox = await _seed_empty_vault(session, 'inbox')
+    await _seed_vault_with_note(session, 'vault-a', _VEC_A)
+    await _seed_inbox_note(session, inbox, _VEC_A)
+
+    # Force PROPOSE_NO_FIT regardless of the cold-start score.
+    api.config.server.memory.inbox_router.t_low = 0.99
+    # Simulate a not-yet-due backoff window: the upsert lands 0 rows.
+    api.inbox_router._emit_no_fit = AsyncMock(return_value=False)
+
+    result = await api.inbox_router.triage_tick()
+    assert result.scored == 1
+    assert result.no_fit == 0
+    assert result.blocked_backoff == 1
+    assert result.errors == 0
+
+
+async def test_reproposal_cooldown_blocks_then_bootstrap_unblocks(api, session):
+    """A recently-dismissed route is not re-proposed (counted, not silently
+    dropped); setting the cooldown to 0 re-evaluates it immediately."""
+    inbox = await _seed_empty_vault(session, 'inbox')
+    await _seed_vault_with_note(session, 'vault-a', _VEC_A)
+    await _seed_vault_with_note(session, 'vault-b', _VEC_B)
+    note_id = await _seed_inbox_note(session, inbox, _VEC_A)
+
+    cfg = api.config.server.memory.inbox_router
+    # Drop the no-fit floor so the note routes (PROPOSE_CANDIDATES) rather than
+    # falling to no-fit under the cold-start NB scores — this test is about the
+    # route re-proposal cooldown specifically.
+    cfg.t_low = 0.0
+
+    # First tick emits a pending route proposal; dismiss it (status flip +
+    # resolved_at=now) so the note is eligible again but inside the cooldown.
+    first = await api.inbox_router.triage_tick()
+    assert first.proposed >= 1, f'expected a route proposal on first tick; got {first.as_dict()}'
+    async with api.metastore.session() as s:
+        await s.execute(
+            text(
+                "UPDATE maintenance_proposals SET status = 'dismissed', resolved_at = now() "
+                "WHERE lint_type = 'routing' AND target_id = :tid"
+            ),
+            {'tid': str(note_id)},
+        )
+        await s.commit()
+
+    # Default cooldown (30d) → the re-proposal is suppressed and ACCOUNTED.
+    cfg.reproposal_cooldown_days = 30
+    blocked = await api.inbox_router.triage_tick()
+    assert blocked.proposed == 0
+    assert blocked.blocked_cooldown >= 1, (
+        f'cooldown-suppressed note must be counted, not dropped; got {blocked.as_dict()}'
+    )
+
+    # Bootstrap: cooldown 0 → re-evaluated immediately.
+    cfg.reproposal_cooldown_days = 0
+    unblocked = await api.inbox_router.triage_tick()
+    assert unblocked.proposed >= 1, (
+        f'cooldown=0 must re-propose the dismissed note; got {unblocked.as_dict()}'
+    )
+    assert unblocked.blocked_cooldown == 0
+
+
 async def test_record_feedback_updates_sufficient_stats(api, session):
     """An online update increments the match class count and a feature's n."""
     inbox = await _seed_empty_vault(session, 'inbox')

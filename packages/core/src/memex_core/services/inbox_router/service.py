@@ -61,12 +61,30 @@ _ROUTER_LOCK_ID = 5432789123456790
 
 @dataclass
 class TriageResult:
+    """Per-tick triage counters.
+
+    Every scored note increments at least one terminal-disposition bucket
+    (``auto_routed`` / ``proposed`` / ``no_fit`` / ``blocked_cooldown`` /
+    ``blocked_backoff`` / ``errors``). ``skipped_cap`` is NOT a terminal
+    bucket but an orthogonal reason-tag: an over-budget AUTO_ROUTE increments
+    ``skipped_cap`` AND its terminal bucket (``proposed`` or
+    ``blocked_cooldown``). So the buckets are intentionally non-additive — do
+    not assume they sum to ``scored``.
+    """
+
     vault_id: UUID | None = None
     scored: int = 0
     auto_routed: int = 0
     proposed: int = 0
     no_fit: int = 0
     skipped_cap: int = 0
+    # A route proposal the re-proposal cooldown suppressed (the note was routed/
+    # dismissed recently). Previously these notes were silently uncounted, so a
+    # tick that "scored 22" could show "proposed 0" with no explanation.
+    blocked_cooldown: int = 0
+    # A no-fit proposal whose backoff window is not yet due — also previously
+    # silent.
+    blocked_backoff: int = 0
     errors: int = 0
     # Populated only on a dry run: one entry per scored note with the would-be
     # decision + top candidate. Lets callers (e.g. the eval suite) read per-note
@@ -81,6 +99,8 @@ class TriageResult:
             'proposed': self.proposed,
             'no_fit': self.no_fit,
             'skipped_cap': self.skipped_cap,
+            'blocked_cooldown': self.blocked_cooldown,
+            'blocked_backoff': self.blocked_backoff,
             'errors': self.errors,
             'decisions': self.decisions,
         }
@@ -107,7 +127,7 @@ WHERE NOT EXISTS (
        AND mp.target_id = :target_id
        AND mp.vault_id = :vault_id ::uuid
        AND mp.status IN ('resolved', 'dismissed')
-       AND mp.resolved_at > now() - interval '30 days'
+       AND mp.resolved_at > now() - make_interval(days => :cooldown_days)
 )
 ON CONFLICT (rule_name, target_type, target_id, vault_id)
     WHERE status = 'pending'
@@ -456,11 +476,18 @@ class InboxRouterService(BaseService):
                     # The daily cap applies to the count in both modes so a dry run
                     # previews the same auto/skipped split a live tick would produce.
                     if remaining_budget <= 0:
+                        # skipped_cap is a reason-tag (hit the daily auto-apply
+                        # cap), orthogonal to the terminal disposition below: the
+                        # note still falls through to a proposal, which either
+                        # lands (proposed) or is suppressed by the cooldown
+                        # (blocked_cooldown) — never silently dropped.
                         result.skipped_cap += 1
                         if dry_run:
                             result.proposed += 1
                         elif await self._emit_route(inbox_vault_id=inbox_id, decision=decision):
                             result.proposed += 1
+                        else:
+                            result.blocked_cooldown += 1
                     else:
                         if not dry_run:
                             await self._auto_apply(inbox_id, decision)
@@ -468,16 +495,21 @@ class InboxRouterService(BaseService):
                         remaining_budget -= 1
                 elif decision.kind == DecisionKind.PROPOSE_CANDIDATES:
                     # Count only proposals that actually landed (the cooldown guard
-                    # in _EMIT_PENDING_SQL can skip the insert).
+                    # in _EMIT_PENDING_SQL can skip the insert). A suppressed insert
+                    # is counted as blocked_cooldown rather than silently dropped.
                     if dry_run:
                         result.proposed += 1
                     elif await self._emit_route(inbox_vault_id=inbox_id, decision=decision):
                         result.proposed += 1
+                    else:
+                        result.blocked_cooldown += 1
                 else:  # PROPOSE_NO_FIT
                     if dry_run:
                         result.no_fit += 1
                     elif await self._emit_no_fit(inbox_id, decision):
                         result.no_fit += 1
+                    else:
+                        result.blocked_backoff += 1
             except Exception:
                 logger.exception('inbox_router: failed to act on note %s', nid)
                 result.errors += 1
@@ -625,6 +657,7 @@ class InboxRouterService(BaseService):
                     'rule_name': ROUTE_RULE,
                     'evidence': evidence.model_dump_json(),
                     'suggested_action': f'Route to {top.vault_name}?',
+                    'cooldown_days': self._cfg.reproposal_cooldown_days,
                 },
             )
             await session.commit()

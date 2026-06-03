@@ -60,6 +60,35 @@ class ReviewSummary:
         return len(self.accepted) + len(self.dismissed) + len(self.skipped)
 
 
+def finding_target_label(finding: dict[str, Any], *, max_len: int = 80) -> str:
+    """Best-effort human-readable label for a finding's target.
+
+    A finding's ``target_id`` is an opaque UUID — useless for review on its
+    own. Prefer, in order: the server-resolved ``target_label`` (note title /
+    entity / mental-model name), then evidence-embedded names, then a
+    unit-text snippet, and finally a truncated ``target_id`` so the reviewer
+    always sees *something* legible.
+    """
+    label: Any = finding.get('target_label')
+    if not label:
+        evidence = finding.get('evidence') or {}
+        if isinstance(evidence, dict):
+            names = evidence.get('member_canonical_names') or evidence.get('canonical_names')
+            if isinstance(names, dict):
+                names = list(names.values())
+            if isinstance(names, list) and names:
+                label = ', '.join(str(n) for n in names)
+            else:
+                label = evidence.get('entity_name')
+    if not label:
+        label = finding.get('target_text')
+    if not label:
+        tid = str(finding.get('target_id') or '?')
+        return tid[:8] + '…' if len(tid) > 9 else tid
+    collapsed = ' '.join(str(label).split())
+    return collapsed if len(collapsed) <= max_len else collapsed[: max_len - 1] + '…'
+
+
 def _render_finding(console: Console, index: int, total: int, finding: dict[str, Any]) -> None:
     """Render a single finding as a rich panel: header + evidence + suggested action."""
     rule = finding.get('rule_name', '?')
@@ -82,7 +111,8 @@ def _render_finding(console: Console, index: int, total: int, finding: dict[str,
     body.add_column(style='dim', no_wrap=True)
     body.add_column(overflow='fold')
     body.add_row('id', finding.get('id', '?'))
-    body.add_row('target', str(target_id))
+    body.add_row('target', finding_target_label(finding, max_len=200))
+    body.add_row('target_id', str(target_id))
     if target_text:
         body.add_row('text', str(target_text))
     if created_at:

@@ -76,10 +76,29 @@ def score_entity_pair(
       - 20% neighbourhood (overlap of cooccurrence partners, TF-IDF
         weighted by partner mention frequency)
 
+    Names that are identical after case-folding + whitespace normalization
+    short-circuit to ``1.0`` (exact-name fast path) so they always cluster
+    regardless of the configured thresholds or phonetic availability.
+
     Returns a float in ``[0.0, 1.0]``. Deterministic given inputs.
     """
-    a = (a_name or '').lower().strip()
-    b = (b_name or '').lower().strip()
+    # Case-fold and collapse ALL whitespace runs (leading/trailing AND internal)
+    # so messy extractions like ``ACME  Corp`` and ``ACME Corp`` normalize equal.
+    # ``str.split()`` with no args splits on any whitespace and drops empties, so
+    # ``'   '`` → ``''`` (the fast-path guard below stays falsy).
+    a = ' '.join((a_name or '').lower().split())
+    b = ' '.join((b_name or '').lower().split())
+
+    # Exact normalized-name fast path: two entities whose canonical names are
+    # identical after case-folding + whitespace normalization (e.g. ``Marc de
+    # haas`` / ``Marc de Haas``, ``ACME  Corp`` / ``ACME Corp``) are the same
+    # entity by definition. Return the maximum score so they always cluster,
+    # independent of the configured thresholds or whether a phonetic code was
+    # computed. Without this, identical names cap at ``trigram_weight +
+    # phonetic_weight`` (0.80 at the defaults), which can sit below
+    # ``pair_threshold`` and silently suppress every merge.
+    if a and a == b:
+        return 1.0
 
     name_score = _trigram_similarity(a, b)
     phonetic_match = bool(a_phonetic and b_phonetic and a_phonetic == b_phonetic)

@@ -475,6 +475,38 @@ def options_for_rule(rule_name: str, target_type: str) -> list[CockpitOption]:
     return filtered
 
 
+def options_for_proposal(proposal: CockpitProposal) -> list[CockpitOption]:
+    """Dispatch to the correct option builder for a proposal's rule/target.
+
+    Single source of truth for both the single-detail panel and batch
+    resolution so the two never drift. The batch path historically called only
+    ``options_for_rule`` and therefore never offered the dynamically-built
+    inbox-route / contradiction actions (which carry per-proposal ``params``),
+    so a batch could never actually route a note.
+    """
+    if proposal.rule_name == 'llm_semantic_contradiction':
+        return options_for_contradiction(proposal)
+    if proposal.rule_name == 'inbox_vault_route':
+        return options_for_inbox_route(proposal)
+    return options_for_rule(proposal.rule_name, proposal.target_type)
+
+
+def recommended_resolve_option(proposal: CockpitProposal) -> CockpitOption | None:
+    """The option a per-proposal batch 'accept' applies to one proposal.
+
+    Prefers an explicitly ``recommended`` resolve option — which carries any
+    proposal-specific ``params`` such as ``target_vault_id`` for an inbox route
+    — and falls back to the first concrete resolve action. Returns ``None`` when
+    the proposal exposes no actionable resolve (only flag/dismiss), so the
+    caller can skip it rather than silently no-op.
+    """
+    resolves = [o for o in options_for_proposal(proposal) if o.verb == 'resolve']
+    for option in resolves:
+        if option.recommended:
+            return option
+    return resolves[0] if resolves else None
+
+
 def custom_action_options(target_type: str) -> list[CockpitOption]:
     """Return the full action catalogue filtered to this target_type — used by [O]ther.
 
@@ -511,6 +543,7 @@ class CockpitProposal:
     target_type: str
     target_id: str
     target_text: str | None
+    target_label: str | None
     vault_id: str | None
     created_at: str | None
     source: str  # 'rule' or 'llm'
@@ -543,6 +576,7 @@ class CockpitProposal:
             target_type=str(finding.get('target_type') or ''),
             target_id=str(finding.get('target_id') or ''),
             target_text=finding.get('target_text'),
+            target_label=finding.get('target_label'),
             vault_id=finding.get('vault_id'),
             created_at=finding.get('created_at'),
             source=str(finding.get('source') or 'rule'),
