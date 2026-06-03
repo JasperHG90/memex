@@ -108,7 +108,9 @@ def _overlap_to_409(e: OverlapError, request: Request | None = None) -> JSONResp
             resource_id=str(e.existing_id),
             existing_status=e.status,
             overlapping_keys_count=len(e.overlapping_keys),
-            path=request.url.path,
+            # CVE-2026-48710 (BadHost): scope['path'] is unspoofable; request.url.path
+            # is reconstructed from the Host header on Starlette < 1.0.1.
+            path=request.scope['path'],
         )
     return JSONResponse(
         status_code=409,

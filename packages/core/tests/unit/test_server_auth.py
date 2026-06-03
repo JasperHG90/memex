@@ -5,7 +5,7 @@ import pathlib as plb
 
 import pytest
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 from fastapi.testclient import TestClient
 from pydantic import SecretStr
 
@@ -26,6 +26,7 @@ sys.modules['_auth'] = _auth_mod
 _spec.loader.exec_module(_auth_mod)
 setup_auth = _auth_mod.setup_auth
 auth_middleware = _auth_mod.auth_middleware
+require_admin_auth = _auth_mod.require_admin_auth
 _validate_key = _auth_mod._validate_key
 _resolve_key = _auth_mod._resolve_key
 AuthContext = _auth_mod.AuthContext
@@ -343,6 +344,138 @@ class TestSetupAuth:
         app = FastAPI()
         setup_auth(app, AuthConfig(enabled=False))
         assert not hasattr(app.state, 'auth_config')
+
+
+# ---------------------------------------------------------------------------
+# CVE-2026-48710 BadHost regression tests
+# ---------------------------------------------------------------------------
+
+
+class TestBadHostCVE202648710:
+    """Regression tests for CVE-2026-48710 (BadHost) — host-header auth bypass.
+
+    Starlette < 1.0.1 reconstructs ``request.url`` by concatenating the
+    client-supplied ``Host`` header with the request path and re-parsing the
+    result. A ``Host`` value like ``localhost/api/v1/health?`` makes
+    ``request.url.path`` collapse onto ``'/api/v1/health'`` (an exempt path)
+    while ``scope['path']`` — what the router actually dispatches on — stays
+    ``'/api/v1/notes'``. Auth middleware that compares ``request.url.path``
+    against ``exempt_paths`` is therefore bypassed.
+
+    The fix uses ``request.scope['path']`` for security decisions. ``scope['path']``
+    comes from the ASGI server directly, matches what the router uses, and is
+    immune regardless of installed Starlette version.
+
+    These tests assert the property directly. They simulate the Starlette bug
+    by hijacking ``Request.url`` so it returns a different path than
+    ``scope['path']``; a middleware that uses ``request.url.path`` will
+    bypass auth, a middleware that uses ``scope['path']`` will enforce it.
+    """
+
+    @staticmethod
+    def _patch_url_to_exempt_path(monkeypatch, exempt_path: str = '/api/v1/health') -> None:
+        """Make ``Request.url.path`` always return *exempt_path* regardless of scope."""
+        from starlette.datastructures import URL
+        from starlette.requests import Request as StarletteRequest
+
+        def hijacked_url(self):  # type: ignore[no-untyped-def]
+            return URL(f'http://attacker.example{exempt_path}')
+
+        monkeypatch.setattr(StarletteRequest, 'url', property(hijacked_url))
+
+    def test_badhost_path_divergence_does_not_bypass_auth(self, monkeypatch):
+        """Hijacked request.url.path pointing at an exempt route must NOT bypass auth."""
+        self._patch_url_to_exempt_path(monkeypatch, '/api/v1/health')
+
+        config = AuthConfig(enabled=True, keys=[_key(VALID_KEY)])
+        app = _make_app(config)
+        client = TestClient(app)
+
+        # /api/v1/notes is protected. Even though url.path now claims to be
+        # '/api/v1/health' (an exempt path), the dispatcher uses scope['path']
+        # and runs the /notes handler. The middleware must do the same and
+        # require a key.
+        response = client.get('/api/v1/notes')
+        assert response.status_code == 401, (
+            f'CVE-2026-48710 regression: got {response.status_code}; protected '
+            "'/api/v1/notes' was reached without an API key because the middleware "
+            "trusted request.url.path (spoofed) instead of scope['path']."
+        )
+
+    def test_badhost_path_divergence_with_invalid_key_returns_403(self, monkeypatch):
+        """Same attack with a wrong key still hits the validate step → 403, not 200."""
+        self._patch_url_to_exempt_path(monkeypatch, '/api/v1/health')
+
+        config = AuthConfig(enabled=True, keys=[_key(VALID_KEY)])
+        app = _make_app(config)
+        client = TestClient(app)
+
+        response = client.get('/api/v1/notes', headers={'X-API-Key': 'wrong'})
+        assert response.status_code == 403
+
+    def test_clean_host_still_serves_exempt_paths(self):
+        """Regression: legitimate exempt-path requests still work without a key."""
+        config = AuthConfig(enabled=True, keys=[_key(VALID_KEY)])
+        app = _make_app(config)
+        client = TestClient(app)
+        response = client.get('/api/v1/health')
+        assert response.status_code == 200
+
+    def test_clean_host_still_requires_key_on_protected_routes(self):
+        """Regression: protected routes still 401 without a key on clean Host."""
+        config = AuthConfig(enabled=True, keys=[_key(VALID_KEY)])
+        app = _make_app(config)
+        client = TestClient(app)
+        response = client.get('/api/v1/notes')
+        assert response.status_code == 401
+
+
+class TestBadHostAdminAuditPath:
+    """CVE-2026-48710 (BadHost): ``require_admin_auth`` records ``scope['path']``.
+
+    ``require_admin_auth`` has no exempt-path branch, so the BadHost spoof
+    cannot bypass it — but it writes the request path into five admin audit
+    events. A spoofed ``request.url.path`` would poison that audit trail. This
+    pins the audit detail to the unspoofable dispatched path.
+    """
+
+    def test_admin_missing_key_audits_scope_path_not_spoofed_url(self, monkeypatch):
+        from starlette.datastructures import URL
+        from starlette.requests import Request as StarletteRequest
+
+        # Simulate the BadHost reconstruction: request.url.path claims an exempt path.
+        monkeypatch.setattr(
+            StarletteRequest,
+            'url',
+            property(lambda self: URL('http://attacker.example/api/v1/health')),
+        )
+
+        # Auth disabled globally → the global middleware passes through, so the
+        # route-level require_admin_auth dependency is what enforces and audits.
+        app = _make_app(AuthConfig(enabled=False))
+
+        captured: list[dict] = []
+
+        class _CapturingAudit:
+            def log(self, **kwargs):
+                captured.append(kwargs)
+
+        app.state.audit_service = _CapturingAudit()
+
+        @app.get('/api/v1/admin/thing', dependencies=[Depends(require_admin_auth)])
+        async def _admin_thing():
+            return {'ok': True}
+
+        client = TestClient(app)
+        response = client.get('/api/v1/admin/thing')  # no X-API-Key
+
+        assert response.status_code == 401
+        events = [e for e in captured if e.get('action') == 'auth.admin.missing_key']
+        assert events, 'expected an auth.admin.missing_key audit event'
+        assert events[0]['details']['path'] == '/api/v1/admin/thing', (
+            'CVE-2026-48710 regression: require_admin_auth wrote the spoofed '
+            "request.url.path into the audit detail instead of scope['path']."
+        )
 
 
 # ---------------------------------------------------------------------------

@@ -309,7 +309,13 @@ async def audit_access_log(request: Request, call_next):
     """Layer 1: HTTP access log for every non-skipped request."""
     t0 = time.monotonic()
     response = await call_next(request)
-    if request.url.path not in _AUDIT_SKIP_PATHS:
+    # CVE-2026-48710 (BadHost): use the ASGI scope path, not request.url.path.
+    # request.url.path is reconstructed from the client-supplied Host header on
+    # Starlette < 1.0.1 and can be spoofed to collapse onto an _AUDIT_SKIP_PATHS
+    # entry, suppressing the access-log line for the attacker's real request.
+    # scope['path'] is the path the router dispatched on and is unspoofable.
+    request_path = request.scope['path']
+    if request_path not in _AUDIT_SKIP_PATHS:
         latency_ms = round((time.monotonic() - t0) * 1000, 1)
         audit: AuditService | None = getattr(request.app.state, 'audit_service', None)
         if audit:
@@ -319,7 +325,7 @@ async def audit_access_log(request: Request, call_next):
                 session_id=get_session_id(),
                 details={
                     'method': request.method,
-                    'path': request.url.path,
+                    'path': request_path,
                     'status': response.status_code,
                     'latency_ms': latency_ms,
                 },
