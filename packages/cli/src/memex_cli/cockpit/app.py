@@ -36,12 +36,39 @@ from memex_cli.cockpit.controller import (
     CockpitController,
     CockpitOption,
     CockpitProposal,
+    DISMISS_OPTION,
+    FLAG_OPTION,
     UnitDetail,
     UnitLineage,
     UnitMeta,
-    options_for_contradiction,
-    options_for_inbox_route,
-    options_for_rule,
+    options_for_proposal,
+    recommended_resolve_option,
+)
+
+
+# Batch sentinel: applies each proposal's OWN recommended action (with its
+# proposal-specific params) rather than one shared option — so an inbox route in
+# a mixed batch still migrates to its top vault. Never sent to the server; the
+# batch submitter translates it per proposal.
+_BATCH_RECOMMENDED_ACTION_ID = '__recommended__'
+_BATCH_RECOMMENDED_OPTION = CockpitOption(
+    action_id=_BATCH_RECOMMENDED_ACTION_ID,
+    label='Accept recommended action (per proposal)',
+    summary=(
+        "Apply each selected proposal's own recommended action — e.g. route "
+        'each inbox note to its top vault, deprioritize each contradiction '
+        'target. Findings with no actionable default are skipped.'
+    ),
+    effect="Per-proposal: the recommended mutation for each finding's rule.",
+    reversible=False,
+    recommended=True,
+)
+_BATCH_NO_OP_OPTION = CockpitOption(
+    action_id='no_op',
+    label='Mark reviewed (no mutation)',
+    summary='Flip every selected finding to resolved without mutating its target.',
+    effect='No mutation. Status flips to resolved.',
+    reversible=True,
 )
 
 
@@ -541,7 +568,12 @@ class ProposalCockpitApp(App):
         if proposal.rule_name == 'llm_semantic_contradiction':
             body_lines.extend(self._build_contradiction_body(proposal))
         else:
-            body_lines.append(f'[bold]TARGET[/bold]  [dim cyan]{proposal.target_id[:8]}[/dim cyan]')
+            label_suffix = (
+                f'  [white]{proposal.target_label}[/white]' if proposal.target_label else ''
+            )
+            body_lines.append(
+                f'[bold]TARGET[/bold]  [dim cyan]{proposal.target_id[:8]}[/dim cyan]{label_suffix}'
+            )
 
             # For orphan_mental_model, show the entity name prominently.
             entity_name = proposal.raw_evidence.get('entity_name')
@@ -604,7 +636,10 @@ class ProposalCockpitApp(App):
 
     def _build_contradiction_body(self, proposal: CockpitProposal) -> list[str]:
         lines: list[str] = []
-        lines.append(f' [bold]TARGET[/bold]   [dim cyan]{proposal.target_id[:8]}[/dim cyan]')
+        label_suffix = f'  [white]{proposal.target_label}[/white]' if proposal.target_label else ''
+        lines.append(
+            f' [bold]TARGET[/bold]   [dim cyan]{proposal.target_id[:8]}[/dim cyan]{label_suffix}'
+        )
         if proposal.target_text:
             lines.append(f' {proposal.target_text}')
         else:
@@ -640,7 +675,10 @@ class ProposalCockpitApp(App):
         contra_meta = all_meta.get(contra_id)
 
         body_lines: list[str] = []
-        body_lines.append(f' [bold]TARGET[/bold]   [dim cyan]{proposal.target_id[:8]}[/dim cyan]')
+        label_suffix = f'  [white]{proposal.target_label}[/white]' if proposal.target_label else ''
+        body_lines.append(
+            f' [bold]TARGET[/bold]   [dim cyan]{proposal.target_id[:8]}[/dim cyan]{label_suffix}'
+        )
         if target_meta:
             meta_line = _format_unit_meta_line(target_meta)
             if meta_line:
@@ -688,12 +726,7 @@ class ProposalCockpitApp(App):
     # ------------------------------------------------------------------
 
     def _populate_actions(self, proposal: CockpitProposal) -> None:
-        if proposal.rule_name == 'llm_semantic_contradiction':
-            options = options_for_contradiction(proposal)
-        elif proposal.rule_name == 'inbox_vault_route':
-            options = options_for_inbox_route(proposal)
-        else:
-            options = options_for_rule(proposal.rule_name, proposal.target_type)
+        options = options_for_proposal(proposal)
         action_list = self.query_one('#action-list', ListView)
         action_list.clear()
         for i, opt in enumerate(options):
@@ -707,31 +740,33 @@ class ProposalCockpitApp(App):
     def _populate_batch_actions(self, proposals: list[CockpitProposal]) -> None:
         if not proposals:
             return
-        option_sets = [
-            {o.action_id for o in options_for_rule(p.rule_name, p.target_type)} for p in proposals
-        ]
-        common_ids = option_sets[0]
-        for s in option_sets[1:]:
-            common_ids = common_ids & s
-
-        ref = proposals[0]
-        all_options = options_for_rule(ref.rule_name, ref.target_type)
-        filtered = [o for o in all_options if o.action_id in common_ids]
+        # A single shared option cannot carry per-proposal params (e.g. each
+        # inbox route's target_vault_id), and the old intersection over
+        # ``options_for_rule`` never even included the dynamic route /
+        # contradiction actions — so a batch could never route. Offer verb-level
+        # batch actions instead: "accept recommended" fans out to each
+        # proposal's own option at submit time; no-op / flag / dismiss apply
+        # uniformly because they need no params.
+        n_actionable = sum(1 for p in proposals if recommended_resolve_option(p) is not None)
+        options: list[CockpitOption] = []
+        if n_actionable:
+            options.append(_BATCH_RECOMMENDED_OPTION)
+        options.extend([_BATCH_NO_OP_OPTION, FLAG_OPTION, DISMISS_OPTION])
 
         action_list = self.query_one('#action-list', ListView)
         action_list.clear()
-        for i, opt in enumerate(filtered):
+        for i, opt in enumerate(options):
             action_list.append(_ActionListItem(opt, highlighted=(i == 0)))
-        if filtered:
-            action_list.index = 0
-            self._show_action_detail(filtered[0])
+        action_list.index = 0
+        self._show_action_detail(options[0])
 
         self.query_one('#detail-header', Static).update(
             f'[bold]BATCH — {len(proposals)} proposals selected[/bold]'
         )
         rule_names = {p.rule_name for p in proposals}
         self.query_one('#detail-body', Static).update(
-            f'Rules: {", ".join(sorted(rule_names))}\nCommon actions: {len(filtered)}'
+            f'Rules: {", ".join(sorted(rule_names))}\n'
+            f'{n_actionable}/{len(proposals)} have a recommended action'
         )
 
     def _show_action_detail(self, option: CockpitOption) -> None:
@@ -1245,15 +1280,31 @@ class ProposalCockpitApp(App):
             self._show_status(', '.join(parts), error=bool(fail))
             await self._refresh_queue()
             return
+        skipped = 0
         for proposal in proposals:
+            # For "accept recommended", resolve each proposal with ITS OWN option
+            # so proposal-specific params (e.g. an inbox route's target_vault_id)
+            # are not dropped. For the uniform verbs (no_op / dismiss) the shared
+            # option carries no params and applies to every proposal as-is.
+            if option.action_id == _BATCH_RECOMMENDED_ACTION_ID:
+                per_option = recommended_resolve_option(proposal)
+                if per_option is None:
+                    skipped += 1
+                    continue
+            else:
+                per_option = option
             try:
-                await self._controller.resolve(proposal, option, note=note)
+                await self._controller.resolve(
+                    proposal, per_option, note=note, params=per_option.params
+                )
                 ok += 1
             except Exception:  # noqa: BLE001
                 fail += 1
         parts = []
         if ok:
             parts.append(f'{ok} resolved')
+        if skipped:
+            parts.append(f'{skipped} skipped (no recommended action)')
         if fail:
             parts.append(f'{fail} failed')
         self._show_status(', '.join(parts), error=bool(fail))

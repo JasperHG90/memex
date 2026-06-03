@@ -137,6 +137,98 @@ async def test_invalid_status_raises(session: AsyncSession, api) -> None:
         await api.lint.get_findings(vault_id=vault_id, status='garbage')
 
 
+@pytest.mark.asyncio
+async def test_findings_endpoint_resolves_target_label_per_type(session: AsyncSession, api) -> None:
+    """The /lint/findings SELECT resolves a human-readable label for each
+    target_type — exercises the correlated-subquery enrichment against real
+    Postgres (otherwise a column typo would ship undetected)."""
+    from uuid import uuid4 as _uuid4
+
+    from memex_core.memory.sql_models import Entity, MemoryUnit, MentalModel, Note
+    from memex_core.server.lint import lint_findings
+
+    vault_id = await _make_vault(session)
+
+    note = Note(
+        id=_uuid4(), vault_id=vault_id, title='Quarterly Planning', content_hash=uuid4().hex
+    )
+    session.add(note)
+    await session.commit()
+    unit = MemoryUnit(
+        id=_uuid4(),
+        vault_id=vault_id,
+        note_id=note.id,
+        text='The release captain signs off on staging.',
+        event_date=datetime.now(timezone.utc),
+    )
+    entity = Entity(id=_uuid4(), canonical_name='Marc de Haas', phonetic_code='MRTKS')
+    session.add_all([unit, entity])
+    await session.commit()
+    mm = MentalModel(
+        id=_uuid4(), vault_id=vault_id, entity_id=entity.id, name='Marc de Haas', observations=[]
+    )
+    session.add(mm)
+    await session.commit()
+
+    unit_fid = await _seed_finding(
+        session, vault_id=vault_id, target_type='memory_unit', target_id=str(unit.id)
+    )
+    mm_fid = await _seed_finding(
+        session, vault_id=vault_id, target_type='mental_model', target_id=str(mm.id)
+    )
+    ent_fid = await _seed_finding(
+        session, vault_id=vault_id, target_type='entity', target_id=str(entity.id)
+    )
+
+    # Pass every param explicitly: FastAPI Query(...) defaults are sentinel
+    # objects, not real values, when the route function is called directly.
+    # vault_id=None skips the per-vault auth gate; we filter to our ids below.
+    payload = await lint_findings(
+        api=api,
+        vault_id=None,
+        lint_type=None,
+        status='pending',
+        flagged=None,
+        limit=500,
+        offset=0,
+        auth=None,
+    )
+    by_id = {f['id']: f for f in payload['findings']}
+
+    assert by_id[str(unit_fid)]['target_label'] == 'Quarterly Planning'
+    assert by_id[str(unit_fid)]['target_text'] == 'The release captain signs off on staging.'
+    assert by_id[str(mm_fid)]['target_label'] == 'Marc de Haas'
+    assert by_id[str(ent_fid)]['target_label'] == 'Marc de Haas'
+
+    # Same enrichment must flow through the service DTO path (the MCP
+    # `memex_get_lint_flags` agent surface), not just the HTTP endpoint.
+    page = await api.lint.get_findings(vault_id=vault_id)
+    dto_by_id = {f.finding_id: f for f in page.findings}
+    assert dto_by_id[unit_fid].target_label == 'Quarterly Planning'
+    assert dto_by_id[unit_fid].target_text == 'The release captain signs off on staging.'
+    assert dto_by_id[mm_fid].target_label == 'Marc de Haas'
+    assert dto_by_id[ent_fid].target_label == 'Marc de Haas'
+
+
+@pytest.mark.asyncio
+async def test_llm_deferred_rows_excluded_from_findings(session: AsyncSession, api) -> None:
+    """``llm_deferred`` bookkeeping rows must not surface in the review list.
+
+    They are internal cost-cap deferrals (retried by ``process_deferred``);
+    only genuine findings are operator-actionable.
+    """
+    vault_id = await _make_vault(session)
+    real_id = await _seed_finding(session, vault_id=vault_id, rule_name='cold_low_mw_unit')
+    await _seed_finding(session, vault_id=vault_id, rule_name='llm_deferred')
+
+    page = await api.lint.get_findings(vault_id=vault_id)
+    returned = {f.finding_id for f in page.findings}
+    assert returned == {real_id}
+
+    # The deferred row is also excluded from the pending count.
+    assert await api.lint.count_pending(vault_id=vault_id) == 1
+
+
 # ---------------------------------------------------------------------------
 # TC-21-6 — DTO surfaces every documented field
 # ---------------------------------------------------------------------------

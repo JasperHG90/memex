@@ -47,7 +47,7 @@ from memex_core.server.auth import (
     require_write,
 )
 from memex_core.server.common import _handle_error, get_api
-from memex_core.services.lint import LintSubsystemNotInitializedError
+from memex_core.services.lint import TARGET_ENRICHMENT_SQL, LintSubsystemNotInitializedError
 from memex_core.services.proposal_actions import (
     ActionValidationError,
     ProposalActionError,
@@ -149,7 +149,12 @@ async def lint_findings(
         # column/operator strings are trusted constants and user-supplied values
         # are safely bound via :named parameters. SQLAlchemy Core constructs
         # would be more idiomatic but offer no additional safety here.
-        clauses = ['status = :status']
+        # ``llm_deferred`` rows are internal cost-cap bookkeeping (units the LLM
+        # lint pass skipped when the 24h quota was exhausted; retried
+        # automatically by ``process_deferred``). They are persisted as
+        # status='pending' for lack of a dedicated state, but they are not
+        # operator-actionable findings — keep them out of the human review list.
+        clauses = ['status = :status', "rule_name != 'llm_deferred'"]
         params: dict[str, Any] = {'status': status}
         if vault_id is not None:
             clauses.append('vault_id = :vault_id')
@@ -172,9 +177,9 @@ async def lint_findings(
                     'SELECT mp.id::text, mp.vault_id::text, mp.lint_type, mp.target_type, '
                     'mp.target_id, mp.rule_name, mp.evidence, mp.suggested_action, mp.status, '
                     'mp.source, mp.created_at, mp.resolved_at, mp.resolved_by, mp.flagged_at, '
-                    '(SELECT mu.text FROM memory_units mu '
-                    "WHERE mp.target_type = 'memory_unit' "
-                    'AND mu.id::text = mp.target_id) AS target_text '
+                    # Shared enrichment fragment (target_text snippet + per-type
+                    # human-readable target_label) — see services.lint.
+                    f'{TARGET_ENRICHMENT_SQL} '
                     f'FROM maintenance_proposals mp WHERE {where} '  # noqa: S608
                     'ORDER BY mp.created_at DESC '
                     'LIMIT :limit OFFSET :offset'

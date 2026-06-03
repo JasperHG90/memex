@@ -56,7 +56,12 @@ async def aggregate_lint_findings(
             MaintenanceProposal.source.label('source'),
             func.count().label('count'),
         )
-        .where(MaintenanceProposal.vault_id == vault_id)
+        .where(
+            MaintenanceProposal.vault_id == vault_id,
+            # Exclude internal cost-cap bookkeeping (retried by process_deferred);
+            # it must not inflate the pending pivot the briefing/dashboard show.
+            MaintenanceProposal.rule_name != 'llm_deferred',
+        )
         .group_by(
             MaintenanceProposal.lint_type,
             MaintenanceProposal.status,
@@ -78,6 +83,7 @@ async def aggregate_lint_findings(
         .where(
             MaintenanceProposal.vault_id == vault_id,
             MaintenanceProposal.status == LintStatus.PENDING,
+            MaintenanceProposal.rule_name != 'llm_deferred',
         )
         .order_by(desc(MaintenanceProposal.created_at))
         .limit(5)
@@ -137,6 +143,7 @@ async def pending_by_type(
         .where(
             MaintenanceProposal.vault_id == vault_id,
             MaintenanceProposal.status == LintStatus.PENDING,
+            MaintenanceProposal.rule_name != 'llm_deferred',
         )
         .group_by(MaintenanceProposal.lint_type)
     )

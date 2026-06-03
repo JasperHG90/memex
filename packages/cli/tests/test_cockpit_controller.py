@@ -15,9 +15,55 @@ import pytest
 from memex_cli.cockpit.controller import (
     CockpitController,
     CockpitOption,
+    CockpitProposal,
     DISMISS_OPTION,
+    options_for_proposal,
     options_for_rule,
+    recommended_resolve_option,
 )
+
+
+def test_recommended_resolve_option_inbox_route_carries_vault_param():
+    """An inbox route's recommended option must carry its target_vault_id.
+
+    Regression pin for the batch-resolve bug: batch resolution fans out to this
+    per-proposal option, so the params must be present or the note never moves.
+    """
+    vault_id = str(uuid4())
+    proposal = CockpitProposal.from_finding(
+        _finding(
+            'inbox_vault_route',
+            target_type='note',
+            evidence={
+                'top_candidates': [
+                    {'vault_id': vault_id, 'vault_name': 'projects', 'p_match': 0.7},
+                    {'vault_id': str(uuid4()), 'vault_name': 'archive', 'p_match': 0.3},
+                ]
+            },
+        )
+    )
+    option = recommended_resolve_option(proposal)
+    assert option is not None
+    assert option.action_id == 'route_note_to_vault'
+    assert option.params == {
+        'target_vault_id': vault_id,
+        'other_vault_ids': [proposal.raw_evidence['top_candidates'][1]['vault_id']],
+    }
+
+
+def test_options_for_proposal_dispatches_by_rule():
+    """Contradiction and inbox-route rules get their dynamic builders, not the generic fallback."""
+    contra = CockpitProposal.from_finding(_finding('llm_semantic_contradiction'))
+    assert any(o.action_id == 'deprioritize_unit' for o in options_for_proposal(contra))
+
+    route = CockpitProposal.from_finding(
+        _finding(
+            'inbox_vault_route',
+            target_type='note',
+            evidence={'top_candidates': [{'vault_id': str(uuid4()), 'vault_name': 'x'}]},
+        )
+    )
+    assert any(o.action_id == 'route_note_to_vault' for o in options_for_proposal(route))
 
 
 def _finding(

@@ -25,7 +25,7 @@ from rich.console import Console
 from rich.table import Table
 
 from memex_common.config import MemexConfig
-from memex_cli.lint_review import render_summary, run_review_loop
+from memex_cli.lint_review import finding_target_label, render_summary, run_review_loop
 from memex_cli.utils import async_command, get_api_context, handle_api_error, parse_uuid
 
 console = Console()
@@ -179,7 +179,7 @@ async def lint_findings(
     table.add_column('lint_type')
     table.add_column('rule_name')
     table.add_column('target_type')
-    table.add_column('target_id', max_width=36)
+    table.add_column('target', max_width=60, overflow='fold')
     table.add_column('vault', max_width=36)
     table.add_column('⚑', justify='center')
     for f in findings:
@@ -191,7 +191,7 @@ async def lint_findings(
             f['lint_type'],
             f['rule_name'],
             f['target_type'],
-            f['target_id'],
+            finding_target_label(f),
             v_label,
             flag_indicator,
         )
