@@ -136,7 +136,16 @@ async def auth_middleware(request: Request, call_next):  # type: ignore[no-untyp
     if request.method == 'OPTIONS':
         return await call_next(request)
 
-    if request.url.path in auth_config.exempt_paths:
+    # CVE-2026-48710 (BadHost): use the ASGI scope path, not request.url.path.
+    # Starlette < 1.0.1 reconstructs request.url from the client-supplied
+    # Host header; a malformed Host can make request.url.path collapse onto
+    # an exempt path while the router still dispatches the original.
+    # scope['path'] comes from the ASGI server and matches what the router
+    # actually uses, so it is safe for security decisions regardless of the
+    # installed Starlette version.
+    request_path = request.scope['path']
+
+    if request_path in auth_config.exempt_paths:
         return await call_next(request)
 
     audit = _get_audit_service(request)
@@ -146,7 +155,7 @@ async def auth_middleware(request: Request, call_next):  # type: ignore[no-untyp
         if audit:
             audit.log(
                 action='auth.missing_key',
-                details={'path': request.url.path, 'method': request.method},
+                details={'path': request_path, 'method': request.method},
             )
         return JSONResponse(
             status_code=401,
@@ -158,7 +167,7 @@ async def auth_middleware(request: Request, call_next):  # type: ignore[no-untyp
         if audit:
             audit.log(
                 action='auth.failure',
-                details={'path': request.url.path, 'method': request.method},
+                details={'path': request_path, 'method': request.method},
             )
         return JSONResponse(
             status_code=403,
@@ -278,13 +287,17 @@ async def require_admin_auth(request: Request) -> None:
     """
     auth_config: AuthConfig | None = getattr(request.app.state, 'auth_config', None)
 
+    # CVE-2026-48710 (BadHost): scope['path'] is the path the router dispatched
+    # on; request.url.path is reconstructed from the Host header and can be spoofed.
+    request_path = request.scope['path']
+
     audit = _get_audit_service(request)
     api_key = request.headers.get('X-API-Key')
     if not api_key:
         if audit:
             audit.log(
                 action='auth.admin.missing_key',
-                details={'path': request.url.path, 'method': request.method},
+                details={'path': request_path, 'method': request.method},
             )
         raise HTTPException(
             status_code=401,
@@ -299,7 +312,7 @@ async def require_admin_auth(request: Request) -> None:
         if audit:
             audit.log(
                 action='auth.admin.failure',
-                details={'path': request.url.path, 'method': request.method},
+                details={'path': request_path, 'method': request.method},
             )
         raise HTTPException(status_code=403, detail='Invalid API key.')
 
@@ -307,7 +320,7 @@ async def require_admin_auth(request: Request) -> None:
         if audit:
             audit.log(
                 action='auth.admin.insufficient',
-                details={'path': request.url.path, 'method': request.method},
+                details={'path': request_path, 'method': request.method},
             )
         raise HTTPException(
             status_code=403,
