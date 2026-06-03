@@ -10,6 +10,7 @@ DETAIL — drill-down view of a finding's memory units: metadata, lineage, sourc
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from rich.markdown import Markdown as RichMarkdown
@@ -45,6 +46,8 @@ from memex_cli.cockpit.controller import (
     options_for_proposal,
     recommended_resolve_option,
 )
+
+logger = logging.getLogger('memex.cli.cockpit')
 
 
 # Batch sentinel: applies each proposal's OWN recommended action (with its
@@ -231,14 +234,14 @@ class _CollapseMemberItem(ListItem):
     def __init__(
         self,
         member_id: str,
-        name: str,
+        display_name: str,
         *,
         included: bool = True,
         is_winner: bool = False,
         highlighted: bool = False,
     ) -> None:
         self.member_id = member_id
-        self.member_name = name
+        self.member_name = display_name
         self.included = included
         self.is_winner = is_winner
         super().__init__(Label(self._render_label(highlighted)))
@@ -1032,6 +1035,8 @@ class ProposalCockpitApp(App):
             self._show_status('This cluster has no members to review.', error=True)
             self.mode = 'list'
             return
+        # ``or`` fallback is safe here: entity ids are always non-empty UUID
+        # strings, so a present suggested_winner_id is never falsy.
         winner = str(ev.get('suggested_winner_id') or proposal.target_id)
         if winner not in member_ids:
             winner = member_ids[0]
@@ -1180,6 +1185,7 @@ class ProposalCockpitApp(App):
                 proposal.finding_id, winner_id=winner_id, member_ids=member_ids
             )
         except Exception as exc:  # noqa: BLE001
+            logger.exception('entity-collapse apply failed for finding %s', proposal.finding_id)
             self._show_status(f'Collapse failed: {exc}', error=True)
             self.mode = 'list'
             return
@@ -1198,6 +1204,7 @@ class ProposalCockpitApp(App):
         try:
             await self._controller.resolve(proposal, DISMISS_OPTION, note=None)
         except Exception as exc:  # noqa: BLE001
+            logger.exception('entity-collapse dismiss failed for finding %s', proposal.finding_id)
             self._show_status(f'Dismiss failed: {exc}', error=True)
             self.mode = 'list'
             return

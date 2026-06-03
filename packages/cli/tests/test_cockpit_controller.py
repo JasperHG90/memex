@@ -88,6 +88,18 @@ async def test_fetch_note_detail_none_on_error():
 
 
 @pytest.mark.asyncio
+async def test_fetch_note_detail_handles_dict_note():
+    """A client returning a dict (not a model) still yields title/text."""
+
+    class _Client:
+        async def get_note(self, note_id: Any) -> Any:
+            return {'title': 'Quarterly Planning', 'original_text': 'Body.'}
+
+    ctrl = CockpitController(_Client())
+    assert await ctrl.fetch_note_detail('n') == ('Quarterly Planning', 'Body.')
+
+
+@pytest.mark.asyncio
 async def test_apply_entity_collapse_uses_carveout_with_member_subset():
     """The collapse apply hits the server carveout (action=None) and sends the
     chosen winner + member subset via top-level (legacy_params) body keys."""

@@ -988,6 +988,10 @@ class CockpitController:
             note = await self._client.get_note(note_id)
         except Exception:  # noqa: BLE001
             return None
+        # Handle both a model object (attrs) and a raw dict, so a client that
+        # returns either still surfaces the note's title/body.
+        if isinstance(note, dict):
+            return note.get('title'), note.get('original_text')
         return getattr(note, 'title', None), getattr(note, 'original_text', None)
 
 
