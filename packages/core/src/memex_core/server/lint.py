@@ -6,6 +6,7 @@ Routes:
 - GET    /api/v1/lint/flags                           — cursor-paginated agent surface
 - GET    /api/v1/lint/actions                         — the closed proposal-action catalogue (read-only)
 - POST   /api/v1/lint/proposals                       — externally-submitted proposals (single or batch)
+- POST   /api/v1/lint/findings/{finding_id}/preview   — read-only blast-radius preview of a canned action
 - POST   /api/v1/lint/findings/{finding_id}/dismiss   — flip status to 'dismissed' (optional note)
 - POST   /api/v1/lint/findings/{finding_id}/resolve   — flip status to 'resolved' (optional canned action + note)
 - POST   /api/v1/lint/findings/{finding_id}/apply     — DEPRECATED: alias for the winner-proposal apply path
@@ -300,6 +301,63 @@ async def lint_submit_proposals(
         extra={'batch_size': len(items), 'actor': actor, **counts},
     )
     return {'results': [r.as_dict() for r in results], **counts}
+
+
+@router.post('/findings/{finding_id}/preview', dependencies=[Depends(require_read)])
+async def lint_preview_action(
+    finding_id: UUID,
+    api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+    payload: Annotated[dict[str, Any] | None, Body(embed=False)] = None,
+) -> dict[str, Any]:
+    """Blast-radius preview of ``{action, params}`` against a pending finding.
+
+    Read-only by the action protocol's ``preview()`` contract — nothing
+    mutates. The cockpit calls this before confirming a forward-only
+    action so the reviewer sees what would be destroyed.
+    """
+    payload = payload or {}
+    finding = await _load_finding_or_404(finding_id, api)
+    vault_raw = finding.get('vault_id')
+    finding_vault = UUID(str(vault_raw)) if vault_raw else None
+    if finding_vault is not None:
+        await check_vault_access(auth, [finding_vault], api, permission=Permission.READ)
+    action_id = str(payload.get('action') or '')
+    if not action_id:
+        raise HTTPException(status_code=400, detail='`action` is required')
+    try:
+        action = get_action(action_id)
+    except KeyError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    params = payload.get('params') or {}
+    if not isinstance(params, dict):
+        raise HTTPException(status_code=400, detail='`params` must be an object')
+    target_type = str(finding['target_type'])
+    target_id = str(finding['target_id'])
+    if target_type not in action.applicable_target_types:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f'action {action_id!r} does not apply to target_type {target_type!r}; '
+                f'applicable types are {list(action.applicable_target_types)}'
+            ),
+        )
+    try:
+        action.validate(params, target_type=target_type, target_id=target_id)
+    except ActionValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    try:
+        preview_text = await action.preview(
+            api, params, target_id=target_id, vault_id=finding_vault
+        )
+    except Exception as e:
+        raise _handle_error(e, f'Failed to preview action {action_id}')
+    return {
+        'finding_id': str(finding_id),
+        'action': action_id,
+        'reversible': action.reversible,
+        'preview': preview_text,
+    }
 
 
 @router.get('/findings', dependencies=[Depends(require_read)])

@@ -1656,6 +1656,19 @@ class RemoteMemexAPI:
         """
         return await self._post('lint/proposals', data={'proposals': proposals})
 
+    async def lint_preview_action(
+        self,
+        finding_id: str,
+        *,
+        action: str,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Read-only blast-radius preview of a canned action against a finding."""
+        return await self._post(
+            f'lint/findings/{finding_id}/preview',
+            data={'action': action, 'params': params or {}},
+        )
+
     async def lint_findings(
         self,
         *,

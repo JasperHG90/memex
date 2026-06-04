@@ -38,9 +38,24 @@ class LintApplyProto(Protocol):
     ignores the payload and only cares about success vs raised exception.
     """
 
-    async def lint_resolve(self, finding_id: str) -> dict[str, Any]: ...
+    async def lint_resolve(
+        self,
+        finding_id: str,
+        *,
+        action: str | None = None,
+        params: dict[str, Any] | None = None,
+        note: str | None = None,
+    ) -> dict[str, Any]: ...
 
     async def lint_dismiss(self, finding_id: str) -> dict[str, Any]: ...
+
+    async def lint_preview_action(
+        self,
+        finding_id: str,
+        *,
+        action: str,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]: ...
 
 
 @dataclass
@@ -150,14 +165,220 @@ def _prompt_verdict(console: Console) -> str:
         console.print('[red]Invalid choice. Pick one of a / d / s / q.[/red]')
 
 
+def _prefill_for_action(action_id: str, finding: dict[str, Any]) -> dict[str, Any]:
+    """Params an action can take from the finding itself — evidence-derived.
+
+    The entity-merge actions are filled from the collapse finding's cluster
+    evidence (member ids + suggested winner); ``kv_delete`` defaults to the
+    finding target (the KV key); a submitter's ``proposed_action`` params are
+    reused verbatim when the reviewer picks the same action.
+    """
+    evidence = finding.get('evidence') or {}
+    if not isinstance(evidence, dict):
+        evidence = {}
+    if action_id in ('merge_entities', 'collapse_into_new_entity'):
+        members = evidence.get('cluster_members') or []
+        prefill: dict[str, Any] = {}
+        if isinstance(members, list) and members:
+            prefill['member_ids'] = [str(m) for m in members]
+        if action_id == 'merge_entities':
+            winner = evidence.get('suggested_winner_id')
+            if winner:
+                prefill['winner_id'] = str(winner)
+        return prefill
+    if action_id == 'kv_delete':
+        target = finding.get('target_id')
+        return {'key': str(target)} if target else {}
+    suggestion = evidence.get('proposed_action')
+    if (
+        isinstance(suggestion, dict)
+        and suggestion.get('action_name') == action_id
+        and isinstance(suggestion.get('params'), dict)
+    ):
+        return dict(suggestion['params'])
+    return {}
+
+
+def _prompt_params_from_schema(
+    console: Console,
+    schema: dict[str, Any] | None,
+    prefill: dict[str, Any],
+) -> dict[str, Any]:
+    """Collect action params, walking the published JSON schema.
+
+    Prefilled (evidence-derived) values are shown and kept; missing required
+    fields are prompted; optional fields prompt with empty-skip. Array-typed
+    fields accept comma-separated input. Falls back to the prefill alone
+    when the schema is unavailable (offline catalogue).
+    """
+    params = dict(prefill)
+    if not schema:
+        return params
+    props = schema.get('properties') or {}
+    required = set(schema.get('required') or [])
+    for key, spec in props.items():
+        if not isinstance(spec, dict):
+            continue
+        if key in params:
+            console.print(f'  [dim]{key} = {params[key]!r} (from finding evidence)[/dim]')
+            continue
+        desc = str(spec.get('description') or '').strip()
+        enum = spec.get('enum')
+        if isinstance(enum, list) and enum:
+            desc = f'{desc} [{" | ".join(str(e) for e in enum)}]'.strip()
+        label = f'{key}' + (f' — {desc}' if desc else '')
+        is_array = spec.get('type') == 'array'
+        if key in required:
+            raw = typer.prompt(f'  {label}')
+        else:
+            raw = typer.prompt(f'  {label} (optional)', default='', show_default=False)
+            if raw == '':
+                continue
+        if is_array:
+            params[key] = [part.strip() for part in raw.split(',') if part.strip()]
+        else:
+            params[key] = raw
+    return params
+
+
+def _action_descriptor_index(
+    catalogue: list[dict[str, Any]] | None,
+) -> dict[str, dict[str, Any]]:
+    if not isinstance(catalogue, list) or not catalogue:
+        return {}
+    return {str(a.get('id')): a for a in catalogue if isinstance(a, dict) and a.get('id')}
+
+
+def _build_action_choices(
+    finding: dict[str, Any],
+    catalogue: list[dict[str, Any]] | None,
+) -> list[tuple[str, dict[str, Any] | None]]:
+    """Ordered ``(label, descriptor)`` menu rows for the accept sub-menu.
+
+    Row 0 is always the plain status flip (no action). A submitter's
+    ``proposed_action`` follows as the marked suggestion; the rest of the
+    catalogue (filtered to this target_type) trails alphabetically.
+    """
+    choices: list[tuple[str, dict[str, Any] | None]] = [
+        ('Resolve only (no action; status flip + note)', None)
+    ]
+    index = _action_descriptor_index(catalogue)
+    target_type = str(finding.get('target_type') or '')
+    evidence = finding.get('evidence') or {}
+    suggested_id: str | None = None
+    if isinstance(evidence, dict):
+        suggestion = evidence.get('proposed_action')
+        if isinstance(suggestion, dict):
+            candidate = str(suggestion.get('action_name') or '')
+            if candidate in index:
+                suggested_id = candidate
+    if suggested_id:
+        descriptor = index[suggested_id]
+        choices.append((f'{suggested_id} — suggested by submitter', descriptor))
+    for action_id in sorted(index):
+        if action_id == suggested_id:
+            continue
+        descriptor = index[action_id]
+        types = descriptor.get('applicable_target_types') or []
+        if target_type not in types:
+            continue
+        marker = '' if descriptor.get('reversible') else ' [NOT reversible]'
+        choices.append((f'{action_id}{marker}', descriptor))
+    return choices
+
+
+async def _accept_with_action(
+    console: Console,
+    finding: dict[str, Any],
+    finding_id: str,
+    catalogue: list[dict[str, Any]] | None,
+    *,
+    apply: bool,
+    api: LintApplyProto,
+) -> tuple[bool, str | None]:
+    """Accept flow: action sub-menu → params → preview gate → resolve.
+
+    Returns ``(applied_ok, error)``; ``applied_ok`` is True in dry-run too
+    (the verdict was collected; nothing was written).
+    """
+    choices = _build_action_choices(finding, catalogue)
+    if len(choices) > 1:
+        console.print('[bold]Resolve with:[/bold]')
+        for i, (label, _) in enumerate(choices):
+            console.print(f'  [{i}] {label}')
+        raw = await asyncio.to_thread(typer.prompt, 'action #', default='0', show_default=True)
+        try:
+            picked = choices[int(str(raw).strip() or '0')]
+        except (ValueError, IndexError):
+            console.print('[red]Invalid pick — falling back to plain resolve.[/red]')
+            picked = choices[0]
+    else:
+        picked = choices[0]
+
+    _, descriptor = picked
+    action_id: str | None = None
+    params: dict[str, Any] | None = None
+    if descriptor is not None:
+        action_id = str(descriptor.get('id'))
+        prefill = _prefill_for_action(action_id, finding)
+        schema = descriptor.get('params_schema')
+        params = await asyncio.to_thread(_prompt_params_from_schema, console, schema, prefill)
+        if not descriptor.get('reversible'):
+            preview_text: str | None = None
+            try:
+                payload = await api.lint_preview_action(finding_id, action=action_id, params=params)
+                preview_text = str(payload.get('preview') or '')
+            except Exception as e:  # noqa: BLE001 - preview is advisory
+                console.print(f'[dim]preview unavailable: {e}[/dim]')
+            if preview_text:
+                console.print(Panel(preview_text, border_style='red', title='blast radius'))
+            confirmed = await asyncio.to_thread(
+                typer.confirm,
+                f'{action_id} is NOT reversible. Execute?',
+                False,
+            )
+            if not confirmed:
+                console.print('[dim]Cancelled — falling back to plain resolve.[/dim]')
+                action_id = None
+                params = None
+
+    if not apply:
+        chosen = action_id or 'resolve-only'
+        console.print(f'[dim]dry-run: would resolve {finding_id} via {chosen}[/dim]')
+        return True, None
+    try:
+        if action_id is None:
+            await api.lint_resolve(finding_id)
+        else:
+            await api.lint_resolve(finding_id, action=action_id, params=params)
+        suffix = f' (action={action_id})' if action_id else ''
+        console.print(f'[green]resolved:[/green] {finding_id}{suffix}')
+        return True, None
+    except Exception as e:
+        _logger.exception(
+            'lint_review.apply_failed: finding_id=%s verdict=accept action=%s',
+            finding_id,
+            action_id,
+        )
+        console.print(f'[red]apply failed for {finding_id}:[/red] {e}')
+        return False, str(e)
+
+
 async def run_review_loop(
     findings: list[dict[str, Any]],
     *,
     apply: bool,
     api: LintApplyProto,
     console: Console,
+    catalogue: list[dict[str, Any]] | None = None,
 ) -> ReviewSummary:
     """Walk the user through ``findings``; collect verdicts; optionally apply.
+
+    ``catalogue`` is the closed proposal-action catalogue from
+    ``GET /lint/actions``; when present, accepting a finding opens an
+    action sub-menu (with schema-driven params prompts and a blast-radius
+    preview gate on irreversible actions). Without it, accept degrades to
+    the plain status flip.
 
     Per-finding errors when ``apply=True`` are captured into ``summary.apply_errors``
     and the loop continues — one bad finding shouldn't abort the session.
@@ -186,18 +407,14 @@ async def run_review_loop(
             continue
         if verdict == 'a':
             summary.accepted.append(finding_id)
+            applied_ok, error = await _accept_with_action(
+                console, finding, finding_id, catalogue, apply=apply, api=api
+            )
             if apply:
-                try:
-                    await api.lint_resolve(finding_id)
+                if applied_ok:
                     summary.applied_resolved.append(finding_id)
-                    console.print(f'[green]resolved:[/green] {finding_id}')
-                except Exception as e:
-                    _logger.exception(
-                        'lint_review.apply_failed: finding_id=%s verdict=accept',
-                        finding_id,
-                    )
-                    summary.apply_errors.append((finding_id, str(e)))
-                    console.print(f'[red]apply failed for {finding_id}:[/red] {e}')
+                elif error is not None:
+                    summary.apply_errors.append((finding_id, error))
             continue
         if verdict == 'd':
             summary.dismissed.append(finding_id)

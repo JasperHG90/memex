@@ -461,6 +461,9 @@ class ProposalCockpitApp(App):
         # COLLAPSE mode state (entity_collapse_cluster member selection).
         self._collapse_proposal: CockpitProposal | None = None
         self._collapse_winner_id: str | None = None
+        # When True the note input is collecting the NEW canonical name for a
+        # collapse-into-new-entity merge, not a reviewer note.
+        self._collapse_new_name_pending: bool = False
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -563,7 +566,9 @@ class ProposalCockpitApp(App):
             'review': '[↑↓] Navigate  [Enter] Confirm  [Esc] Back',
             'note': '[Enter] Submit  [Shift+Enter] Newline  [Esc] Cancel',
             'detail': '[n] View note  [Tab] Cycle units  [Esc] Back',
-            'collapse': ('[Space] in/out  [w] winner  [a] apply  [x] dismiss  [Esc] cancel'),
+            'collapse': (
+                '[Space] in/out  [w] winner  [a] apply  [n] new entity  [x] dismiss  [Esc] cancel'
+            ),
         }
         hint = hints.get(self.mode, '')
         self.query_one('#status-bar', Static).update(f' [dim]{hint}[/dim]')
@@ -951,11 +956,32 @@ class ProposalCockpitApp(App):
             self._enter_note_mode()
 
     def _on__note_input_submitted(self, event: _NoteInput.Submitted) -> None:
+        if self._collapse_new_name_pending:
+            self._collapse_new_name_pending = False
+            self.query_one('#note-section').remove_class('visible')
+            new_name = (event.text or '').strip()
+            proposal = self._collapse_proposal
+            if not new_name or proposal is None:
+                self._show_status('Merge cancelled — a non-empty name is required.', error=True)
+                self.mode = 'collapse'
+                self._update_footer()
+                return
+            self.run_worker(
+                self._apply_collapse_new_async(proposal, new_name, self._collapse_included_ids()),
+                exclusive=True,
+                name='apply_collapse_new',
+            )
+            return
         self._pending_note = event.text or None
         self._submit_verdict()
 
     def _on__note_input_cancelled(self, event: _NoteInput.Cancelled) -> None:
         self.query_one('#note-section').remove_class('visible')
+        if self._collapse_new_name_pending:
+            self._collapse_new_name_pending = False
+            self.mode = 'collapse'
+            self._update_footer()
+            return
         self.query_one('#action-list', ListView).focus()
         self.mode = 'review' if not self._batch_targets else 'batch'
         self._update_footer()
@@ -1148,6 +1174,10 @@ class ProposalCockpitApp(App):
             event.prevent_default()
             event.stop()
             self._apply_collapse()
+        elif key == 'n':
+            event.prevent_default()
+            event.stop()
+            self._collapse_into_new()
         elif key == 'x':
             event.prevent_default()
             event.stop()
@@ -1195,6 +1225,58 @@ class ProposalCockpitApp(App):
             self.mode = 'list'
             return
         self._show_status(f'Merged {len(member_ids)} entities into "{winner_name}".')
+        await self._refresh_queue()
+
+    def _collapse_into_new(self) -> None:
+        """Merge the selected members into a freshly named entity.
+
+        Opens the note input to collect the new canonical name; submission
+        resolves the finding through the ``collapse_into_new_entity``
+        catalogue action with the selected member subset. NOT reversible —
+        same caveat as the winner merge.
+        """
+        proposal = self._collapse_proposal
+        if proposal is None:
+            return
+        included = self._collapse_included_ids()
+        if len(included) < 2:
+            self._show_status('Select at least 2 entities to merge into a new one.', error=True)
+            return
+        self._collapse_new_name_pending = True
+        note_section = self.query_one('#note-section')
+        note_section.add_class('visible')
+        note_input = self.query_one('#note-input', _NoteInput)
+        note_input.clear()
+        note_input.focus()
+        self.mode = 'note'
+        self._show_status('Type the NEW canonical name; [Enter] merges, [Esc] cancels.')
+
+    async def _apply_collapse_new_async(
+        self,
+        proposal: CockpitProposal,
+        new_name: str,
+        member_ids: list[str],
+    ) -> None:
+        option = CockpitOption(
+            action_id='collapse_into_new_entity',
+            label='Collapse into a new entity',
+            summary='Create a new entity and fold the selected members onto it.',
+            effect='Members hard-deleted; counters/links/models fold onto the new entity.',
+            reversible=False,
+        )
+        try:
+            await self._controller.resolve(
+                proposal,
+                option,
+                note=None,
+                params={'new_canonical_name': new_name, 'member_ids': member_ids},
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception('collapse-into-new-entity failed for finding %s', proposal.finding_id)
+            self._show_status('Merge into new entity failed — see logs for details.', error=True)
+            self.mode = 'list'
+            return
+        self._show_status(f'Merged {len(member_ids)} entities into new "{new_name}".')
         await self._refresh_queue()
 
     def _dismiss_collapse(self) -> None:
