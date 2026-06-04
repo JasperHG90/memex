@@ -31,6 +31,11 @@ if TYPE_CHECKING:
     from memex_core.api import MemexAPI
 
 
+# The ``(CAST(:vault_id AS uuid) IS NULL OR …)`` guard scopes the row to the
+# finding's vault when one is bound, and matches by id alone when :vault_id is
+# NULL (global finding). Postgres evaluates ``CAST(NULL AS uuid) IS NULL`` →
+# true, so the OR short-circuits to the id-only match — i.e. NULL vault means
+# "don't constrain by vault", not "match no rows".
 _NOTE_BLAST_SQL = text("""
     SELECT n.title,
            (SELECT count(*) FROM memory_units mu WHERE mu.note_id = n.id) AS unit_count,

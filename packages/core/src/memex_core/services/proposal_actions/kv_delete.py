@@ -48,6 +48,10 @@ class KvDeleteAction:
     params_schema: ClassVar[dict[str, Any] | None] = _KvDeleteParams.model_json_schema()
 
     def _resolve_key(self, params: dict[str, Any], target_id: str) -> str:
+        # Falls back to the finding's target_id only when params['key'] is
+        # absent/empty. A KV key is never an empty string, and any non-empty
+        # string (including '0') is truthy, so a real key never falls through;
+        # the params validator additionally enforces min_length=1 when present.
         key = str(params.get('key') or target_id or '').strip()
         return key
 

@@ -9,6 +9,14 @@ plain prior 'active' clears everything. A prior `appended_to` provenance
 pointer cannot be restored through this path (the service rejects
 'appended' as a settable status), so reverse refuses with a clear error
 instead of silently dropping it.
+
+Snapshot caveat: the prior-state SELECT and the status mutation run in
+separate sessions (read-committed), so a concurrent edit between them
+could make `prior_state` slightly stale — `reverse()` would then restore
+that near-current state rather than a strictly-consistent snapshot. The
+resolve route holds a row lock across execute, which serialises against
+other lint resolutions of the same finding; an out-of-band note edit is
+the only remaining window and is acceptable for this advisory path.
 """
 
 from __future__ import annotations

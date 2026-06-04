@@ -106,13 +106,20 @@ class MergeEntitiesAction:
         vault_id: UUID | None,
         actor: str,
     ) -> ExecuteResult:
+        from memex_common.exceptions import EntityNotFoundError
+
         parsed = _MergeEntitiesParams(**params)
         members = _parse_member_uuids(self.id, parsed.member_ids)
         winner = UUID(parsed.winner_id)
         losers = [m for m in members if m != winner]
-        summary = await api.entities.collapse_cluster(
-            winner_id=winner, loser_ids=losers, actor=actor
-        )
+        try:
+            summary = await api.entities.collapse_cluster(
+                winner_id=winner, loser_ids=losers, actor=actor
+            )
+        except EntityNotFoundError as exc:
+            # A valid-but-nonexistent member UUID → clean 409, not a 500
+            # surfacing from deep in the entity service.
+            raise ProposalActionError(f'merge_entities: {exc}') from exc
         return ExecuteResult(
             applied_state={
                 'winner_id': str(winner),
@@ -209,6 +216,8 @@ class CollapseIntoNewEntityAction:
         vault_id: UUID | None,
         actor: str,
     ) -> ExecuteResult:
+        from memex_common.exceptions import EntityNotFoundError
+
         parsed = _CollapseIntoNewEntityParams(**params)
         members = _parse_member_uuids(self.id, parsed.member_ids)
         try:
@@ -217,7 +226,9 @@ class CollapseIntoNewEntityAction:
                 new_canonical_name=parsed.new_canonical_name,
                 actor=actor,
             )
-        except ValueError as exc:
+        except (ValueError, EntityNotFoundError) as exc:
+            # ValueError = duplicate name / bad input; EntityNotFoundError =
+            # a valid-but-nonexistent member UUID. Both → clean 409, not 500.
             raise ProposalActionError(str(exc)) from exc
         return ExecuteResult(
             applied_state={

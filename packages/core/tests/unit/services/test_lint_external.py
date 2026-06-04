@@ -125,6 +125,12 @@ class TestFieldValidation:
         with pytest.raises(ValidationError):
             _request(description='x' * 501)
 
+    def test_unknown_field_rejected(self) -> None:
+        # extra='forbid' on the server model: a submitter's typo'd field is a
+        # per-item rejection, not a silently-dropped value.
+        with pytest.raises(ValidationError):
+            _request(targett_type='note')  # typo'd 'target_type'
+
 
 class TestEvidenceHygiene:
     @pytest.mark.parametrize(

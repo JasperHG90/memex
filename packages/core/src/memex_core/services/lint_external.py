@@ -22,14 +22,13 @@ refactor).
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from pydantic import field_validator
+from pydantic import ConfigDict, field_validator
 from sqlalchemy import text as sa_text
-from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import col, select
 
 from memex_common.lint import LintProposal, ProposedAction
@@ -79,7 +78,13 @@ class ExternalProposalRequest(LintProposal):
     that needs core internals: rejecting rule names reserved for internal
     emitters. The shared shape means the client builder and this validator
     can never diverge — the server can only add constraints.
+
+    ``extra='forbid'`` rejects unknown keys: at the untrusted server
+    ingress a submitter's typo'd field should surface as a per-item 400,
+    not be silently dropped (the client-side ``LintProposal`` stays lenient).
     """
+
+    model_config = ConfigDict(extra='forbid')
 
     @field_validator('rule_name')
     @classmethod
@@ -110,7 +115,14 @@ class SubmissionItemResult:
 
 
 def action_descriptor(action: Any) -> dict[str, Any]:
-    """Wire shape for one catalogue action (the lint actions listing + facade)."""
+    """Wire shape for one catalogue action (the lint actions listing + facade).
+
+    ``params_schema`` is the action's Pydantic ``model_json_schema()`` and is
+    served verbatim to external callers. Every current action uses a flat
+    params model, so the schema carries no ``$defs`` with internal type
+    names; if a future action nests models, sanitise/inline ``$defs`` here
+    before exposing it so internal class names don't leak.
+    """
     return {
         'id': action.id,
         'name': action.name,
@@ -170,93 +182,84 @@ async def insert_external_proposal(
     ``ON CONFLICT DO NOTHING`` plus the post-resolution cooldown:
 
     * ``created`` — fresh pending row, id returned.
-    * ``deduplicated`` — a row for the same (rule, target, vault) already
-      covers this; its id is returned so retry-happy callers stay idempotent.
+    * ``deduplicated`` — a pending row for the same (rule, target, vault)
+      already covers this; its id is returned so retry-happy callers stay
+      idempotent. ``finding_id`` is always a real pending row.
     * ``cooldown_suppressed`` — a human resolved/dismissed this same finding
-      within the cooldown window; no row is written.
+      within the cooldown window; no row is written, ``finding_id`` is None.
+
+    The cooldown check and the insert are ONE statement — an
+    ``INSERT … SELECT … WHERE NOT EXISTS(<recent resolution>) ON CONFLICT
+    DO NOTHING`` (the contract internal-rule emission uses). That removes the
+    check-then-insert TOCTOU: a concurrent resolution cannot slip between a
+    separate cooldown SELECT and the insert, and the classification below is
+    unambiguous — a failed insert is either a live pending dedup or a
+    cooldown block, never a resolved-row id masquerading as a dedup.
     """
     cooldown_days = api.config.server.memory.lint.external_proposals.cooldown_days
     evidence = _assemble_evidence(req, actor=actor)
 
-    async with api.metastore.session() as session:
-        if cooldown_days > 0:
-            cutoff = datetime.now(timezone.utc) - timedelta(days=cooldown_days)
-            recent_stmt = (
-                select(MaintenanceProposal.id)
-                .where(
-                    col(MaintenanceProposal.rule_name) == req.rule_name,
-                    col(MaintenanceProposal.target_type) == req.target_type,
-                    col(MaintenanceProposal.target_id) == req.target_id,
-                    col(MaintenanceProposal.vault_id) == vault_id,
-                    col(MaintenanceProposal.status).in_(('resolved', 'dismissed')),
-                    col(MaintenanceProposal.resolved_at) > cutoff,
-                )
-                .limit(1)
-            )
-            recent = (await session.exec(recent_stmt)).first()
-            if recent is not None:
-                return ('cooldown_suppressed', None)
+    params: dict[str, Any] = {
+        'vault_id': str(vault_id) if vault_id is not None else None,
+        'lint_type': req.lint_type,
+        'target_type': req.target_type,
+        'target_id': req.target_id,
+        'rule_name': req.rule_name,
+        'evidence': json.dumps(evidence),
+        'suggested_action': req.suggested_action,
+        'cooldown_days': cooldown_days,
+    }
+    # The cooldown predicate is part of the INSERT's source SELECT, so it is
+    # evaluated atomically with the conflict arbiter. cooldown_days=0 short-
+    # circuits the NOT EXISTS to a no-op (nothing recent ever matches).
+    cooldown_clause = """
+      AND NOT EXISTS (
+          SELECT 1 FROM maintenance_proposals mp
+           WHERE mp.rule_name = :rule_name
+             AND mp.target_type = :target_type
+             AND mp.target_id = :target_id
+             AND mp.vault_id IS NOT DISTINCT FROM CAST(:vault_id AS uuid)
+             AND mp.status IN ('resolved', 'dismissed')
+             AND mp.resolved_at > now() - make_interval(days => :cooldown_days)
+      )
+    """
+    insert_sql = sa_text(
+        'INSERT INTO maintenance_proposals '
+        '(vault_id, lint_type, target_type, target_id, rule_name, evidence, '
+        ' suggested_action, status, source) '
+        'SELECT CAST(:vault_id AS uuid), :lint_type, :target_type, :target_id, '
+        '       :rule_name, CAST(:evidence AS jsonb), :suggested_action, '
+        "       'pending', 'external' "
+        'WHERE true'
+        f'{cooldown_clause if cooldown_days > 0 else ""} '
+        'ON CONFLICT (rule_name, target_type, target_id, vault_id) '
+        "WHERE status = 'pending' DO NOTHING "
+        'RETURNING id'
+    )
 
-        insert_stmt = (
-            pg_insert(MaintenanceProposal)
-            .values(
-                vault_id=vault_id,
-                lint_type=req.lint_type,
-                target_type=req.target_type,
-                target_id=req.target_id,
-                rule_name=req.rule_name,
-                evidence=evidence,
-                suggested_action=req.suggested_action,
-                status='pending',
-                source='external',
-            )
-            .on_conflict_do_nothing(
-                index_elements=['rule_name', 'target_type', 'target_id', 'vault_id'],
-                index_where=sa_text("status = 'pending'"),
-            )
-            .returning(MaintenanceProposal.id)  # type: ignore[arg-type]
-        )
-        inserted = (await session.execute(insert_stmt)).scalar_one_or_none()
+    async with api.metastore.session() as session:
+        inserted = (await session.execute(insert_sql, params)).scalar_one_or_none()
         if inserted is not None:
             await session.commit()
             return ('created', inserted)
 
-        pending_stmt = (
-            select(MaintenanceProposal.id)
-            .where(
-                col(MaintenanceProposal.rule_name) == req.rule_name,
-                col(MaintenanceProposal.target_type) == req.target_type,
-                col(MaintenanceProposal.target_id) == req.target_id,
-                col(MaintenanceProposal.vault_id) == vault_id,
-                col(MaintenanceProposal.status) == 'pending',
-            )
-            .limit(1)
-        )
-        existing = (await session.exec(pending_stmt)).first()
-        if existing is not None:
-            return ('deduplicated', existing)
-        # Conflict fired but no pending row remains — it was resolved or
-        # dismissed between our insert and this SELECT. Do NOT report a
-        # resolved row's id as 'deduplicated' (that would imply an open
-        # finding still covers the submission). Re-check the cooldown: a
-        # just-resolved finding within the window suppresses re-submission,
-        # exactly as it would on a fresh request that lost the race.
-        if cooldown_days > 0:
-            cutoff = datetime.now(timezone.utc) - timedelta(days=cooldown_days)
-            recheck = (
+        # No row inserted: either a pending row already covers this (ON
+        # CONFLICT), or the cooldown NOT EXISTS blocked the source SELECT.
+        # A live pending row is the dedup target; its absence means the
+        # cooldown is what stopped us.
+        pending = (
+            await session.exec(
                 select(MaintenanceProposal.id)
                 .where(
                     col(MaintenanceProposal.rule_name) == req.rule_name,
                     col(MaintenanceProposal.target_type) == req.target_type,
                     col(MaintenanceProposal.target_id) == req.target_id,
                     col(MaintenanceProposal.vault_id) == vault_id,
-                    col(MaintenanceProposal.status).in_(('resolved', 'dismissed')),
-                    col(MaintenanceProposal.resolved_at) > cutoff,
+                    col(MaintenanceProposal.status) == 'pending',
                 )
                 .limit(1)
             )
-            if (await session.exec(recheck)).first() is not None:
-                return ('cooldown_suppressed', None)
-        # No pending row and no recent resolution: a transient conflict with
-        # no covering finding. Idempotent no-op — the caller may resubmit.
-        return ('deduplicated', None)
+        ).first()
+        if pending is not None:
+            return ('deduplicated', pending)
+        return ('cooldown_suppressed', None)

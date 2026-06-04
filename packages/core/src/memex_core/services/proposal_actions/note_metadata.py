@@ -7,6 +7,12 @@ value through the same facade so the cascades stay consistent. A prior
 NULL value cannot be re-applied (the facades require a concrete value),
 so reverse refuses with a clear error in that case.
 
+Snapshot caveat: the prior-value SELECT and the mutation run in separate
+sessions (read-committed), so a concurrent edit between them could make
+the snapshot slightly stale; reverse would then restore that near-current
+value. The resolve route's row lock serialises against other lint
+resolutions of the same finding — an out-of-band edit is the only window.
+
 Date-reverse caveat: the service recomputes the unit-timestamp delta from
 the note's CURRENT publish date, so a reverse restores the note-level
 date exactly but child unit timestamps only when nothing else moved them

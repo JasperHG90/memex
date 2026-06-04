@@ -85,6 +85,8 @@ class _FakeEntities:
         loser_ids: list[UUID],
         actor: str | None = None,
     ) -> dict[str, Any]:
+        if self.collapse_error is not None:
+            raise self.collapse_error
         self.collapsed.append((winner_id, list(loser_ids), actor))
         return {'winner_id': str(winner_id), 'losers': len(loser_ids)}
 
@@ -586,6 +588,24 @@ class TestMergeEntitiesAction:
         assert api.entities.collapsed == [(winner, [loser_a, loser_b], _ACTOR)]
         assert result.applied_state['winner_id'] == str(winner)
         assert result.prior_state == {}
+
+    @pytest.mark.asyncio
+    async def test_nonexistent_member_raises_action_error_not_500(self) -> None:
+        from memex_common.exceptions import EntityNotFoundError
+        from memex_core.services.proposal_actions import ProposalActionError
+
+        action = get_action('merge_entities')
+        api = _FakeApi()
+        api.entities.collapse_error = EntityNotFoundError('Entities not found: [...]')
+        winner, loser = uuid4(), uuid4()
+        with pytest.raises(ProposalActionError):
+            await action.execute(
+                api,
+                {'winner_id': str(winner), 'member_ids': [str(winner), str(loser)]},
+                target_id=str(winner),
+                vault_id=_VAULT,
+                actor=_ACTOR,
+            )
 
 
 class TestCollapseIntoNewEntityAction:
