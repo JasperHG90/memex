@@ -837,6 +837,73 @@ class EntityService(BaseService):
         )
         return True
 
+    async def collapse_into_new_entity(
+        self,
+        *,
+        member_ids: list[UUID],
+        new_canonical_name: str,
+        actor: str | None = None,
+    ) -> dict[str, Any]:
+        """Merge a duplicate cluster into a freshly created canonical entity.
+
+        Creates a bare survivor row (``mention_count=0``, no links), then
+        delegates to :meth:`collapse_cluster` so every member's counters,
+        links, aliases, and per-vault mental models fold onto the new entity
+        through the same audited six-step repoint. Forward-only — the member
+        entities are hard-deleted.
+
+        The create and the collapse run in separate transactions
+        (``collapse_cluster`` owns its session); on collapse failure the bare
+        survivor is best-effort deleted so no orphan entity is left behind.
+        """
+        from memex_core.memory.sql_models import Entity
+        from memex_core.memory.utils import get_phonetic_code
+        from sqlmodel import col, select
+
+        name = new_canonical_name.strip()
+        if not name:
+            raise ValueError('new_canonical_name must be non-empty')
+        member_uuids = list(dict.fromkeys(UUID(str(m)) for m in member_ids))
+        if not member_uuids:
+            raise ValueError('collapse_into_new_entity requires at least one member_id')
+
+        async with self.metastore.session() as session:
+            existing = (
+                await session.exec(select(Entity).where(col(Entity.canonical_name) == name))
+            ).first()
+            if existing is not None:
+                raise ValueError(
+                    f'an entity named {name!r} already exists ({existing.id}); '
+                    'merge into that winner instead of creating a new entity.'
+                )
+            survivor = Entity(
+                canonical_name=name,
+                phonetic_code=get_phonetic_code(name),
+                mention_count=0,
+            )
+            session.add(survivor)
+            await session.commit()
+            await session.refresh(survivor)
+            survivor_id = survivor.id
+
+        try:
+            summary = await self.collapse_cluster(
+                winner_id=survivor_id, loser_ids=member_uuids, actor=actor
+            )
+        except Exception:
+            try:
+                await self.delete_entity(survivor_id)
+            except Exception:  # noqa: BLE001 - cleanup is best-effort
+                logger.warning(
+                    'collapse_into_new_entity: failed to clean up bare survivor %s',
+                    survivor_id,
+                    exc_info=True,
+                )
+            raise
+        summary['created_entity_id'] = str(survivor_id)
+        summary['created_canonical_name'] = name
+        return summary
+
     async def get_top_entities(
         self,
         limit: int = 5,
