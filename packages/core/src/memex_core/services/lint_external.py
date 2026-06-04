@@ -89,7 +89,6 @@ class ExternalProposalRequest(LintProposal):
         if v in RESERVED_RULE_NAMES:
             raise ValueError(f'rule_name {v!r} is reserved for internal emitters.')
         return v
-        return v
 
 
 @dataclass(frozen=True)
@@ -236,19 +235,28 @@ async def insert_external_proposal(
         existing = (await session.exec(pending_stmt)).first()
         if existing is not None:
             return ('deduplicated', existing)
-        # Conflict fired but the pending row vanished in the race window
-        # (resolved between insert and select); the latest row still covers
-        # the submission for idempotency purposes.
-        latest_stmt = (
-            select(MaintenanceProposal.id)
-            .where(
-                col(MaintenanceProposal.rule_name) == req.rule_name,
-                col(MaintenanceProposal.target_type) == req.target_type,
-                col(MaintenanceProposal.target_id) == req.target_id,
-                col(MaintenanceProposal.vault_id) == vault_id,
+        # Conflict fired but no pending row remains — it was resolved or
+        # dismissed between our insert and this SELECT. Do NOT report a
+        # resolved row's id as 'deduplicated' (that would imply an open
+        # finding still covers the submission). Re-check the cooldown: a
+        # just-resolved finding within the window suppresses re-submission,
+        # exactly as it would on a fresh request that lost the race.
+        if cooldown_days > 0:
+            cutoff = datetime.now(timezone.utc) - timedelta(days=cooldown_days)
+            recheck = (
+                select(MaintenanceProposal.id)
+                .where(
+                    col(MaintenanceProposal.rule_name) == req.rule_name,
+                    col(MaintenanceProposal.target_type) == req.target_type,
+                    col(MaintenanceProposal.target_id) == req.target_id,
+                    col(MaintenanceProposal.vault_id) == vault_id,
+                    col(MaintenanceProposal.status).in_(('resolved', 'dismissed')),
+                    col(MaintenanceProposal.resolved_at) > cutoff,
+                )
+                .limit(1)
             )
-            .order_by(col(MaintenanceProposal.created_at).desc())
-            .limit(1)
-        )
-        latest = (await session.exec(latest_stmt)).first()
-        return ('deduplicated', latest)
+            if (await session.exec(recheck)).first() is not None:
+                return ('cooldown_suppressed', None)
+        # No pending row and no recent resolution: a transient conflict with
+        # no covering finding. Idempotent no-op — the caller may resubmit.
+        return ('deduplicated', None)

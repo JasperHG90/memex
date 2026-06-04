@@ -71,7 +71,7 @@ class RouteNoteToVaultAction:
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ExecuteResult:
         note_id = UUID(target_id)
@@ -120,7 +120,7 @@ class RouteNoteToVaultAction:
         prior_state: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ReverseResult:
         note_id = UUID(str(applied_state.get('note_id') or target_id))
@@ -148,7 +148,7 @@ class RouteNoteToVaultAction:
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
     ) -> str:
         target_vault = params.get('target_vault_id', '<unspecified>')
         return f'Will migrate this note to vault {target_vault} (note + units + chunks + links).'

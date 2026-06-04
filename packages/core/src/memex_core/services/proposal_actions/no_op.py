@@ -45,7 +45,7 @@ class NoOpAction:
         target_type: str,
         target_id: str,
     ) -> None:
-        return None
+        """Accepts any target — no-op records the verdict only."""
 
     async def execute(
         self,
@@ -53,7 +53,7 @@ class NoOpAction:
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ExecuteResult:
         return ExecuteResult(applied_state={'noop': True}, prior_state={})
@@ -66,7 +66,7 @@ class NoOpAction:
         prior_state: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ReverseResult:
         return ReverseResult(restored_state={'noop_reversed': True})
@@ -77,7 +77,7 @@ class NoOpAction:
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
     ) -> str:
         return 'No mutation; only the verdict and note are recorded.'
 

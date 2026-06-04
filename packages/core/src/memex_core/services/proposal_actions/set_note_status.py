@@ -94,7 +94,7 @@ class SetNoteStatusAction:
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ExecuteResult:
         parsed = _SetNoteStatusParams(**params)
@@ -133,7 +133,7 @@ class SetNoteStatusAction:
         prior_state: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ReverseResult:
         if prior_state.get('appended_to'):
@@ -166,7 +166,7 @@ class SetNoteStatusAction:
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
     ) -> str:
         status = params.get('status', '<unspecified>')
         cascade = {

@@ -75,7 +75,7 @@ class KvDeleteAction:
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ExecuteResult:
         key = self._resolve_key(params, target_id)
@@ -92,7 +92,7 @@ class KvDeleteAction:
         prior_state: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ReverseResult:
         raise ProposalActionError(
@@ -105,7 +105,7 @@ class KvDeleteAction:
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
     ) -> str:
         key = self._resolve_key(params, target_id) or '<unspecified>'
         return f'Will hard-delete KV key {key!r} including any procedure history. NOT reversible.'

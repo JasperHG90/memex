@@ -81,7 +81,7 @@ class DeprioritizeUnitAction:
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ExecuteResult:
         reason = str(params.get('reason') or 'cockpit: maintenance proposal accepted')
@@ -108,7 +108,7 @@ class DeprioritizeUnitAction:
         prior_state: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ReverseResult:
         actual_id = applied_state.get('unit_id') or target_id
@@ -122,7 +122,7 @@ class DeprioritizeUnitAction:
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
     ) -> str:
         # Counting citing observations costs a JSONB scan; defer the exact
         # count and surface the contract instead. The receipt after execute
@@ -162,7 +162,7 @@ class RestoreUnitAction:
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ExecuteResult:
         unit_id = UUID(target_id)
@@ -180,7 +180,7 @@ class RestoreUnitAction:
         prior_state: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ReverseResult:
         unit_id = UUID(target_id)
@@ -198,7 +198,7 @@ class RestoreUnitAction:
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
     ) -> str:
         return 'Will clear is_deprioritized on this unit; observations will re-surface it.'
 

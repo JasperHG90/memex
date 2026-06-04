@@ -102,7 +102,7 @@ class DeleteNoteAction:
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ExecuteResult:
         note_id = UUID(target_id)
@@ -128,7 +128,7 @@ class DeleteNoteAction:
         prior_state: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ReverseResult:
         raise ProposalActionError('delete_note is forward-only: the note was hard-deleted.')
@@ -139,7 +139,7 @@ class DeleteNoteAction:
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
     ) -> str:
         try:
             row = await self._blast_radius(api, UUID(target_id), vault_id)
@@ -186,7 +186,7 @@ class DeleteEntityAction:
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ExecuteResult:
         entity_id = UUID(target_id)
@@ -212,7 +212,7 @@ class DeleteEntityAction:
         prior_state: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ReverseResult:
         raise ProposalActionError('delete_entity is forward-only: the entity was hard-deleted.')
@@ -223,7 +223,7 @@ class DeleteEntityAction:
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
     ) -> str:
         try:
             row = await self._blast_radius(api, UUID(target_id))
@@ -273,7 +273,7 @@ class DeleteMentalModelAction:
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ExecuteResult:
         entity_id = UUID(target_id)
@@ -313,7 +313,7 @@ class DeleteMentalModelAction:
         prior_state: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ReverseResult:
         raise ProposalActionError(
@@ -327,7 +327,7 @@ class DeleteMentalModelAction:
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
     ) -> str:
         try:
             entity_id = UUID(target_id)

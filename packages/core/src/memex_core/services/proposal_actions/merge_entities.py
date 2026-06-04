@@ -103,7 +103,7 @@ class MergeEntitiesAction:
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ExecuteResult:
         parsed = _MergeEntitiesParams(**params)
@@ -130,7 +130,7 @@ class MergeEntitiesAction:
         prior_state: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ReverseResult:
         raise ProposalActionError(
@@ -143,12 +143,13 @@ class MergeEntitiesAction:
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
     ) -> str:
-        member_ids = params.get('member_ids') or []
+        members = params.get('member_ids')
+        count = len(members) if isinstance(members, list) else 0
         winner = params.get('winner_id', '<unspecified>')
         return (
-            f'Will merge {max(len(member_ids) - 1, 0)} entities into winner {winner} '
+            f'Will merge {max(count - 1, 0)} entities into winner {winner} '
             '(links, aliases, counters, mental models fold onto it; losers are '
             'hard-deleted). NOT reversible.'
         )
@@ -205,7 +206,7 @@ class CollapseIntoNewEntityAction:
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ExecuteResult:
         parsed = _CollapseIntoNewEntityParams(**params)
@@ -236,7 +237,7 @@ class CollapseIntoNewEntityAction:
         prior_state: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ReverseResult:
         raise ProposalActionError(
@@ -249,12 +250,13 @@ class CollapseIntoNewEntityAction:
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
     ) -> str:
-        member_ids = params.get('member_ids') or []
+        members = params.get('member_ids')
+        count = len(members) if isinstance(members, list) else 0
         name = params.get('new_canonical_name', '<unspecified>')
         return (
-            f'Will create a new entity {name!r} and fold {len(member_ids)} entities '
+            f'Will create a new entity {name!r} and fold {count} entities '
             'onto it; the originals are hard-deleted. NOT reversible.'
         )
 

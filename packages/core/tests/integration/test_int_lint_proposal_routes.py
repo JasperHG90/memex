@@ -751,6 +751,45 @@ async def test_vaults_affected_gate_enforces_write_on_scoped_key(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_resolve_reasserts_pending_before_executing_action(
+    http: AsyncClient, api, monkeypatch
+):
+    """The FOR UPDATE + pending re-assert gates the action: a second resolve
+    of an already-resolved finding returns 404 WITHOUT re-running the action
+    (pre-fix it would re-enter execute and 409 on the now-missing target)."""
+    monkeypatch.setenv('MEMEX_LINT_ALLOW_UNATTENDED_APPLY', '1')
+    vault_id = await _create_vault(http)
+    key = f'global:route-contract-serial:{uuid4().hex[:8]}'
+    await api.kv_put(key, 'doomed')
+    submit = await http.post(
+        '/api/v1/lint/proposals',
+        json=_proposal(
+            vault_id,
+            rule_name='route-contract-serial',
+            lint_type='governance',
+            target_type='kv',
+            target_id=key,
+            proposed_action={'action_name': 'kv_delete', 'params': {}},
+        ),
+    )
+    finding_id = submit.json()['results'][0]['finding_id']
+
+    first = await http.post(
+        f'/api/v1/lint/findings/{finding_id}/resolve', json={'action': 'kv_delete'}
+    )
+    assert first.status_code == 200, first.text
+    assert await api.kv_get(key) is None
+
+    # Second resolve of the now-resolved finding: gated at the pending
+    # re-assert → 404, not a re-execution (which would 409 on the gone key).
+    second = await http.post(
+        f'/api/v1/lint/findings/{finding_id}/resolve', json={'action': 'kv_delete'}
+    )
+    assert second.status_code == 404, second.text
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_submitted_suggestion_validated_at_the_door(http: AsyncClient):
     vault_id = await _create_vault(http)
     bad_action = _proposal(

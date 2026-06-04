@@ -82,7 +82,7 @@ class RecordOutcomeAction:
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ExecuteResult:
         parsed = _RecordOutcomeParams(**params)
@@ -108,7 +108,7 @@ class RecordOutcomeAction:
         prior_state: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ReverseResult:
         raise ProposalActionError(
@@ -121,7 +121,7 @@ class RecordOutcomeAction:
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
     ) -> str:
         verb = params.get('verb', '<unspecified>')
         return (

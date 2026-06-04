@@ -146,10 +146,13 @@ async def lint_status(
         if scope == 'global':
             count = await api.lint.count_pending(None)
             return {'scope': 'global', 'pending': count}
-        # scope == 'all': aggregate across every vault + global.
+        # scope == 'all': aggregate across every vault + global. Parameterised
+        # for consistency with every other query in this module (the value is
+        # a trusted constant, but no inline literals here either).
         async with api.metastore.session() as session:
             row = await session.execute(
-                text("SELECT count(*) FROM maintenance_proposals WHERE status = 'pending'")
+                text('SELECT count(*) FROM maintenance_proposals WHERE status = :status'),
+                {'status': 'pending'},
             )
             return {'scope': 'all', 'pending': int(row.scalar() or 0)}
     except HTTPException:
@@ -544,7 +547,14 @@ async def _gate_entity_action_footprint(
         except (ValueError, AttributeError):
             continue
     if not entity_ids:
-        return
+        # raw_ids is never empty (target_id is always present), so reaching
+        # here means EVERY id was unparseable. Refuse rather than silently
+        # skipping the scope check — defence-in-depth even though validate()
+        # also rejects bad UUIDs downstream.
+        raise HTTPException(
+            status_code=400,
+            detail='no valid entity id to authorize the action against.',
+        )
     async with api.metastore.session() as session:
         result = await session.execute(_ENTITY_FOOTPRINT_SQL, {'ids': entity_ids})
         footprint = [row[0] for row in result if row[0] is not None]
@@ -848,66 +858,87 @@ async def lint_resolve(
     except ActionValidationError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    try:
-        execute_result = await action.execute(
-            api,
-            action_params,
-            target_id=target_id,
-            vault_id=finding_vault,
-            actor=actor,
-        )
-    except ActionValidationError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except ProposalActionError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except Exception as exc:
-        raise _handle_error(exc, f'Failed to execute proposal action {action_id}')
+    # Serialise resolution of THIS finding: hold a row lock across the
+    # action + the status flip so a concurrent resolve can't run the action
+    # twice or flip the row out from under us between execute and set_status.
+    # The action's own side-effect transactions still commit independently
+    # (true crash-durable atomicity across them needs session-threading
+    # through the whole service layer — a separate refactor; see the
+    # archive_mental_model docstring). What this closes is the concurrency
+    # race the review flagged.
+    async with api.metastore.session() as txn:
+        locked = (
+            await txn.execute(
+                text('SELECT status FROM maintenance_proposals WHERE id = :id FOR UPDATE'),
+                {'id': str(finding_id)},
+            )
+        ).first()
+        if locked is None or str(locked.status) != 'pending':
+            raise HTTPException(status_code=404, detail='Finding not found or not pending')
 
-    followup = {
-        'action': action_id,
-        'params': action_params,
-        'applied_at': datetime.now(timezone.utc).isoformat(),
-        'applied_state': execute_result.applied_state,
-        'prior_state': execute_result.prior_state,
-        'reversible': action.reversible,
-    }
-    resolution = _build_resolution_payload(
-        verdict='accepted', actor=actor, note=note, followup=followup
-    )
-    try:
-        ok = await api.lint.set_status(
-            finding_id,
-            'resolved',
-            vault_id=finding_vault,
-            actor=actor,
-            resolution=resolution,
-        )
-    except Exception as e:
-        raise _handle_error(e, 'Failed to flip finding status after action.execute')
+        try:
+            execute_result = await action.execute(
+                api,
+                action_params,
+                target_id=target_id,
+                vault_id=finding_vault,
+                actor=actor,
+            )
+        except ActionValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ProposalActionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except Exception as exc:
+            raise _handle_error(exc, f'Failed to execute proposal action {action_id}')
 
-    if not ok:
-        # The action ran but the status flip failed (e.g. row deleted, status
-        # already non-pending). Log a structured warning so operators can
-        # reconcile the leaked side effect, then surface 409 to the caller.
-        logger.warning(
-            'lint.resolve.side_effect_without_status_flip',
-            extra={
-                'finding_id': str(finding_id),
-                'action_id': action_id,
-                'target_type': target_type,
-                'target_id': target_id,
-                'applied_state': execute_result.applied_state,
-                'actor': actor,
-            },
+        followup = {
+            'action': action_id,
+            'params': action_params,
+            'applied_at': datetime.now(timezone.utc).isoformat(),
+            'applied_state': execute_result.applied_state,
+            'prior_state': execute_result.prior_state,
+            'reversible': action.reversible,
+        }
+        resolution = _build_resolution_payload(
+            verdict='accepted', actor=actor, note=note, followup=followup
         )
-        raise HTTPException(
-            status_code=409,
-            detail=(
-                f'Action {action_id} executed but finding status flip failed '
-                '(finding not pending). The side effect is real; the proposal '
-                'row may need manual reconciliation.'
-            ),
-        )
+        try:
+            ok = await api.lint.set_status(
+                finding_id,
+                'resolved',
+                vault_id=finding_vault,
+                actor=actor,
+                resolution=resolution,
+                session=txn,
+            )
+        except Exception as e:
+            raise _handle_error(e, 'Failed to flip finding status after action.execute')
+
+        if not ok:
+            # We re-asserted pending under FOR UPDATE above and hold the lock,
+            # so concurrency cannot reach here — this guards an in-transaction
+            # anomaly (e.g. the row deleted within our own txn). The action
+            # ran; log so operators can reconcile the side effect.
+            logger.warning(
+                'lint.resolve.side_effect_without_status_flip',
+                extra={
+                    'finding_id': str(finding_id),
+                    'action_id': action_id,
+                    'target_type': target_type,
+                    'target_id': target_id,
+                    'applied_state': execute_result.applied_state,
+                    'actor': actor,
+                },
+            )
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f'Action {action_id} executed but finding status flip failed '
+                    '(finding not pending). The side effect is real; the proposal '
+                    'row may need manual reconciliation.'
+                ),
+            )
+        await txn.commit()
 
     return {
         'finding_id': str(finding_id),

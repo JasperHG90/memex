@@ -95,7 +95,7 @@ class ProposalAction(Protocol):
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ExecuteResult:
         """Run the mutation and return its before/after snapshot."""
@@ -109,7 +109,7 @@ class ProposalAction(Protocol):
         prior_state: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ReverseResult:
         """Undo the side effects captured under `prior_state`.
@@ -126,7 +126,7 @@ class ProposalAction(Protocol):
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
     ) -> str:
         """One-line description of the blast radius shown in the cockpit.
 

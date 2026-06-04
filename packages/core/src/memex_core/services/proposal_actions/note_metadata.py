@@ -104,7 +104,7 @@ class UpdateNoteTitleAction:
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ExecuteResult:
         parsed = _UpdateNoteTitleParams(**params)
@@ -131,7 +131,7 @@ class UpdateNoteTitleAction:
         prior_state: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ReverseResult:
         prior_title = prior_state.get('title')
@@ -149,7 +149,7 @@ class UpdateNoteTitleAction:
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
     ) -> str:
         new_title = params.get('new_title', '<unspecified>')
         return f'Will retitle this note to {new_title!r} and re-extract its title facts.'
@@ -192,7 +192,7 @@ class UpdateNoteDateAction:
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ExecuteResult:
         parsed = _UpdateNoteDateParams(**params)
@@ -223,7 +223,7 @@ class UpdateNoteDateAction:
         prior_state: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ReverseResult:
         prior_date = prior_state.get('publish_date')
@@ -241,7 +241,7 @@ class UpdateNoteDateAction:
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
     ) -> str:
         new_date = params.get('new_date', '<unspecified>')
         return (

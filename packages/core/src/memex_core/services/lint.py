@@ -996,6 +996,7 @@ class LintService(BaseService):
         actor: str | None = None,
         vault_id: UUID | None = None,
         resolution: dict[str, Any] | None = None,
+        session: AsyncSession | None = None,
     ) -> bool:
         """Flip a finding's status to ``resolved`` or ``dismissed``.
 
@@ -1016,6 +1017,12 @@ class LintService(BaseService):
         atomic write keeps the reviewer's note, the executed action, and
         the prior_state snapshot tied to the status flip (no half-states
         where status='resolved' but evidence still says 'no resolution').
+
+        When ``session`` is supplied the UPDATE runs in the caller's
+        transaction and is NOT committed here — the caller commits. The
+        resolve route uses this to flip status inside the same transaction
+        that holds a ``SELECT … FOR UPDATE`` lock on the row, so a
+        concurrent resolve cannot slip between the action and the flip.
         """
         if new_status not in ('resolved', 'dismissed'):
             raise ValueError(f"new_status must be 'resolved' or 'dismissed', got {new_status!r}")
@@ -1039,24 +1046,27 @@ class LintService(BaseService):
         else:
             resolution_assignment = ''
 
-        async with self.metastore.session() as session:
-            # Safety invariant for S608: ``where_extra`` is either '' or the
-            # literal string ' AND vault_id = :vault_id'. ``resolution_assignment``
-            # is either '' or a fixed literal that adds an ``evidence = ...``
-            # SET clause where the JSONB payload is bound as :resolution_json.
-            # No user-controlled value is ever interpolated into the SQL
-            # string — ``new_status`` is allowlist-validated on L509;
-            # everything else flows through the bound ``params`` dict.
-            result = await session.execute(
-                text(
-                    'UPDATE maintenance_proposals '  # noqa: S608
-                    'SET status = :new, resolved_at = now(), resolved_by = :actor'
-                    f'{resolution_assignment} '
-                    f"WHERE id = :id AND status = 'pending'{where_extra}"
-                ),
-                params,
-            )
-            await session.commit()
+        # Safety invariant for S608: ``where_extra`` is either '' or the
+        # literal string ' AND vault_id = :vault_id'. ``resolution_assignment``
+        # is either '' or a fixed literal that adds an ``evidence = ...``
+        # SET clause where the JSONB payload is bound as :resolution_json.
+        # No user-controlled value is ever interpolated into the SQL
+        # string — ``new_status`` is allowlist-validated above; everything
+        # else flows through the bound ``params`` dict.
+        stmt = text(
+            'UPDATE maintenance_proposals '  # noqa: S608
+            'SET status = :new, resolved_at = now(), resolved_by = :actor'
+            f'{resolution_assignment} '
+            f"WHERE id = :id AND status = 'pending'{where_extra}"
+        )
+        if session is not None:
+            # Caller owns the transaction (e.g. holds a FOR UPDATE lock) and
+            # commits; we only stage the UPDATE.
+            result = await session.execute(stmt, params)
+            return bool(result.rowcount)
+        async with self.metastore.session() as own_session:
+            result = await own_session.execute(stmt, params)
+            await own_session.commit()
             return bool(result.rowcount)
 
     async def get_findings(

@@ -90,7 +90,7 @@ class ArchiveMentalModelAction:
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ExecuteResult:
         async with api.metastore.session() as session:
@@ -126,7 +126,7 @@ class ArchiveMentalModelAction:
         prior_state: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ReverseResult:
         async with api.metastore.session() as session:
@@ -149,7 +149,7 @@ class ArchiveMentalModelAction:
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
     ) -> str:
         return (
             'Will set archived_at=now() on this mental model; it stops surfacing '
