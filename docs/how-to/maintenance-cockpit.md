@@ -142,12 +142,45 @@ runaway LLM — driving the cockpit end-to-end and shipping mutations
 that nobody reviewed. Pass the env var only when you know the
 attended path runs from CI under human supervision.
 
+## The live action catalogue
+
+On its first fetch the cockpit swaps its built-in option list for the
+server's live catalogue (`GET /api/v1/lint/actions`), so new server-side
+actions appear in the menus without a CLI upgrade. Offline it degrades
+to the built-in list.
+
+When an external proposal carries a `proposed_action`, the cockpit
+surfaces it first as **"(suggested by submitter)"** with the submitter's
+params prefilled — it is advisory; every other option stays available.
+
+## Merging an entity cluster into a NEW entity
+
+In collapse mode (entity-cluster findings), `[a]` merges the selected
+members into the chosen winner — and `[n]` merges them into a **new**
+entity instead: select members with `Space` as usual, press `[n]`, type
+the new canonical name, and `Enter`. All selected members fold onto the
+freshly created entity (links, aliases, counters, mental models) and are
+hard-deleted. Like the winner merge, this is NOT reversible.
+
+## Irreversible actions and previews
+
+Forward-only actions (the entity merges, `kv_delete`, `record_outcome`,
+`delete_note`, `delete_entity`, `delete_mental_model`) cannot be undone
+with `[r]` — the server refuses with `409 forward_only`. The prompt-loop
+reviewer (`--no-tui`) fetches a live blast-radius preview
+(`POST /lint/findings/{id}/preview`) and asks for explicit confirmation
+before executing any of them; prefer the lifecycle alternatives
+(`set_note_status`, `archive_mental_model`, `deprioritize_unit`) unless
+the content must actually go away.
+
 ## What the cockpit does NOT do
 
 It does not change the way the linter generates findings. Lint
-proposals still come from the SQL rules and the LLM check pass on the
-scheduler's six-hour tick. The cockpit only handles the human-review
-side of the loop: picking, reasoning, executing, and undoing.
+proposals come from the SQL rules and the LLM check pass on the
+scheduler's six-hour tick — and from **external submitters** (agent
+skills posting to `/api/v1/lint/proposals`, shown with
+`source=external`). The cockpit only handles the human-review side of
+the loop: picking, reasoning, executing, and undoing.
 
 It does not auto-resolve anything. Even on `no_op`, you press a key
 that means "I have read this and have decided not to act." That is by

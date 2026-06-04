@@ -99,6 +99,9 @@ The server is FastAPI. The OpenAPI document is served at `/openapi.json`; Swagge
 | GET | `/api/v1/lint/status` | read | Pending lint-finding counts. |
 | GET | `/api/v1/lint/findings` | read | List lint findings (offset paging). |
 | GET | `/api/v1/lint/flags` | read | Cursor-paginated agent surface for findings. |
+| GET | `/api/v1/lint/actions` | read | The closed proposal-action catalogue (with params schemas). |
+| POST | `/api/v1/lint/proposals` | write | Externally-submitted lint proposals (single or batch, partial-success). |
+| POST | `/api/v1/lint/findings/{finding_id}/preview` | read | Read-only blast-radius preview of a canned action. |
 | POST | `/api/v1/lint/findings/{finding_id}/dismiss` | write | Mark a finding dismissed. |
 | POST | `/api/v1/lint/findings/{finding_id}/resolve` | write | Mark a finding resolved (rule-keyed dispatcher). |
 | POST | `/api/v1/lint/findings/{finding_id}/apply` | write | Apply a winner-proposal action. |
