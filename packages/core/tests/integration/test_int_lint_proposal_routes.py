@@ -699,9 +699,18 @@ async def test_delete_entity_and_mental_model_through_resolve(http: AsyncClient,
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_vaults_affected_gate_enforces_write_on_scoped_key(http: AsyncClient, api):
+async def test_vaults_affected_gate_enforces_write_on_scoped_key(
+    http: AsyncClient, api, monkeypatch
+):
     """The vaults_affected branch's 403 (scope present but key lacks it),
-    proven through real check_vault_access on a NULL-vault finding."""
+    proven through real check_vault_access on a NULL-vault finding.
+
+    The unattended-apply env var is set so the attended-mode fence passes
+    first — otherwise it would 403 ahead of the gate and the test would
+    pass for the wrong reason. The detail assertion pins that the 403 came
+    from check_vault_access, not the fence.
+    """
+    monkeypatch.setenv('MEMEX_LINT_ALLOW_UNATTENDED_APPLY', '1')
     from memex_common.config import Permission, Policy
     from memex_core.server.auth import AuthContext, get_auth_context
 
@@ -719,8 +728,8 @@ async def test_vaults_affected_gate_enforces_write_on_scoped_key(http: AsyncClie
     )
     app.dependency_overrides[get_auth_context] = lambda: scoped
     try:
-        # no_op stays allowed (exempt); a mutating action is refused because
-        # the finding's vaults_affected names vault_b, which the key lacks.
+        # A mutating action is refused because the finding's vaults_affected
+        # names vault_b, which the key lacks WRITE on.
         members = [str(uuid4()), str(uuid4())]
         resp = await http.post(
             f'/api/v1/lint/findings/{finding_id}/resolve',
@@ -729,9 +738,15 @@ async def test_vaults_affected_gate_enforces_write_on_scoped_key(http: AsyncClie
                 'params': {'winner_id': members[0], 'member_ids': members},
             },
         )
+        # no_op stays allowed even for this scoped key — it is gate-exempt.
+        noop = await http.post(
+            f'/api/v1/lint/findings/{finding_id}/resolve', json={'action': 'no_op'}
+        )
     finally:
         app.dependency_overrides.pop(get_auth_context, None)
     assert resp.status_code == 403, resp.text
+    assert f'Access denied to vault {vault_b}' in resp.json()['detail']
+    assert noop.status_code == 200, noop.text
 
 
 @pytest.mark.integration

@@ -725,6 +725,16 @@ class TestDeleteActions:
         assert result.applied_state['mention_count'] == 7
 
     @pytest.mark.asyncio
+    async def test_delete_mental_model_refuses_null_vault(self) -> None:
+        from memex_core.services.proposal_actions import ProposalActionError
+
+        action = get_action('delete_mental_model')
+        api = _FakeApi()
+        with pytest.raises(ProposalActionError, match='vault-scoped'):
+            await action.execute(api, {}, target_id=str(uuid4()), vault_id=None, actor=_ACTOR)
+        assert api.deleted_models == []
+
+    @pytest.mark.asyncio
     async def test_delete_mental_model_scopes_to_vault(self) -> None:
         action = get_action('delete_mental_model')
         api = _FakeApi()
