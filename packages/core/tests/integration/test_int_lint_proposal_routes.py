@@ -13,13 +13,14 @@ exists precisely to block that combination outside trusted test/CI runs.
 from __future__ import annotations
 
 from typing import Any, AsyncGenerator
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 
+from memex_core.memory.sql_models import Entity, MentalModel, Note
 from memex_core.server import app
 from memex_core.server.common import get_api
 
@@ -459,6 +460,278 @@ async def test_entity_footprint_gate_enforces_write_on_all_vaults(api):
         params={},
         permission=Permission.WRITE,
     )
+
+
+# ---------------------------------------------------------------------------
+# Destructive / mutating catalogue actions executed through the REAL resolve
+# route against real Postgres — exercises the action facades + blast-radius
+# SQL that the fake-API unit tests never run, and the merge-through-resolve
+# path the eval suite only covers with no_op.
+# ---------------------------------------------------------------------------
+
+
+async def _seed_note(api, vault_id: str) -> str:
+    """Insert a bare Note row directly.
+
+    ``api.ingest`` would run real DSPy extraction (date + facts), which the
+    integration fixture's mock LM can't satisfy; a direct row gives the
+    destructive note actions a real target without the LLM dependency. The
+    blast-radius SQL counts its (zero) units/chunks against real Postgres.
+    """
+    note_id = uuid4()
+    async with api.metastore.session() as s:
+        note = Note(
+            id=note_id,
+            vault_id=UUID(vault_id),
+            title='Route Victim',
+            original_text='A note destined for a destructive lint action.',
+            content_hash=uuid4().hex,
+        )
+        s.add(note)
+        await s.commit()
+    return str(note_id)
+
+
+async def _seed_entities(api, names: list[str], *, vault_id: str) -> list[str]:
+    """Bare Entity rows. With auth disabled the footprint gate's
+    check_vault_access is a no-op, so the entities need no unit_entities
+    rows (which would FK-violate against a non-existent memory_unit)."""
+    ids: list[str] = []
+    async with api.metastore.session() as s:
+        for i, name in enumerate(names):
+            ent = Entity(canonical_name=name, mention_count=i + 1)
+            s.add(ent)
+            await s.flush()
+            ids.append(str(ent.id))
+        await s.commit()
+    return ids
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_delete_note_executes_through_resolve(http: AsyncClient, api, monkeypatch):
+    monkeypatch.setenv('MEMEX_LINT_ALLOW_UNATTENDED_APPLY', '1')
+    vault_id = await _create_vault(http)
+    note_id = await _seed_note(api, vault_id)
+    submit = await http.post(
+        '/api/v1/lint/proposals',
+        json=_proposal(
+            vault_id,
+            rule_name='route-contract-delnote',
+            lint_type='structural',
+            target_type='note',
+            target_id=note_id,
+        ),
+    )
+    finding_id = submit.json()['results'][0]['finding_id']
+    resolve = await http.post(
+        f'/api/v1/lint/findings/{finding_id}/resolve', json={'action': 'delete_note'}
+    )
+    assert resolve.status_code == 200, resolve.text
+    followup = resolve.json()['resolution']['followup']
+    assert followup['action'] == 'delete_note'
+    assert followup['reversible'] is False
+    # Blast-radius counts came from the real _NOTE_BLAST_SQL against Postgres.
+    assert followup['applied_state']['units_deleted'] >= 0
+    assert 'chunks_deleted' in followup['applied_state']
+    assert await api.note_exists(UUID(note_id)) is False
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_set_note_status_round_trips_through_resolve_and_reverse(
+    http: AsyncClient, api, monkeypatch
+):
+    monkeypatch.setenv('MEMEX_LINT_ALLOW_UNATTENDED_APPLY', '1')
+    vault_id = await _create_vault(http)
+    note_id = await _seed_note(api, vault_id)
+    submit = await http.post(
+        '/api/v1/lint/proposals',
+        json=_proposal(
+            vault_id,
+            rule_name='route-contract-status',
+            lint_type='governance',
+            target_type='note',
+            target_id=note_id,
+        ),
+    )
+    finding_id = submit.json()['results'][0]['finding_id']
+    resolve = await http.post(
+        f'/api/v1/lint/findings/{finding_id}/resolve',
+        json={'action': 'set_note_status', 'params': {'status': 'archived'}},
+    )
+    assert resolve.status_code == 200, resolve.text
+    followup = resolve.json()['resolution']['followup']
+    assert followup['action'] == 'set_note_status'
+    assert followup['prior_state']['status'] == 'active'
+
+    reverse = await http.post(f'/api/v1/lint/findings/{finding_id}/reverse')
+    assert reverse.status_code == 200, reverse.text
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_update_note_title_through_resolve(http: AsyncClient, api, monkeypatch):
+    monkeypatch.setenv('MEMEX_LINT_ALLOW_UNATTENDED_APPLY', '1')
+    vault_id = await _create_vault(http)
+    note_id = await _seed_note(api, vault_id)
+    submit = await http.post(
+        '/api/v1/lint/proposals',
+        json=_proposal(
+            vault_id,
+            rule_name='route-contract-retitle',
+            lint_type='quality',
+            target_type='note',
+            target_id=note_id,
+        ),
+    )
+    finding_id = submit.json()['results'][0]['finding_id']
+    resolve = await http.post(
+        f'/api/v1/lint/findings/{finding_id}/resolve',
+        json={'action': 'update_note_title', 'params': {'new_title': 'Corrected Title'}},
+    )
+    assert resolve.status_code == 200, resolve.text
+    note = await api.get_note(UUID(note_id))
+    assert note['title'] == 'Corrected Title'
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_merge_entities_executes_through_resolve(http: AsyncClient, api, monkeypatch):
+    """The merge-through-resolve path (eval covers it only with no_op):
+    real entities, the route's footprint gate, and collapse_cluster all run."""
+    monkeypatch.setenv('MEMEX_LINT_ALLOW_UNATTENDED_APPLY', '1')
+    vault_id = await _create_vault(http)
+    suffix = uuid4().hex[:8]
+    winner, loser = await _seed_entities(
+        api, [f'Winner {suffix}', f'Loser {suffix}'], vault_id=vault_id
+    )
+    submit = await http.post(
+        '/api/v1/lint/proposals',
+        json=_proposal(
+            vault_id,
+            rule_name='route-contract-merge',
+            lint_type='structural',
+            target_type='entity',
+            target_id=winner,
+        ),
+    )
+    finding_id = submit.json()['results'][0]['finding_id']
+    resolve = await http.post(
+        f'/api/v1/lint/findings/{finding_id}/resolve',
+        json={
+            'action': 'merge_entities',
+            'params': {'winner_id': winner, 'member_ids': [winner, loser]},
+        },
+    )
+    assert resolve.status_code == 200, resolve.text
+    assert resolve.json()['resolution']['followup']['action'] == 'merge_entities'
+    async with api.metastore.session() as s:
+        alive = (
+            await s.execute(
+                text('SELECT count(*) FROM entities WHERE id = ANY(CAST(:ids AS uuid[]))'),
+                {'ids': [winner, loser]},
+            )
+        ).scalar()
+    assert alive == 1  # loser hard-deleted
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_delete_entity_and_mental_model_through_resolve(http: AsyncClient, api, monkeypatch):
+    monkeypatch.setenv('MEMEX_LINT_ALLOW_UNATTENDED_APPLY', '1')
+    vault_id = await _create_vault(http)
+    suffix = uuid4().hex[:8]
+    [entity_id] = await _seed_entities(api, [f'Doomed {suffix}'], vault_id=vault_id)
+    async with api.metastore.session() as s:
+        s.add(
+            MentalModel(
+                vault_id=UUID(vault_id),
+                entity_id=UUID(entity_id),
+                name=f'Doomed {suffix}',
+                observations=[{'text': 'an observation'}],
+            )
+        )
+        await s.commit()
+
+    # delete_mental_model first (entity survives), then delete_entity.
+    mm_finding = (
+        await http.post(
+            '/api/v1/lint/proposals',
+            json=_proposal(
+                vault_id,
+                rule_name='route-contract-delmm',
+                lint_type='structural',
+                target_type='entity',
+                target_id=entity_id,
+            ),
+        )
+    ).json()['results'][0]['finding_id']
+    mm_resolve = await http.post(
+        f'/api/v1/lint/findings/{mm_finding}/resolve',
+        json={'action': 'delete_mental_model'},
+    )
+    assert mm_resolve.status_code == 200, mm_resolve.text
+    assert mm_resolve.json()['resolution']['followup']['applied_state']['observations_deleted'] == 1
+
+    ent_finding = (
+        await http.post(
+            '/api/v1/lint/proposals',
+            json=_proposal(
+                vault_id,
+                rule_name='route-contract-delentity',
+                lint_type='structural',
+                target_type='entity',
+                target_id=entity_id,
+            ),
+        )
+    ).json()['results'][0]['finding_id']
+    ent_resolve = await http.post(
+        f'/api/v1/lint/findings/{ent_finding}/resolve', json={'action': 'delete_entity'}
+    )
+    assert ent_resolve.status_code == 200, ent_resolve.text
+    async with api.metastore.session() as s:
+        gone = (
+            await s.execute(text('SELECT count(*) FROM entities WHERE id = :id'), {'id': entity_id})
+        ).scalar()
+    assert gone == 0
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_vaults_affected_gate_enforces_write_on_scoped_key(http: AsyncClient, api):
+    """The vaults_affected branch's 403 (scope present but key lacks it),
+    proven through real check_vault_access on a NULL-vault finding."""
+    from memex_common.config import Permission, Policy
+    from memex_core.server.auth import AuthContext, get_auth_context
+
+    vault_a = await _create_vault(http)
+    vault_b = await _create_vault(http)
+    finding_id = await _insert_global_entity_finding(api, with_scope=True, vault_id=vault_b)
+
+    scoped = AuthContext(
+        key_prefix='scopedkey',
+        key_name='scoped-to-a',
+        policy=Policy.WRITER,
+        permissions=frozenset({Permission.READ, Permission.WRITE}),
+        vault_ids=[vault_a],
+        read_vault_ids=None,
+    )
+    app.dependency_overrides[get_auth_context] = lambda: scoped
+    try:
+        # no_op stays allowed (exempt); a mutating action is refused because
+        # the finding's vaults_affected names vault_b, which the key lacks.
+        members = [str(uuid4()), str(uuid4())]
+        resp = await http.post(
+            f'/api/v1/lint/findings/{finding_id}/resolve',
+            json={
+                'action': 'merge_entities',
+                'params': {'winner_id': members[0], 'member_ids': members},
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(get_auth_context, None)
+    assert resp.status_code == 403, resp.text
 
 
 @pytest.mark.integration

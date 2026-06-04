@@ -277,6 +277,14 @@ class DeleteMentalModelAction:
         actor: str,
     ) -> ExecuteResult:
         entity_id = UUID(target_id)
+        if vault_id is None:
+            # A mental model is one (entity_id, vault_id) row; without a vault
+            # there is nothing to scope the delete to. Mirrors the CAST-NULL
+            # guards on the note actions rather than 500-ing on str(None).
+            raise ProposalActionError(
+                'delete_mental_model requires a vault-scoped finding; '
+                f'finding for entity {target_id} has no vault.'
+            )
         async with api.metastore.session() as session:
             result = await session.execute(
                 _MENTAL_MODEL_BLAST_SQL,

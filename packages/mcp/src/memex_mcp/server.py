@@ -3997,7 +3997,7 @@ async def memex_get_lint_flags(
     ] = None,
     lint_type: Annotated[
         str | None,
-        Field(description='structural | quality | governance | schema'),
+        Field(description='structural | quality | governance | schema | routing'),
     ] = None,
     status: Annotated[
         str,
