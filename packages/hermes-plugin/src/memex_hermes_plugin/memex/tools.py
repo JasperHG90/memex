@@ -54,12 +54,14 @@ from memex_common.tool_descriptions import (
     MEMEX_KV_LIST_DESC,
     MEMEX_KV_SEARCH_DESC,
     MEMEX_KV_PUT_DESC,
+    MEMEX_LIST_LINT_ACTIONS_DESC,
     MEMEX_MEMORY_CONSOLIDATE_DESC,
     MEMEX_MEMORY_DEPRIORITIZE_DESC,
     MEMEX_MEMORY_RECONSOLIDATE_DESC,
     MEMEX_MEMORY_RESTORE_DESC,
     MEMEX_MEMORY_SUMMARIZE_NODE_DESC,
     MEMEX_RECORD_OUTCOME_DESC,
+    MEMEX_SUBMIT_LINT_PROPOSAL_DESC,
 )
 from tools.registry import tool_error  # type: ignore[import-not-found]
 
@@ -154,6 +156,10 @@ class MemexAPIProtocol(Protocol):
     # Lint resolution (winner-proposal apply / reverse)
     async def lint_apply_winner(self, *args: Any, **kwargs: Any) -> Any: ...
     async def lint_reverse_winner(self, *args: Any, **kwargs: Any) -> Any: ...
+
+    # External lint proposals (closed action catalogue)
+    async def list_lint_actions(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def submit_lint_proposals(self, *args: Any, **kwargs: Any) -> Any: ...
 
     # F9 — Per-entity advisory lock + vault-wide consolidate
     async def reconsolidate_entity(self, *args: Any, **kwargs: Any) -> Any: ...
@@ -3940,7 +3946,7 @@ GET_LINT_FLAGS_SCHEMA: dict[str, Any] = {
         '- vault_id (optional): scope to a single vault. Defaults to the active write vault '
         'when omitted (Wave 0 vault-scoping invariant — never falls through to a global '
         'all-vault view).\n'
-        '- lint_type (optional): structural | quality | governance | schema\n'
+        '- lint_type (optional): structural | quality | governance | schema | routing\n'
         '- status (optional): pending | resolved | dismissed (default: pending)\n'
         '- limit (default 20)\n'
         '\n'
@@ -3960,7 +3966,7 @@ GET_LINT_FLAGS_SCHEMA: dict[str, Any] = {
             },
             'lint_type': {
                 'type': 'string',
-                'enum': ['structural', 'quality', 'governance', 'schema'],
+                'enum': ['structural', 'quality', 'governance', 'schema', 'routing'],
             },
             'status': {
                 'type': 'string',
@@ -4116,6 +4122,151 @@ HANDLERS['memex_lint_apply_winner'] = handle_lint_apply_winner
 HANDLERS['memex_lint_reverse_winner'] = handle_lint_reverse_winner
 ALL_SCHEMAS.append(LINT_APPLY_WINNER_SCHEMA)
 ALL_SCHEMAS.append(LINT_REVERSE_WINNER_SCHEMA)
+
+
+# --- External lint proposals (closed action catalogue) ---
+
+LIST_LINT_ACTIONS_SCHEMA: dict[str, Any] = {
+    'name': 'memex_list_lint_actions',
+    'description': MEMEX_LIST_LINT_ACTIONS_DESC,
+    'parameters': {'type': 'object', 'properties': {}},
+}
+
+
+def handle_list_lint_actions(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    """Sync wrapper around RemoteMemexAPI.list_lint_actions (read-only)."""
+    try:
+        result = run_sync(api.list_lint_actions(), timeout=30.0)
+    except Exception as e:
+        logger.warning('memex_list_lint_actions failed: %s', e)
+        return tool_error(f'Lint action catalogue query failed: {e}')
+    return json.dumps(result, default=str)
+
+
+SUBMIT_LINT_PROPOSAL_SCHEMA: dict[str, Any] = {
+    'name': 'memex_submit_lint_proposal',
+    'description': MEMEX_SUBMIT_LINT_PROPOSAL_DESC,
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'rule_name': {
+                'type': 'string',
+                'description': (
+                    'Caller-owned lowercase slug; internal rule names and the '
+                    'llm_ prefix are reserved.'
+                ),
+            },
+            'lint_type': {
+                'type': 'string',
+                'enum': ['structural', 'quality', 'governance', 'schema', 'routing'],
+            },
+            'target_type': {
+                'type': 'string',
+                'description': "Construct kind: 'note' | 'memory_unit' | 'entity' | 'kv' | ...",
+            },
+            'target_id': {
+                'type': 'string',
+                'description': 'UUID of the targeted construct (KV key for kv targets).',
+            },
+            'description': {
+                'type': 'string',
+                'description': 'Why the rule fired — shown to the reviewer (max 500 chars).',
+            },
+            'suggested_action': {
+                'type': 'string',
+                'description': 'Free-text remediation summary (max 500 chars).',
+            },
+            'vault_id': {
+                'type': 'string',
+                'description': (
+                    'Vault UUID or name. Omit to default to the session active write vault.'
+                ),
+            },
+            'evidence': {
+                'type': 'object',
+                'description': (
+                    'Supporting payload; keys resolution / rule_metadata / '
+                    'proposed_action are server-owned and rejected.'
+                ),
+            },
+            'proposed_action': {
+                'type': 'object',
+                'description': (
+                    '{action_name, params} from memex_list_lint_actions; must '
+                    'apply to target_type and pass its params schema.'
+                ),
+            },
+        },
+        'required': [
+            'rule_name',
+            'lint_type',
+            'target_type',
+            'target_id',
+            'description',
+            'suggested_action',
+        ],
+    },
+}
+
+
+def handle_submit_lint_proposal(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    """Sync wrapper around RemoteMemexAPI.submit_lint_proposals (one item).
+
+    Vault scoping mirrors handle_get_lint_flags: explicit vault_id wins,
+    otherwise the session vault binding; refuses without either.
+    """
+    raw_vault = args.get('vault_id')
+    resolved: str | None = None
+    try:
+        if raw_vault:
+            resolved_id = run_sync(api.resolve_vault_identifier(raw_vault), timeout=10.0)
+            resolved = str(resolved_id) if resolved_id else None
+        elif vault_id is not None:
+            resolved = str(vault_id)
+        if resolved is None:
+            return tool_error(
+                'memex_submit_lint_proposal requires a vault_id or an active session vault binding.'
+            )
+        proposal: dict[str, Any] = {
+            key: args[key]
+            for key in (
+                'rule_name',
+                'lint_type',
+                'target_type',
+                'target_id',
+                'description',
+                'suggested_action',
+            )
+            if key in args
+        }
+        proposal['vault_id'] = resolved
+        if args.get('evidence') is not None:
+            proposal['evidence'] = args['evidence']
+        if args.get('proposed_action') is not None:
+            proposal['proposed_action'] = args['proposed_action']
+        result = run_sync(api.submit_lint_proposals([proposal]), timeout=30.0)
+    except Exception as e:
+        logger.warning('memex_submit_lint_proposal failed: %s', e)
+        return tool_error(f'Lint proposal submission failed: {e}')
+    items = result.get('results') if isinstance(result, dict) else None
+    payload = items[0] if items else result
+    return json.dumps(payload, default=str)
+
+
+HANDLERS['memex_list_lint_actions'] = handle_list_lint_actions
+HANDLERS['memex_submit_lint_proposal'] = handle_submit_lint_proposal
+ALL_SCHEMAS.append(LIST_LINT_ACTIONS_SCHEMA)
+ALL_SCHEMAS.append(SUBMIT_LINT_PROPOSAL_SCHEMA)
 
 
 # --- F9 ---  (filled by WS-locks)

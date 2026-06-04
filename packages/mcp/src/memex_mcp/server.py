@@ -4104,6 +4104,131 @@ async def memex_lint_reverse_winner(
         raise ToolError(f'memex_lint_reverse_winner failed: {e}')
 
 
+# --- External lint proposals (closed action catalogue) ---
+
+from memex_common.tool_descriptions import (
+    MEMEX_LIST_LINT_ACTIONS_DESC,
+    MEMEX_SUBMIT_LINT_PROPOSAL_DESC,
+)
+
+
+@mcp.tool(
+    name='memex_list_lint_actions',
+    description=MEMEX_LIST_LINT_ACTIONS_DESC,
+    tags={'diagnostics'},
+    annotations={'readOnlyHint': True},
+    timeout=30.0,
+)
+async def memex_list_lint_actions(ctx: Context) -> dict[str, Any]:
+    """Read-only catalogue dump; the registry only grows with core releases."""
+    try:
+        api = get_api(ctx)
+        return await api.list_lint_actions()
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'memex_list_lint_actions failed: {e}', exc_info=True)
+        raise ToolError(f'memex_list_lint_actions failed: {e}')
+
+
+@mcp.tool(
+    name='memex_submit_lint_proposal',
+    description=MEMEX_SUBMIT_LINT_PROPOSAL_DESC,
+    tags={'write', 'diagnostics'},
+    annotations={'readOnlyHint': False, 'destructiveHint': False},
+    timeout=30.0,
+)
+async def memex_submit_lint_proposal(
+    ctx: Context,
+    rule_name: Annotated[
+        str,
+        Field(
+            description=(
+                'Caller-owned lowercase slug; internal rule names and the llm_ prefix are reserved.'
+            ),
+        ),
+    ],
+    lint_type: Annotated[
+        str,
+        Field(description='structural | quality | governance | schema | routing'),
+    ],
+    target_type: Annotated[
+        str,
+        Field(description="Construct kind: 'note' | 'memory_unit' | 'entity' | 'kv' | ..."),
+    ],
+    target_id: Annotated[
+        str,
+        Field(description='UUID of the targeted construct (KV key for kv targets).'),
+    ],
+    description: Annotated[
+        str,
+        Field(description='Why the rule fired — shown to the reviewer (max 500 chars).'),
+    ],
+    suggested_action: Annotated[
+        str,
+        Field(description='Free-text remediation summary (max 500 chars).'),
+    ],
+    vault_id: Annotated[
+        str | None,
+        Field(
+            description=(
+                'Vault UUID or name. Defaults to the active write vault when '
+                'omitted (vault-scoping invariant).'
+            ),
+        ),
+    ] = None,
+    evidence: Annotated[
+        dict[str, Any] | None,
+        Field(
+            description=(
+                'Supporting payload; keys resolution / rule_metadata / '
+                'proposed_action are server-owned and rejected.'
+            ),
+        ),
+    ] = None,
+    proposed_action: Annotated[
+        dict[str, Any] | None,
+        Field(
+            description=(
+                '{action_name, params} from memex_list_lint_actions; must '
+                'apply to target_type and pass its params schema.'
+            ),
+        ),
+    ] = None,
+) -> dict[str, Any]:
+    """File one pending finding for human review; mutates nothing else.
+
+    The per-item submission contract (created / deduplicated /
+    cooldown_suppressed / rejected) is surfaced verbatim from the server
+    so retry-happy callers can branch on it.
+    """
+    try:
+        api = get_api(ctx)
+        effective_vault = vault_id if vault_id is not None else _default_write_vault(ctx)
+        resolved_vault = str(await _resolve_vault_id(api, effective_vault))
+        proposal: dict[str, Any] = {
+            'vault_id': resolved_vault,
+            'rule_name': rule_name,
+            'lint_type': lint_type,
+            'target_type': target_type,
+            'target_id': target_id,
+            'description': description,
+            'suggested_action': suggested_action,
+        }
+        if evidence is not None:
+            proposal['evidence'] = evidence
+        if proposed_action is not None:
+            proposal['proposed_action'] = proposed_action
+        result = await api.submit_lint_proposals([proposal])
+        items = result.get('results') if isinstance(result, dict) else None
+        return items[0] if items else result
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'memex_submit_lint_proposal failed: {e}', exc_info=True)
+        raise ToolError(f'memex_submit_lint_proposal failed: {e}')
+
+
 # --- Consolidation ---
 
 from memex_mcp._reconsolidate_descriptions import (

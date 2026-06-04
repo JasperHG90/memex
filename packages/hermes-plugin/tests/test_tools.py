@@ -182,6 +182,8 @@ def test_all_schemas_have_required_fields():
         'memex_get_lint_flags',
         'memex_lint_apply_winner',
         'memex_lint_reverse_winner',
+        'memex_list_lint_actions',
+        'memex_submit_lint_proposal',
     }
     tier_a_locks = {
         'memex_memory_reconsolidate',

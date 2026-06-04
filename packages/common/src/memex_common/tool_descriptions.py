@@ -226,15 +226,61 @@ MEMEX_KV_LIST_DESC = (
 )
 
 
+# ---------------------------------------------------------------------------
+# External lint proposals (closed action catalogue).
+# ---------------------------------------------------------------------------
+
+MEMEX_LIST_LINT_ACTIONS_DESC = (
+    'List the closed catalogue of lint resolution actions (read-only).\n'
+    '\n'
+    'Each entry: id, name, description, applicable_target_types, reversible, '
+    'params_schema (JSON schema for the action params; null when '
+    'parameterless).\n'
+    '\n'
+    'When to use: before memex_submit_lint_proposal with a proposed_action — '
+    'pick an action whose applicable_target_types contains your target_type '
+    'and shape params against its params_schema. The catalogue is closed: '
+    'actions cannot be registered at runtime; it only grows with releases.'
+)
+
+
+MEMEX_SUBMIT_LINT_PROPOSAL_DESC = (
+    'Submit an externally-detected lint proposal for human review in the '
+    'maintenance cockpit.\n'
+    '\n'
+    'Required: vault_id (UUID or name); rule_name (lowercase slug you own — '
+    'internal rule names and the llm_ prefix are reserved → rejected); '
+    'lint_type structural|quality|governance|schema|routing; target_type '
+    "(e.g. 'note', 'memory_unit', 'entity', 'kv'); target_id; description "
+    '(why it fired, ≤500 chars); suggested_action (free-text remediation '
+    'summary).\n'
+    'Optional: evidence dict (keys resolution / rule_metadata / '
+    'proposed_action are server-owned → rejected); proposed_action='
+    '{action_name, params} from the closed catalogue — must apply to '
+    'target_type and pass its params schema or the item is rejected.\n'
+    '\n'
+    'Result status: created | deduplicated (an existing finding already '
+    'covers it; its finding_id is returned — resubmitting is idempotent) | '
+    'cooldown_suppressed (a human resolved this same finding recently; do '
+    'NOT retry) | rejected (detail explains why).\n'
+    '\n'
+    'When to use: your detection logic flagged a construct (misrouted note, '
+    'stale KV entry, duplicate entities). Submission only files a pending '
+    'finding — nothing mutates until a human resolves it.'
+)
+
+
 __all__ = [
     'MEMEX_KV_GET_DESC',
     'MEMEX_KV_LIST_DESC',
     'MEMEX_KV_SEARCH_DESC',
     'MEMEX_KV_PUT_DESC',
+    'MEMEX_LIST_LINT_ACTIONS_DESC',
     'MEMEX_MEMORY_CONSOLIDATE_DESC',
     'MEMEX_MEMORY_DEPRIORITIZE_DESC',
     'MEMEX_MEMORY_RECONSOLIDATE_DESC',
     'MEMEX_MEMORY_RESTORE_DESC',
     'MEMEX_MEMORY_SUMMARIZE_NODE_DESC',
     'MEMEX_RECORD_OUTCOME_DESC',
+    'MEMEX_SUBMIT_LINT_PROPOSAL_DESC',
 ]
