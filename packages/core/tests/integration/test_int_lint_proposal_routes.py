@@ -56,6 +56,31 @@ async def _create_vault(http: AsyncClient) -> str:
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_submit_succeeds_with_info_logging_enabled(http: AsyncClient):
+    """The submission INFO log must not collide with reserved LogRecord
+    attributes. A live server logs at INFO; if the per-item counts were
+    spread onto ``extra`` the ``created`` count would overwrite the
+    record's reserved ``created`` field and 500. Force INFO here so the
+    record is actually built (route tests otherwise run above INFO)."""
+    import logging
+
+    logger = logging.getLogger('memex.core.server.lint')
+    prior = logger.level
+    logger.setLevel(logging.INFO)
+    try:
+        vault_id = await _create_vault(http)
+        resp = await http.post(
+            '/api/v1/lint/proposals',
+            json=_proposal(vault_id, rule_name='route-contract-infolog'),
+        )
+    finally:
+        logger.setLevel(prior)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()['results'][0]['status'] == 'created'
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_batch_partial_success_statuses(http: AsyncClient):
     vault_id = await _create_vault(http)
     good = _proposal(vault_id, rule_name='route-contract-good')

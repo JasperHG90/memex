@@ -295,10 +295,13 @@ async def lint_submit_proposals(
             span.set_attribute('lint.external.created', counts['created'])
             span.set_attribute('lint.external.rejected', counts['rejected'])
     # Counts only — external rule names are user-supplied and stay out of
-    # INFO logs (cardinality + leak hygiene).
+    # INFO logs (cardinality + leak hygiene). The counts ride under a single
+    # `outcome_counts` key: spreading them would put `created` directly on
+    # the LogRecord, colliding with its reserved `created` attribute (→
+    # KeyError at INFO level).
     logger.info(
         'lint.external.submitted',
-        extra={'batch_size': len(items), 'actor': actor, **counts},
+        extra={'batch_size': len(items), 'actor': actor, 'outcome_counts': counts},
     )
     return {'results': [r.as_dict() for r in results], **counts}
 
