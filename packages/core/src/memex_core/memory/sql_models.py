@@ -1890,6 +1890,7 @@ class LintStatus(str, Enum):
 class LintSource(str, Enum):
     RULE = 'rule'
     LLM = 'llm'
+    EXTERNAL = 'external'
 
 
 class MaintenanceProposal(SQLModel, table=True):  # type: ignore
@@ -1949,7 +1950,7 @@ class MaintenanceProposal(SQLModel, table=True):  # type: ignore
     source: LintSource = Field(
         default=LintSource.RULE,
         sa_column=Column(Text, nullable=False, server_default=sql_text("'rule'")),
-        description='Whether the finding came from a SQL rule or an LLM check.',
+        description='Whether the finding came from a SQL rule, an LLM check, or an external tool.',
     )
     created_at: datetime = created_at_field()
     resolved_at: datetime | None = Field(
@@ -1982,7 +1983,7 @@ class MaintenanceProposal(SQLModel, table=True):  # type: ignore
             name='ck_maintenance_proposals_status',
         ),
         CheckConstraint(
-            "source IN ('rule', 'llm')",
+            "source IN ('rule', 'llm', 'external')",
             name='ck_maintenance_proposals_source',
         ),
         Index('idx_maintenance_proposals_vault_status', 'vault_id', 'status'),
