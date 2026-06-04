@@ -166,10 +166,13 @@ hard-deleted. Like the winner merge, this is NOT reversible.
 
 Forward-only actions (the entity merges, `kv_delete`, `record_outcome`,
 `delete_note`, `delete_entity`, `delete_mental_model`) cannot be undone
-with `[r]` — the server refuses with `409 forward_only`. The prompt-loop
-reviewer (`--no-tui`) fetches a live blast-radius preview
-(`POST /lint/findings/{id}/preview`) and asks for explicit confirmation
-before executing any of them; prefer the lifecycle alternatives
+with `[r]` — the server refuses with `409 forward_only`. Both review
+surfaces fetch a live blast-radius preview
+(`POST /lint/findings/{id}/preview`) and demand explicit confirmation
+before executing one: the TUI opens a `[y]/[n]` modal with the preview
+text; the prompt-loop reviewer (`--no-tui`) prints it and asks. Batch
+accept never executes an irreversible action — those findings are
+skipped with "review singly". Prefer the lifecycle alternatives
 (`set_note_status`, `archive_mental_model`, `deprioritize_unit`) unless
 the content must actually go away.
 

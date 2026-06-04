@@ -612,8 +612,22 @@ async def optimizer_compiles_and_stores(ctx: ScenarioContext) -> None:
 # ------------------------------------------------------------------
 
 
+async def _isolated_vault(ctx: ScenarioContext, tag: str) -> str:
+    """A dedicated vault per external-proposal scenario.
+
+    The legacy scenarios in this suite assert on vault-wide lint state
+    (telemetry rollups, resolution counts); running the external-proposal
+    lifecycle in the shared run vault would pollute those aggregates.
+    """
+    created = await ctx.api.create_vault(f'ext-{tag}-{uuid4().hex[:6]}')
+    vault_id = getattr(created, 'id', None) or (
+        created.get('id') if isinstance(created, dict) else None
+    )
+    return str(vault_id)
+
+
 def _external_proposal(
-    ctx: ScenarioContext,
+    vault_id: str,
     *,
     rule_name: str,
     lint_type: str = 'quality',
@@ -621,7 +635,7 @@ def _external_proposal(
     proposed_action: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     proposal: dict[str, Any] = {
-        'vault_id': str(ctx.vault_id),
+        'vault_id': vault_id,
         'rule_name': rule_name,
         'lint_type': lint_type,
         'target_type': target_type,
@@ -646,8 +660,9 @@ def _external_proposal(
     group='external',
 )
 async def external_proposal_creates_pending(ctx: ScenarioContext) -> None:
+    vault_id = await _isolated_vault(ctx, 'create')
     proposal = _external_proposal(
-        ctx,
+        vault_id,
         rule_name='eval-external-create',
         proposed_action={'action_name': 'no_op', 'params': {}},
     )
@@ -656,7 +671,8 @@ async def external_proposal_creates_pending(ctx: ScenarioContext) -> None:
     assert items and items[0]['status'] == 'created', f'unexpected submit result: {result!r}'
     finding_id = items[0]['finding_id']
 
-    findings = await _get_pending_findings(ctx, rule_name='eval-external-create')
+    payload = await ctx.api.lint_findings(vault_id=vault_id, status='pending', limit=100)
+    findings = [f for f in (payload.get('findings') or []) if isinstance(f, dict)]
     match = [f for f in findings if f.get('id') == finding_id]
     ok = bool(match)
     evidence = match[0].get('evidence') or {} if match else {}
@@ -676,7 +692,8 @@ async def external_proposal_creates_pending(ctx: ScenarioContext) -> None:
     group='external',
 )
 async def external_proposal_dedup_idempotent(ctx: ScenarioContext) -> None:
-    proposal = _external_proposal(ctx, rule_name='eval-external-dedup')
+    vault_id = await _isolated_vault(ctx, 'dedup')
+    proposal = _external_proposal(vault_id, rule_name='eval-external-dedup')
     first = (await ctx.api.submit_lint_proposals([proposal]))['results'][0]
     second = (await ctx.api.submit_lint_proposals([proposal]))['results'][0]
     ok = (
@@ -699,7 +716,8 @@ async def external_proposal_dedup_idempotent(ctx: ScenarioContext) -> None:
     group='external',
 )
 async def external_proposal_cooldown_after_dismiss(ctx: ScenarioContext) -> None:
-    proposal = _external_proposal(ctx, rule_name='eval-external-cooldown')
+    vault_id = await _isolated_vault(ctx, 'cooldown')
+    proposal = _external_proposal(vault_id, rule_name='eval-external-cooldown')
     first = (await ctx.api.submit_lint_proposals([proposal]))['results'][0]
     assert first['status'] == 'created', f'seed submit failed: {first!r}'
     await ctx.api.lint_dismiss(first['finding_id'], note='eval-suite: human said no')
@@ -721,12 +739,13 @@ async def external_proposal_cooldown_after_dismiss(ctx: ScenarioContext) -> None
     group='external',
 )
 async def external_proposal_resolved_with_catalogue_action(ctx: ScenarioContext) -> None:
+    vault_id = await _isolated_vault(ctx, 'resolve')
     good = _external_proposal(
-        ctx,
+        vault_id,
         rule_name='eval-external-resolve',
         proposed_action={'action_name': 'no_op', 'params': {}},
     )
-    reserved = _external_proposal(ctx, rule_name='composite_deprioritize_candidate')
+    reserved = _external_proposal(vault_id, rule_name='composite_deprioritize_candidate')
     batch = (await ctx.api.submit_lint_proposals([good, reserved]))['results']
     assert batch[0]['status'] == 'created', f'good item failed: {batch!r}'
     assert batch[1]['status'] == 'rejected', f'reserved rule_name not rejected: {batch!r}'
@@ -783,14 +802,15 @@ async def catalogue_action_discoverability(ctx: ScenarioContext) -> None:
     group='external',
 )
 async def routing_proposal_lifecycle(ctx: ScenarioContext) -> None:
+    vault_id = await _isolated_vault(ctx, 'routing')
     proposal = _external_proposal(
-        ctx,
+        vault_id,
         rule_name='eval-skill-misroute',
         lint_type='routing',
         target_type='note',
         proposed_action={
             'action_name': 'route_note_to_vault',
-            'params': {'target_vault_id': str(ctx.vault_id)},
+            'params': {'target_vault_id': vault_id},
         },
     )
     submitted = (await ctx.api.submit_lint_proposals([proposal]))['results'][0]
@@ -798,21 +818,27 @@ async def routing_proposal_lifecycle(ctx: ScenarioContext) -> None:
     finding_id = submitted['finding_id']
 
     routing_page = await ctx.api.lint_findings(
-        vault_id=str(ctx.vault_id), lint_type='routing', status='pending', limit=100
+        vault_id=vault_id, lint_type='routing', status='pending', limit=100
     )
     listed = [f for f in routing_page.get('findings') or [] if f.get('id') == finding_id]
 
     preview = await ctx.api.lint_preview_action(
         finding_id,
         action='route_note_to_vault',
-        params={'target_vault_id': str(ctx.vault_id)},
+        params={'target_vault_id': vault_id},
     )
-    previewed = bool(str(preview.get('preview') or '').strip())
+    preview_text = str(preview.get('preview') or '')
+    # route_note_to_vault's preview names the migration target — assert the
+    # load-bearing content, not just non-emptiness.
+    previewed = 'migrate' in preview_text and vault_id in preview_text
 
     await ctx.api.lint_dismiss(finding_id, note='eval-suite: lifecycle check only')
     ok = bool(listed) and previewed
     ctx.metrics['pass'] = 1.0 if ok else 0.0
-    assert ok, f'routing lifecycle failed: listed={bool(listed)} previewed={previewed}'
+    assert ok, (
+        f'routing lifecycle failed: listed={bool(listed)} previewed={previewed} '
+        f'preview={preview_text!r}'
+    )
 
 
 SUITE = suite.build()

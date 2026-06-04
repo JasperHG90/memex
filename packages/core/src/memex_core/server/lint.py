@@ -227,7 +227,9 @@ async def _submit_one_external(
         )
     except Exception:
         logger.exception('lint.external.item_failed')
-        return _rejected('internal error inserting proposal')
+        # 'retryable' distinguishes a server-side fault from a validation
+        # rejection — submitters may resubmit this item, unlike the others.
+        return _rejected('internal error inserting proposal (retryable)')
     return _done(
         SubmissionItemResult(index, status, finding_id=str(finding_id) if finding_id else None)
     )
@@ -320,11 +322,15 @@ async def lint_preview_action(
     finding = await _load_finding_or_404(finding_id, api)
     vault_raw = finding.get('vault_id')
     finding_vault = UUID(str(vault_raw)) if vault_raw else None
-    if finding_vault is not None:
-        await check_vault_access(auth, [finding_vault], api, permission=Permission.READ)
     action_id = str(payload.get('action') or '')
     if not action_id:
         raise HTTPException(status_code=400, detail='`action` is required')
+    if finding_vault is not None:
+        await check_vault_access(auth, [finding_vault], api, permission=Permission.READ)
+    else:
+        await _gate_global_finding_action(
+            finding, api, auth, action_id=action_id, permission=Permission.READ
+        )
     try:
         action = get_action(action_id)
     except KeyError as exc:
@@ -468,6 +474,50 @@ async def _gate_finding_for_write(
     if finding_vault is not None:
         await check_vault_access(auth, [finding_vault], api, permission=Permission.WRITE)
     return finding_vault
+
+
+async def _gate_global_finding_action(
+    finding: dict[str, Any],
+    api: MemexAPI,
+    auth: AuthContext | None,
+    *,
+    action_id: str,
+    permission: Permission,
+) -> None:
+    """No-fail-open scope gate for running an action against a GLOBAL finding.
+
+    A NULL-vault finding has no single vault to authorize against, so the
+    per-vault gate in :func:`_gate_finding_for_write` is skipped for it —
+    fine for status flips, but executing a catalogue action against a
+    global target (e.g. an entity merge) mutates state visible to every
+    tenant. Authorization scope comes from the finding's
+    ``evidence.vaults_affected`` (stamped by the emitting scan) — the same
+    contract the entity-collapse carveout enforces. Refuse when it is
+    absent rather than falling through unauthorized. ``no_op`` is exempt:
+    it mutates nothing beyond the status flip global findings already
+    allow.
+    """
+    if action_id == 'no_op':
+        return
+    evidence = finding.get('evidence') or {}
+    if not isinstance(evidence, dict):
+        evidence = {}
+    vaults_affected = [str(v) for v in (evidence.get('vaults_affected') or [])]
+    if not vaults_affected:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                'global finding has no vaults_affected evidence; refusing to '
+                f'run {action_id!r} without an authorization scope.'
+            ),
+        )
+    try:
+        vault_uuids = [UUID(v) for v in vaults_affected]
+    except (ValueError, AttributeError) as exc:
+        raise HTTPException(
+            status_code=400, detail='vaults_affected contains a non-UUID entry'
+        ) from exc
+    await check_vault_access(auth, vault_uuids, api, permission=permission)
 
 
 @router.post('/findings/{finding_id}/flag', dependencies=[Depends(require_write)])
@@ -653,6 +703,10 @@ async def lint_resolve(
                 f'action {action_id!r} does not apply to target_type {target_type!r}; '
                 f'applicable types are {list(action.applicable_target_types)}'
             ),
+        )
+    if finding_vault is None:
+        await _gate_global_finding_action(
+            finding, api, auth, action_id=action_id, permission=Permission.WRITE
         )
     try:
         action.validate(action_params, target_type=target_type, target_id=target_id)
@@ -1021,6 +1075,14 @@ async def lint_reverse(
     followup = resolution.get('followup') if isinstance(resolution, dict) else None
 
     if isinstance(followup, dict) and followup.get('action'):
+        if finding_vault is None:
+            await _gate_global_finding_action(
+                finding,
+                api,
+                auth,
+                action_id=str(followup.get('action')),
+                permission=Permission.WRITE,
+            )
         return await _reverse_via_registry(
             api=api,
             finding_id=finding_id,

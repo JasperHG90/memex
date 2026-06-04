@@ -43,6 +43,7 @@ from memex_cli.cockpit.controller import (
     UnitDetail,
     UnitLineage,
     UnitMeta,
+    action_is_reversible,
     options_for_proposal,
     recommended_resolve_option,
 )
@@ -376,6 +377,38 @@ class ReverseScreen(ModalScreen[str | None]):
     def on_input_submitted(self, event: Input.Submitted) -> None:
         text = (event.value or '').strip()
         self.dismiss(text or None)
+
+
+class ConfirmIrreversibleScreen(ModalScreen[bool]):
+    """Blast-radius confirmation for forward-only catalogue actions.
+
+    Rendered before executing any action the catalogue marks
+    ``reversible=False`` — the preview text comes live from the server
+    (``POST /lint/findings/{id}/preview``) so the reviewer sees what would
+    actually be destroyed, not a canned description.
+    """
+
+    BINDINGS = [
+        Binding('y', 'dismiss(True)', 'Execute'),
+        Binding('n', 'dismiss(False)', 'Cancel'),
+        Binding('escape', 'dismiss(False)', 'Cancel'),
+    ]
+
+    def __init__(self, action_id: str, preview_text: str) -> None:
+        super().__init__()
+        self._action_id = action_id
+        self._preview_text = preview_text
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Label(
+                f'[bold red]{self._action_id} is NOT reversible.[/bold red]',
+                id='confirm-title',
+            ),
+            Static(self._preview_text, id='confirm-preview'),
+            Label('[dim][y] execute · [n]/[Esc] cancel[/dim]', id='confirm-help'),
+            id='confirm-modal',
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -1257,6 +1290,13 @@ class ProposalCockpitApp(App):
         new_name: str,
         member_ids: list[str],
     ) -> None:
+        params = {'new_canonical_name': new_name, 'member_ids': member_ids}
+        if not await self._confirm_if_irreversible(
+            proposal.finding_id, 'collapse_into_new_entity', params
+        ):
+            self._show_status('Cancelled — merge into new entity not confirmed.')
+            self.mode = 'collapse'
+            return
         option = CockpitOption(
             action_id='collapse_into_new_entity',
             label='Collapse into a new entity',
@@ -1682,6 +1722,13 @@ class ProposalCockpitApp(App):
             self.mode = 'list'
             return
 
+        if option.verb == 'resolve' and not await self._confirm_if_irreversible(
+            proposal.finding_id, option.action_id, option.params
+        ):
+            self._show_status('Cancelled — irreversible action not confirmed.')
+            self.mode = 'list'
+            return
+
         try:
             result = await self._controller.resolve(
                 proposal,
@@ -1736,6 +1783,7 @@ class ProposalCockpitApp(App):
             await self._refresh_queue()
             return
         skipped = 0
+        needs_review = 0
         for proposal in proposals:
             # For "accept recommended", resolve each proposal with ITS OWN option
             # so proposal-specific params (e.g. an inbox route's target_vault_id)
@@ -1748,6 +1796,15 @@ class ProposalCockpitApp(App):
                     continue
             else:
                 per_option = option
+            # Irreversible actions never execute from a batch — each one needs
+            # the single-review blast-radius confirmation.
+            if (
+                per_option.verb == 'resolve'
+                and per_option.action_id
+                and action_is_reversible(per_option.action_id) is False
+            ):
+                needs_review += 1
+                continue
             try:
                 await self._controller.resolve(
                     proposal, per_option, note=note, params=per_option.params
@@ -1760,10 +1817,36 @@ class ProposalCockpitApp(App):
             parts.append(f'{ok} resolved')
         if skipped:
             parts.append(f'{skipped} skipped (no recommended action)')
+        if needs_review:
+            parts.append(f'{needs_review} skipped (irreversible — review singly)')
         if fail:
             parts.append(f'{fail} failed')
         self._show_status(', '.join(parts), error=bool(fail))
         await self._refresh_queue()
+
+    async def _confirm_if_irreversible(
+        self,
+        finding_id: str,
+        action_id: str,
+        params: dict[str, Any] | None,
+    ) -> bool:
+        """Blast-radius confirm gate; True when execution may proceed.
+
+        Reversible / unknown-to-catalogue actions pass through (the server
+        re-validates everything); forward-only actions fetch the live
+        preview and require an explicit [y].
+        """
+        if not action_id or action_is_reversible(action_id) is not False:
+            return True
+        preview = await self._controller.preview_action(
+            finding_id, action_id=action_id, params=params
+        )
+        text = preview or (
+            f'{action_id} cannot be undone (live preview unavailable — '
+            'the server may predate the preview endpoint).'
+        )
+        confirmed = await self.push_screen_wait(ConfirmIrreversibleScreen(action_id, text))
+        return bool(confirmed)
 
     # ------------------------------------------------------------------
     # App-level actions

@@ -6,6 +6,11 @@ cascades to child memory-unit timestamps). Reverse re-applies the prior
 value through the same facade so the cascades stay consistent. A prior
 NULL value cannot be re-applied (the facades require a concrete value),
 so reverse refuses with a clear error in that case.
+
+Date-reverse caveat: the service recomputes the unit-timestamp delta from
+the note's CURRENT publish date, so a reverse restores the note-level
+date exactly but child unit timestamps only when nothing else moved them
+in between — approximate, like any cascade-based undo.
 """
 
 from __future__ import annotations
