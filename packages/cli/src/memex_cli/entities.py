@@ -458,6 +458,18 @@ async def scan_merges_cmd(
             ),
         ),
     ] = None,
+    entity: Annotated[
+        str | None,
+        typer.Option(
+            '--entity',
+            '-e',
+            help=(
+                'Scan only entities whose name contains this string '
+                '(case-insensitive), ignoring the cooldown — e.g. '
+                '`--entity Marc` to re-scan the Marc cluster on demand.'
+            ),
+        ),
+    ] = None,
 ):
     """Run an on-demand cross-batch entity-cluster collapse scan.
 
@@ -465,6 +477,9 @@ async def scan_merges_cmd(
     NOT applied — review the proposals with ``memex lint findings`` and
     approve via ``memex lint resolve <id> --winner <member>``. The collapse
     affects every vault listed in ``evidence.vaults_affected``.
+
+    Pass ``--entity <name>`` to target a specific cluster (e.g. "Marc") without
+    waiting out the per-entity cooldown.
     """
     config: MemexConfig = ctx.obj
     async with get_api_context(config) as api:
@@ -474,6 +489,7 @@ async def scan_merges_cmd(
                 scan_cooldown_days=scan_cooldown_days,
                 pair_threshold=pair_threshold,
                 cluster_min_threshold=cluster_min_threshold,
+                focus=entity,
             )
         except Exception as e:
             handle_api_error(e)

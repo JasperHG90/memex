@@ -590,6 +590,37 @@ class CockpitProposal:
         )
 
     @property
+    def target_display(self) -> str:
+        """Compact human-readable target for queue / detail rows.
+
+        Prefers the server-resolved ``target_label`` (note title / entity /
+        mental-model name), then evidence-embedded names, then a unit-text
+        snippet, and finally a truncated ``target_id`` — so the reviewer never
+        stares at a bare UUID.
+        """
+        label: str | None = self.target_label
+        if not label and isinstance(self.raw_evidence, dict):
+            names = self.raw_evidence.get('member_canonical_names') or self.raw_evidence.get(
+                'canonical_names'
+            )
+            if isinstance(names, dict):
+                names = list(names.values())
+            if isinstance(names, list) and names:
+                # Cap to a few names + "+N more" so a many-member cluster reads
+                # as a deliberate summary, not a mid-name truncation.
+                shown = ', '.join(str(n) for n in names[:3])
+                label = shown if len(names) <= 3 else f'{shown} +{len(names) - 3} more'
+            else:
+                entity_name = self.raw_evidence.get('entity_name')
+                label = str(entity_name) if entity_name else None
+        if not label:
+            label = self.target_text
+        if not label:
+            return f'{self.target_id[:8]}…'
+        collapsed = ' '.join(label.split())
+        return collapsed if len(collapsed) <= 56 else collapsed[:55] + '…'
+
+    @property
     def is_llm_source(self) -> bool:
         return self.source == 'llm'
 
@@ -622,6 +653,7 @@ class CockpitClient(Protocol):
         action: str | None = None,
         params: dict[str, Any] | None = None,
         note: str | None = None,
+        legacy_params: dict[str, Any] | None = None,
     ) -> dict[str, Any]: ...
 
     async def lint_dismiss(
@@ -708,6 +740,28 @@ class CockpitController:
             action=action_id,
             params=params,
             note=note,
+        )
+
+    async def apply_entity_collapse(
+        self,
+        finding_id: str,
+        *,
+        winner_id: str,
+        member_ids: list[str],
+        note: str | None = None,
+    ) -> dict[str, Any]:
+        """Apply an entity-cluster collapse with a chosen winner + member subset.
+
+        Uses the server's ``entity_collapse_cluster`` carveout (no canned
+        ``action``; ``winner_id`` / ``member_ids`` are read from the top-level
+        body, so they go through ``legacy_params``). Only ``member_ids`` are
+        merged into ``winner_id`` — deselected members stay separate.
+        """
+        return await self._client.lint_resolve(
+            finding_id,
+            action=None,
+            note=note,
+            legacy_params={'winner_id': winner_id, 'member_ids': member_ids},
         )
 
     async def reverse(self, finding_id: str) -> dict[str, Any]:
@@ -923,6 +977,23 @@ class CockpitController:
             return getattr(note, 'original_text', None)
         except Exception:  # noqa: BLE001
             return None
+
+    async def fetch_note_detail(self, note_id: str) -> tuple[str | None, str | None] | None:
+        """Fetch ``(title, original_text)`` for a note by ID.
+
+        Used by DETAIL mode when a finding targets a note directly (e.g. inbox
+        routing proposals), where ``target_id`` is a note id, not a unit id.
+        Returns ``None`` on any error so the caller can render a load failure.
+        """
+        try:
+            note = await self._client.get_note(note_id)
+        except Exception:  # noqa: BLE001
+            return None
+        # Handle both a model object (attrs) and a raw dict, so a client that
+        # returns either still surfaces the note's title/body.
+        if isinstance(note, dict):
+            return note.get('title'), note.get('original_text')
+        return getattr(note, 'title', None), getattr(note, 'original_text', None)
 
 
 def _count_toc_nodes(toc: list[dict[str, Any]]) -> int:

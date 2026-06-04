@@ -89,6 +89,9 @@ TARGET_ENRICHMENT_SQL = (
     'COALESCE('
     '(SELECT n.title FROM memory_units mu LEFT JOIN notes n ON n.id = mu.note_id '
     "WHERE mp.target_type IN ('memory_unit', 'unit_entity') AND mu.id::text = mp.target_id), "
+    # Note targets (e.g. inbox routing proposals) carry the note id directly.
+    '(SELECT n.title FROM notes n '
+    "WHERE mp.target_type = 'note' AND n.id::text = mp.target_id), "
     '(SELECT mm.name FROM mental_models mm '
     "WHERE mp.target_type = 'mental_model' AND mm.id::text = mp.target_id), "
     '(SELECT e.canonical_name FROM entities e '

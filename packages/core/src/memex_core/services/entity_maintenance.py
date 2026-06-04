@@ -60,6 +60,16 @@ _SUGGESTED_ACTION = (
 )
 
 
+def _like_escape(value: str) -> str:
+    """Escape LIKE/ILIKE metacharacters so a focus string matches literally.
+
+    Without this, ``%`` and ``_`` in an operator-supplied ``--entity`` value
+    act as wildcards (e.g. ``ma_c`` would match ``marc``). The backslash must
+    be escaped first since it is the default LIKE escape character.
+    """
+    return value.replace('\\', '\\\\').replace('%', '\\%').replace('_', '\\_')
+
+
 def _composition_hash(member_ids: list[str]) -> str:
     """Order-independent fingerprint of a cluster's membership."""
     canonical = sorted(str(m) for m in member_ids)
@@ -126,6 +136,7 @@ async def scan_collapse_clusters(
     scan_cooldown_days: int | None = None,
     pair_threshold: float | None = None,
     cluster_min_threshold: float | None = None,
+    focus: str | None = None,
 ) -> dict[str, Any]:
     """Scan top-N active entities, cluster duplicates, emit cluster proposals.
 
@@ -196,30 +207,37 @@ async def scan_collapse_clusters(
                 logger.info('entity_collapse_scan: concurrent scan in progress, skipping')
                 return summary
 
-            cand_rows = (
-                (
-                    await session.execute(
-                        text(
-                            """
-                        SELECT id::text AS id,
-                               canonical_name,
-                               phonetic_code,
-                               mention_count,
-                               first_seen,
-                               last_merge_scan_at
-                        FROM entities
-                        WHERE last_merge_scan_at IS NULL
-                           OR last_merge_scan_at < :cutoff
-                        ORDER BY mention_count DESC, first_seen ASC
-                        LIMIT :limit
-                        """
-                        ),
-                        {'cutoff': cutoff, 'limit': top_n},
-                    )
-                )
-                .mappings()
-                .all()
-            )
+            # Targeted scan: when ``focus`` is given (e.g. "Marc"), select every
+            # entity whose canonical_name contains it — case-insensitive — and
+            # ignore the per-entity cooldown, so an operator can re-scan a known
+            # cluster on demand without waiting out the cooldown window. Without
+            # focus, scan the most-active entities subject to the cooldown.
+            if focus:
+                cand_sql = """
+                    SELECT id::text AS id, canonical_name, phonetic_code,
+                           mention_count, first_seen, last_merge_scan_at
+                    FROM entities
+                    WHERE canonical_name ILIKE :focus_pattern ESCAPE '\\'
+                    ORDER BY mention_count DESC, first_seen ASC
+                    LIMIT :limit
+                """
+                cand_params: dict[str, Any] = {
+                    'focus_pattern': f'%{_like_escape(focus)}%',
+                    'limit': top_n,
+                }
+            else:
+                cand_sql = """
+                    SELECT id::text AS id, canonical_name, phonetic_code,
+                           mention_count, first_seen, last_merge_scan_at
+                    FROM entities
+                    WHERE last_merge_scan_at IS NULL
+                       OR last_merge_scan_at < :cutoff
+                    ORDER BY mention_count DESC, first_seen ASC
+                    LIMIT :limit
+                """
+                cand_params = {'cutoff': cutoff, 'limit': top_n}
+
+            cand_rows = (await session.execute(text(cand_sql), cand_params)).mappings().all()
 
             candidates: list[dict[str, Any]] = [dict(r) for r in cand_rows]
             summary['scanned'] = len(candidates)

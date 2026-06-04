@@ -23,6 +23,110 @@ from memex_cli.cockpit.controller import (
 )
 
 
+def test_target_display_prefers_label_then_evidence_then_text_then_id():
+    """Queue/detail rows must show a human label, never a bare UUID."""
+    base = {'id': '1', 'rule_name': 'r', 'lint_type': 'quality'}
+    # 1) Server-resolved label (note title / entity / mm name) wins.
+    p = CockpitProposal.from_finding(
+        {
+            **base,
+            'target_type': 'note',
+            'target_id': 'a' * 36,
+            'target_label': 'AlphaEvolve article',
+        }
+    )
+    assert p.target_display == 'AlphaEvolve article'
+    # 2) Entity-collapse member names from evidence when no server label.
+    p2 = CockpitProposal.from_finding(
+        {
+            **base,
+            'target_type': 'entity',
+            'target_id': 'b' * 36,
+            'evidence': {'member_canonical_names': {'b' * 36: 'Marc', 'c' * 36: 'Marc Haas'}},
+        }
+    )
+    assert 'Marc' in p2.target_display and 'Marc Haas' in p2.target_display
+    # 3) Unit text snippet when that's all there is.
+    p3 = CockpitProposal.from_finding(
+        {
+            **base,
+            'target_type': 'memory_unit',
+            'target_id': 'd' * 36,
+            'target_text': 'the fact body',
+        }
+    )
+    assert p3.target_display == 'the fact body'
+    # 4) Last resort: truncated id (never the full bare UUID).
+    p4 = CockpitProposal.from_finding(
+        {**base, 'target_type': 'memory_unit', 'target_id': 'abcdef1234567890'}
+    )
+    assert p4.target_display == 'abcdef12…'
+
+
+@pytest.mark.asyncio
+async def test_fetch_note_detail_returns_title_and_text():
+    class _Note:
+        title = 'Quarterly Planning'
+        original_text = 'Body of the note.'
+
+    class _Client:
+        async def get_note(self, note_id: Any) -> Any:
+            return _Note()
+
+    ctrl = CockpitController(_Client())
+    assert await ctrl.fetch_note_detail('n') == ('Quarterly Planning', 'Body of the note.')
+
+
+@pytest.mark.asyncio
+async def test_fetch_note_detail_none_on_error():
+    class _Client:
+        async def get_note(self, note_id: Any) -> Any:
+            raise RuntimeError('boom')
+
+    ctrl = CockpitController(_Client())
+    assert await ctrl.fetch_note_detail('n') is None
+
+
+@pytest.mark.asyncio
+async def test_fetch_note_detail_handles_dict_note():
+    """A client returning a dict (not a model) still yields title/text."""
+
+    class _Client:
+        async def get_note(self, note_id: Any) -> Any:
+            return {'title': 'Quarterly Planning', 'original_text': 'Body.'}
+
+    ctrl = CockpitController(_Client())
+    assert await ctrl.fetch_note_detail('n') == ('Quarterly Planning', 'Body.')
+
+
+@pytest.mark.asyncio
+async def test_apply_entity_collapse_uses_carveout_with_member_subset():
+    """The collapse apply hits the server carveout (action=None) and sends the
+    chosen winner + member subset via top-level (legacy_params) body keys."""
+    captured: dict[str, Any] = {}
+
+    class _Client:
+        async def lint_resolve(
+            self,
+            finding_id: str,
+            *,
+            action: Any = None,
+            params: Any = None,
+            note: Any = None,
+            legacy_params: Any = None,
+        ) -> dict[str, Any]:
+            captured.update(
+                finding_id=finding_id, action=action, params=params, legacy_params=legacy_params
+            )
+            return {'status': 'resolved'}
+
+    ctrl = CockpitController(_Client())
+    await ctrl.apply_entity_collapse('f1', winner_id='w', member_ids=['w', 'l1'])
+    assert captured['action'] is None  # carveout, not a canned action
+    assert captured['params'] is None
+    assert captured['legacy_params'] == {'winner_id': 'w', 'member_ids': ['w', 'l1']}
+
+
 def test_recommended_resolve_option_inbox_route_carries_vault_param():
     """An inbox route's recommended option must carry its target_vault_id.
 

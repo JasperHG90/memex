@@ -561,6 +561,71 @@ async def test_scan_emits_cluster_of_three(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_focus_scan_targets_named_cluster_ignoring_cooldown(
+    session: AsyncSession,
+    metastore,
+):
+    """``focus`` (CLI ``--entity Marc``) re-scans the named cluster even when the
+    entities were recently scanned — the cooldown that would otherwise exclude
+    them is bypassed for a targeted scan."""
+    from datetime import timedelta
+
+    from memex_common.config import EntityMaintenanceConfig, MemexConfig
+    from memex_core.services.entity_maintenance import scan_collapse_clusters
+
+    suffix = uuid4().hex[:8]
+    a = await _make_entity(
+        session,
+        f'Marc de haas {suffix}',
+        mention_count=13,
+        first_seen=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    b = await _make_entity(
+        session,
+        f'Marc de Haas {suffix}',
+        mention_count=3,
+        first_seen=datetime(2026, 2, 1, tzinfo=timezone.utc),
+    )
+    # Stamp both as scanned 1 day ago — inside the default 7-day cooldown.
+    async with metastore.session() as s:
+        await s.execute(
+            text(
+                'UPDATE entities SET last_merge_scan_at = :ts WHERE id = ANY(CAST(:ids AS uuid[]))'
+            ),
+            {'ts': datetime.now(timezone.utc) - timedelta(days=1), 'ids': [str(a.id), str(b.id)]},
+        )
+        await s.commit()
+
+    config = MemexConfig()
+    config.server.memory.entity_maintenance = EntityMaintenanceConfig(scan_enabled=True)
+    api_stub = MagicMock()
+    api_stub.metastore = metastore
+    api_stub.config = config
+
+    async def _cluster_has(eid: str) -> bool:
+        async with metastore.session() as s:
+            rows = (
+                await s.execute(
+                    text(
+                        'SELECT evidence FROM maintenance_proposals '
+                        "WHERE rule_name = 'entity_collapse_cluster' AND status = 'pending'"
+                    )
+                )
+            ).all()
+        return any(eid in (r[0].get('cluster_members') or []) for r in rows)
+
+    # Plain scan: the cooldown excludes the recently-stamped Marcs.
+    await scan_collapse_clusters(api_stub)
+    assert not await _cluster_has(str(a.id)), 'cooldown should exclude the stamped Marc cluster'
+
+    # Focused scan: bypasses cooldown, targets the cluster by name → emits.
+    focused = await scan_collapse_clusters(api_stub, focus=suffix)
+    assert focused['clusters_emitted'] >= 1
+    assert await _cluster_has(str(a.id)) and await _cluster_has(str(b.id))
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_scan_emits_with_default_thresholds(
     session: AsyncSession,
     metastore,
