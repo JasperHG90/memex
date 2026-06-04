@@ -287,6 +287,50 @@ curl -X POST "$MEMEX_URL/api/v1/lint/proposals" \
 Agents use the `memex_submit_lint_proposal` MCP tool (and
 `memex_list_lint_actions` to discover the catalogue) instead of raw HTTP.
 
+### Typed submission with the Python client
+
+Don't hand-build dicts — use the Pydantic models in `memex_common.lint`.
+Subclass `LintRule` to define a custom rule as reusable metadata (the rule
+*is* its identity; *when* it fires is your detection logic's business),
+then `build()` a concrete proposal per finding and submit a batch:
+
+```python
+import httpx
+from memex_common.client import RemoteMemexAPI
+from memex_common.lint import LintRule, ProposedAction
+
+
+class DecommissionedSkillRef(LintRule):
+    rule_name: str = "decommissioned-skill-ref"
+    lint_type: str = "governance"
+    description: str = "Unit cites a skill retired in the 2026-05 cleanup."
+
+
+rule = DecommissionedSkillRef()   # malformed metadata fails HERE, not at submit
+
+async def flag(api: RemoteMemexAPI, unit_id: str) -> None:
+    proposal = rule.build(
+        vault_id="hermes",
+        target_type="memory_unit",
+        target_id=unit_id,
+        suggested_action="Deprioritise the unit; the skill no longer exists.",
+        evidence={"skill": "old-router", "confidence": 0.97},
+        proposed_action=ProposedAction(
+            action_name="deprioritize_unit",
+            params={"reason": "references decommissioned skill"},
+        ),
+    )
+    result = await api.submit_lint_proposals([proposal])   # models or dicts
+    print(result["results"][0])   # {"index": 0, "status": "created", "finding_id": "…"}
+```
+
+`submit_lint_proposals` accepts `LintProposal` instances or raw dicts and
+serialises them for you. `LintProposal`/`LintRule` enforce shape locally
+(slug, lint_type, evidence-key, length); the server adds the
+reserved-internal-name check — the wire shape is defined once in
+`memex_common.lint` and the server validator subclasses it, so the two
+cannot drift.
+
 Submission rules:
 
 - `rule_name` is a lowercase slug you own. Internal rule names and the

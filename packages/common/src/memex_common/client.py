@@ -5,12 +5,15 @@ Used by the CLI to interact with a running Memex server.
 
 import datetime as dt
 import logging
-from typing import Any, AsyncGenerator
+from typing import TYPE_CHECKING, Any, AsyncGenerator
 
 from uuid import UUID
 
 import httpx
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from memex_common.lint import LintProposal
 
 from memex_common.kv_utils import is_procedure_key
 from memex_common.vault_utils import resolve_vault_list
@@ -1647,14 +1650,22 @@ class RemoteMemexAPI:
 
     async def submit_lint_proposals(
         self,
-        proposals: list[dict[str, Any]],
+        proposals: 'list[LintProposal | dict[str, Any]]',
     ) -> dict[str, Any]:
         """Submit external lint proposals (batch, partial-success).
 
-        Each result item carries ``status`` ∈ {'created', 'deduplicated',
-        'cooldown_suppressed', 'rejected'} plus ``finding_id`` / ``detail``.
+        Accepts :class:`memex_common.lint.LintProposal` instances (build
+        them directly or via a :class:`memex_common.lint.LintRule` subclass)
+        or raw dicts. Each result item carries ``status`` ∈ {'created',
+        'deduplicated', 'cooldown_suppressed', 'rejected'} plus
+        ``finding_id`` / ``detail``.
         """
-        return await self._post('lint/proposals', data={'proposals': proposals})
+        from memex_common.lint import LintProposal
+
+        serialised = [
+            p.model_dump(mode='json') if isinstance(p, LintProposal) else p for p in proposals
+        ]
+        return await self._post('lint/proposals', data={'proposals': serialised})
 
     async def lint_preview_action(
         self,

@@ -24,6 +24,46 @@ from memex_core.services.lint import V1_RULES
 from memex_core.services.proposal_actions import list_actions
 
 
+class TestSharedShapeSSOT:
+    """The wire shape lives once in memex_common; core only adds the
+    reserved-name check. These pins stop the two surfaces from drifting."""
+
+    def test_lint_types_parity_with_enum(self) -> None:
+        from memex_common.lint import LINT_TYPES
+        from memex_core.memory.sql_models import LintType
+
+        assert set(LINT_TYPES) == {item.value for item in LintType}
+
+    def test_request_inherits_common_shape(self) -> None:
+        from memex_common.lint import LintProposal
+
+        assert issubclass(ExternalProposalRequest, LintProposal)
+        assert set(ExternalProposalRequest.model_fields) == set(LintProposal.model_fields)
+
+    def test_proposed_action_is_the_common_object(self) -> None:
+        from memex_common.lint import ProposedAction as CommonProposedAction
+        from memex_core.services.lint_external import ProposedAction as CoreProposedAction
+
+        assert CoreProposedAction is CommonProposedAction
+
+    def test_client_model_defers_reserved_check_to_server(self) -> None:
+        # The shared client model must NOT reject reserved names — that is
+        # the server's authority (needs the live rule set). It only enforces
+        # shape, so a reserved name passes here and is rejected by the server
+        # subclass.
+        from memex_common.lint import LintProposal
+
+        ok = LintProposal(
+            rule_name='composite_deprioritize_candidate',
+            lint_type='quality',
+            target_type='note',
+            target_id='t',
+            description='d',
+            suggested_action='s',
+        )
+        assert ok.rule_name == 'composite_deprioritize_candidate'
+
+
 def _request(**overrides: object) -> ExternalProposalRequest:
     base: dict[str, object] = {
         'vault_id': str(uuid4()),

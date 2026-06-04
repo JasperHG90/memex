@@ -22,31 +22,35 @@ refactor).
 
 from __future__ import annotations
 
-import json
-import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import field_validator
 from sqlalchemy import text as sa_text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import col, select
 
-from memex_core.memory.sql_models import LintType, MaintenanceProposal
+from memex_common.lint import LintProposal, ProposedAction
+from memex_core.memory.sql_models import MaintenanceProposal
 from memex_core.services.lint import V1_RULES
 from memex_core.services.proposal_actions import ActionValidationError, get_action
 
 if TYPE_CHECKING:
     from memex_core.api import MemexAPI
 
-
-# Lowercase slug: dash or underscore. Underscores are allowed on purpose —
-# internal rule names are snake_case, so the reserved set below (not the
-# pattern) is what fences collisions.
-_RULE_NAME_RE = re.compile(r'^[a-z][a-z0-9_-]*$')
-_TARGET_TYPE_RE = re.compile(r'^[a-z][a-z0-9_]*$')
+# Re-export so existing importers (server, tests) keep their import site.
+__all__ = [
+    'ExternalProposalRejected',
+    'ExternalProposalRequest',
+    'ProposedAction',
+    'RESERVED_RULE_NAMES',
+    'SubmissionItemResult',
+    'action_descriptor',
+    'insert_external_proposal',
+    'validate_proposed_action',
+]
 
 _RESERVED_LITERALS = (
     'entity_collapse_cluster',
@@ -62,115 +66,29 @@ RESERVED_RULE_NAMES: frozenset[str] = frozenset(spec.name for spec in V1_RULES) 
     _RESERVED_LITERALS
 )
 
-# Evidence keys the server owns; accepting them from a submitter would let
-# an external tool forge resolution records, rule metadata, or — via
-# vaults_affected — the authorization scope the global-finding gate trusts.
-_RESERVED_EVIDENCE_KEYS = frozenset(
-    {'resolution', 'rule_metadata', 'proposed_action', 'vaults_affected'}
-)
-
-_MAX_EVIDENCE_BYTES = 16_384
-
-_VALID_LINT_TYPES = frozenset(item.value for item in LintType)
-
 
 class ExternalProposalRejected(ValueError):
     """A single proposal failed validation; carries the per-item detail."""
 
 
-class ProposedAction(BaseModel):
-    action_name: str = Field(
-        min_length=1,
-        max_length=64,
-        description='id of a registered catalogue action (see the lint actions listing).',
-    )
-    params: dict[str, Any] = Field(
-        default_factory=dict,
-        description='Parameters for the action, matching its published params_schema.',
-    )
+class ExternalProposalRequest(LintProposal):
+    """Server-side proposal validator.
 
-
-class ExternalProposalRequest(BaseModel):
-    """One externally-submitted lint proposal (rule metadata included inline)."""
-
-    vault_id: str | None = Field(
-        default=None,
-        description='Vault UUID or name the finding belongs to.',
-    )
-    rule_name: str = Field(
-        min_length=1,
-        max_length=64,
-        description='Caller-owned rule identifier (lowercase slug).',
-    )
-    lint_type: str = Field(
-        description='Finding category: structural | quality | governance | schema | routing.',
-    )
-    target_type: str = Field(
-        min_length=1,
-        max_length=64,
-        description="Construct the finding targets (e.g. 'note', 'memory_unit', 'entity', 'kv').",
-    )
-    target_id: str = Field(
-        min_length=1,
-        max_length=512,
-        description='Identifier of the targeted construct (UUID for rows, key for KV).',
-    )
-    description: str = Field(
-        min_length=1,
-        max_length=500,
-        description='What the rule detects and why it fired — shown to the reviewer.',
-    )
-    suggested_action: str = Field(
-        min_length=1,
-        max_length=500,
-        description='Free-text remediation summary shown on the finding card.',
-    )
-    evidence: dict[str, Any] = Field(
-        default_factory=dict,
-        description='Rule-specific payload supporting the finding.',
-    )
-    proposed_action: ProposedAction | None = Field(
-        default=None,
-        description='Optional catalogue action the cockpit pre-selects at review time.',
-    )
+    Inherits the wire shape + core-independent hygiene from
+    ``memex_common.lint.LintProposal`` (the SSOT) and adds the one check
+    that needs core internals: rejecting rule names reserved for internal
+    emitters. The shared shape means the client builder and this validator
+    can never diverge — the server can only add constraints.
+    """
 
     @field_validator('rule_name')
     @classmethod
-    def _rule_name_hygiene(cls, v: str) -> str:
-        if not _RULE_NAME_RE.fullmatch(v):
-            raise ValueError('rule_name must be a lowercase slug ([a-z][a-z0-9_-]*).')
+    def _rule_name_not_reserved(cls, v: str) -> str:
+        # LintProposal's own validator has already enforced slug + llm_
+        # prefix; here we only add the reserved-set rejection.
         if v in RESERVED_RULE_NAMES:
             raise ValueError(f'rule_name {v!r} is reserved for internal emitters.')
-        if v.startswith('llm_'):
-            raise ValueError("rule_name prefix 'llm_' is reserved for internal emitters.")
         return v
-
-    @field_validator('lint_type')
-    @classmethod
-    def _lint_type_member(cls, v: str) -> str:
-        if v not in _VALID_LINT_TYPES:
-            raise ValueError(f'lint_type must be one of {sorted(_VALID_LINT_TYPES)}.')
-        return v
-
-    @field_validator('target_type')
-    @classmethod
-    def _target_type_hygiene(cls, v: str) -> str:
-        if not _TARGET_TYPE_RE.fullmatch(v):
-            raise ValueError('target_type must be a lowercase identifier ([a-z][a-z0-9_]*).')
-        return v
-
-    @field_validator('evidence')
-    @classmethod
-    def _evidence_hygiene(cls, v: dict[str, Any]) -> dict[str, Any]:
-        clashes = _RESERVED_EVIDENCE_KEYS & v.keys()
-        if clashes:
-            raise ValueError(f'evidence keys {sorted(clashes)} are reserved for the server.')
-        try:
-            size = len(json.dumps(v, default=str))
-        except (TypeError, ValueError) as exc:
-            raise ValueError(f'evidence is not JSON-serializable: {exc}') from exc
-        if size > _MAX_EVIDENCE_BYTES:
-            raise ValueError(f'evidence too large ({size} bytes > {_MAX_EVIDENCE_BYTES}).')
         return v
 
 
