@@ -4,10 +4,19 @@ Routes:
 - GET    /api/v1/lint/status                          — pending counts (global + per-vault)
 - GET    /api/v1/lint/findings                        — list findings (CLI surface, offset paged)
 - GET    /api/v1/lint/flags                           — cursor-paginated agent surface
+- GET    /api/v1/lint/actions                         — the closed proposal-action catalogue (read-only)
+- POST   /api/v1/lint/proposals                       — externally-submitted proposals (single or batch)
 - POST   /api/v1/lint/findings/{finding_id}/dismiss   — flip status to 'dismissed' (optional note)
 - POST   /api/v1/lint/findings/{finding_id}/resolve   — flip status to 'resolved' (optional canned action + note)
 - POST   /api/v1/lint/findings/{finding_id}/apply     — DEPRECATED: alias for the winner-proposal apply path
 - POST   /api/v1/lint/findings/{finding_id}/reverse   — reverse a previously applied resolution
+
+``/proposals`` is the external ingress: agent skills submit findings whose
+rule is pure metadata traveling with the proposal (no server-side rule
+registration). Batches are partial-success — every item carries its own
+``status ∈ {created, deduplicated, cooldown_suppressed, rejected}`` and a
+bad item never fails its siblings. Submission only writes a pending row;
+execution still happens through the human-reviewed ``/resolve`` path.
 
 The ``findings`` endpoint backs ``memex lint findings`` (CLI). The
 ``flags`` endpoint is the agent surface — shape-stable returns and
@@ -27,6 +36,7 @@ mutations gate on :func:`_require_attended_mode` exactly like
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 from datetime import datetime, timezone
@@ -34,7 +44,10 @@ from typing import Annotated, Any
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
+from pydantic import ValidationError
 from sqlalchemy import text
+
+from memex_core import metrics
 
 from memex_common.config import Permission
 from memex_core.api import MemexAPI
@@ -48,13 +61,29 @@ from memex_core.server.auth import (
 )
 from memex_core.server.common import _handle_error, get_api
 from memex_core.services.lint import TARGET_ENRICHMENT_SQL, LintSubsystemNotInitializedError
+from memex_core.services.lint_external import (
+    ExternalProposalRejected,
+    ExternalProposalRequest,
+    SubmissionItemResult,
+    action_descriptor,
+    insert_external_proposal,
+    validate_proposed_action,
+)
 from memex_core.services.proposal_actions import (
     ActionValidationError,
     ProposalActionError,
     get_action,
+    list_actions,
 )
 
 logger = logging.getLogger('memex.core.server.lint')
+
+try:  # pragma: no cover - optional dependency
+    from opentelemetry import trace as _otel_trace
+
+    _tracer = _otel_trace.get_tracer('memex.lint')
+except Exception:  # pragma: no cover - otel absent
+    _tracer = None
 
 _UNATTENDED_OPT_IN_ENV = 'MEMEX_LINT_ALLOW_UNATTENDED_APPLY'
 
@@ -128,11 +157,156 @@ async def lint_status(
         raise _handle_error(e, 'Failed to read lint status')
 
 
+@router.get('/actions', dependencies=[Depends(require_read)])
+async def lint_actions_catalogue(
+    api: Annotated[MemexAPI, Depends(get_api)],
+) -> dict[str, Any]:
+    """The closed proposal-action catalogue, with per-action params schemas.
+
+    Read-only discoverability for external submitters and review UIs; the
+    catalogue itself only grows through core releases.
+    """
+    return {'actions': [action_descriptor(a) for a in sorted(list_actions(), key=lambda a: a.id)]}
+
+
+async def _submit_one_external(
+    api: MemexAPI,
+    auth: AuthContext | None,
+    index: int,
+    item: Any,
+    *,
+    actor: str,
+    require_vault: bool,
+) -> SubmissionItemResult:
+    """Process one batch item; never raises — failures become per-item results."""
+    lint_type_label = 'invalid'
+    vault_label = 'unresolved'
+
+    def _done(result: SubmissionItemResult) -> SubmissionItemResult:
+        metrics.LINT_EXTERNAL_PROPOSALS_TOTAL.labels(
+            lint_type=lint_type_label, result=result.status, vault_id=vault_label
+        ).inc()
+        return result
+
+    def _rejected(detail: str) -> SubmissionItemResult:
+        return _done(SubmissionItemResult(index, 'rejected', detail=detail))
+
+    if not isinstance(item, dict):
+        return _rejected('proposal must be a JSON object')
+    try:
+        req = ExternalProposalRequest(**item)
+    except ValidationError as exc:
+        first = exc.errors()[0]
+        loc = '.'.join(str(part) for part in first.get('loc', ()))
+        return _rejected(f'{loc or "proposal"}: {first.get("msg", "invalid")}')
+    lint_type_label = req.lint_type
+    try:
+        validate_proposed_action(req)
+    except ExternalProposalRejected as exc:
+        return _rejected(str(exc))
+
+    vault_uuid: UUID | None = None
+    if req.vault_id is None:
+        if require_vault:
+            return _rejected('vault_id is required for external proposals')
+    else:
+        try:
+            vault_uuid = await api.resolve_vault_identifier(req.vault_id)
+        except Exception:
+            return _rejected(f'unknown vault {req.vault_id!r}')
+        try:
+            await check_vault_access(auth, [vault_uuid], api, permission=Permission.WRITE)
+        except HTTPException:
+            return _rejected('vault access denied')
+        vault_label = str(vault_uuid)
+
+    try:
+        status, finding_id = await insert_external_proposal(
+            api, req, vault_id=vault_uuid, actor=actor
+        )
+    except Exception:
+        logger.exception('lint.external.item_failed')
+        return _rejected('internal error inserting proposal')
+    return _done(
+        SubmissionItemResult(index, status, finding_id=str(finding_id) if finding_id else None)
+    )
+
+
+@router.post('/proposals', dependencies=[Depends(require_write)])
+async def lint_submit_proposals(
+    api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+    payload: Annotated[Any, Body(embed=False)] = None,
+) -> dict[str, Any]:
+    """Submit externally-detected lint proposals (single object or batch).
+
+    Accepts a bare proposal object, a list, or ``{"proposals": [...]}``.
+    Batch is partial-success: each item resolves independently to
+    ``created`` (fresh pending row), ``deduplicated`` (an existing row
+    already covers it — its id is returned), ``cooldown_suppressed`` (a
+    human resolved the same finding within the cooldown window), or
+    ``rejected`` (validation / vault failure with a per-item detail).
+    Submission is non-destructive — no attended-mode gate; actions only
+    execute later through ``/resolve``.
+    """
+    cfg = api.config.server.memory.lint.external_proposals
+    if isinstance(payload, dict) and isinstance(payload.get('proposals'), list):
+        items = payload['proposals']
+    elif isinstance(payload, dict):
+        items = [payload]
+    elif isinstance(payload, list):
+        items = payload
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail='body must be a proposal object, a list, or {"proposals": [...]}',
+        )
+    if not items:
+        raise HTTPException(status_code=400, detail='no proposals supplied')
+    if len(items) > cfg.max_batch:
+        raise HTTPException(
+            status_code=400,
+            detail=f'batch size {len(items)} exceeds max_batch {cfg.max_batch}',
+        )
+
+    actor = _audit_actor()
+    span_ctx = (
+        _tracer.start_as_current_span(
+            'memex.lint.submit_external',
+            attributes={'lint.external.batch_size': len(items)},
+        )
+        if _tracer
+        else contextlib.nullcontext()
+    )
+    results: list[SubmissionItemResult] = []
+    with span_ctx as span:
+        for index, item in enumerate(items):
+            results.append(
+                await _submit_one_external(
+                    api, auth, index, item, actor=actor, require_vault=cfg.require_vault
+                )
+            )
+        counts = {
+            status: sum(1 for r in results if r.status == status)
+            for status in ('created', 'deduplicated', 'cooldown_suppressed', 'rejected')
+        }
+        if span is not None:
+            span.set_attribute('lint.external.created', counts['created'])
+            span.set_attribute('lint.external.rejected', counts['rejected'])
+    # Counts only — external rule names are user-supplied and stay out of
+    # INFO logs (cardinality + leak hygiene).
+    logger.info(
+        'lint.external.submitted',
+        extra={'batch_size': len(items), 'actor': actor, **counts},
+    )
+    return {'results': [r.as_dict() for r in results], **counts}
+
+
 @router.get('/findings', dependencies=[Depends(require_read)])
 async def lint_findings(
     api: Annotated[MemexAPI, Depends(get_api)],
     vault_id: UUID | None = Query(None, description='Scope to one vault.'),
-    lint_type: str | None = Query(None, pattern='^(structural|quality|governance|schema)$'),
+    lint_type: str | None = Query(None, pattern='^(structural|quality|governance|schema|routing)$'),
     status: str = Query('pending', pattern='^(pending|resolved|dismissed)$'),
     flagged: bool | None = Query(
         None, description='Filter to flagged (true) or unflagged (false).'
@@ -1191,7 +1365,7 @@ async def lint_llm_run(
 async def lint_flags(
     api: Annotated[MemexAPI, Depends(get_api)],
     vault_id: UUID | None = Query(None, description='Scope to one vault.'),
-    lint_type: str | None = Query(None, pattern='^(structural|quality|governance|schema)$'),
+    lint_type: str | None = Query(None, pattern='^(structural|quality|governance|schema|routing)$'),
     target_type: str | None = Query(None),
     status: str = Query('pending', pattern='^(pending|resolved|dismissed)$'),
     limit: int = Query(20, ge=1, le=200),

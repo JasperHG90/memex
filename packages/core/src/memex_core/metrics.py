@@ -499,6 +499,14 @@ LINT_RUN_DURATION_SECONDS = Histogram(
     buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0),
 )
 
+# rule_name is deliberately NOT a label here: external rule names are
+# user-supplied free text and would explode series cardinality.
+LINT_EXTERNAL_PROPOSALS_TOTAL = Counter(
+    'memex_lint_external_proposals_total',
+    'Externally-submitted lint proposals by outcome.',
+    ['lint_type', 'result', 'vault_id'],
+)
+
 CONTRADICTION_RESOLUTION_APPLIED_TOTAL = Counter(
     'memex_contradiction_resolution_applied_total',
     'Winner-proposal applies by resolution action (bounded literals).',

@@ -1641,6 +1641,21 @@ class RemoteMemexAPI:
             params['vault_id'] = vault_id
         return await self._get('lint/status', params=params)
 
+    async def list_lint_actions(self) -> dict[str, Any]:
+        """The closed proposal-action catalogue with per-action params schemas."""
+        return await self._get('lint/actions')
+
+    async def submit_lint_proposals(
+        self,
+        proposals: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Submit external lint proposals (batch, partial-success).
+
+        Each result item carries ``status`` ∈ {'created', 'deduplicated',
+        'cooldown_suppressed', 'rejected'} plus ``finding_id`` / ``detail``.
+        """
+        return await self._post('lint/proposals', data={'proposals': proposals})
+
     async def lint_findings(
         self,
         *,

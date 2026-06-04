@@ -1812,6 +1812,43 @@ class MemexAPI:
         resolved_id = await self._vaults.resolve_vault_identifier(target_vault_id)
         return await self._notes.migrate_note(note_id, resolved_id)
 
+    def list_lint_actions(self) -> list[dict[str, Any]]:
+        """The closed proposal-action catalogue in wire shape (sorted by id)."""
+        from memex_core.services.lint_external import action_descriptor
+        from memex_core.services.proposal_actions import list_actions
+
+        return [action_descriptor(a) for a in sorted(list_actions(), key=lambda a: a.id)]
+
+    async def submit_external_lint_proposal(
+        self,
+        proposal: dict[str, Any],
+        *,
+        actor: str = 'api',
+    ) -> tuple[str, UUID | None]:
+        """Validate and insert one external lint proposal.
+
+        In-process surface (tests, embedded callers) over the same
+        primitives the HTTP ingress uses; the route adds per-item auth
+        gating on top. Returns ``(status, finding_id)`` with status in
+        ``{'created', 'deduplicated', 'cooldown_suppressed'}``; validation
+        failures raise (pydantic ``ValidationError`` /
+        ``ExternalProposalRejected`` / ``ValueError``).
+        """
+        from memex_core.services.lint_external import (
+            ExternalProposalRequest,
+            insert_external_proposal,
+            validate_proposed_action,
+        )
+
+        req = ExternalProposalRequest(**proposal)
+        validate_proposed_action(req)
+        vault_uuid: UUID | None = None
+        if req.vault_id is not None:
+            vault_uuid = await self.resolve_vault_identifier(req.vault_id)
+        elif self.config.server.memory.lint.external_proposals.require_vault:
+            raise ValueError('vault_id is required for external proposals')
+        return await insert_external_proposal(self, req, vault_id=vault_uuid, actor=actor)
+
     async def update_user_notes(self, note_id: UUID, user_notes: str | None) -> dict[str, Any]:
         """Update user_notes on an existing note and reprocess into the memory graph.
 

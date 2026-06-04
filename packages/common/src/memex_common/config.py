@@ -1600,6 +1600,39 @@ class LintConfidenceGate(BaseModel):
         return self.confidence_min > 0.0 or self.variance_max < _MAX_VARIANCE
 
 
+class ExternalLintProposalsConfig(BaseModel):
+    """Configuration for externally-submitted lint proposals.
+
+    External tools (agent skills, routing agents) submit proposals through
+    the lint-proposals endpoint; these knobs bound how aggressively they can
+    write into the maintenance ledger.
+    """
+
+    cooldown_days: int = Field(
+        default=30,
+        ge=0,
+        description=(
+            'Days after a resolution/dismissal during which an identical '
+            'external proposal (same rule/target/vault) is suppressed. '
+            '0 disables the cooldown.'
+        ),
+    )
+    max_batch: int = Field(
+        default=100,
+        ge=1,
+        le=1000,
+        description='Maximum proposals accepted in a single submission request.',
+    )
+    require_vault: bool = Field(
+        default=True,
+        description=(
+            'Reject external proposals without a vault — global (NULL-vault) '
+            'findings stay internal-only, and the pending-dedup index does '
+            'not deduplicate NULL vaults.'
+        ),
+    )
+
+
 class LintConfig(BaseModel):
     """Configuration for the maintenance ledger / rule-based linter."""
 
@@ -1615,6 +1648,10 @@ class LintConfig(BaseModel):
     confidence_gate: LintConfidenceGate = Field(
         default_factory=LintConfidenceGate,
         description='confidence/variance gate for rule-based lint findings.',
+    )
+    external_proposals: ExternalLintProposalsConfig = Field(
+        default_factory=ExternalLintProposalsConfig,
+        description='Bounds for externally-submitted lint proposals.',
     )
 
 
