@@ -943,6 +943,9 @@ class ProposalCockpitApp(App):
         if event.list_view.id == 'queue-list' and self.mode == 'list':
             self._enter_review_mode()
         elif event.list_view.id == 'action-list' and self.mode == 'collapse':
+            # In collapse mode Enter toggles the highlighted member (same as
+            # Space) — apply is the explicit [a] key, never Enter, so a stray
+            # Enter can't commit a merge.
             self._toggle_collapse_current()
         elif event.list_view.id == 'action-list' and self.mode in ('review', 'batch'):
             self._enter_note_mode()
@@ -1184,11 +1187,11 @@ class ProposalCockpitApp(App):
             await self._controller.apply_entity_collapse(
                 proposal.finding_id, winner_id=winner_id, member_ids=member_ids
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             logger.exception('entity-collapse apply failed for finding %s', proposal.finding_id)
-            # Full traceback is logged; keep the status bar terse so it doesn't
-            # leak internal error detail.
-            self._show_status(f'Collapse failed: {str(exc)[:120]}', error=True)
+            # Generic UI message — the full detail (which may contain internal
+            # error strings) goes to the log, not the status bar.
+            self._show_status('Collapse failed — see logs for details.', error=True)
             self.mode = 'list'
             return
         self._show_status(f'Merged {len(member_ids)} entities into "{winner_name}".')
@@ -1205,9 +1208,9 @@ class ProposalCockpitApp(App):
     async def _dismiss_collapse_async(self, proposal: CockpitProposal) -> None:
         try:
             await self._controller.resolve(proposal, DISMISS_OPTION, note=None)
-        except Exception as exc:  # noqa: BLE001
+        except Exception:  # noqa: BLE001
             logger.exception('entity-collapse dismiss failed for finding %s', proposal.finding_id)
-            self._show_status(f'Dismiss failed: {str(exc)[:120]}', error=True)
+            self._show_status('Dismiss failed — see logs for details.', error=True)
             self.mode = 'list'
             return
         self._show_status('Dismissed.')
