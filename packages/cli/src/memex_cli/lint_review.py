@@ -13,6 +13,7 @@ Defaults to dry-run preview. ``--apply`` is required to write.
 from __future__ import annotations
 
 import asyncio
+import sys
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
@@ -303,7 +304,12 @@ async def _accept_with_action(
     (the verdict was collected; nothing was written).
     """
     choices = _build_action_choices(finding, catalogue)
-    if len(choices) > 1:
+    # The action sub-menu is an interactive affordance. ``--no-tui`` is also
+    # the headless/scripted path (piped stdin, CI), where an extra prompt
+    # would desync the input stream and there is no human to answer it — so
+    # only offer the menu at a real terminal. Headless callers that need a
+    # specific action use ``memex lint resolve <id> --action … --params …``.
+    if len(choices) > 1 and sys.stdin.isatty():
         console.print('[bold]Resolve with:[/bold]')
         for i, (label, _) in enumerate(choices):
             console.print(f'  [{i}] {label}')
