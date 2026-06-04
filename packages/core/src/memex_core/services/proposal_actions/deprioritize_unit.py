@@ -33,7 +33,11 @@ class _DeprioritizeUnitParams(BaseModel):
     )
     override_target_id: str | None = Field(
         default=None,
-        description='UUID of a memory unit to deprioritize instead of the finding target.',
+        description=(
+            'UUID of a memory unit to deprioritize instead of the finding '
+            "target (e.g. a contradiction's RELATED side). Bounded to the "
+            "finding's vault — the service refuses cross-vault overrides."
+        ),
     )
 
 

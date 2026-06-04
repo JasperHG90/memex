@@ -1,8 +1,12 @@
-"""Maintenance cockpit eval suite — 7 regression gate scenarios.
+"""Maintenance cockpit eval suite — 13 regression gate scenarios.
 
-Exercises the lint auto-learning loop end-to-end: cooldown suppression,
+Exercises the lint auto-learning loop end-to-end (cooldown suppression,
 evidence blob integrity, telemetry verdict rollup, threshold calibration,
-auto-apply confidence gating, and DSPy signature optimisation.
+auto-apply confidence gating, DSPy signature optimisation) plus the
+external-proposal ingress: the submit/dedup/cooldown lifecycle, catalogue
+discoverability, and the routing-proposal flow — all against the REAL
+``POST /lint/proposals`` path, in per-scenario isolated vaults so the
+legacy telemetry aggregates stay clean.
 
 Each scenario uses the ``@suite.scenario`` decorator with an async
 evaluator function that drives the lint lifecycle via ``ctx.api``
@@ -795,8 +799,8 @@ async def catalogue_action_discoverability(ctx: ScenarioContext) -> None:
     id='routing_proposal_lifecycle',
     query='deployment cadence',
     description=(
-        'A routing-typed external proposal (the V-skill submission shape) '
-        'files, filters via lint_type=routing, previews its suggested '
+        'A routing-typed external proposal (the routing-skill submission '
+        'shape) files, filters via lint_type=routing, previews its suggested '
         'route_note_to_vault action read-only, and dismisses cleanly.'
     ),
     group='external',

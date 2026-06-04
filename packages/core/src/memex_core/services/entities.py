@@ -871,20 +871,26 @@ class EntityService(BaseService):
             existing = (
                 await session.exec(select(Entity).where(col(Entity.canonical_name) == name))
             ).first()
-            if existing is not None:
+            if existing is not None and existing.mention_count > 0:
                 raise ValueError(
                     f'an entity named {name!r} already exists ({existing.id}); '
                     'merge into that winner instead of creating a new entity.'
                 )
-            survivor = Entity(
-                canonical_name=name,
-                phonetic_code=get_phonetic_code(name),
-                mention_count=0,
-            )
-            session.add(survivor)
-            await session.commit()
-            await session.refresh(survivor)
-            survivor_id = survivor.id
+            if existing is not None:
+                # A zero-mention row with this name is an orphan bare survivor
+                # from a crashed prior attempt — reuse it so the retry heals
+                # the leak instead of tripping over the unique name index.
+                survivor_id = existing.id
+            else:
+                survivor = Entity(
+                    canonical_name=name,
+                    phonetic_code=get_phonetic_code(name),
+                    mention_count=0,
+                )
+                session.add(survivor)
+                await session.commit()
+                await session.refresh(survivor)
+                survivor_id = survivor.id
 
         try:
             summary = await self.collapse_cluster(

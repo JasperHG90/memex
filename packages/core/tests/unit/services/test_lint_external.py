@@ -87,7 +87,9 @@ class TestFieldValidation:
 
 
 class TestEvidenceHygiene:
-    @pytest.mark.parametrize('key', ['resolution', 'rule_metadata', 'proposed_action'])
+    @pytest.mark.parametrize(
+        'key', ['resolution', 'rule_metadata', 'proposed_action', 'vaults_affected']
+    )
     def test_server_owned_keys_rejected(self, key: str) -> None:
         with pytest.raises(ValidationError, match='reserved'):
             _request(evidence={key: {}})
@@ -135,18 +137,15 @@ class TestProposedActionValidation:
 
 
 class TestMetricsCardinality:
-    def test_external_counter_never_labels_rule_name(self) -> None:
-        """External rule names are user-supplied free text — labelling them
-        would mint one series per skill-invented name, unbounded. The pinned
-        set keeps lint_type/result (closed literals) and vault_id (bounded by
-        tenant count — the same trade LINT_FINDINGS_TOTAL already makes)."""
+    def test_external_counter_labels_are_closed_literals(self) -> None:
+        """rule_name (user-supplied free text) and vault_id would both mint
+        unbounded series; the counter stays on the closed lint_type × result
+        grid. Per-vault / per-rule attribution lives in the submission logs."""
         from memex_core import metrics
 
-        assert 'rule_name' not in metrics.LINT_EXTERNAL_PROPOSALS_TOTAL._labelnames
         assert set(metrics.LINT_EXTERNAL_PROPOSALS_TOTAL._labelnames) == {
             'lint_type',
             'result',
-            'vault_id',
         }
 
 

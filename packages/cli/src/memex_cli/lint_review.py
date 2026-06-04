@@ -270,7 +270,8 @@ def _build_action_choices(
         suggestion = evidence.get('proposed_action')
         if isinstance(suggestion, dict):
             candidate = str(suggestion.get('action_name') or '')
-            if candidate in index:
+            applicable = (index.get(candidate) or {}).get('applicable_target_types') or []
+            if candidate in index and target_type in applicable:
                 suggested_id = candidate
     if suggested_id:
         descriptor = index[suggested_id]

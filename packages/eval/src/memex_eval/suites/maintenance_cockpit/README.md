@@ -24,6 +24,27 @@ This suite exercises the lint lifecycle end-to-end:
 7. **Optimizer compile** (Layer 4) -- the DSPy optimizer produces a
    lint_llm_signature row with version >= 1 and a non-null validation_score.
 
+Plus six external-proposal scenarios that gate the agent-skill ingress
+against the REAL `POST /lint/proposals` path (not the eval-only seed
+endpoint), each in its own isolated vault so the legacy telemetry
+aggregates above stay clean:
+
+8. **external_proposal_creates_pending** -- a submitted proposal lands as a
+   pending `source=external` row with rule metadata + the submitter's
+   suggested action under evidence.
+9. **external_proposal_dedup_idempotent** -- resubmission returns
+   `deduplicated` with the original finding_id.
+10. **external_proposal_cooldown_after_dismiss** -- resubmitting after a human
+    dismissal returns `cooldown_suppressed`.
+11. **external_proposal_resolved_with_catalogue_action** -- batch rejection
+    isolates a reserved rule_name; the good item resolves through the
+    registry and stamps `evidence.resolution.followup`.
+12. **catalogue_action_discoverability** -- `GET /lint/actions` publishes the
+    closed catalogue (both entity-merge variants with params schemas, the
+    fenced deletes marked irreversible).
+13. **routing_proposal_lifecycle** -- a `lint_type=routing` proposal files,
+    filters, previews its suggested `route_note_to_vault`, and dismisses.
+
 ## Out of scope
 
 - **fresh_db_creates_all_tables** -- verified by integration tests in
@@ -38,6 +59,11 @@ This suite exercises the lint lifecycle end-to-end:
 - Docker (for testcontainer Postgres)
 - NLI polarity classifier enabled (`server.memory.lint_llm.polarity.enabled=true`)
 - LLM API key for the lint LLM pass (ANTHROPIC_API_KEY or equivalent)
+- `MEMEX_EVAL_MODE=1` on the target server (scenarios 1-7 seed synthetic
+  findings through the eval-only endpoint; they skip gracefully without it).
+  The external-proposal scenarios (8-13) need no eval mode — they exercise
+  the production ingress, and resolution uses `no_op`, which is exempt from
+  the attended-mode gate.
 
 ## Running
 

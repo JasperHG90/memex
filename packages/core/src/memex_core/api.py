@@ -1812,12 +1812,15 @@ class MemexAPI:
         resolved_id = await self._vaults.resolve_vault_identifier(target_vault_id)
         return await self._notes.migrate_note(note_id, resolved_id)
 
-    def list_lint_actions(self) -> list[dict[str, Any]]:
-        """The closed proposal-action catalogue in wire shape (sorted by id)."""
+    def list_lint_actions(self) -> dict[str, Any]:
+        """The closed proposal-action catalogue, in the wire shape the
+        HTTP route and ``RemoteMemexAPI`` return (``{'actions': [...]}``)."""
         from memex_core.services.lint_external import action_descriptor
         from memex_core.services.proposal_actions import list_actions
 
-        return [action_descriptor(a) for a in sorted(list_actions(), key=lambda a: a.id)]
+        return {
+            'actions': [action_descriptor(a) for a in sorted(list_actions(), key=lambda a: a.id)]
+        }
 
     async def submit_external_lint_proposal(
         self,

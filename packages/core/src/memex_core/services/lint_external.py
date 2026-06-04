@@ -63,8 +63,11 @@ RESERVED_RULE_NAMES: frozenset[str] = frozenset(spec.name for spec in V1_RULES) 
 )
 
 # Evidence keys the server owns; accepting them from a submitter would let
-# an external tool forge resolution records or rule metadata.
-_RESERVED_EVIDENCE_KEYS = frozenset({'resolution', 'rule_metadata', 'proposed_action'})
+# an external tool forge resolution records, rule metadata, or — via
+# vaults_affected — the authorization scope the global-finding gate trusts.
+_RESERVED_EVIDENCE_KEYS = frozenset(
+    {'resolution', 'rule_metadata', 'proposed_action', 'vaults_affected'}
+)
 
 _MAX_EVIDENCE_BYTES = 16_384
 

@@ -2,9 +2,9 @@
 
 Covers the insert-layer contract (create / dedup / cooldown / source CHECK)
 and the entity-merge machinery the new catalogue actions bind to. The
-HTTP-route auth gating is unit-level; the full submit→review→resolve
-lifecycle runs in the maintenance_cockpit eval suite against the live
-server.
+HTTP-route contract (batch semantics, gates, destructive resolve) lives in
+``test_int_lint_proposal_routes.py``; the live-server lifecycle runs in the
+maintenance_cockpit eval suite.
 """
 
 from __future__ import annotations

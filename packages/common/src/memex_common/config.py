@@ -1628,7 +1628,10 @@ class ExternalLintProposalsConfig(BaseModel):
         description=(
             'Reject external proposals without a vault — global (NULL-vault) '
             'findings stay internal-only, and the pending-dedup index does '
-            'not deduplicate NULL vaults.'
+            'not deduplicate NULL vaults. NOTE: when disabled, the resulting '
+            'NULL-vault external findings resolve only via no_op/dismiss '
+            '(mutating actions need vaults_affected evidence, which is a '
+            'server-owned key external submitters cannot set).'
         ),
     )
 

@@ -181,11 +181,10 @@ async def _submit_one_external(
 ) -> SubmissionItemResult:
     """Process one batch item; never raises — failures become per-item results."""
     lint_type_label = 'invalid'
-    vault_label = 'unresolved'
 
     def _done(result: SubmissionItemResult) -> SubmissionItemResult:
         metrics.LINT_EXTERNAL_PROPOSALS_TOTAL.labels(
-            lint_type=lint_type_label, result=result.status, vault_id=vault_label
+            lint_type=lint_type_label, result=result.status
         ).inc()
         return result
 
@@ -219,7 +218,6 @@ async def _submit_one_external(
             await check_vault_access(auth, [vault_uuid], api, permission=Permission.WRITE)
         except HTTPException:
             return _rejected('vault access denied')
-        vault_label = str(vault_uuid)
 
     try:
         status, finding_id = await insert_external_proposal(
@@ -330,6 +328,15 @@ async def lint_preview_action(
     else:
         await _gate_global_finding_action(
             finding, api, auth, action_id=action_id, permission=Permission.READ
+        )
+    if str(finding.get('target_type')) == 'entity':
+        await _gate_entity_action_footprint(
+            api,
+            auth,
+            action_id=action_id,
+            target_id=str(finding.get('target_id')),
+            params=payload.get('params') or {},
+            permission=Permission.READ,
         )
     try:
         action = get_action(action_id)
@@ -474,6 +481,115 @@ async def _gate_finding_for_write(
     if finding_vault is not None:
         await check_vault_access(auth, [finding_vault], api, permission=Permission.WRITE)
     return finding_vault
+
+
+# Actions that mutate the GLOBAL entities table (hard-delete / merge rows
+# other tenants reference). Their authorization scope is the entity
+# footprint, not the finding's vault. delete_mental_model is deliberately
+# absent: it deletes one (entity_id, vault_id) row, so the finding-vault
+# gate is its correct scope.
+_GLOBAL_ENTITY_ACTIONS = frozenset({'merge_entities', 'collapse_into_new_entity', 'delete_entity'})
+
+# Footprint = every vault holding ANY tenant-scoped derivative of the
+# entities: unit links, synthesized mental models, or cooccurrence edges.
+# unit_entities alone is insufficient — mental models and cooccurrences
+# outlive unit links (orphan mental models are a known lint state).
+_ENTITY_FOOTPRINT_SQL = text(
+    'SELECT DISTINCT vault_id FROM ('
+    '  SELECT vault_id FROM unit_entities WHERE entity_id = ANY(CAST(:ids AS uuid[]))'
+    '  UNION'
+    '  SELECT vault_id FROM mental_models WHERE entity_id = ANY(CAST(:ids AS uuid[]))'
+    '  UNION'
+    '  SELECT vault_id FROM entity_cooccurrences'
+    '   WHERE entity_id_1 = ANY(CAST(:ids AS uuid[]))'
+    '      OR entity_id_2 = ANY(CAST(:ids AS uuid[]))'
+    ') footprint WHERE vault_id IS NOT NULL'
+)
+
+
+async def _gate_entity_action_footprint(
+    api: MemexAPI,
+    auth: AuthContext | None,
+    *,
+    action_id: str,
+    target_id: str,
+    params: dict[str, Any],
+    permission: Permission,
+) -> None:
+    """Footprint authorization for actions that mutate GLOBAL entity rows.
+
+    Entities are a global table — a finding's ``vault_id`` is advisory, not
+    an authorization scope, so a vault-scoped key must not be able to merge
+    or hard-delete entities other tenants reference. The real scope is the
+    union of vaults holding ANY derivative of the affected entities (unit
+    links, mental models, cooccurrence edges); require ``permission`` on
+    ALL of them — the entity-collapse carveout's contract, computed live
+    rather than trusted from evidence. Entities with an empty footprint
+    have no tenant-scoped derivatives anywhere; the finding-vault gate has
+    already run for those.
+    """
+    if action_id not in _GLOBAL_ENTITY_ACTIONS:
+        return
+    raw_ids: list[str] = [str(target_id)]
+    members = params.get('member_ids') if isinstance(params, dict) else None
+    if isinstance(members, list):
+        raw_ids.extend(str(m) for m in members)
+    entity_ids: list[str] = []
+    for raw in raw_ids:
+        try:
+            entity_ids.append(str(UUID(raw)))
+        except (ValueError, AttributeError):
+            continue
+    if not entity_ids:
+        return
+    async with api.metastore.session() as session:
+        result = await session.execute(_ENTITY_FOOTPRINT_SQL, {'ids': entity_ids})
+        footprint = [row[0] for row in result if row[0] is not None]
+    if footprint:
+        await check_vault_access(auth, footprint, api, permission=permission)
+
+
+async def _gate_route_destination(
+    api: MemexAPI,
+    auth: AuthContext | None,
+    *,
+    destination: Any,
+) -> None:
+    """WRITE gate on the vault a ``route_note_to_vault`` moves a note INTO.
+
+    The finding's vault covers the source side only; without this, a
+    principal scoped to the source vault could push notes into vaults it
+    cannot write. Unparseable destinations fall through — the action's own
+    ``validate()`` rejects them with a clearer 400.
+    """
+    if destination is None:
+        return
+    try:
+        destination_vault = UUID(str(destination))
+    except (ValueError, AttributeError):
+        return
+    await check_vault_access(auth, [destination_vault], api, permission=Permission.WRITE)
+
+
+def _require_unscoped_for_kv_action(auth: AuthContext | None, action_id: str) -> None:
+    """KV mutations through lint resolution require an unscoped principal.
+
+    The KV store is a single global keyspace with no vault dimension, so
+    there is nothing meaningful for a vault-scoped key to be authorized
+    against — the finding's vault would be a decorative gate. Unscoped keys
+    (and auth-disabled deployments, where attended mode is the human gate)
+    pass through.
+    """
+    if action_id == 'no_op':
+        return
+    if auth is not None and auth.vault_ids is not None:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                'kv-target actions require an unscoped key — KV entries are '
+                'global, so vault-scoped authorization cannot cover them.'
+            ),
+        )
 
 
 async def _gate_global_finding_action(
@@ -683,9 +799,12 @@ async def lint_resolve(
             'resolution': resolution,
         }
 
-    # Canned-action path — destructive; gate as such.
-    _require_attended_mode(api)
+    # Canned-action path — destructive; gate as such. no_op is exempt: it
+    # mutates nothing beyond the status flip the action-less path already
+    # performs ungated, and the followup it records is pure audit.
     action_id = str(action_id_raw)
+    if action_id != 'no_op':
+        _require_attended_mode(api)
     try:
         action = get_action(action_id)
     except KeyError as exc:
@@ -704,6 +823,19 @@ async def lint_resolve(
                 f'applicable types are {list(action.applicable_target_types)}'
             ),
         )
+    if target_type == 'entity':
+        await _gate_entity_action_footprint(
+            api,
+            auth,
+            action_id=action_id,
+            target_id=target_id,
+            params=action_params,
+            permission=Permission.WRITE,
+        )
+    elif target_type == 'kv':
+        _require_unscoped_for_kv_action(auth, action_id)
+    if action_id == 'route_note_to_vault':
+        await _gate_route_destination(api, auth, destination=action_params.get('target_vault_id'))
     if finding_vault is None:
         await _gate_global_finding_action(
             finding, api, auth, action_id=action_id, permission=Permission.WRITE
@@ -1075,12 +1207,29 @@ async def lint_reverse(
     followup = resolution.get('followup') if isinstance(resolution, dict) else None
 
     if isinstance(followup, dict) and followup.get('action'):
+        reverse_action_id = str(followup.get('action'))
+        if str(finding.get('target_type')) == 'entity':
+            await _gate_entity_action_footprint(
+                api,
+                auth,
+                action_id=reverse_action_id,
+                target_id=str(finding.get('target_id')),
+                params=followup.get('params') or {},
+                permission=Permission.WRITE,
+            )
+        elif str(finding.get('target_type')) == 'kv':
+            _require_unscoped_for_kv_action(auth, reverse_action_id)
+        if reverse_action_id == 'route_note_to_vault':
+            # Reverse migrates the note BACK into its source vault — that
+            # is the destination needing WRITE this time.
+            prior = followup.get('prior_state') or {}
+            await _gate_route_destination(api, auth, destination=prior.get('source_vault_id'))
         if finding_vault is None:
             await _gate_global_finding_action(
                 finding,
                 api,
                 auth,
-                action_id=str(followup.get('action')),
+                action_id=reverse_action_id,
                 permission=Permission.WRITE,
             )
         return await _reverse_via_registry(

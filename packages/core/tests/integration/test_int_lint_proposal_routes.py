@@ -240,6 +240,204 @@ async def test_destructive_action_executes_through_resolve(http: AsyncClient, ap
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_noop_resolve_passes_without_attended_override(http: AsyncClient):
+    """no_op is exempt from the attended-mode gate — it mutates nothing
+    beyond the status flip the action-less resolve already allows."""
+    vault_id = await _create_vault(http)
+    submit = await http.post(
+        '/api/v1/lint/proposals', json=_proposal(vault_id, rule_name='route-contract-noop')
+    )
+    finding_id = submit.json()['results'][0]['finding_id']
+    resolve = await http.post(
+        f'/api/v1/lint/findings/{finding_id}/resolve', json={'action': 'no_op'}
+    )
+    assert resolve.status_code == 200, resolve.text
+    assert resolve.json()['resolution']['followup']['action'] == 'no_op'
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_kv_action_refused_for_vault_scoped_key(http: AsyncClient, api, monkeypatch):
+    """KV entries are global: a vault-scoped key must not hard-delete them
+    through a vault-scoped finding (the finding's vault is decorative)."""
+    from memex_common.config import Permission, Policy
+    from memex_core.server.auth import AuthContext, get_auth_context
+
+    monkeypatch.setenv('MEMEX_LINT_ALLOW_UNATTENDED_APPLY', '1')
+    vault_id = await _create_vault(http)
+    key = f'global:route-contract-scoped:{uuid4().hex[:6]}'
+    await api.kv_put(key, 'should-survive')
+
+    submit = await http.post(
+        '/api/v1/lint/proposals',
+        json=_proposal(
+            vault_id,
+            rule_name='route-contract-scopedkv',
+            lint_type='governance',
+            target_type='kv',
+            target_id=key,
+        ),
+    )
+    finding_id = submit.json()['results'][0]['finding_id']
+
+    scoped = AuthContext(
+        key_prefix='scopedkey',
+        key_name='scoped-to-one-vault',
+        policy=Policy.WRITER,
+        permissions=frozenset({Permission.READ, Permission.WRITE}),
+        vault_ids=[vault_id],
+        read_vault_ids=None,
+    )
+    app.dependency_overrides[get_auth_context] = lambda: scoped
+    try:
+        resolve = await http.post(
+            f'/api/v1/lint/findings/{finding_id}/resolve', json={'action': 'kv_delete'}
+        )
+    finally:
+        app.dependency_overrides.pop(get_auth_context, None)
+    assert resolve.status_code == 403, resolve.text
+    assert 'unscoped' in resolve.json()['detail']
+    assert await api.kv_get(key) is not None
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_route_destination_requires_write_on_target_vault(
+    http: AsyncClient, api, monkeypatch
+):
+    """route_note_to_vault must gate WRITE on the DESTINATION vault — the
+    finding's vault only covers the source side."""
+    from memex_common.config import Permission, Policy
+    from memex_core.server.auth import AuthContext, get_auth_context
+
+    monkeypatch.setenv('MEMEX_LINT_ALLOW_UNATTENDED_APPLY', '1')
+    source_vault = await _create_vault(http)
+    other_vault = await _create_vault(http)
+    submit = await http.post(
+        '/api/v1/lint/proposals',
+        json=_proposal(
+            source_vault,
+            rule_name='route-contract-destination',
+            lint_type='routing',
+            target_type='note',
+        ),
+    )
+    finding_id = submit.json()['results'][0]['finding_id']
+
+    scoped = AuthContext(
+        key_prefix='scopedkey',
+        key_name='scoped-to-source',
+        policy=Policy.WRITER,
+        permissions=frozenset({Permission.READ, Permission.WRITE}),
+        vault_ids=[source_vault],
+        read_vault_ids=None,
+    )
+    app.dependency_overrides[get_auth_context] = lambda: scoped
+    try:
+        resolve = await http.post(
+            f'/api/v1/lint/findings/{finding_id}/resolve',
+            json={
+                'action': 'route_note_to_vault',
+                'params': {'target_vault_id': other_vault},
+            },
+        )
+    finally:
+        app.dependency_overrides.pop(get_auth_context, None)
+    assert resolve.status_code == 403, resolve.text
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_entity_footprint_gate_enforces_write_on_all_vaults(api):
+    """The footprint gate's enforcement branch: a key scoped to vault A is
+    refused when the affected entities' unit_entities footprint spans vault
+    B — through the REAL check_vault_access permission check."""
+    from fastapi import HTTPException
+
+    from memex_common.config import Permission, Policy
+    from memex_core.server.auth import AuthContext
+    from memex_core.server.lint import _gate_entity_action_footprint
+
+    vault_a = uuid4()
+    vault_b = uuid4()
+
+    class _FootprintResult:
+        def __iter__(self):
+            return iter([(vault_b,)])
+
+    class _Session:
+        async def execute(self, stmt, params):
+            return _FootprintResult()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return None
+
+    class _Api:
+        class metastore:  # noqa: N801 - structural stub
+            @staticmethod
+            def session():
+                return _Session()
+
+        @staticmethod
+        async def resolve_vault_identifier(value):
+            from uuid import UUID as _UUID
+
+            return _UUID(str(value))
+
+    scoped = AuthContext(
+        key_prefix='scopedkey',
+        key_name='scoped-to-a',
+        policy=Policy.WRITER,
+        permissions=frozenset({Permission.READ, Permission.WRITE}),
+        vault_ids=[str(vault_a)],
+        read_vault_ids=None,
+    )
+    members = [str(uuid4()), str(uuid4())]
+    with pytest.raises(HTTPException) as excinfo:
+        await _gate_entity_action_footprint(
+            _Api(),
+            scoped,
+            action_id='merge_entities',
+            target_id=members[0],
+            params={'winner_id': members[0], 'member_ids': members},
+            permission=Permission.WRITE,
+        )
+    assert excinfo.value.status_code == 403
+
+    # Same call with the footprint vault granted passes.
+    granted = AuthContext(
+        key_prefix='scopedkey',
+        key_name='scoped-to-b',
+        policy=Policy.WRITER,
+        permissions=frozenset({Permission.READ, Permission.WRITE}),
+        vault_ids=[str(vault_b)],
+        read_vault_ids=None,
+    )
+    await _gate_entity_action_footprint(
+        _Api(),
+        granted,
+        action_id='merge_entities',
+        target_id=members[0],
+        params={'winner_id': members[0], 'member_ids': members},
+        permission=Permission.WRITE,
+    )
+
+    # Non-global-entity actions skip the footprint gate entirely.
+    await _gate_entity_action_footprint(
+        _Api(),
+        scoped,
+        action_id='delete_mental_model',
+        target_id=members[0],
+        params={},
+        permission=Permission.WRITE,
+    )
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_submitted_suggestion_validated_at_the_door(http: AsyncClient):
     vault_id = await _create_vault(http)
     bad_action = _proposal(
