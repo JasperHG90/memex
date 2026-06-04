@@ -66,6 +66,7 @@ class ArchiveMentalModelAction:
     )
     applicable_target_types: ClassVar[tuple[str, ...]] = ('mental_model',)
     reversible: ClassVar[bool] = True
+    params_schema: ClassVar[dict[str, Any] | None] = None
 
     def validate(
         self,

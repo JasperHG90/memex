@@ -32,8 +32,11 @@ class NoOpAction:
         'mental_model',
         'note',
         'unit_entity',
+        'entity',
+        'kv',
     )
     reversible: ClassVar[bool] = True
+    params_schema: ClassVar[dict[str, Any] | None] = None
 
     def validate(
         self,

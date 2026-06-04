@@ -13,6 +13,8 @@ import logging
 from typing import TYPE_CHECKING, Any, ClassVar
 from uuid import UUID
 
+from pydantic import BaseModel, Field
+
 from memex_core.services.proposal_actions.base import (
     ActionValidationError,
     ExecuteResult,
@@ -27,6 +29,14 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 
+class _RouteNoteToVaultParams(BaseModel):
+    target_vault_id: str = Field(description='UUID of the vault to migrate the note into.')
+    other_vault_ids: list[str] = Field(
+        default_factory=list,
+        description='UUIDs of the candidate vaults NOT chosen (negative routing signal).',
+    )
+
+
 class RouteNoteToVaultAction:
     id: ClassVar[str] = 'route_note_to_vault'
     name: ClassVar[str] = 'Route note to vault'
@@ -36,6 +46,7 @@ class RouteNoteToVaultAction:
     )
     applicable_target_types: ClassVar[tuple[str, ...]] = ('note',)
     reversible: ClassVar[bool] = True
+    params_schema: ClassVar[dict[str, Any] | None] = _RouteNoteToVaultParams.model_json_schema()
 
     def validate(self, params: dict[str, Any], *, target_type: str, target_id: str) -> None:
         if target_type != 'note':

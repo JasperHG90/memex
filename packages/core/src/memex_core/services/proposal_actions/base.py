@@ -69,6 +69,11 @@ class ProposalAction(Protocol):
     description: ClassVar[str]
     applicable_target_types: ClassVar[tuple[str, ...]]
     reversible: ClassVar[bool]
+    # JSON schema for `params` (from a Pydantic model's `model_json_schema()`),
+    # or None for parameterless actions. Discoverability only — `validate()`
+    # remains the execution-time gate. Surfaced verbatim by `GET /lint/actions`
+    # so external submitters and the cockpit can render parameter forms.
+    params_schema: ClassVar[dict[str, Any] | None]
 
     def validate(
         self,

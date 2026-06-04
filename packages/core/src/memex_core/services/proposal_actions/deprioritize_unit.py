@@ -13,6 +13,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, ClassVar
 from uuid import UUID
 
+from pydantic import BaseModel, Field
+
 from memex_core.services.proposal_actions.base import (
     ActionValidationError,
     ExecuteResult,
@@ -24,6 +26,17 @@ if TYPE_CHECKING:
     from memex_core.api import MemexAPI
 
 
+class _DeprioritizeUnitParams(BaseModel):
+    reason: str | None = Field(
+        default=None,
+        description='Audit reason recorded on the unit; defaults to a cockpit-accepted note.',
+    )
+    override_target_id: str | None = Field(
+        default=None,
+        description='UUID of a memory unit to deprioritize instead of the finding target.',
+    )
+
+
 class DeprioritizeUnitAction:
     id: ClassVar[str] = 'deprioritize_unit'
     name: ClassVar[str] = 'Deprioritize unit'
@@ -33,6 +46,7 @@ class DeprioritizeUnitAction:
     )
     applicable_target_types: ClassVar[tuple[str, ...]] = ('memory_unit',)
     reversible: ClassVar[bool] = True
+    params_schema: ClassVar[dict[str, Any] | None] = _DeprioritizeUnitParams.model_json_schema()
 
     def validate(
         self,
@@ -124,6 +138,7 @@ class RestoreUnitAction:
     )
     applicable_target_types: ClassVar[tuple[str, ...]] = ('memory_unit',)
     reversible: ClassVar[bool] = True
+    params_schema: ClassVar[dict[str, Any] | None] = None
 
     def validate(
         self,
