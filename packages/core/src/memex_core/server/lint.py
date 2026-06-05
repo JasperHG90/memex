@@ -46,7 +46,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import ValidationError
-from sqlalchemy import Text, bindparam, case, cast, func, insert, or_, text, union, update
+from sqlalchemy import Text, bindparam, case, cast, func, insert, or_, union, update
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlmodel import col, select
@@ -71,7 +71,10 @@ from memex_core.server.auth import (
     require_write,
 )
 from memex_core.server.common import _handle_error, get_api
-from memex_core.services.lint import TARGET_ENRICHMENT_SQL, LintSubsystemNotInitializedError
+from memex_core.services.lint import (
+    LintSubsystemNotInitializedError,
+    _target_enrichment_columns,
+)
 from memex_core.services.lint_external import (
     ExternalProposalRejected,
     ExternalProposalRequest,
@@ -89,14 +92,6 @@ from memex_core.services.proposal_actions import (
 from memex_core.services.proposal_actions.record_outcome import RecordOutcomeAction
 
 logger = logging.getLogger('memex.core.server.lint')
-
-# TARGET_ENRICHMENT_SQL is f-string-interpolated into the findings query (its
-# `noqa: S608` is justified only because it is a compile-time constant). Guard
-# it here so a future refactor that makes it dynamic — and thus an injection
-# vector — fails loudly at import. An explicit raise (NOT assert, which
-# `python -O` strips) keeps the guard alive under optimized bytecode.
-if not isinstance(TARGET_ENRICHMENT_SQL, str):
-    raise TypeError('TARGET_ENRICHMENT_SQL must be a compile-time string literal')
 
 try:  # pragma: no cover - optional dependency
     from opentelemetry import trace as _otel_trace
@@ -419,47 +414,47 @@ async def lint_findings(
     try:
         if vault_id is not None:
             await check_vault_access(auth, [vault_id], api, permission=Permission.READ)
-        # `clauses` only contains hard-coded predicate fragments; the
-        # column/operator strings are trusted constants and user-supplied values
-        # are safely bound via :named parameters. SQLAlchemy Core constructs
-        # would be more idiomatic but offer no additional safety here.
         # ``llm_deferred`` rows are internal cost-cap bookkeeping (units the LLM
         # lint pass skipped when the 24h quota was exhausted; retried
         # automatically by ``process_deferred``). They are persisted as
         # status='pending' for lack of a dedicated state, but they are not
         # operator-actionable findings — keep them out of the human review list.
-        clauses = ['status = :status', "rule_name != 'llm_deferred'"]
-        params: dict[str, Any] = {'status': status}
+        # id / vault_id are CAST to text so the route returns string ids (the
+        # cockpit consumes dict rows with string id/vault_id); every other
+        # column is selected raw. The enrichment columns (target_text snippet +
+        # per-type human-readable target_label) are shared with services.lint.
+        tt, tl = _target_enrichment_columns()
+        mp = MaintenanceProposal
+        stmt = select(
+            cast(mp.id, Text).label('id'),
+            cast(mp.vault_id, Text).label('vault_id'),
+            mp.lint_type,
+            mp.target_type,
+            mp.target_id,
+            mp.rule_name,
+            mp.evidence,
+            mp.suggested_action,
+            mp.status,
+            mp.source,
+            mp.created_at,
+            mp.resolved_at,
+            mp.resolved_by,
+            mp.flagged_at,
+            tt,
+            tl,
+        ).where(col(mp.status) == status, col(mp.rule_name) != 'llm_deferred')
         if vault_id is not None:
-            clauses.append('vault_id = :vault_id')
-            params['vault_id'] = str(vault_id)
+            stmt = stmt.where(col(mp.vault_id) == vault_id)
         if lint_type is not None:
-            clauses.append('lint_type = :lint_type')
-            params['lint_type'] = lint_type
+            stmt = stmt.where(col(mp.lint_type) == lint_type)
         if flagged is True:
-            clauses.append('flagged_at IS NOT NULL')
+            stmt = stmt.where(col(mp.flagged_at).is_not(None))
         elif flagged is False:
-            clauses.append('flagged_at IS NULL')
-
-        where = ' AND '.join(clauses)
-        params['limit'] = limit
-        params['offset'] = offset
+            stmt = stmt.where(col(mp.flagged_at).is_(None))
+        stmt = stmt.order_by(col(mp.created_at).desc()).limit(limit).offset(offset)
 
         async with api.metastore.session() as session:
-            result = await session.execute(
-                text(
-                    'SELECT mp.id::text, mp.vault_id::text, mp.lint_type, mp.target_type, '
-                    'mp.target_id, mp.rule_name, mp.evidence, mp.suggested_action, mp.status, '
-                    'mp.source, mp.created_at, mp.resolved_at, mp.resolved_by, mp.flagged_at, '
-                    # Shared enrichment fragment (target_text snippet + per-type
-                    # human-readable target_label) — see services.lint.
-                    f'{TARGET_ENRICHMENT_SQL} '
-                    f'FROM maintenance_proposals mp WHERE {where} '  # noqa: S608
-                    'ORDER BY mp.created_at DESC '
-                    'LIMIT :limit OFFSET :offset'
-                ),
-                params,
-            )
+            result = await session.execute(stmt)
             rows = [dict(row) for row in result.mappings().all()]
         return {'count': len(rows), 'findings': rows}
     except Exception as e:

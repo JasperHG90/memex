@@ -31,12 +31,20 @@ from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel
-from sqlalchemy import text
+from sqlalchemy import Text, cast, func, text, tuple_
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import col, select
 
 from memex_core.memory._lint_utils import enum_value as _enum_value
-from memex_core.memory.sql_models import LintType
+from memex_core.memory.sql_models import (
+    Entity,
+    LintType,
+    MaintenanceProposal,
+    MemoryUnit,
+    MentalModel,
+    Note,
+)
 from memex_core.services.base import BaseService
 from memex_core.services.lint_confidence import (
     bulk_load_confidence_map,
@@ -75,29 +83,57 @@ class LintSubsystemNotInitializedError(RuntimeError):
         )
 
 
-# Correlated-subquery SELECT fragment that resolves a human-readable label
-# (+ a unit-body snippet) for a finding's target, per target_type — so reviewers
-# (and the agent surface) see a title/name instead of an opaque UUID. Each arm
-# is single-row (PK equality) and tolerant (no match → NULL → COALESCE falls
-# through). Assumes the ``maintenance_proposals`` row is aliased ``mp``. Shared
-# verbatim by ``LintService.get_findings`` and the HTTP ``/lint/findings``
-# endpoint so the two never drift.
-TARGET_ENRICHMENT_SQL = (
-    '(SELECT mu.text FROM memory_units mu '
-    "WHERE mp.target_type IN ('memory_unit', 'unit_entity') "
-    'AND mu.id::text = mp.target_id) AS target_text, '
-    'COALESCE('
-    '(SELECT n.title FROM memory_units mu LEFT JOIN notes n ON n.id = mu.note_id '
-    "WHERE mp.target_type IN ('memory_unit', 'unit_entity') AND mu.id::text = mp.target_id), "
+def _target_enrichment_columns() -> tuple[Any, Any]:
+    """``target_text`` + ``target_label`` correlated scalar subqueries.
+
+    Resolves a human-readable label (+ a unit-body snippet) for a finding's
+    target, polymorphic on :attr:`MaintenanceProposal.target_type` — so
+    reviewers (and the agent surface) see a title/name instead of an opaque
+    UUID. ``target_id`` is TEXT, joined to each table's UUID id via
+    ``CAST(id AS text)``. Each arm is single-row (PK equality) and tolerant
+    (no match → NULL → COALESCE falls through).
+
+    The scalar subqueries auto-correlate to the outer ``MaintenanceProposal``
+    in every query that selects from it (the subqueries reference
+    ``MaintenanceProposal`` columns the outer select already exposes). Shared
+    by :meth:`LintService.get_findings` and the HTTP ``/lint/findings``
+    endpoint so the two never drift.
+    """
+    mp = MaintenanceProposal
+    unit_types = ('memory_unit', 'unit_entity')
+    target_text = (
+        select(MemoryUnit.text)
+        .where(col(mp.target_type).in_(unit_types), cast(MemoryUnit.id, Text) == mp.target_id)
+        .scalar_subquery()
+        .label('target_text')
+    )
+    label_from_unit_note = (
+        select(Note.title)
+        .select_from(MemoryUnit)
+        .join(Note, Note.id == MemoryUnit.note_id, isouter=True)
+        .where(col(mp.target_type).in_(unit_types), cast(MemoryUnit.id, Text) == mp.target_id)
+        .scalar_subquery()
+    )
     # Note targets (e.g. inbox routing proposals) carry the note id directly.
-    '(SELECT n.title FROM notes n '
-    "WHERE mp.target_type = 'note' AND n.id::text = mp.target_id), "
-    '(SELECT mm.name FROM mental_models mm '
-    "WHERE mp.target_type = 'mental_model' AND mm.id::text = mp.target_id), "
-    '(SELECT e.canonical_name FROM entities e '
-    "WHERE mp.target_type = 'entity' AND e.id::text = mp.target_id)"
-    ') AS target_label'
-)
+    label_from_note = (
+        select(Note.title)
+        .where(col(mp.target_type) == 'note', cast(Note.id, Text) == mp.target_id)
+        .scalar_subquery()
+    )
+    label_from_mm = (
+        select(MentalModel.name)
+        .where(col(mp.target_type) == 'mental_model', cast(MentalModel.id, Text) == mp.target_id)
+        .scalar_subquery()
+    )
+    label_from_entity = (
+        select(Entity.canonical_name)
+        .where(col(mp.target_type) == 'entity', cast(Entity.id, Text) == mp.target_id)
+        .scalar_subquery()
+    )
+    target_label = func.coalesce(
+        label_from_unit_note, label_from_note, label_from_mm, label_from_entity
+    ).label('target_label')
+    return target_text, target_label
 
 
 class LintFindingDTO(BaseModel):
@@ -1112,48 +1148,38 @@ class LintService(BaseService):
         fetch_limit = capped_limit + 1
         # Exclude ``llm_deferred`` bookkeeping rows — internal cost-cap deferrals
         # retried by ``process_deferred``, not operator-actionable findings.
-        clauses: list[str] = ['status = :status', "rule_name != 'llm_deferred'"]
-        params: dict[str, Any] = {'status': status, 'fetch_limit': fetch_limit}
+        tt, tl = _target_enrichment_columns()
+        mp = MaintenanceProposal
+        stmt = select(
+            mp.id,
+            mp.vault_id,
+            mp.lint_type,
+            mp.target_type,
+            mp.target_id,
+            mp.rule_name,
+            mp.evidence,
+            mp.suggested_action,
+            mp.status,
+            mp.source,
+            mp.created_at,
+            mp.resolved_at,
+            mp.resolved_by,
+            tt,
+            tl,
+        ).where(col(mp.status) == status, col(mp.rule_name) != 'llm_deferred')
         if vault_id is not None:
-            clauses.append('vault_id = CAST(:vault_id AS uuid)')
-            params['vault_id'] = str(vault_id)
+            stmt = stmt.where(col(mp.vault_id) == vault_id)
         if lint_type is not None:
-            clauses.append('lint_type = :lint_type')
-            params['lint_type'] = lint_type
+            stmt = stmt.where(col(mp.lint_type) == lint_type)
         if target_type is not None:
-            clauses.append('target_type = :target_type')
-            params['target_type'] = target_type
+            stmt = stmt.where(col(mp.target_type) == target_type)
         if cursor_ts is not None and cursor_id is not None:
-            clauses.append('(created_at, id) < (:cursor_ts, CAST(:cursor_id AS uuid))')
-            params['cursor_ts'] = cursor_ts
-            params['cursor_id'] = str(cursor_id)
-
-        # Safety invariant for S608: every entry appended to ``clauses`` (lines
-        # 575-589) is a hard-coded literal SQL fragment — no f-string contains
-        # a value derived from ``status``, ``vault_id``, ``lint_type``,
-        # ``target_type``, or ``cursor``. All user-controlled values flow
-        # exclusively through the ``params`` dict via :name bind parameters.
-        # ``status`` is allowlist-validated on L557 and ``limit`` is bounded on
-        # L559-561, so ``where_sql`` is provably constructed from a closed set
-        # of literal strings.
-        #
-        # noqa placement: ruff anchors S608 on the FIRST physical line of the
-        # multi-line concatenated string (the line below), so the noqa is on
-        # the correct line. Verified by stripping the marker — ruff reports
-        # `lint.py:611:13` (the `f'SELECT ...'` line) and `--^` underlines
-        # through the closing string.
-        where_sql = ' AND '.join(clauses)
-        stmt = text(
-            f'SELECT mp.id, mp.vault_id, mp.lint_type, mp.target_type, mp.target_id, '  # noqa: S608
-            f'mp.rule_name, mp.evidence, mp.suggested_action, mp.status, mp.source, '
-            f'mp.created_at, mp.resolved_at, mp.resolved_by, {TARGET_ENRICHMENT_SQL} '
-            f'FROM maintenance_proposals mp WHERE {where_sql} '
-            'ORDER BY mp.created_at DESC, mp.id DESC LIMIT :fetch_limit'
-        )
+            stmt = stmt.where(tuple_(mp.created_at, mp.id) < tuple_(cursor_ts, cursor_id))
+        stmt = stmt.order_by(col(mp.created_at).desc(), col(mp.id).desc()).limit(fetch_limit)
 
         async with self.metastore.session() as session:
             try:
-                result = await session.execute(stmt, params)
+                result = await session.execute(stmt)
                 rows = result.mappings().all()
             except ProgrammingError as exc:
                 if 'maintenance_proposals' in str(exc).lower():
