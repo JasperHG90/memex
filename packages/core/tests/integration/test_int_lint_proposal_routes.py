@@ -447,7 +447,9 @@ async def test_entity_footprint_gate_enforces_write_on_all_vaults(api):
             return iter([(vault_b,)])
 
     class _Session:
-        async def execute(self, stmt, params):
+        async def execute(self, stmt, params=None):
+            # params is optional now: the footprint query binds its uuid[] inside
+            # the statement (no separate params dict).
             return _FootprintResult()
 
         async def __aenter__(self):

@@ -46,13 +46,23 @@ from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import ValidationError
-from sqlalchemy import text
+from sqlalchemy import Text, bindparam, case, cast, func, insert, or_, text, union, update
+from sqlalchemy.dialects.postgresql import ARRAY, JSONB
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlmodel import col, select
 
 from memex_core import metrics
 
 from memex_common.config import Permission
 from memex_core.api import MemexAPI
 from memex_core.context import get_actor
+from memex_core.memory.sql_models import (
+    Entity,
+    EntityCooccurrence,
+    MaintenanceProposal,
+    MentalModel,
+    UnitEntity,
+)
 from memex_core.server.auth import (
     AuthContext,
     check_vault_access,
@@ -155,13 +165,14 @@ async def lint_status(
         if scope == 'global':
             count = await api.lint.count_pending(None)
             return {'scope': 'global', 'pending': count}
-        # scope == 'all': aggregate across every vault + global. Parameterised
-        # for consistency with every other query in this module (the value is
-        # a trusted constant, but no inline literals here either).
+        # scope == 'all': aggregate across every vault + global. Expressed as a
+        # SQLAlchemy Core select for consistency with the rest of the module
+        # (the status value is a trusted constant; no inline literals either).
         async with api.metastore.session() as session:
             row = await session.execute(
-                text('SELECT count(*) FROM maintenance_proposals WHERE status = :status'),
-                {'status': 'pending'},
+                select(func.count())
+                .select_from(MaintenanceProposal)
+                .where(col(MaintenanceProposal.status) == 'pending')
             )
             return {'scope': 'all', 'pending': int(row.scalar() or 0)}
     except HTTPException:
@@ -508,22 +519,6 @@ async def _gate_finding_for_write(
 # gate is its correct scope.
 _GLOBAL_ENTITY_ACTIONS = frozenset({'merge_entities', 'collapse_into_new_entity', 'delete_entity'})
 
-# Footprint = every vault holding ANY tenant-scoped derivative of the
-# entities: unit links, synthesized mental models, or cooccurrence edges.
-# unit_entities alone is insufficient — mental models and cooccurrences
-# outlive unit links (orphan mental models are a known lint state).
-_ENTITY_FOOTPRINT_SQL = text(
-    'SELECT DISTINCT vault_id FROM ('
-    '  SELECT vault_id FROM unit_entities WHERE entity_id = ANY(CAST(:ids AS uuid[]))'
-    '  UNION'
-    '  SELECT vault_id FROM mental_models WHERE entity_id = ANY(CAST(:ids AS uuid[]))'
-    '  UNION'
-    '  SELECT vault_id FROM entity_cooccurrences'
-    '   WHERE entity_id_1 = ANY(CAST(:ids AS uuid[]))'
-    '      OR entity_id_2 = ANY(CAST(:ids AS uuid[]))'
-    ') footprint WHERE vault_id IS NOT NULL'
-)
-
 
 async def _gate_entity_action_footprint(
     api: MemexAPI,
@@ -567,8 +562,28 @@ async def _gate_entity_action_footprint(
             status_code=400,
             detail='no valid entity id to authorize the action against.',
         )
+    # Footprint = every vault holding ANY tenant-scoped derivative of the
+    # entities: unit links, synthesized mental models, or cooccurrence edges.
+    # unit_entities alone is insufficient — mental models and cooccurrences
+    # outlive unit links (orphan mental models are a known lint state). The
+    # SQL-side NULL filter is dropped; the Python ``row[0] is not None`` guard
+    # below preserves identical behaviour.
+    # entity_id = ANY(:ids::uuid[]) — array membership, NOT an expanding IN()
+    # (which trips asyncpg's UUID binding inside a UNION). One bound uuid[] param
+    # shared across the three legs, matching the original raw SQL exactly.
+    ids_arr = bindparam('ids', [UUID(e) for e in entity_ids], type_=ARRAY(PG_UUID(as_uuid=True)))
+    footprint_stmt = union(
+        select(UnitEntity.vault_id).where(col(UnitEntity.entity_id) == func.any(ids_arr)),
+        select(MentalModel.vault_id).where(col(MentalModel.entity_id) == func.any(ids_arr)),
+        select(EntityCooccurrence.vault_id).where(
+            or_(
+                col(EntityCooccurrence.entity_id_1) == func.any(ids_arr),
+                col(EntityCooccurrence.entity_id_2) == func.any(ids_arr),
+            )
+        ),
+    )
     async with api.metastore.session() as session:
-        result = await session.execute(_ENTITY_FOOTPRINT_SQL, {'ids': entity_ids})
+        result = await session.execute(footprint_stmt)
         footprint = [row[0] for row in result if row[0] is not None]
     if footprint:
         await check_vault_access(auth, footprint, api, permission=permission)
@@ -686,16 +701,15 @@ async def lint_flag(
     try:
         async with api.metastore.session() as session:
             result = await session.execute(
-                text(
-                    'UPDATE maintenance_proposals '
-                    'SET flagged_at = CASE '
-                    '  WHEN flagged_at IS NULL THEN now() '
-                    '  ELSE NULL '
-                    'END '
-                    'WHERE id = :id '
-                    'RETURNING flagged_at'
-                ),
-                {'id': str(finding_id)},
+                update(MaintenanceProposal)
+                .where(col(MaintenanceProposal.id) == finding_id)
+                .values(
+                    flagged_at=case(
+                        (col(MaintenanceProposal.flagged_at).is_(None), func.now()),
+                        else_=None,
+                    )
+                )
+                .returning(MaintenanceProposal.flagged_at)
             )
             updated_row = result.mappings().first()
             await session.commit()
@@ -884,8 +898,9 @@ async def lint_resolve(
     async with api.metastore.session() as txn:
         locked = (
             await txn.execute(
-                text('SELECT status FROM maintenance_proposals WHERE id = :id FOR UPDATE'),
-                {'id': str(finding_id)},
+                select(MaintenanceProposal.status)
+                .where(col(MaintenanceProposal.id) == finding_id)
+                .with_for_update()
             )
         ).first()
         if locked is None or str(locked.status) != 'pending':
@@ -1023,12 +1038,15 @@ async def _load_finding_or_404(finding_id: UUID, api: MemexAPI) -> dict[str, Any
         row = (
             (
                 await session.execute(
-                    text(
-                        'SELECT id::text AS id, vault_id, rule_name, '
-                        'target_type, target_id, evidence, status '
-                        'FROM maintenance_proposals WHERE id = :id'
-                    ),
-                    {'id': str(finding_id)},
+                    select(
+                        cast(col(MaintenanceProposal.id), Text).label('id'),
+                        MaintenanceProposal.vault_id,
+                        MaintenanceProposal.rule_name,
+                        MaintenanceProposal.target_type,
+                        MaintenanceProposal.target_id,
+                        MaintenanceProposal.evidence,
+                        MaintenanceProposal.status,
+                    ).where(col(MaintenanceProposal.id) == finding_id)
                 )
             )
             .mappings()
@@ -1135,8 +1153,9 @@ async def _resolve_entity_collapse_cluster(
     async with api.metastore.session() as txn:
         locked = (
             await txn.execute(
-                text('SELECT status FROM maintenance_proposals WHERE id = :id FOR UPDATE'),
-                {'id': str(finding_pk)},
+                select(MaintenanceProposal.status)
+                .where(col(MaintenanceProposal.id) == finding_pk)
+                .with_for_update()
             )
         ).first()
         if locked is None or str(locked.status) != 'pending':
@@ -1207,12 +1226,10 @@ async def _resolve_winner_id(winner_param: str, cluster_members: list[str], api:
         rows = (
             (
                 await session.execute(
-                    text(
-                        'SELECT id::text AS id FROM entities '
-                        'WHERE id = ANY(CAST(:ids AS uuid[])) '
-                        'AND canonical_name = :name'
-                    ),
-                    {'ids': [str(u) for u in member_uuids], 'name': winner_param},
+                    select(cast(col(Entity.id), Text).label('id')).where(
+                        col(Entity.id).in_(member_uuids),
+                        col(Entity.canonical_name) == winner_param,
+                    )
                 )
             )
             .mappings()
@@ -1410,12 +1427,12 @@ async def _reverse_via_registry(
     async with api.metastore.session() as session:
         locked = (
             await session.execute(
-                text(
-                    'SELECT status, '
-                    "(evidence -> 'resolution' -> 'reversal') AS reversal "
-                    'FROM maintenance_proposals WHERE id = :id FOR UPDATE'
-                ),
-                {'id': str(finding_id)},
+                select(
+                    MaintenanceProposal.status,
+                    col(MaintenanceProposal.evidence)['resolution']['reversal'].label('reversal'),
+                )
+                .where(col(MaintenanceProposal.id) == finding_id)
+                .with_for_update()
             )
         ).first()
         if locked is None or str(locked.status) != 'resolved' or locked.reversal is not None:
@@ -1448,26 +1465,26 @@ async def _reverse_via_registry(
         }
         new_resolution = dict(resolution)
         new_resolution['reversal'] = reversal_block
-        await session.execute(
-            text(
-                """
-                UPDATE maintenance_proposals
-                SET evidence = jsonb_set(
-                    COALESCE(evidence, '{}'::jsonb),
-                    '{resolution}',
-                    CAST(:resolution_json AS jsonb),
-                    true
+        # ``jsonb_set(COALESCE(evidence,'{}'::jsonb), '{resolution}', <json>, true)``
+        # — the path is a ``text[]`` cast (mirrors the inline literal the raw
+        # SQL relied on for its implicit cast). The optional vault constraint
+        # replaces the ``CAST(:vault_id AS text) IS NULL OR ...`` guard: a NULL
+        # finding_vault adds no predicate (matches any row), exactly as before.
+        update_stmt = (
+            update(MaintenanceProposal)
+            .where(col(MaintenanceProposal.id) == finding_id)
+            .values(
+                evidence=func.jsonb_set(
+                    func.coalesce(col(MaintenanceProposal.evidence), func.cast('{}', JSONB)),
+                    func.cast('{resolution}', ARRAY(Text)),
+                    func.cast(_json.dumps(new_resolution), JSONB),
+                    True,
                 )
-                WHERE id = :id
-                  AND (CAST(:vault_id AS text) IS NULL OR vault_id = CAST(:vault_id AS uuid))
-                """
-            ),
-            {
-                'id': str(finding_id),
-                'vault_id': str(finding_vault) if finding_vault else None,
-                'resolution_json': _json.dumps(new_resolution),
-            },
+            )
         )
+        if finding_vault is not None:
+            update_stmt = update_stmt.where(col(MaintenanceProposal.vault_id) == finding_vault)
+        await session.execute(update_stmt)
         await session.commit()
 
     return {
@@ -1483,12 +1500,15 @@ async def _load_resolved_finding_or_404(finding_id: UUID, api: MemexAPI) -> dict
         row = (
             (
                 await session.execute(
-                    text(
-                        'SELECT id::text AS id, vault_id, rule_name, target_type, '
-                        'target_id, evidence, status '
-                        'FROM maintenance_proposals WHERE id = :id'
-                    ),
-                    {'id': str(finding_id)},
+                    select(
+                        cast(col(MaintenanceProposal.id), Text).label('id'),
+                        MaintenanceProposal.vault_id,
+                        MaintenanceProposal.rule_name,
+                        MaintenanceProposal.target_type,
+                        MaintenanceProposal.target_id,
+                        MaintenanceProposal.evidence,
+                        MaintenanceProposal.status,
+                    ).where(col(MaintenanceProposal.id) == finding_id)
                 )
             )
             .mappings()
@@ -1593,26 +1613,18 @@ async def lint_seed_finding(
     try:
         async with api.metastore.session() as session:
             await session.execute(
-                text(
-                    'INSERT INTO maintenance_proposals '
-                    '(id, vault_id, lint_type, target_type, target_id, '
-                    'rule_name, evidence, suggested_action, status, source) '
-                    'VALUES (CAST(:id AS uuid), CAST(:vault_id AS uuid), '
-                    ':lint_type, :target_type, :target_id, :rule_name, '
-                    "CAST(:evidence AS jsonb), :suggested_action, 'pending', "
-                    ':source)'
-                ),
-                {
-                    'id': fid,
-                    'vault_id': str(vault_id),
-                    'lint_type': lint_type,
-                    'target_type': 'memory_unit',
-                    'target_id': tid,
-                    'rule_name': rule_name,
-                    'evidence': json.dumps(ev),
-                    'suggested_action': sa,
-                    'source': source,
-                },
+                insert(MaintenanceProposal).values(
+                    id=UUID(fid),
+                    vault_id=vault_id,
+                    lint_type=lint_type,
+                    target_type='memory_unit',
+                    target_id=tid,
+                    rule_name=rule_name,
+                    evidence=func.cast(json.dumps(ev), JSONB),
+                    suggested_action=sa,
+                    status='pending',
+                    source=source,
+                )
             )
             await session.commit()
     except Exception as e:
