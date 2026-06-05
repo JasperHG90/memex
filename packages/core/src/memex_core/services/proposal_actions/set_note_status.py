@@ -152,18 +152,31 @@ class SetNoteStatusAction:
         note_id = UUID(str(prior_state.get('note_id') or target_id))
         prior_status = str(prior_state.get('status') or 'active')
         prior_superseded = prior_state.get('superseded_by')
+        # 'superseded' and 'archived' coexist: NoteService.set_note_status(
+        # 'archived') only stamps archived_at — it does NOT touch status or
+        # superseded_by — so re-applying the supersede pointer first and
+        # re-archiving second restores BOTH signals without losing the pointer.
+        # Unknown statuses are refused rather than silently collapsed to
+        # 'active', so a future lifecycle state cannot mis-restore here.
         if prior_status == 'superseded':
             await api.set_note_status(
                 note_id, 'superseded', UUID(str(prior_superseded)) if prior_superseded else None
             )
-        else:
+        elif prior_status in ('active', 'archived'):
+            # 'archived''s base is the active note it was archived from; the
+            # archived_at re-stamp below reconstructs the archived signal.
             await api.set_note_status(note_id, 'active')
+        else:
+            raise ProposalActionError(
+                f'cannot reverse set_note_status: unhandled prior status {prior_status!r}.'
+            )
         if prior_state.get('archived_at'):
             await api.set_note_status(note_id, 'archived')
         return ReverseResult(
             restored_state={
                 'note_id': str(note_id),
                 'status': prior_status,
+                'superseded_by': str(prior_superseded) if prior_superseded else None,
                 'archived': bool(prior_state.get('archived_at')),
             }
         )

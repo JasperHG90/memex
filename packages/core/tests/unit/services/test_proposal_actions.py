@@ -455,7 +455,7 @@ class TestSetNoteStatusAction:
         api = _FakeApi()
         target_id = str(uuid4())
         winner = str(uuid4())
-        await action.reverse(
+        result = await action.reverse(
             api,
             {},
             {'note_id': target_id, 'status': 'active'},
@@ -474,6 +474,31 @@ class TestSetNoteStatusAction:
             (UUID(target_id), 'superseded', UUID(winner)),
             (UUID(target_id), 'archived', None),
         ]
+        # The supersede pointer survives the re-archive (archived coexists with
+        # superseded) and is echoed in restored_state for the audit trail.
+        assert result.restored_state['superseded_by'] == winner
+        assert result.restored_state['status'] == 'superseded'
+        assert result.restored_state['archived'] is True
+
+    @pytest.mark.asyncio
+    async def test_reverse_refuses_unknown_prior_status(self) -> None:
+        """An unrecognised prior status is refused, not silently restored as
+        'active' — a future lifecycle state cannot mis-restore here."""
+        from memex_core.services.proposal_actions import ProposalActionError
+
+        action = get_action('set_note_status')
+        api = _FakeApi()
+        with pytest.raises(ProposalActionError, match='unhandled prior status'):
+            await action.reverse(
+                api,
+                {},
+                {},
+                {'note_id': str(uuid4()), 'status': 'some_future_state'},
+                target_id=str(uuid4()),
+                vault_id=_VAULT,
+                actor=_ACTOR,
+            )
+        assert api.note_status_calls == []
 
     @pytest.mark.asyncio
     async def test_reverse_refuses_appended_to(self) -> None:

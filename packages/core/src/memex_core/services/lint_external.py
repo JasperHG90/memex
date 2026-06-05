@@ -216,6 +216,10 @@ async def insert_external_proposal(
     # The cooldown predicate is part of the INSERT's source SELECT, so it is
     # evaluated atomically with the conflict arbiter. cooldown_days=0 short-
     # circuits the NOT EXISTS to a no-op (nothing recent ever matches).
+    # Injection-safe: cooldown_clause is a module-local constant (no runtime
+    # interpolation) and the only dynamic value — cooldown_days — is bound as
+    # the :cooldown_days parameter. The f-string splice below only chooses
+    # WHETHER to include the constant clause, never what it contains.
     cooldown_clause = """
       AND NOT EXISTS (
           SELECT 1 FROM maintenance_proposals mp
