@@ -676,12 +676,10 @@ async def lint_flag(
     finding (pending, resolved, dismissed) can be flagged or unflagged.
     This is a non-destructive bookmark; no ``_require_attended_mode`` gate.
     """
-    # Vault-scope auth gate (same as dismiss/resolve).
-    found, finding_vault = await api.lint.get_finding_vault_id(finding_id)
-    if not found:
-        raise HTTPException(status_code=404, detail='Finding not found')
-    if finding_vault is not None:
-        await check_vault_access(auth, [finding_vault], api, permission=Permission.WRITE)
+    # Vault-scope auth gate — route through the shared helper so global
+    # (NULL-vault) findings are gated identically to dismiss/resolve rather
+    # than skipped (the inline gate previously left global findings open).
+    await _gate_finding_for_write(finding_id, api, auth)
     try:
         async with api.metastore.session() as session:
             result = await session.execute(

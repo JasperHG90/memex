@@ -258,7 +258,14 @@ async def insert_external_proposal(
                     col(MaintenanceProposal.rule_name) == req.rule_name,
                     col(MaintenanceProposal.target_type) == req.target_type,
                     col(MaintenanceProposal.target_id) == req.target_id,
-                    col(MaintenanceProposal.vault_id) == vault_id,
+                    # IS NOT DISTINCT FROM semantics: a global (NULL) vault must
+                    # match the existing NULL pending row; `== None` → `= NULL`
+                    # never matches, misclassifying a dup as cooldown_suppressed.
+                    (
+                        col(MaintenanceProposal.vault_id).is_(None)
+                        if vault_id is None
+                        else col(MaintenanceProposal.vault_id) == vault_id
+                    ),
                     col(MaintenanceProposal.status) == 'pending',
                 )
                 .limit(1)
