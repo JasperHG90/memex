@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 import dspy
 
@@ -1747,6 +1748,7 @@ class MemexAPI:
         turn_outcome: str | None = None,
         retrieved_set_size: int | None = None,
         exploration_tagged: bool = False,
+        session: AsyncSession | None = None,
     ) -> dict[str, Any]:
         """Record an outcome against memory units. Delegates to OutcomeService.
 
@@ -1762,9 +1764,10 @@ class MemexAPI:
         """
         half_life = self.config.server.memory.retrieval.mw_ema_half_life_days
         coverage_mode = self.config.server.memory.outcomes.coverage_check_mode
-        async with self.metastore.session() as session:
+
+        async def _run(active: AsyncSession, *, commit: bool) -> dict[str, Any]:
             return await self._outcomes.record_outcome(
-                session=session,
+                session=active,
                 unit_ids=unit_ids,
                 success=success,
                 vault_id=vault_id,
@@ -1777,7 +1780,16 @@ class MemexAPI:
                 retrieved_set_size=retrieved_set_size,
                 exploration_tagged=exploration_tagged,
                 coverage_check_mode=coverage_mode,
+                commit=commit,
             )
+
+        # A caller-supplied session means "join my transaction; I will commit" —
+        # lint resolve folds the outcome into its FOR UPDATE txn so the ledger
+        # write is atomic with the finding's status flip (no crash double-count).
+        if session is not None:
+            return await _run(session, commit=False)
+        async with self.metastore.session() as owned:
+            return await _run(owned, commit=True)
 
     async def create_vault(self, name: str, description: str | None = None) -> Any:
         """Create a new vault. Delegates to VaultService."""

@@ -26,6 +26,8 @@ from memex_core.services.proposal_actions.base import (
 )
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
     from memex_core.api import MemexAPI
 
 
@@ -84,12 +86,18 @@ class RecordOutcomeAction:
         target_id: str,
         vault_id: UUID | None,
         actor: str,
+        session: AsyncSession | None = None,
     ) -> ExecuteResult:
         parsed = _RecordOutcomeParams(**params)
+        # When the resolve route supplies its transaction, the ledger write joins
+        # it and commits with the finding status flip — so a crash cannot leave
+        # the outcome recorded against a still-pending finding that a re-resolve
+        # would then double-count. Append-only, hence still no reverse.
         result = await api.record_outcome(
             vault_id=str(vault_id) if vault_id is not None else None,
             units=[{'unit_id': target_id, 'verb': parsed.verb, 'reason': parsed.reason}],
             caller_id=actor,
+            session=session,
         )
         return ExecuteResult(
             applied_state={
