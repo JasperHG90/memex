@@ -34,7 +34,11 @@ from sqlmodel import col, select
 from memex_common.lint import LintProposal, ProposedAction
 from memex_core.memory.sql_models import MaintenanceProposal
 from memex_core.services.lint import V1_RULES
-from memex_core.services.proposal_actions import ActionValidationError, get_action
+from memex_core.services.proposal_actions import (
+    ActionValidationError,
+    ProposalAction,
+    get_action,
+)
 
 if TYPE_CHECKING:
     from memex_core.api import MemexAPI
@@ -114,7 +118,7 @@ class SubmissionItemResult:
         return body
 
 
-def action_descriptor(action: Any) -> dict[str, Any]:
+def action_descriptor(action: ProposalAction) -> dict[str, Any]:
     """Wire shape for one catalogue action (the lint actions listing + facade).
 
     ``params_schema`` is the action's Pydantic ``model_json_schema()`` and is

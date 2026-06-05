@@ -4003,7 +4003,7 @@ async def memex_get_lint_flags(
         str,
         Field(description='pending | resolved | dismissed (default: pending)'),
     ] = 'pending',
-    limit: Annotated[int, Field(description='Page size (default 20, max 200).')] = 20,
+    limit: Annotated[int, Field(ge=1, le=200, description='Page size (default 20, max 200).')] = 20,
     cursor: Annotated[
         str | None,
         Field(description='Opaque cursor from a prior page; omit on first call.'),

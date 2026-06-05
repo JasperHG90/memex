@@ -28,6 +28,7 @@ from rich.console import Console
 from rich.table import Table
 
 from memex_common.config import MemexConfig
+from memex_common.lint import LINT_TYPES
 from memex_cli.lint_review import finding_target_label, render_summary, run_review_loop
 from memex_cli.utils import async_command, get_api_context, handle_api_error, parse_uuid
 
@@ -143,13 +144,7 @@ async def lint_findings(
     limit: Annotated[int, typer.Option('--limit', min=1, max=500)] = 50,
 ):
     """List maintenance findings."""
-    if lint_type is not None and lint_type not in {
-        'structural',
-        'quality',
-        'governance',
-        'schema',
-        'routing',
-    }:
+    if lint_type is not None and lint_type not in LINT_TYPES:
         console.print(f'[red]Unknown --type: {lint_type!r}[/red]')
         raise typer.Exit(2)
 
@@ -701,13 +696,7 @@ async def lint_review_cmd(
     headless/CI use; in that mode ``--apply`` switches dry-run off.
     """
     scope = _resolve_scope(vault, is_global, is_all)
-    if lint_type is not None and lint_type not in {
-        'structural',
-        'quality',
-        'governance',
-        'schema',
-        'routing',
-    }:
+    if lint_type is not None and lint_type not in LINT_TYPES:
         console.print(f'[red]Unknown --type: {lint_type!r}[/red]')
         raise typer.Exit(2)
 
