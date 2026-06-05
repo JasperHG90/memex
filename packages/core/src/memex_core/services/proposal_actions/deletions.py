@@ -338,6 +338,11 @@ class DeleteMentalModelAction:
             entity_id = UUID(target_id)
         except (ValueError, AttributeError):
             return "Will permanently delete this vault's mental model. NOT reversible."
+        if vault_id is None:
+            # Mirror execute()'s guard: a mental model is an (entity, vault) row,
+            # so a vault-less finding has nothing to preview; binding str(None)
+            # into the uuid-cast SQL would raise rather than match zero rows.
+            return 'No vault-scoped mental model for this entity — execute would refuse.'
         async with api.metastore.session() as session:
             result = await session.execute(
                 _MENTAL_MODEL_BLAST_SQL,

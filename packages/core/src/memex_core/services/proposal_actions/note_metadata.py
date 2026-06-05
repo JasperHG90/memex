@@ -141,9 +141,9 @@ class UpdateNoteTitleAction:
         actor: str,
     ) -> ReverseResult:
         prior_title = prior_state.get('title')
-        if not prior_title:
+        if prior_title is None:
             raise ProposalActionError(
-                'cannot reverse update_note_title: the prior title was empty.'
+                'cannot reverse update_note_title: the prior title was unset.'
             )
         note_id = UUID(str(prior_state.get('note_id') or target_id))
         await api.update_note_title(note_id, str(prior_title))

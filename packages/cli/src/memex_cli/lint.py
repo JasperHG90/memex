@@ -706,6 +706,7 @@ async def lint_review_cmd(
         'quality',
         'governance',
         'schema',
+        'routing',
     }:
         console.print(f'[red]Unknown --type: {lint_type!r}[/red]')
         raise typer.Exit(2)

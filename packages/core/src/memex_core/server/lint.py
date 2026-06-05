@@ -205,7 +205,10 @@ async def _submit_one_external(
     try:
         req = ExternalProposalRequest(**item)
     except ValidationError as exc:
-        first = exc.errors()[0]
+        errs = exc.errors()
+        if not errs:
+            return _rejected('proposal: invalid')
+        first = errs[0]
         loc = '.'.join(str(part) for part in first.get('loc', ()))
         return _rejected(f'{loc or "proposal"}: {first.get("msg", "invalid")}')
     lint_type_label = req.lint_type
@@ -637,6 +640,11 @@ async def _gate_global_finding_action(
     evidence = finding.get('evidence') or {}
     if not isinstance(evidence, dict):
         evidence = {}
+    # SECURITY: vaults_affected is a server-owned authorization key. External
+    # submitters cannot forge it — ``vaults_affected`` is in RESERVED_EVIDENCE_KEYS
+    # and ExternalProposalRequest uses extra='forbid', so it only ever reaches
+    # this gate stamped by an in-process scan. Any future path that merges
+    # user input into evidence MUST preserve that invariant or this gate opens.
     vaults_affected = [str(v) for v in (evidence.get('vaults_affected') or [])]
     if not vaults_affected:
         raise HTTPException(
