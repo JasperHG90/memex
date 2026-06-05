@@ -24,7 +24,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
 from pydantic import ConfigDict, field_validator
@@ -100,12 +100,15 @@ class ExternalProposalRequest(LintProposal):
         return v
 
 
+SubmissionStatus = Literal['created', 'deduplicated', 'cooldown_suppressed', 'rejected']
+
+
 @dataclass(frozen=True)
 class SubmissionItemResult:
     """Per-item outcome of a batch submission (batch is partial-success)."""
 
     index: int
-    status: str  # 'created' | 'deduplicated' | 'cooldown_suppressed' | 'rejected'
+    status: SubmissionStatus
     finding_id: str | None = None
     detail: str | None = None
 
@@ -179,7 +182,7 @@ async def insert_external_proposal(
     *,
     vault_id: UUID | None,
     actor: str,
-) -> tuple[str, UUID | None]:
+) -> tuple[Literal['created', 'deduplicated', 'cooldown_suppressed'], UUID | None]:
     """Insert one validated proposal; returns ``(status, finding_id)``.
 
     Status semantics mirror what internal rules get from

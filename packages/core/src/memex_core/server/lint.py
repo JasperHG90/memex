@@ -1108,7 +1108,7 @@ async def _resolve_entity_collapse_cluster(
         )
         raise HTTPException(status_code=400, detail=detail)
 
-    actor_id = getattr(auth, 'api_key_id', None) if auth else None
+    actor = _audit_actor()
     finding_pk = PyUUID(str(finding['id']))
     # Serialise resolution of THIS finding under a row lock so a concurrent
     # resolve cannot double-apply the collapse between the mutation and the
@@ -1129,14 +1129,14 @@ async def _resolve_entity_collapse_cluster(
             summary = await api.entities.collapse_cluster(
                 winner_id=PyUUID(winner_id),
                 loser_ids=[PyUUID(lid) for lid in losers],
-                actor=actor_id,
+                actor=actor,
             )
         except Exception as exc:
             raise _handle_error(exc, 'Failed to apply entity cluster collapse')
 
         resolution = _build_resolution_payload(
             verdict='accepted',
-            actor=_audit_actor(),
+            actor=actor,
             note=_extract_note(params),
             followup={
                 'rule_name': 'entity_collapse_cluster',
@@ -1150,7 +1150,7 @@ async def _resolve_entity_collapse_cluster(
             ok = await api.lint.set_status(
                 finding_pk,
                 'resolved',
-                actor=actor_id,
+                actor=actor,
                 vault_id=None,
                 resolution=resolution,
                 session=txn,
