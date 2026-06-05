@@ -80,10 +80,12 @@ from memex_core.services.proposal_actions import (
 logger = logging.getLogger('memex.core.server.lint')
 
 # TARGET_ENRICHMENT_SQL is f-string-interpolated into the findings query (its
-# `noqa: S608` is justified only because it is a compile-time constant). Assert
+# `noqa: S608` is justified only because it is a compile-time constant). Guard
 # it here so a future refactor that makes it dynamic — and thus an injection
-# vector — fails loudly at import rather than silently.
-assert isinstance(TARGET_ENRICHMENT_SQL, str), 'TARGET_ENRICHMENT_SQL must be a string literal'
+# vector — fails loudly at import. An explicit raise (NOT assert, which
+# `python -O` strips) keeps the guard alive under optimized bytecode.
+if not isinstance(TARGET_ENRICHMENT_SQL, str):
+    raise TypeError('TARGET_ENRICHMENT_SQL must be a compile-time string literal')
 
 try:  # pragma: no cover - optional dependency
     from opentelemetry import trace as _otel_trace
