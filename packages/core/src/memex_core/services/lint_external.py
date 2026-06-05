@@ -234,6 +234,10 @@ async def insert_external_proposal(
              AND mp.resolved_at > now() - make_interval(days => :cooldown_days)
       )
     """
+    # Defense-in-depth, mirroring the TARGET_ENRICHMENT_SQL assert: cooldown_clause
+    # must stay a constant string. A future refactor that made it carry a runtime
+    # value would turn the f-string splice below into an injection vector.
+    assert isinstance(cooldown_clause, str)
     insert_sql = sa_text(
         'INSERT INTO maintenance_proposals '
         '(vault_id, lint_type, target_type, target_id, rule_name, evidence, '
