@@ -28,7 +28,11 @@ from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
 from pydantic import ConfigDict, field_validator
-from sqlalchemy import text as sa_text
+from sqlalchemy import cast, func, literal
+from sqlalchemy import select as sa_select
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import col, select
 
 from memex_common.lint import LintProposal, ProposedAction
@@ -205,57 +209,65 @@ async def insert_external_proposal(
     """
     cooldown_days = api.config.server.memory.lint.external_proposals.cooldown_days
     evidence = _assemble_evidence(req, actor=actor)
+    mp = MaintenanceProposal
 
-    params: dict[str, Any] = {
-        'vault_id': str(vault_id) if vault_id is not None else None,
-        'lint_type': req.lint_type,
-        'target_type': req.target_type,
-        'target_id': req.target_id,
-        'rule_name': req.rule_name,
-        'evidence': json.dumps(evidence),
-        'suggested_action': req.suggested_action,
-        'cooldown_days': cooldown_days,
-    }
-    # The cooldown predicate is part of the INSERT's source SELECT, so it is
-    # evaluated atomically with the conflict arbiter. cooldown_days=0 short-
-    # circuits the NOT EXISTS to a no-op (nothing recent ever matches).
-    # Injection-safe: cooldown_clause is a module-local constant (no runtime
-    # interpolation) and the only dynamic value — cooldown_days — is bound as
-    # the :cooldown_days parameter. The f-string splice below only chooses
-    # WHETHER to include the constant clause, never what it contains.
-    cooldown_clause = """
-      AND NOT EXISTS (
-          SELECT 1 FROM maintenance_proposals mp
-           WHERE mp.rule_name = :rule_name
-             AND mp.target_type = :target_type
-             AND mp.target_id = :target_id
-             AND mp.vault_id IS NOT DISTINCT FROM CAST(:vault_id AS uuid)
-             AND mp.status IN ('resolved', 'dismissed')
-             AND mp.resolved_at > now() - make_interval(days => :cooldown_days)
-      )
-    """
-    # Defense-in-depth: cooldown_clause must stay a constant string. A future
-    # refactor that made it carry a runtime value would turn the f-string splice
-    # below into an injection vector. An explicit raise (NOT assert, which
-    # `python -O` strips) keeps the guard alive under optimized bytecode.
-    if not isinstance(cooldown_clause, str):
-        raise TypeError('cooldown_clause must be a constant string, never a runtime value')
-    insert_sql = sa_text(
-        'INSERT INTO maintenance_proposals '
-        '(vault_id, lint_type, target_type, target_id, rule_name, evidence, '
-        ' suggested_action, status, source) '
-        'SELECT CAST(:vault_id AS uuid), :lint_type, :target_type, :target_id, '
-        '       :rule_name, CAST(:evidence AS jsonb), :suggested_action, '
-        "       'pending', 'external' "
-        'WHERE true'
-        f'{cooldown_clause if cooldown_days > 0 else ""} '
-        'ON CONFLICT (rule_name, target_type, target_id, vault_id) '
-        "WHERE status = 'pending' DO NOTHING "
-        'RETURNING id'
+    # A resolved/dismissed sibling within the cooldown window suppresses
+    # re-creation. cooldown_days=0 makes `resolved_at > now() - make_interval(0)`
+    # (i.e. resolved_at > now()) false for every past row, so this is a no-op.
+    recent_resolution = (
+        sa_select(literal(1))
+        .where(
+            col(mp.rule_name) == req.rule_name,
+            col(mp.target_type) == req.target_type,
+            col(mp.target_id) == req.target_id,
+            col(mp.vault_id).is_not_distinct_from(vault_id),
+            col(mp.status).in_(('resolved', 'dismissed')),
+            col(mp.resolved_at) > func.now() - func.make_interval(0, 0, 0, cooldown_days),
+        )
+        .exists()
+    )
+
+    # INSERT … SELECT <new row> WHERE NOT EXISTS(<recent resolution>) ON CONFLICT
+    # DO NOTHING RETURNING id — the cooldown guard and the conflict arbiter are
+    # evaluated in ONE statement (no check-then-insert TOCTOU), built entirely
+    # from typed SQLAlchemy constructs so every value is a bound parameter.
+    source = sa_select(
+        literal(vault_id, type_=PG_UUID(as_uuid=True)).label('vault_id'),
+        literal(req.lint_type).label('lint_type'),
+        literal(req.target_type).label('target_type'),
+        literal(req.target_id).label('target_id'),
+        literal(req.rule_name).label('rule_name'),
+        cast(literal(json.dumps(evidence)), JSONB).label('evidence'),
+        literal(req.suggested_action).label('suggested_action'),
+        literal('pending').label('status'),
+        literal('external').label('source'),
+    ).where(~recent_resolution)
+
+    insert_stmt = (
+        pg_insert(mp)
+        .from_select(
+            [
+                'vault_id',
+                'lint_type',
+                'target_type',
+                'target_id',
+                'rule_name',
+                'evidence',
+                'suggested_action',
+                'status',
+                'source',
+            ],
+            source,
+        )
+        .on_conflict_do_nothing(
+            index_elements=['rule_name', 'target_type', 'target_id', 'vault_id'],
+            index_where=col(mp.status) == 'pending',
+        )
+        .returning(mp.id)
     )
 
     async with api.metastore.session() as session:
-        inserted = (await session.execute(insert_sql, params)).scalar_one_or_none()
+        inserted = (await session.execute(insert_stmt)).scalar_one_or_none()
         if inserted is not None:
             await session.commit()
             return ('created', inserted)

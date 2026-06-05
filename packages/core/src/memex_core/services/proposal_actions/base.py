@@ -98,7 +98,17 @@ class ProposalAction(Protocol):
         vault_id: UUID | None,
         actor: str,
     ) -> ExecuteResult:
-        """Run the mutation and return its before/after snapshot."""
+        """Run the mutation and return its before/after snapshot.
+
+        An action MAY additionally accept an optional ``session: AsyncSession``
+        keyword to run its writes inside the resolve route's transaction (so the
+        side effect commits atomically with the finding's status flip). The
+        route opts a specific action into this via an ``isinstance`` check —
+        ``RecordOutcomeAction`` uses it because its ledger write would otherwise
+        not be safe to re-apply after a crash. Actions that don't declare the
+        parameter run in their own session, which is correct for any action
+        that is already idempotent or 409s on an already-applied target.
+        """
         ...
 
     async def reverse(
