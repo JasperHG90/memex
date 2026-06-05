@@ -25,8 +25,9 @@ from typing import TYPE_CHECKING, Any, ClassVar, Literal
 from uuid import UUID
 
 from pydantic import BaseModel, Field, ValidationError
-from sqlalchemy import text
+from sqlmodel import select
 
+from memex_core.memory.sql_models import Note
 from memex_core.services.proposal_actions.base import (
     ActionValidationError,
     ExecuteResult,
@@ -37,14 +38,6 @@ from memex_core.services.proposal_actions.base import (
 
 if TYPE_CHECKING:
     from memex_core.api import MemexAPI
-
-
-_SNAPSHOT_SQL = text("""
-    SELECT status, superseded_by, archived_at, appended_to
-    FROM notes
-    WHERE id = :id
-      AND (CAST(:vault_id AS uuid) IS NULL OR vault_id = CAST(:vault_id AS uuid))
-""")
 
 
 class _SetNoteStatusParams(BaseModel):
@@ -108,10 +101,12 @@ class SetNoteStatusAction:
         parsed = _SetNoteStatusParams(**params)
         note_id = UUID(target_id)
         async with api.metastore.session() as session:
-            result = await session.execute(
-                _SNAPSHOT_SQL,
-                {'id': note_id, 'vault_id': str(vault_id) if vault_id is not None else None},
-            )
+            stmt = select(
+                Note.status, Note.superseded_by, Note.archived_at, Note.appended_to
+            ).where(Note.id == note_id)
+            if vault_id is not None:
+                stmt = stmt.where(Note.vault_id == vault_id)
+            result = await session.execute(stmt)
             row = result.first()
         if row is None:
             raise ProposalActionError(f'note {target_id} not found in vault.')

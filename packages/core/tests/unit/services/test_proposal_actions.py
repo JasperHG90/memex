@@ -32,8 +32,12 @@ class _FakeMetastoreSession:
     executed: list[tuple[str, dict[str, Any]]] = field(default_factory=list)
     committed: bool = False
 
-    async def execute(self, stmt: Any, params: dict[str, Any]) -> '_FakeMetastoreResult':
-        self.executed.append((str(stmt), params))
+    async def execute(
+        self, stmt: Any, params: dict[str, Any] | None = None
+    ) -> '_FakeMetastoreResult':
+        # params is now optional: the actions build SQLModel/Core statements with
+        # values bound into the statement (no separate params dict).
+        self.executed.append((str(stmt), params or {}))
         return _FakeMetastoreResult(self.rows.pop(0) if self.rows else None)
 
     async def commit(self) -> None:

@@ -17,8 +17,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, ClassVar
 from uuid import UUID
 
-from sqlalchemy import text
+from sqlalchemy import func
+from sqlmodel import select
 
+from memex_core.memory.sql_models import Chunk, Entity, MemoryUnit, MentalModel, Note
 from memex_core.services.proposal_actions.base import (
     ActionValidationError,
     ExecuteResult,
@@ -31,36 +33,12 @@ if TYPE_CHECKING:
     from memex_core.api import MemexAPI
 
 
-# The ``(CAST(:vault_id AS uuid) IS NULL OR …)`` guard scopes the row to the
-# finding's vault when one is bound, and matches by id alone when :vault_id is
-# NULL (global finding). Postgres evaluates ``CAST(NULL AS uuid) IS NULL`` →
-# true, so the OR short-circuits to the id-only match — i.e. NULL vault means
-# "don't constrain by vault", not "match no rows".
-_NOTE_BLAST_SQL = text("""
-    SELECT n.title,
-           (SELECT count(*) FROM memory_units mu WHERE mu.note_id = n.id) AS unit_count,
-           (SELECT count(*) FROM chunks c WHERE c.note_id = n.id) AS chunk_count
-    FROM notes n
-    WHERE n.id = :id
-      AND (CAST(:vault_id AS uuid) IS NULL OR n.vault_id = CAST(:vault_id AS uuid))
-""")
-
-_ENTITY_BLAST_SQL = text("""
-    SELECT e.canonical_name,
-           e.mention_count,
-           (SELECT count(*) FROM mental_models mm WHERE mm.entity_id = e.id) AS model_count
-    FROM entities e
-    WHERE e.id = :id
-""")
-
-_MENTAL_MODEL_BLAST_SQL = text("""
-    SELECT COALESCE(jsonb_array_length(mm.observations), 0) AS observation_count
-    FROM mental_models mm
-    WHERE mm.entity_id = :entity_id
-      AND mm.vault_id = CAST(:vault_id AS uuid)
-""")
-
-
+# The vault guard scopes the row to the finding's vault when one is bound, and
+# matches by id alone when ``vault_id`` is None (global finding). Implemented as
+# a Python conditional on the select statement: the base statement matches by id
+# only, and a ``.where(<Model>.vault_id == vault_id)`` clause is appended exactly
+# when ``vault_id is not None`` — i.e. a None vault means "don't constrain by
+# vault", not "match no rows".
 def _validate_uuid_target(action_id: str, expected: str, target_type: str, target_id: str) -> None:
     if target_type != expected:
         raise ActionValidationError(
@@ -94,11 +72,27 @@ class DeleteNoteAction:
         _validate_uuid_target(self.id, 'note', target_type, target_id)
 
     async def _blast_radius(self, api: MemexAPI, note_id: UUID, vault_id: UUID | None) -> Any:
+        unit_count = (
+            select(func.count())
+            .select_from(MemoryUnit)
+            .where(MemoryUnit.note_id == Note.id)
+            .scalar_subquery()
+        )
+        chunk_count = (
+            select(func.count())
+            .select_from(Chunk)
+            .where(Chunk.note_id == Note.id)
+            .scalar_subquery()
+        )
+        stmt = select(
+            Note.title,
+            unit_count.label('unit_count'),
+            chunk_count.label('chunk_count'),
+        ).where(Note.id == note_id)
+        if vault_id is not None:
+            stmt = stmt.where(Note.vault_id == vault_id)
         async with api.metastore.session() as session:
-            result = await session.execute(
-                _NOTE_BLAST_SQL,
-                {'id': note_id, 'vault_id': str(vault_id) if vault_id is not None else None},
-            )
+            result = await session.execute(stmt)
             return result.first()
 
     async def execute(
@@ -181,8 +175,19 @@ class DeleteEntityAction:
         _validate_uuid_target(self.id, 'entity', target_type, target_id)
 
     async def _blast_radius(self, api: MemexAPI, entity_id: UUID) -> Any:
+        model_count = (
+            select(func.count())
+            .select_from(MentalModel)
+            .where(MentalModel.entity_id == Entity.id)
+            .scalar_subquery()
+        )
+        stmt = select(
+            Entity.canonical_name,
+            Entity.mention_count,
+            model_count.label('model_count'),
+        ).where(Entity.id == entity_id)
         async with api.metastore.session() as session:
-            result = await session.execute(_ENTITY_BLAST_SQL, {'id': entity_id})
+            result = await session.execute(stmt)
             return result.first()
 
     async def execute(
@@ -290,11 +295,13 @@ class DeleteMentalModelAction:
                 'delete_mental_model requires a vault-scoped finding; '
                 f'finding for entity {target_id} has no vault.'
             )
-        async with api.metastore.session() as session:
-            result = await session.execute(
-                _MENTAL_MODEL_BLAST_SQL,
-                {'entity_id': entity_id, 'vault_id': str(vault_id)},
+        stmt = select(
+            func.coalesce(func.jsonb_array_length(MentalModel.observations), 0).label(
+                'observation_count'
             )
+        ).where(MentalModel.entity_id == entity_id, MentalModel.vault_id == vault_id)
+        async with api.metastore.session() as session:
+            result = await session.execute(stmt)
             row = result.first()
         if row is None:
             raise ProposalActionError(
@@ -343,11 +350,13 @@ class DeleteMentalModelAction:
             # so a vault-less finding has nothing to preview; binding str(None)
             # into the uuid-cast SQL would raise rather than match zero rows.
             return 'No vault-scoped mental model for this entity — execute would refuse.'
-        async with api.metastore.session() as session:
-            result = await session.execute(
-                _MENTAL_MODEL_BLAST_SQL,
-                {'entity_id': entity_id, 'vault_id': str(vault_id)},
+        stmt = select(
+            func.coalesce(func.jsonb_array_length(MentalModel.observations), 0).label(
+                'observation_count'
             )
+        ).where(MentalModel.entity_id == entity_id, MentalModel.vault_id == vault_id)
+        async with api.metastore.session() as session:
+            result = await session.execute(stmt)
             row = result.first()
         if row is None:
             return 'No mental model for this entity in this vault — execute would refuse.'

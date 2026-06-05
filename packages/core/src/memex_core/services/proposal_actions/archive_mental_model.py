@@ -23,8 +23,10 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, ClassVar
 from uuid import UUID
 
-from sqlalchemy import text
+from sqlalchemy import func, update
+from sqlmodel import col
 
+from memex_core.memory.sql_models import MentalModel
 from memex_core.services.proposal_actions.base import (
     ActionValidationError,
     ExecuteResult,
@@ -35,26 +37,6 @@ from memex_core.services.proposal_actions.base import (
 
 if TYPE_CHECKING:
     from memex_core.api import MemexAPI
-
-
-_ARCHIVE_SQL = text("""
-    UPDATE mental_models
-    SET archived_at = now()
-    WHERE id = :id
-      AND (CAST(:vault_id AS uuid) IS NULL OR vault_id = CAST(:vault_id AS uuid))
-      AND archived_at IS NULL
-    RETURNING archived_at
-""")
-
-
-_UNARCHIVE_SQL = text("""
-    UPDATE mental_models
-    SET archived_at = NULL
-    WHERE id = :id
-      AND (CAST(:vault_id AS uuid) IS NULL OR vault_id = CAST(:vault_id AS uuid))
-      AND archived_at IS NOT NULL
-    RETURNING id
-""")
 
 
 class ArchiveMentalModelAction:
@@ -93,14 +75,20 @@ class ArchiveMentalModelAction:
         vault_id: UUID | None,
         actor: str,
     ) -> ExecuteResult:
+        model_id = UUID(target_id)
         async with api.metastore.session() as session:
-            result = await session.execute(
-                _ARCHIVE_SQL,
-                {
-                    'id': UUID(target_id),
-                    'vault_id': str(vault_id) if vault_id is not None else None,
-                },
+            stmt = (
+                update(MentalModel)
+                .where(
+                    col(MentalModel.id) == model_id,
+                    col(MentalModel.archived_at).is_(None),
+                )
+                .values(archived_at=func.now())
+                .returning(MentalModel.archived_at)
             )
+            if vault_id is not None:
+                stmt = stmt.where(col(MentalModel.vault_id) == vault_id)
+            result = await session.execute(stmt)
             row = result.first()
             await session.commit()
         if row is None:
@@ -129,14 +117,20 @@ class ArchiveMentalModelAction:
         vault_id: UUID | None,
         actor: str,
     ) -> ReverseResult:
+        model_id = UUID(target_id)
         async with api.metastore.session() as session:
-            result = await session.execute(
-                _UNARCHIVE_SQL,
-                {
-                    'id': UUID(target_id),
-                    'vault_id': str(vault_id) if vault_id is not None else None,
-                },
+            stmt = (
+                update(MentalModel)
+                .where(
+                    col(MentalModel.id) == model_id,
+                    col(MentalModel.archived_at).is_not(None),
+                )
+                .values(archived_at=None)
+                .returning(MentalModel.id)
             )
+            if vault_id is not None:
+                stmt = stmt.where(col(MentalModel.vault_id) == vault_id)
+            result = await session.execute(stmt)
             row = result.first()
             await session.commit()
         if row is None:

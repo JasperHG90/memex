@@ -26,8 +26,9 @@ from typing import TYPE_CHECKING, Any, ClassVar
 from uuid import UUID
 
 from pydantic import BaseModel, Field, ValidationError
-from sqlalchemy import text
+from sqlmodel import select
 
+from memex_core.memory.sql_models import Note
 from memex_core.services.proposal_actions.base import (
     ActionValidationError,
     ExecuteResult,
@@ -38,21 +39,6 @@ from memex_core.services.proposal_actions.base import (
 
 if TYPE_CHECKING:
     from memex_core.api import MemexAPI
-
-
-_TITLE_SNAPSHOT_SQL = text("""
-    SELECT title
-    FROM notes
-    WHERE id = :id
-      AND (CAST(:vault_id AS uuid) IS NULL OR vault_id = CAST(:vault_id AS uuid))
-""")
-
-_DATE_SNAPSHOT_SQL = text("""
-    SELECT publish_date
-    FROM notes
-    WHERE id = :id
-      AND (CAST(:vault_id AS uuid) IS NULL OR vault_id = CAST(:vault_id AS uuid))
-""")
 
 
 def _validate_note_target(action_id: str, target_type: str, target_id: str) -> None:
@@ -116,10 +102,10 @@ class UpdateNoteTitleAction:
         parsed = _UpdateNoteTitleParams(**params)
         note_id = UUID(target_id)
         async with api.metastore.session() as session:
-            result = await session.execute(
-                _TITLE_SNAPSHOT_SQL,
-                {'id': note_id, 'vault_id': str(vault_id) if vault_id is not None else None},
-            )
+            stmt = select(Note.title).where(Note.id == note_id)
+            if vault_id is not None:
+                stmt = stmt.where(Note.vault_id == vault_id)
+            result = await session.execute(stmt)
             row = result.first()
         if row is None:
             raise ProposalActionError(f'note {target_id} not found in vault.')
@@ -205,10 +191,10 @@ class UpdateNoteDateAction:
         new_date = _parse_iso_datetime(parsed.new_date)
         note_id = UUID(target_id)
         async with api.metastore.session() as session:
-            result = await session.execute(
-                _DATE_SNAPSHOT_SQL,
-                {'id': note_id, 'vault_id': str(vault_id) if vault_id is not None else None},
-            )
+            stmt = select(Note.publish_date).where(Note.id == note_id)
+            if vault_id is not None:
+                stmt = stmt.where(Note.vault_id == vault_id)
+            result = await session.execute(stmt)
             row = result.first()
         if row is None:
             raise ProposalActionError(f'note {target_id} not found in vault.')
