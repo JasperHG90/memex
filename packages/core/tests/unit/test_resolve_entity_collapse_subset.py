@@ -30,10 +30,31 @@ def _finding(members: list[str], winner: str) -> dict:
     }
 
 
+def _mock_locked_session(api: MagicMock, *, status: str | None = 'pending') -> None:
+    """Wire ``api.metastore.session()`` as an async context manager whose
+    ``SELECT … FOR UPDATE`` returns a row with ``status`` (None → missing row)
+    so the carveout's serialization lock is satisfied under unit mocks."""
+    row = None
+    if status is not None:
+        row = MagicMock()
+        row.status = status
+    result_obj = MagicMock()
+    result_obj.first.return_value = row
+    txn = MagicMock()
+    txn.execute = AsyncMock(return_value=result_obj)
+    txn.commit = AsyncMock()
+    cm = MagicMock()
+    cm.__aenter__ = AsyncMock(return_value=txn)
+    cm.__aexit__ = AsyncMock(return_value=False)
+    api.metastore.session = MagicMock(return_value=cm)
+
+
 def _api() -> MagicMock:
     api = MagicMock()
     api.entities.collapse_cluster = AsyncMock(return_value={'cluster_size': 2})
     api.lint.set_status = AsyncMock(return_value=True)
+    api.config.server.auth.enabled = True  # attended-mode gate is a no-op here
+    _mock_locked_session(api)
     return api
 
 

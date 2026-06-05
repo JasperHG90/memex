@@ -28,7 +28,9 @@ FORBIDDEN_VAULT = uuid4()
 @pytest.fixture
 def mock_api():
     api = AsyncMock()
-    api.config = SimpleNamespace(server=SimpleNamespace(default_active_vault='vault-a'))
+    api.config = SimpleNamespace(
+        server=SimpleNamespace(default_active_vault='vault-a', auth=SimpleNamespace(enabled=True))
+    )
 
     async def _resolve(identifier):
         if isinstance(identifier, UUID):
@@ -388,6 +390,9 @@ class TestCollapseClusterEmptyBody:
                 'status': 'pending',
             }
             result.mappings = lambda: mappings
+            # The carveout's serialization lock issues `SELECT status … FOR
+            # UPDATE` and reads `.first().status`; satisfy that access too.
+            result.first = lambda: SimpleNamespace(status='pending')
             return result
 
         session_cm.execute = AsyncMock(side_effect=_execute)
