@@ -11,6 +11,9 @@ Revises: 056_node_assets
 Create Date: 2026-06-04
 """
 
+import logging
+
+import sqlalchemy as sa
 from alembic import op
 
 revision: str = '057_lint_source_external'
@@ -53,6 +56,19 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    # Rows that would violate the narrowed CHECK must be cleared first.
-    op.execute("DELETE FROM maintenance_proposals WHERE source = 'external'")
+    # DATA LOSS: permanently deletes every externally-submitted proposal
+    # (source='external'), including resolved ones whose catalogue actions
+    # already ran — their audit trail is destroyed. This is the additive-
+    # reverse of upgrade() (which only widened the CHECK to admit 'external');
+    # an operator downgrading past this revision accepts the loss. The deleted
+    # count is logged so the destruction is auditable.
+    deleted = (
+        op.get_bind()
+        .execute(sa.text("DELETE FROM maintenance_proposals WHERE source = 'external'"))
+        .rowcount
+    )
+    logging.getLogger('alembic.runtime.migration').warning(
+        'downgrade 057_lint_source_external: deleted %d external maintenance_proposals row(s)',
+        deleted,
+    )
     _exec_each(_CHECK_WITHOUT_EXTERNAL)

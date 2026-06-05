@@ -7,6 +7,12 @@ cannot be faithfully reconstructed by a re-put, so there is no reverse.
 The deleted value itself is deliberately NOT captured into the resolution
 payload — KV rows can hold sensitive preferences and `evidence` is visible
 to the agent surface.
+
+The ``vault_id`` parameter (required by the ProposalAction protocol) is
+intentionally unused here: the KV store is a single global keyspace with no
+vault dimension, so deletion is scoped by key alone. The resolve route
+additionally refuses KV actions for vault-scoped keys (only an unscoped
+principal may drive them), so there is no cross-vault concern to gate on.
 """
 
 from __future__ import annotations

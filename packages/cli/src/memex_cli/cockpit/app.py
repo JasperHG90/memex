@@ -676,7 +676,7 @@ class ProposalCockpitApp(App):
             # For orphan_mental_model, show the entity name prominently.
             entity_name = proposal.raw_evidence.get('entity_name')
             if entity_name:
-                body_lines.append(f'[bold]Entity: "{entity_name}"[/bold]')
+                body_lines.append(f'[bold]Entity: "{_esc(str(entity_name))}"[/bold]')
 
             # Fetch and display unit metadata for the target.
             target_meta = await self._controller.fetch_unit_metadata([proposal.target_id])
@@ -708,7 +708,7 @@ class ProposalCockpitApp(App):
             body_lines.append(f'[dim]related: {n} {unit_word} cited[/dim]')
         if proposal.suggested_action:
             body_lines.append('')
-            body_lines.append(f'[dim]suggested: {proposal.suggested_action}[/dim]')
+            body_lines.append(f'[dim]suggested: {_esc(proposal.suggested_action)}[/dim]')
         body_lines.append('')
         body_lines.append('[dim]' + '─' * 72 + '[/dim]')
         self.query_one('#detail-body', Static).update('\n'.join(body_lines))
@@ -860,7 +860,7 @@ class ProposalCockpitApp(App):
             body_lines.append(f'[dim]{n} more related {unit_word} not shown[/dim]')
         if proposal.suggested_action:
             body_lines.append('')
-            body_lines.append(f'[dim]suggested: {proposal.suggested_action}[/dim]')
+            body_lines.append(f'[dim]suggested: {_esc(proposal.suggested_action)}[/dim]')
         body_lines.append('')
         body_lines.append('[dim]' + '─' * 72 + '[/dim]')
 
