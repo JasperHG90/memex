@@ -31,7 +31,11 @@ from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel
-from sqlalchemy import Text, cast, func, text, tuple_
+from sqlalchemy import Text, cast, func, literal, literal_column, text, tuple_, update
+from sqlalchemy import select as sa_select
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlmodel import col, select
@@ -704,27 +708,83 @@ V1_RULES: tuple[RuleSpec, ...] = (
 
 _COOLDOWN_DAYS = 30
 
-_INSERT_FINDING_SQL = text("""
-    INSERT INTO maintenance_proposals (
-        vault_id, lint_type, target_type, target_id,
-        rule_name, evidence, suggested_action, status, source
+
+def _build_insert_finding_stmt(
+    *,
+    vault_id: str,
+    lint_type: str,
+    target_type: str,
+    target_id: str,
+    rule_name: str,
+    evidence: str,
+    suggested_action: str,
+) -> Any:
+    """Build the per-finding ``INSERT … SELECT … WHERE NOT EXISTS … ON CONFLICT``.
+
+    Mirrors :func:`lint_external.insert_external_proposal` (same single-statement
+    cooldown-guard + conflict-arbiter idiom) but with ``source='rule'`` and the
+    rule-emission cooldown. The SELECTed row, the cooldown ``NOT EXISTS``, and
+    the ``ON CONFLICT DO NOTHING`` are evaluated in ONE statement so a
+    concurrent resolution cannot slip between a separate cooldown SELECT and the
+    insert; every value is a bound parameter (no user-controlled interpolation).
+
+    ``evidence`` is the pre-serialised JSON string (see :func:`_json_dumps`),
+    cast to JSONB inside the statement to match the original
+    ``CAST(:evidence AS jsonb)``.
+    """
+    mp = MaintenanceProposal
+
+    # Post-resolution cooldown: a resolved/dismissed sibling within the
+    # cooldown window suppresses re-creation. Vault match is plain equality
+    # (the original used ``mp.vault_id = CAST(:vault_id AS uuid)``); the call
+    # site always passes a concrete (non-NULL) vault_id.
+    recent_resolution = (
+        sa_select(literal(1))
+        .where(
+            col(mp.rule_name) == rule_name,
+            col(mp.target_type) == target_type,
+            col(mp.target_id) == target_id,
+            col(mp.vault_id) == cast(literal(vault_id), PG_UUID(as_uuid=True)),
+            col(mp.status).in_(('resolved', 'dismissed')),
+            col(mp.resolved_at) > func.now() - func.make_interval(0, 0, 0, _COOLDOWN_DAYS),
+        )
+        .exists()
     )
-    SELECT
-        :vault_id, :lint_type, :target_type, :target_id,
-        :rule_name, CAST(:evidence AS jsonb), :suggested_action, 'pending', 'rule'
-    WHERE NOT EXISTS (
-        SELECT 1 FROM maintenance_proposals mp
-        WHERE mp.rule_name = :rule_name
-          AND mp.target_type = :target_type
-          AND mp.target_id = :target_id
-          AND mp.vault_id = CAST(:vault_id AS uuid)
-          AND mp.status IN ('resolved', 'dismissed')
-          AND mp.resolved_at > now() - interval '30 days'
+
+    source = sa_select(
+        cast(literal(vault_id), PG_UUID(as_uuid=True)).label('vault_id'),
+        literal(lint_type).label('lint_type'),
+        literal(target_type).label('target_type'),
+        literal(target_id).label('target_id'),
+        literal(rule_name).label('rule_name'),
+        cast(literal(evidence), JSONB).label('evidence'),
+        literal(suggested_action).label('suggested_action'),
+        literal('pending').label('status'),
+        literal('rule').label('source'),
+    ).where(~recent_resolution)
+
+    return (
+        pg_insert(mp)
+        .from_select(
+            [
+                'vault_id',
+                'lint_type',
+                'target_type',
+                'target_id',
+                'rule_name',
+                'evidence',
+                'suggested_action',
+                'status',
+                'source',
+            ],
+            source,
+        )
+        .on_conflict_do_nothing(
+            index_elements=['rule_name', 'target_type', 'target_id', 'vault_id'],
+            index_where=col(mp.status) == 'pending',
+        )
+        .returning(mp.id)
     )
-    ON CONFLICT (rule_name, target_type, target_id, vault_id)
-    WHERE status = 'pending'
-    DO NOTHING
-""")
 
 
 @dataclass
@@ -855,6 +915,10 @@ class LintService(BaseService):
             params: dict[str, Any] = {'vault_id': str(vault_id)}
             if spec.param_keys:
                 params.update(self._resolve_rule_params(spec.param_keys))
+            # SQL-by-design: lint rules ARE defined as parameterised SQL detection
+            # strings (``RuleSpec.select_sql``); the rule engine executes each
+            # verbatim. Intentionally NOT ported to SQLModel — the rules' query
+            # surface is their authored content, not a hand-built statement.
             result = await session.execute(text(spec.select_sql), params)
             rows = result.mappings().all()
             # Bulk-fetch (confidence, evidence_count) for every candidate
@@ -901,18 +965,21 @@ class LintService(BaseService):
                 ):
                     continue
                 ins = await session.execute(
-                    _INSERT_FINDING_SQL,
-                    {
-                        'vault_id': str(vault_id),
-                        'lint_type': spec.lint_type.value,
-                        'target_type': spec.target_type,
-                        'target_id': row['target_id'],
-                        'rule_name': spec.name,
-                        'evidence': _json_dumps(row['evidence']),
-                        'suggested_action': spec.suggested_action,
-                    },
+                    _build_insert_finding_stmt(
+                        vault_id=str(vault_id),
+                        lint_type=spec.lint_type.value,
+                        target_type=spec.target_type,
+                        target_id=row['target_id'],
+                        rule_name=spec.name,
+                        evidence=_json_dumps(row['evidence']),
+                        suggested_action=spec.suggested_action,
+                    )
                 )
-                if ins.rowcount:
+                # RETURNING id yields the new row's id iff the SELECT survived the
+                # cooldown NOT EXISTS and the row did not conflict with a pending
+                # sibling — same 0-or-1 "did we insert" signal the prior
+                # ``rowcount`` check consumed.
+                if ins.scalar_one_or_none() is not None:
                     emitted += 1
             metrics.LINT_FINDINGS_TOTAL.labels(
                 rule_name=spec.name,
@@ -987,23 +1054,22 @@ class LintService(BaseService):
         """
         # Exclude ``llm_deferred`` bookkeeping rows — they are not operator-
         # actionable findings (see ``lint_llm.process_deferred``).
-        if vault_id is None:
-            stmt = text(
-                'SELECT count(*) FROM maintenance_proposals '
-                "WHERE status = 'pending' AND vault_id IS NULL "
-                "AND rule_name != 'llm_deferred'"
+        mp = MaintenanceProposal
+        vault_clause = (
+            col(mp.vault_id).is_(None) if vault_id is None else col(mp.vault_id) == vault_id
+        )
+        stmt = (
+            select(func.count())
+            .select_from(mp)
+            .where(
+                col(mp.status) == 'pending',
+                col(mp.rule_name) != 'llm_deferred',
+                vault_clause,
             )
-            params: dict[str, Any] = {}
-        else:
-            stmt = text(
-                'SELECT count(*) FROM maintenance_proposals '
-                "WHERE status = 'pending' AND vault_id = :v "
-                "AND rule_name != 'llm_deferred'"
-            )
-            params = {'v': str(vault_id)}
+        )
 
         async with self.metastore.session() as session:
-            result = await session.execute(stmt, params)
+            result = await session.execute(stmt)
             return int(result.scalar() or 0)
 
     async def get_finding_vault_id(self, finding_id: UUID) -> tuple[bool, UUID | None]:
@@ -1016,8 +1082,9 @@ class LintService(BaseService):
         """
         async with self.metastore.session() as session:
             result = await session.execute(
-                text('SELECT vault_id FROM maintenance_proposals WHERE id = :id'),
-                {'id': str(finding_id)},
+                select(MaintenanceProposal.vault_id).where(
+                    col(MaintenanceProposal.id) == finding_id
+                )
             )
             row = result.first()
             if row is None:
@@ -1063,45 +1130,40 @@ class LintService(BaseService):
         if new_status not in ('resolved', 'dismissed'):
             raise ValueError(f"new_status must be 'resolved' or 'dismissed', got {new_status!r}")
 
-        params: dict[str, Any] = {
-            'new': new_status,
-            'id': str(finding_id),
-            'actor': actor,
+        mp = MaintenanceProposal
+        values: dict[str, Any] = {
+            'status': new_status,
+            'resolved_at': func.now(),
+            'resolved_by': actor,
         }
-        where_extra = ''
-        if vault_id is not None:
-            where_extra = ' AND vault_id = :vault_id'
-            params['vault_id'] = str(vault_id)
-
         if resolution is not None:
-            resolution_assignment = (
-                ", evidence = jsonb_set(COALESCE(evidence, '{}'::jsonb), "
-                "'{resolution}', CAST(:resolution_json AS jsonb), true)"
+            # ``evidence = jsonb_set(COALESCE(evidence, '{}'::jsonb), '{resolution}',
+            # CAST(:resolution_json AS jsonb), true)`` — write the resolution dict
+            # verbatim under ``evidence.resolution`` in the same UPDATE so the
+            # status flip and the resolution payload are atomic. The path
+            # ``'{resolution}'`` is emitted inline (``literal_column``) exactly as
+            # the original SQL literal so Postgres coerces it to ``text[]`` in the
+            # function-arg context; the dynamic payload is a bound, JSONB-cast param.
+            values['evidence'] = func.jsonb_set(
+                func.coalesce(col(mp.evidence), cast(literal('{}'), JSONB)),
+                literal_column("'{resolution}'"),
+                cast(literal(json.dumps(resolution)), JSONB),
+                literal(True),
             )
-            params['resolution_json'] = json.dumps(resolution)
-        else:
-            resolution_assignment = ''
 
-        # Safety invariant for S608: ``where_extra`` is either '' or the
-        # literal string ' AND vault_id = :vault_id'. ``resolution_assignment``
-        # is either '' or a fixed literal that adds an ``evidence = ...``
-        # SET clause where the JSONB payload is bound as :resolution_json.
-        # No user-controlled value is ever interpolated into the SQL
-        # string — ``new_status`` is allowlist-validated above; everything
-        # else flows through the bound ``params`` dict.
-        stmt = text(
-            'UPDATE maintenance_proposals '  # noqa: S608
-            'SET status = :new, resolved_at = now(), resolved_by = :actor'
-            f'{resolution_assignment} '
-            f"WHERE id = :id AND status = 'pending'{where_extra}"
+        stmt = (
+            update(mp).where(col(mp.id) == finding_id, col(mp.status) == 'pending').values(**values)
         )
+        if vault_id is not None:
+            # Defense-in-depth cross-vault check (was ``AND vault_id = :vault_id``).
+            stmt = stmt.where(col(mp.vault_id) == vault_id)
         if session is not None:
             # Caller owns the transaction (e.g. holds a FOR UPDATE lock) and
             # commits; we only stage the UPDATE.
-            result = await session.execute(stmt, params)
+            result = await session.execute(stmt)
             return bool(result.rowcount)
         async with self.metastore.session() as own_session:
-            result = await own_session.execute(stmt, params)
+            result = await own_session.execute(stmt)
             await own_session.commit()
             return bool(result.rowcount)
 
