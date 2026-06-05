@@ -223,6 +223,61 @@ async def test_global_finding_action_refused_without_scope(http: AsyncClient, ap
     assert noop.status_code == 200, noop.text
 
 
+async def _insert_collapse_cluster_finding(api) -> tuple[str, list[str]]:
+    """A pending entity_collapse_cluster finding (the legacy carveout path),
+    scoped via vaults_affected so it clears the no-fail-open gate."""
+    finding_id = str(uuid4())
+    members = [str(uuid4()), str(uuid4())]
+    evidence: dict[str, Any] = {
+        'cluster_members': members,
+        'suggested_winner_id': members[0],
+        'vaults_affected': [str(uuid4())],
+    }
+    import json
+
+    async with api.metastore.session() as s:
+        await s.execute(
+            text(
+                'INSERT INTO maintenance_proposals '
+                '(id, vault_id, lint_type, target_type, target_id, rule_name, evidence, '
+                ' suggested_action, status, source) VALUES '
+                "(:id, NULL, 'structural', 'entity', :target_id, 'entity_collapse_cluster', "
+                " CAST(:evidence AS jsonb), 'merge', 'pending', 'rule')"
+            ),
+            {'id': finding_id, 'target_id': members[0], 'evidence': json.dumps(evidence)},
+        )
+        await s.commit()
+    return finding_id, members
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_entity_collapse_carveout_requires_attended_mode(http: AsyncClient, api, monkeypatch):
+    """The entity_collapse_cluster carveout (resolve with no ``action``) is a
+    destructive cross-vault merge, so it must hit the attended-mode fence like
+    every other destructive resolve. Auth is disabled in this suite; with no
+    unattended opt-in the carveout is refused 403 BEFORE any entity mutation."""
+    monkeypatch.delenv('MEMEX_LINT_ALLOW_UNATTENDED_APPLY', raising=False)
+    finding_id, members = await _insert_collapse_cluster_finding(api)
+
+    resolve = await http.post(
+        f'/api/v1/lint/findings/{finding_id}/resolve',
+        json={'winner_id': members[0]},  # no `action` key → carveout branch
+    )
+    assert resolve.status_code == 403, resolve.text
+    assert 'auth' in resolve.json()['detail'].lower()
+
+    # The finding must remain pending — the gate fired before the status flip.
+    async with api.metastore.session() as s:
+        status = (
+            await s.execute(
+                text('SELECT status FROM maintenance_proposals WHERE id = :id'),
+                {'id': finding_id},
+            )
+        ).scalar_one()
+    assert status == 'pending'
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_destructive_action_executes_through_resolve(http: AsyncClient, api, monkeypatch):

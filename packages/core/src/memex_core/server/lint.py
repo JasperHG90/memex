@@ -1058,6 +1058,11 @@ async def _resolve_entity_collapse_cluster(
         )
         raise exc
 
+    # Destructive cross-vault merge: gate on attended mode exactly like the
+    # canned-action resolve path, so an unattended deployment cannot auto-apply
+    # an entity collapse without the human-confirmation fence.
+    _require_attended_mode(api)
+
     # Winner resolution / validation
     winner_param = params.get('winner_id') or params.get('winner_canonical_name')
     if winner_param is None:
@@ -1104,26 +1109,57 @@ async def _resolve_entity_collapse_cluster(
         raise HTTPException(status_code=400, detail=detail)
 
     actor_id = getattr(auth, 'api_key_id', None) if auth else None
-    try:
-        summary = await api.entities.collapse_cluster(
-            winner_id=PyUUID(winner_id),
-            loser_ids=[PyUUID(lid) for lid in losers],
-            actor=actor_id,
-        )
-    except Exception as exc:
-        raise _handle_error(exc, 'Failed to apply entity cluster collapse')
+    finding_pk = PyUUID(str(finding['id']))
+    # Serialise resolution of THIS finding under a row lock so a concurrent
+    # resolve cannot double-apply the collapse between the mutation and the
+    # status flip — mirrors the canned-action path. collapse_cluster commits
+    # in its own session; the lock closes the concurrency race (not the
+    # cross-session durability gap, which is the tracked follow-up).
+    async with api.metastore.session() as txn:
+        locked = (
+            await txn.execute(
+                text('SELECT status FROM maintenance_proposals WHERE id = :id FOR UPDATE'),
+                {'id': str(finding_pk)},
+            )
+        ).first()
+        if locked is None or str(locked.status) != 'pending':
+            raise HTTPException(status_code=404, detail='Finding not found or not pending')
 
-    try:
-        ok = await api.lint.set_status(
-            PyUUID(str(finding['id'])),
-            'resolved',
-            actor=actor_id,
-            vault_id=None,
+        try:
+            summary = await api.entities.collapse_cluster(
+                winner_id=PyUUID(winner_id),
+                loser_ids=[PyUUID(lid) for lid in losers],
+                actor=actor_id,
+            )
+        except Exception as exc:
+            raise _handle_error(exc, 'Failed to apply entity cluster collapse')
+
+        resolution = _build_resolution_payload(
+            verdict='accepted',
+            actor=_audit_actor(),
+            note=_extract_note(params),
+            followup={
+                'rule_name': 'entity_collapse_cluster',
+                'winner_id': winner_id,
+                'losers': losers,
+                'applied_at': datetime.now(timezone.utc).isoformat(),
+                'summary': summary,
+            },
         )
-    except Exception as exc:
-        raise _handle_error(exc, 'Failed to mark finding resolved')
-    if not ok:
-        raise HTTPException(status_code=409, detail='Finding state changed during apply')
+        try:
+            ok = await api.lint.set_status(
+                finding_pk,
+                'resolved',
+                actor=actor_id,
+                vault_id=None,
+                resolution=resolution,
+                session=txn,
+            )
+        except Exception as exc:
+            raise _handle_error(exc, 'Failed to mark finding resolved')
+        if not ok:
+            raise HTTPException(status_code=409, detail='Finding state changed during apply')
+        await txn.commit()
 
     return {
         'finding_id': str(finding['id']),
@@ -1348,34 +1384,54 @@ async def _reverse_via_registry(
     prior_state = followup.get('prior_state') or {}
     target_id = str(finding['target_id'])
 
-    try:
-        result = await action.reverse(
-            api,
-            params,
-            applied_state,
-            prior_state,
-            target_id=target_id,
-            vault_id=finding_vault,
-            actor=actor,
-        )
-    except ActionValidationError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    except ProposalActionError as exc:
-        raise HTTPException(status_code=409, detail=str(exc)) from exc
-    except Exception as exc:
-        raise _handle_error(exc, f'Failed to reverse proposal action {action_id}')
-
-    reversal_block = {
-        'reversed_at': datetime.now(timezone.utc).isoformat(),
-        'actor': actor,
-        'restored_state': result.restored_state,
-    }
-    new_resolution = dict(resolution)
-    new_resolution['reversal'] = reversal_block
-    # CAS-guarded UPDATE: refuse if `resolution.reversal` was filled in
-    # between our load and write (concurrent reverse caller).
+    # Serialise reverse of THIS finding under a row lock acquired BEFORE the
+    # (committing) reverse side-effect, so a concurrent reverse blocks here and
+    # sees reversal-already-set rather than double-applying the inverse. Mirrors
+    # the FOR UPDATE on the forward resolve path; action.reverse() still commits
+    # in its own session (the cross-session durability gap is the tracked
+    # follow-up), but the lock closes the double-execution race the review flagged.
     async with api.metastore.session() as session:
-        update_result = await session.execute(
+        locked = (
+            await session.execute(
+                text(
+                    'SELECT status, '
+                    "(evidence -> 'resolution' -> 'reversal') AS reversal "
+                    'FROM maintenance_proposals WHERE id = :id FOR UPDATE'
+                ),
+                {'id': str(finding_id)},
+            )
+        ).first()
+        if locked is None or str(locked.status) != 'resolved' or locked.reversal is not None:
+            raise HTTPException(
+                status_code=409,
+                detail='Resolution state changed during reverse (concurrent update).',
+            )
+
+        try:
+            result = await action.reverse(
+                api,
+                params,
+                applied_state,
+                prior_state,
+                target_id=target_id,
+                vault_id=finding_vault,
+                actor=actor,
+            )
+        except ActionValidationError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except ProposalActionError as exc:
+            raise HTTPException(status_code=409, detail=str(exc)) from exc
+        except Exception as exc:
+            raise _handle_error(exc, f'Failed to reverse proposal action {action_id}')
+
+        reversal_block = {
+            'reversed_at': datetime.now(timezone.utc).isoformat(),
+            'actor': actor,
+            'restored_state': result.restored_state,
+        }
+        new_resolution = dict(resolution)
+        new_resolution['reversal'] = reversal_block
+        await session.execute(
             text(
                 """
                 UPDATE maintenance_proposals
@@ -1386,8 +1442,6 @@ async def _reverse_via_registry(
                     true
                 )
                 WHERE id = :id
-                  AND status = 'resolved'
-                  AND (evidence -> 'resolution' -> 'reversal') IS NULL
                   AND (CAST(:vault_id AS text) IS NULL OR vault_id = CAST(:vault_id AS uuid))
                 """
             ),
@@ -1398,13 +1452,6 @@ async def _reverse_via_registry(
             },
         )
         await session.commit()
-    if update_result.rowcount == 0:
-        # The reversal already succeeded between our read and write — surface
-        # the conflict so the caller can refetch.
-        raise HTTPException(
-            status_code=409,
-            detail='Resolution state changed during reverse (concurrent update).',
-        )
 
     return {
         'finding_id': str(finding_id),
