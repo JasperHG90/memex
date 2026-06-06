@@ -4220,8 +4220,29 @@ async def memex_submit_lint_proposal(
         if proposed_action is not None:
             proposal['proposed_action'] = proposed_action
         result = await api.submit_lint_proposals([proposal])
-        items = result.get('results') if isinstance(result, dict) else None
-        return items[0] if items else result
+        # Non-2xx responses already raise httpx.HTTPStatusError upstream
+        # (client._handle_response -> raise_for_status) and are surfaced as a
+        # ToolError by the outer handler. A 200-with-error-body envelope, by
+        # contrast, would slip through silently: the prior code returned the
+        # raw dict whenever `results` was absent/empty, so an error payload
+        # like {'error': 'rate_limited'} reached the caller masquerading as a
+        # success. Detect the error envelope here and fail loudly instead.
+        # Mirrors the structured-envelope handling in memex_get_lint_flags
+        # (detail.get('error')).
+        if not isinstance(result, dict):
+            raise ToolError(
+                f'memex_submit_lint_proposal: unexpected response (expected an '
+                f'object with a results list, got {type(result).__name__})'
+            )
+        items = result.get('results')
+        if not isinstance(items, list) or not items:
+            # No usable result row: either an error envelope (e.g.
+            # {'error': 'rate_limited'}) or a 200 with an empty/missing
+            # results list. We submitted exactly one proposal, so a missing
+            # row is never a normal success — surface the server's detail.
+            error_detail = result.get('error') or result.get('detail') or result
+            raise ToolError(f'memex_submit_lint_proposal failed: {error_detail}')
+        return items[0]
     except ToolError:
         raise
     except Exception as e:

@@ -13,7 +13,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, ClassVar
 from uuid import UUID
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 
 from memex_core.services.proposal_actions.base import (
     ActionValidationError,
@@ -69,13 +69,18 @@ class DeprioritizeUnitAction:
             UUID(target_id)
         except (ValueError, AttributeError):
             raise ActionValidationError(f'target_id {target_id!r} is not a valid UUID.')
-        override = params.get('override_target_id')
-        if override:
-            try:
-                UUID(override)
-            except (ValueError, AttributeError):
-                raise ActionValidationError(f'override_target_id {override!r} is not a valid UUID.')
+        try:
+            parsed = _DeprioritizeUnitParams(**params)
+        except ValidationError as exc:
+            raise ActionValidationError(f'invalid deprioritize_unit params: {exc}') from exc
         # `reason` is optional; the proposal's evidence supplies a default when absent.
+        if parsed.override_target_id is not None:
+            try:
+                UUID(parsed.override_target_id)
+            except (ValueError, AttributeError):
+                raise ActionValidationError(
+                    f'override_target_id {parsed.override_target_id!r} is not a valid UUID.'
+                )
 
     async def execute(
         self,

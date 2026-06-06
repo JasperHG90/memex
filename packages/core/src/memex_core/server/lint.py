@@ -626,6 +626,28 @@ def _require_unscoped_for_kv_action(auth: AuthContext | None, action_id: str) ->
         )
 
 
+def _require_unscoped_for_global_finding(
+    auth: AuthContext | None, finding_vault: UUID | None
+) -> None:
+    """A plain status flip (dismiss / resolve-without-action) on a global
+    (vault-less) finding mutates system-wide review state with no per-vault
+    scope to authorize against. Require an unscoped principal — a vault-scoped
+    tenant must not be able to dismiss or resolve system-wide findings. Actions
+    on global findings take the ``vaults_affected`` gate instead (which lets a
+    multi-vault key act); auth-disabled deployments pass, attended mode being
+    the human gate there.
+    """
+    if finding_vault is None and auth is not None and auth.vault_ids is not None:
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                'global (vault-less) findings require an unscoped key for a plain '
+                'status change — a vault-scoped principal cannot dismiss or '
+                'resolve system-wide findings.'
+            ),
+        )
+
+
 async def _gate_global_finding_action(
     finding: dict[str, Any],
     api: MemexAPI,
@@ -738,6 +760,7 @@ async def lint_dismiss(
     non-destructive; no attended-mode gate.
     """
     finding_vault = await _gate_finding_for_write(finding_id, api, auth)
+    _require_unscoped_for_global_finding(auth, finding_vault)
     actor = _audit_actor()
     resolution = _build_resolution_payload(
         verdict='dismissed',
@@ -813,7 +836,9 @@ async def lint_resolve(
     note = _extract_note(payload)
 
     if action_id_raw is None:
-        # Pure status flip + note. Non-destructive — no attended-mode gate.
+        # Pure status flip + note. Non-destructive — no attended-mode gate, but a
+        # global (vault-less) finding still needs an unscoped principal.
+        _require_unscoped_for_global_finding(auth, finding_vault)
         resolution = _build_resolution_payload(
             verdict='accepted', actor=actor, note=note, followup=None
         )

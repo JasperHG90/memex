@@ -297,15 +297,24 @@ class TestLintMutationNoAuth:
 
 
 class TestLintMutationGlobalFinding:
-    def test_global_finding_bypasses_per_vault_gate(self, mock_api):
-        """A finding with vault_id NULL is global — the per-vault auth gate
-        does not apply. The service-layer SQL filter still constrains by
-        ``vault_id IS NULL`` (passed through as ``None``).
+    def test_global_finding_plain_write_requires_unscoped_key(self, mock_api):
+        """A finding with vault_id NULL is global — a plain dismiss/resolve
+        mutates system-wide review state, so a vault-SCOPED key is refused (403)
+        and only an unscoped principal (here: auth-disabled/system) may flip it.
+        The service-layer SQL filter still constrains by ``vault_id IS NULL``
+        (passed through as ``None``). Actions on global findings take the
+        vaults_affected gate instead.
         """
         mock_api.lint.get_finding_vault_id = AsyncMock(return_value=(True, None))
-        client = _make_client(mock_api, _scoped_writer())
-        resp = client.post(f'/api/v1/lint/findings/{FINDING_ID}/dismiss')
-        assert resp.status_code == 200, resp.text
+        # Vault-scoped key → refused on a global (vault-less) finding.
+        scoped = _make_client(mock_api, _scoped_writer())
+        resp = scoped.post(f'/api/v1/lint/findings/{FINDING_ID}/dismiss')
+        assert resp.status_code == 403, resp.text
+        mock_api.lint.set_status.assert_not_awaited()
+        # Auth-disabled (unscoped/system) → allowed, vault_id passed through None.
+        system = _make_client(mock_api, None)
+        resp2 = system.post(f'/api/v1/lint/findings/{FINDING_ID}/dismiss')
+        assert resp2.status_code == 200, resp2.text
         mock_api.lint.set_status.assert_awaited_once()
         call = mock_api.lint.set_status.await_args
         assert call.kwargs['vault_id'] is None
