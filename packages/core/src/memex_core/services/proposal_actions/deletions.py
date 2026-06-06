@@ -261,7 +261,11 @@ class DeleteMentalModelAction:
         'entity itself is untouched). NOT reversible — prefer '
         'archive_mental_model unless the model must go away.'
     )
-    applicable_target_types: ClassVar[tuple[str, ...]] = ('entity', 'mental_model')
+    # entity-only: execute keys the delete on entity_id (the MM belonging to an
+    # entity in the finding's vault). A `mental_model`-typed finding carries
+    # target_id = mental_model.id (NOT entity_id), so this action cannot honour
+    # it — those findings resolve via archive_mental_model (which keys on .id).
+    applicable_target_types: ClassVar[tuple[str, ...]] = ('entity',)
     reversible: ClassVar[bool] = False
     params_schema: ClassVar[dict[str, Any] | None] = None
 
@@ -274,7 +278,7 @@ class DeleteMentalModelAction:
     ) -> None:
         if target_type not in self.applicable_target_types:
             raise ActionValidationError(
-                f'delete_mental_model applies to entity/mental_model targets, not {target_type!r}.'
+                f'delete_mental_model applies to entity targets, not {target_type!r}.'
             )
         try:
             UUID(target_id)

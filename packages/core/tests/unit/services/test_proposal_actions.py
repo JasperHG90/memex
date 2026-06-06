@@ -849,6 +849,25 @@ class TestDeleteActions:
         assert api.deleted_entities == [UUID(target_id)]
         assert result.applied_state['mention_count'] == 7
 
+    def test_delete_mental_model_is_entity_only(self) -> None:
+        """delete_mental_model keys the delete on entity_id, so it applies to
+        ENTITY targets only. A ``mental_model``-typed finding carries
+        target_id = mental_model.id (NOT entity_id); offering this action there
+        would delete the wrong (or no) row. Those findings route via
+        archive_mental_model instead. Pins the entity-only contract + the
+        validate fence that rejects a mental_model target."""
+        action = get_action('delete_mental_model')
+        assert action.applicable_target_types == ('entity',)
+        assert 'mental_model' not in action.applicable_target_types
+
+        with pytest.raises(ActionValidationError):
+            action.validate({}, target_type='mental_model', target_id=str(uuid4()))
+
+        # The registry filter agrees: delete_mental_model is offered for entity
+        # targets and withheld from mental_model targets.
+        assert 'delete_mental_model' in {a.id for a in list_actions(target_type='entity')}
+        assert 'delete_mental_model' not in {a.id for a in list_actions(target_type='mental_model')}
+
     @pytest.mark.asyncio
     async def test_delete_mental_model_refuses_null_vault(self) -> None:
         from memex_core.services.proposal_actions import ProposalActionError

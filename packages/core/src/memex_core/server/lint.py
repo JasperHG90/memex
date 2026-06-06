@@ -62,6 +62,7 @@ from memex_core.memory.sql_models import (
     MaintenanceProposal,
     MemoryLink,
     MentalModel,
+    ReflectionQueue,
     UnitEntity,
 )
 from memex_core.server.auth import (
@@ -558,19 +559,24 @@ async def _gate_entity_action_footprint(
             detail='no valid entity id to authorize the action against.',
         )
     # Footprint = every vault holding ANY tenant-scoped derivative of the
-    # entities: unit links, synthesized mental models, or cooccurrence edges.
-    # unit_entities alone is insufficient — mental models and cooccurrences
-    # outlive unit links (orphan mental models are a known lint state). The
-    # SQL-side NULL filter is dropped; the Python ``row[0] is not None`` guard
-    # below preserves identical behaviour.
+    # entities: unit links, synthesised mental models, cooccurrence edges,
+    # memory links, or queued reflection tasks. unit_entities alone is
+    # insufficient — mental models, links and reflection-queue rows outlive
+    # unit links (orphan mental models are a known lint state), and EACH one
+    # cascade-deletes when the global entity is hard-deleted/merged, so every
+    # one is part of the true authorization blast radius. Omitting a leg lets a
+    # vault-scoped key destroy a derivative in a vault it was never authorised
+    # for. The SQL-side NULL filter is dropped; the Python ``row[0] is not None``
+    # guard below preserves identical behaviour.
     # entity_id = ANY(:ids::uuid[]) — array membership, NOT an expanding IN()
     # (which trips asyncpg's UUID binding inside a UNION). One bound uuid[] param
-    # shared across the three legs, matching the original raw SQL exactly.
+    # shared across all legs.
     ids_arr = bindparam('ids', [UUID(e) for e in entity_ids], type_=ARRAY(PG_UUID(as_uuid=True)))
     footprint_stmt = union(
         select(UnitEntity.vault_id).where(col(UnitEntity.entity_id) == func.any(ids_arr)),
         select(MentalModel.vault_id).where(col(MentalModel.entity_id) == func.any(ids_arr)),
         select(MemoryLink.vault_id).where(col(MemoryLink.entity_id) == func.any(ids_arr)),
+        select(ReflectionQueue.vault_id).where(col(ReflectionQueue.entity_id) == func.any(ids_arr)),
         select(EntityCooccurrence.vault_id).where(
             or_(
                 col(EntityCooccurrence.entity_id_1) == func.any(ids_arr),

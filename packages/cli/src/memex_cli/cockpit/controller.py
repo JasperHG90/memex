@@ -405,7 +405,7 @@ _ACTION_CATALOGUE: dict[str, tuple[str, str, tuple[str, ...], bool]] = {
     'delete_mental_model': (
         'Delete mental model (permanent)',
         "Hard-delete this vault's mental model; the entity is untouched. NOT reversible.",
-        ('entity', 'mental_model'),
+        ('entity',),
         False,
     ),
 }

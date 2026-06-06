@@ -153,6 +153,55 @@ async def test_evidence_with_sql_metacharacters_round_trips_safely(
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_evidence_with_datetime_serializes_via_default_str(session: AsyncSession, metastore):
+    """An in-process caller may pass non-JSON-native evidence values (datetime,
+    UUID). The insert must serialize them, not 500.
+
+    REGRESSION: ``insert_external_proposal`` used bare ``json.dumps(evidence)``,
+    which raises ``TypeError: Object of type datetime is not JSON serializable``
+    for a direct caller (over HTTP the body is already JSON-native, so this only
+    bites in-process). The fix adds ``default=str`` — mirroring the internal
+    ``_json_dumps`` fallback. This passes a datetime in evidence and asserts it
+    round-trips as its string form; pre-fix the insert raised before any row was
+    written."""
+    vault = await _make_vault(session)
+    api = _fake_api(metastore)
+    when = datetime(2026, 1, 2, 3, 4, 5, tzinfo=timezone.utc)
+    req = ExternalProposalRequest(
+        vault_id=str(vault.id),
+        rule_name='skill-datetimeevidence',
+        lint_type='routing',
+        target_type='note',
+        target_id=str(uuid4()),
+        description=f'evidence datetime {uuid4()}',
+        suggested_action='review',
+        evidence={'observed_at': when},
+    )
+
+    status, finding_id = await insert_external_proposal(
+        api, req, vault_id=vault.id, actor='skill:test'
+    )
+    assert status == 'created'
+    assert finding_id is not None
+
+    async with metastore.session() as s:
+        row = (
+            (
+                await s.execute(
+                    text('SELECT evidence FROM maintenance_proposals WHERE id = :id'),
+                    {'id': str(finding_id)},
+                )
+            )
+            .mappings()
+            .first()
+        )
+    assert row is not None
+    # default=str stringifies the datetime (str(datetime), not isoformat).
+    assert row['evidence']['observed_at'] == str(when)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_resubmission_deduplicates_to_existing_row(session: AsyncSession, metastore):
     vault = await _make_vault(session)
     api = _fake_api(metastore)

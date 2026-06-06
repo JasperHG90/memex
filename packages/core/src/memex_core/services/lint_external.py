@@ -237,7 +237,10 @@ async def insert_external_proposal(
         literal(req.target_type).label('target_type'),
         literal(req.target_id).label('target_id'),
         literal(req.rule_name).label('rule_name'),
-        cast(literal(json.dumps(evidence)), JSONB).label('evidence'),
+        # default=str mirrors the internal _json_dumps fallback: over HTTP the
+        # evidence is JSON-native, but a direct in-process caller may pass
+        # datetime/UUID values, which bare json.dumps would raise on.
+        cast(literal(json.dumps(evidence, default=str)), JSONB).label('evidence'),
         literal(req.suggested_action).label('suggested_action'),
         literal('pending').label('status'),
         literal('external').label('source'),

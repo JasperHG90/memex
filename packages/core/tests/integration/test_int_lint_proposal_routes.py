@@ -20,7 +20,7 @@ import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
 
-from memex_core.memory.sql_models import Entity, MentalModel, Note
+from memex_core.memory.sql_models import Entity, MentalModel, Note, ReflectionQueue, Vault
 from memex_core.server import app
 from memex_core.server.common import get_api
 
@@ -681,6 +681,115 @@ async def test_entity_footprint_gate_fences_up_on_empty_footprint():
         action_id='merge_entities',
         target_id=members[0],
         params=params,
+        permission=Permission.WRITE,
+    )
+
+
+async def _create_vault_row(api, *, name: str | None = None) -> str:
+    """Insert a real Vault row directly and return its UUID string.
+
+    ``check_vault_access`` resolves a key's *allowed* vault_ids against the
+    Vault table; an allowed vault that does not resolve is dropped from the
+    permitted set. So both the scoped-key vault and (for realism) the footprint
+    vault must be real rows for the gate's allow/deny to mean what the test
+    asserts."""
+    vault_id = uuid4()
+    async with api.metastore.session() as s:
+        s.add(Vault(id=vault_id, name=name or f'footprint-{vault_id.hex[:8]}'))
+        await s.commit()
+    return str(vault_id)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_entity_footprint_gate_counts_reflection_queue_row(api):
+    """A queued reflection task in vault B makes vault B part of the entity's
+    authorization footprint — proven through the REAL 5-leg UNION + the real
+    ``check_vault_access`` against Postgres.
+
+    REGRESSION: ``reflection_queue`` rows cascade-delete when the global entity
+    is hard-deleted/merged, so a vault holding ONLY a queued reflection task for
+    the entity is inside the blast radius. Before the ``reflection_queue`` UNION
+    leg was added, the footprint query missed that vault entirely: with no
+    unit_entities / mental_models / cooccurrences / memory_links rows the
+    footprint came back EMPTY, the gate fenced up generically (any scoped key
+    403s on an empty footprint) and a vault-B-scoped key would have been WRONGLY
+    *granted* — its reflection-queue derivative invisible to the scope check.
+    This seeds vault B's reflection_queue row as the entity's ONLY derivative and
+    pins that (a) a vault-A-scoped key is refused because B is in the footprint,
+    and (b) a vault-B-scoped key is GRANTED (the discriminating assertion: it
+    only passes if the reflection_queue leg actually contributed vault B).
+    """
+    from fastapi import HTTPException
+
+    from memex_common.config import Permission, Policy
+    from memex_core.server.auth import AuthContext
+    from memex_core.server.lint import _gate_entity_action_footprint
+
+    vault_a = await _create_vault_row(api)
+    vault_b = await _create_vault_row(api)
+
+    # One real entity whose ONLY tenant-scoped derivative is a reflection_queue
+    # row in vault B. No unit_entities / mental_models / cooccurrences /
+    # memory_links — so if the reflection_queue leg were absent the footprint
+    # would be empty and vault B would never appear.
+    async with api.metastore.session() as s:
+        entity = Entity(canonical_name=f'Queued {uuid4().hex[:8]}', mention_count=1)
+        s.add(entity)
+        await s.flush()
+        entity_id = entity.id
+        s.add(ReflectionQueue(entity_id=entity_id, vault_id=UUID(vault_b)))
+        await s.commit()
+
+    # Vault-A-scoped key: vault B is in the footprint (via the reflection_queue
+    # leg) and the key lacks it -> 403 from the real check_vault_access.
+    scoped_a = AuthContext(
+        key_prefix='scopedkey',
+        key_name='scoped-to-a',
+        policy=Policy.WRITER,
+        permissions=frozenset({Permission.READ, Permission.WRITE}),
+        vault_ids=[vault_a],
+        read_vault_ids=None,
+    )
+    with pytest.raises(HTTPException) as excinfo:
+        await _gate_entity_action_footprint(
+            api,
+            scoped_a,
+            action_id='delete_entity',
+            target_id=str(entity_id),
+            params={},
+            permission=Permission.WRITE,
+        )
+    assert excinfo.value.status_code == 403
+    assert f'Access denied to vault {vault_b}' in excinfo.value.detail
+
+    # Vault-B-scoped key: passes ONLY because the reflection_queue leg put vault
+    # B in the footprint (an empty footprint would 403 this scoped key too). This
+    # is the assertion that fails if the reflection_queue UNION leg is removed.
+    scoped_b = AuthContext(
+        key_prefix='scopedkey',
+        key_name='scoped-to-b',
+        policy=Policy.WRITER,
+        permissions=frozenset({Permission.READ, Permission.WRITE}),
+        vault_ids=[vault_b],
+        read_vault_ids=None,
+    )
+    await _gate_entity_action_footprint(
+        api,
+        scoped_b,
+        action_id='delete_entity',
+        target_id=str(entity_id),
+        params={},
+        permission=Permission.WRITE,
+    )
+
+    # Unscoped / auth-disabled context: never fenced regardless of footprint.
+    await _gate_entity_action_footprint(
+        api,
+        None,
+        action_id='delete_entity',
+        target_id=str(entity_id),
+        params={},
         permission=Permission.WRITE,
     )
 

@@ -112,16 +112,23 @@ class RouteNoteToVaultAction:
                     exc_info=True,
                 )
         source_vault_id = result.get('source_vault_id')
-        if source_vault_id is None:
-            # migrate_note is a no-op when source == target; nothing to reverse.
-            source_vault_id = str(vault_id)
+        if source_vault_id is None and vault_id is not None:
+            # migrate_note is a no-op when source == target; the finding's vault
+            # IS the known source. Guard on vault_id: a global (NULL-vault)
+            # finding has no source, so leave it None — str(None) would persist
+            # the literal 'None' and 500 on reverse's UUID('None'). reverse()
+            # refuses cleanly on a missing/None source_vault_id instead.
+            source_vault_id = vault_id
         return ExecuteResult(
             applied_state={
                 'note_id': str(note_id),
                 'target_vault_id': str(target_vault_id),
                 'status': result.get('status'),
             },
-            prior_state={'note_id': str(note_id), 'source_vault_id': str(source_vault_id)},
+            prior_state={
+                'note_id': str(note_id),
+                'source_vault_id': str(source_vault_id) if source_vault_id is not None else None,
+            },
         )
 
     async def reverse(
