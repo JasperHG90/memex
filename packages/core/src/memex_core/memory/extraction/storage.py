@@ -891,7 +891,12 @@ async def update_note_tags(
         .where(col(Note.id) == doc_uuid)
         .values(
             doc_metadata=func.jsonb_set(
-                func.coalesce(col(Note.doc_metadata), func.cast('{}', postgresql.JSONB)),
+                # coalesce default must also bind as native JSONB: func.cast('{}',
+                # JSONB) double-encodes to the string scalar '"{}"', and jsonb_set
+                # on a scalar raises 'cannot set path in scalar'. Reachable only if
+                # doc_metadata is NULL (today it has a '{}' server_default), so this
+                # is defense-in-depth — same form as the value bind below.
+                func.coalesce(col(Note.doc_metadata), literal({}, type_=postgresql.JSONB)),
                 # jsonb_set's path is a text[]. literal_column emits the Postgres
                 # array literal '{tags}' (a 1-element path). cast('{tags}', Text[])
                 # would CHAR-SPLIT the string into {'{','t','a','g','s','}'} — a
