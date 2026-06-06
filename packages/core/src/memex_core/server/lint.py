@@ -46,7 +46,19 @@ from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import ValidationError
-from sqlalchemy import Text, bindparam, case, cast, func, insert, literal_column, or_, union, update
+from sqlalchemy import (
+    Text,
+    bindparam,
+    case,
+    cast,
+    func,
+    insert,
+    literal,
+    literal_column,
+    or_,
+    union,
+    update,
+)
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlmodel import col, select
@@ -1511,13 +1523,21 @@ async def _reverse_via_registry(
             .where(col(MaintenanceProposal.id) == finding_id)
             .values(
                 evidence=func.jsonb_set(
-                    func.coalesce(col(MaintenanceProposal.evidence), func.cast('{}', JSONB)),
+                    func.coalesce(col(MaintenanceProposal.evidence), cast(literal('{}'), JSONB)),
                     # literal_column, NOT cast(..., ARRAY(Text)): the latter
                     # char-splits the string into a 12-element path, so jsonb_set
                     # silently no-ops and the reversal is never written.
                     literal_column("'{resolution}'"),
-                    func.cast(_json.dumps(new_resolution), JSONB),
-                    True,
+                    # cast(literal(json), JSONB), NOT func.cast(json, JSONB): the
+                    # bare form binds the already-JSON string straight to asyncpg's
+                    # JSONB codec, which json.dumps-es it AGAIN — the value lands as
+                    # a JSONB *string scalar* ('"{...}"'), overwriting the native
+                    # dict the forward set_status wrote. literal() binds as VARCHAR
+                    # so the SQL CAST parses it to a native object. (Verified through
+                    # the production engine: bare form -> jsonb_typeof 'string';
+                    # literal form -> 'object'.) Mirrors services/lint.py:1150.
+                    cast(literal(_json.dumps(new_resolution)), JSONB),
+                    literal(True),
                 )
             )
         )
@@ -1659,7 +1679,12 @@ async def lint_seed_finding(
                     target_type='memory_unit',
                     target_id=tid,
                     rule_name=rule_name,
-                    evidence=func.cast(json.dumps(ev), JSONB),
+                    # cast(literal(json), JSONB), NOT func.cast(json, JSONB): the
+                    # bare form double-encodes via asyncpg's JSONB codec, storing a
+                    # string scalar instead of a native object. literal() binds as
+                    # VARCHAR so the SQL CAST parses native JSONB. Mirrors
+                    # lint_external.py:243.
+                    evidence=cast(literal(json.dumps(ev)), JSONB),
                     suggested_action=sa,
                     status='pending',
                     source=source,

@@ -19,8 +19,16 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy import text
+from sqlmodel import col, select
 
-from memex_core.memory.sql_models import Entity, MentalModel, Note, ReflectionQueue, Vault
+from memex_core.memory.sql_models import (
+    Entity,
+    MaintenanceProposal,
+    MentalModel,
+    Note,
+    ReflectionQueue,
+    Vault,
+)
 from memex_core.server import app
 from memex_core.server.common import get_api
 
@@ -979,36 +987,111 @@ async def test_reverse_writes_reversal_block_to_evidence(http: AsyncClient, api,
     reverse = await http.post(f'/api/v1/lint/findings/{finding_id}/reverse')
     assert reverse.status_code == 200, reverse.text
 
-    # The reversal block must be durably written under evidence.resolution.
-    # Raw text SQL returns JSONB as a serialized string, so deserialize.
-    import json as _json
-
+    # The reversal block must be durably written under evidence.resolution as
+    # NATIVE JSONB. Read the ORM column (asyncpg's JSONB codec decodes a native
+    # object to a dict all the way down).
+    #
+    # REGRESSION (double-encode): the reverse jsonb_set value previously used
+    # ``func.cast(json.dumps(new_resolution), JSONB)`` — without ``literal()``,
+    # asyncpg's JSONB codec re-json.dumps-es the already-JSON string, so the
+    # value landed as a JSONB *string scalar* and OVERWROTE the native dict the
+    # forward set_status had written under evidence.resolution. The fix uses
+    # ``cast(literal(json.dumps(new_resolution)), JSONB)`` (mirrors
+    # services/lint.py:1150). These assertions pin the NATIVE shape: if the bug
+    # regresses, ``evidence['resolution']`` comes back as a str and the
+    # isinstance-dict assertion fails loudly.
     async with api.metastore.session() as s:
-        raw_evidence = (
+        evidence = (
             await s.execute(
-                text('SELECT evidence FROM maintenance_proposals WHERE id = :id'),
-                {'id': finding_id},
+                select(MaintenanceProposal.evidence).where(
+                    col(MaintenanceProposal.id) == UUID(finding_id)
+                )
             )
         ).scalar_one()
-    evidence = _json.loads(raw_evidence) if isinstance(raw_evidence, str) else raw_evidence
     assert isinstance(evidence, dict), evidence
-    # The resolution sub-object persists as a JSON-encoded string under evidence.
-    resolution_blob = evidence.get('resolution')
-    if isinstance(resolution_blob, str):
-        resolution = _json.loads(resolution_blob)
-    else:
-        resolution = resolution_blob or {}
-    reversal = resolution.get('reversal') if isinstance(resolution, dict) else None
-    assert reversal is not None, (
-        f'evidence.resolution.reversal must be written on reverse; got resolution={resolution!r}'
+    resolution = evidence.get('resolution')
+    assert isinstance(resolution, dict), (
+        f'evidence.resolution must persist as a NATIVE JSONB object (not a '
+        f'double-encoded string scalar); got {type(resolution).__name__}: {resolution!r}'
+    )
+    reversal = resolution.get('reversal')
+    assert isinstance(reversal, dict), (
+        f'evidence.resolution.reversal must be written on reverse as a native '
+        f'object; got {type(reversal).__name__}: {reversal!r}'
     )
     assert reversal.get('reversed_at')
     assert 'restored_state' in reversal
 
     # The double-reverse guard reads evidence.resolution.reversal; it only
     # fires if the block above actually persisted. A second reverse is 409.
+    # Assert the INTENDED guard message — before the double-encode fix the
+    # second reverse hit the legacy ``reverse_winner_proposal`` fallback (the
+    # string-scalar evidence.resolution made ``followup`` unreadable, diverting
+    # the dispatch), so the 409 fired for the wrong reason. With native shape the
+    # registry guard at server/lint.py:1438 fires directly.
     second = await http.post(f'/api/v1/lint/findings/{finding_id}/reverse')
     assert second.status_code == 409, second.text
+    assert 'already reversed' in second.text.lower(), second.text
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_seed_endpoint_stores_native_object_evidence(http: AsyncClient, api, monkeypatch):
+    """The eval-only ``/findings/seed`` endpoint MUST persist evidence as a
+    NATIVE JSONB object, not a double-encoded string scalar.
+
+    REGRESSION (double-encode): the INSERT used
+    ``func.cast(json.dumps(ev), JSONB)`` — without ``literal()``, asyncpg's
+    JSONB codec re-json.dumps-es the already-JSON string, so the whole evidence
+    payload landed as a JSONB *string scalar* (``jsonb_typeof = 'string'``)
+    instead of an object. Any downstream reader doing ``evidence['check_type']``
+    would then fail. The fix uses ``cast(literal(json.dumps(ev)), JSONB)``
+    (mirrors lint_external.py:243). This reads the row back and asserts the
+    native object shape.
+    """
+    monkeypatch.setenv('MEMEX_EVAL_MODE', '1')
+    vault_id = await _create_vault(http)
+    payload = {
+        'check_type': 'semantic_contradiction',
+        'explanation': f'seed-native-{uuid4()}',
+        'surprise_score': 0.42,
+        'related_unit_ids': [str(uuid4()), str(uuid4())],
+    }
+    resp = await http.post(
+        '/api/v1/lint/findings/seed',
+        json={'vault_id': vault_id, 'rule_name': 'route-contract-seed-native', 'evidence': payload},
+    )
+    assert resp.status_code == 200, resp.text
+    finding_id = resp.json()['id']
+
+    async with api.metastore.session() as s:
+        # Native-object check: asyncpg decodes a JSONB object to a dict; a
+        # double-encoded string scalar would come back as str.
+        evidence = (
+            await s.execute(
+                select(MaintenanceProposal.evidence).where(
+                    col(MaintenanceProposal.id) == UUID(finding_id)
+                )
+            )
+        ).scalar_one()
+        # Postgres-side ground truth: jsonb_typeof must be 'object', not 'string'.
+        jsonb_type = (
+            await s.execute(
+                text('SELECT jsonb_typeof(evidence) FROM maintenance_proposals WHERE id = :id'),
+                {'id': finding_id},
+            )
+        ).scalar_one()
+
+    assert jsonb_type == 'object', (
+        f'seed evidence must be a native JSONB object, got jsonb_typeof={jsonb_type!r} '
+        f'(double-encode regression stores a string scalar)'
+    )
+    assert isinstance(evidence, dict), (
+        f'seed evidence must decode to a dict, got {type(evidence).__name__}: {evidence!r}'
+    )
+    assert evidence['check_type'] == 'semantic_contradiction'
+    assert evidence['explanation'] == payload['explanation']
+    assert evidence['related_unit_ids'] == payload['related_unit_ids']
 
 
 @pytest.mark.integration
