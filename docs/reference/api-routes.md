@@ -29,6 +29,7 @@ The server is FastAPI. The OpenAPI document is served at `/openapi.json`; Swagge
 | POST | `/api/v1/memories/search` | read | TEMPR memory-unit search (NDJSON). |
 | POST | `/api/v1/memories/summary` | read | Synthesize a summary with citations from texts. |
 | POST | `/api/v1/memories/by-chunks` | read | Resolve chunk IDs to memory units. |
+| POST | `/api/v1/memories/by-ids` | read | Batch-fetch memory units by ID (vault-scoped). |
 | GET | `/api/v1/memories/{id}` | read | Get one memory unit. |
 | DELETE | `/api/v1/memories/{id}` | delete | Delete a memory unit and its links. |
 | POST | `/api/v1/memories/{id}/deprioritize` | write | Flip `is_deprioritized=true`. |
@@ -403,12 +404,12 @@ Typed links from one note. <code-ref path="packages/core/src/memex_core/server/n
 
 ### GET /api/v1/notes/{note_id}/memory_units
 
-Memory units belonging to a note. Used by the eval suite to map note keys back to unit IDs. <code-ref path="packages/core/src/memex_core/server/memories.py" lines="91-123" />
+Memory units belonging to a note. Used by the eval suite to map note keys back to unit IDs. <code-ref path="packages/core/src/memex_core/server/memories.py" lines="149-185" />
 
 - **Auth.** `require_read`.
 - **Path params.** `note_id` (UUID).
-- **Query params.** `vault_id` (UUID, **required**). A mismatch returns 403.
-- **Returns.** `MemoryUnitDTO[]`.
+- **Query params.** `vault_id` (UUID, **required**). A mismatch returns 403. `include_vectors` (bool, default `false`).
+- **Returns.** `MemoryUnitDTO[]`. `embedding` is `null` unless `include_vectors=true`.
 
 ### GET /api/v1/notes/{id}/lineage
 
@@ -531,11 +532,12 @@ Get many page-index nodes by ID. <code-ref path="packages/core/src/memex_core/se
 
 ### GET /api/v1/memories/{id}
 
-Get one memory unit. <code-ref path="packages/core/src/memex_core/server/memories.py" lines="78-88" />
+Get one memory unit. <code-ref path="packages/core/src/memex_core/server/memories.py" lines="129-146" />
 
 - **Auth.** `require_read`.
 - **Path params.** `id` (UUID).
-- **Returns.** `MemoryUnitDTO`.
+- **Query params.** `include_vectors` (bool, default `false`) — populate `embedding` with the unit's stored 384-dim vector.
+- **Returns.** `MemoryUnitDTO`. `embedding` is `null` unless `include_vectors=true`.
 - **Errors.** 404 not found.
 
 ### DELETE /api/v1/memories/{id}
@@ -548,11 +550,19 @@ Delete a memory unit. <code-ref path="packages/core/src/memex_core/server/memori
 
 ### POST /api/v1/memories/by-chunks
 
-Resolve chunk IDs to memory units, vault-scoped. <code-ref path="packages/core/src/memex_core/server/memories.py" lines="54-75" />
+Resolve chunk IDs to memory units, vault-scoped. <code-ref path="packages/core/src/memex_core/server/memories.py" lines="79-100" />
 
 - **Auth.** `require_read`. The route checks vault access against the supplied `vault_id`.
-- **Body.** `{chunk_ids: UUID[], vault_id: UUID}` — both required. Cross-vault returns 403.
-- **Returns.** `MemoryUnitDTO[]`.
+- **Body.** `{chunk_ids: UUID[], vault_id: UUID, include_vectors?: bool}` — IDs and vault required. Cross-vault returns 403.
+- **Returns.** `MemoryUnitDTO[]`. `embedding` is `null` unless `include_vectors=true`.
+
+### POST /api/v1/memories/by-ids
+
+Batch-fetch memory units by ID, vault-scoped. The bulk path for vector arithmetic: search lean, then fetch the vectors for the units you care about in one call. <code-ref path="packages/core/src/memex_core/server/memories.py" lines="103-126" />
+
+- **Auth.** `require_read`. The route checks vault access against the supplied `vault_id`.
+- **Body.** `{unit_ids: UUID[] (max 500), vault_id: UUID, include_vectors?: bool}`. Cross-vault returns 403.
+- **Returns.** `MemoryUnitDTO[]`. IDs that don't exist or belong to another vault are silently omitted; duplicates deduplicate; result order does not follow input order.
 
 ### POST /api/v1/memories/{id}/deprioritize
 
@@ -630,36 +640,36 @@ Walk the contradiction graph backward to produce the supersession history tree. 
 
 ### PUT /api/v1/kv
 
-Upsert a KV entry. <code-ref path="packages/core/src/memex_core/server/kv.py" lines="49-64" />
+Upsert a KV entry. <code-ref path="packages/core/src/memex_core/server/kv.py" lines="65-80" />
 
 - **Auth.** `require_write`.
 - **Body** (`KVPutRequest`): `key`, `value`, optional `embedding`, `ttl_seconds`. If `embedding` is omitted the server generates one.
-- **Returns.** `KVEntryDTO`.
+- **Returns.** `KVEntryDTO`. The response never echoes the vector (`embedding` is `null`); read it back via `GET /api/v1/kv/get?include_vectors=true`.
 
 ### GET /api/v1/kv
 
-List KV entries. <code-ref path="packages/core/src/memex_core/server/kv.py" lines="153-186" />
+List KV entries. <code-ref path="packages/core/src/memex_core/server/kv.py" lines="173-210" />
 
 - **Auth.** `require_read`.
-- **Query params.** `limit` (1-500, default 100), `namespaces` (comma-separated prefixes), `exclude_prefix`, `key_prefix`, `pattern` (trailing `*` only).
-- **Returns.** `KVEntryDTO[]`.
+- **Query params.** `limit` (1-500, default 100), `namespaces` (comma-separated prefixes), `exclude_prefix`, `key_prefix`, `pattern` (trailing `*` only), `include_vectors` (bool, default `false`).
+- **Returns.** `KVEntryDTO[]`. `embedding` is `null` unless `include_vectors=true`.
 
 ### GET /api/v1/kv/get
 
-Get a KV entry by exact key. <code-ref path="packages/core/src/memex_core/server/kv.py" lines="67-107" />
+Get a KV entry by exact key. <code-ref path="packages/core/src/memex_core/server/kv.py" lines="83-127" />
 
 - **Auth.** `require_read`.
-- **Query params.** `key` (required), `include_history` (bool, default `false`).
-- **Returns.** `KVEntryDTO`. For procedure keys (`<scope>:procedure:<verb>:<context-tag>`) with `include_history=true`, the server returns `KVProcedureEntryDTO` carrying the active value plus version + history.
+- **Query params.** `key` (required), `include_history` (bool, default `false`), `include_vectors` (bool, default `false`).
+- **Returns.** `KVEntryDTO` (with `embedding` populated when `include_vectors=true`). For procedure keys (`<scope>:procedure:<verb>:<context-tag>`) with `include_history=true`, the server returns `KVProcedureEntryDTO` carrying the active value plus version + history — procedure envelopes never carry vectors.
 - **Errors.** 404 unknown key.
 
 ### POST /api/v1/kv/search
 
-Semantic search over KV entries. <code-ref path="packages/core/src/memex_core/server/kv.py" lines="110-133" />
+Semantic search over KV entries. <code-ref path="packages/core/src/memex_core/server/kv.py" lines="130-153" />
 
 - **Auth.** `require_read`.
-- **Body** (`KVSearchRequest`): exactly one of `query` (text — the server embeds it) or `query_embedding` (pre-computed vector); optional `namespaces` (list of prefixes), `limit` (1-500, default 5).
-- **Returns.** `KVEntryDTO[]` ranked by embedding similarity.
+- **Body** (`KVSearchRequest`): exactly one of `query` (text — the server embeds it) or `query_embedding` (pre-computed vector); optional `namespaces` (list of prefixes), `limit` (1-500, default 5), `include_vectors` (bool, default `false`).
+- **Returns.** `KVEntryDTO[]` ranked by embedding similarity. `embedding` is `null` unless `include_vectors=true`.
 
 ### DELETE /api/v1/kv/delete
 
@@ -846,11 +856,12 @@ Runtime override for the default read vault. <code-ref path="packages/core/src/m
 
 ### GET /api/v1/vaults/{vault_id}/summary
 
-Get the cached vault summary. <code-ref path="packages/core/src/memex_core/server/vault_summary.py" lines="36-56" />
+Get the cached vault summary. <code-ref path="packages/core/src/memex_core/server/vault_summary.py" lines="37-63" />
 
 - **Auth.** `require_read`.
 - **Path params.** `vault_id` (UUID).
-- **Returns.** `VaultSummaryDTO` — `id`, `vault_id`, `narrative`, `themes`, `inventory`, `key_entities`, `version`, `notes_incorporated`, `created_at`, `updated_at`.
+- **Query params.** `include_vectors` (bool, default `false`) — populate `embedding` with the stored narrative vector (384-dim). The vector is `null` for summaries not yet (re)generated since the column landed, empty vaults, and encode failures — callers must tolerate `null`.
+- **Returns.** `VaultSummaryDTO` — `id`, `vault_id`, `narrative`, `themes`, `inventory`, `key_entities`, `embedding`, `version`, `notes_incorporated`, `created_at`, `updated_at`.
 - **Errors.** 404 no summary cached.
 
 ### POST /api/v1/vaults/{vault_id}/summary/regenerate

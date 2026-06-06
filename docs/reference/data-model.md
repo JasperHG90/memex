@@ -486,6 +486,7 @@ One row per vault — enforced by the `UNIQUE` constraint on `vault_id`. Cheap-t
 | `themes` | jsonb | no | `'[]'` | List of theme blobs (see shape below). |
 | `inventory` | jsonb | no | `'{}'` | Computed content stats. |
 | `key_entities` | jsonb | no | `'[]'` | Top entities by mention count. |
+| `embedding` | vector(384) | yes | NULL | Narrative embedding, refreshed on every (re)generation. NULL for empty vaults, rows not yet rewritten since the column landed (lazy backfill), and encode failures. Read via `GET /vaults/{id}/summary?include_vectors=true`. |
 | `version` | int | no | `1` | Incremented on each update. |
 | `notes_incorporated` | int | no | `0` | Count of notes folded into this summary. |
 | `patch_log` | jsonb | no | `'[]'` | Last 20 patches. |
