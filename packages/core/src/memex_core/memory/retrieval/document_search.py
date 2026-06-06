@@ -638,9 +638,17 @@ class NoteSearchEngine:
             date_col_b = func.coalesce(Note.publish_date, Note.created_at)
             doc_stmt = doc_stmt.where(date_col_b <= before)
         if tags:
-            # JSONB containment: doc_metadata->'tags' @> '["tag1","tag2"]'
+            # JSONB containment: doc_metadata->'tags' @> '["tag1","tag2"]'.
+            # The RHS MUST be wrapped ``literal(json.dumps(tags)).cast(JSONB)``:
+            # a bare ``json.dumps(tags)`` python-str makes ``.contains`` emit a
+            # ``jsonb @> character varying`` comparison, which Postgres rejects at
+            # runtime ("operator does not exist") — every tag-filtered doc search
+            # would 500. ``literal(...).cast(JSONB)`` gives the RHS a JSONB type.
+            # Mirrors services/notes.py search_notes.
             doc_stmt = doc_stmt.where(
-                col(Note.doc_metadata)['tags'].astext.cast(JSONB).contains(json.dumps(tags))
+                col(Note.doc_metadata)['tags']
+                .astext.cast(JSONB)
+                .contains(literal(json.dumps(tags)).cast(JSONB))
             )
         docs_result = await session.exec(doc_stmt)
         docs = {d.id: d for d in docs_result.all()}

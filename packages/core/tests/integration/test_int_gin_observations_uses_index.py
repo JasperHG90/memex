@@ -186,3 +186,88 @@ async def test_flush_deferred_observation_refresh_uses_gin(metastore):
         plan = _plan_text(result.all())
 
     _assert_gin_index_used(plan)
+
+
+# ---------------------------------------------------------------------------
+# Behavioural regressions for the JSONB-codec double-encode bug.
+#
+# The two EXPLAIN tests above reconstruct the containment query as RAW SQL
+# (``CAST(:probe AS jsonb)``), which binds the json.dumps string through
+# asyncpg's TEXT protocol and lands a native array — so they validate the
+# index plan but NOT the SQLAlchemy expression the production code builds.
+#
+# ``UnitsService`` builds the predicate with the SQLAlchemy ``cast()``
+# construct. A bare ``cast(probe, JSONB)`` (probe = json.dumps(...)) makes
+# SQLAlchemy bind ``probe`` through asyncpg's JSONB codec, double-encoding the
+# already-JSON string into a JSONB *string scalar* — so ``@>`` matches NOTHING
+# and the method silently returns no rows. These tests call the REAL methods
+# and assert a match, so the bug (and any regression to it) fails loudly.
+# ---------------------------------------------------------------------------
+
+
+def _units_service(metastore, filestore, memex_config):
+    from memex_core.services.units import UnitsService
+
+    return UnitsService(metastore, filestore, memex_config)
+
+
+@pytest.mark.asyncio
+async def test_find_source_mus_for_observation_matches_via_orm(metastore, filestore, memex_config):
+    """The REAL ``_find_source_mus_for_observation`` must resolve the seeded
+    observation id to its evidence MU (would return ``None`` under the
+    double-encode bug)."""
+    async with metastore.session() as session:
+        vault_id, target_obs_id, target_mu_id = await _seed_mental_models(session, count=12)
+
+    service = _units_service(metastore, filestore, memex_config)
+    async with metastore.session() as session:
+        result = await service._find_source_mus_for_observation(
+            session, target_obs_id, vault_id=vault_id
+        )
+
+    assert result is not None, (
+        'observation @> probe matched nothing — JSONB double-encode regression'
+    )
+    assert target_mu_id in result
+
+    # A genuinely-absent observation id must still return None (no false match).
+    async with metastore.session() as session:
+        miss = await service._find_source_mus_for_observation(session, uuid4(), vault_id=vault_id)
+    assert miss is None
+
+
+@pytest.mark.asyncio
+async def test_enqueue_refresh_tasks_for_mu_finds_citing_observation(
+    metastore, filestore, memex_config
+):
+    """The REAL ``_enqueue_refresh_tasks_for_mu`` must find the MentalModel whose
+    observation cites the deprio'd MU and enqueue a ``refresh_observation`` row
+    (enqueues NOTHING under the double-encode bug -> silent staleness)."""
+    from memex_core.memory.sql_models import ReflectionQueue
+    from sqlmodel import col, select as sm_select
+
+    async with metastore.session() as session:
+        vault_id, _, target_mu_id = await _seed_mental_models(session, count=12)
+
+    service = _units_service(metastore, filestore, memex_config)
+    async with metastore.session() as session:
+        await service._enqueue_refresh_tasks_for_mu(
+            session, triggering_unit_id=target_mu_id, vault_id=vault_id
+        )
+        await session.commit()
+
+    async with metastore.session() as session:
+        rows = (
+            await session.execute(
+                sm_select(ReflectionQueue).where(
+                    col(ReflectionQueue.vault_id) == vault_id,
+                    col(ReflectionQueue.source_unit_id) == target_mu_id,
+                    col(ReflectionQueue.task_type) == 'refresh_observation',
+                )
+            )
+        ).all()
+
+    assert len(rows) == 1, (
+        f'expected exactly one refresh_observation enqueued, got {len(rows)} — '
+        'JSONB double-encode regression (observations @> probe matched nothing)'
+    )
