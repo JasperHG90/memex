@@ -343,6 +343,47 @@ class TestArchiveMentalModelAction:
         with pytest.raises(ProposalActionError):
             await action.execute(api, {}, target_id=str(uuid4()), vault_id=_VAULT, actor=_ACTOR)
 
+    @pytest.mark.asyncio
+    async def test_reverse_unarchives(self) -> None:
+        """archive → reverse: the un-archive UPDATE...RETURNING runs and a
+        ReverseResult comes back. The reverse statement is an
+        ``UPDATE ... RETURNING MentalModel.id``, so the mock session must
+        return a row (``result.first()`` non-None) or the CAS guard would
+        wrongly raise 'nothing to restore'."""
+        from datetime import datetime, timezone
+
+        action = get_action('archive_mental_model')
+        api = _FakeApi()
+        # Session 1: the forward archive UPDATE...RETURNING archived_at.
+        # Session 2: the reverse un-archive UPDATE...RETURNING id.
+        target_id = str(uuid4())
+        api.metastore.sessions.append(
+            _FakeMetastoreSession(
+                rows=[type('Row', (), {'archived_at': datetime.now(timezone.utc)})()],
+            )
+        )
+        forward = await action.execute(api, {}, target_id=target_id, vault_id=_VAULT, actor=_ACTOR)
+        assert forward.applied_state['archived_at'] is not None
+
+        # A fresh fake session for the reverse, returning a row so the CAS
+        # guard passes (a row was un-archived).
+        reverse_session = _FakeMetastoreSession(rows=[_row(id=target_id)])
+        api.metastore.sessions = [reverse_session]
+        result = await action.reverse(
+            api,
+            {},
+            forward.applied_state,
+            forward.prior_state,
+            target_id=target_id,
+            vault_id=_VAULT,
+            actor=_ACTOR,
+        )
+        assert result.restored_state['mental_model_id'] == target_id
+        assert result.restored_state['archived_at'] is None
+        # The un-archive UPDATE actually ran against the session.
+        assert reverse_session.executed
+        assert reverse_session.committed is True
+
 
 class TestRegistryShape:
     def test_unknown_action_id_raises(self) -> None:
@@ -580,6 +621,41 @@ class TestNoteMetadataActions:
         )
         assert result.prior_state['publish_date'] == prior.isoformat()
         assert len(api.date_calls) == 1
+
+    @pytest.mark.asyncio
+    async def test_update_note_date_reverse_restores_prior(self) -> None:
+        """date execute → reverse re-applies the snapshotted prior publish
+        date through the facade (cascade-consistent), so the second
+        update_note_date carries the original date and restored_state echoes
+        it for the audit trail."""
+        from datetime import datetime, timezone
+
+        action = get_action('update_note_date')
+        api = _FakeApi()
+        prior = datetime(2025, 3, 1, tzinfo=timezone.utc)
+        target_id = str(uuid4())
+        api.metastore.sessions.append(_FakeMetastoreSession(rows=[_row(publish_date=prior)]))
+        forward = await action.execute(
+            api, {'new_date': '2026-01-15'}, target_id=target_id, vault_id=_VAULT, actor=_ACTOR
+        )
+        assert forward.prior_state['publish_date'] == prior.isoformat()
+
+        result = await action.reverse(
+            api,
+            {},
+            forward.applied_state,
+            forward.prior_state,
+            target_id=target_id,
+            vault_id=_VAULT,
+            actor=_ACTOR,
+        )
+        # Two facade calls: forward sets the new date, reverse restores the prior.
+        assert len(api.date_calls) == 2
+        assert api.date_calls[0][0] == UUID(target_id)
+        # The reverse call re-applies the prior date (parsed back to a datetime).
+        assert api.date_calls[1][0] == UUID(target_id)
+        assert api.date_calls[1][1] == prior
+        assert result.restored_state['publish_date'] == prior.isoformat()
 
 
 class TestMergeEntitiesAction:

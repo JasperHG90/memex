@@ -46,7 +46,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
 from pydantic import ValidationError
-from sqlalchemy import Text, bindparam, case, cast, func, insert, or_, union, update
+from sqlalchemy import Text, bindparam, case, cast, func, insert, literal_column, or_, union, update
 from sqlalchemy.dialects.postgresql import ARRAY, JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
 from sqlmodel import col, select
@@ -60,6 +60,7 @@ from memex_core.memory.sql_models import (
     Entity,
     EntityCooccurrence,
     MaintenanceProposal,
+    MemoryLink,
     MentalModel,
     UnitEntity,
 )
@@ -569,6 +570,7 @@ async def _gate_entity_action_footprint(
     footprint_stmt = union(
         select(UnitEntity.vault_id).where(col(UnitEntity.entity_id) == func.any(ids_arr)),
         select(MentalModel.vault_id).where(col(MentalModel.entity_id) == func.any(ids_arr)),
+        select(MemoryLink.vault_id).where(col(MemoryLink.entity_id) == func.any(ids_arr)),
         select(EntityCooccurrence.vault_id).where(
             or_(
                 col(EntityCooccurrence.entity_id_1) == func.any(ids_arr),
@@ -581,6 +583,20 @@ async def _gate_entity_action_footprint(
         footprint = [row[0] for row in result if row[0] is not None]
     if footprint:
         await check_vault_access(auth, footprint, api, permission=permission)
+    elif auth is not None and auth.vault_ids is not None:
+        # FENCE-UP — do NOT fail open. An empty footprint means these GLOBAL
+        # entity rows have no tenant-scoped derivative anywhere, so there is no
+        # per-vault owner to authorize a scoped principal against. A vault-scoped
+        # key must not hard-delete/merge such (orphaned) global entities; require
+        # an unscoped principal, mirroring _require_unscoped_for_global_finding.
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                'entity action on entities with no vault-scoped footprint '
+                'requires an unscoped key — global entity rows with no per-vault '
+                'derivative have no scope to authorize a vault-scoped key against.'
+            ),
+        )
 
 
 async def _gate_route_destination(
@@ -710,10 +726,11 @@ async def lint_flag(
     finding (pending, resolved, dismissed) can be flagged or unflagged.
     This is a non-destructive bookmark; no ``_require_attended_mode`` gate.
     """
-    # Vault-scope auth gate — route through the shared helper so global
-    # (NULL-vault) findings are gated identically to dismiss/resolve rather
-    # than skipped (the inline gate previously left global findings open).
-    await _gate_finding_for_write(finding_id, api, auth)
+    # Vault-scope auth gate — route through the shared helper, then (like
+    # dismiss/resolve) require an unscoped key for global (NULL-vault) findings
+    # so a vault-scoped tenant cannot toggle the bookmark on system-wide findings.
+    finding_vault = await _gate_finding_for_write(finding_id, api, auth)
+    _require_unscoped_for_global_finding(auth, finding_vault)
     try:
         async with api.metastore.session() as session:
             result = await session.execute(
@@ -1489,7 +1506,10 @@ async def _reverse_via_registry(
             .values(
                 evidence=func.jsonb_set(
                     func.coalesce(col(MaintenanceProposal.evidence), func.cast('{}', JSONB)),
-                    func.cast('{resolution}', ARRAY(Text)),
+                    # literal_column, NOT cast(..., ARRAY(Text)): the latter
+                    # char-splits the string into a 12-element path, so jsonb_set
+                    # silently no-ops and the reversal is never written.
+                    literal_column("'{resolution}'"),
                     func.cast(_json.dumps(new_resolution), JSONB),
                     True,
                 )

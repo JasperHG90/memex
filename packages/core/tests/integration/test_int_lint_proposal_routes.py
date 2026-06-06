@@ -321,6 +321,71 @@ async def test_destructive_action_executes_through_resolve(http: AsyncClient, ap
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_record_outcome_executes_through_resolve(http: AsyncClient, api, monkeypatch):
+    """record_outcome end-to-end through /resolve against a real MemoryUnit.
+
+    REGRESSION: record_outcome runs inside the resolve FOR UPDATE txn
+    (``commit=False``); the OutcomeService added its OutcomeAuditLog row and
+    then called ``session.refresh(audit_row)`` without flushing first. Under
+    ``commit=False`` (the metastore session is ``autoflush=False``) the row is
+    never persistent, so refresh raised InvalidRequestError, the route's broad
+    ``except Exception`` mapped it to 500, and the outcome was never committed.
+    The fix flushes before refresh. This asserts 200 (NOT 500) AND that the
+    targeted unit's ``success_co_count`` actually incremented — i.e. the ledger
+    write committed atomically with the status flip, not just that no 500 fired.
+    """
+    monkeypatch.setenv('MEMEX_LINT_ALLOW_UNATTENDED_APPLY', '1')
+    vault_id = await _create_vault(http)
+    unit_id = await _seed_memory_unit(api, vault_id)
+
+    submit = await http.post(
+        '/api/v1/lint/proposals',
+        json=_proposal(
+            vault_id,
+            rule_name='route-contract-outcome',
+            lint_type='quality',
+            target_type='memory_unit',
+            target_id=unit_id,
+        ),
+    )
+    finding_id = submit.json()['results'][0]['finding_id']
+
+    resolve = await http.post(
+        f'/api/v1/lint/findings/{finding_id}/resolve',
+        json={
+            'action': 'record_outcome',
+            'params': {'verb': 'helpful', 'reason': 'confirmed useful'},
+        },
+    )
+    assert resolve.status_code == 200, resolve.text
+    followup = resolve.json()['resolution']['followup']
+    assert followup['action'] == 'record_outcome'
+    assert followup['reversible'] is False
+    assert followup['applied_state']['verb'] == 'helpful'
+
+    # The append-only ledger write committed with the status flip: the
+    # targeted unit's success counter is now 1 (was 0 at seed time).
+    async with api.metastore.session() as s:
+        success = (
+            await s.execute(
+                text('SELECT success_co_count FROM memory_units WHERE id = :id'),
+                {'id': unit_id},
+            )
+        ).scalar_one()
+    assert success == 1, f'expected success_co_count incremented to 1, got {success}'
+    # And the finding is resolved (not left pending by a rolled-back 500 txn).
+    async with api.metastore.session() as s:
+        status = (
+            await s.execute(
+                text('SELECT status FROM maintenance_proposals WHERE id = :id'),
+                {'id': finding_id},
+            )
+        ).scalar_one()
+    assert status == 'resolved'
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_noop_resolve_passes_without_attended_override(http: AsyncClient):
     """no_op is exempt from the attended-mode gate — it mutates nothing
     beyond the status flip the action-less resolve already allows."""
@@ -519,6 +584,107 @@ async def test_entity_footprint_gate_enforces_write_on_all_vaults(api):
     )
 
 
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_entity_footprint_gate_fences_up_on_empty_footprint():
+    """The footprint gate must FENCE UP (not fail open) when the affected
+    entities have NO vault-scoped footprint at all.
+
+    REGRESSION: when ``unit_entities`` / ``mental_models`` / cooccurrences /
+    ``memory_links`` are all empty for the entities, the gate previously did
+    NOTHING (``if footprint: check_vault_access(...)`` with no else) — a
+    vault-scoped key could then merge/hard-delete orphaned GLOBAL entity rows
+    unchecked. The fix raises 403 for a vault-scoped principal on an empty
+    footprint; an unscoped principal (auth disabled, or a key with
+    ``vault_ids is None``) still passes.
+    """
+    from fastapi import HTTPException
+
+    from memex_common.config import Permission, Policy
+    from memex_core.server.auth import AuthContext
+    from memex_core.server.lint import _gate_entity_action_footprint
+
+    vault_a = uuid4()
+
+    class _EmptyFootprintResult:
+        def __iter__(self):
+            return iter(())  # no rows -> empty footprint
+
+    class _Session:
+        async def execute(self, stmt, params=None):
+            return _EmptyFootprintResult()
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return None
+
+    class _Api:
+        class metastore:  # noqa: N801 - structural stub
+            @staticmethod
+            def session():
+                return _Session()
+
+        @staticmethod
+        async def resolve_vault_identifier(value):
+            from uuid import UUID as _UUID
+
+            return _UUID(str(value))
+
+    members = [str(uuid4()), str(uuid4())]
+    params = {'winner_id': members[0], 'member_ids': members}
+
+    # Vault-scoped key (vault_ids is not None) + empty footprint -> fence up 403.
+    scoped = AuthContext(
+        key_prefix='scopedkey',
+        key_name='scoped-to-a',
+        policy=Policy.WRITER,
+        permissions=frozenset({Permission.READ, Permission.WRITE}),
+        vault_ids=[str(vault_a)],
+        read_vault_ids=None,
+    )
+    with pytest.raises(HTTPException) as excinfo:
+        await _gate_entity_action_footprint(
+            _Api(),
+            scoped,
+            action_id='merge_entities',
+            target_id=members[0],
+            params=params,
+            permission=Permission.WRITE,
+        )
+    assert excinfo.value.status_code == 403
+
+    # Auth disabled (auth is None) -> the gate passes (no scope to enforce).
+    await _gate_entity_action_footprint(
+        _Api(),
+        None,
+        action_id='merge_entities',
+        target_id=members[0],
+        params=params,
+        permission=Permission.WRITE,
+    )
+
+    # Unscoped key (vault_ids is None) -> also passes; an unscoped principal
+    # is the required caller for orphaned global entities.
+    unscoped = AuthContext(
+        key_prefix='unscopedkey',
+        key_name='global-admin',
+        policy=Policy.WRITER,
+        permissions=frozenset({Permission.READ, Permission.WRITE}),
+        vault_ids=None,
+        read_vault_ids=None,
+    )
+    await _gate_entity_action_footprint(
+        _Api(),
+        unscoped,
+        action_id='merge_entities',
+        target_id=members[0],
+        params=params,
+        permission=Permission.WRITE,
+    )
+
+
 # ---------------------------------------------------------------------------
 # Destructive / mutating catalogue actions executed through the REAL resolve
 # route against real Postgres — exercises the action facades + blast-radius
@@ -547,6 +713,45 @@ async def _seed_note(api, vault_id: str) -> str:
         s.add(note)
         await s.commit()
     return str(note_id)
+
+
+async def _seed_memory_unit(api, vault_id: str) -> str:
+    """Insert a Note + a real MemoryUnit row in ``vault_id``.
+
+    record_outcome's counter bump filters ``MU.vault_id == finding_vault``, so
+    the unit MUST live in the finding's vault for the increment to land. Mirrors
+    the f38 outcome-audit seed (Note then MemoryUnit, both committed)."""
+    from datetime import datetime, timezone
+
+    from memex_common.types import FactTypes
+    from memex_core.memory.sql_models import MemoryUnit
+
+    note_id = uuid4()
+    unit_id = uuid4()
+    async with api.metastore.session() as s:
+        s.add(
+            Note(
+                id=note_id,
+                vault_id=UUID(vault_id),
+                title='Outcome Target',
+                original_text='A note whose unit gets an outcome recorded.',
+                content_hash=uuid4().hex,
+            )
+        )
+        await s.commit()
+        s.add(
+            MemoryUnit(
+                id=unit_id,
+                note_id=note_id,
+                vault_id=UUID(vault_id),
+                text='seed unit for record_outcome-through-resolve',
+                fact_type=FactTypes.WORLD,
+                embedding=[0.1] * 384,
+                event_date=datetime.now(timezone.utc),
+            )
+        )
+        await s.commit()
+    return str(unit_id)
 
 
 async def _seed_entities(api, names: list[str], *, vault_id: str) -> list[str]:
@@ -624,6 +829,77 @@ async def test_set_note_status_round_trips_through_resolve_and_reverse(
 
     reverse = await http.post(f'/api/v1/lint/findings/{finding_id}/reverse')
     assert reverse.status_code == 200, reverse.text
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_reverse_writes_reversal_block_to_evidence(http: AsyncClient, api, monkeypatch):
+    """A reversible catalogue action's reverse MUST persist
+    ``evidence.resolution.reversal`` to the proposal row.
+
+    REGRESSION: ``_reverse_via_registry`` built the jsonb_set path with
+    ``cast('{resolution}', ARRAY(Text))``, which char-split the literal into a
+    12-element path (``{,{,r,e,s,o,...}``). jsonb_set then silently no-oped and
+    the reversal block was NEVER written — the reverse returned 200 but left no
+    durable record, so the double-reverse guard (which reads
+    ``evidence.resolution.reversal``) could never fire. The fix uses
+    ``literal_column("'{resolution}'")``. This reads the row back to prove the
+    block landed, then proves a SECOND reverse is rejected 409 — which only
+    holds if reversal was actually persisted.
+    """
+    monkeypatch.setenv('MEMEX_LINT_ALLOW_UNATTENDED_APPLY', '1')
+    vault_id = await _create_vault(http)
+    note_id = await _seed_note(api, vault_id)
+    submit = await http.post(
+        '/api/v1/lint/proposals',
+        json=_proposal(
+            vault_id,
+            rule_name='route-contract-reversal-evidence',
+            lint_type='governance',
+            target_type='note',
+            target_id=note_id,
+        ),
+    )
+    finding_id = submit.json()['results'][0]['finding_id']
+    resolve = await http.post(
+        f'/api/v1/lint/findings/{finding_id}/resolve',
+        json={'action': 'set_note_status', 'params': {'status': 'archived'}},
+    )
+    assert resolve.status_code == 200, resolve.text
+
+    reverse = await http.post(f'/api/v1/lint/findings/{finding_id}/reverse')
+    assert reverse.status_code == 200, reverse.text
+
+    # The reversal block must be durably written under evidence.resolution.
+    # Raw text SQL returns JSONB as a serialized string, so deserialize.
+    import json as _json
+
+    async with api.metastore.session() as s:
+        raw_evidence = (
+            await s.execute(
+                text('SELECT evidence FROM maintenance_proposals WHERE id = :id'),
+                {'id': finding_id},
+            )
+        ).scalar_one()
+    evidence = _json.loads(raw_evidence) if isinstance(raw_evidence, str) else raw_evidence
+    assert isinstance(evidence, dict), evidence
+    # The resolution sub-object persists as a JSON-encoded string under evidence.
+    resolution_blob = evidence.get('resolution')
+    if isinstance(resolution_blob, str):
+        resolution = _json.loads(resolution_blob)
+    else:
+        resolution = resolution_blob or {}
+    reversal = resolution.get('reversal') if isinstance(resolution, dict) else None
+    assert reversal is not None, (
+        f'evidence.resolution.reversal must be written on reverse; got resolution={resolution!r}'
+    )
+    assert reversal.get('reversed_at')
+    assert 'restored_state' in reversal
+
+    # The double-reverse guard reads evidence.resolution.reversal; it only
+    # fires if the block above actually persisted. A second reverse is 409.
+    second = await http.post(f'/api/v1/lint/findings/{finding_id}/reverse')
+    assert second.status_code == 409, second.text
 
 
 @pytest.mark.integration
@@ -783,11 +1059,28 @@ async def test_vaults_affected_gate_enforces_write_on_scoped_key(
         vault_ids=[vault_a],
         read_vault_ids=None,
     )
+    # Give the merge members a real footprint in vault_a (a mental model keyed
+    # by the winner entity id) so the footprint gate — which runs BEFORE the
+    # vaults_affected gate and now fences up on an EMPTY footprint — passes
+    # through on the vault_a-scoped key. That isolates the 403 to the
+    # vaults_affected/check_vault_access branch on vault_b, which is what this
+    # test pins. (mental_models.entity_id has no FK, so no entity row needed.)
+    members = [str(uuid4()), str(uuid4())]
+    async with api.metastore.session() as s:
+        s.add(
+            MentalModel(
+                vault_id=UUID(vault_a),
+                entity_id=UUID(members[0]),
+                name='footprint anchor',
+                observations=[{'text': 'anchors the winner entity to vault_a'}],
+            )
+        )
+        await s.commit()
+
     app.dependency_overrides[get_auth_context] = lambda: scoped
     try:
         # A mutating action is refused because the finding's vaults_affected
         # names vault_b, which the key lacks WRITE on.
-        members = [str(uuid4()), str(uuid4())]
         resp = await http.post(
             f'/api/v1/lint/findings/{finding_id}/resolve',
             json={

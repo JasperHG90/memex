@@ -4258,9 +4258,23 @@ def handle_submit_lint_proposal(
     except Exception as e:
         logger.warning('memex_submit_lint_proposal failed: %s', e)
         return tool_error(f'Lint proposal submission failed: {e}')
-    items = result.get('results') if isinstance(result, dict) else None
-    payload = items[0] if items else result
-    return json.dumps(payload, default=str)
+    # Mirror the MCP guard (memex_mcp.server.memex_submit_lint_proposal): a
+    # 200-with-error-body envelope must NOT masquerade as success. Non-2xx
+    # responses already raise upstream (caught above); but a 200 carrying
+    # {'error': 'rate_limited'} or an empty/missing `results` list would
+    # otherwise be returned verbatim as a fake success. We submitted exactly
+    # one proposal, so a missing result row is never a normal success —
+    # surface the server's detail via the Hermes tool_error idiom instead.
+    if not isinstance(result, dict):
+        return tool_error(
+            f'Lint proposal submission failed: unexpected response (expected an '
+            f'object with a results list, got {type(result).__name__}).'
+        )
+    items = result.get('results')
+    if not isinstance(items, list) or not items:
+        error_detail = result.get('error') or result.get('detail') or result
+        return tool_error(f'Lint proposal submission failed: {error_detail}')
+    return json.dumps(items[0], default=str)
 
 
 HANDLERS['memex_list_lint_actions'] = handle_list_lint_actions
