@@ -1787,6 +1787,14 @@ class VaultSummary(SQLModel, table=True):  # type: ignore
         sa_column=Column(JSONB, server_default=sql_text("'[]'::jsonb")),
         description='Top entities by mention count: [{name, type, mention_count}].',
     )
+    embedding: list[float] | None = Field(
+        default=None,
+        sa_column=Column(Vector(EMBEDDING_DIMENSION), nullable=True),
+        description=(
+            'Vector embedding of the narrative, refreshed on every (re)generation. '
+            'NULL for empty summaries, pre-migration rows, and encode failures.'
+        ),
+    )
     version: int = Field(
         default=1,
         description='Incremented on each update (patch or regeneration).',
