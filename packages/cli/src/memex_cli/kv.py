@@ -126,7 +126,9 @@ async def kv_search(
         return
 
     if json_output:
-        console.print_json(json.dumps([r.model_dump() for r in results], default=str))
+        console.print_json(
+            json.dumps([r.model_dump(exclude={'embedding'}) for r in results], default=str)
+        )
         return
 
     table = Table(title=f'KV Search: "{query}"')
@@ -176,7 +178,9 @@ async def kv_list(
         return
 
     if json_output:
-        console.print_json(json.dumps([e.model_dump() for e in entries], default=str))
+        console.print_json(
+            json.dumps([e.model_dump(exclude={'embedding'}) for e in entries], default=str)
+        )
         return
 
     table = Table(title='KV Entries')

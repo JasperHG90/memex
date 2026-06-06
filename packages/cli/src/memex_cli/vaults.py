@@ -293,7 +293,7 @@ async def vault_summary(
             return
 
     if json_output:
-        console.print_json(json.dumps(summary.model_dump(), default=str))
+        console.print_json(json.dumps(summary.model_dump(exclude={'embedding'}), default=str))
         return
 
     if compact:

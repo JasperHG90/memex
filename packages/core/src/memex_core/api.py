@@ -1484,8 +1484,9 @@ class MemexAPI:
         """Get a memory unit by ID. Delegates to StatsService.
 
         ``include_vectors`` exists for signature parity with
-        ``RemoteMemexAPI``; in-process rows on this path are eager-loaded,
-        so ``.embedding`` is populated regardless.
+        ``RemoteMemexAPI`` and is otherwise ignored: this returns the raw
+        ORM row (no DTO boundary in-process), whose ``.embedding``
+        attribute is eager-loaded on this path regardless of the flag.
         """
         return await self._stats.get_memory_unit(unit_id)
 

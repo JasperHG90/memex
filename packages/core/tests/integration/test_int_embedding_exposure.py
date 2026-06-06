@@ -230,3 +230,143 @@ async def test_get_memory_units_by_ids_is_vault_scoped(api, metastore):
 @pytest.mark.asyncio
 async def test_get_memory_units_by_ids_empty_input(api):
     assert await api.get_memory_units_by_ids([], uuid.uuid4()) == []
+
+
+# --------------------------------------------------------------------------- #
+# HTTP-layer matrix: include_vectors over the real app + real Postgres
+# --------------------------------------------------------------------------- #
+
+
+@pytest.fixture
+async def http_client(api):
+    """ASGI client on the test's own event loop — a sync TestClient would run
+    requests on a second loop and trip the session-scoped async engine."""
+    import httpx
+
+    from memex_core.server import app
+    from memex_core.server.auth import get_auth_context
+
+    app.state.api = api
+    app.dependency_overrides[get_auth_context] = lambda: None
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
+        yield client
+    if hasattr(app.state, 'api'):
+        del app.state.api
+    app.dependency_overrides.pop(get_auth_context, None)
+
+
+async def _seed_unit(metastore) -> tuple[uuid.UUID, uuid.UUID]:
+    async with metastore.session() as session:
+        vault_id = await _create_vault(session, 'http_matrix')
+        note = Note(
+            id=uuid.uuid4(),
+            vault_id=vault_id,
+            title='HTTP matrix note',
+            original_text=f'Note {uuid.uuid4()}',
+            content_hash=f'hash_{uuid.uuid4()}',
+        )
+        session.add(note)
+        await session.flush()
+        unit_id = uuid.uuid4()
+        session.add(
+            MemoryUnit(
+                id=unit_id,
+                vault_id=vault_id,
+                note_id=note.id,
+                text=f'HTTP matrix unit {uuid.uuid4()}',
+                fact_type='world',
+                embedding=[0.3] * 384,
+                event_date=datetime.now(timezone.utc),
+            )
+        )
+        await session.commit()
+    return vault_id, unit_id
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_http_unit_getters_vector_matrix(http_client, metastore):
+    """Rows in Postgres carry vectors; the wire strips them unless requested."""
+    vault_id, unit_id = await _seed_unit(metastore)
+
+    resp = await http_client.get(f'/api/v1/memories/{unit_id}')
+    assert resp.status_code == 200, resp.text
+    assert resp.json()['embedding'] is None
+
+    resp = await http_client.get(f'/api/v1/memories/{unit_id}?include_vectors=true')
+    assert resp.status_code == 200
+    vec = resp.json()['embedding']
+    assert vec is not None and len(vec) == 384
+    assert vec[0] == pytest.approx(0.3, abs=1e-4)
+
+    body = {'unit_ids': [str(unit_id)], 'vault_id': str(vault_id)}
+    resp = await http_client.post('/api/v1/memories/by-ids', json=body)
+    assert resp.status_code == 200, resp.text
+    assert resp.json()[0]['embedding'] is None
+
+    resp = await http_client.post('/api/v1/memories/by-ids', json={**body, 'include_vectors': True})
+    assert resp.status_code == 200
+    assert len(resp.json()[0]['embedding']) == 384
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_http_kv_vector_matrix(http_client, api):
+    """KV rows are fully loaded server-side (from_attributes leak surface) —
+    the wire must strip by default on get, list, and search."""
+    key = f'project:test:embed-matrix-{uuid.uuid4().hex[:8]}'
+    await api.kv_put(key=key, value='vector-laden', embedding=[0.7] * 384)
+
+    resp = await http_client.get('/api/v1/kv/get', params={'key': key})
+    assert resp.status_code == 200, resp.text
+    assert resp.json()['embedding'] is None
+
+    resp = await http_client.get('/api/v1/kv/get', params={'key': key, 'include_vectors': True})
+    assert resp.status_code == 200
+    assert len(resp.json()['embedding']) == 384
+
+    resp = await http_client.get('/api/v1/kv', params={'key_prefix': key})
+    assert resp.status_code == 200
+    assert resp.json()[0]['embedding'] is None
+
+    resp = await http_client.get('/api/v1/kv', params={'key_prefix': key, 'include_vectors': True})
+    assert resp.status_code == 200
+    assert len(resp.json()[0]['embedding']) == 384
+
+    search_body = {'query_embedding': [0.7] * 384, 'limit': 5}
+    resp = await http_client.post('/api/v1/kv/search', json=search_body)
+    assert resp.status_code == 200
+    assert all(r['embedding'] is None for r in resp.json())
+
+    resp = await http_client.post(
+        '/api/v1/kv/search', json={**search_body, 'include_vectors': True}
+    )
+    assert resp.status_code == 200
+    hits = [r for r in resp.json() if r['key'] == key]
+    assert hits and len(hits[0]['embedding']) == 384
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_http_vault_summary_vector_matrix(http_client, metastore):
+    async with metastore.session() as session:
+        vault_id = await _create_vault(session, 'http_summary')
+        session.add(
+            VaultSummary(
+                vault_id=vault_id,
+                narrative='HTTP matrix narrative.',
+                embedding=[0.6] * 384,
+            )
+        )
+        await session.commit()
+
+    resp = await http_client.get(f'/api/v1/vaults/{vault_id}/summary')
+    assert resp.status_code == 200, resp.text
+    assert resp.json()['embedding'] is None
+
+    resp = await http_client.get(f'/api/v1/vaults/{vault_id}/summary?include_vectors=true')
+    assert resp.status_code == 200
+    vec = resp.json()['embedding']
+    assert vec is not None and len(vec) == 384
+    assert vec[0] == pytest.approx(0.6, abs=1e-4)
