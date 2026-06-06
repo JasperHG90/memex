@@ -250,10 +250,23 @@ class RemoteMemexAPI:
         response = await self.client.post(f'vaults/{identifier}/set-reader')
         return await self._handle_response(response)
 
-    async def get_vault_summary(self, vault_id: UUID) -> VaultSummaryDTO | None:
-        """Get the summary for a vault. Returns None if no summary exists."""
+    async def get_vault_summary(
+        self,
+        vault_id: UUID,
+        *,
+        include_vectors: bool = False,
+    ) -> VaultSummaryDTO | None:
+        """Get the summary for a vault. Returns None if no summary exists.
+
+        ``include_vectors=True`` populates ``embedding`` with the stored
+        narrative vector; it stays None for never-regenerated, empty, or
+        encode-failed summaries — callers must tolerate null.
+        """
         try:
-            result = await self._get(f'vaults/{vault_id}/summary')
+            result = await self._get(
+                f'vaults/{vault_id}/summary',
+                params={'include_vectors': include_vectors},
+            )
             return VaultSummaryDTO(**result)
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
@@ -1025,15 +1038,26 @@ class RemoteMemexAPI:
             params['vault_id'] = [str(v) for v in resolved]
         return await self._get(f'entities/{entity_id}/cooccurrences', params=params)
 
-    async def get_memory_unit(self, unit_id: UUID | str) -> MemoryUnitDTO:
-        """Get memory unit details."""
-        result = await self._get(f'memories/{unit_id}')
+    async def get_memory_unit(
+        self,
+        unit_id: UUID | str,
+        *,
+        include_vectors: bool = False,
+    ) -> MemoryUnitDTO:
+        """Get memory unit details.
+
+        ``include_vectors=True`` populates ``embedding`` with the unit's
+        stored vector (384-dim).
+        """
+        result = await self._get(f'memories/{unit_id}', params={'include_vectors': include_vectors})
         return MemoryUnitDTO(**result)
 
     async def get_memory_units_by_chunks(
         self,
         chunk_ids: list[UUID | str],
         vault_id: UUID | str,
+        *,
+        include_vectors: bool = False,
     ) -> list[MemoryUnitDTO]:
         """Fetch memory units belonging to the named chunks (vault-scoped).
 
@@ -1046,14 +1070,42 @@ class RemoteMemexAPI:
         body = {
             'chunk_ids': [str(c) for c in chunk_ids],
             'vault_id': str(vault_id),
+            'include_vectors': include_vectors,
         }
         result = await self._post('memories/by-chunks', body)
+        return [MemoryUnitDTO(**r) for r in result]
+
+    async def get_memory_units_by_ids(
+        self,
+        unit_ids: list[UUID | str],
+        vault_id: UUID | str,
+        *,
+        include_vectors: bool = False,
+    ) -> list[MemoryUnitDTO]:
+        """Fetch memory units by ID (vault-scoped batch lookup, max 500 per call).
+
+        IDs that don't exist or belong to another vault are silently omitted;
+        duplicates are deduplicated; result order is not guaranteed to follow
+        input order. ``include_vectors=True`` populates each unit's
+        ``embedding`` for vector arithmetic (e.g. comparing units against the
+        vault-summary embedding from :pymeth:`get_vault_summary`).
+        """
+        if not unit_ids:
+            return []
+        body = {
+            'unit_ids': [str(u) for u in unit_ids],
+            'vault_id': str(vault_id),
+            'include_vectors': include_vectors,
+        }
+        result = await self._post('memories/by-ids', body)
         return [MemoryUnitDTO(**r) for r in result]
 
     async def list_memory_units_by_note(
         self,
         note_id: UUID | str,
         vault_id: UUID | str,
+        *,
+        include_vectors: bool = False,
     ) -> list[MemoryUnitDTO]:
         """Fetch memory units belonging to a note (vault-scoped).
 
@@ -1062,7 +1114,8 @@ class RemoteMemexAPI:
         the caller's API key is not authorized for returns 403.
         """
         result = await self._get(
-            f'notes/{note_id}/memory_units', params={'vault_id': str(vault_id)}
+            f'notes/{note_id}/memory_units',
+            params={'vault_id': str(vault_id), 'include_vectors': include_vectors},
         )
         return [MemoryUnitDTO(**r) for r in result]
 
@@ -1527,6 +1580,7 @@ class RemoteMemexAPI:
         key: str,
         *,
         include_history: bool = False,
+        include_vectors: bool = False,
     ) -> KVEntryDTO | KVProcedureEntryDTO | None:
         """Get a KV entry by exact key. Returns None if not found.
 
@@ -1535,8 +1589,16 @@ class RemoteMemexAPI:
         ``include_history=True`` returns a :class:`KVProcedureEntryDTO`
         whose ``value`` field is the structured envelope
         ({value, version, history}).
+
+        ``include_vectors=True`` populates ``embedding`` with the entry's
+        stored value vector (plain entries only — procedure envelopes don't
+        carry vectors).
         """
-        params: dict[str, Any] = {'key': key, 'include_history': include_history}
+        params: dict[str, Any] = {
+            'key': key,
+            'include_history': include_history,
+            'include_vectors': include_vectors,
+        }
         try:
             result = await self._get('kv/get', params=params)
             # Procedure DTO routing: a `<scope>:procedure:<verb>:<context>`
@@ -1556,6 +1618,8 @@ class RemoteMemexAPI:
         query_embedding: list[float],
         namespaces: list[str] | None = None,
         limit: int = 5,
+        *,
+        include_vectors: bool = False,
     ) -> list[KVEntryDTO]:
         """Semantic search over KV entries.
 
@@ -1568,6 +1632,7 @@ class RemoteMemexAPI:
             query_embedding=query_embedding,
             namespaces=namespaces,
             limit=limit,
+            include_vectors=include_vectors,
         )
         result = await self._post('kv/search', request)
         return [KVEntryDTO(**r) for r in result]
@@ -1577,6 +1642,8 @@ class RemoteMemexAPI:
         query: str,
         namespaces: list[str] | None = None,
         limit: int = 5,
+        *,
+        include_vectors: bool = False,
     ) -> list[KVEntryDTO]:
         """Convenience wrapper: server embeds ``query`` before searching.
 
@@ -1588,6 +1655,7 @@ class RemoteMemexAPI:
             query=query,
             namespaces=namespaces,
             limit=limit,
+            include_vectors=include_vectors,
         )
         result = await self._post('kv/search', request)
         return [KVEntryDTO(**r) for r in result]
@@ -1613,9 +1681,11 @@ class RemoteMemexAPI:
         exclude_prefix: str | None = None,
         key_prefix: str | None = None,
         pattern: str | None = None,
+        *,
+        include_vectors: bool = False,
     ) -> list[KVEntryDTO]:
         """List KV entries, optionally filtered by namespace prefixes."""
-        params: dict[str, Any] = {'limit': limit}
+        params: dict[str, Any] = {'limit': limit, 'include_vectors': include_vectors}
         if namespaces is not None:
             params['namespaces'] = ','.join(namespaces)
         if exclude_prefix is not None:

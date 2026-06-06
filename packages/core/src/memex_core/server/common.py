@@ -282,16 +282,30 @@ def _extract_superseded_by(unit: Any) -> list[SupersessionInfo] | None:
     return out or None
 
 
+def vector_to_list(vec: Any) -> list[float] | None:
+    """Normalize a pgvector/numpy/sequence vector to a JSON-serializable list."""
+    if vec is None:
+        return None
+    if hasattr(vec, 'tolist'):
+        return list(vec.tolist())
+    return [float(x) for x in vec]
+
+
 def build_memory_unit_dto(
     unit: Any,
     *,
     debug: bool = False,
+    include_vectors: bool = False,
 ) -> MemoryUnitDTO:
     """Build a MemoryUnitDTO from a MemoryUnit ORM/model object.
 
     Handles all field variations across retrieval, mentions, and single-unit
     endpoints.  Optional ``debug`` flag controls whether per-strategy
     attribution data is included.
+
+    ``include_vectors`` may only be True on paths whose rows were loaded
+    eagerly (the unit getters); retrieval-path rows defer the embedding
+    column, and touching it on a detached row raises.
 
     Confidence-variance is intentionally NOT passed: the DTO defaults to
     _MAX_VARIANCE, preserving the cold-start invariant (variance derived
@@ -319,6 +333,7 @@ def build_memory_unit_dto(
         id=unit.id,
         note_id=doc_id,
         source_note_ids=source_docs,
+        embedding=vector_to_list(getattr(unit, 'embedding', None)) if include_vectors else None,
         text=unit.text,
         fact_type=unit.fact_type,
         status=unit.status,

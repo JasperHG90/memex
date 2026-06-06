@@ -44,7 +44,7 @@ async def test_list_memory_units_by_note_calls_correct_endpoint(mock_client: Asy
 
     assert result == []
     assert captured['path'] == f'notes/{note_id}/memory_units'
-    assert captured['params'] == {'vault_id': vault_id}
+    assert captured['params'] == {'vault_id': vault_id, 'include_vectors': False}
 
 
 @pytest.mark.asyncio

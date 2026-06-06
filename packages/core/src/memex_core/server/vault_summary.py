@@ -4,12 +4,12 @@ import logging
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from memex_common.exceptions import MemexError
 from memex_common.schemas import VaultSummaryDTO
 from memex_core.server.auth import require_read, require_write
-from memex_core.server.common import _handle_error, get_api
+from memex_core.server.common import _handle_error, get_api, vector_to_list
 from memex_core.api import MemexAPI
 from memex_core.memory.sql_models import VaultSummary
 
@@ -18,7 +18,7 @@ logger = logging.getLogger('memex.core.server.vault_summary')
 router = APIRouter(prefix='/api/v1')
 
 
-def _summary_to_dto(summary: VaultSummary) -> VaultSummaryDTO:
+def _summary_to_dto(summary: VaultSummary, *, include_vectors: bool = False) -> VaultSummaryDTO:
     return VaultSummaryDTO(
         id=summary.id,
         vault_id=summary.vault_id,
@@ -26,6 +26,7 @@ def _summary_to_dto(summary: VaultSummary) -> VaultSummaryDTO:
         themes=summary.themes,
         inventory=summary.inventory,
         key_entities=summary.key_entities,
+        embedding=vector_to_list(summary.embedding) if include_vectors else None,
         version=summary.version,
         notes_incorporated=summary.notes_incorporated,
         created_at=summary.created_at,
@@ -43,13 +44,17 @@ def _summary_to_dto(summary: VaultSummary) -> VaultSummaryDTO:
 async def get_vault_summary(
     vault_id: UUID,
     api: Annotated[MemexAPI, Depends(get_api)],
+    include_vectors: Annotated[
+        bool,
+        Query(description='Include the stored narrative embedding in the response.'),
+    ] = False,
 ) -> VaultSummaryDTO:
     """Return the current vault summary, or 404 if none exists."""
     try:
         summary = await api.vault_summary.get_summary(vault_id)
         if summary is None:
             raise HTTPException(status_code=404, detail='No summary exists for this vault')
-        return _summary_to_dto(summary)
+        return _summary_to_dto(summary, include_vectors=include_vectors)
     except HTTPException:
         raise
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:

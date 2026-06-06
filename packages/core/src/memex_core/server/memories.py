@@ -49,6 +49,31 @@ class MemoryUnitsByChunksRequest(BaseModel):
             'leak units from sibling vaults.'
         ),
     )
+    include_vectors: bool = Field(
+        default=False,
+        description="Include each unit's stored embedding vector in the results.",
+    )
+
+
+class MemoryUnitsByIdsRequest(BaseModel):
+    """Batch lookup of memory units by unit ID."""
+
+    unit_ids: list[UUID] = Field(
+        ...,
+        max_length=500,
+        description='Memory unit UUIDs to fetch (max 500 per request).',
+    )
+    vault_id: UUID = Field(
+        ...,
+        description=(
+            'Vault UUID to scope the lookup. REQUIRED — IDs belonging to a '
+            'sibling vault are silently omitted from the result.'
+        ),
+    )
+    include_vectors: bool = Field(
+        default=False,
+        description="Include each unit's stored embedding vector in the results.",
+    )
 
 
 @router.post(
@@ -65,7 +90,7 @@ async def get_memory_units_by_chunks(
     await check_vault_access(auth, [request.vault_id], api, permission=Permission.READ)
     try:
         units = await api.get_memory_units_by_chunks(request.chunk_ids, request.vault_id)
-        return [build_memory_unit_dto(u) for u in units]
+        return [build_memory_unit_dto(u, include_vectors=request.include_vectors) for u in units]
     except (MemexError, ValueError) as e:
         # Narrowed from (KeyError, RuntimeError, OSError) which can mask
         # genuine bugs (bad DTO dict access, filesystem errors) rather than
@@ -75,15 +100,48 @@ async def get_memory_units_by_chunks(
         raise _handle_error(e, 'Failed to get memory units by chunks')
 
 
+@router.post(
+    '/memories/by-ids',
+    response_model=list[MemoryUnitDTO],
+    dependencies=[Depends(require_read)],
+)
+async def get_memory_units_by_ids(
+    request: Annotated[MemoryUnitsByIdsRequest, Body()],
+    api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+) -> list[MemoryUnitDTO]:
+    """Get memory units by ID (vault-scoped batch lookup).
+
+    IDs that don't exist or belong to another vault are silently omitted;
+    duplicates are deduplicated. Result order is not guaranteed to follow
+    input order.
+    """
+    await check_vault_access(auth, [request.vault_id], api, permission=Permission.READ)
+    try:
+        units = await api.get_memory_units_by_ids(request.unit_ids, request.vault_id)
+        return [build_memory_unit_dto(u, include_vectors=request.include_vectors) for u in units]
+    except (MemexError, ValueError) as e:
+        # Narrow catch matches get_memory_units_by_chunks above, where the
+        # comment explains the reasoning.
+        raise _handle_error(e, 'Failed to get memory units by ids')
+
+
 @router.get('/memories/{id}', response_model=MemoryUnitDTO, dependencies=[Depends(require_read)])
-async def get_memory_unit(id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
+async def get_memory_unit(
+    id: UUID,
+    api: Annotated[MemexAPI, Depends(get_api)],
+    include_vectors: Annotated[
+        bool,
+        Query(description="Include the unit's stored embedding vector in the response."),
+    ] = False,
+):
     """Get memory unit details."""
     try:
         unit = await api.get_memory_unit(id)
         if not unit:
             raise HTTPException(status_code=404, detail=f'Memory unit {id} not found')
 
-        return build_memory_unit_dto(unit)
+        return build_memory_unit_dto(unit, include_vectors=include_vectors)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, f'Failed to get memory unit {id}')
 
@@ -101,6 +159,10 @@ async def list_memory_units_by_note(
     ],
     api: Annotated[MemexAPI, Depends(get_api)],
     auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
+    include_vectors: Annotated[
+        bool,
+        Query(description="Include each unit's stored embedding vector in the results."),
+    ] = False,
 ) -> list[MemoryUnitDTO]:
     """List memory units belonging to a note (vault-scoped).
 
@@ -112,10 +174,10 @@ async def list_memory_units_by_note(
     await check_vault_access(auth, [vault_id], api, permission=Permission.READ)
     try:
         units = await api.list_memory_units_by_note(note_id, vault_id)
-        return [build_memory_unit_dto(u) for u in units]
+        return [build_memory_unit_dto(u, include_vectors=include_vectors) for u in units]
     except (MemexError, ValueError) as e:
-        # Narrow catch matches the sibling get_memory_units_by_chunks above
-        # (lines 65-71 explain the reasoning): KeyError / RuntimeError /
+        # Narrow catch matches the sibling get_memory_units_by_chunks above,
+        # where the comment explains the reasoning: KeyError / RuntimeError /
         # OSError mask genuine bugs rather than client-visible failures.
         # Service-layer raises MemexError subclasses for known failure modes;
         # ValueError covers UUID/typing validation. Anything else propagates

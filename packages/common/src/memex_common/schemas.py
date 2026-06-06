@@ -351,9 +351,6 @@ class RetrievalRequest(BaseModel):
         description='Strategies to run. None = all.',
         examples=[['semantic', 'keyword', 'graph', 'temporal', 'mental_model']],
     )
-    include_vectors: bool = Field(
-        default=False, description='Include embeddings in results (slower).'
-    )
     include_stale: bool = Field(default=False, description='Include stale memory units.')
     include_superseded: bool = Field(
         default=False,
@@ -535,6 +532,11 @@ class MemoryUnitDTO(MemoryUnitBase):
         default=None,
         description='Relevance score from retrieval or reranking (0.0 to 1.0).',
         examples=[0.95],
+    )
+
+    embedding: list[float] | None = Field(
+        default=None,
+        description='Stored vector for the unit text; populated only when include_vectors=true.',
     )
 
     debug_info: list[StrategyDebugInfo] | None = Field(
@@ -1309,6 +1311,14 @@ class VaultSummaryDTO(BaseModel):
     key_entities: list[dict[str, Any]] = Field(
         description='Top entities by mention count: [{name, type, mention_count}].'
     )
+    embedding: list[float] | None = Field(
+        default=None,
+        description=(
+            'Stored vector of the narrative; populated only when include_vectors=true. '
+            'Null when the summary has never been (re)generated since the column landed, '
+            'the vault is empty, or the encode step failed.'
+        ),
+    )
     version: int = Field(description='Summary version number.')
     notes_incorporated: int = Field(description='Number of notes incorporated.')
     created_at: dt.datetime = Field(description='When the summary was created.')
@@ -1366,6 +1376,10 @@ class KVEntryDTO(BaseModel):
     id: UUID
     key: str
     value: str
+    embedding: list[float] | None = Field(
+        default=None,
+        description='Stored value vector; populated only when include_vectors=true.',
+    )
     expires_at: dt.datetime | None = None
     created_at: dt.datetime
     updated_at: dt.datetime
@@ -1426,6 +1440,10 @@ class KVSearchRequest(BaseModel):
     )
     namespaces: list[str] | None = None
     limit: int = Field(5, ge=1, le=500)
+    include_vectors: bool = Field(
+        default=False,
+        description="Include each entry's stored value vector in the results.",
+    )
 
     @model_validator(mode='after')
     def _exactly_one(self) -> 'KVSearchRequest':
