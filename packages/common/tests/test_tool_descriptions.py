@@ -128,6 +128,30 @@ def test_reconsolidate_vs_consolidate_distinction() -> None:
     assert 'memex_memory_reconsolidate' in con, 'consolidate must cross-reference reconsolidate'
 
 
+def test_submit_lint_proposal_spells_out_rejection_triggers() -> None:
+    """The submission contract's 4xx-class triggers must stay visible:
+    reserved rule names, the llm_ prefix, server-owned evidence keys, and
+    the four per-item result statuses retry logic branches on."""
+    desc = td.MEMEX_SUBMIT_LINT_PROPOSAL_DESC
+    assert 'reserved' in desc
+    assert 'llm_' in desc
+    for status in ('created', 'deduplicated', 'cooldown_suppressed', 'rejected'):
+        assert status in desc, status
+    for owned in ('resolution', 'rule_metadata', 'proposed_action'):
+        assert owned in desc, owned
+    assert 'vault_id' in desc
+
+
+def test_list_lint_actions_teaches_the_closed_catalogue() -> None:
+    """Agents must learn the catalogue is closed and schema-published, and
+    that it pairs with the submit tool."""
+    desc = td.MEMEX_LIST_LINT_ACTIONS_DESC
+    assert 'closed' in desc
+    assert 'params_schema' in desc
+    assert 'memex_submit_lint_proposal' in desc
+    assert 'applicable_target_types' in desc
+
+
 # ---------------------------------------------------------------------------
 # Constants are exported — accidental rename / removal breaks importers.
 # ---------------------------------------------------------------------------
@@ -144,6 +168,8 @@ _REQUIRED_CONSTANTS = (
     'MEMEX_KV_GET_DESC',
     'MEMEX_KV_SEARCH_DESC',
     'MEMEX_KV_LIST_DESC',
+    'MEMEX_SUBMIT_LINT_PROPOSAL_DESC',
+    'MEMEX_LIST_LINT_ACTIONS_DESC',
 )
 
 

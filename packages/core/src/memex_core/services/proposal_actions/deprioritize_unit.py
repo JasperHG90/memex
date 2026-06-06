@@ -13,6 +13,8 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any, ClassVar
 from uuid import UUID
 
+from pydantic import BaseModel, Field, ValidationError
+
 from memex_core.services.proposal_actions.base import (
     ActionValidationError,
     ExecuteResult,
@@ -21,7 +23,24 @@ from memex_core.services.proposal_actions.base import (
 )
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
     from memex_core.api import MemexAPI
+
+
+class _DeprioritizeUnitParams(BaseModel):
+    reason: str | None = Field(
+        default=None,
+        description='Audit reason recorded on the unit; defaults to a cockpit-accepted note.',
+    )
+    override_target_id: str | None = Field(
+        default=None,
+        description=(
+            'UUID of a memory unit to deprioritize instead of the finding '
+            "target (e.g. a contradiction's RELATED side). Bounded to the "
+            "finding's vault — the service refuses cross-vault overrides."
+        ),
+    )
 
 
 class DeprioritizeUnitAction:
@@ -33,6 +52,7 @@ class DeprioritizeUnitAction:
     )
     applicable_target_types: ClassVar[tuple[str, ...]] = ('memory_unit',)
     reversible: ClassVar[bool] = True
+    params_schema: ClassVar[dict[str, Any] | None] = _DeprioritizeUnitParams.model_json_schema()
 
     def validate(
         self,
@@ -49,13 +69,18 @@ class DeprioritizeUnitAction:
             UUID(target_id)
         except (ValueError, AttributeError):
             raise ActionValidationError(f'target_id {target_id!r} is not a valid UUID.')
-        override = params.get('override_target_id')
-        if override:
-            try:
-                UUID(override)
-            except (ValueError, AttributeError):
-                raise ActionValidationError(f'override_target_id {override!r} is not a valid UUID.')
+        try:
+            parsed = _DeprioritizeUnitParams(**params)
+        except ValidationError as exc:
+            raise ActionValidationError(f'invalid deprioritize_unit params: {exc}') from exc
         # `reason` is optional; the proposal's evidence supplies a default when absent.
+        if parsed.override_target_id is not None:
+            try:
+                UUID(parsed.override_target_id)
+            except (ValueError, AttributeError):
+                raise ActionValidationError(
+                    f'override_target_id {parsed.override_target_id!r} is not a valid UUID.'
+                )
 
     async def execute(
         self,
@@ -63,8 +88,9 @@ class DeprioritizeUnitAction:
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
+        session: AsyncSession | None = None,
     ) -> ExecuteResult:
         reason = str(params.get('reason') or 'cockpit: maintenance proposal accepted')
         override = params.get('override_target_id')
@@ -90,7 +116,7 @@ class DeprioritizeUnitAction:
         prior_state: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ReverseResult:
         actual_id = applied_state.get('unit_id') or target_id
@@ -104,7 +130,7 @@ class DeprioritizeUnitAction:
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
     ) -> str:
         # Counting citing observations costs a JSONB scan; defer the exact
         # count and surface the contract instead. The receipt after execute
@@ -124,6 +150,7 @@ class RestoreUnitAction:
     )
     applicable_target_types: ClassVar[tuple[str, ...]] = ('memory_unit',)
     reversible: ClassVar[bool] = True
+    params_schema: ClassVar[dict[str, Any] | None] = None
 
     def validate(
         self,
@@ -143,8 +170,9 @@ class RestoreUnitAction:
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
+        session: AsyncSession | None = None,
     ) -> ExecuteResult:
         unit_id = UUID(target_id)
         await api.restore_memory_unit(unit_id, vault_id=vault_id, actor=actor)
@@ -161,7 +189,7 @@ class RestoreUnitAction:
         prior_state: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ReverseResult:
         unit_id = UUID(target_id)
@@ -179,7 +207,7 @@ class RestoreUnitAction:
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
     ) -> str:
         return 'Will clear is_deprioritized on this unit; observations will re-surface it.'
 

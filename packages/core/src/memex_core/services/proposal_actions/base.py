@@ -21,6 +21,8 @@ from typing import TYPE_CHECKING, Any, ClassVar, Protocol
 from uuid import UUID
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
     from memex_core.api import MemexAPI
 
 
@@ -69,6 +71,11 @@ class ProposalAction(Protocol):
     description: ClassVar[str]
     applicable_target_types: ClassVar[tuple[str, ...]]
     reversible: ClassVar[bool]
+    # JSON schema for `params` (from a Pydantic model's `model_json_schema()`),
+    # or None for parameterless actions. Discoverability only — `validate()`
+    # remains the execution-time gate. Surfaced verbatim by `GET /lint/actions`
+    # so external submitters and the cockpit can render parameter forms.
+    params_schema: ClassVar[dict[str, Any] | None]
 
     def validate(
         self,
@@ -90,10 +97,21 @@ class ProposalAction(Protocol):
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
+        session: AsyncSession | None = None,
     ) -> ExecuteResult:
-        """Run the mutation and return its before/after snapshot."""
+        """Run the mutation and return its before/after snapshot.
+
+        The resolve route passes its transaction as ``session`` to every
+        action's ``execute()`` so an action MAY run its writes inside that
+        transaction (committing atomically with the finding's status flip).
+        Only ``RecordOutcomeAction`` reads it — its append-only ledger write
+        would otherwise not be safe to re-apply after a crash. Every other
+        action ignores the kwarg and runs in its own session, which is correct
+        for any action that is already idempotent or 409s on an already-applied
+        target.
+        """
         ...
 
     async def reverse(
@@ -104,7 +122,7 @@ class ProposalAction(Protocol):
         prior_state: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
         actor: str,
     ) -> ReverseResult:
         """Undo the side effects captured under `prior_state`.
@@ -121,7 +139,7 @@ class ProposalAction(Protocol):
         params: dict[str, Any],
         *,
         target_id: str,
-        vault_id: UUID,
+        vault_id: UUID | None,
     ) -> str:
         """One-line description of the blast radius shown in the cockpit.
 

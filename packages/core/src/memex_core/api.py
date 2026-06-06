@@ -13,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 
 from sqlalchemy.exc import IntegrityError
+from sqlalchemy.ext.asyncio import AsyncSession
 
 import dspy
 
@@ -1747,6 +1748,7 @@ class MemexAPI:
         turn_outcome: str | None = None,
         retrieved_set_size: int | None = None,
         exploration_tagged: bool = False,
+        session: AsyncSession | None = None,
     ) -> dict[str, Any]:
         """Record an outcome against memory units. Delegates to OutcomeService.
 
@@ -1762,9 +1764,10 @@ class MemexAPI:
         """
         half_life = self.config.server.memory.retrieval.mw_ema_half_life_days
         coverage_mode = self.config.server.memory.outcomes.coverage_check_mode
-        async with self.metastore.session() as session:
+
+        async def _run(active: AsyncSession, *, commit: bool) -> dict[str, Any]:
             return await self._outcomes.record_outcome(
-                session=session,
+                session=active,
                 unit_ids=unit_ids,
                 success=success,
                 vault_id=vault_id,
@@ -1777,7 +1780,16 @@ class MemexAPI:
                 retrieved_set_size=retrieved_set_size,
                 exploration_tagged=exploration_tagged,
                 coverage_check_mode=coverage_mode,
+                commit=commit,
             )
+
+        # A caller-supplied session means "join my transaction; I will commit" —
+        # lint resolve folds the outcome into its FOR UPDATE txn so the ledger
+        # write is atomic with the finding's status flip (no crash double-count).
+        if session is not None:
+            return await _run(session, commit=False)
+        async with self.metastore.session() as owned:
+            return await _run(owned, commit=True)
 
     async def create_vault(self, name: str, description: str | None = None) -> Any:
         """Create a new vault. Delegates to VaultService."""
@@ -1811,6 +1823,46 @@ class MemexAPI:
         """Move a note to a different vault. Delegates to NoteService."""
         resolved_id = await self._vaults.resolve_vault_identifier(target_vault_id)
         return await self._notes.migrate_note(note_id, resolved_id)
+
+    def list_lint_actions(self) -> dict[str, Any]:
+        """The closed proposal-action catalogue, in the wire shape the
+        HTTP route and ``RemoteMemexAPI`` return (``{'actions': [...]}``)."""
+        from memex_core.services.lint_external import action_descriptor
+        from memex_core.services.proposal_actions import list_actions
+
+        return {
+            'actions': [action_descriptor(a) for a in sorted(list_actions(), key=lambda a: a.id)]
+        }
+
+    async def submit_external_lint_proposal(
+        self,
+        proposal: dict[str, Any],
+        *,
+        actor: str = 'api',
+    ) -> tuple[str, UUID | None]:
+        """Validate and insert one external lint proposal.
+
+        In-process surface (tests, embedded callers) over the same
+        primitives the HTTP ingress uses; the route adds per-item auth
+        gating on top. Returns ``(status, finding_id)`` with status in
+        ``{'created', 'deduplicated', 'cooldown_suppressed'}``; validation
+        failures raise (pydantic ``ValidationError`` /
+        ``ExternalProposalRejected`` / ``ValueError``).
+        """
+        from memex_core.services.lint_external import (
+            ExternalProposalRequest,
+            insert_external_proposal,
+            validate_proposed_action,
+        )
+
+        req = ExternalProposalRequest(**proposal)
+        validate_proposed_action(req)
+        vault_uuid: UUID | None = None
+        if req.vault_id is not None:
+            vault_uuid = await self.resolve_vault_identifier(req.vault_id)
+        elif self.config.server.memory.lint.external_proposals.require_vault:
+            raise ValueError('vault_id is required for external proposals')
+        return await insert_external_proposal(self, req, vault_id=vault_uuid, actor=actor)
 
     async def update_user_notes(self, note_id: UUID, user_notes: str | None) -> dict[str, Any]:
         """Update user_notes on an existing note and reprocess into the memory graph.

@@ -499,6 +499,16 @@ LINT_RUN_DURATION_SECONDS = Histogram(
     buckets=(0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0, 10.0, 30.0, 60.0),
 )
 
+# rule_name (user-supplied free text) and vault_id are deliberately NOT
+# labels here — both would mint unbounded series. lint_type × result is a
+# closed 5×4 grid; per-vault/per-rule attribution lives in the structured
+# submission logs.
+LINT_EXTERNAL_PROPOSALS_TOTAL = Counter(
+    'memex_lint_external_proposals_total',
+    'Externally-submitted lint proposals by outcome.',
+    ['lint_type', 'result'],
+)
+
 CONTRADICTION_RESOLUTION_APPLIED_TOTAL = Counter(
     'memex_contradiction_resolution_applied_total',
     'Winner-proposal applies by resolution action (bounded literals).',

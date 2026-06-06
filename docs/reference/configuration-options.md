@@ -770,6 +770,18 @@ Rule-based maintenance linter. Lives at `server.memory.lint`.
 | `enabled` | `bool` | `true` | `MEMEX_SERVER__MEMORY__LINT__ENABLED` | Enable periodic lint runs. |
 | `interval_seconds` | `int` (>= 60) | `21600` (6h) | `…__INTERVAL_SECONDS` | Interval between lint runs. |
 | `confidence_gate` | [`LintConfidenceGate`](#lintconfidencegate) | see below | `…__CONFIDENCE_GATE__*` | Confidence/variance gate for findings. |
+| `external_proposals` | [`ExternalLintProposalsConfig`](#externallintproposalsconfig) | see below | `…__EXTERNAL_PROPOSALS__*` | Bounds for externally-submitted lint proposals. |
+
+## ExternalLintProposalsConfig
+
+Bounds for externally-submitted lint proposals (the agent-skill ingress).
+Lives at `server.memory.lint.external_proposals`.
+
+| Key | Type | Default | Env var | Description |
+|---|---|---|---|---|
+| `cooldown_days` | `int` (>= 0) | `30` | `MEMEX_SERVER__MEMORY__LINT__EXTERNAL_PROPOSALS__COOLDOWN_DAYS` | Days after a resolution/dismissal during which an identical external proposal (same rule/target/vault) is suppressed. `0` disables the cooldown. |
+| `max_batch` | `int` (1–1000) | `100` | `…__MAX_BATCH` | Maximum proposals accepted in a single submission request. |
+| `require_vault` | `bool` | `true` | `…__REQUIRE_VAULT` | Reject external proposals without a vault — global (NULL-vault) findings stay internal-only, and the pending-dedup index does not deduplicate NULL vaults. When disabled, the resulting NULL-vault external findings resolve only via `no_op`/dismiss (mutating actions need `vaults_affected` evidence, a server-owned key submitters cannot set). |
 
 ## LintConfidenceGate
 

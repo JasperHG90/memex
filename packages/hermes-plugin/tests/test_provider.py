@@ -200,6 +200,8 @@ def test_get_tool_schemas_in_hybrid_mode(provider_with_stubbed_api):
         'memex_get_lint_flags',
         'memex_lint_apply_winner',
         'memex_lint_reverse_winner',
+        'memex_list_lint_actions',
+        'memex_submit_lint_proposal',
         # Tier A WS-locks (F9)
         'memex_memory_reconsolidate',
         'memex_memory_consolidate',
@@ -281,6 +283,8 @@ class TestGetToolSchemasBeforeInitialize:
             'memex_get_lint_flags',
             'memex_lint_apply_winner',
             'memex_lint_reverse_winner',
+            'memex_list_lint_actions',
+            'memex_submit_lint_proposal',
             # Tier A WS-locks (F9)
             'memex_memory_reconsolidate',
             'memex_memory_consolidate',
@@ -300,10 +304,10 @@ class TestGetToolSchemasBeforeInitialize:
         """A fresh provider with no config always exposes tools. Only an
         initialized provider whose config explicitly says ``context`` hides them.
         """
-        # Pre-init: full 47-tool set (Stream 1-5 baseline + Tier A
-        # quick-wins + diagnostics + lint (3) + locks + history).
+        # Pre-init: full 49-tool set (Stream 1-5 baseline + Tier A
+        # quick-wins + diagnostics + lint (5) + locks + history).
         p = MemexMemoryProvider()
-        assert len(p.get_tool_schemas()) == 47
+        assert len(p.get_tool_schemas()) == 49
 
         # After init in context mode: empty.
         monkeypatch.setenv('HERMES_HOME', str(tmp_path))

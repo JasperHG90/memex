@@ -400,11 +400,18 @@ async def test_store_chunks_batch_summary_in_upsert_set(mock_session):
 
 
 @pytest.mark.asyncio
-async def test_update_note_tags_casts_path_as_text_array(mock_session):
-    """Regression: jsonb_set path must be cast to text[] not varchar.
+async def test_update_note_tags_uses_single_element_path_literal(mock_session):
+    """Regression: jsonb_set's text[] path must be the 1-element array literal
+    ``'{tags}'``, NOT ``cast('{tags}', TEXT[])``.
 
-    See: https://github.com/JasperHG90/memex/issues/XXX
-    PostgreSQL's jsonb_set(jsonb, text[], jsonb) rejects varchar for the path arg.
+    ``cast('{tags}', TEXT[])`` CHAR-SPLITS the string into the 6-element path
+    ``{'{','t','a','g','s','}'}``; jsonb_set then never matches and silently
+    no-ops, dropping the tags. ``literal_column("'{tags}'")`` emits the Postgres
+    array literal Postgres coerces to a 1-element text[] in context. The value is
+    bound directly as JSONB (``literal(tags, JSONB)``) rather than
+    ``cast(json.dumps(tags), JSONB)``, which would double-encode into a JSONB
+    string scalar. End-to-end proof:
+    test_int_storage::test_update_note_tags_persists_tags_to_doc_metadata.
     """
     note_id = str(uuid4())
     tags = ['tag-a', 'tag-b']
@@ -418,6 +425,6 @@ async def test_update_note_tags_casts_path_as_text_array(mock_session):
     compiled = stmt.compile(dialect=pg_dialect.dialect())
     sql_text = str(compiled)
 
-    # The path argument must be cast to TEXT[] (not VARCHAR)
-    assert 'CAST' in sql_text
-    assert 'TEXT[]' in sql_text
+    # Path is the 1-element array literal — NOT a char-splitting CAST(... AS TEXT[]).
+    assert "'{tags}'" in sql_text
+    assert 'TEXT[]' not in sql_text

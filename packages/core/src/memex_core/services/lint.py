@@ -31,12 +31,24 @@ from typing import Any
 from uuid import UUID
 
 from pydantic import BaseModel
-from sqlalchemy import text
+from sqlalchemy import Text, cast, func, literal, literal_column, text, tuple_, update
+from sqlalchemy import select as sa_select
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID as PG_UUID
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import ProgrammingError
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlmodel import col, select
 
 from memex_core.memory._lint_utils import enum_value as _enum_value
-from memex_core.memory.sql_models import LintType
+from memex_core.memory.sql_models import (
+    Entity,
+    LintType,
+    MaintenanceProposal,
+    MemoryUnit,
+    MentalModel,
+    Note,
+)
 from memex_core.services.base import BaseService
 from memex_core.services.lint_confidence import (
     bulk_load_confidence_map,
@@ -75,29 +87,57 @@ class LintSubsystemNotInitializedError(RuntimeError):
         )
 
 
-# Correlated-subquery SELECT fragment that resolves a human-readable label
-# (+ a unit-body snippet) for a finding's target, per target_type — so reviewers
-# (and the agent surface) see a title/name instead of an opaque UUID. Each arm
-# is single-row (PK equality) and tolerant (no match → NULL → COALESCE falls
-# through). Assumes the ``maintenance_proposals`` row is aliased ``mp``. Shared
-# verbatim by ``LintService.get_findings`` and the HTTP ``/lint/findings``
-# endpoint so the two never drift.
-TARGET_ENRICHMENT_SQL = (
-    '(SELECT mu.text FROM memory_units mu '
-    "WHERE mp.target_type IN ('memory_unit', 'unit_entity') "
-    'AND mu.id::text = mp.target_id) AS target_text, '
-    'COALESCE('
-    '(SELECT n.title FROM memory_units mu LEFT JOIN notes n ON n.id = mu.note_id '
-    "WHERE mp.target_type IN ('memory_unit', 'unit_entity') AND mu.id::text = mp.target_id), "
+def _target_enrichment_columns() -> tuple[Any, Any]:
+    """``target_text`` + ``target_label`` correlated scalar subqueries.
+
+    Resolves a human-readable label (+ a unit-body snippet) for a finding's
+    target, polymorphic on :attr:`MaintenanceProposal.target_type` — so
+    reviewers (and the agent surface) see a title/name instead of an opaque
+    UUID. ``target_id`` is TEXT, joined to each table's UUID id via
+    ``CAST(id AS text)``. Each arm is single-row (PK equality) and tolerant
+    (no match → NULL → COALESCE falls through).
+
+    The scalar subqueries auto-correlate to the outer ``MaintenanceProposal``
+    in every query that selects from it (the subqueries reference
+    ``MaintenanceProposal`` columns the outer select already exposes). Shared
+    by :meth:`LintService.get_findings` and the HTTP ``/lint/findings``
+    endpoint so the two never drift.
+    """
+    mp = MaintenanceProposal
+    unit_types = ('memory_unit', 'unit_entity')
+    target_text = (
+        select(MemoryUnit.text)
+        .where(col(mp.target_type).in_(unit_types), cast(MemoryUnit.id, Text) == mp.target_id)
+        .scalar_subquery()
+        .label('target_text')
+    )
+    label_from_unit_note = (
+        select(Note.title)
+        .select_from(MemoryUnit)
+        .join(Note, Note.id == MemoryUnit.note_id, isouter=True)
+        .where(col(mp.target_type).in_(unit_types), cast(MemoryUnit.id, Text) == mp.target_id)
+        .scalar_subquery()
+    )
     # Note targets (e.g. inbox routing proposals) carry the note id directly.
-    '(SELECT n.title FROM notes n '
-    "WHERE mp.target_type = 'note' AND n.id::text = mp.target_id), "
-    '(SELECT mm.name FROM mental_models mm '
-    "WHERE mp.target_type = 'mental_model' AND mm.id::text = mp.target_id), "
-    '(SELECT e.canonical_name FROM entities e '
-    "WHERE mp.target_type = 'entity' AND e.id::text = mp.target_id)"
-    ') AS target_label'
-)
+    label_from_note = (
+        select(Note.title)
+        .where(col(mp.target_type) == 'note', cast(Note.id, Text) == mp.target_id)
+        .scalar_subquery()
+    )
+    label_from_mm = (
+        select(MentalModel.name)
+        .where(col(mp.target_type) == 'mental_model', cast(MentalModel.id, Text) == mp.target_id)
+        .scalar_subquery()
+    )
+    label_from_entity = (
+        select(Entity.canonical_name)
+        .where(col(mp.target_type) == 'entity', cast(Entity.id, Text) == mp.target_id)
+        .scalar_subquery()
+    )
+    target_label = func.coalesce(
+        label_from_unit_note, label_from_note, label_from_mm, label_from_entity
+    ).label('target_label')
+    return target_text, target_label
 
 
 class LintFindingDTO(BaseModel):
@@ -668,27 +708,83 @@ V1_RULES: tuple[RuleSpec, ...] = (
 
 _COOLDOWN_DAYS = 30
 
-_INSERT_FINDING_SQL = text("""
-    INSERT INTO maintenance_proposals (
-        vault_id, lint_type, target_type, target_id,
-        rule_name, evidence, suggested_action, status, source
+
+def _build_insert_finding_stmt(
+    *,
+    vault_id: str,
+    lint_type: str,
+    target_type: str,
+    target_id: str,
+    rule_name: str,
+    evidence: str,
+    suggested_action: str,
+) -> Any:
+    """Build the per-finding ``INSERT … SELECT … WHERE NOT EXISTS … ON CONFLICT``.
+
+    Mirrors :func:`lint_external.insert_external_proposal` (same single-statement
+    cooldown-guard + conflict-arbiter idiom) but with ``source='rule'`` and the
+    rule-emission cooldown. The SELECTed row, the cooldown ``NOT EXISTS``, and
+    the ``ON CONFLICT DO NOTHING`` are evaluated in ONE statement so a
+    concurrent resolution cannot slip between a separate cooldown SELECT and the
+    insert; every value is a bound parameter (no user-controlled interpolation).
+
+    ``evidence`` is the pre-serialised JSON string (see :func:`_json_dumps`),
+    cast to JSONB inside the statement to match the original
+    ``CAST(:evidence AS jsonb)``.
+    """
+    mp = MaintenanceProposal
+
+    # Post-resolution cooldown: a resolved/dismissed sibling within the
+    # cooldown window suppresses re-creation. Vault match is plain equality
+    # (the original used ``mp.vault_id = CAST(:vault_id AS uuid)``); the call
+    # site always passes a concrete (non-NULL) vault_id.
+    recent_resolution = (
+        sa_select(literal(1))
+        .where(
+            col(mp.rule_name) == rule_name,
+            col(mp.target_type) == target_type,
+            col(mp.target_id) == target_id,
+            col(mp.vault_id) == cast(literal(vault_id), PG_UUID(as_uuid=True)),
+            col(mp.status).in_(('resolved', 'dismissed')),
+            col(mp.resolved_at) > func.now() - func.make_interval(0, 0, 0, _COOLDOWN_DAYS),
+        )
+        .exists()
     )
-    SELECT
-        :vault_id, :lint_type, :target_type, :target_id,
-        :rule_name, CAST(:evidence AS jsonb), :suggested_action, 'pending', 'rule'
-    WHERE NOT EXISTS (
-        SELECT 1 FROM maintenance_proposals mp
-        WHERE mp.rule_name = :rule_name
-          AND mp.target_type = :target_type
-          AND mp.target_id = :target_id
-          AND mp.vault_id = CAST(:vault_id AS uuid)
-          AND mp.status IN ('resolved', 'dismissed')
-          AND mp.resolved_at > now() - interval '30 days'
+
+    source = sa_select(
+        cast(literal(vault_id), PG_UUID(as_uuid=True)).label('vault_id'),
+        literal(lint_type).label('lint_type'),
+        literal(target_type).label('target_type'),
+        literal(target_id).label('target_id'),
+        literal(rule_name).label('rule_name'),
+        cast(literal(evidence), JSONB).label('evidence'),
+        literal(suggested_action).label('suggested_action'),
+        literal('pending').label('status'),
+        literal('rule').label('source'),
+    ).where(~recent_resolution)
+
+    return (
+        pg_insert(mp)
+        .from_select(
+            [
+                'vault_id',
+                'lint_type',
+                'target_type',
+                'target_id',
+                'rule_name',
+                'evidence',
+                'suggested_action',
+                'status',
+                'source',
+            ],
+            source,
+        )
+        .on_conflict_do_nothing(
+            index_elements=['rule_name', 'target_type', 'target_id', 'vault_id'],
+            index_where=col(mp.status) == 'pending',
+        )
+        .returning(mp.id)
     )
-    ON CONFLICT (rule_name, target_type, target_id, vault_id)
-    WHERE status = 'pending'
-    DO NOTHING
-""")
 
 
 @dataclass
@@ -819,6 +915,10 @@ class LintService(BaseService):
             params: dict[str, Any] = {'vault_id': str(vault_id)}
             if spec.param_keys:
                 params.update(self._resolve_rule_params(spec.param_keys))
+            # SQL-by-design: lint rules ARE defined as parameterised SQL detection
+            # strings (``RuleSpec.select_sql``); the rule engine executes each
+            # verbatim. Intentionally NOT ported to SQLModel — the rules' query
+            # surface is their authored content, not a hand-built statement.
             result = await session.execute(text(spec.select_sql), params)
             rows = result.mappings().all()
             # Bulk-fetch (confidence, evidence_count) for every candidate
@@ -865,18 +965,21 @@ class LintService(BaseService):
                 ):
                     continue
                 ins = await session.execute(
-                    _INSERT_FINDING_SQL,
-                    {
-                        'vault_id': str(vault_id),
-                        'lint_type': spec.lint_type.value,
-                        'target_type': spec.target_type,
-                        'target_id': row['target_id'],
-                        'rule_name': spec.name,
-                        'evidence': _json_dumps(row['evidence']),
-                        'suggested_action': spec.suggested_action,
-                    },
+                    _build_insert_finding_stmt(
+                        vault_id=str(vault_id),
+                        lint_type=spec.lint_type.value,
+                        target_type=spec.target_type,
+                        target_id=row['target_id'],
+                        rule_name=spec.name,
+                        evidence=_json_dumps(row['evidence']),
+                        suggested_action=spec.suggested_action,
+                    )
                 )
-                if ins.rowcount:
+                # RETURNING id yields the new row's id iff the SELECT survived the
+                # cooldown NOT EXISTS and the row did not conflict with a pending
+                # sibling — same 0-or-1 "did we insert" signal the prior
+                # ``rowcount`` check consumed.
+                if ins.scalar_one_or_none() is not None:
                     emitted += 1
             metrics.LINT_FINDINGS_TOTAL.labels(
                 rule_name=spec.name,
@@ -951,23 +1054,22 @@ class LintService(BaseService):
         """
         # Exclude ``llm_deferred`` bookkeeping rows — they are not operator-
         # actionable findings (see ``lint_llm.process_deferred``).
-        if vault_id is None:
-            stmt = text(
-                'SELECT count(*) FROM maintenance_proposals '
-                "WHERE status = 'pending' AND vault_id IS NULL "
-                "AND rule_name != 'llm_deferred'"
+        mp = MaintenanceProposal
+        vault_clause = (
+            col(mp.vault_id).is_(None) if vault_id is None else col(mp.vault_id) == vault_id
+        )
+        stmt = (
+            select(func.count())
+            .select_from(mp)
+            .where(
+                col(mp.status) == 'pending',
+                col(mp.rule_name) != 'llm_deferred',
+                vault_clause,
             )
-            params: dict[str, Any] = {}
-        else:
-            stmt = text(
-                'SELECT count(*) FROM maintenance_proposals '
-                "WHERE status = 'pending' AND vault_id = :v "
-                "AND rule_name != 'llm_deferred'"
-            )
-            params = {'v': str(vault_id)}
+        )
 
         async with self.metastore.session() as session:
-            result = await session.execute(stmt, params)
+            result = await session.execute(stmt)
             return int(result.scalar() or 0)
 
     async def get_finding_vault_id(self, finding_id: UUID) -> tuple[bool, UUID | None]:
@@ -980,8 +1082,9 @@ class LintService(BaseService):
         """
         async with self.metastore.session() as session:
             result = await session.execute(
-                text('SELECT vault_id FROM maintenance_proposals WHERE id = :id'),
-                {'id': str(finding_id)},
+                select(MaintenanceProposal.vault_id).where(
+                    col(MaintenanceProposal.id) == finding_id
+                )
             )
             row = result.first()
             if row is None:
@@ -996,6 +1099,7 @@ class LintService(BaseService):
         actor: str | None = None,
         vault_id: UUID | None = None,
         resolution: dict[str, Any] | None = None,
+        session: AsyncSession | None = None,
     ) -> bool:
         """Flip a finding's status to ``resolved`` or ``dismissed``.
 
@@ -1016,47 +1120,51 @@ class LintService(BaseService):
         atomic write keeps the reviewer's note, the executed action, and
         the prior_state snapshot tied to the status flip (no half-states
         where status='resolved' but evidence still says 'no resolution').
+
+        When ``session`` is supplied the UPDATE runs in the caller's
+        transaction and is NOT committed here — the caller commits. The
+        resolve route uses this to flip status inside the same transaction
+        that holds a ``SELECT … FOR UPDATE`` lock on the row, so a
+        concurrent resolve cannot slip between the action and the flip.
         """
         if new_status not in ('resolved', 'dismissed'):
             raise ValueError(f"new_status must be 'resolved' or 'dismissed', got {new_status!r}")
 
-        params: dict[str, Any] = {
-            'new': new_status,
-            'id': str(finding_id),
-            'actor': actor,
+        mp = MaintenanceProposal
+        values: dict[str, Any] = {
+            'status': new_status,
+            'resolved_at': func.now(),
+            'resolved_by': actor,
         }
-        where_extra = ''
-        if vault_id is not None:
-            where_extra = ' AND vault_id = :vault_id'
-            params['vault_id'] = str(vault_id)
-
         if resolution is not None:
-            resolution_assignment = (
-                ", evidence = jsonb_set(COALESCE(evidence, '{}'::jsonb), "
-                "'{resolution}', CAST(:resolution_json AS jsonb), true)"
+            # ``evidence = jsonb_set(COALESCE(evidence, '{}'::jsonb), '{resolution}',
+            # CAST(:resolution_json AS jsonb), true)`` — write the resolution dict
+            # verbatim under ``evidence.resolution`` in the same UPDATE so the
+            # status flip and the resolution payload are atomic. The path
+            # ``'{resolution}'`` is emitted inline (``literal_column``) exactly as
+            # the original SQL literal so Postgres coerces it to ``text[]`` in the
+            # function-arg context; the dynamic payload is a bound, JSONB-cast param.
+            values['evidence'] = func.jsonb_set(
+                func.coalesce(col(mp.evidence), cast(literal('{}'), JSONB)),
+                literal_column("'{resolution}'"),
+                cast(literal(json.dumps(resolution)), JSONB),
+                literal(True),
             )
-            params['resolution_json'] = json.dumps(resolution)
-        else:
-            resolution_assignment = ''
 
-        async with self.metastore.session() as session:
-            # Safety invariant for S608: ``where_extra`` is either '' or the
-            # literal string ' AND vault_id = :vault_id'. ``resolution_assignment``
-            # is either '' or a fixed literal that adds an ``evidence = ...``
-            # SET clause where the JSONB payload is bound as :resolution_json.
-            # No user-controlled value is ever interpolated into the SQL
-            # string — ``new_status`` is allowlist-validated on L509;
-            # everything else flows through the bound ``params`` dict.
-            result = await session.execute(
-                text(
-                    'UPDATE maintenance_proposals '  # noqa: S608
-                    'SET status = :new, resolved_at = now(), resolved_by = :actor'
-                    f'{resolution_assignment} '
-                    f"WHERE id = :id AND status = 'pending'{where_extra}"
-                ),
-                params,
-            )
-            await session.commit()
+        stmt = (
+            update(mp).where(col(mp.id) == finding_id, col(mp.status) == 'pending').values(**values)
+        )
+        if vault_id is not None:
+            # Defense-in-depth cross-vault check (was ``AND vault_id = :vault_id``).
+            stmt = stmt.where(col(mp.vault_id) == vault_id)
+        if session is not None:
+            # Caller owns the transaction (e.g. holds a FOR UPDATE lock) and
+            # commits; we only stage the UPDATE.
+            result = await session.execute(stmt)
+            return bool(result.rowcount)
+        async with self.metastore.session() as own_session:
+            result = await own_session.execute(stmt)
+            await own_session.commit()
             return bool(result.rowcount)
 
     async def get_findings(
@@ -1102,48 +1210,38 @@ class LintService(BaseService):
         fetch_limit = capped_limit + 1
         # Exclude ``llm_deferred`` bookkeeping rows — internal cost-cap deferrals
         # retried by ``process_deferred``, not operator-actionable findings.
-        clauses: list[str] = ['status = :status', "rule_name != 'llm_deferred'"]
-        params: dict[str, Any] = {'status': status, 'fetch_limit': fetch_limit}
+        tt, tl = _target_enrichment_columns()
+        mp = MaintenanceProposal
+        stmt = select(
+            mp.id,
+            mp.vault_id,
+            mp.lint_type,
+            mp.target_type,
+            mp.target_id,
+            mp.rule_name,
+            mp.evidence,
+            mp.suggested_action,
+            mp.status,
+            mp.source,
+            mp.created_at,
+            mp.resolved_at,
+            mp.resolved_by,
+            tt,
+            tl,
+        ).where(col(mp.status) == status, col(mp.rule_name) != 'llm_deferred')
         if vault_id is not None:
-            clauses.append('vault_id = CAST(:vault_id AS uuid)')
-            params['vault_id'] = str(vault_id)
+            stmt = stmt.where(col(mp.vault_id) == vault_id)
         if lint_type is not None:
-            clauses.append('lint_type = :lint_type')
-            params['lint_type'] = lint_type
+            stmt = stmt.where(col(mp.lint_type) == lint_type)
         if target_type is not None:
-            clauses.append('target_type = :target_type')
-            params['target_type'] = target_type
+            stmt = stmt.where(col(mp.target_type) == target_type)
         if cursor_ts is not None and cursor_id is not None:
-            clauses.append('(created_at, id) < (:cursor_ts, CAST(:cursor_id AS uuid))')
-            params['cursor_ts'] = cursor_ts
-            params['cursor_id'] = str(cursor_id)
-
-        # Safety invariant for S608: every entry appended to ``clauses`` (lines
-        # 575-589) is a hard-coded literal SQL fragment — no f-string contains
-        # a value derived from ``status``, ``vault_id``, ``lint_type``,
-        # ``target_type``, or ``cursor``. All user-controlled values flow
-        # exclusively through the ``params`` dict via :name bind parameters.
-        # ``status`` is allowlist-validated on L557 and ``limit`` is bounded on
-        # L559-561, so ``where_sql`` is provably constructed from a closed set
-        # of literal strings.
-        #
-        # noqa placement: ruff anchors S608 on the FIRST physical line of the
-        # multi-line concatenated string (the line below), so the noqa is on
-        # the correct line. Verified by stripping the marker — ruff reports
-        # `lint.py:611:13` (the `f'SELECT ...'` line) and `--^` underlines
-        # through the closing string.
-        where_sql = ' AND '.join(clauses)
-        stmt = text(
-            f'SELECT mp.id, mp.vault_id, mp.lint_type, mp.target_type, mp.target_id, '  # noqa: S608
-            f'mp.rule_name, mp.evidence, mp.suggested_action, mp.status, mp.source, '
-            f'mp.created_at, mp.resolved_at, mp.resolved_by, {TARGET_ENRICHMENT_SQL} '
-            f'FROM maintenance_proposals mp WHERE {where_sql} '
-            'ORDER BY mp.created_at DESC, mp.id DESC LIMIT :fetch_limit'
-        )
+            stmt = stmt.where(tuple_(mp.created_at, mp.id) < tuple_(cursor_ts, cursor_id))
+        stmt = stmt.order_by(col(mp.created_at).desc(), col(mp.id).desc()).limit(fetch_limit)
 
         async with self.metastore.session() as session:
             try:
-                result = await session.execute(stmt, params)
+                result = await session.execute(stmt)
                 rows = result.mappings().all()
             except ProgrammingError as exc:
                 if 'maintenance_proposals' in str(exc).lower():

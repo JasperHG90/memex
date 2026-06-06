@@ -137,6 +137,7 @@ class OutcomeService:
         retrieved_set_size: int | None = None,
         exploration_tagged: bool = False,
         coverage_check_mode: Literal['strict', 'permissive'] = 'permissive',
+        commit: bool = True,
     ) -> dict[str, Any]:
         """Record an outcome against memory units.
 
@@ -335,8 +336,16 @@ class OutcomeService:
 
         # Single commit covers all counter updates + audit rows so the
         # co-occurrence invariant across MemoryUnit / UnitEntity / MentalModel
-        # holds atomically.
-        await session.commit()
+        # holds atomically. commit=False lets a caller fold this write into its
+        # own transaction (lint resolve, so the outcome is atomic with the
+        # finding status flip) and own the commit.
+        # Flush BEFORE refresh: audit_row needs its server-default id and must be
+        # persistent for session.refresh() to read it. Under commit=False
+        # (autoflush off) nothing else flushes it, so refresh would otherwise
+        # raise InvalidRequestError ('not persistent within this Session').
+        await session.flush()
+        if commit:
+            await session.commit()
         await session.refresh(audit_row)
 
         # Observe Memory Worth scores post-commit (read-only).

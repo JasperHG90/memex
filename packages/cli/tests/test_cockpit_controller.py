@@ -278,6 +278,29 @@ def test_options_for_rule_falls_back_for_unknown_rule() -> None:
     assert '' in ids
 
 
+def test_orphan_mental_model_does_not_offer_delete_mental_model() -> None:
+    """delete_mental_model is entity-only; a mental_model-typed orphan finding
+    must never surface it.
+
+    Pins fix #2's client-side half: the static action catalogue marks
+    delete_mental_model ``applicable_target_types=('entity',)`` (was
+    ``('entity', 'mental_model')``), so the target-type filter in
+    options_for_rule withholds it from a mental_model target. A
+    mental_model-typed finding carries target_id = mental_model.id, which the
+    server's delete_mental_model (keyed on entity_id) cannot honour — offering
+    it would dead-end the reviewer."""
+    from memex_cli.cockpit.controller import _ACTION_CATALOGUE
+
+    # Catalogue contract: the action is entity-only (the fix-#2 change).
+    _, _, applicable_types, _ = _ACTION_CATALOGUE['delete_mental_model']
+    assert applicable_types == ('entity',)
+    assert 'mental_model' not in applicable_types
+
+    # And the rule menu never offers it for a mental_model target.
+    option_ids = [opt.action_id for opt in options_for_rule('orphan_mental_model', 'mental_model')]
+    assert 'delete_mental_model' not in option_ids
+
+
 def test_options_have_at_most_one_recommended() -> None:
     for rule in [
         'cold_low_mw_unit',

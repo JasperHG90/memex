@@ -12,7 +12,7 @@ MEMEX_GET_LINT_FLAGS_DESCRIPTION = (
     '- vault_id (optional): scope to a single vault. Defaults to the active write vault '
     'when omitted (vault-scoping invariant — never falls through to a global '
     'all-vault view).\n'
-    '- lint_type (optional): structural | quality | governance | schema\n'
+    '- lint_type (optional): structural | quality | governance | schema | routing\n'
     '- status (optional): pending | resolved | dismissed (default: pending)\n'
     '- limit (default 20)\n'
     '\n'

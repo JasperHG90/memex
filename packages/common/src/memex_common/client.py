@@ -5,12 +5,15 @@ Used by the CLI to interact with a running Memex server.
 
 import datetime as dt
 import logging
-from typing import Any, AsyncGenerator
+from typing import TYPE_CHECKING, Any, AsyncGenerator
 
 from uuid import UUID
 
 import httpx
 from pydantic import BaseModel
+
+if TYPE_CHECKING:
+    from memex_common.lint import LintProposal
 
 from memex_common.kv_utils import is_procedure_key
 from memex_common.vault_utils import resolve_vault_list
@@ -1640,6 +1643,42 @@ class RemoteMemexAPI:
         if vault_id is not None:
             params['vault_id'] = vault_id
         return await self._get('lint/status', params=params)
+
+    async def list_lint_actions(self) -> dict[str, Any]:
+        """The closed proposal-action catalogue with per-action params schemas."""
+        return await self._get('lint/actions')
+
+    async def submit_lint_proposals(
+        self,
+        proposals: 'list[LintProposal | dict[str, Any]]',
+    ) -> dict[str, Any]:
+        """Submit external lint proposals (batch, partial-success).
+
+        Accepts :class:`memex_common.lint.LintProposal` instances (build
+        them directly or via a :class:`memex_common.lint.LintRule` subclass)
+        or raw dicts. Each result item carries ``status`` ∈ {'created',
+        'deduplicated', 'cooldown_suppressed', 'rejected'} plus
+        ``finding_id`` / ``detail``.
+        """
+        from memex_common.lint import LintProposal
+
+        serialised = [
+            p.model_dump(mode='json') if isinstance(p, LintProposal) else p for p in proposals
+        ]
+        return await self._post('lint/proposals', data={'proposals': serialised})
+
+    async def lint_preview_action(
+        self,
+        finding_id: str,
+        *,
+        action: str,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Read-only blast-radius preview of a canned action against a finding."""
+        return await self._post(
+            f'lint/findings/{finding_id}/preview',
+            data={'action': action, 'params': params or {}},
+        )
 
     async def lint_findings(
         self,

@@ -116,3 +116,47 @@ async def test_reverse_without_source_raises():
             vault_id=uuid4(),
             actor='tester',
         )
+
+
+@pytest.mark.asyncio
+async def test_route_global_noop_stores_none_not_string():
+    """A GLOBAL (NULL-vault) finding whose migrate is a no-op must record
+    prior_state['source_vault_id'] as None — NOT the literal string 'None'.
+
+    REGRESSION: execute stored ``str(source_vault_id)``. When the finding has
+    no vault (vault_id=None) AND migrate_note returns no source (source==target
+    no-op), source_vault_id stays None and ``str(None)`` persisted the literal
+    'None'. reverse() then read a TRUTHY 'None' string and called UUID('None'),
+    which raises ValueError -> 500. The fix stores None, so reverse refuses
+    cleanly with ProposalActionError instead of blowing up. This pins both
+    halves: prior_state is None (not 'None'), and reverse raises the action
+    error (not a bare ValueError)."""
+    note_id, target_vault = uuid4(), uuid4()
+    api = MagicMock()
+    # No-op migrate: source == target, so migrate_note reports no source vault.
+    api.migrate_note = AsyncMock(return_value={'source_vault_id': None, 'status': 'noop'})
+    api.inbox_router.record_feedback = AsyncMock()
+
+    res = await ACTION.execute(
+        api,
+        {'target_vault_id': str(target_vault)},
+        target_id=str(note_id),
+        vault_id=None,  # GLOBAL finding: no source vault to fall back to.
+        actor='tester',
+    )
+    # The load-bearing assertion: None, never the string 'None'.
+    assert res.prior_state['source_vault_id'] is None
+    assert res.prior_state['source_vault_id'] != 'None'
+
+    # reverse must refuse cleanly (ProposalActionError), NOT raise ValueError
+    # from UUID('None') as the pre-fix string would have caused.
+    with pytest.raises(ProposalActionError):
+        await ACTION.reverse(
+            api,
+            {},
+            res.applied_state,
+            res.prior_state,
+            target_id=str(note_id),
+            vault_id=None,
+            actor='tester',
+        )

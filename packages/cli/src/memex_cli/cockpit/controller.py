@@ -12,7 +12,7 @@ evidence-carried options and fall back to the static dict.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
 
 
@@ -312,13 +312,15 @@ _DEFAULT_OPTIONS_BY_RULE: dict[str, list[CockpitOption]] = {
 # Inlined here on purpose — importing memex_core.services to read the live
 # registry transitively loads onnxruntime via SearchService / reranker, which
 # adds ~1.5s to every cockpit launch for information the cockpit already knows.
-# Adding a new server-side action means adding a row here too; the integration
-# tests in packages/core/tests/integration cover the round-trip end to end.
+# This static dict is the OFFLINE FALLBACK; ``refresh_action_catalogue`` swaps
+# in the server's live registry (GET /lint/actions) at cockpit startup so new
+# server-side actions appear without a CLI release. The integration tests in
+# packages/core/tests/integration cover the round-trip end to end.
 _ACTION_CATALOGUE: dict[str, tuple[str, str, tuple[str, ...], bool]] = {
     'no_op': (
         'No-op (record only)',
         'Record the verdict and any reviewer note without touching the target.',
-        ('memory_unit', 'mental_model', 'note', 'unit_entity'),
+        ('memory_unit', 'mental_model', 'note', 'unit_entity', 'entity', 'kv'),
         True,
     ),
     'deprioritize_unit': (
@@ -339,7 +341,121 @@ _ACTION_CATALOGUE: dict[str, tuple[str, str, tuple[str, ...], bool]] = {
         ('mental_model',),
         True,
     ),
+    'route_note_to_vault': (
+        'Route note to vault',
+        'Migrate the note to params.target_vault_id; undo migrates it back.',
+        ('note',),
+        True,
+    ),
+    'set_note_status': (
+        'Set note status',
+        "Lifecycle transition: 'superseded' stales units, 'archived' deprioritizes, "
+        "'active' reactivates.",
+        ('note',),
+        True,
+    ),
+    'update_note_title': (
+        'Update note title',
+        'Replace the note title; embedded title facts re-extract.',
+        ('note',),
+        True,
+    ),
+    'update_note_date': (
+        'Update note date',
+        'Replace the publish date; child unit timestamps cascade.',
+        ('note',),
+        True,
+    ),
+    'merge_entities': (
+        'Merge entities into winner',
+        'Fold member entities onto the chosen winner; losers hard-deleted. NOT reversible.',
+        ('entity',),
+        False,
+    ),
+    'collapse_into_new_entity': (
+        'Collapse into a new entity',
+        'Create a new entity and fold ALL members onto it; originals hard-deleted. NOT reversible.',
+        ('entity',),
+        False,
+    ),
+    'kv_delete': (
+        'Delete KV entry',
+        'Hard-delete the KV entry including procedure history. NOT reversible.',
+        ('kv',),
+        False,
+    ),
+    'record_outcome': (
+        'Record outcome on unit',
+        'Append helpful / not_helpful / not_used to the Memory-Worth ledger. NOT reversible.',
+        ('memory_unit',),
+        False,
+    ),
+    'delete_note': (
+        'Delete note (permanent)',
+        'Hard-delete the note + units + chunks + assets. NOT reversible.',
+        ('note',),
+        False,
+    ),
+    'delete_entity': (
+        'Delete entity (permanent)',
+        'Hard-delete the entity + mental models + aliases + links. NOT reversible.',
+        ('entity',),
+        False,
+    ),
+    'delete_mental_model': (
+        'Delete mental model (permanent)',
+        "Hard-delete this vault's mental model; the entity is untouched. NOT reversible.",
+        ('entity',),
+        False,
+    ),
 }
+
+# action_id → params JSON schema (or None), populated alongside the catalogue
+# by ``refresh_action_catalogue``. Static fallback carries no schemas — the
+# review flows degrade to free-form params when offline.
+_ACTION_PARAMS_SCHEMA: dict[str, dict[str, Any] | None] = {}
+
+
+def refresh_action_catalogue(descriptors: list[dict[str, Any]]) -> None:
+    """Replace the client-side catalogue with the server's live registry.
+
+    ``descriptors`` is the ``actions`` list from ``GET /lint/actions``.
+    Malformed entries are skipped defensively; an empty list is a no-op so
+    a degenerate server response can never blank the menus.
+    """
+    parsed: dict[str, tuple[str, str, tuple[str, ...], bool]] = {}
+    schemas: dict[str, dict[str, Any] | None] = {}
+    for entry in descriptors:
+        if not isinstance(entry, dict):
+            continue
+        action_id = str(entry.get('id') or '')
+        if not action_id:
+            continue
+        parsed[action_id] = (
+            str(entry.get('name') or action_id),
+            str(entry.get('description') or ''),
+            tuple(str(t) for t in (entry.get('applicable_target_types') or ())),
+            bool(entry.get('reversible')),
+        )
+        schema = entry.get('params_schema')
+        schemas[action_id] = schema if isinstance(schema, dict) else None
+    if not parsed:
+        return
+    _ACTION_CATALOGUE.clear()
+    _ACTION_CATALOGUE.update(parsed)
+    _ACTION_PARAMS_SCHEMA.clear()
+    _ACTION_PARAMS_SCHEMA.update(schemas)
+
+
+def action_params_schema(action_id: str) -> dict[str, Any] | None:
+    """JSON schema for an action's params, when the live catalogue carried one."""
+    return _ACTION_PARAMS_SCHEMA.get(action_id)
+
+
+def action_is_reversible(action_id: str) -> bool | None:
+    """Reversibility per the catalogue; None when the action is unknown."""
+    descriptor = _ACTION_CATALOGUE.get(action_id)
+    return descriptor[3] if descriptor else None
 
 
 def options_for_contradiction(
@@ -475,6 +591,37 @@ def options_for_rule(rule_name: str, target_type: str) -> list[CockpitOption]:
     return filtered
 
 
+def proposed_action_option(proposal: CockpitProposal) -> CockpitOption | None:
+    """The submitter's suggested action, when an external proposal carries one.
+
+    External proposals stamp ``evidence.proposed_action = {action_name,
+    params}`` at submission (already validated server-side against the
+    registry). Surface it as the recommended option so the reviewer sees the
+    submitter's intent first — but it is advisory: every other option stays
+    available.
+    """
+    suggestion = proposal.raw_evidence.get('proposed_action')
+    if not isinstance(suggestion, dict):
+        return None
+    action_id = str(suggestion.get('action_name') or '')
+    descriptor = _ACTION_CATALOGUE.get(action_id)
+    if descriptor is None:
+        return None
+    label, description, applicable_types, reversible = descriptor
+    if proposal.target_type not in applicable_types:
+        return None
+    params = suggestion.get('params')
+    return CockpitOption(
+        action_id=action_id,
+        label=f'{label} (suggested by submitter)',
+        summary=description,
+        effect='Executes the catalogue action with the submitter-supplied params.',
+        reversible=reversible,
+        recommended=True,
+        params=dict(params) if isinstance(params, dict) else None,
+    )
+
+
 def options_for_proposal(proposal: CockpitProposal) -> list[CockpitOption]:
     """Dispatch to the correct option builder for a proposal's rule/target.
 
@@ -483,12 +630,28 @@ def options_for_proposal(proposal: CockpitProposal) -> list[CockpitOption]:
     ``options_for_rule`` and therefore never offered the dynamically-built
     inbox-route / contradiction actions (which carry per-proposal ``params``),
     so a batch could never actually route a note.
+
+    An external proposal's ``evidence.proposed_action`` is prepended as the
+    recommended option; rule defaults follow (de-duplicated, demoted to
+    non-recommended so the submitter's suggestion wins batch-accept).
     """
     if proposal.rule_name == 'llm_semantic_contradiction':
-        return options_for_contradiction(proposal)
-    if proposal.rule_name == 'inbox_vault_route':
-        return options_for_inbox_route(proposal)
-    return options_for_rule(proposal.rule_name, proposal.target_type)
+        base = options_for_contradiction(proposal)
+    elif proposal.rule_name == 'inbox_vault_route':
+        base = options_for_inbox_route(proposal)
+    else:
+        base = options_for_rule(proposal.rule_name, proposal.target_type)
+    suggested = proposed_action_option(proposal)
+    if suggested is None:
+        return base
+    rest: list[CockpitOption] = []
+    for option in base:
+        if option.action_id == suggested.action_id and option.params == suggested.params:
+            continue
+        if option.recommended:
+            option = replace(option, recommended=False)
+        rest.append(option)
+    return [suggested, *rest]
 
 
 def recommended_resolve_option(proposal: CockpitProposal) -> CockpitOption | None:
@@ -667,6 +830,16 @@ class CockpitClient(Protocol):
 
     async def lint_flag(self, finding_id: str) -> dict[str, Any]: ...
 
+    async def list_lint_actions(self) -> dict[str, Any]: ...
+
+    async def lint_preview_action(
+        self,
+        finding_id: str,
+        *,
+        action: str,
+        params: dict[str, Any] | None = None,
+    ) -> dict[str, Any]: ...
+
     async def get_memory_unit(self, unit_id: str) -> Any: ...
 
     async def get_note(self, note_id: Any) -> Any: ...
@@ -692,6 +865,7 @@ class CockpitController:
         self._client = client
         self._vault_id = vault_id
         self._vault_name_cache: dict[str, str] = {}
+        self._catalogue_loaded = False
 
     async def resolve_vault_name(self, vault_id: str) -> str:
         """Resolve a vault UUID to its human-readable name.
@@ -713,6 +887,9 @@ class CockpitController:
 
     async def fetch_pending(self, *, limit: int = 50) -> list[CockpitProposal]:
         """Fetch pending proposals, LLM-first then rule, newest first within tier."""
+        # First fetch also swaps the static action catalogue for the server's
+        # live registry, so the menus track new server-side actions.
+        await self.load_action_catalogue()
         payload = await self._client.lint_findings(
             vault_id=self._vault_id,
             status='pending',
@@ -770,6 +947,40 @@ class CockpitController:
     async def flag_finding(self, finding_id: str) -> dict[str, Any]:
         """Toggle the flagged_at bookmark on a finding."""
         return await self._client.lint_flag(finding_id)
+
+    async def load_action_catalogue(self) -> None:
+        """Swap the static action catalogue for the server's live registry.
+
+        Idempotent per controller; failures keep the static fallback so the
+        cockpit stays usable against older servers.
+        """
+        if self._catalogue_loaded:
+            return
+        self._catalogue_loaded = True
+        try:
+            payload = await self._client.list_lint_actions()
+        except Exception:  # noqa: BLE001 - offline fallback is the contract
+            return
+        actions = payload.get('actions') if isinstance(payload, dict) else None
+        if isinstance(actions, list):
+            refresh_action_catalogue(actions)
+
+    async def preview_action(
+        self,
+        finding_id: str,
+        *,
+        action_id: str,
+        params: dict[str, Any] | None = None,
+    ) -> str | None:
+        """Server-side blast-radius preview; None when unavailable."""
+        try:
+            payload = await self._client.lint_preview_action(
+                finding_id, action=action_id, params=params
+            )
+        except Exception:  # noqa: BLE001 - preview is advisory, never blocking
+            return None
+        preview = payload.get('preview') if isinstance(payload, dict) else None
+        return str(preview) if preview else None
 
     async def fetch_unit_texts(self, unit_ids: list[str]) -> dict[str, str]:
         """Fetch the text body of one or more memory units by ID.

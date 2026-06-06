@@ -28,7 +28,13 @@ def test_schema_advertises_documented_parameters() -> None:
     """The Hermes schema mirrors the MCP signature exactly."""
     props = GET_LINT_FLAGS_SCHEMA['parameters']['properties']
     assert set(props.keys()) == {'vault_id', 'lint_type', 'status', 'limit', 'cursor'}
-    assert props['lint_type']['enum'] == ['structural', 'quality', 'governance', 'schema']
+    assert props['lint_type']['enum'] == [
+        'structural',
+        'quality',
+        'governance',
+        'schema',
+        'routing',
+    ]
     assert props['status']['enum'] == ['pending', 'resolved', 'dismissed']
     assert props['status']['default'] == 'pending'
     assert props['limit']['default'] == 20

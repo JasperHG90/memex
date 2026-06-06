@@ -43,6 +43,7 @@ from memex_cli.cockpit.controller import (
     UnitDetail,
     UnitLineage,
     UnitMeta,
+    action_is_reversible,
     options_for_proposal,
     recommended_resolve_option,
 )
@@ -378,6 +379,38 @@ class ReverseScreen(ModalScreen[str | None]):
         self.dismiss(text or None)
 
 
+class ConfirmIrreversibleScreen(ModalScreen[bool]):
+    """Blast-radius confirmation for forward-only catalogue actions.
+
+    Rendered before executing any action the catalogue marks
+    ``reversible=False`` — the preview text comes live from the server
+    (``POST /lint/findings/{id}/preview``) so the reviewer sees what would
+    actually be destroyed, not a canned description.
+    """
+
+    BINDINGS = [
+        Binding('y', 'dismiss(True)', 'Execute'),
+        Binding('n', 'dismiss(False)', 'Cancel'),
+        Binding('escape', 'dismiss(False)', 'Cancel'),
+    ]
+
+    def __init__(self, action_id: str, preview_text: str) -> None:
+        super().__init__()
+        self._action_id = action_id
+        self._preview_text = preview_text
+
+    def compose(self) -> ComposeResult:
+        yield Vertical(
+            Label(
+                f'[bold red]{self._action_id} is NOT reversible.[/bold red]',
+                id='confirm-title',
+            ),
+            Static(self._preview_text, id='confirm-preview'),
+            Label('[dim][y] execute · [n]/[Esc] cancel[/dim]', id='confirm-help'),
+            id='confirm-modal',
+        )
+
+
 # ---------------------------------------------------------------------------
 # Main app
 # ---------------------------------------------------------------------------
@@ -461,6 +494,9 @@ class ProposalCockpitApp(App):
         # COLLAPSE mode state (entity_collapse_cluster member selection).
         self._collapse_proposal: CockpitProposal | None = None
         self._collapse_winner_id: str | None = None
+        # When True the note input is collecting the NEW canonical name for a
+        # collapse-into-new-entity merge, not a reviewer note.
+        self._collapse_new_name_pending: bool = False
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=False)
@@ -563,7 +599,9 @@ class ProposalCockpitApp(App):
             'review': '[↑↓] Navigate  [Enter] Confirm  [Esc] Back',
             'note': '[Enter] Submit  [Shift+Enter] Newline  [Esc] Cancel',
             'detail': '[n] View note  [Tab] Cycle units  [Esc] Back',
-            'collapse': ('[Space] in/out  [w] winner  [a] apply  [x] dismiss  [Esc] cancel'),
+            'collapse': (
+                '[Space] in/out  [w] winner  [a] apply  [n] new entity  [x] dismiss  [Esc] cancel'
+            ),
         }
         hint = hints.get(self.mode, '')
         self.query_one('#status-bar', Static).update(f' [dim]{hint}[/dim]')
@@ -638,7 +676,7 @@ class ProposalCockpitApp(App):
             # For orphan_mental_model, show the entity name prominently.
             entity_name = proposal.raw_evidence.get('entity_name')
             if entity_name:
-                body_lines.append(f'[bold]Entity: "{entity_name}"[/bold]')
+                body_lines.append(f'[bold]Entity: "{_esc(str(entity_name))}"[/bold]')
 
             # Fetch and display unit metadata for the target.
             target_meta = await self._controller.fetch_unit_metadata([proposal.target_id])
@@ -670,7 +708,7 @@ class ProposalCockpitApp(App):
             body_lines.append(f'[dim]related: {n} {unit_word} cited[/dim]')
         if proposal.suggested_action:
             body_lines.append('')
-            body_lines.append(f'[dim]suggested: {proposal.suggested_action}[/dim]')
+            body_lines.append(f'[dim]suggested: {_esc(proposal.suggested_action)}[/dim]')
         body_lines.append('')
         body_lines.append('[dim]' + '─' * 72 + '[/dim]')
         self.query_one('#detail-body', Static).update('\n'.join(body_lines))
@@ -822,7 +860,7 @@ class ProposalCockpitApp(App):
             body_lines.append(f'[dim]{n} more related {unit_word} not shown[/dim]')
         if proposal.suggested_action:
             body_lines.append('')
-            body_lines.append(f'[dim]suggested: {proposal.suggested_action}[/dim]')
+            body_lines.append(f'[dim]suggested: {_esc(proposal.suggested_action)}[/dim]')
         body_lines.append('')
         body_lines.append('[dim]' + '─' * 72 + '[/dim]')
 
@@ -951,11 +989,32 @@ class ProposalCockpitApp(App):
             self._enter_note_mode()
 
     def _on__note_input_submitted(self, event: _NoteInput.Submitted) -> None:
+        if self._collapse_new_name_pending:
+            self._collapse_new_name_pending = False
+            self.query_one('#note-section').remove_class('visible')
+            new_name = (event.text or '').strip()
+            proposal = self._collapse_proposal
+            if not new_name or proposal is None:
+                self._show_status('Merge cancelled — a non-empty name is required.', error=True)
+                self.mode = 'collapse'
+                self._update_footer()
+                return
+            self.run_worker(
+                self._apply_collapse_new_async(proposal, new_name, self._collapse_included_ids()),
+                exclusive=True,
+                name='apply_collapse_new',
+            )
+            return
         self._pending_note = event.text or None
         self._submit_verdict()
 
     def _on__note_input_cancelled(self, event: _NoteInput.Cancelled) -> None:
         self.query_one('#note-section').remove_class('visible')
+        if self._collapse_new_name_pending:
+            self._collapse_new_name_pending = False
+            self.mode = 'collapse'
+            self._update_footer()
+            return
         self.query_one('#action-list', ListView).focus()
         self.mode = 'review' if not self._batch_targets else 'batch'
         self._update_footer()
@@ -1148,6 +1207,10 @@ class ProposalCockpitApp(App):
             event.prevent_default()
             event.stop()
             self._apply_collapse()
+        elif key == 'n':
+            event.prevent_default()
+            event.stop()
+            self._collapse_into_new()
         elif key == 'x':
             event.prevent_default()
             event.stop()
@@ -1195,6 +1258,65 @@ class ProposalCockpitApp(App):
             self.mode = 'list'
             return
         self._show_status(f'Merged {len(member_ids)} entities into "{winner_name}".')
+        await self._refresh_queue()
+
+    def _collapse_into_new(self) -> None:
+        """Merge the selected members into a freshly named entity.
+
+        Opens the note input to collect the new canonical name; submission
+        resolves the finding through the ``collapse_into_new_entity``
+        catalogue action with the selected member subset. NOT reversible —
+        same caveat as the winner merge.
+        """
+        proposal = self._collapse_proposal
+        if proposal is None:
+            return
+        included = self._collapse_included_ids()
+        if len(included) < 2:
+            self._show_status('Select at least 2 entities to merge into a new one.', error=True)
+            return
+        self._collapse_new_name_pending = True
+        note_section = self.query_one('#note-section')
+        note_section.add_class('visible')
+        note_input = self.query_one('#note-input', _NoteInput)
+        note_input.clear()
+        note_input.focus()
+        self.mode = 'note'
+        self._show_status('Type the NEW canonical name; [Enter] merges, [Esc] cancels.')
+
+    async def _apply_collapse_new_async(
+        self,
+        proposal: CockpitProposal,
+        new_name: str,
+        member_ids: list[str],
+    ) -> None:
+        params = {'new_canonical_name': new_name, 'member_ids': member_ids}
+        if not await self._confirm_if_irreversible(
+            proposal.finding_id, 'collapse_into_new_entity', params
+        ):
+            self._show_status('Cancelled — merge into new entity not confirmed.')
+            self.mode = 'collapse'
+            return
+        option = CockpitOption(
+            action_id='collapse_into_new_entity',
+            label='Collapse into a new entity',
+            summary='Create a new entity and fold the selected members onto it.',
+            effect='Members hard-deleted; counters/links/models fold onto the new entity.',
+            reversible=False,
+        )
+        try:
+            await self._controller.resolve(
+                proposal,
+                option,
+                note=None,
+                params={'new_canonical_name': new_name, 'member_ids': member_ids},
+            )
+        except Exception:  # noqa: BLE001
+            logger.exception('collapse-into-new-entity failed for finding %s', proposal.finding_id)
+            self._show_status('Merge into new entity failed — see logs for details.', error=True)
+            self.mode = 'list'
+            return
+        self._show_status(f'Merged {len(member_ids)} entities into new "{new_name}".')
         await self._refresh_queue()
 
     def _dismiss_collapse(self) -> None:
@@ -1600,6 +1722,13 @@ class ProposalCockpitApp(App):
             self.mode = 'list'
             return
 
+        if option.verb == 'resolve' and not await self._confirm_if_irreversible(
+            proposal.finding_id, option.action_id, option.params
+        ):
+            self._show_status('Cancelled — irreversible action not confirmed.')
+            self.mode = 'list'
+            return
+
         try:
             result = await self._controller.resolve(
                 proposal,
@@ -1654,6 +1783,7 @@ class ProposalCockpitApp(App):
             await self._refresh_queue()
             return
         skipped = 0
+        needs_review = 0
         for proposal in proposals:
             # For "accept recommended", resolve each proposal with ITS OWN option
             # so proposal-specific params (e.g. an inbox route's target_vault_id)
@@ -1666,6 +1796,15 @@ class ProposalCockpitApp(App):
                     continue
             else:
                 per_option = option
+            # Irreversible actions never execute from a batch — each one needs
+            # the single-review blast-radius confirmation.
+            if (
+                per_option.verb == 'resolve'
+                and per_option.action_id
+                and action_is_reversible(per_option.action_id) is False
+            ):
+                needs_review += 1
+                continue
             try:
                 await self._controller.resolve(
                     proposal, per_option, note=note, params=per_option.params
@@ -1678,10 +1817,36 @@ class ProposalCockpitApp(App):
             parts.append(f'{ok} resolved')
         if skipped:
             parts.append(f'{skipped} skipped (no recommended action)')
+        if needs_review:
+            parts.append(f'{needs_review} skipped (irreversible — review singly)')
         if fail:
             parts.append(f'{fail} failed')
         self._show_status(', '.join(parts), error=bool(fail))
         await self._refresh_queue()
+
+    async def _confirm_if_irreversible(
+        self,
+        finding_id: str,
+        action_id: str,
+        params: dict[str, Any] | None,
+    ) -> bool:
+        """Blast-radius confirm gate; True when execution may proceed.
+
+        Reversible / unknown-to-catalogue actions pass through (the server
+        re-validates everything); forward-only actions fetch the live
+        preview and require an explicit [y].
+        """
+        if not action_id or action_is_reversible(action_id) is not False:
+            return True
+        preview = await self._controller.preview_action(
+            finding_id, action_id=action_id, params=params
+        )
+        text = preview or (
+            f'{action_id} cannot be undone (live preview unavailable — '
+            'the server may predate the preview endpoint).'
+        )
+        confirmed = await self.push_screen_wait(ConfirmIrreversibleScreen(action_id, text))
+        return bool(confirmed)
 
     # ------------------------------------------------------------------
     # App-level actions

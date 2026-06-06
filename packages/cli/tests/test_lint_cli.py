@@ -109,6 +109,25 @@ def test_lint_findings_passes_type_filter(runner, mock_config, mock_api, strip_a
     assert 'memory_unit' in text
 
 
+def test_lint_review_accepts_routing_type(runner, mock_config, mock_api, strip_ansi):
+    """``memex lint review --type routing`` is valid (regression: the review
+    command's type gate omitted 'routing' though findings/help accept it)."""
+    mock_api.lint_findings = AsyncMock(return_value={'count': 0, 'findings': []})
+
+    with patch('memex_cli.lint.get_api_context') as gac:
+        gac.return_value.__aenter__.return_value = mock_api
+        gac.return_value.__aexit__.return_value = None
+        result = runner.invoke(app, ['review', '--no-tui', '--type', 'routing'], obj=mock_config)
+
+    text = strip_ansi(result.stdout)
+    assert 'Unknown --type' not in text
+    assert result.exit_code == 0, text
+    mock_api.lint_findings.assert_awaited_once()
+    call = mock_api.lint_findings.await_args
+    assert call is not None
+    assert call.kwargs['lint_type'] == 'routing'
+
+
 # ---------------------------------------------------------------------------
 # dismiss + resolve
 # ---------------------------------------------------------------------------

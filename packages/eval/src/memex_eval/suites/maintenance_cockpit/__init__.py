@@ -1,8 +1,12 @@
-"""Maintenance cockpit eval suite — 7 regression gate scenarios.
+"""Maintenance cockpit eval suite — 13 regression gate scenarios.
 
-Exercises the lint auto-learning loop end-to-end: cooldown suppression,
+Exercises the lint auto-learning loop end-to-end (cooldown suppression,
 evidence blob integrity, telemetry verdict rollup, threshold calibration,
-auto-apply confidence gating, and DSPy signature optimisation.
+auto-apply confidence gating, DSPy signature optimisation) plus the
+external-proposal ingress: the submit/dedup/cooldown lifecycle, catalogue
+discoverability, and the routing-proposal flow — all against the REAL
+``POST /lint/proposals`` path, in per-scenario isolated vaults so the
+legacy telemetry aggregates stay clean.
 
 Each scenario uses the ``@suite.scenario`` decorator with an async
 evaluator function that drives the lint lifecycle via ``ctx.api``
@@ -602,6 +606,242 @@ async def optimizer_compiles_and_stores(ctx: ScenarioContext) -> None:
         f'Expected optimizer to produce signature with version>=1 '
         f'and non-null validation_score, got version={version}, '
         f'validation_score={validation_score}. result={result!r}'
+    )
+
+
+# ------------------------------------------------------------------
+# External lint proposals — the agent-skill ingress + closed catalogue.
+# These scenarios hit the REAL POST /lint/proposals path (not the
+# eval-only seed endpoint), so they gate the production ingress.
+# ------------------------------------------------------------------
+
+
+async def _isolated_vault(ctx: ScenarioContext, tag: str) -> str:
+    """A dedicated vault per external-proposal scenario.
+
+    The legacy scenarios in this suite assert on vault-wide lint state
+    (telemetry rollups, resolution counts); running the external-proposal
+    lifecycle in the shared run vault would pollute those aggregates.
+    """
+    created = await ctx.api.create_vault(f'ext-{tag}-{uuid4().hex[:6]}')
+    vault_id = getattr(created, 'id', None) or (
+        created.get('id') if isinstance(created, dict) else None
+    )
+    return str(vault_id)
+
+
+def _external_proposal(
+    vault_id: str,
+    *,
+    rule_name: str,
+    lint_type: str = 'quality',
+    target_type: str = 'memory_unit',
+    proposed_action: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    proposal: dict[str, Any] = {
+        'vault_id': vault_id,
+        'rule_name': rule_name,
+        'lint_type': lint_type,
+        'target_type': target_type,
+        'target_id': str(uuid4()),
+        'description': f'eval-suite external finding {uuid4()}',
+        'suggested_action': 'review this construct in the cockpit',
+        'evidence': {'confidence': 0.9},
+    }
+    if proposed_action is not None:
+        proposal['proposed_action'] = proposed_action
+    return proposal
+
+
+@suite.scenario(
+    id='external_proposal_creates_pending',
+    query='deployment cadence',
+    description=(
+        'POST /lint/proposals files a pending finding with source=external, '
+        'rule metadata under evidence.rule_metadata, and the submitter '
+        'suggestion under evidence.proposed_action.'
+    ),
+    group='external',
+)
+async def external_proposal_creates_pending(ctx: ScenarioContext) -> None:
+    vault_id = await _isolated_vault(ctx, 'create')
+    proposal = _external_proposal(
+        vault_id,
+        rule_name='eval-external-create',
+        proposed_action={'action_name': 'no_op', 'params': {}},
+    )
+    result = await ctx.api.submit_lint_proposals([proposal])
+    items = result.get('results') or []
+    assert items and items[0]['status'] == 'created', f'unexpected submit result: {result!r}'
+    finding_id = items[0]['finding_id']
+
+    payload = await ctx.api.lint_findings(vault_id=vault_id, status='pending', limit=100)
+    findings = [f for f in (payload.get('findings') or []) if isinstance(f, dict)]
+    match = [f for f in findings if f.get('id') == finding_id]
+    ok = bool(match)
+    evidence = match[0].get('evidence') or {} if match else {}
+    ok = ok and evidence.get('rule_metadata', {}).get('description') == proposal['description']
+    ok = ok and evidence.get('proposed_action', {}).get('action_name') == 'no_op'
+    ctx.metrics['pass'] = 1.0 if ok else 0.0
+    assert ok, f'external proposal row malformed: {match!r}'
+
+
+@suite.scenario(
+    id='external_proposal_dedup_idempotent',
+    query='deployment cadence',
+    description=(
+        'Resubmitting an identical external proposal returns status='
+        'deduplicated with the original finding_id — retry-safe ingress.'
+    ),
+    group='external',
+)
+async def external_proposal_dedup_idempotent(ctx: ScenarioContext) -> None:
+    vault_id = await _isolated_vault(ctx, 'dedup')
+    proposal = _external_proposal(vault_id, rule_name='eval-external-dedup')
+    first = (await ctx.api.submit_lint_proposals([proposal]))['results'][0]
+    second = (await ctx.api.submit_lint_proposals([proposal]))['results'][0]
+    ok = (
+        first['status'] == 'created'
+        and second['status'] == 'deduplicated'
+        and second['finding_id'] == first['finding_id']
+    )
+    ctx.metrics['pass'] = 1.0 if ok else 0.0
+    assert ok, f'dedup contract violated: first={first!r} second={second!r}'
+
+
+@suite.scenario(
+    id='external_proposal_cooldown_after_dismiss',
+    query='deployment cadence',
+    description=(
+        'After a human dismisses an external finding, resubmitting the same '
+        'proposal within the cooldown window returns cooldown_suppressed — '
+        'an external tool cannot nag past a human verdict.'
+    ),
+    group='external',
+)
+async def external_proposal_cooldown_after_dismiss(ctx: ScenarioContext) -> None:
+    vault_id = await _isolated_vault(ctx, 'cooldown')
+    proposal = _external_proposal(vault_id, rule_name='eval-external-cooldown')
+    first = (await ctx.api.submit_lint_proposals([proposal]))['results'][0]
+    assert first['status'] == 'created', f'seed submit failed: {first!r}'
+    await ctx.api.lint_dismiss(first['finding_id'], note='eval-suite: human said no')
+
+    again = (await ctx.api.submit_lint_proposals([proposal]))['results'][0]
+    ok = again['status'] == 'cooldown_suppressed'
+    ctx.metrics['pass'] = 1.0 if ok else 0.0
+    assert ok, f'expected cooldown_suppressed after dismissal, got {again!r}'
+
+
+@suite.scenario(
+    id='external_proposal_resolved_with_catalogue_action',
+    query='deployment cadence',
+    description=(
+        'An external proposal resolves through the registry path: the '
+        'chosen catalogue action lands in evidence.resolution.followup '
+        'with applied/prior state, and batch rejection isolates bad items.'
+    ),
+    group='external',
+)
+async def external_proposal_resolved_with_catalogue_action(ctx: ScenarioContext) -> None:
+    vault_id = await _isolated_vault(ctx, 'resolve')
+    good = _external_proposal(
+        vault_id,
+        rule_name='eval-external-resolve',
+        proposed_action={'action_name': 'no_op', 'params': {}},
+    )
+    reserved = _external_proposal(vault_id, rule_name='composite_deprioritize_candidate')
+    batch = (await ctx.api.submit_lint_proposals([good, reserved]))['results']
+    assert batch[0]['status'] == 'created', f'good item failed: {batch!r}'
+    assert batch[1]['status'] == 'rejected', f'reserved rule_name not rejected: {batch!r}'
+
+    resolved = await ctx.api.lint_resolve(
+        batch[0]['finding_id'],
+        action='no_op',
+        note='eval-suite: accepting the submitter suggestion',
+    )
+    followup = (resolved.get('resolution') or {}).get('followup') or {}
+    ok = followup.get('action') == 'no_op' and 'applied_state' in followup
+    ctx.metrics['pass'] = 1.0 if ok else 0.0
+    assert ok, f'resolution followup not stamped: {resolved!r}'
+
+
+@suite.scenario(
+    id='catalogue_action_discoverability',
+    query='deployment cadence',
+    description=(
+        'GET /lint/actions publishes the closed catalogue: both entity-merge '
+        'variants with params schemas, the fenced deletes marked '
+        'irreversible, and at least 13 actions overall.'
+    ),
+    group='external',
+)
+async def catalogue_action_discoverability(ctx: ScenarioContext) -> None:
+    payload = await ctx.api.list_lint_actions()
+    actions = {a['id']: a for a in payload.get('actions') or []}
+    checks = {
+        'count': len(actions) >= 13,
+        'merge_schema': isinstance(actions.get('merge_entities', {}).get('params_schema'), dict),
+        'collapse_schema': isinstance(
+            actions.get('collapse_into_new_entity', {}).get('params_schema'), dict
+        ),
+        'deletes_fenced': all(
+            actions.get(a, {}).get('reversible') is False
+            for a in ('delete_note', 'delete_entity', 'delete_mental_model')
+        ),
+        'originals_present': {'no_op', 'deprioritize_unit', 'archive_mental_model'}
+        <= actions.keys(),
+    }
+    ctx.metrics['pass'] = 1.0 if all(checks.values()) else 0.0
+    assert all(checks.values()), f'catalogue checks failed: {checks!r}'
+
+
+@suite.scenario(
+    id='routing_proposal_lifecycle',
+    query='deployment cadence',
+    description=(
+        'A routing-typed external proposal (the routing-skill submission '
+        'shape) files, filters via lint_type=routing, previews its suggested '
+        'route_note_to_vault action read-only, and dismisses cleanly.'
+    ),
+    group='external',
+)
+async def routing_proposal_lifecycle(ctx: ScenarioContext) -> None:
+    vault_id = await _isolated_vault(ctx, 'routing')
+    proposal = _external_proposal(
+        vault_id,
+        rule_name='eval-skill-misroute',
+        lint_type='routing',
+        target_type='note',
+        proposed_action={
+            'action_name': 'route_note_to_vault',
+            'params': {'target_vault_id': vault_id},
+        },
+    )
+    submitted = (await ctx.api.submit_lint_proposals([proposal]))['results'][0]
+    assert submitted['status'] == 'created', f'routing submit failed: {submitted!r}'
+    finding_id = submitted['finding_id']
+
+    routing_page = await ctx.api.lint_findings(
+        vault_id=vault_id, lint_type='routing', status='pending', limit=100
+    )
+    listed = [f for f in routing_page.get('findings') or [] if f.get('id') == finding_id]
+
+    preview = await ctx.api.lint_preview_action(
+        finding_id,
+        action='route_note_to_vault',
+        params={'target_vault_id': vault_id},
+    )
+    preview_text = str(preview.get('preview') or '')
+    # route_note_to_vault's preview names the migration target — assert the
+    # load-bearing content, not just non-emptiness.
+    previewed = 'migrate' in preview_text and vault_id in preview_text
+
+    await ctx.api.lint_dismiss(finding_id, note='eval-suite: lifecycle check only')
+    ok = bool(listed) and previewed
+    ctx.metrics['pass'] = 1.0 if ok else 0.0
+    assert ok, (
+        f'routing lifecycle failed: listed={bool(listed)} previewed={previewed} '
+        f'preview={preview_text!r}'
     )
 
 

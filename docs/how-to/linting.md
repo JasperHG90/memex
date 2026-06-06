@@ -232,9 +232,131 @@ between the load and the update. Re-run the apply — the second
 attempt reads the current state and either applies cleanly or
 surfaces a real divergence.
 
+## Browse the action catalogue
+
+Every finding resolves through a **closed catalogue** of canned actions —
+users cannot register actions; the set only grows with releases. List it:
+
+```bash
+memex lint actions          # table: id, targets, reversibility, params
+memex lint actions --json   # includes each action's params JSON schema
+```
+
+Execute one directly on a pending finding:
+
+```bash
+memex lint resolve <finding_id> --action update_note_title \
+  --params '{"new_title": "Postmortem: 2026-06 deploy incident"}' \
+  --note 'title was a placeholder'
+```
+
+Irreversible actions (the entity merges, `kv_delete`, `record_outcome`,
+and the hard deletes) refuse `memex lint reverse` with `409 forward_only`.
+The interactive reviewer shows a live blast-radius preview before
+executing any of them. See the
+[proposal-actions reference](../reference/proposal-actions.md) for the
+full catalogue.
+
+## Submit an external lint proposal
+
+External tools (agent skills, routing agents) participate in the lint
+loop by **submitting proposals**: a rule is pure metadata traveling with
+the proposal — what it detects and why it fired — paired with an optional
+suggestion from the action catalogue. Nothing executes at submission;
+a human resolves the finding in the cockpit.
+
+```bash
+curl -X POST "$MEMEX_URL/api/v1/lint/proposals" \
+  -H 'content-type: application/json' \
+  -d '{
+    "vault_id": "hermes",
+    "rule_name": "skill-misroute",
+    "lint_type": "routing",
+    "target_type": "note",
+    "target_id": "<note-uuid>",
+    "description": "classifier was confident but the note belongs in agentic",
+    "suggested_action": "route the note to the agentic vault",
+    "evidence": {"confidence": 0.93},
+    "proposed_action": {
+      "action_name": "route_note_to_vault",
+      "params": {"target_vault_id": "<vault-uuid>"}
+    }
+  }'
+```
+
+Agents use the `memex_submit_lint_proposal` MCP tool (and
+`memex_list_lint_actions` to discover the catalogue) instead of raw HTTP.
+
+### Typed submission with the Python client
+
+Don't hand-build dicts — use the Pydantic models in `memex_common.lint`.
+Subclass `LintRule` to define a custom rule as reusable metadata (the rule
+*is* its identity; *when* it fires is your detection logic's business),
+then `build()` a concrete proposal per finding and submit a batch:
+
+```python
+import httpx
+from memex_common.client import RemoteMemexAPI
+from memex_common.lint import LintRule, ProposedAction
+
+
+class DecommissionedSkillRef(LintRule):
+    rule_name: str = "decommissioned-skill-ref"
+    lint_type: str = "governance"
+    description: str = "Unit cites a skill retired in the 2026-05 cleanup."
+
+
+rule = DecommissionedSkillRef()   # malformed metadata fails HERE, not at submit
+
+async def flag(api: RemoteMemexAPI, unit_id: str) -> None:
+    proposal = rule.build(
+        vault_id="hermes",
+        target_type="memory_unit",
+        target_id=unit_id,
+        suggested_action="Deprioritise the unit; the skill no longer exists.",
+        evidence={"skill": "old-router", "confidence": 0.97},
+        proposed_action=ProposedAction(
+            action_name="deprioritize_unit",
+            params={"reason": "references decommissioned skill"},
+        ),
+    )
+    result = await api.submit_lint_proposals([proposal])   # models or dicts
+    print(result["results"][0])   # {"index": 0, "status": "created", "finding_id": "…"}
+```
+
+`submit_lint_proposals` accepts `LintProposal` instances or raw dicts and
+serialises them for you. `LintProposal`/`LintRule` enforce shape locally
+(slug, lint_type, evidence-key, length); the server adds the
+reserved-internal-name check — the wire shape is defined once in
+`memex_common.lint` and the server validator subclasses it, so the two
+cannot drift.
+
+Submission rules:
+
+- `rule_name` is a lowercase slug you own. Internal rule names and the
+  `llm_` prefix are reserved and rejected.
+- `vault_id` is required (global findings stay internal-only).
+- A batch (`{"proposals": [...]}`, up to `max_batch`) is
+  **partial-success**: each item resolves independently to `created`,
+  `deduplicated` (an existing finding already covers it — its
+  `finding_id` is returned, so resubmitting is idempotent),
+  `cooldown_suppressed` (a human resolved the same finding within
+  `cooldown_days` — do not retry), or `rejected` (with a per-item
+  `detail`).
+- `evidence` keys `resolution`, `rule_metadata`, and `proposed_action`
+  are server-owned and rejected.
+- A `proposed_action` is validated against the catalogue at the door —
+  unknown actions, target-type mismatches, and params failing the
+  action's schema reject the item, so the cockpit never renders a dead
+  suggestion.
+
+The knobs live under `server.memory.lint.external_proposals`
+(`cooldown_days`, `max_batch`, `require_vault`).
+
 ## See also
 
 - [How-to: Deprioritize memory units](deprioritize-units.md)
+- [Reference: proposal actions](../reference/proposal-actions.md)
 - [Reference: lint API](../reference/lint-api.md)
 - [Explanation: how lint findings flow through the ledger](../explanation/maintenance-linter.md)
 - [Tutorial: First-time vault setup](../tutorials/getting-started.md)

@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, cast, text
+from sqlalchemy import and_, cast, literal, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import col, select
@@ -303,10 +303,17 @@ class UnitsService(BaseService):
         """
         from memex_core.memory.sql_models import MentalModel
 
+        # ``cast(literal(probe), JSONB)`` — NOT ``cast(probe, JSONB)``. A bare
+        # python-str operand makes SQLAlchemy bind it through asyncpg's JSONB
+        # codec, which ``json.dumps``-es the already-JSON string AGAIN: the value
+        # lands as a JSONB *string scalar* ``'"[{...}]"'`` instead of an array, so
+        # the ``@>`` containment never matches and this silently returns no source
+        # MUs (degrading the observation-UUID 400 contract to a wrong path).
+        # ``literal()`` forces a text bind cast server-side. See lint.py set_status.
         probe = json.dumps([{'id': str(observation_id)}])
         stmt = (
             select(MentalModel.observations)
-            .where(col(MentalModel.observations).op('@>')(cast(probe, JSONB)))
+            .where(col(MentalModel.observations).op('@>')(cast(literal(probe), JSONB)))
             .order_by(col(MentalModel.id))
         )
         if vault_id is not None:
@@ -374,11 +381,16 @@ class UnitsService(BaseService):
         """
         from memex_core.memory.sql_models import MentalModel, ReflectionQueue, ReflectionStatus
 
+        # ``cast(literal(probe), JSONB)`` — NOT ``cast(probe, JSONB)``: the bare
+        # python-str operand double-encodes via asyncpg's JSONB codec into a JSONB
+        # string scalar, so ``@>`` never matches and observations citing the
+        # deprio'd MU are NEVER refreshed (silent staleness). See sibling fix in
+        # ``_find_source_mus_for_observation`` above.
         probe = json.dumps([{'evidence': [{'memory_id': str(triggering_unit_id)}]}])
         stmt = (
             select(MentalModel.id, MentalModel.entity_id, MentalModel.observations)
             .where(col(MentalModel.vault_id) == vault_id)
-            .where(col(MentalModel.observations).op('@>')(cast(probe, JSONB)))
+            .where(col(MentalModel.observations).op('@>')(cast(literal(probe), JSONB)))
             .with_for_update(of=MentalModel, skip_locked=True)
         )
         result = await session.exec(stmt)

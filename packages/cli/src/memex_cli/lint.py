@@ -4,8 +4,10 @@ Subcommands:
 
 * ``memex lint status [--vault X | --global | --all]`` — pending counts.
 * ``memex lint findings [--type ...]`` — list findings.
+* ``memex lint actions`` — the closed proposal-action catalogue.
 * ``memex lint dismiss <finding_id>`` — flip to dismissed.
-* ``memex lint resolve <finding_id>`` — flip to resolved.
+* ``memex lint resolve <finding_id> [--action X --params JSON]`` — flip to
+  resolved, optionally executing a catalogue action.
 * ``memex lint apply <finding_id>`` — apply a winner-proposal action.
 * ``memex lint reverse <finding_id>`` — reverse an applied winner-proposal.
 * ``memex lint review [--vault X | --global | --all] [--apply]`` —
@@ -17,6 +19,7 @@ for human inspection and reconciliation.
 
 from __future__ import annotations
 
+import json
 from typing import Annotated, Any
 from uuid import UUID
 
@@ -25,6 +28,7 @@ from rich.console import Console
 from rich.table import Table
 
 from memex_common.config import MemexConfig
+from memex_common.lint import LINT_TYPES
 from memex_cli.lint_review import finding_target_label, render_summary, run_review_loop
 from memex_cli.utils import async_command, get_api_context, handle_api_error, parse_uuid
 
@@ -119,7 +123,7 @@ async def lint_findings(
         str | None,
         typer.Option(
             '--type',
-            help='Filter by lint_type: structural, quality, governance, schema.',
+            help='Filter by lint_type: structural, quality, governance, schema, routing.',
         ),
     ] = None,
     status: Annotated[
@@ -140,7 +144,7 @@ async def lint_findings(
     limit: Annotated[int, typer.Option('--limit', min=1, max=500)] = 50,
 ):
     """List maintenance findings."""
-    if lint_type is not None and lint_type not in {'structural', 'quality', 'governance', 'schema'}:
+    if lint_type is not None and lint_type not in LINT_TYPES:
         console.print(f'[red]Unknown --type: {lint_type!r}[/red]')
         raise typer.Exit(2)
 
@@ -431,6 +435,49 @@ async def lint_stats_refresh(
     )
 
 
+@app.command('actions')
+@async_command
+async def lint_actions_cmd(
+    ctx: typer.Context,
+    json_output: Annotated[
+        bool,
+        typer.Option('--json', help='Emit the raw catalogue JSON (includes params schemas).'),
+    ] = False,
+):
+    """List the closed proposal-action catalogue.
+
+    Every entry is a canned remediation ``memex lint resolve --action`` (or
+    the review cockpit) can execute. Actions with parameters publish a JSON
+    schema — visible with ``--json``.
+    """
+    config: MemexConfig = ctx.obj
+    async with get_api_context(config) as api:
+        try:
+            payload = await api.list_lint_actions()
+        except Exception as e:
+            handle_api_error(e)
+            return
+    actions = payload.get('actions', [])
+    if json_output:
+        console.print_json(data=actions)
+        return
+    table = Table(title='Proposal actions (closed catalogue)')
+    table.add_column('id', no_wrap=True)
+    table.add_column('targets')
+    table.add_column('reversible', justify='center')
+    table.add_column('params', justify='center')
+    table.add_column('description', overflow='fold')
+    for action in actions:
+        table.add_row(
+            str(action.get('id', '?')),
+            ', '.join(action.get('applicable_target_types') or []),
+            'yes' if action.get('reversible') else '[red]NO[/red]',
+            'schema' if action.get('params_schema') else '—',
+            str(action.get('description', '')),
+        )
+    console.print(table)
+
+
 @app.command('resolve')
 @async_command
 async def lint_resolve_cmd(
@@ -449,14 +496,55 @@ async def lint_resolve_cmd(
             ),
         ),
     ] = None,
+    action: Annotated[
+        str | None,
+        typer.Option(
+            '--action',
+            '-a',
+            help=(
+                'Catalogue action to execute on resolve (see `memex lint actions`). '
+                'Mutually exclusive with --winner.'
+            ),
+        ),
+    ] = None,
+    params_json: Annotated[
+        str | None,
+        typer.Option(
+            '--params',
+            '-p',
+            help='JSON object of action params, e.g. \'{"new_title": "Better name"}\'.',
+        ),
+    ] = None,
+    note: Annotated[
+        str | None,
+        typer.Option('--note', help='Reviewer note stored on the resolution.'),
+    ] = None,
 ):
     """Flip a pending finding to ``resolved``.
 
-    For ``entity_collapse_cluster`` findings, optionally override the
-    suggested cluster winner with ``--winner / -w``. Without the flag,
-    the server applies the suggested winner recorded in the finding.
+    With ``--action`` the server validates and executes the catalogue
+    action, stamping prior/applied state under the resolution for
+    ``memex lint reverse``. For ``entity_collapse_cluster`` findings,
+    ``--winner / -w`` keeps driving the legacy collapse path.
     """
     parse_uuid(finding_id, 'finding_id')
+    if winner is not None and action is not None:
+        console.print('[red]Pass at most one of --winner / --action.[/red]')
+        raise typer.Exit(2)
+    params: dict[str, Any] | None = None
+    if params_json is not None:
+        if action is None:
+            console.print('[red]--params requires --action.[/red]')
+            raise typer.Exit(2)
+        try:
+            parsed = json.loads(params_json)
+        except json.JSONDecodeError as e:
+            console.print(f'[red]--params is not valid JSON:[/red] {e}')
+            raise typer.Exit(2)
+        if not isinstance(parsed, dict):
+            console.print('[red]--params must be a JSON object.[/red]')
+            raise typer.Exit(2)
+        params = parsed
     config: MemexConfig = ctx.obj
     legacy_params: dict[str, Any] | None = None
     if winner is not None:
@@ -467,11 +555,18 @@ async def lint_resolve_cmd(
             legacy_params = {'winner_canonical_name': winner}
     async with get_api_context(config) as api:
         try:
-            payload = await api.lint_resolve(finding_id, legacy_params=legacy_params)
+            payload = await api.lint_resolve(
+                finding_id,
+                action=action,
+                params=params,
+                note=note,
+                legacy_params=legacy_params,
+            )
         except Exception as e:
             handle_api_error(e)
             return
-    console.print(f'[green]resolved:[/green] {payload["finding_id"]}')
+    suffix = f' [dim](action={action})[/dim]' if action else ''
+    console.print(f'[green]resolved:[/green] {payload["finding_id"]}{suffix}')
 
 
 @app.command('apply')
@@ -555,7 +650,7 @@ async def lint_review_cmd(
         str | None,
         typer.Option(
             '--type',
-            help='Filter by lint_type: structural, quality, governance, schema.',
+            help='Filter by lint_type: structural, quality, governance, schema, routing.',
         ),
     ] = None,
     limit: Annotated[
@@ -601,12 +696,7 @@ async def lint_review_cmd(
     headless/CI use; in that mode ``--apply`` switches dry-run off.
     """
     scope = _resolve_scope(vault, is_global, is_all)
-    if lint_type is not None and lint_type not in {
-        'structural',
-        'quality',
-        'governance',
-        'schema',
-    }:
+    if lint_type is not None and lint_type not in LINT_TYPES:
         console.print(f'[red]Unknown --type: {lint_type!r}[/red]')
         raise typer.Exit(2)
 
@@ -650,11 +740,21 @@ async def lint_review_cmd(
                 'Pass --apply to persist verdicts.[/dim]'
             )
 
+        catalogue: list[dict[str, Any]] | None = None
+        try:
+            actions_payload = await api.list_lint_actions()
+            actions = actions_payload.get('actions') if isinstance(actions_payload, dict) else None
+            if isinstance(actions, list):
+                catalogue = actions
+        except Exception:  # noqa: BLE001 - older servers: degrade to plain resolve
+            pass
+
         summary = await run_review_loop(
             findings,
             apply=apply,
             api=api,
             console=console,
+            catalogue=catalogue,
         )
 
     render_summary(console, summary, apply=apply)
