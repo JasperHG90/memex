@@ -88,6 +88,41 @@ async def test_int_handle_document_tracking_db(session):
 
 
 @pytest.mark.asyncio
+async def test_update_note_tags_persists_tags_to_doc_metadata(session):
+    """update_note_tags must land tags as a NATIVE array under doc_metadata['tags'].
+
+    REGRESSION (two bugs on one statement, both fixed):
+    1. PATH: the jsonb_set path was ``func.cast('{tags}', ARRAY(Text))``, which
+       CHAR-SPLITS the literal into a 6-element path ``{'{','t','a','g','s','}'}``.
+       jsonb_set never matches it and silently no-ops, so the ``tags`` key was
+       DROPPED entirely (column stays ``{}``). Fixed with ``literal_column("'{tags}'")``.
+    2. VALUE: ``func.cast(json.dumps(tags), JSONB)`` DOUBLE-encodes — asyncpg sends
+       the json string as text and the cast re-wraps it into a JSONB string scalar
+       ``'["alpha","beta"]'`` instead of the array ``["alpha","beta"]``. Every
+       consumer that iterates ``doc_meta['tags']`` (e.g. vault_summary) would then
+       walk CHARACTERS. Fixed by binding the list directly: ``literal(tags, JSONB)``.
+
+    Asserting a native list pins BOTH: presence (fails against the char-split path)
+    AND the array shape (fails against the double-encoded value)."""
+    doc_id = uuid4()
+    doc = Note(id=doc_id, original_text='Tagging Test Doc')
+    session.add(doc)
+    await session.commit()
+
+    await storage.update_note_tags(session, str(doc_id), ['alpha', 'beta'])
+    await session.commit()
+
+    session.expire_all()
+    db_doc = await session.get(Note, doc_id)
+    assert db_doc is not None
+    assert db_doc.doc_metadata is not None
+    # Native list, not a JSON-string scalar — pre-fix the key was dropped (path
+    # char-split) AND would have been a double-encoded string (value cast).
+    assert db_doc.doc_metadata['tags'] == ['alpha', 'beta']
+    assert isinstance(db_doc.doc_metadata['tags'], list)
+
+
+@pytest.mark.asyncio
 async def test_int_store_chunks_batch_db(session):
     from memex_core.memory.extraction.core import content_hash
 

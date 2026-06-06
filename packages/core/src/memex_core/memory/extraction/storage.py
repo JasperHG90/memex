@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import case, type_coerce, update
+from sqlalchemy import case, literal, literal_column, type_coerce, update
 from sqlalchemy.dialects.postgresql import insert as pg_insert, UUID as SA_UUID
 from sqlmodel import col, delete, func, select, and_
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -883,9 +883,6 @@ async def update_note_tags(
         note_id: Note identifier.
         tags: List of tags to set.
     """
-    import json
-
-    import sqlalchemy as sa
     from sqlalchemy.dialects import postgresql
 
     doc_uuid = UUID(note_id)
@@ -895,8 +892,18 @@ async def update_note_tags(
         .values(
             doc_metadata=func.jsonb_set(
                 func.coalesce(col(Note.doc_metadata), func.cast('{}', postgresql.JSONB)),
-                func.cast('{tags}', postgresql.ARRAY(sa.Text)),
-                func.cast(json.dumps(tags), postgresql.JSONB),
+                # jsonb_set's path is a text[]. literal_column emits the Postgres
+                # array literal '{tags}' (a 1-element path). cast('{tags}', Text[])
+                # would CHAR-SPLIT the string into {'{','t','a','g','s','}'} — a
+                # 6-element path that never matches, so jsonb_set silently no-ops
+                # and the tags are dropped. See the sibling fix in services/lint.py.
+                literal_column("'{tags}'"),
+                # Bind the list as JSONB directly. func.cast(json.dumps(tags), JSONB)
+                # DOUBLE-encodes: asyncpg sends the json string as text and the cast
+                # re-wraps it into a JSONB string scalar '["a","b"]' instead of the
+                # array ["a","b"], char-corrupting every tags consumer (e.g.
+                # vault_summary iterates doc_meta['tags']).
+                literal(tags, type_=postgresql.JSONB),
             )
         )
     )
