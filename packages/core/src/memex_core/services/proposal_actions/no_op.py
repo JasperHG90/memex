@@ -18,6 +18,8 @@ from memex_core.services.proposal_actions.base import (
 )
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
     from memex_core.api import MemexAPI
 
 
@@ -55,6 +57,7 @@ class NoOpAction:
         target_id: str,
         vault_id: UUID | None,
         actor: str,
+        session: AsyncSession | None = None,
     ) -> ExecuteResult:
         return ExecuteResult(applied_state={'noop': True}, prior_state={})
 

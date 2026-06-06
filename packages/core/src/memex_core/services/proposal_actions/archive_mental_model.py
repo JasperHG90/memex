@@ -36,6 +36,8 @@ from memex_core.services.proposal_actions.base import (
 )
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
     from memex_core.api import MemexAPI
 
 
@@ -74,6 +76,7 @@ class ArchiveMentalModelAction:
         target_id: str,
         vault_id: UUID | None,
         actor: str,
+        session: AsyncSession | None = None,
     ) -> ExecuteResult:
         model_id = UUID(target_id)
         async with api.metastore.session() as session:

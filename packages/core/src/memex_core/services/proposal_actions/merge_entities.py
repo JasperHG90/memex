@@ -27,6 +27,8 @@ from memex_core.services.proposal_actions.base import (
 )
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
     from memex_core.api import MemexAPI
 
 
@@ -46,6 +48,9 @@ def _parse_member_uuids(action_id: str, member_ids: list[str]) -> list[UUID]:
             parsed.append(UUID(str(raw)))
         except (ValueError, AttributeError):
             raise ActionValidationError(f'{action_id}: member_id {raw!r} is not a valid UUID.')
+    # Dedup is intentional and order-preserving: a caller that lists the same
+    # entity twice gets it merged once (re-collapsing an entity into itself is a
+    # no-op), so duplicates are silently dropped rather than rejected.
     deduped = list(dict.fromkeys(parsed))
     if len(deduped) < 2:
         raise ActionValidationError(
@@ -105,6 +110,7 @@ class MergeEntitiesAction:
         target_id: str,
         vault_id: UUID | None,
         actor: str,
+        session: AsyncSession | None = None,
     ) -> ExecuteResult:
         from memex_common.exceptions import EntityNotFoundError
 
@@ -215,6 +221,7 @@ class CollapseIntoNewEntityAction:
         target_id: str,
         vault_id: UUID | None,
         actor: str,
+        session: AsyncSession | None = None,
     ) -> ExecuteResult:
         from memex_common.exceptions import EntityNotFoundError
 

@@ -21,6 +21,8 @@ from typing import TYPE_CHECKING, Any, ClassVar, Protocol
 from uuid import UUID
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
     from memex_core.api import MemexAPI
 
 
@@ -97,17 +99,18 @@ class ProposalAction(Protocol):
         target_id: str,
         vault_id: UUID | None,
         actor: str,
+        session: AsyncSession | None = None,
     ) -> ExecuteResult:
         """Run the mutation and return its before/after snapshot.
 
-        An action MAY additionally accept an optional ``session: AsyncSession``
-        keyword to run its writes inside the resolve route's transaction (so the
-        side effect commits atomically with the finding's status flip). The
-        route opts a specific action into this via an ``isinstance`` check —
-        ``RecordOutcomeAction`` uses it because its ledger write would otherwise
-        not be safe to re-apply after a crash. Actions that don't declare the
-        parameter run in their own session, which is correct for any action
-        that is already idempotent or 409s on an already-applied target.
+        The resolve route passes its transaction as ``session`` to every
+        action's ``execute()`` so an action MAY run its writes inside that
+        transaction (committing atomically with the finding's status flip).
+        Only ``RecordOutcomeAction`` reads it — its append-only ledger write
+        would otherwise not be safe to re-apply after a crash. Every other
+        action ignores the kwarg and runs in its own session, which is correct
+        for any action that is already idempotent or 409s on an already-applied
+        target.
         """
         ...
 

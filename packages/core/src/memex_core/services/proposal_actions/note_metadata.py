@@ -38,6 +38,8 @@ from memex_core.services.proposal_actions.base import (
 )
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
     from memex_core.api import MemexAPI
 
 
@@ -98,6 +100,7 @@ class UpdateNoteTitleAction:
         target_id: str,
         vault_id: UUID | None,
         actor: str,
+        session: AsyncSession | None = None,
     ) -> ExecuteResult:
         parsed = _UpdateNoteTitleParams(**params)
         note_id = UUID(target_id)
@@ -186,6 +189,7 @@ class UpdateNoteDateAction:
         target_id: str,
         vault_id: UUID | None,
         actor: str,
+        session: AsyncSession | None = None,
     ) -> ExecuteResult:
         parsed = _UpdateNoteDateParams(**params)
         new_date = _parse_iso_datetime(parsed.new_date)

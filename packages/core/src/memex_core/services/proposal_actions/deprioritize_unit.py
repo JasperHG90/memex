@@ -23,6 +23,8 @@ from memex_core.services.proposal_actions.base import (
 )
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
     from memex_core.api import MemexAPI
 
 
@@ -83,6 +85,7 @@ class DeprioritizeUnitAction:
         target_id: str,
         vault_id: UUID | None,
         actor: str,
+        session: AsyncSession | None = None,
     ) -> ExecuteResult:
         reason = str(params.get('reason') or 'cockpit: maintenance proposal accepted')
         override = params.get('override_target_id')
@@ -164,6 +167,7 @@ class RestoreUnitAction:
         target_id: str,
         vault_id: UUID | None,
         actor: str,
+        session: AsyncSession | None = None,
     ) -> ExecuteResult:
         unit_id = UUID(target_id)
         await api.restore_memory_unit(unit_id, vault_id=vault_id, actor=actor)

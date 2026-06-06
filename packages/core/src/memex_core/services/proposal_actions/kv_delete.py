@@ -31,6 +31,8 @@ from memex_core.services.proposal_actions.base import (
 )
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
     from memex_core.api import MemexAPI
 
 
@@ -58,6 +60,8 @@ class KvDeleteAction:
         # absent/empty. A KV key is never an empty string, and any non-empty
         # string (including '0') is truthy, so a real key never falls through;
         # the params validator additionally enforces min_length=1 when present.
+        # .strip() removes accidental surrounding whitespace — namespaced KV keys
+        # (e.g. 'user:editor') never carry meaningful leading/trailing spaces.
         key = str(params.get('key') or target_id or '').strip()
         return key
 
@@ -87,6 +91,7 @@ class KvDeleteAction:
         target_id: str,
         vault_id: UUID | None,
         actor: str,
+        session: AsyncSession | None = None,
     ) -> ExecuteResult:
         key = self._resolve_key(params, target_id)
         deleted = await api.kv_delete(key)

@@ -89,7 +89,6 @@ from memex_core.services.proposal_actions import (
     get_action,
     list_actions,
 )
-from memex_core.services.proposal_actions.record_outcome import RecordOutcomeAction
 
 logger = logging.getLogger('memex.core.server.lint')
 
@@ -902,27 +901,21 @@ async def lint_resolve(
             raise HTTPException(status_code=404, detail='Finding not found or not pending')
 
         try:
-            if isinstance(action, RecordOutcomeAction):
-                # Append-only outcome: run it inside this FOR UPDATE txn so the
-                # ledger write commits atomically with the status flip below — a
-                # crash cannot leave it recorded against a still-pending finding
-                # that a re-resolve would then double-count.
-                execute_result = await action.execute(
-                    api,
-                    action_params,
-                    target_id=target_id,
-                    vault_id=finding_vault,
-                    actor=actor,
-                    session=txn,
-                )
-            else:
-                execute_result = await action.execute(
-                    api,
-                    action_params,
-                    target_id=target_id,
-                    vault_id=finding_vault,
-                    actor=actor,
-                )
+            # Thread this FOR UPDATE txn into execute() for every action. Only
+            # record_outcome consumes the session — its append-only ledger write
+            # must commit atomically with the status flip below, so a crash
+            # cannot leave the outcome recorded against a still-pending finding
+            # that a re-resolve would then double-count. Every other action
+            # ignores the kwarg and runs in its own session, so threading it
+            # unconditionally leaves their behaviour unchanged.
+            execute_result = await action.execute(
+                api,
+                action_params,
+                target_id=target_id,
+                vault_id=finding_vault,
+                actor=actor,
+                session=txn,
+            )
         except ActionValidationError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         except ProposalActionError as exc:

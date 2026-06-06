@@ -24,6 +24,8 @@ from memex_core.services.proposal_actions.base import (
 )
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
     from memex_core.api import MemexAPI
 
 logger = logging.getLogger(__name__)
@@ -73,6 +75,7 @@ class RouteNoteToVaultAction:
         target_id: str,
         vault_id: UUID | None,
         actor: str,
+        session: AsyncSession | None = None,
     ) -> ExecuteResult:
         note_id = UUID(target_id)
         target_vault_id = UUID(str(params['target_vault_id']))

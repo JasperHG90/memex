@@ -101,6 +101,58 @@ async def test_submit_creates_pending_external_row(session: AsyncSession, metast
 
 @pytest.mark.integration
 @pytest.mark.asyncio
+async def test_evidence_with_sql_metacharacters_round_trips_safely(
+    session: AsyncSession, metastore
+):
+    """Evidence values are BOUND parameters, never inlined SQL. A single quote /
+    injection-looking payload must round-trip verbatim — proving the Core insert
+    (cast(literal(json.dumps(evidence)), JSONB)) binds rather than splices.
+    If it inlined, this would raise a syntax error or corrupt the table."""
+    vault = await _make_vault(session)
+    api = _fake_api(metastore)
+    evil = {
+        'note': "O'Brien'); DROP TABLE maintenance_proposals;--",
+        'quote': "it's a 'quoted' value",
+        'list': ["a'b", 'c;d'],
+    }
+    req = ExternalProposalRequest(
+        vault_id=str(vault.id),
+        rule_name='skill-sqlsafe',
+        lint_type='routing',
+        target_type='note',
+        target_id=str(uuid4()),
+        description=f'evidence sql-safety {uuid4()}',
+        suggested_action='review',
+        evidence=evil,
+    )
+
+    status, finding_id = await insert_external_proposal(
+        api, req, vault_id=vault.id, actor='skill:test'
+    )
+    assert status == 'created'
+    assert finding_id is not None
+
+    async with metastore.session() as s:
+        row = (
+            (
+                await s.execute(
+                    text('SELECT evidence FROM maintenance_proposals WHERE id = :id'),
+                    {'id': str(finding_id)},
+                )
+            )
+            .mappings()
+            .first()
+        )
+    assert row is not None
+    ev = row['evidence']
+    # Verbatim round-trip — the metacharacters were data, not SQL.
+    assert ev['note'] == evil['note']
+    assert ev['quote'] == evil['quote']
+    assert ev['list'] == evil['list']
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
 async def test_resubmission_deduplicates_to_existing_row(session: AsyncSession, metastore):
     vault = await _make_vault(session)
     api = _fake_api(metastore)

@@ -30,6 +30,8 @@ from memex_core.services.proposal_actions.base import (
 )
 
 if TYPE_CHECKING:
+    from sqlalchemy.ext.asyncio import AsyncSession
+
     from memex_core.api import MemexAPI
 
 
@@ -103,6 +105,7 @@ class DeleteNoteAction:
         target_id: str,
         vault_id: UUID | None,
         actor: str,
+        session: AsyncSession | None = None,
     ) -> ExecuteResult:
         note_id = UUID(target_id)
         row = await self._blast_radius(api, note_id, vault_id)
@@ -198,6 +201,7 @@ class DeleteEntityAction:
         target_id: str,
         vault_id: UUID | None,
         actor: str,
+        session: AsyncSession | None = None,
     ) -> ExecuteResult:
         entity_id = UUID(target_id)
         row = await self._blast_radius(api, entity_id)
@@ -285,6 +289,7 @@ class DeleteMentalModelAction:
         target_id: str,
         vault_id: UUID | None,
         actor: str,
+        session: AsyncSession | None = None,
     ) -> ExecuteResult:
         entity_id = UUID(target_id)
         if vault_id is None:
