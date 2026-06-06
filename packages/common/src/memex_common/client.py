@@ -822,13 +822,24 @@ class RemoteMemexAPI:
         turn_outcome: str | None = None,
         retrieved_set_size: int | None = None,
         exploration_tagged: bool = False,
+        session: Any | None = None,
     ) -> dict[str, Any]:
         """Record an outcome over HTTP.
 
         Preferred shape: ``units=[{unit_id, verb, reason}, ...]``. Legacy
         ``(unit_ids, success)`` shape still accepted (server emits
         FutureWarning on translation).
+
+        ``session`` is accepted for signature parity with
+        ``MemexAPI.record_outcome`` but an ``AsyncSession`` cannot cross the
+        HTTP boundary — passing one raises, same pattern as
+        ``restore_memory_unit(background_tasks=…)``.
         """
+        if session is not None:
+            raise NotImplementedError(
+                'record_outcome(session=…) cannot cross the HTTP boundary; '
+                'in-process callers holding a session should use MemexAPI directly.'
+            )
         body: dict[str, Any] = {
             'outcome_confidence': outcome_confidence,
         }
