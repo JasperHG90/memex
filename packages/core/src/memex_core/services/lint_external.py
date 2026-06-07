@@ -62,8 +62,11 @@ __all__ = [
 _RESERVED_LITERALS = (
     'entity_collapse_cluster',
     'propose_contradiction_winner',
-    'inbox_vault_route',
-    'inbox_vault_no_fit',
+    # 'inbox_vault_route' / 'inbox_vault_no_fit' were reserved while the in-core
+    # router emitted them. The router is gone; routing is now owned by the
+    # external triage-inbox skill, so these are deliberately NOT reserved and
+    # external submissions may use them. Historical routing findings stay
+    # resolvable (the maintenance_proposals rows are untouched).
     'llm_deferred',
 )
 
