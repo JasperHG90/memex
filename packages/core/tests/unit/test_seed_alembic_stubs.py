@@ -55,8 +55,8 @@ def test_seed_chain_is_linear_and_correct() -> None:
     sd = ScriptDirectory.from_config(cfg)
 
     heads = sd.get_heads()
-    assert heads == ['058_vault_summary_embedding'], (
-        f'Expected single head 058_vault_summary_embedding, got {heads}'
+    assert heads == ['059_drop_inbox_router'], (
+        f'Expected single head 059_drop_inbox_router, got {heads}'
     )
 
     walk = list(sd.walk_revisions())
@@ -64,9 +64,10 @@ def test_seed_chain_is_linear_and_correct() -> None:
     # 053 is a merge node (down_revision is a tuple) — the cockpit/lint chain
     # (…→052) and the procedure-to-global chain (046_procedure_to_global) were
     # merged, then 054 (nodes index), 055 (inbox router), 056 (node assets),
-    # 057 (external lint source), and 058 (vault summary embedding) extend
-    # linearly from there.
+    # 057 (external lint source), 058 (vault summary embedding), and 059 (drop
+    # inbox router) extend linearly from there.
     expected_top10 = [
+        ('059_drop_inbox_router', '058_vault_summary_embedding'),
         ('058_vault_summary_embedding', '057_lint_source_external'),
         ('057_lint_source_external', '056_node_assets'),
         ('056_node_assets', '055_inbox_router'),
@@ -76,7 +77,6 @@ def test_seed_chain_is_linear_and_correct() -> None:
         ('046_procedure_to_global', '045_drop_procedure_outcomes'),
         ('052_entity_cooccurrence_vault_pk', '051_fix_telemetry_pk'),
         ('051_fix_telemetry_pk', '050_mp_flagged_at'),
-        ('050_mp_flagged_at', '049_lint_llm_signature'),
     ]
     assert top10 == expected_top10, f'Tier A chain mismatch: got {top10}'
 
