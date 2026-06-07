@@ -93,7 +93,8 @@ class TestGetMemoryUnitsByIds:
 
 class TestIncludeVectorsParamThreading:
     @pytest.mark.asyncio
-    async def test_get_memory_unit_passes_query_param(self, mock_client) -> None:
+    async def test_get_memory_unit_does_not_send_include_vectors(self, mock_client) -> None:
+        """The unscoped single-ID GET never exposes vectors — no flag on the wire."""
         api = RemoteMemexAPI(mock_client)
         captured: dict = {}
         unit = {
@@ -104,9 +105,9 @@ class TestIncludeVectorsParamThreading:
         }
         mock_client.get = _capture_get(captured, payload=unit)
 
-        await api.get_memory_unit('11111111-1111-1111-1111-111111111111', include_vectors=True)
+        await api.get_memory_unit('11111111-1111-1111-1111-111111111111')
 
-        assert captured['params']['include_vectors'] is True
+        assert 'include_vectors' not in (captured['params'] or {})
 
     @pytest.mark.asyncio
     async def test_by_chunks_body_carries_include_vectors(self, mock_client) -> None:

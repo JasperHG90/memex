@@ -1049,18 +1049,15 @@ class RemoteMemexAPI:
             params['vault_id'] = [str(v) for v in resolved]
         return await self._get(f'entities/{entity_id}/cooccurrences', params=params)
 
-    async def get_memory_unit(
-        self,
-        unit_id: UUID | str,
-        *,
-        include_vectors: bool = False,
-    ) -> MemoryUnitDTO:
+    async def get_memory_unit(self, unit_id: UUID | str) -> MemoryUnitDTO:
         """Get memory unit details.
 
-        ``include_vectors=True`` populates ``embedding`` with the unit's
-        stored vector (384-dim).
+        This route is not vault-scoped and does not return the embedding
+        vector. For a unit's vector, use
+        :pymeth:`get_memory_units_by_ids` with a one-element ``unit_ids``
+        and the owning ``vault_id``.
         """
-        result = await self._get(f'memories/{unit_id}', params={'include_vectors': include_vectors})
+        result = await self._get(f'memories/{unit_id}')
         return MemoryUnitDTO(**result)
 
     async def get_memory_units_by_chunks(

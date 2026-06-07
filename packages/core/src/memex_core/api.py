@@ -1475,18 +1475,12 @@ class MemexAPI:
         """Get multiple entities by ID. Delegates to EntityService."""
         return await self._entities.get_entities(entity_ids, vault_id=vault_id)
 
-    async def get_memory_unit(
-        self,
-        unit_id: UUID | str,
-        *,
-        include_vectors: bool = False,
-    ) -> Any | None:
+    async def get_memory_unit(self, unit_id: UUID | str) -> Any | None:
         """Get a memory unit by ID. Delegates to StatsService.
 
-        ``include_vectors`` exists for signature parity with
-        ``RemoteMemexAPI`` and is otherwise ignored: this returns the raw
-        ORM row (no DTO boundary in-process), whose ``.embedding``
-        attribute is eager-loaded on this path regardless of the flag.
+        Returns the raw ORM row, whose ``.embedding`` is eager-loaded; the
+        unscoped single-ID HTTP route does not serialize it (vectors are
+        confined to vault-scoped routes — use ``get_memory_units_by_ids``).
         """
         return await self._stats.get_memory_unit(unit_id)
 

@@ -68,11 +68,10 @@ async def test_get_memory_units_output_has_no_embedding(mock_api, mock_config, m
     _assert_no_embedding_key(data)
 
 
-@pytest.mark.asyncio
-async def test_kv_get_output_has_no_embedding(mock_api, mock_config, mcp_client):
-    mock_api.kv_get.return_value = SimpleNamespace(
+def _kv_entry(key: str):
+    return SimpleNamespace(
         id=uuid4(),
-        key='user:editor',
+        key=key,
         value='neovim',
         embedding=[0.5] * 8,
         expires_at=None,
@@ -80,7 +79,32 @@ async def test_kv_get_output_has_no_embedding(mock_api, mock_config, mcp_client)
         updated_at=dt.datetime(2026, 1, 2, tzinfo=dt.timezone.utc),
     )
 
+
+@pytest.mark.asyncio
+async def test_kv_get_output_has_no_embedding(mock_api, mock_config, mcp_client):
+    mock_api.kv_get.return_value = _kv_entry('user:editor')
+
     result = await mcp_client.call_tool('memex_kv_get', {'key': 'user:editor'})
+    data = parse_tool_result(result)
+    assert data is not None
+    _assert_no_embedding_key(data)
+
+
+@pytest.mark.asyncio
+async def test_kv_search_output_has_no_embedding(mock_api, mock_config, mcp_client):
+    mock_api.kv_search_text.return_value = [_kv_entry('user:editor')]
+
+    result = await mcp_client.call_tool('memex_kv_search', {'query': 'editor'})
+    data = parse_tool_result(result)
+    assert data is not None
+    _assert_no_embedding_key(data)
+
+
+@pytest.mark.asyncio
+async def test_kv_list_output_has_no_embedding(mock_api, mock_config, mcp_client):
+    mock_api.kv_list.return_value = [_kv_entry('user:editor'), _kv_entry('global:lang')]
+
+    result = await mcp_client.call_tool('memex_kv_list', {})
     data = parse_tool_result(result)
     assert data is not None
     _assert_no_embedding_key(data)

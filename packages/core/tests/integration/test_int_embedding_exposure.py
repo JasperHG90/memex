@@ -287,18 +287,15 @@ async def _seed_unit(metastore) -> tuple[uuid.UUID, uuid.UUID]:
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_http_unit_getters_vector_matrix(http_client, metastore):
-    """Rows in Postgres carry vectors; the wire strips them unless requested."""
+    """Rows in Postgres carry vectors; the wire strips them unless requested
+    on a vault-scoped route. The unscoped single-ID GET NEVER returns a
+    vector — confirmed even though the row carries one."""
     vault_id, unit_id = await _seed_unit(metastore)
 
+    # Single-ID GET is unscoped → never serves the vector, no opt-in exists.
     resp = await http_client.get(f'/api/v1/memories/{unit_id}')
     assert resp.status_code == 200, resp.text
     assert resp.json()['embedding'] is None
-
-    resp = await http_client.get(f'/api/v1/memories/{unit_id}?include_vectors=true')
-    assert resp.status_code == 200
-    vec = resp.json()['embedding']
-    assert vec is not None and len(vec) == 384
-    assert vec[0] == pytest.approx(0.3, abs=1e-4)
 
     body = {'unit_ids': [str(unit_id)], 'vault_id': str(vault_id)}
     resp = await http_client.post('/api/v1/memories/by-ids', json=body)
@@ -307,7 +304,9 @@ async def test_http_unit_getters_vector_matrix(http_client, metastore):
 
     resp = await http_client.post('/api/v1/memories/by-ids', json={**body, 'include_vectors': True})
     assert resp.status_code == 200
-    assert len(resp.json()[0]['embedding']) == 384
+    vec = resp.json()[0]['embedding']
+    assert vec is not None and len(vec) == 384
+    assert vec[0] == pytest.approx(0.3, abs=1e-4)
 
 
 @pytest.mark.integration

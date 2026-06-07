@@ -230,10 +230,12 @@ want to pipe the edges into another tool.
 
 ## Stored embeddings — vector arithmetic against the vault
 
-Read surfaces accept `include_vectors=true` to return stored embeddings
-(384-dim) alongside the data: unit getters (`GET /memories/{id}`,
-`POST /memories/by-ids`, `POST /memories/by-chunks`,
-`GET /notes/{id}/memory_units`), KV reads, and the vault summary. Search
+Vault-scoped read surfaces accept `include_vectors=true` to return stored
+embeddings (384-dim) alongside the data: the vault-scoped unit getters
+(`POST /memories/by-ids`, `POST /memories/by-chunks`,
+`GET /notes/{id}/memory_units`), KV reads, and the vault summary. The
+unscoped single-ID `GET /memories/{id}` never returns a vector — fetch a
+single unit's embedding via `POST /memories/by-ids` with one ID. Search
 responses never carry vectors — search lean, collect the IDs you care
 about, then batch-fetch with vectors:
 

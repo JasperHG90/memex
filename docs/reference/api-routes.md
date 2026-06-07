@@ -534,10 +534,9 @@ Get many page-index nodes by ID. <code-ref path="packages/core/src/memex_core/se
 
 Get one memory unit. <code-ref path="packages/core/src/memex_core/server/memories.py" lines="129-146" />
 
-- **Auth.** `require_read`.
+- **Auth.** `require_read`. This route is **not vault-scoped** (no `vault_id`) — preserved for vault-agnostic callers.
 - **Path params.** `id` (UUID).
-- **Query params.** `include_vectors` (bool, default `false`) — populate `embedding` with the unit's stored 384-dim vector.
-- **Returns.** `MemoryUnitDTO`. `embedding` is `null` unless `include_vectors=true`.
+- **Returns.** `MemoryUnitDTO`. `embedding` is always `null`: vector exposure is confined to vault-scoped routes. To fetch a single unit's vector, use `POST /memories/by-ids` with a one-element `unit_ids` and the owning `vault_id`.
 - **Errors.** 404 not found.
 
 ### DELETE /api/v1/memories/{id}

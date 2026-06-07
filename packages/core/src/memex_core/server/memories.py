@@ -127,21 +127,23 @@ async def get_memory_units_by_ids(
 
 
 @router.get('/memories/{id}', response_model=MemoryUnitDTO, dependencies=[Depends(require_read)])
-async def get_memory_unit(
-    id: UUID,
-    api: Annotated[MemexAPI, Depends(get_api)],
-    include_vectors: Annotated[
-        bool,
-        Query(description="Include the unit's stored embedding vector in the response."),
-    ] = False,
-):
-    """Get memory unit details."""
+async def get_memory_unit(id: UUID, api: Annotated[MemexAPI, Depends(get_api)]):
+    """Get memory unit details.
+
+    This route is intentionally NOT vault-scoped (no ``vault_id``, no
+    ``check_vault_access``) — preserved from before this contract for the
+    many vault-agnostic callers (CLI, cockpit, MCP, Hermes). Because of
+    that, it deliberately does NOT expose embedding vectors: vector
+    exposure is confined to vault-scoped routes. To fetch a single unit's
+    vector, use ``POST /memories/by-ids`` with a one-element ``unit_ids``
+    and the owning ``vault_id``.
+    """
     try:
         unit = await api.get_memory_unit(id)
         if not unit:
             raise HTTPException(status_code=404, detail=f'Memory unit {id} not found')
 
-        return build_memory_unit_dto(unit, include_vectors=include_vectors)
+        return build_memory_unit_dto(unit)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, f'Failed to get memory unit {id}')
 
