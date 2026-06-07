@@ -102,16 +102,28 @@ The forward-only path is wired so future actions like
 
 ## Keybindings cheat-sheet
 
-| Key | Action |
-|-----|--------|
-| `j` / `k` / arrows | Navigate the queue |
-| `1`–`9` | Pick a numbered option from the detail card |
-| `o` | Other — free-form description mapped to a canned action |
-| `n` | Add a reviewer note (proposal stays pending) |
-| `r` | Reverse a resolved proposal |
-| `F5` | Refresh the queue from the server |
-| `?` | Help |
-| `q` | Quit |
+The status bar at the bottom always shows the keys live for the current
+mode. The full map:
+
+| Mode | Key | Action |
+|------|-----|--------|
+| LIST | `↑` / `↓` | Navigate the queue |
+| LIST | `Enter` | Open the highlighted finding in REVIEW |
+| LIST | `d` | Drill into unit DETAIL |
+| LIST | `Space` | Toggle multi-select; `Shift+↑/↓` selects and moves |
+| LIST | `Esc` | Deselect all |
+| LIST | `f` | Toggle the flag bookmark on the highlighted finding |
+| REVIEW | `↑` / `↓` | Navigate the action list |
+| REVIEW | `Enter` | Confirm the action (opens the note area) |
+| REVIEW | `n` | Toggle the reviewer-note area |
+| DETAIL | `Tab` / `↑` / `↓` | Cycle between units in the finding |
+| DETAIL | `s` | View the source note text |
+| COLLAPSE | `Space` `w` `a` `n` `x` | In/out · winner · apply · new entity · dismiss |
+| any | `Esc` | Back to the previous mode |
+| any | `r` | Reverse a resolved proposal (paste its finding_id) |
+| any | `F5` | Refresh the queue from the server |
+| any | `?` | Help |
+| any | `q` | Quit |
 
 ## Headless / CI fallback
 

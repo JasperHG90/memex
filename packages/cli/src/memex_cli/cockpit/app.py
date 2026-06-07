@@ -10,8 +10,10 @@ DETAIL — drill-down view of a finding's memory units: metadata, lineage, sourc
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from typing import Any
+from uuid import UUID
 
 from rich.markdown import Markdown as RichMarkdown
 from rich.markup import escape as _esc
@@ -323,7 +325,7 @@ class HelpScreen(ModalScreen[None]):
             '\n'
             '[bold underline]DETAIL mode[/bold underline]\n'
             '  [bold]Tab / ↑ / ↓[/bold] cycle between units in the finding\n'
-            '  [bold]n[/bold]           view source note text\n'
+            '  [bold]s[/bold]           view source note text\n'
             '  [bold]Esc[/bold]         back to LIST\n'
             '\n'
             '[bold underline]REVIEW mode[/bold underline]\n'
@@ -354,7 +356,7 @@ class HelpScreen(ModalScreen[None]):
                     effect_lines.append(f'  [bold]{opt.label}[/bold]')
                     effect_lines.append(f'    [dim]{opt.effect}[/dim]')
         body += '\n'.join(effect_lines)
-        body += '\n\n[dim]Esc or q to close this help.[/dim]'
+        body += '\n\n[dim][Esc]/[q] Close[/dim]'
         yield Vertical(Static(body, id='help-body'), id='help-modal')
 
 
@@ -370,13 +372,23 @@ class ReverseScreen(ModalScreen[str | None]):
                 id='reverse-prompt',
             ),
             Input(placeholder='UUID…', id='reverse-input'),
-            Label('[dim]Enter to submit · Esc to cancel[/dim]', id='reverse-help'),
+            Label('[dim][Enter] Submit · [Esc] Cancel[/dim]', id='reverse-help'),
             id='reverse-modal',
         )
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         text = (event.value or '').strip()
-        self.dismiss(text or None)
+        if not text:
+            self.dismiss(None)
+            return
+        try:
+            UUID(text)
+        except ValueError:
+            self.query_one('#reverse-help', Label).update(
+                '[red]Not a valid finding_id (UUID). Esc to cancel.[/red]'
+            )
+            return
+        self.dismiss(text)
 
 
 class ConfirmIrreversibleScreen(ModalScreen[bool]):
@@ -406,7 +418,7 @@ class ConfirmIrreversibleScreen(ModalScreen[bool]):
                 id='confirm-title',
             ),
             Static(self._preview_text, id='confirm-preview'),
-            Label('[dim][y] execute · [n]/[Esc] cancel[/dim]', id='confirm-help'),
+            Label('[dim][y] Execute · [n]/[Esc] Cancel[/dim]', id='confirm-help'),
             id='confirm-modal',
         )
 
@@ -469,7 +481,7 @@ class ProposalCockpitApp(App):
     BINDINGS = [
         Binding('q', 'quit', 'Quit'),
         Binding('question_mark', 'help', 'Help', show=True, key_display='?'),
-        Binding('f5', 'refresh', 'Refresh'),
+        Binding('f5', 'refresh', 'Refresh', key_display='F5'),
         Binding('f', 'flag', 'Flag'),
         Binding('r', 'reverse', 'Reverse'),
     ]
@@ -595,12 +607,12 @@ class ProposalCockpitApp(App):
         footer = self.query_one(Footer)
         footer.refresh()
         hints = {
-            'list': '[d] Detail  [Enter] Review  [f] Flag  [?] Help  [q] Quit',
-            'review': '[↑↓] Navigate  [Enter] Confirm  [Esc] Back',
+            'list': '[d] Detail  [Enter] Review  [f] Flag  [F5] Refresh  [?] Help  [q] Quit',
+            'review': '[↑↓] Navigate  [Enter] Confirm  [Esc] Back  [q] Quit',
             'note': '[Enter] Submit  [Shift+Enter] Newline  [Esc] Cancel',
-            'detail': '[n] View note  [Tab] Cycle units  [Esc] Back',
+            'detail': '[s] View note  [Tab] Cycle units  [Esc] Back  [q] Quit',
             'collapse': (
-                '[Space] in/out  [w] winner  [a] apply  [n] new entity  [x] dismiss  [Esc] cancel'
+                '[Space] in/out  [w] winner  [a] apply  [n] new entity  [x] dismiss  [Esc] Cancel'
             ),
         }
         hint = hints.get(self.mode, '')
@@ -627,7 +639,12 @@ class ProposalCockpitApp(App):
     # ------------------------------------------------------------------
 
     async def _refresh_queue(self) -> None:
-        proposals = await self._controller.fetch_pending(limit=self._limit)
+        try:
+            proposals = await self._controller.fetch_pending(limit=self._limit)
+        except Exception as exc:  # noqa: BLE001
+            self._show_load_error(exc)
+            self.mode = 'list'
+            return
         self.proposals = proposals
         queue = self.query_one('#queue-list', ListView)
         queue.clear()
@@ -640,6 +657,20 @@ class ProposalCockpitApp(App):
         else:
             self._show_empty_queue()
         self.mode = 'list'
+
+    def _show_load_error(self, exc: Exception) -> None:
+        if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
+            detail = 'the server did not respond in time'
+        else:
+            detail = str(exc) or exc.__class__.__name__
+        self.query_one('#queue-label', Label).update('[bold red]Failed to load queue[/bold red]')
+        self.query_one('#detail-header', Static).update(
+            f'[red]Could not load the proposal queue: {_esc(detail)}.[/red]'
+        )
+        self.query_one('#detail-body', Static).update(
+            '[dim]Check the server is reachable, then press [bold]F5[/bold] to retry.[/dim]'
+        )
+        self.query_one('#status-bar', Static).update(' [dim][F5] Retry  [q] Quit[/dim]')
 
     def _show_empty_queue(self) -> None:
         self.query_one('#detail-header', Static).update(
@@ -1491,7 +1522,7 @@ class ProposalCockpitApp(App):
             self._detail_unit_index = (self._detail_unit_index + 1) % len(self._detail_unit_ids)
             self._load_detail_for_current_unit()
             self._update_subtitle()
-        elif key == 'n':
+        elif key == 's':
             event.prevent_default()
             event.stop()
             self._fetch_source_note_text()
@@ -1590,7 +1621,7 @@ class ProposalCockpitApp(App):
         lines.append('[dim]' + '─' * 60 + '[/dim]')
         lines.append('[bold]ACTIONS[/bold]')
         lines.append('')
-        action_parts: list[str] = ['  [bold][n][/bold] View source note']
+        action_parts: list[str] = ['  [bold][s][/bold] View source note']
         if len(self._detail_unit_ids) > 1:
             action_parts.append('  [bold][Tab/↑/↓][/bold] Navigate units')
         action_parts.append('  [bold][Esc][/bold] Back to list')
@@ -1694,6 +1725,30 @@ class ProposalCockpitApp(App):
                 name='single_verdict',
             )
 
+    async def _flag_one(self, proposal: CockpitProposal) -> tuple[bool, dict[str, Any] | None]:
+        """Toggle the flag bookmark for one proposal. Returns (ok, result)."""
+        try:
+            result = await self._controller.flag_finding(proposal.finding_id)
+        except Exception:  # noqa: BLE001
+            return False, None
+        proposal.flagged_at = result.get('flagged_at')
+        return True, result
+
+    async def _resolve_one(
+        self,
+        proposal: CockpitProposal,
+        option: CockpitOption,
+        note: str | None,
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        """Execute a non-flag verdict for one proposal. Returns (result, error)."""
+        try:
+            result = await self._controller.resolve(
+                proposal, option, note=note, params=option.params
+            )
+            return result, None
+        except Exception as exc:  # noqa: BLE001
+            return None, str(exc)
+
     async def _submit_single_async(
         self,
         proposal: CockpitProposal,
@@ -1703,21 +1758,18 @@ class ProposalCockpitApp(App):
         # Flag is orthogonal — call the flag endpoint and stay in LIST mode
         # without removing the finding from the queue.
         if option.verb == 'flag':
-            try:
-                result = await self._controller.flag_finding(proposal.finding_id)
-            except Exception as exc:  # noqa: BLE001
-                self._show_status(f'Flag toggle failed: {exc}', error=True)
+            ok, result = await self._flag_one(proposal)
+            if not ok:
+                self._show_status('Flag toggle failed.', error=True)
                 self.mode = 'list'
                 return
-            flagged = result.get('flagged', False)
-            proposal.flagged_at = result.get('flagged_at')
             # Update the queue item label.
             queue = self.query_one('#queue-list', ListView)
             for child in queue.children:
                 if isinstance(child, _ProposalQueueItem) and child.proposal is proposal:
                     child.refresh_label()
                     break
-            verb = 'Flagged' if flagged else 'Unflagged'
+            verb = 'Flagged' if (result or {}).get('flagged', False) else 'Unflagged'
             self._show_status(f'{verb} {proposal.finding_id[:8]}…')
             self.mode = 'list'
             return
@@ -1729,17 +1781,12 @@ class ProposalCockpitApp(App):
             self.mode = 'list'
             return
 
-        try:
-            result = await self._controller.resolve(
-                proposal,
-                option,
-                note=note,
-                params=option.params,
-            )
-        except Exception as exc:  # noqa: BLE001
-            self._show_status(f'Action failed: {exc}', error=True)
+        result, error = await self._resolve_one(proposal, option, note)
+        if error is not None:
+            self._show_status(f'Action failed: {error}', error=True)
             self.mode = 'list'
             return
+        assert result is not None
         status = result.get('status', 'unknown')
         action_id = option.action_id or 'dismiss'
 
@@ -1768,11 +1815,10 @@ class ProposalCockpitApp(App):
         fail = 0
         if option.verb == 'flag':
             for proposal in proposals:
-                try:
-                    result = await self._controller.flag_finding(proposal.finding_id)
-                    proposal.flagged_at = result.get('flagged_at')
+                flag_ok, _ = await self._flag_one(proposal)
+                if flag_ok:
                     ok += 1
-                except Exception:  # noqa: BLE001
+                else:
                     fail += 1
             parts: list[str] = []
             if ok:
@@ -1805,12 +1851,10 @@ class ProposalCockpitApp(App):
             ):
                 needs_review += 1
                 continue
-            try:
-                await self._controller.resolve(
-                    proposal, per_option, note=note, params=per_option.params
-                )
+            _, error = await self._resolve_one(proposal, per_option, note)
+            if error is None:
                 ok += 1
-            except Exception:  # noqa: BLE001
+            else:
                 fail += 1
         parts = []
         if ok:

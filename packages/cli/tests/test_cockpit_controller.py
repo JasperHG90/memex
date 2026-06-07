@@ -362,3 +362,21 @@ async def test_reverse_forwards_to_client() -> None:
     result = await controller.reverse(fid)
     assert result['status'] == 'reversed'
     assert client.reversed_ids == [fid]
+
+
+@pytest.mark.asyncio
+async def test_fetch_pending_times_out_on_slow_server(monkeypatch) -> None:
+    """A hung server surfaces as a TimeoutError instead of freezing the cockpit."""
+    import asyncio
+
+    from memex_cli.cockpit import controller as controller_mod
+
+    class _SlowClient(_FakeClient):
+        async def lint_findings(self, **kwargs: Any) -> dict[str, Any]:
+            await asyncio.sleep(1.0)
+            return {'count': 0, 'findings': []}
+
+    monkeypatch.setattr(controller_mod, '_COCKPIT_FETCH_TIMEOUT', 0.05)
+    controller = CockpitController(_SlowClient([]))
+    with pytest.raises((TimeoutError, asyncio.TimeoutError)):
+        await controller.fetch_pending(limit=5)
