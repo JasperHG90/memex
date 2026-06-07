@@ -208,13 +208,14 @@ def main(
         logger.critical(f'Configuration Error: {e}')
 
         err_console = Console(stderr=True)
-        if not global_data and not local_data and not overrides_data:
+        has_env_config = any(key.startswith('MEMEX_') for key in os.environ)
+        if not global_data and not local_data and not overrides_data and not has_env_config:
             err_console.print('[bold red]Error:[/bold red] No Memex configuration found.')
             err_console.print(
                 'Run [bold cyan]memex config init[/bold cyan] to create one interactively.'
             )
         else:
-            err_console.print(f'[bold red]Configuration error:[/bold red] {e}')
+            # logger.critical above already printed the parse error to stderr; add the CTA only.
             err_console.print(
                 'Inspect your configuration with [bold cyan]memex config show[/bold cyan] '
                 'or regenerate it with [bold cyan]memex config init[/bold cyan].'

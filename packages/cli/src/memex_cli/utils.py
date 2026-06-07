@@ -34,6 +34,11 @@ VaultFilterOption = Annotated[
     typer.Option('--vault', '-v', help='Filter to one vault by name or UUID. Omit for all scopes.'),
 ]
 
+VaultScopeOption = Annotated[
+    str | None,
+    typer.Option('--vault', '-v', help='Vault scope (name or UUID). Omit for the global scope.'),
+]
+
 # Lazy loaded subcommands map: command_name -> import_path:object_name
 LAZY_SUBCOMMANDS: dict[str, str] = {
     'vault': 'memex_cli.vaults:app',
@@ -142,18 +147,17 @@ def handle_api_error(e: Exception) -> NoReturn:
     """
     Handle exceptions from RemoteMemexAPI and provide helpful feedback.
     """
-    connection_errors = (
-        httpx.ConnectError,
-        httpx.ConnectTimeout,
-        httpx.ReadTimeout,
-        httpx.PoolTimeout,
-    )
-    if isinstance(e, connection_errors):
+    if isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout)):
         console.print('[bold red]Error:[/bold red] Could not reach the Memex server.')
         console.print(
             '  - Is it running? Start it with: [bold cyan]memex server start --daemon[/bold cyan]'
         )
         console.print('  - Check the configured URL: [bold cyan]memex config show[/bold cyan]')
+        raise typer.Exit(1)
+    if isinstance(e, (httpx.ReadTimeout, httpx.PoolTimeout)):
+        console.print('[bold red]Error:[/bold red] The Memex server did not respond in time.')
+        console.print('  - The operation may still be running on the server; retry shortly.')
+        console.print('  - Check server health: [bold cyan]memex server status[/bold cyan]')
         raise typer.Exit(1)
     if isinstance(e, httpx.HTTPStatusError):
         try:

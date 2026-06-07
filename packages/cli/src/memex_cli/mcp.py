@@ -6,7 +6,7 @@ import asyncio
 import typer
 from rich.console import Console
 
-console = Console()
+console = Console(stderr=True)
 
 app = typer.Typer(name='mcp', help='Manage the Memex MCP server.', no_args_is_help=True)
 
