@@ -32,7 +32,6 @@ LAZY_SUBCOMMANDS: dict[str, str] = {
     'note': 'memex_cli.notes:app',
     'kv': 'memex_cli.kv:app',
     'lint': 'memex_cli.lint:app',
-    'inbox': 'memex_cli.inbox:app',
     'system': 'memex_cli.stats:app',
     'config': 'memex_cli.config:app',
     'server': 'memex_cli.server:app',

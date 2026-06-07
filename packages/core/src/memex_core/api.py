@@ -77,7 +77,6 @@ from memex_core.services.lint_learning import LintLearningService
 from memex_core.services.lint_optimizer import LintLLMOptimizer
 from memex_core.services.lint_auto_apply import LintAutoApplyService
 from memex_core.services.locks import LocksService
-from memex_core.services.inbox_router import InboxRouterService
 from memex_core.services.notes import NoteService
 from memex_core.services.deprioritize_score import DeprioritizeScorer, ScoreBreakdown
 
@@ -561,14 +560,6 @@ class MemexAPI:
             filestore=self.filestore,
             config=self.config,
         )
-        self._inbox_router = InboxRouterService(
-            metastore=self.metastore,
-            filestore=self.filestore,
-            config=self.config,
-            embedding_model=self.embedding_model,
-            notes=self._notes,
-            vaults=self._vaults,
-        )
         self._lint_learning = LintLearningService(
             metastore=self.metastore,
             filestore=self.filestore,
@@ -663,11 +654,6 @@ class MemexAPI:
     @property
     def lint(self) -> LintService:
         return self._lint
-
-    @property
-    def inbox_router(self) -> InboxRouterService:
-        """Inbox-vault triage / routing service."""
-        return self._inbox_router
 
     @property
     def lint_learning(self) -> LintLearningService:
