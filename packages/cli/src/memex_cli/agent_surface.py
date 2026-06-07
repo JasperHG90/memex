@@ -149,6 +149,7 @@ def agent_surface(
     output_dir: Optional[Path] = typer.Option(
         None,
         '--output-dir',
+        '-d',
         help=(
             'If set, write to <dir>/memex-agent-surface.md atomically instead of '
             'stdout. Creates <dir> if missing. Skips the rewrite when content is '

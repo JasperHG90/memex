@@ -7,7 +7,7 @@ You will ingest the three notes, watch them rank identically at first, record on
 ## Prerequisites
 
 - A running Memex server with the HTTP API reachable at `http://localhost:8000` (set a different host with `MEMEX_URL` if you have one).
-- The `memex` CLI installed and configured against that server. Run `memex system status` to confirm.
+- The `memex` CLI installed and configured against that server. Run `memex stats` to confirm.
 - An active vault. `memex vault list` will show one. If none exists, run `memex vault create demo` and `memex vault use demo`.
 - `curl` and `jq` on your shell — used to record outcomes against the HTTP endpoint, since Memex has no CLI for recording outcomes today.
 - About fifteen minutes.

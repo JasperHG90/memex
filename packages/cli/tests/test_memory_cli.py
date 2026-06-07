@@ -122,21 +122,21 @@ def test_memory_search_risk_forwarded_to_api(runner, mock_api, mock_config, monk
 
 
 def test_memory_search_intent_invalid_rejected_locally(runner, mock_api, mock_config, monkeypatch):
-    """Bad --intent values must be rejected before the API roundtrip with exit code 1."""
+    """Bad --intent values must be rejected before the API roundtrip with exit code 2."""
     monkeypatch.setattr('memex_cli.memory.get_api_context', lambda config: mock_api)
 
     result = runner.invoke(app, ['search', 'q', '--intent', 'bogus'], obj=mock_config)
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert 'Invalid --intent' in result.stdout
     mock_api.search.assert_not_called()
 
 
 def test_memory_search_risk_invalid_rejected_locally(runner, mock_api, mock_config, monkeypatch):
-    """Bad --risk values must be rejected before the API roundtrip with exit code 1."""
+    """Bad --risk values must be rejected before the API roundtrip with exit code 2."""
     monkeypatch.setattr('memex_cli.memory.get_api_context', lambda config: mock_api)
 
     result = runner.invoke(app, ['search', 'q', '--risk', 'bogus'], obj=mock_config)
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert 'Invalid --risk' in result.stdout
     mock_api.search.assert_not_called()
 

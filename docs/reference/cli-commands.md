@@ -217,7 +217,7 @@ Search the knowledge base using TEMPR retrieval strategies.
 |--------|-------|------|---------|-------------|
 | `--vault` | `-v` | str (list) | - | Filter by vault(s). Repeatable. Use `"*"` for all vaults. |
 | `--limit` | | int | `5` | Maximum number of results to return. |
-| `--token-budget` | `-t` | int | - | Token budget for retrieval context. |
+| `--budget` | `-b` | int | - | Token budget for retrieval context. |
 | `--answer` | `-a` | bool | `False` | Generate an AI-synthesized answer from results. |
 | `--json` | | bool | `False` | Output results as JSON. |
 | `--minimal` | | bool | `False` | Output memory unit IDs only (one per line). |
@@ -1604,10 +1604,10 @@ Delete a vault by name or UUID.
 
 ---
 
-### `vault truncate`
+### `vault clear`
 
 ```
-memex vault truncate IDENTIFIER [OPTIONS]
+memex vault clear IDENTIFIER [OPTIONS]
 ```
 
 Remove all content from a vault (notes, memories, entities, etc.). The vault itself is preserved.
@@ -1616,7 +1616,7 @@ Remove all content from a vault (notes, memories, entities, etc.). The vault its
 
 | Name | Required | Description |
 |------|----------|-------------|
-| `IDENTIFIER` | Yes | Name or UUID of the vault to truncate. |
+| `IDENTIFIER` | Yes | Name or UUID of the vault to clear. |
 
 #### Options
 
@@ -1627,11 +1627,11 @@ Remove all content from a vault (notes, memories, entities, etc.). The vault its
 #### Examples
 
 ```bash
-# Truncate a vault by name (with confirmation prompt)
-memex vault truncate my-vault
+# Clear a vault by name (with confirmation prompt)
+memex vault clear my-vault
 
-# Truncate without confirmation
-memex vault truncate my-vault --force
+# Clear without confirmation
+memex vault clear my-vault --force
 ```
 
 > [!WARNING]
@@ -1814,14 +1814,12 @@ memex mcp run --transport sse --port 8080
 
 ---
 
-## `system`
+## `stats`
 
 Show overview of system counts (memories, entities, queue).
 
-### `system system`
-
 ```
-memex system system [OPTIONS]
+memex stats [OPTIONS]
 ```
 
 Show an overview of system counts: total memories (documents), entities, and reflection queue size.

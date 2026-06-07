@@ -357,9 +357,11 @@ async def search_memory(
             '--vault', '-v', help='Vault(s) to search. Accepts names or UUIDs. Use "*" for all.'
         ),
     ] = None,
-    limit: int = 5,
+    limit: Annotated[
+        int, typer.Option('--limit', '-l', help='Maximum number of results to return.')
+    ] = 5,
     token_budget: Annotated[
-        int | None, typer.Option('--token-budget', '-t', help='Token budget for retrieval.')
+        int | None, typer.Option('--budget', '-b', help='Token budget for retrieval.')
     ] = None,
     answer: Annotated[
         bool, typer.Option('--answer', '-a', help='Generate an AI answer from results.')
@@ -471,7 +473,7 @@ async def search_memory(
             console.print(
                 f'[red]Invalid --intent {intent!r}. Allowed: {sorted(VALID_INTENT_CLASSES)}[/red]'
             )
-            raise typer.Exit(1)
+            raise typer.Exit(2)
         intent_value = IntentClass(intent_str)
 
     risk_value: RiskClass | None = None
@@ -481,7 +483,7 @@ async def search_memory(
             console.print(
                 f'[red]Invalid --risk {risk!r}. Allowed: {sorted(VALID_RISK_CLASSES)}[/red]'
             )
-            raise typer.Exit(1)
+            raise typer.Exit(2)
         risk_value = RiskClass(risk_str)
 
     async with get_api_context(config) as api:
@@ -559,7 +561,9 @@ async def reflect(
             help='ID of the entity to reflect on. If omitted, reflects on top entities.'
         ),
     ] = None,
-    limit: int = 5,
+    limit: Annotated[
+        int, typer.Option('--limit', '-l', help='Maximum number of entities to reflect on.')
+    ] = 5,
     batch_size: int = 10,
 ):
     """
@@ -664,7 +668,9 @@ async def memory_links(
         str | None,
         typer.Option('--type', '-t', help='Filter by link type (e.g. contradicts).'),
     ] = None,
-    limit: Annotated[int, typer.Option('--limit', '-l', help='Max links to return.')] = 20,
+    limit: Annotated[
+        int, typer.Option('--limit', '-l', help='Maximum number of links to return.')
+    ] = 20,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
 ):
     """
@@ -713,14 +719,16 @@ async def memory_links(
 async def get_lineage(
     ctx: typer.Context,
     entity_type: Annotated[
-        str, typer.Argument(help='Type: mental_model, observation, memory_unit, note')
+        str, typer.Argument(help='Type: mental_model, observation, memory_unit, note.')
     ],
     entity_id: Annotated[str, typer.Argument(help='UUID of the entity.')],
     direction: Annotated[
         LineageDirection, typer.Option('--direction', '-d', help='Traverse direction.')
     ] = LineageDirection.UPSTREAM,
     depth: Annotated[int, typer.Option('--depth', help='Max recursion depth.')] = 3,
-    limit: Annotated[int, typer.Option('--limit', help='Max children per node.')] = 5,
+    limit: Annotated[
+        int, typer.Option('--limit', '-l', help='Maximum number of children per node to return.')
+    ] = 5,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
 ):
     """

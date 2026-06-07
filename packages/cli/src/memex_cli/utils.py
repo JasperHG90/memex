@@ -48,7 +48,7 @@ LAZY_SUBCOMMANDS: dict[str, str] = {
     'kv': 'memex_cli.kv:app',
     'lint': 'memex_cli.lint:app',
     'inbox': 'memex_cli.inbox:app',
-    'system': 'memex_cli.stats:app',
+    'stats': 'memex_cli.stats:app',
     'config': 'memex_cli.config:app',
     'server': 'memex_cli.server:app',
     'database': 'memex_cli.db:app',
@@ -196,7 +196,7 @@ def parse_uuid(value: str, label: str = 'ID') -> UUID:
         return UUID(value)
     except ValueError:
         console.print(f'[red]Invalid UUID for {label}: {value}[/red]')
-        raise typer.Exit(1)
+        raise typer.Exit(2)
 
 
 def merge_overrides(config_data: dict[str, Any], overrides: list[str]) -> dict[str, Any]:

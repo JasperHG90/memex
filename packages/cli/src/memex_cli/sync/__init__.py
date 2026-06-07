@@ -57,15 +57,15 @@ def _make_progress() -> Progress:
 @async_command
 async def run_sync(
     ctx: typer.Context,
-    vault_path: Path = typer.Argument(..., help='Path to the notes folder'),
-    config: Path | None = typer.Option(None, '--config', '-c', help='Path to config TOML'),
-    full: bool = typer.Option(False, '--full', help='Ignore last sync, re-sync all'),
-    dry_run: bool = typer.Option(False, '--dry-run', help='Show what would be synced'),
+    vault_path: Path = typer.Argument(..., help='Path to the notes folder.'),
+    config: Path | None = typer.Option(None, '--config', '-c', help='Path to config TOML.'),
+    full: bool = typer.Option(False, '--full', help='Ignore last sync, re-sync all.'),
+    dry_run: bool = typer.Option(False, '--dry-run', help='Show what would be synced.'),
     background: bool = typer.Option(
         False,
         '--background',
         '-b',
-        help='Submit batch job and return immediately without waiting',
+        help='Submit batch job and return immediately without waiting.',
     ),
     no_handle_deletes: bool = typer.Option(
         False,
@@ -185,8 +185,8 @@ async def run_sync(
 @app.command(no_args_is_help=True)
 def status(
     ctx: typer.Context,
-    vault_path: Path = typer.Argument(..., help='Path to the notes folder'),
-    config: Path | None = typer.Option(None, '--config', '-c', help='Path to config TOML'),
+    vault_path: Path = typer.Argument(..., help='Path to the notes folder.'),
+    config: Path | None = typer.Option(None, '--config', '-c', help='Path to config TOML.'),
 ) -> None:
     """Show sync state and pending changes."""
     vault_path = vault_path.resolve()
@@ -247,7 +247,7 @@ def status(
 @async_command
 async def job_status(
     ctx: typer.Context,
-    job_id: str = typer.Argument(..., help='Batch job ID returned by sync --background'),
+    job_id: str = typer.Argument(..., help='Batch job ID returned by sync --background.'),
 ) -> None:
     """Check the status of a background batch ingestion job."""
     memex_config: MemexConfig = ctx.obj
@@ -276,9 +276,9 @@ async def job_status(
 @async_command
 async def watch(
     ctx: typer.Context,
-    vault_path: Path = typer.Argument(..., help='Path to the notes folder'),
-    config: Path | None = typer.Option(None, '--config', '-c', help='Path to config TOML'),
-    mode: str | None = typer.Option(None, help='Override watch mode: events|poll'),
+    vault_path: Path = typer.Argument(..., help='Path to the notes folder.'),
+    config: Path | None = typer.Option(None, '--config', '-c', help='Path to config TOML.'),
+    mode: str | None = typer.Option(None, help='Override watch mode: events|poll.'),
 ) -> None:
     """Watch folder for changes and sync continuously."""
     vault_path = vault_path.resolve()
@@ -309,7 +309,7 @@ async def watch(
 
 @app.command(no_args_is_help=True)
 def init(
-    vault_path: Path = typer.Argument(..., help='Path to the notes folder'),
+    vault_path: Path = typer.Argument(..., help='Path to the notes folder.'),
 ) -> None:
     """Create a default note-sync.toml in the folder."""
     vault_path = vault_path.resolve()

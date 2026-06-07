@@ -1,8 +1,8 @@
 """F32 CLI — `memex diagnostics ...` smoke tests (Test 10).
 
 Verifies:
-- `--help` lists the four F32 subcommands (manifold, retrieval, summary, lint).
-- `manifold --help` / `retrieval --help` / `lint --help` emit usable help text.
+- `--help` lists the four diagnostics subcommands (manifold, retrieval, summary, findings).
+- `manifold --help` / `retrieval --help` / `findings --help` emit usable help text.
 - Each command emits JSON shape when invoked against a mocked api.
 """
 
@@ -22,8 +22,8 @@ def test_help_lists_subcommands(runner):
     assert 'manifold' in result.output
     assert 'retrieval' in result.output
     assert 'summary' in result.output
-    # F26: lint dashboard subcommand is now part of the diagnostics surface.
-    assert 'lint' in result.output
+    # The lint-finding pivot dashboard is part of the diagnostics surface.
+    assert 'findings' in result.output
 
 
 def test_manifold_help_and_json_shape(runner, mock_api, monkeypatch, mock_config):
@@ -55,7 +55,7 @@ def test_retrieval_help_and_json_shape(runner, mock_api, monkeypatch, mock_confi
     help_result = runner.invoke(diagnose_app, ['retrieval', '--help'])
     assert help_result.exit_code == 0
     assert '--vault' in help_result.output
-    assert '--top-n' in help_result.output
+    assert '--limit' in help_result.output
 
     fake_vault = uuid4()
     payload = {
@@ -76,10 +76,10 @@ def test_retrieval_help_and_json_shape(runner, mock_api, monkeypatch, mock_confi
     assert parsed['top_n'] == 50
 
 
-def test_lint_help_and_json_shape(runner, mock_api, monkeypatch, mock_config):
-    """F26: `memex diagnostics lint --help` works, and the command emits the
+def test_findings_help_and_json_shape(runner, mock_api, monkeypatch, mock_config):
+    """`memex diagnostics findings --help` works, and the command emits the
     aggregator pivot JSON 1:1 from the API."""
-    help_result = runner.invoke(diagnose_app, ['lint', '--help'])
+    help_result = runner.invoke(diagnose_app, ['findings', '--help'])
     assert help_result.exit_code == 0
     assert '--vault' in help_result.output
 
@@ -99,7 +99,7 @@ def test_lint_help_and_json_shape(runner, mock_api, monkeypatch, mock_config):
 
     monkeypatch.setattr('memex_cli.diagnose.get_api_context', lambda config: mock_api)
 
-    result = runner.invoke(diagnose_app, ['lint', '--vault', str(fake_vault)], obj=mock_config)
+    result = runner.invoke(diagnose_app, ['findings', '--vault', str(fake_vault)], obj=mock_config)
     assert result.exit_code == 0, result.output
     parsed = json.loads(result.output)
     assert parsed['vault_id'] == str(fake_vault)

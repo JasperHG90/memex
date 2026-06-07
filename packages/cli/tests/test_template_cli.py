@@ -177,19 +177,21 @@ class TestTemplateDelete:
         _write_toml_template(templates_dir, 'standup')
         mock_config.server.file_store.root = str(tmp_path)
 
-        result = runner.invoke(app, ['template', 'delete', 'standup', '--yes'], obj=mock_config)
+        result = runner.invoke(app, ['template', 'delete', 'standup', '--force'], obj=mock_config)
         assert result.exit_code == 0
         assert 'Deleted' in result.stdout
 
     def test_delete_nonexistent(self, runner: CliRunner, mock_config) -> None:
-        result = runner.invoke(app, ['template', 'delete', 'nonexistent', '--yes'], obj=mock_config)
+        result = runner.invoke(
+            app, ['template', 'delete', 'nonexistent', '--force'], obj=mock_config
+        )
         assert result.exit_code == 1
         assert 'not found' in result.stdout
 
     def test_delete_builtin_rejected(self, runner: CliRunner, mock_config) -> None:
         """Cannot delete built-in templates (no 'builtin' scope accessible via --local or default)."""
         result = runner.invoke(
-            app, ['template', 'delete', 'general_note', '--yes'], obj=mock_config
+            app, ['template', 'delete', 'general_note', '--force'], obj=mock_config
         )
         # Will fail because general_note.toml doesn't exist in the global scope dir
         assert result.exit_code == 1

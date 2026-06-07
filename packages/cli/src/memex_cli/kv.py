@@ -102,7 +102,9 @@ async def kv_get(
 async def kv_search(
     ctx: typer.Context,
     query: Annotated[str, typer.Argument(help='Search query.')],
-    limit: Annotated[int, typer.Option('--limit', '-l', help='Max results.')] = 5,
+    limit: Annotated[
+        int, typer.Option('--limit', '-l', help='Maximum number of results to return.')
+    ] = 5,
     namespace: Annotated[
         list[str] | None,
         typer.Option('--namespace', '-n', help='Filter by namespace prefix (repeatable).'),

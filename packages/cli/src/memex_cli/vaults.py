@@ -149,11 +149,11 @@ async def create_vault(
     console.print(f'[bold green]Vault created successfully![/bold green] ID: {vault.id}')
 
 
-@app.command('truncate')
+@app.command('clear')
 @async_command
-async def truncate_vault(
+async def clear_vault(
     ctx: typer.Context,
-    identifier: Annotated[str, typer.Argument(help='Name or UUID of the vault to truncate.')],
+    identifier: Annotated[str, typer.Argument(help='Name or UUID of the vault to clear.')],
     force: Annotated[bool, typer.Option('--force', '-f', help='Skip confirmation.')] = False,
 ):
     """
@@ -198,13 +198,13 @@ async def truncate_vault(
                 console.print('[yellow]Aborted.[/yellow]')
                 return
 
-        console.print(f'[red]Truncating vault:[/red] {identifier}...')
+        console.print(f'[red]Clearing vault:[/red] {identifier}...')
         try:
             counts = await api.truncate_vault(vault_uuid)
         except Exception as e:
             handle_api_error(e)
 
-    console.print('[bold green]Vault truncated.[/bold green]')
+    console.print('[bold green]Vault cleared.[/bold green]')
     for label, count in counts.items():
         if count > 0:
             console.print(f'  {label}: [dim]{count} removed[/dim]')

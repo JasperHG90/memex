@@ -125,6 +125,7 @@ async def lint_findings(
         str | None,
         typer.Option(
             '--type',
+            '-t',
             help='Filter by lint_type: structural, quality, governance, schema, routing.',
         ),
     ] = None,
@@ -143,7 +144,10 @@ async def lint_findings(
             show_default=False,
         ),
     ] = False,
-    limit: Annotated[int, typer.Option('--limit', min=1, max=500)] = 50,
+    limit: Annotated[
+        int,
+        typer.Option('--limit', '-l', min=1, max=500, help='Maximum number of findings to return.'),
+    ] = 50,
 ):
     """List maintenance findings."""
     if lint_type is not None and lint_type not in LINT_TYPES:
@@ -643,6 +647,7 @@ async def lint_review_cmd(
         str | None,
         typer.Option(
             '--type',
+            '-t',
             help='Filter by lint_type: structural, quality, governance, schema, routing.',
         ),
     ] = None,
@@ -650,9 +655,10 @@ async def lint_review_cmd(
         int,
         typer.Option(
             '--limit',
+            '-l',
             min=1,
             max=500,
-            help='Max findings to load into the cockpit at once.',
+            help='Maximum number of findings to load into the cockpit.',
         ),
     ] = 50,
     use_tui: Annotated[

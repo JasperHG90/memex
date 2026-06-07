@@ -15,15 +15,15 @@ from memex_cli.utils import emit_json, get_api_context, async_command, handle_ap
 console = Console()
 
 app = typer.Typer(
-    name='system',
+    name='stats',
     help='Show overview of system counts (memories, entities, queue).',
     no_args_is_help=True,
 )
 
 
-@app.command('system')
+@app.command('stats')
 @async_command
-async def system_stats(
+async def stats(
     ctx: typer.Context,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
 ):

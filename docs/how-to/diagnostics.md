@@ -49,7 +49,7 @@ The payload's `points` array is one entry per memory unit: `{unit_id, x, y}`. Fe
 ### 3. See which entities dominate retrieval
 
 ```bash
-memex diagnostics retrieval --vault my-vault --top-n 20 | jq '.entities[] | {name, volume, avg_mw_score}'
+memex diagnostics retrieval --vault my-vault --limit 20 | jq '.entities[] | {name, volume, avg_mw_score}'
 ```
 
 `retrieval` returns the top-N entities ranked by outcome volume — the sum of `success_co_count + failure_co_count` across every unit linked to the entity. <code-ref path="packages/core/src/memex_core/diagnostics/heatmap.py" lines="18-43" /> Each row also carries the Bayesian-smoothed average MW score for the entity's units. The default top-N is 50; the server caps it at 500.
@@ -59,7 +59,7 @@ Use this when retrieval feels skewed. An entity at the top of the list with a lo
 ### 4. Pivot the lint backlog
 
 ```bash
-memex diagnostics lint --vault my-vault | jq '.pending_by_type'
+memex diagnostics findings --vault my-vault | jq '.pending_by_type'
 ```
 
 The lint subcommand emits a JSON pivot over the `maintenance_proposals` table:
@@ -73,7 +73,7 @@ This is the dashboard view. It is distinct from `memex lint status` (single glob
 To watch the backlog over time, capture the pivot daily:
 
 ```bash
-memex diagnostics lint --vault my-vault \
+memex diagnostics findings --vault my-vault \
   | jq '{at: now, pending: .pending_by_type}' \
   >> ~/memex-lint-history.ndjson
 ```
