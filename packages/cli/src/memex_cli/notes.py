@@ -144,7 +144,7 @@ async def add_note(
         pass
     else:
         console.print('[red]Error: Must provide content, --file, or --url.[/red]')
-        raise typer.Exit(1)
+        raise typer.Exit(2)
 
     effective_vault = vault if vault is not None else config.write_vault
 
@@ -233,7 +233,7 @@ async def add_note(
                         console.print(
                             '[red]Error: --asset cannot be used with a directory --file. Point --file to a markdown file instead.[/red]'
                         )
-                        raise typer.Exit(1)
+                        raise typer.Exit(2)
 
                     console.print(f'[cyan]Reading main note file {file.name}...[/cyan]')
                     async with aiofiles.open(file, 'r', encoding='utf-8') as f:
@@ -364,7 +364,7 @@ async def append_note(
     # Resolve delta from --delta, --delta-file, or stdin
     if delta and delta_file:
         console.print('[red]Cannot pass both --delta and --delta-file.[/red]')
-        raise typer.Exit(1)
+        raise typer.Exit(2)
 
     delta_text: str | None = delta
     if delta_text is None and delta_file is not None:
@@ -374,11 +374,11 @@ async def append_note(
         delta_text = sys.stdin.read()
     if not delta_text:
         console.print('[red]Provide a delta via --delta, --delta-file, or stdin.[/red]')
-        raise typer.Exit(1)
+        raise typer.Exit(2)
 
     if not note_id and not key:
         console.print('[red]Pass either a note_id argument or --key.[/red]')
-        raise typer.Exit(1)
+        raise typer.Exit(2)
     if note_id and key:
         # Both ways of identifying the note were supplied. The schema would
         # silently let note_id win, which is hostile if the user genuinely
@@ -387,7 +387,7 @@ async def append_note(
             '[red]Pass either a note_id argument or --key, not both. '
             'If you meant --key, drop the positional note_id.[/red]'
         )
-        raise typer.Exit(1)
+        raise typer.Exit(2)
 
     config: MemexConfig = ctx.obj
     effective_vault = vault if vault is not None else config.write_vault
@@ -396,12 +396,12 @@ async def append_note(
         resolved_append_id = UUID(append_id) if append_id else uuid4()
     except ValueError:
         console.print(f'[red]--append-id must be a UUID. Got: {append_id!r}[/red]')
-        raise typer.Exit(1)
+        raise typer.Exit(2)
     try:
         resolved_note_id: UUID | None = UUID(note_id) if note_id else None
     except ValueError:
         console.print(f'[red]note_id must be a UUID. Got: {note_id!r}[/red]')
-        raise typer.Exit(1)
+        raise typer.Exit(2)
 
     request = NoteAppendRequest(
         note_id=resolved_note_id,

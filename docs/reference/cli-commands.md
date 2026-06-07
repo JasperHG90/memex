@@ -1075,7 +1075,7 @@ Delete a user template. Cannot delete built-in templates.
 | Option | Short | Type | Default | Description |
 |--------|-------|------|---------|-------------|
 | `--local` | | bool | `False` | Delete from project-local scope instead of global. |
-| `--yes` | `-y` | bool | `False` | Skip the confirmation prompt. |
+| `--force` | `-f` | bool | `False` | Skip the confirmation prompt. |
 
 ---
 

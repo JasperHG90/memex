@@ -131,3 +131,41 @@ def test_renamed_options_are_gone(removed):
     for _path, cmd in _all_leaf_commands():
         for opt in _option_params(cmd):
             assert removed not in opt.opts
+
+
+# --limit help follows the canonical "Maximum number of <items> to return." pattern,
+# except where the count has genuinely different semantics (cockpit load, scan cap).
+_LIMIT_HELP_EXEMPT = {
+    ('review', '--limit'),  # loads into the cockpit, not "returns"
+    ('scan-merges', '--limit'),  # caps how many entities are scanned
+}
+
+
+def test_limit_help_is_canonical():
+    offenders = []
+    for path, cmd in _all_leaf_commands():
+        leaf = path[-1] if path else ''
+        for opt in _option_params(cmd):
+            if '--limit' not in opt.opts or (leaf, '--limit') in _LIMIT_HELP_EXEMPT:
+                continue
+            if not (opt.help or '').startswith('Maximum number of'):
+                offenders.append(f'{" ".join(path)} -> {opt.help!r}')
+    assert not offenders, '--limit help drifted from canonical pattern:\n' + '\n'.join(offenders)
+
+
+def test_local_validation_uses_exit_code_2():
+    """Local usage errors exit 2 (distinct from runtime/server errors, which exit 1)."""
+    from typer.testing import CliRunner
+
+    from memex_cli import app
+
+    runner = CliRunner()
+    cases = [
+        # missing/conflicting arguments — validated before any network call
+        ['memory', 'search', 'q', '--intent', 'bogus'],
+        ['note', 'append', 'some-id', '--delta', 'x', '--delta-file', 'y'],
+        ['note', 'page-index', 'not-a-uuid'],
+    ]
+    for argv in cases:
+        result = runner.invoke(app, argv)
+        assert result.exit_code == 2, f'{argv} -> {result.exit_code}\n{result.output}'
