@@ -165,14 +165,7 @@ async def view_memory(
 async def deprioritize_memory(
     ctx: typer.Context,
     unit_id: Annotated[str, typer.Argument(help='UUID of the memory unit to deprioritize.')],
-    vault: Annotated[
-        str | None,
-        typer.Option(
-            '--vault',
-            '-v',
-            help='Vault name or UUID. Defaults to the active vault.',
-        ),
-    ] = None,
+    vault: VaultOption = None,
     reason: Annotated[
         str,
         typer.Option('--reason', '-r', help='Why this unit is being deprioritized.'),
@@ -205,14 +198,7 @@ async def deprioritize_memory(
 async def restore_memory(
     ctx: typer.Context,
     unit_id: Annotated[str, typer.Argument(help='UUID of the memory unit to restore.')],
-    vault: Annotated[
-        str | None,
-        typer.Option(
-            '--vault',
-            '-v',
-            help='Vault name or UUID. Defaults to the active vault.',
-        ),
-    ] = None,
+    vault: VaultOption = None,
 ):
     """Restore a deprioritized memory unit (flips ``is_deprioritized`` back to false)."""
     config: MemexConfig = ctx.obj

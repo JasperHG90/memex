@@ -11,7 +11,6 @@ from memex_cli.utils import (
     VaultOption,
     async_command,
     get_api_context,
-    handle_api_error,
     resolve_active_vault,
 )
 
@@ -51,26 +50,27 @@ async def briefing(
 
     config: MemexConfig = ctx.obj
 
+    # This command is consumed by hooks/scripts: errors go to stderr as plain text,
+    # never through the interactive (stdout, rich) handler used elsewhere.
     try:
         async with get_api_context(config) as api:
-            try:
-                vault_uuid = await resolve_active_vault(api, config, vault)
-            except Exception as e:
-                handle_api_error(e)
-
-            try:
-                result = await api.get_session_briefing(
-                    vault_id=vault_uuid,
-                    budget=budget,
-                    project_id=project_id,
-                )
-            except Exception as e:
-                handle_api_error(e)
-    except (httpx.ConnectError, httpx.ConnectTimeout, OSError) as e:
+            vault_uuid = await resolve_active_vault(api, config, vault)
+            result = await api.get_session_briefing(
+                vault_id=vault_uuid,
+                budget=budget,
+                project_id=project_id,
+            )
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, OSError) as e:
         print(
-            f'Error: Could not connect to Memex server. Is it running? ({e})',
+            f'Error: Could not reach the Memex server. Is it running? ({e})',
             file=sys.stderr,
         )
+        raise typer.Exit(1)
+    except httpx.HTTPStatusError as e:
+        print(f'Error: Memex server returned {e.response.status_code}.', file=sys.stderr)
+        raise typer.Exit(1)
+    except Exception as e:
+        print(f'Error: Failed to generate briefing ({e}).', file=sys.stderr)
         raise typer.Exit(1)
 
     # Output raw markdown to stdout (no Rich formatting)
