@@ -6,9 +6,16 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 
+from memex_common.config import Permission
 from memex_common.exceptions import MemexError
 from memex_common.schemas import VaultSummaryDTO
-from memex_core.server.auth import require_read, require_write
+from memex_core.server.auth import (
+    AuthContext,
+    check_vault_access,
+    get_auth_context,
+    require_read,
+    require_write,
+)
 from memex_core.server.common import _handle_error, get_api, vector_to_list
 from memex_core.api import MemexAPI
 from memex_core.memory.sql_models import VaultSummary
@@ -48,8 +55,10 @@ async def get_vault_summary(
         bool,
         Query(description='Include the stored narrative embedding in the response.'),
     ] = False,
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ) -> VaultSummaryDTO:
     """Return the current vault summary, or 404 if none exists."""
+    await check_vault_access(auth, [vault_id], api, permission=Permission.READ)
     try:
         summary = await api.vault_summary.get_summary(vault_id)
         if summary is None:
@@ -71,8 +80,10 @@ async def get_vault_summary(
 async def regenerate_vault_summary(
     vault_id: UUID,
     api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ) -> VaultSummaryDTO:
     """Regenerate the vault summary from scratch."""
+    await check_vault_access(auth, [vault_id], api, permission=Permission.WRITE)
     try:
         summary = await api.vault_summary.regenerate_summary(vault_id)
         return _summary_to_dto(summary)

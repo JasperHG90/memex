@@ -369,3 +369,58 @@ async def test_http_vault_summary_vector_matrix(http_client, metastore):
     vec = resp.json()['embedding']
     assert vec is not None and len(vec) == 384
     assert vec[0] == pytest.approx(0.6, abs=1e-4)
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_vault_summary_vectors_are_vault_authz_gated(api, metastore):
+    """A vault-restricted key cannot read another vault's summary embedding —
+    the summary route enforces check_vault_access (403), so the matrix above
+    (auth disabled) does not give vectors a cross-vault bypass."""
+    import httpx
+
+    from memex_core.server import app
+    from memex_core.server.auth import (
+        AuthContext,
+        Permission,
+        Policy,
+        get_auth_context,
+    )
+
+    async with metastore.session() as session:
+        allowed_vault = await _create_vault(session, 'authz_allowed')
+        foreign_vault = await _create_vault(session, 'authz_foreign')
+        session.add(
+            VaultSummary(
+                vault_id=foreign_vault,
+                narrative='Foreign vault narrative.',
+                embedding=[0.9] * 384,
+            )
+        )
+        await session.commit()
+
+    async def _restricted_auth():
+        return AuthContext(
+            key_prefix='test...',
+            key_name='restricted',
+            policy=Policy.READER,
+            permissions=frozenset({Permission.READ}),
+            vault_ids=[str(allowed_vault)],
+            read_vault_ids=None,
+        )
+
+    app.state.api = api
+    app.dependency_overrides[get_auth_context] = _restricted_auth
+    transport = httpx.ASGITransport(app=app)
+    try:
+        async with httpx.AsyncClient(transport=transport, base_url='http://test') as client:
+            # Foreign vault → 403 even with include_vectors requested.
+            resp = await client.get(f'/api/v1/vaults/{foreign_vault}/summary?include_vectors=true')
+            assert resp.status_code == 403, resp.text
+            # The allowed vault is reachable (404 — no summary — not 403).
+            resp = await client.get(f'/api/v1/vaults/{allowed_vault}/summary')
+            assert resp.status_code == 404, resp.text
+    finally:
+        if hasattr(app.state, 'api'):
+            del app.state.api
+        app.dependency_overrides.pop(get_auth_context, None)

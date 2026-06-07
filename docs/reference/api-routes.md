@@ -532,7 +532,7 @@ Get many page-index nodes by ID. <code-ref path="packages/core/src/memex_core/se
 
 ### GET /api/v1/memories/{id}
 
-Get one memory unit. <code-ref path="packages/core/src/memex_core/server/memories.py" lines="129-146" />
+Get one memory unit. <code-ref path="packages/core/src/memex_core/server/memories.py" lines="129-148" />
 
 - **Auth.** `require_read`. This route is **not vault-scoped** (no `vault_id`) — preserved for vault-agnostic callers.
 - **Path params.** `id` (UUID).
@@ -855,9 +855,9 @@ Runtime override for the default read vault. <code-ref path="packages/core/src/m
 
 ### GET /api/v1/vaults/{vault_id}/summary
 
-Get the cached vault summary. <code-ref path="packages/core/src/memex_core/server/vault_summary.py" lines="37-63" />
+Get the cached vault summary. <code-ref path="packages/core/src/memex_core/server/vault_summary.py" lines="44-70" />
 
-- **Auth.** `require_read`.
+- **Auth.** `require_read` + `check_vault_access` against `vault_id` (cross-vault returns 403).
 - **Path params.** `vault_id` (UUID).
 - **Query params.** `include_vectors` (bool, default `false`) — populate `embedding` with the stored narrative vector (384-dim). The vector is `null` for summaries not yet (re)generated since the column landed, empty vaults, and encode failures — callers must tolerate `null`.
 - **Returns.** `VaultSummaryDTO` — `id`, `vault_id`, `narrative`, `themes`, `inventory`, `key_entities`, `embedding`, `version`, `notes_incorporated`, `created_at`, `updated_at`.
