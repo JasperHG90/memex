@@ -1731,14 +1731,16 @@ class ProposalCockpitApp(App):
                 name='single_verdict',
             )
 
-    async def _flag_one(self, proposal: CockpitProposal) -> tuple[bool, dict[str, Any] | None]:
-        """Toggle the flag bookmark for one proposal. Returns (ok, result)."""
+    async def _flag_one(
+        self, proposal: CockpitProposal
+    ) -> tuple[dict[str, Any] | None, str | None]:
+        """Toggle the flag bookmark for one proposal. Returns (result, error)."""
         try:
             result = await self._controller.flag_finding(proposal.finding_id)
-        except Exception:  # noqa: BLE001
-            return False, None
+        except Exception as exc:  # noqa: BLE001
+            return None, str(exc)
         proposal.flagged_at = result.get('flagged_at')
-        return True, result
+        return result, None
 
     async def _resolve_one(
         self,
@@ -1764,9 +1766,9 @@ class ProposalCockpitApp(App):
         # Flag is orthogonal — call the flag endpoint and stay in LIST mode
         # without removing the finding from the queue.
         if option.verb == 'flag':
-            ok, result = await self._flag_one(proposal)
-            if not ok:
-                self._show_status('Flag toggle failed.', error=True)
+            result, error = await self._flag_one(proposal)
+            if error is not None:
+                self._show_status(f'Flag toggle failed: {error}', error=True)
                 self.mode = 'list'
                 return
             # Update the queue item label.
@@ -1821,8 +1823,8 @@ class ProposalCockpitApp(App):
         fail = 0
         if option.verb == 'flag':
             for proposal in proposals:
-                flag_ok, _ = await self._flag_one(proposal)
-                if flag_ok:
+                _, error = await self._flag_one(proposal)
+                if error is None:
                     ok += 1
                 else:
                     fail += 1
