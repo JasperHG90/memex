@@ -1,4 +1,5 @@
 import asyncio
+import inspect
 import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
 from memex_core.config import (
@@ -390,3 +391,14 @@ async def test_diagnostics_refresh_per_vault_known_exception_continues(
     await periodic_diagnostics_refresh_task(api)
 
     assert visited == ['vault-a', 'vault-b']
+
+
+def test_no_inbox_router_job_registered() -> None:
+    """V6 removed the in-core router: the scheduler must define no inbox task and
+    register no inbox job. Guards against a stray re-introduction."""
+    import memex_core.scheduler as scheduler
+
+    assert not hasattr(scheduler, 'periodic_inbox_router_task')
+    src = inspect.getsource(scheduler)
+    assert 'inbox_router' not in src
+    assert 'run_inbox_router_job' not in src
