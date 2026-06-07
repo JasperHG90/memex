@@ -30,7 +30,14 @@ from memex_common.schemas import (
 )
 import httpx
 
-from memex_cli.utils import get_api_context, async_command, handle_api_error, parse_uuid
+from memex_cli.utils import (
+    VaultOption,
+    emit_json,
+    get_api_context,
+    async_command,
+    handle_api_error,
+    parse_uuid,
+)
 
 console = Console()
 
@@ -50,7 +57,7 @@ try:
 except ImportError:
     _sync_stub = typer.Typer(
         name='sync',
-        help='Sync a folder of Markdown notes to Memex. (requires: pip install memex-cli[sync])',
+        help="Sync a folder of Markdown notes to Memex. (requires: uv pip install 'memex-cli[sync]')",
         invoke_without_command=True,
     )
 
@@ -58,7 +65,7 @@ except ImportError:
     def _sync_not_installed(ctx: typer.Context) -> None:
         console.print(
             '[bold red]Error:[/bold red] Missing dependencies for note sync.\n'
-            'Install with: [cyan]pip install memex-cli\\[sync][/cyan]'
+            "Install with: [cyan]uv pip install 'memex-cli\\[sync]'[/cyan]"
         )
         raise typer.Exit(1)
 
@@ -82,10 +89,7 @@ async def add_note(
         list[pathlib.Path] | None,
         typer.Option('--asset', '-a', help='Path to an asset file to attach to the note.'),
     ] = None,
-    vault: Annotated[
-        str | None,
-        typer.Option('--vault', '-v', help='Vault name or UUID. Defaults to the active vault.'),
-    ] = None,
+    vault: VaultOption = None,
     key: Annotated[
         str | None, typer.Option('--key', '-k', help='Unique stable key for the note.')
     ] = None,
@@ -321,10 +325,7 @@ async def append_note(
             '--key', '-k', help='Stable note key set at creation time. Preferred identifier.'
         ),
     ] = None,
-    vault: Annotated[
-        str | None,
-        typer.Option('--vault', '-v', help='Vault name or UUID. Defaults to the active vault.'),
-    ] = None,
+    vault: VaultOption = None,
     delta: Annotated[
         str | None,
         typer.Option('--delta', '-d', help='Content snippet to append.'),
@@ -541,7 +542,7 @@ async def list_notes(
         return
 
     if json_output:
-        console.print_json(json.dumps([d.model_dump() for d in notes], default=str))
+        emit_json([d.model_dump() for d in notes])
         return
 
     table = Table(title='Notes')
@@ -665,7 +666,7 @@ async def list_recent(
         return
 
     if json_output:
-        console.print_json(json.dumps([d.model_dump() for d in notes], default=str))
+        emit_json([d.model_dump() for d in notes])
         return
 
     table = Table(title='Recent Notes')
@@ -735,7 +736,7 @@ async def find_note(
         return
 
     if json_output:
-        console.print_json(json.dumps([r.model_dump() for r in results], default=str))
+        emit_json([r.model_dump() for r in results])
         return
 
     table = Table(title=f'Notes matching "{query}"')
@@ -793,7 +794,7 @@ async def note_links(
         return
 
     if json_output:
-        console.print_json(json.dumps([lnk.model_dump() for lnk in links], default=str))
+        emit_json([lnk.model_dump() for lnk in links])
         return
 
     table = Table(title=f'Links for note {note_id[:8]}...')
@@ -967,7 +968,7 @@ async def view_note(
             return
 
     if json_output:
-        console.print_json(json.dumps(note.model_dump(), default=str))
+        emit_json(note.model_dump())
         return
 
     name = note.name or 'Untitled Note'
@@ -1030,7 +1031,7 @@ async def view_metadata(
             console.print('[dim]Only notes with a page index have metadata.[/dim]')
             return
         if json_output:
-            console.print_json(json.dumps(metadata, default=str))
+            emit_json(metadata)
             return
         _render_metadata_table(metadata, note_ids[0])
         return
@@ -1041,7 +1042,7 @@ async def view_metadata(
         return
 
     if json_output:
-        console.print_json(json.dumps(metadata_list, default=str))
+        emit_json(metadata_list)
         return
 
     for i, metadata in enumerate(metadata_list):
@@ -1092,7 +1093,7 @@ async def view_page_index(
             )
             return
         if json_output:
-            console.print_json(json.dumps(page_index, default=str))
+            emit_json(page_index)
             return
         nodes = page_index if isinstance(page_index, list) else page_index.get('toc', [])
         tree = Tree(f'[bold cyan]Page Index[/bold cyan] [dim]({nid})[/dim]')
@@ -1105,7 +1106,7 @@ async def view_page_index(
         out = []
         for nid, pi in results:
             out.append({'note_id': nid, 'page_index': pi})
-        console.print_json(json.dumps(out, default=str))
+        emit_json(out)
         return
 
     for i, (nid, page_index) in enumerate(results):
@@ -1164,9 +1165,9 @@ async def view_node(
 
     if json_output:
         if len(uuids) == 1:
-            console.print_json(json.dumps(nodes[0].model_dump(), default=str))
+            emit_json(nodes[0].model_dump())
         else:
-            console.print_json(json.dumps([n.model_dump() for n in nodes], default=str))
+            emit_json([n.model_dump() for n in nodes])
         return
 
     for i, node in enumerate(nodes):
@@ -1291,7 +1292,7 @@ async def search_notes(
         return
 
     if json_output:
-        console.print_json(json.dumps([r.model_dump() for r in results], default=str))
+        emit_json([r.model_dump() for r in results])
         return
 
     table = Table(title=f'Search Results: "{query}"', show_lines=True)
@@ -1725,7 +1726,7 @@ async def update_user_notes(
             handle_api_error(e)
 
     if json_output:
-        console.print_json(json.dumps(result, default=str))
+        emit_json(result)
         return
 
     console.print(f'[green]User notes updated for note {nid}.[/green]')

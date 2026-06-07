@@ -5,7 +5,7 @@ import importlib
 import json
 import logging
 from functools import wraps
-from typing import Any, Callable, Coroutine, NoReturn, TypeVar, AsyncGenerator
+from typing import Annotated, Any, Callable, Coroutine, NoReturn, TypeVar, AsyncGenerator
 from contextlib import asynccontextmanager
 from uuid import UUID
 
@@ -23,6 +23,21 @@ console = Console()
 logger = logging.getLogger('memex_cli')
 
 T = TypeVar('T')
+
+VaultOption = Annotated[
+    str | None,
+    typer.Option('--vault', '-v', help='Vault name or UUID. Defaults to the active vault.'),
+]
+
+VaultFilterOption = Annotated[
+    str | None,
+    typer.Option('--vault', '-v', help='Filter to one vault by name or UUID. Omit for all scopes.'),
+]
+
+VaultScopeOption = Annotated[
+    str | None,
+    typer.Option('--vault', '-v', help='Vault scope (name or UUID). Omit for the global scope.'),
+]
 
 # Lazy loaded subcommands map: command_name -> import_path:object_name
 LAZY_SUBCOMMANDS: dict[str, str] = {
@@ -93,12 +108,13 @@ class LazyTyperGroup(TyperGroup):
             # Check if this is due to missing optional dependencies
             if cmd_name == 'server':
                 console.print('[bold red]Error:[/bold red] Missing dependency for server.')
-                console.print('Install with: [cyan]uv add memex-cli[server][/cyan]')
+                console.print("Install with: [cyan]uv pip install 'memex-cli\\[server]'[/cyan]")
                 raise typer.Exit(code=1)
             elif cmd_name == 'mcp':
                 console.print('[bold red]Error:[/bold red] Missing dependency for MCP.')
-                console.print('Install with: [cyan]uv add memex-cli[mcp][/cyan]')
+                console.print("Install with: [cyan]uv pip install 'memex-cli\\[mcp]'[/cyan]")
                 raise typer.Exit(code=1)
+            console.print(f"[bold red]Error:[/bold red] Failed to load command '{cmd_name}': {e}")
             logger.error(f"Failed to load command '{cmd_name}': {e}")
             raise typer.Exit(code=1) from e
 
@@ -116,10 +132,33 @@ def async_command(f: Callable[..., Coroutine[Any, Any, Any]]) -> Callable[..., A
     return wrapper
 
 
+async def resolve_active_vault(api: RemoteMemexAPI, config: MemexConfig, vault: str | None) -> UUID:
+    """Resolve a --vault value (or the configured active vault) to a vault UUID."""
+    effective_vault = vault if vault is not None else config.write_vault
+    return await api.resolve_vault_identifier(effective_vault)
+
+
+def emit_json(data: Any) -> None:
+    """Print data as formatted JSON, serializing non-JSON types via str()."""
+    console.print_json(json.dumps(data, default=str))
+
+
 def handle_api_error(e: Exception) -> NoReturn:
     """
     Handle exceptions from RemoteMemexAPI and provide helpful feedback.
     """
+    if isinstance(e, (httpx.ConnectError, httpx.ConnectTimeout)):
+        console.print('[bold red]Error:[/bold red] Could not reach the Memex server.')
+        console.print(
+            '  - Is it running? Start it with: [bold cyan]memex server start --daemon[/bold cyan]'
+        )
+        console.print('  - Check the configured URL: [bold cyan]memex config show[/bold cyan]')
+        raise typer.Exit(1)
+    if isinstance(e, (httpx.ReadTimeout, httpx.PoolTimeout)):
+        console.print('[bold red]Error:[/bold red] The Memex server did not respond in time.')
+        console.print('  - The operation may still be running on the server; retry shortly.')
+        console.print('  - Check server health: [bold cyan]memex server status[/bold cyan]')
+        raise typer.Exit(1)
     if isinstance(e, httpx.HTTPStatusError):
         try:
             detail = e.response.json().get('detail', str(e))

@@ -4,6 +4,9 @@ Memex MCP CLI commands.
 
 import asyncio
 import typer
+from rich.console import Console
+
+console = Console(stderr=True)
 
 app = typer.Typer(name='mcp', help='Manage the Memex MCP server.', no_args_is_help=True)
 
@@ -29,9 +32,9 @@ def run(
     try:
         from memex_mcp.server import mcp
     except ImportError:
-        raise ModuleNotFoundError(
-            "'memex_mcp' is not installed. Please install 'memex_cli' with the 'mcp' extra"
-        )
+        console.print('[bold red]Error:[/bold red] Missing dependency for the MCP server.')
+        console.print("Install with: [cyan]uv pip install 'memex-cli\\[mcp]'[/cyan]")
+        raise typer.Exit(1)
     if transport in ('http', 'sse'):
         asyncio.run(mcp.run_async(transport=transport, host=host, port=port))
     else:

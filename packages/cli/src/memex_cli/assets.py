@@ -3,7 +3,6 @@ Note Asset Management Commands.
 """
 
 import asyncio
-import json
 import mimetypes
 import pathlib
 import sys
@@ -15,7 +14,13 @@ from rich.console import Console
 from rich.table import Table
 
 from memex_common.config import MemexConfig
-from memex_cli.utils import get_api_context, async_command, handle_api_error, parse_uuid
+from memex_cli.utils import (
+    emit_json,
+    get_api_context,
+    async_command,
+    handle_api_error,
+    parse_uuid,
+)
 
 console = Console()
 
@@ -62,7 +67,7 @@ async def list_assets(
                     'mime_type': mime_type,
                 }
             )
-        console.print_json(json.dumps(items))
+        emit_json(items)
         return
 
     table = Table(title=f'Assets ({note_id})')
