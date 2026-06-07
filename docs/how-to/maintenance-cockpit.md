@@ -11,6 +11,15 @@ The cockpit launches as a TUI on top of your terminal. It uses
 [Textual](https://textual.textualize.io/) for layout and rendering;
 nothing about it leaves the terminal.
 
+## Where routing proposals come from
+
+Inbox routing is no longer a built-in engine. The `triage-inbox` workspace
+skill classifies notes sitting in the `inbox` vault and files
+`inbox_vault_route` (or `inbox_vault_no_fit`) proposals through the
+external-lint ingress; they surface in this cockpit like any other finding.
+Accepting a route runs the reversible `route_note_to_vault` action, which
+migrates the note — plus its units, chunks, and links — to the chosen vault.
+
 ## Launch the cockpit
 
 ```bash
