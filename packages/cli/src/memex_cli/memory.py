@@ -116,10 +116,14 @@ async def view_memory(
             return
 
     if json_output:
+        # exclude embedding: vectors are an HTTP/Python-caller capability; CLI
+        # JSON shape stays byte-identical to the pre-field era.
         if len(uuids) == 1:
-            console.print_json(json.dumps(units[0].model_dump(), default=str))
+            console.print_json(json.dumps(units[0].model_dump(exclude={'embedding'}), default=str))
         else:
-            console.print_json(json.dumps([u.model_dump() for u in units], default=str))
+            console.print_json(
+                json.dumps([u.model_dump(exclude={'embedding'}) for u in units], default=str)
+            )
         return
 
     for i, unit in enumerate(units):
@@ -538,7 +542,9 @@ async def search_memory(
             return
 
         if json_output:
-            console.print_json(json.dumps([u.model_dump() for u in results], default=str))
+            console.print_json(
+                json.dumps([u.model_dump(exclude={'embedding'}) for u in results], default=str)
+            )
             return
 
         # Display Table

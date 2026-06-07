@@ -114,6 +114,32 @@ class StatsService(BaseService):
             result = await session.exec(stmt)
             return list(result.all())
 
+    async def get_memory_units_by_ids(
+        self,
+        unit_ids: list[UUID],
+        vault_id: UUID,
+    ) -> list[Any]:
+        """Return memory units whose ``id`` is in ``unit_ids``, scoped to ``vault_id``.
+
+        Vault-scoping is mandatory — IDs from a sibling vault are silently
+        omitted, never returned. Duplicate IDs are deduplicated by the SQL
+        ``IN``; result order is not guaranteed to follow input order.
+        """
+        from sqlmodel import select
+
+        from memex_core.memory.sql_models import MemoryUnit
+
+        if not unit_ids:
+            return []
+
+        async with self.metastore.session() as session:
+            stmt = select(MemoryUnit).where(
+                col(MemoryUnit.id).in_(unit_ids),
+                MemoryUnit.vault_id == vault_id,
+            )
+            result = await session.exec(stmt)
+            return list(result.all())
+
     async def list_memory_units_by_note(
         self,
         note_id: UUID,

@@ -17,7 +17,11 @@ def _make_service():
     config.batch_size = 20
     config.max_narrative_tokens = 200
     config.max_patch_log = 20
-    return VaultSummaryService(metastore=metastore, lm=lm, config=config)
+    embedding_model = MagicMock()
+    embedding_model.encode.return_value = [MagicMock(tolist=lambda: [0.1] * 384)]
+    return VaultSummaryService(
+        metastore=metastore, lm=lm, config=config, embedding_model=embedding_model
+    )
 
 
 def _mock_session(metastore, session):

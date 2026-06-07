@@ -228,6 +228,54 @@ memex entity related "Acme Corp"
 The table is sorted by co-occurrence count, top 20. Add `--json` if you
 want to pipe the edges into another tool.
 
+## Stored embeddings — vector arithmetic against the vault
+
+Vault-scoped read surfaces accept `include_vectors=true` to return stored
+embeddings (384-dim) alongside the data: the vault-scoped unit getters
+(`POST /memories/by-ids`, `POST /memories/by-chunks`,
+`GET /notes/{id}/memory_units`), KV reads, and the vault summary. The
+unscoped single-ID `GET /memories/{id}` never returns a vector — fetch a
+single unit's embedding via `POST /memories/by-ids` with one ID. Search
+responses never carry vectors — search lean, collect the IDs you care
+about, then batch-fetch with vectors:
+
+```bash
+# 1. Find candidate units (no vectors in search results)
+curl -s -X POST "$MEMEX/api/v1/memories/search" \
+  -H 'content-type: application/json' \
+  -d '{"query": "deploy pipeline decisions", "limit": 30}'
+
+# 2. Batch-fetch their vectors (max 500 IDs per call)
+curl -s -X POST "$MEMEX/api/v1/memories/by-ids" \
+  -H 'content-type: application/json' \
+  -d '{"unit_ids": ["<id1>", "<id2>"], "vault_id": "<vault>", "include_vectors": true}'
+
+# 3. The vault-level comparison anchor: the summary's narrative embedding
+curl -s "$MEMEX/api/v1/vaults/$VAULT_ID/summary?include_vectors=true" | jq '.embedding'
+```
+
+From Python, `RemoteMemexAPI` threads the same flag:
+
+```python
+import numpy as np
+
+summary = await client.get_vault_summary(vault_id, include_vectors=True)
+hits = await client.search('deploy pipeline decisions', limit=30)
+units = await client.get_memory_units_by_ids(
+    [u.id for u in hits], vault_id, include_vectors=True
+)
+if summary is not None and summary.embedding is not None:
+    v = np.array(summary.embedding)
+    for u in units:
+        e = np.array(u.embedding)
+        sim = float(e @ v / (np.linalg.norm(e) * np.linalg.norm(v)))
+```
+
+The summary embedding is `null` for empty vaults, summaries not yet
+(re)generated since the feature landed (lazy backfill), and encode
+failures — always handle `None`. Agent surfaces (MCP tools, CLI) do not
+expose vectors; this is an HTTP/Python-caller capability only.
+
 ## Verification
 
 Confirm a known fact appears in at least one of the surfaces:

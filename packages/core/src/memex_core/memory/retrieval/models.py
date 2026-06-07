@@ -84,9 +84,6 @@ class RetrievalRequest(SQLModel):
     fusion_strategy: str = Field(
         default='rrf', description='The fusion strategy to use (e.g., rrf, position_aware).'
     )
-    include_vectors: bool = Field(
-        default=False, description='Whether to include embeddings in the result (slower).'
-    )
     include_stale: bool = Field(
         default=False, description='Whether to include stale memory units in results.'
     )

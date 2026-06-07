@@ -18,6 +18,13 @@ from memex_core.services.vault_summary import VaultSummaryService
 from memex_core.services.vault_summary_signatures import LLMTheme
 
 
+def _mock_embedding_model() -> MagicMock:
+    """Encode returns a real 384-vector so persisted writes survive pgvector."""
+    model = MagicMock()
+    model.encode.return_value = [MagicMock(tolist=lambda: [0.1] * 384)]
+    return model
+
+
 async def _insert_note(
     session,
     vault_id=GLOBAL_VAULT_ID,
@@ -123,7 +130,12 @@ class TestFetchNoteMetadataVersionFilter:
             await _insert_chunk_with_summary(session, n3.id, topic='Topic C')
             await session.commit()
 
-        svc = VaultSummaryService(metastore=metastore, lm=MagicMock(), config=VaultSummaryConfig())
+        svc = VaultSummaryService(
+            metastore=metastore,
+            lm=MagicMock(),
+            config=VaultSummaryConfig(),
+            embedding_model=_mock_embedding_model(),
+        )
         async with metastore.session() as session:
             data, ids, _all = await svc._fetch_note_metadata(
                 session, GLOBAL_VAULT_ID, summary_version=5
@@ -145,7 +157,12 @@ class TestFetchNoteMetadataVersionFilter:
             await _insert_chunk_with_summary(session, n2.id)
             await session.commit()
 
-        svc = VaultSummaryService(metastore=metastore, lm=MagicMock(), config=VaultSummaryConfig())
+        svc = VaultSummaryService(
+            metastore=metastore,
+            lm=MagicMock(),
+            config=VaultSummaryConfig(),
+            embedding_model=_mock_embedding_model(),
+        )
         async with metastore.session() as session:
             data, ids, _all = await svc._fetch_note_metadata(session, GLOBAL_VAULT_ID)
 
@@ -162,7 +179,12 @@ class TestFetchNoteMetadataVersionFilter:
             await _insert_chunk_with_summary(session, n2.id)
             await session.commit()
 
-        svc = VaultSummaryService(metastore=metastore, lm=MagicMock(), config=VaultSummaryConfig())
+        svc = VaultSummaryService(
+            metastore=metastore,
+            lm=MagicMock(),
+            config=VaultSummaryConfig(),
+            embedding_model=_mock_embedding_model(),
+        )
         async with metastore.session() as session:
             data, ids, _all = await svc._fetch_note_metadata(session, GLOBAL_VAULT_ID)
 
@@ -182,7 +204,12 @@ class TestIsStaleVersionBased:
             session.add(summary)
             await session.commit()
 
-        svc = VaultSummaryService(metastore=metastore, lm=MagicMock(), config=VaultSummaryConfig())
+        svc = VaultSummaryService(
+            metastore=metastore,
+            lm=MagicMock(),
+            config=VaultSummaryConfig(),
+            embedding_model=_mock_embedding_model(),
+        )
         assert await svc.is_stale(GLOBAL_VAULT_ID) is True
 
     @pytest.mark.asyncio
@@ -193,7 +220,12 @@ class TestIsStaleVersionBased:
             session.add(summary)
             await session.commit()
 
-        svc = VaultSummaryService(metastore=metastore, lm=MagicMock(), config=VaultSummaryConfig())
+        svc = VaultSummaryService(
+            metastore=metastore,
+            lm=MagicMock(),
+            config=VaultSummaryConfig(),
+            embedding_model=_mock_embedding_model(),
+        )
         assert await svc.is_stale(GLOBAL_VAULT_ID) is False
 
     @pytest.mark.asyncio
@@ -204,7 +236,12 @@ class TestIsStaleVersionBased:
             session.add(summary)
             await session.commit()
 
-        svc = VaultSummaryService(metastore=metastore, lm=MagicMock(), config=VaultSummaryConfig())
+        svc = VaultSummaryService(
+            metastore=metastore,
+            lm=MagicMock(),
+            config=VaultSummaryConfig(),
+            embedding_model=_mock_embedding_model(),
+        )
         assert await svc.is_stale(GLOBAL_VAULT_ID) is True
 
 
@@ -231,7 +268,12 @@ class TestNoteMarkingAfterUpdate:
             LLMTheme(name='ML', description='ML basics', note_count=1, trend='growing')
         ]
 
-        svc = VaultSummaryService(metastore=metastore, lm=MagicMock(), config=VaultSummaryConfig())
+        svc = VaultSummaryService(
+            metastore=metastore,
+            lm=MagicMock(),
+            config=VaultSummaryConfig(),
+            embedding_model=_mock_embedding_model(),
+        )
 
         with patch('memex_core.services.vault_summary.run_dspy_operation') as mock_run:
             mock_run.return_value = mock_prediction
@@ -264,7 +306,12 @@ class TestNoteMarkingAfterUpdate:
         mock_prediction.narrative = 'Full summary.'
         mock_prediction.themes_json = json.dumps([])
 
-        svc = VaultSummaryService(metastore=metastore, lm=MagicMock(), config=VaultSummaryConfig())
+        svc = VaultSummaryService(
+            metastore=metastore,
+            lm=MagicMock(),
+            config=VaultSummaryConfig(),
+            embedding_model=_mock_embedding_model(),
+        )
 
         with patch('memex_core.services.vault_summary.run_dspy_operation') as mock_run:
             mock_run.return_value = mock_prediction
@@ -303,7 +350,12 @@ class TestNoteMarkingAfterUpdate:
         mock_prediction.updated_narrative = 'Updated with only new note.'
         mock_prediction.updated_themes = []
 
-        svc = VaultSummaryService(metastore=metastore, lm=MagicMock(), config=VaultSummaryConfig())
+        svc = VaultSummaryService(
+            metastore=metastore,
+            lm=MagicMock(),
+            config=VaultSummaryConfig(),
+            embedding_model=_mock_embedding_model(),
+        )
 
         with patch('memex_core.services.vault_summary.run_dspy_operation') as mock_run:
             mock_run.return_value = mock_prediction

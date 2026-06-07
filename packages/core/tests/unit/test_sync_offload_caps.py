@@ -421,6 +421,7 @@ EXPECTED_GATED_SITES = [
     ('memory/retrieval/engine.py', '_NER'),
     ('memory/retrieval/engine.py', '_RERANKER'),
     ('services/inbox_router/service.py', '_EMBEDDING'),
+    ('services/vault_summary.py', '_EMBEDDING'),
 ]
 
 EXPECTED_EXEMPT_SITES = [
@@ -475,17 +476,18 @@ class TestToThreadAudit:
         return lines
 
     def test_total_call_count_matches_audit(self) -> None:
-        """RFC-001 §"Step 1.5.1" verified 18 actual calls on 8e59301; two
+        """RFC-001 §"Step 1.5.1" verified 18 actual calls on 8e59301; three
         further sites landed since (the NLI backend offload from the F10b
-        polarity work and the inbox-router vault-anchor embedding offload),
-        bringing the classified total to 20.
+        polarity work, the inbox-router vault-anchor embedding offload, and
+        the vault-summary narrative embedding offload), bringing the
+        classified total to 21.
         AC-009 (d): if origin/main adds a new asyncio.to_thread between
         this AC and merge it must be classified — this test catches a
         silent addition.
         """
         lines = self._all_call_lines()
-        assert len(lines) == 20, (
-            f'Expected 20 asyncio.to_thread calls per AC-009 four-bucket '
+        assert len(lines) == 21, (
+            f'Expected 21 asyncio.to_thread calls per AC-009 four-bucket '
             f'audit; found {len(lines)}. New calls must be classified into '
             f'gated / dead / exempt / warmup.'
         )

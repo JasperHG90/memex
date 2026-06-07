@@ -17,6 +17,7 @@ Full regeneration is available on demand via ``regenerate_summary()``.
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 from collections import Counter
@@ -32,6 +33,7 @@ from sqlmodel import col, func, select
 
 from memex_common.config import VaultSummaryConfig
 from memex_core.llm import run_dspy_operation
+from memex_core.memory.models.protocols import EmbeddingsModel
 from memex_core.memory.sql_models import (
     Chunk,
     ContentStatus,
@@ -140,10 +142,12 @@ class VaultSummaryService:
         metastore: AsyncBaseMetaStoreEngine,
         lm: dspy.LM,
         config: VaultSummaryConfig,
+        embedding_model: EmbeddingsModel,
     ) -> None:
         self.metastore = metastore
         self.lm = lm
         self.config = config
+        self.embedding_model = embedding_model
 
     async def get_summary(self, vault_id: UUID) -> VaultSummary | None:
         """Fetch the current vault summary, or None if none exists.
@@ -424,6 +428,8 @@ class VaultSummaryService:
             running_narrative = prediction.updated_narrative
             running_themes = prediction.updated_themes
 
+        narrative_embedding = await self._embed_narrative(running_narrative, vault_id)
+
         # Phase 4: Persist with SELECT FOR UPDATE to prevent concurrent overwrites
         async with self.metastore.session() as session:
             stmt = (
@@ -443,6 +449,7 @@ class VaultSummaryService:
                 return summary
 
             summary.narrative = running_narrative
+            summary.embedding = narrative_embedding
             summary.themes = _themes_to_dicts(running_themes)
             summary.inventory = inventory
             summary.key_entities = key_entities
@@ -514,6 +521,8 @@ class VaultSummaryService:
         else:
             narrative, themes = await self._tier3_hierarchical(notes_data, note_count, current_time)
 
+        narrative_embedding = await self._embed_narrative(narrative, vault_id)
+
         # Persist
         async with self.metastore.session() as session:
             stmt = select(VaultSummary).where(col(VaultSummary.vault_id) == vault_id)
@@ -525,6 +534,7 @@ class VaultSummaryService:
                 session.add(summary)
 
             summary.narrative = narrative
+            summary.embedding = narrative_embedding
             summary.themes = themes
             summary.inventory = inventory
             summary.key_entities = key_entities
@@ -546,6 +556,30 @@ class VaultSummaryService:
             await session.commit()
             await session.refresh(summary)
             return summary
+
+    async def _embed_narrative(self, narrative: str, vault_id: UUID) -> list[float] | None:
+        """Encode the narrative; non-fatal — a summary without a vector beats no summary."""
+        from memex_core.memory.retrieval._offload import (
+            get_embedding_call_timeout,
+            get_embedding_semaphore,
+        )
+
+        try:
+            async with get_embedding_semaphore():
+                vectors = await asyncio.wait_for(
+                    asyncio.to_thread(self.embedding_model.encode, [narrative]),
+                    timeout=get_embedding_call_timeout(),
+                )
+            return list(vectors[0].tolist())
+        except Exception as e:
+            logger.warning(
+                'Vault summary narrative embedding failed for vault %s (%s); '
+                'persisting without vector',
+                vault_id,
+                type(e).__name__,
+                exc_info=True,
+            )
+            return None
 
     # ------------------------------------------------------------------ #
     # Computed fields (no LLM)
@@ -803,6 +837,9 @@ class VaultSummaryService:
                 session.add(summary)
 
             summary.narrative = 'This vault is empty.'
+            # A vault can be EMPTIED (all notes deleted) — a previous narrative's
+            # vector must not survive as a similarity target for the placeholder.
+            summary.embedding = None
             summary.themes = []
             summary.inventory = {'total_notes': 0, 'total_entities': 0}
             summary.key_entities = []

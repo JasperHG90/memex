@@ -16,10 +16,25 @@ from memex_common.schemas import (
 )
 
 from memex_core.api import MemexAPI
-from memex_core.server.common import _handle_error, get_api
+from memex_core.server.common import _handle_error, get_api, vector_to_list
 from memex_core.services.kv import is_procedure_key
 
 router = APIRouter(prefix='/api/v1')
+
+
+def _kv_entry_dto(entry: object, include_vectors: bool) -> KVEntryDTO:
+    """Validate a KV row into the DTO, stripping the vector unless requested.
+
+    ``model_validate(from_attributes=True)`` auto-populates every matching
+    attribute — including ``embedding`` — so the strip must be explicit or
+    every KV response would leak vectors by default.
+    """
+    dto = KVEntryDTO.model_validate(entry, from_attributes=True)
+    if include_vectors:
+        dto.embedding = vector_to_list(dto.embedding)
+    else:
+        dto.embedding = None
+    return dto
 
 
 class EmbedRequest(BaseModel):
@@ -60,7 +75,7 @@ async def kv_put(
             embedding=request.embedding,
             ttl_seconds=request.ttl_seconds,
         )
-        return KVEntryDTO.model_validate(entry, from_attributes=True)
+        return _kv_entry_dto(entry, include_vectors=False)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to put KV entry')
 
@@ -79,6 +94,10 @@ async def kv_get(
             'For procedure: keys, return the full envelope (value, version, history) '
             'instead of just the active value. Ignored for non-procedure keys.'
         ),
+    ),
+    include_vectors: bool = Query(
+        False,
+        description="Include the entry's stored value vector in the response.",
     ),
 ):
     """Get a key-value entry by key.
@@ -101,7 +120,7 @@ async def kv_get(
                 created_at=entry.created_at,
                 updated_at=entry.updated_at,
             )
-        return KVEntryDTO.model_validate(entry, from_attributes=True)
+        return _kv_entry_dto(entry, include_vectors=include_vectors)
     except HTTPException:
         raise
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
@@ -129,7 +148,7 @@ async def kv_search(
             namespaces=request.namespaces,
             limit=request.limit,
         )
-        return [KVEntryDTO.model_validate(e, from_attributes=True) for e in entries]
+        return [_kv_entry_dto(e, include_vectors=request.include_vectors) for e in entries]
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'KV search failed')
 
@@ -168,6 +187,10 @@ async def kv_list(
         None,
         description='Wildcard filter (e.g. "global:preferences:*"). Only trailing * supported.',
     ),
+    include_vectors: bool = Query(
+        False,
+        description="Include each entry's stored value vector in the results.",
+    ),
 ):
     """List key-value entries, optionally filtered by namespace prefixes."""
     try:
@@ -182,6 +205,6 @@ async def kv_list(
             key_prefix=key_prefix,
             pattern=pattern,
         )
-        return [KVEntryDTO.model_validate(e, from_attributes=True) for e in entries]
+        return [_kv_entry_dto(e, include_vectors=include_vectors) for e in entries]
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to list KV entries')

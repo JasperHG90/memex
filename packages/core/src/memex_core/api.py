@@ -526,6 +526,7 @@ class MemexAPI:
             metastore=self.metastore,
             lm=self.lm,
             config=self.config.server.vault_summary,
+            embedding_model=self.embedding_model,
         )
         self._notes = NoteService(
             metastore=self.metastore,
@@ -1475,23 +1476,54 @@ class MemexAPI:
         return await self._entities.get_entities(entity_ids, vault_id=vault_id)
 
     async def get_memory_unit(self, unit_id: UUID | str) -> Any | None:
-        """Get a memory unit by ID. Delegates to StatsService."""
+        """Get a memory unit by ID. Delegates to StatsService.
+
+        Returns the raw ORM row, whose ``.embedding`` is eager-loaded; the
+        unscoped single-ID HTTP route does not serialize it (vectors are
+        confined to vault-scoped routes — use ``get_memory_units_by_ids``).
+        """
         return await self._stats.get_memory_unit(unit_id)
 
     async def get_memory_units_by_chunks(
         self,
         chunk_ids: list[UUID],
         vault_id: UUID,
+        *,
+        include_vectors: bool = False,
     ) -> list[Any]:
-        """Get memory units belonging to the named chunks (vault-scoped)."""
+        """Get memory units belonging to the named chunks (vault-scoped).
+
+        ``include_vectors`` exists for signature parity with
+        ``RemoteMemexAPI``; in-process rows expose ``.embedding`` regardless.
+        """
         return await self._stats.get_memory_units_by_chunks(chunk_ids, vault_id)
+
+    async def get_memory_units_by_ids(
+        self,
+        unit_ids: list[UUID],
+        vault_id: UUID,
+        *,
+        include_vectors: bool = False,
+    ) -> list[Any]:
+        """Get memory units by ID (vault-scoped). Delegates to StatsService.
+
+        ``include_vectors`` exists for signature parity with
+        ``RemoteMemexAPI``; in-process rows expose ``.embedding`` regardless.
+        """
+        return await self._stats.get_memory_units_by_ids(unit_ids, vault_id)
 
     async def list_memory_units_by_note(
         self,
         note_id: UUID,
         vault_id: UUID,
+        *,
+        include_vectors: bool = False,
     ) -> list[Any]:
-        """Get memory units belonging to a note (vault-scoped). Delegates to StatsService."""
+        """Get memory units belonging to a note (vault-scoped). Delegates to StatsService.
+
+        ``include_vectors`` exists for signature parity with
+        ``RemoteMemexAPI``; in-process rows expose ``.embedding`` regardless.
+        """
         return await self._stats.list_memory_units_by_note(note_id, vault_id)
 
     async def delete_memory_unit(self, unit_id: UUID) -> bool:
@@ -2168,12 +2200,21 @@ class MemexAPI:
             key=key, value=value, embedding=embedding, ttl_seconds=ttl_seconds
         )
 
-    async def kv_get(self, key: str, *, include_history: bool = False) -> Any | None:
+    async def kv_get(
+        self,
+        key: str,
+        *,
+        include_history: bool = False,
+        include_vectors: bool = False,
+    ) -> Any | None:
         """Get a KV entry by key. Delegates to KVService.
 
         For ``procedure:`` keys, ``include_history=True`` swaps the
         returned entry's ``value`` field from the unwrapped active string to
         a dict ``{value, version, history}``. Default behavior is unchanged.
+
+        ``include_vectors`` exists for signature parity with
+        ``RemoteMemexAPI``; in-process rows expose ``.embedding`` regardless.
         """
         return await self._kv.get(key=key, include_history=include_history)
 
@@ -2182,8 +2223,14 @@ class MemexAPI:
         query_embedding: list[float],
         namespaces: list[str] | None = None,
         limit: int = 5,
+        *,
+        include_vectors: bool = False,
     ) -> list[Any]:
-        """Semantic search over KV entries. Delegates to KVService."""
+        """Semantic search over KV entries. Delegates to KVService.
+
+        ``include_vectors`` exists for signature parity with
+        ``RemoteMemexAPI``; in-process rows expose ``.embedding`` regardless.
+        """
         return await self._kv.search(
             query_embedding=query_embedding, namespaces=namespaces, limit=limit
         )
@@ -2193,6 +2240,8 @@ class MemexAPI:
         query: str,
         namespaces: list[str] | None = None,
         limit: int = 5,
+        *,
+        include_vectors: bool = False,
     ) -> list[Any]:
         """Embed ``query`` locally, then delegate to :pymeth:`kv_search`.
 
@@ -2204,6 +2253,7 @@ class MemexAPI:
             query_embedding=embeddings[0].tolist(),
             namespaces=namespaces,
             limit=limit,
+            include_vectors=include_vectors,
         )
 
     async def kv_delete(self, key: str) -> bool:
@@ -2217,8 +2267,14 @@ class MemexAPI:
         exclude_prefix: str | None = None,
         key_prefix: str | None = None,
         pattern: str | None = None,
+        *,
+        include_vectors: bool = False,
     ) -> list[Any]:
-        """List KV entries. Delegates to KVService."""
+        """List KV entries. Delegates to KVService.
+
+        ``include_vectors`` exists for signature parity with
+        ``RemoteMemexAPI``; in-process rows expose ``.embedding`` regardless.
+        """
         return await self._kv.list_entries(
             namespaces=namespaces,
             limit=limit,
