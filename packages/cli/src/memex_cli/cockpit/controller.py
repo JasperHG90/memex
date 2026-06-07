@@ -522,8 +522,9 @@ def options_for_inbox_route(proposal: CockpitProposal) -> list[CockpitOption]:
             p_str = f'{float(p_match):.2f}' if p_match is not None else '?'
         except (TypeError, ValueError):
             p_str = '?'
-        # Pass the other candidates so the router can record them as negatives —
-        # a human confirmation is the same learning signal as an auto-route.
+        # The non-chosen candidates ride along as other_vault_ids. The in-core
+        # router that once learned from them was removed in V6; the field is kept
+        # for back-compat (the action still accepts it) but is no longer consumed.
         other_vault_ids = [v for v in all_vault_ids if v != vault_id]
         options.append(
             CockpitOption(
