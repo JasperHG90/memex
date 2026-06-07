@@ -637,3 +637,59 @@ async def test_refresh_failure_from_detail_keeps_retry_hint() -> None:
         assert 'Retry' in status
         header = str(app.query_one('#detail-header', Static).render())
         assert 'Could not load the proposal queue' in header
+
+
+@pytest.mark.asyncio
+async def test_flag_one_returns_result_then_error() -> None:
+    """_flag_one returns (result, None) on success and (None, error) on failure —
+    the contract both verdict paths branch on. Guards the (result, error) order."""
+    proposal_finding = _finding()
+
+    ok_app = ProposalCockpitApp(CockpitController(_FakeClient([proposal_finding])), limit=5)
+    async with ok_app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        proposal = ok_app.proposals[0]
+        result, error = await ok_app._flag_one(proposal)
+        assert error is None
+        assert result is not None and result.get('flagged') is True
+        assert proposal.flagged_at == '2026-05-26T00:00:00Z'
+
+    class _FlagBoom(_FakeClient):
+        async def lint_flag(self, finding_id: str) -> dict[str, Any]:
+            raise RuntimeError('flag endpoint down')
+
+    err_app = ProposalCockpitApp(CockpitController(_FlagBoom([proposal_finding])), limit=5)
+    async with err_app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        result, error = await err_app._flag_one(err_app.proposals[0])
+        assert result is None
+        assert error is not None and 'flag endpoint down' in error
+
+
+@pytest.mark.asyncio
+async def test_batch_flag_counts_success_and_failure() -> None:
+    """_submit_batch_async flag branch counts ok on error-None, fail otherwise."""
+
+    class _FlagOddFails(_FakeClient):
+        def __init__(self, findings: list[dict[str, Any]]) -> None:
+            super().__init__(findings)
+            self._n = 0
+
+        async def lint_flag(self, finding_id: str) -> dict[str, Any]:
+            self._n += 1
+            if self._n == 2:
+                raise RuntimeError('transient')
+            return {'finding_id': finding_id, 'flagged': True, 'flagged_at': 'x'}
+
+    findings = [_finding(), _finding(), _finding()]
+    app = ProposalCockpitApp(CockpitController(_FlagOddFails(findings)), limit=5)
+    from memex_cli.cockpit.controller import FLAG_OPTION
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await app._submit_batch_async(list(app.proposals), FLAG_OPTION, None)
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        status = str(app.query_one('#status-bar', Static).render())
+        assert '2 flagged' in status
+        assert '1 failed' in status
