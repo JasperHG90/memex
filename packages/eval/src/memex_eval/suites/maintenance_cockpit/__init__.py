@@ -28,16 +28,22 @@ scenario asserts on "No pending finding" and fails.
 
 from __future__ import annotations
 
+import base64
 import logging
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 # Import _outcomes and _setup_actions FIRST for decorator side effects,
 # BEFORE any suite.register(...) calls.
 from . import _outcomes  # noqa: F401
 from . import _setup_actions  # noqa: F401
 
+from memex_common.schemas import NoteCreateDTO
+from memex_core.services.proposal_actions._routing_evidence import (
+    CandidateEvidence,
+    RouteEvidence,
+)
 from memex_eval.suite.base import SuiteMetadata
 from memex_eval.suite.decorator import ScenarioContext, Suite
 from memex_eval.suite.sources import SuiteSources
@@ -842,6 +848,92 @@ async def routing_proposal_lifecycle(ctx: ScenarioContext) -> None:
     assert ok, (
         f'routing lifecycle failed: listed={bool(listed)} previewed={previewed} '
         f'preview={preview_text!r}'
+    )
+
+
+@suite.scenario(
+    id='routing_proposal_resolves_via_route_action',
+    query='deployment cadence',
+    description=(
+        'The full triage-skill routing lifecycle: a real note is filed in a '
+        'source vault, an inbox_vault_route proposal is submitted under its REAL '
+        'rule name (proving V6 freed it from the reserved set), resolved through '
+        'route_note_to_vault, and the note is verified to have actually migrated '
+        'to the target vault.'
+    ),
+    group='external',
+)
+async def routing_proposal_resolves_via_route_action(ctx: ScenarioContext) -> None:
+    src = await _isolated_vault(ctx, 'route-src')
+    dst = await _isolated_vault(ctx, 'route-dst')
+
+    # A real note to migrate. uuid4 in the body dodges the idempotency skip.
+    body = f'Routing target note for the triage skill. marker={uuid4()}'
+    dto = NoteCreateDTO(
+        name=f'route-note-{uuid4().hex[:8]}',
+        description='eval-suite routing source note',
+        content=base64.b64encode(body.encode('utf-8')),
+        vault_id=src,
+        note_key=f'eval-route-{uuid4().hex}',
+    )
+    resp = await ctx.api.ingest(dto)
+    assert getattr(resp, 'note_id', None), f'ingest did not return a note_id: {resp!r}'
+    # IngestResponse.note_id is a 32-char MD5 hex == the note's UUID; canonicalise.
+    note_id = str(UUID(str(resp.note_id)))
+
+    # Build the evidence via the relocated shapes the cockpit reads.
+    evidence = RouteEvidence(
+        routing_state='warm',
+        margin=0.42,
+        source_vault_id=src,
+        top_candidates=[
+            CandidateEvidence(
+                vault_id=dst,
+                vault_name='route-dst',
+                p_match=0.92,
+                p_match_raw=0.85,
+                ci_half_width=0.04,
+            )
+        ],
+    ).model_dump()
+
+    # REAL rule name: pre-V6 this was reserved and would be rejected.
+    proposal = {
+        'vault_id': src,
+        'rule_name': 'inbox_vault_route',
+        'lint_type': 'routing',
+        'target_type': 'note',
+        'target_id': note_id,
+        'description': 'classifier routed this inbox note to the route-dst vault',
+        'suggested_action': 'route the note to route-dst',
+        'evidence': evidence,
+        'proposed_action': {
+            'action_name': 'route_note_to_vault',
+            'params': {'target_vault_id': dst},
+        },
+    }
+    submitted = (await ctx.api.submit_lint_proposals([proposal]))['results'][0]
+    created = submitted['status'] == 'created'  # proves inbox_vault_route is no longer reserved
+    assert created, f'inbox_vault_route submit failed (still reserved?): {submitted!r}'
+
+    resolved = await ctx.api.lint_resolve(
+        submitted['finding_id'],
+        action='route_note_to_vault',
+        params={'target_vault_id': dst},
+        note='eval-suite: accept the route',
+    )
+    followup = (resolved.get('resolution') or {}).get('followup') or {}
+    stamped = followup.get('action') == 'route_note_to_vault' and 'applied_state' in followup
+
+    # The load-bearing assertion: the note actually moved to the target vault.
+    moved = await ctx.api.get_note(UUID(note_id))
+    migrated = str(moved.vault_id) == dst
+
+    ok = created and stamped and migrated
+    ctx.metrics['pass'] = 1.0 if ok else 0.0
+    assert ok, (
+        f'routing resolve failed: created={created} stamped={stamped} '
+        f'migrated={migrated} (note vault={moved.vault_id!r}, want {dst!r})'
     )
 
 
