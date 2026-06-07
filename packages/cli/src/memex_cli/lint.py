@@ -30,7 +30,14 @@ from rich.table import Table
 from memex_common.config import MemexConfig
 from memex_common.lint import LINT_TYPES
 from memex_cli.lint_review import finding_target_label, render_summary, run_review_loop
-from memex_cli.utils import async_command, get_api_context, handle_api_error, parse_uuid
+from memex_cli.utils import (
+    VaultFilterOption,
+    async_command,
+    emit_json,
+    get_api_context,
+    handle_api_error,
+    parse_uuid,
+)
 
 console = Console()
 
@@ -72,10 +79,7 @@ def _resolve_scope(
 @async_command
 async def lint_status(
     ctx: typer.Context,
-    vault: Annotated[
-        str | None,
-        typer.Option('--vault', '-v', help='Filter to one vault by name or UUID.'),
-    ] = None,
+    vault: VaultFilterOption = None,
     is_global: Annotated[
         bool,
         typer.Option('--global/--no-global', help='Show only global (vault_id NULL) findings.'),
@@ -115,10 +119,7 @@ async def lint_status(
 @async_command
 async def lint_findings(
     ctx: typer.Context,
-    vault: Annotated[
-        str | None,
-        typer.Option('--vault', '-v', help='Filter to one vault by name or UUID.'),
-    ] = None,
+    vault: VaultFilterOption = None,
     lint_type: Annotated[
         str | None,
         typer.Option(
@@ -206,10 +207,7 @@ async def lint_findings(
 @async_command
 async def lint_run_cmd(
     ctx: typer.Context,
-    vault: Annotated[
-        str | None,
-        typer.Option('--vault', '-v', help='Vault to scan. Omit to scan all vaults.'),
-    ] = None,
+    vault: VaultFilterOption = None,
     no_llm: Annotated[
         bool,
         typer.Option('--no-llm', help='Skip LLM checks (SQL rules only).'),
@@ -349,10 +347,7 @@ def _render_telemetry_table(rows: list[dict[str, Any]]) -> Table:
 @async_command
 async def lint_stats_default(
     ctx: typer.Context,
-    vault: Annotated[
-        str | None,
-        typer.Option('--vault', '-v', help='Filter to one vault by name or UUID.'),
-    ] = None,
+    vault: VaultFilterOption = None,
     rule: Annotated[
         str | None,
         typer.Option('--rule', help='Filter to one rule_name.'),
@@ -459,7 +454,7 @@ async def lint_actions_cmd(
             return
     actions = payload.get('actions', [])
     if json_output:
-        console.print_json(data=actions)
+        emit_json(actions)
         return
     table = Table(title='Proposal actions (closed catalogue)')
     table.add_column('id', no_wrap=True)
@@ -634,10 +629,7 @@ async def lint_reverse_cmd(
 @async_command
 async def lint_review_cmd(
     ctx: typer.Context,
-    vault: Annotated[
-        str | None,
-        typer.Option('--vault', '-v', help='Filter to one vault by name or UUID.'),
-    ] = None,
+    vault: VaultFilterOption = None,
     is_global: Annotated[
         bool,
         typer.Option('--global/--no-global', help='Review only global (vault_id NULL) findings.'),
@@ -788,10 +780,7 @@ async def lint_optimize_run_cmd(
         str | None,
         typer.Option('--rule', help='Rule to compile. Omit to compile all LLM rules.'),
     ] = None,
-    vault: Annotated[
-        str | None,
-        typer.Option('--vault', '-v', help='Vault scope.'),
-    ] = None,
+    vault: VaultFilterOption = None,
 ):
     """Compile optimized LLM lint signatures from your review history.
 
@@ -880,10 +869,7 @@ async def lint_optimize_rollback_cmd(
     ctx: typer.Context,
     rule: Annotated[str, typer.Option('--rule', help='Rule to rollback.')],
     version: Annotated[int, typer.Option('--version', help='Version to rollback to.')],
-    vault: Annotated[
-        str | None,
-        typer.Option('--vault', '-v', help='Vault scope.'),
-    ] = None,
+    vault: VaultFilterOption = None,
 ):
     """Rollback a rule's DSPy signature to a specific version."""
     config: MemexConfig = ctx.obj
@@ -926,10 +912,7 @@ async def lint_calibration_list(
         str | None,
         typer.Option('--rule', help='Filter to one rule_name.'),
     ] = None,
-    vault: Annotated[
-        str | None,
-        typer.Option('--vault', '-v', help='Vault scope.'),
-    ] = None,
+    vault: VaultFilterOption = None,
 ):
     """List calibration rows — versioned per-rule thresholds."""
     config: MemexConfig = ctx.obj
@@ -970,10 +953,7 @@ async def lint_calibration_list(
 @async_command
 async def lint_calibration_run(
     ctx: typer.Context,
-    vault: Annotated[
-        str | None,
-        typer.Option('--vault', '-v', help='Vault scope.'),
-    ] = None,
+    vault: VaultFilterOption = None,
 ):
     """Run threshold calibration now — adjust per-rule emission thresholds from telemetry."""
     config: MemexConfig = ctx.obj
@@ -1008,10 +988,7 @@ async def lint_calibration_run(
 async def lint_calibration_freeze(
     ctx: typer.Context,
     rule: Annotated[str, typer.Argument(help='Rule to freeze.')],
-    vault: Annotated[
-        str | None,
-        typer.Option('--vault', '-v', help='Vault scope.'),
-    ] = None,
+    vault: VaultFilterOption = None,
     unfreeze: Annotated[
         bool,
         typer.Option('--unfreeze', help='Unfreeze instead of freezing.'),
@@ -1038,10 +1015,7 @@ async def lint_calibration_rollback(
     ctx: typer.Context,
     rule: Annotated[str, typer.Argument(help='Rule to rollback.')],
     version: Annotated[int, typer.Argument(help='Version to rollback to.')],
-    vault: Annotated[
-        str | None,
-        typer.Option('--vault', '-v', help='Vault scope.'),
-    ] = None,
+    vault: VaultFilterOption = None,
 ):
     """Rollback a rule to a specific calibration version."""
     config: MemexConfig = ctx.obj
@@ -1133,10 +1107,7 @@ async def signatures_list_cmd(
         str | None,
         typer.Option('--rule', help='Filter to one rule_name.'),
     ] = None,
-    vault: Annotated[
-        str | None,
-        typer.Option('--vault', '-v', help='Vault scope (name or UUID).'),
-    ] = None,
+    vault: VaultFilterOption = None,
 ):
     """List compiled signature versions with status indicators."""
     config: MemexConfig = ctx.obj
@@ -1192,10 +1163,7 @@ async def signatures_show_cmd(
     ctx: typer.Context,
     rule: Annotated[str, typer.Argument(help='Rule name.')],
     version: Annotated[int, typer.Argument(help='Signature version number.')],
-    vault: Annotated[
-        str | None,
-        typer.Option('--vault', '-v', help='Vault scope (name or UUID).'),
-    ] = None,
+    vault: VaultFilterOption = None,
 ):
     """Show full detail for a specific signature version, including demos."""
     config: MemexConfig = ctx.obj
@@ -1271,10 +1239,7 @@ async def signatures_diff_cmd(
     rule: Annotated[str, typer.Argument(help='Rule name.')],
     v1: Annotated[int, typer.Argument(help='First version to compare.')],
     v2: Annotated[int, typer.Argument(help='Second version to compare.')],
-    vault: Annotated[
-        str | None,
-        typer.Option('--vault', '-v', help='Vault scope (name or UUID).'),
-    ] = None,
+    vault: VaultFilterOption = None,
 ):
     """Compare two signature versions side by side."""
     config: MemexConfig = ctx.obj
@@ -1381,10 +1346,7 @@ async def signatures_status_cmd(
         str | None,
         typer.Option('--rule', help='Filter to one rule_name.'),
     ] = None,
-    vault: Annotated[
-        str | None,
-        typer.Option('--vault', '-v', help='Vault scope (name or UUID).'),
-    ] = None,
+    vault: VaultFilterOption = None,
 ):
     """Composite status: signature + calibration + telemetry + optimizer readiness per rule."""
     config: MemexConfig = ctx.obj

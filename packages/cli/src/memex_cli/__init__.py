@@ -207,9 +207,18 @@ def main(
         setup_logging(ctx, debug, plb.Path(user_log_dir('memex', appauthor=False)) / 'memex.log')
         logger.critical(f'Configuration Error: {e}')
 
-        # Heuristic check for missing config
+        err_console = Console(stderr=True)
         if not global_data and not local_data and not overrides_data:
-            logger.info("Run 'memex init' to generate a valid configuration.")
+            err_console.print('[bold red]Error:[/bold red] No Memex configuration found.')
+            err_console.print(
+                'Run [bold cyan]memex config init[/bold cyan] to create one interactively.'
+            )
+        else:
+            err_console.print(f'[bold red]Configuration error:[/bold red] {e}')
+            err_console.print(
+                'Inspect your configuration with [bold cyan]memex config show[/bold cyan] '
+                'or regenerate it with [bold cyan]memex config init[/bold cyan].'
+            )
 
         raise typer.Exit(code=1)
 

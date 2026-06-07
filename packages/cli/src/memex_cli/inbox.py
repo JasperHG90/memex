@@ -5,7 +5,6 @@
 proposals.
 """
 
-import json
 from typing import Annotated
 
 import typer
@@ -13,7 +12,7 @@ from rich.console import Console
 from rich.table import Table
 
 from memex_common.config import MemexConfig
-from memex_cli.utils import async_command, get_api_context
+from memex_cli.utils import async_command, emit_json, get_api_context
 
 console = Console()
 
@@ -41,7 +40,7 @@ async def triage(
     async with get_api_context(config) as api:
         result = await api.trigger_inbox_triage(dry_run=dry_run)
     if json_output:
-        console.print_json(json.dumps(result))
+        emit_json(result)
         return
     verb = 'Would route' if dry_run else 'Routed'
     # ``blocked_*`` keys are absent on responses from an older server; default to 0.
@@ -74,7 +73,7 @@ async def status(
     async with get_api_context(config) as api:
         payload = await api.inbox_status()
     if json_output:
-        console.print_json(json.dumps(payload))
+        emit_json(payload)
         return
     table = Table(title='Inbox Router Status')
     table.add_column('Field')

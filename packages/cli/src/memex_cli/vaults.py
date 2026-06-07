@@ -2,7 +2,6 @@
 Vault Management Commands.
 """
 
-import json
 from pathlib import Path
 from typing import Annotated
 from uuid import UUID
@@ -12,7 +11,7 @@ from rich.console import Console
 from rich.table import Table
 
 from memex_common.config import MemexConfig
-from memex_cli.utils import get_api_context, async_command, handle_api_error
+from memex_cli.utils import emit_json, get_api_context, async_command, handle_api_error
 
 console = Console()
 
@@ -97,7 +96,7 @@ async def list_vaults(
         return
 
     if json_output:
-        console.print_json(json.dumps([v.model_dump() for v in vaults], default=str))
+        emit_json([v.model_dump() for v in vaults])
         return
 
     has_access = any(v.access is not None for v in vaults)
@@ -293,7 +292,7 @@ async def vault_summary(
             return
 
     if json_output:
-        console.print_json(json.dumps(summary.model_dump(exclude={'embedding'}), default=str))
+        emit_json(summary.model_dump(exclude={'embedding'}))
         return
 
     if compact:

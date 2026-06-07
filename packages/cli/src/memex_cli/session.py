@@ -7,7 +7,13 @@ import httpx
 import typer
 
 from memex_common.config import MemexConfig
-from memex_cli.utils import async_command, get_api_context, handle_api_error
+from memex_cli.utils import (
+    VaultOption,
+    async_command,
+    get_api_context,
+    handle_api_error,
+    resolve_active_vault,
+)
 
 app = typer.Typer(
     name='briefing',
@@ -22,10 +28,7 @@ _VALID_BUDGETS = (1000, 2000)
 @async_command
 async def briefing(
     ctx: typer.Context,
-    vault: Annotated[
-        str | None,
-        typer.Option('--vault', '-v', help='Vault name or UUID. Defaults to the active vault.'),
-    ] = None,
+    vault: VaultOption = None,
     budget: Annotated[
         int,
         typer.Option('--budget', '-b', help='Token budget (1000 or 2000).'),
@@ -50,9 +53,8 @@ async def briefing(
 
     try:
         async with get_api_context(config) as api:
-            vault_name = vault or config.write_vault
             try:
-                vault_uuid = await api.resolve_vault_identifier(vault_name)
+                vault_uuid = await resolve_active_vault(api, config, vault)
             except Exception as e:
                 handle_api_error(e)
 
