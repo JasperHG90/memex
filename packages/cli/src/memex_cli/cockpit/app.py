@@ -608,7 +608,7 @@ class ProposalCockpitApp(App):
         footer.refresh()
         hints = {
             'list': '[d] Detail  [Enter] Review  [f] Flag  [F5] Refresh  [?] Help  [q] Quit',
-            'review': '[↑↓] Navigate  [Enter] Confirm  [Esc] Back  [q] Quit',
+            'review': '[↑↓] Navigate  [Enter] Confirm  [n] Note  [Esc] Back  [q] Quit',
             'note': '[Enter] Submit  [Shift+Enter] Newline  [Esc] Cancel',
             'detail': '[s] View note  [Tab] Cycle units  [Esc] Back  [q] Quit',
             'collapse': (
@@ -642,8 +642,14 @@ class ProposalCockpitApp(App):
         try:
             proposals = await self._controller.fetch_pending(limit=self._limit)
         except Exception as exc:  # noqa: BLE001
-            self._show_load_error(exc)
+            # Drop to LIST first so watch_mode's footer update fires before we
+            # paint the error — otherwise a refresh failing from DETAIL/REVIEW
+            # would overwrite our retry hint with the normal LIST hint.
+            queue = self.query_one('#queue-list', ListView)
+            queue.clear()
+            self.proposals = []
             self.mode = 'list'
+            self._show_load_error(exc)
             return
         self.proposals = proposals
         queue = self.query_one('#queue-list', ListView)

@@ -599,3 +599,41 @@ async def test_reverse_screen_rejects_non_uuid() -> None:
         # Still on the modal; an inline error is shown rather than dismissing.
         assert isinstance(app.screen, ReverseScreen)
         assert 'Not a valid finding_id' in str(screen.query_one('#reverse-help', Label).render())
+
+
+@pytest.mark.asyncio
+async def test_refresh_failure_from_detail_keeps_retry_hint() -> None:
+    """A refresh that fails while in DETAIL still surfaces the retry affordance.
+
+    Regression guard: dropping to LIST must happen before the error is painted,
+    or watch_mode's footer update would clobber the '[F5] Retry' status hint.
+    """
+
+    class _FailAfterFirst(_FakeClient):
+        def __init__(self, findings: list[dict[str, Any]]) -> None:
+            super().__init__(findings)
+            self.calls = 0
+
+        async def lint_findings(self, **kwargs: Any) -> dict[str, Any]:
+            self.calls += 1
+            if self.calls > 1:
+                raise RuntimeError('server went away')
+            return await super().lint_findings(**kwargs)
+
+    finding = _finding()
+    app = ProposalCockpitApp(CockpitController(_FailAfterFirst([finding])), limit=5)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press('d')
+        await pilot.pause()
+        assert app.mode == 'detail'
+
+        await pilot.press('f5')
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        assert app.mode == 'list'
+        status = str(app.query_one('#status-bar', Static).render())
+        assert 'Retry' in status
+        header = str(app.query_one('#detail-header', Static).render())
+        assert 'Could not load the proposal queue' in header
