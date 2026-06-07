@@ -119,7 +119,7 @@ The leaf entity id should match the source note you ingested.
 
 **Observation appears in the lineage tree but you cannot deprioritize it.** Observations are read-only projections of memory units (their `unit_metadata.virtual` flag is `true`). Calling `memex_memory_deprioritize` on an observation UUID returns HTTP 400 with a `source_memory_units` list — re-issue the call against one of the listed underlying memory unit IDs.
 
-**Empty downstream tree from a note you just ingested.** Extraction is asynchronous; the reflection loop has not run yet. Wait a few seconds, or check the scheduler with `memex system status`. Once units are extracted, downstream lineage from the note will populate.
+**Empty downstream tree from a note you just ingested.** Extraction is asynchronous; the reflection loop has not run yet. Wait a few seconds, or check the scheduler with `memex stats`. Once units are extracted, downstream lineage from the note will populate.
 
 ## See also
 

@@ -21,10 +21,10 @@ def main():
 @app.command()
 def run(
     transport: str = typer.Option(
-        'stdio', '--transport', '-t', help='Transport mode: stdio, http, or sse'
+        'stdio', '--transport', '-t', help='Transport mode: stdio, http, or sse.'
     ),
-    host: str = typer.Option('0.0.0.0', help='Host for network transports'),
-    port: int = typer.Option(8000, help='Port for network transports'),
+    host: str = typer.Option('0.0.0.0', help='Host for network transports.'),
+    port: int = typer.Option(8000, help='Port for network transports.'),
 ):
     """
     Run the Memex MCP server.

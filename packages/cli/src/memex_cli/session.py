@@ -46,7 +46,7 @@ async def briefing(
             f'Error: --budget must be one of {_VALID_BUDGETS}, got {budget}',
             file=sys.stderr,
         )
-        raise typer.Exit(1)
+        raise typer.Exit(2)
 
     config: MemexConfig = ctx.obj
 

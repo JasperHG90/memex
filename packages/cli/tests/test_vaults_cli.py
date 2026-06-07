@@ -97,10 +97,10 @@ def test_truncate_vault_with_force(runner, mock_api, strip_ansi, monkeypatch):
 
     monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
 
-    result = runner.invoke(app, ['truncate', vault_name, '--force'])
+    result = runner.invoke(app, ['clear', vault_name, '--force'])
     assert result.exit_code == 0
     clean = strip_ansi(result.stdout)
-    assert 'Vault truncated' in clean
+    assert 'Vault cleared' in clean
     mock_api.truncate_vault.assert_called_once_with(vault_uuid)
 
 
@@ -114,7 +114,7 @@ def test_truncate_vault_shows_stats(runner, mock_api, strip_ansi, monkeypatch):
 
     monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
 
-    result = runner.invoke(app, ['truncate', vault_name, '--force'])
+    result = runner.invoke(app, ['clear', vault_name, '--force'])
     assert result.exit_code == 0
     clean = strip_ansi(result.stdout)
     assert '12' in clean  # notes count shown
@@ -129,7 +129,7 @@ def test_truncate_vault_aborted_without_force(runner, mock_api, strip_ansi, monk
 
     monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
 
-    result = runner.invoke(app, ['truncate', 'test-vault'], input='n\n')
+    result = runner.invoke(app, ['clear', 'test-vault'], input='n\n')
     assert result.exit_code == 0
     clean = strip_ansi(result.stdout)
     assert 'Aborted' in clean
@@ -146,7 +146,7 @@ def test_truncate_empty_vault(runner, mock_api, strip_ansi, monkeypatch):
 
     monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
 
-    result = runner.invoke(app, ['truncate', 'empty-vault', '--force'])
+    result = runner.invoke(app, ['clear', 'empty-vault', '--force'])
     assert result.exit_code == 0
     clean = strip_ansi(result.stdout)
     assert 'already empty' in clean
@@ -163,7 +163,7 @@ def test_truncate_vault_not_found(runner, mock_api, strip_ansi, monkeypatch):
 
     monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
 
-    result = runner.invoke(app, ['truncate', vault_name, '--force'])
+    result = runner.invoke(app, ['clear', vault_name, '--force'])
     assert result.exit_code == 1
     clean = strip_ansi(result.stdout)
     assert f"Vault '{vault_name}' not found" in clean

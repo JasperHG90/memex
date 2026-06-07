@@ -162,7 +162,9 @@ async def delete_mental_model(
 @async_command
 async def list_entities(
     ctx: typer.Context,
-    limit: Annotated[int, typer.Option('--limit', '-l', help='Max number of entities.')] = 50,
+    limit: Annotated[
+        int, typer.Option('--limit', '-l', help='Maximum number of entities to return.')
+    ] = 50,
     query: Annotated[str | None, typer.Option('--query', '-q', help='Search query.')] = None,
     entity_type: Annotated[
         str | None,
@@ -281,7 +283,9 @@ async def view_entity(
 async def list_mentions(
     ctx: typer.Context,
     identifier: Annotated[str, typer.Argument(help='Name or UUID of the entity.')],
-    limit: int = 20,
+    limit: Annotated[
+        int, typer.Option('--limit', '-l', help='Maximum number of mentions to return.')
+    ] = 20,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
     include_stale: Annotated[
         bool,
@@ -425,7 +429,8 @@ async def scan_merges_cmd(
     top_n: Annotated[
         int | None,
         typer.Option(
-            '--top-n',
+            '--limit',
+            '-l',
             min=2,
             max=10_000,
             help='Override the config default for how many entities to scan.',

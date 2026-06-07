@@ -36,7 +36,7 @@ def test_briefing_success_writes_markdown_to_stdout(runner, mock_config, _patche
 def test_briefing_invalid_budget_exits_2_to_stderr(runner, mock_config, _patched_api):
     result = _invoke(runner, mock_config, ['--budget', '500'])
 
-    assert result.exit_code == 1
+    assert result.exit_code == 2
     assert '--budget must be one of' in result.output
 
 

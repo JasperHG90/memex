@@ -4,7 +4,7 @@ Subcommands:
 - manifold   — emit UMAP projection JSON (or 202 task info)
 - retrieval  — emit top-N entities heatmap JSON
 - summary    — emit full diagnostics summary JSON
-- lint       — emit lint-finding pivot JSON
+- findings   — emit lint-finding pivot JSON
 """
 
 from __future__ import annotations
@@ -62,7 +62,9 @@ async def manifold_cmd(
 async def retrieval_cmd(
     ctx: typer.Context,
     vault: VaultOption = None,
-    top_n: Annotated[int, typer.Option('--top-n', help='Number of entities to return.')] = 50,
+    top_n: Annotated[
+        int, typer.Option('--limit', '-l', help='Maximum number of entities to return.')
+    ] = 50,
 ):
     """Print the top-N entity outcome heatmap JSON."""
     config: MemexConfig = ctx.obj
@@ -94,9 +96,9 @@ async def summary_cmd(
     emit_json(payload)
 
 
-@app.command('lint')
+@app.command('findings')
 @async_command
-async def lint_cmd(
+async def findings_cmd(
     ctx: typer.Context,
     vault: VaultOption = None,
 ):

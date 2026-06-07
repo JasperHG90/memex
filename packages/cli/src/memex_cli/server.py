@@ -157,16 +157,16 @@ async def _initialize_models(cache_dir: str):
 @app.command()
 def start(
     ctx: typer.Context,
-    host: str = typer.Option('0.0.0.0', envvar='MEMEX_HOST', help='Host to bind the server to'),
-    port: int | None = typer.Option(None, envvar='MEMEX_PORT', help='Port to bind the server to'),
+    host: str = typer.Option('0.0.0.0', envvar='MEMEX_HOST', help='Host to bind the server to.'),
+    port: int | None = typer.Option(None, envvar='MEMEX_PORT', help='Port to bind the server to.'),
     workers: int = typer.Option(
-        None, '--workers', '-w', envvar='MEMEX_WORKERS', help='Number of worker processes'
+        None, '--workers', '-w', envvar='MEMEX_WORKERS', help='Number of worker processes.'
     ),
     config: str = typer.Option(
-        None, '--config', '-c', envvar='MEMEX_CONFIG_PATH', help='Path to configuration file'
+        None, '--config', '-c', envvar='MEMEX_CONFIG_PATH', help='Path to configuration file.'
     ),
-    reload: bool = typer.Option(False, help='Enable auto-reload for development'),
-    daemon: bool = typer.Option(False, '--daemon', '-d', help='Run the server in the background'),
+    reload: bool = typer.Option(False, help='Enable auto-reload for development.'),
+    daemon: bool = typer.Option(False, '--daemon', '-d', help='Run the server in the background.'),
 ):
     """Start the Memex Core API server."""
     from memex_cli.banner import print_banner
