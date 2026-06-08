@@ -85,10 +85,8 @@ async def test_resolve_vault_scope_semantics(api):
 
 @pytest.mark.asyncio
 async def test_default_scope_excludes_system_notes(api, session):
-    content = Vault(name=f'c-{uuid4().hex[:8]}', kind='content')
-    system = Vault(name=f's-{uuid4().hex[:8]}', kind='system')
-    session.add_all([content, system])
-    await session.commit()
+    content = await api.create_vault(f'c-{uuid4().hex[:8]}')
+    system = await api.create_vault(f's-{uuid4().hex[:8]}', kind='system')
 
     tag = uuid4().hex[:8]
     title = f'deploy runbook {tag}'

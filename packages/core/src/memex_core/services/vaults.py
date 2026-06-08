@@ -8,7 +8,7 @@ from uuid import UUID
 
 from cachetools import LRUCache
 from cachetools_async import cached as cached_async
-from sqlmodel import col
+from sqlmodel import col, select
 
 from memex_common.exceptions import VaultNotFoundError, AmbiguousResourceError
 from memex_common.vault_policy import VaultKind, VaultPolicy, coerce_policy
@@ -76,6 +76,35 @@ class VaultService(BaseService):
                 )
 
             return vaults[0].id
+
+    @staticmethod
+    def content_vault_ids_subquery() -> Any:
+        """Single source of truth for the ``kind != 'system'`` predicate.
+
+        Returns a SQLAlchemy ``select`` subquery over ``Vault.id`` that callers
+        can drop into ``where(...).in_(...)`` (or ``.from_statement`` for raw
+        ``text()`` paths). Every site that needs the "content vaults only"
+        filter — entity listing, stats, search-scoping, raw note queries —
+        routes through here so a future kind rename or filter change is
+        one diff instead of 11.
+        """
+        return select(Vault.id).where(col(Vault.kind) != VaultKind.SYSTEM.value)
+
+    @staticmethod
+    def system_vault_ids_subquery() -> Any:
+        """Mirror of :meth:`content_vault_ids_subquery` for system vaults."""
+        return select(Vault.id).where(col(Vault.kind) == VaultKind.SYSTEM.value)
+
+    @staticmethod
+    def content_vault_clause() -> Any:
+        """Boolean WHERE-clause form of the content-vault filter.
+
+        Use when you're filtering an existing ``select(Vault)`` (rather
+        than needing a subquery of ids). Same SSOT as
+        :meth:`content_vault_ids_subquery` — both predicates are derived
+        from the same ``VaultKind`` import.
+        """
+        return col(Vault.kind) != VaultKind.SYSTEM.value
 
     async def create_vault(
         self,
@@ -238,7 +267,7 @@ class VaultService(BaseService):
         async with self.metastore.session() as session:
             stmt = select(Vault)
             if not include_system:
-                stmt = stmt.where(col(Vault.kind) != VaultKind.SYSTEM.value)
+                stmt = stmt.where(VaultService.content_vault_clause())
             return list((await session.exec(stmt)).all())
 
     async def list_vaults_with_counts(self, include_system: bool = True) -> list[dict[str, Any]]:
@@ -266,7 +295,7 @@ class VaultService(BaseService):
                 )
             )
             if not include_system:
-                stmt = stmt.where(col(Vault.kind) != VaultKind.SYSTEM.value)
+                stmt = stmt.where(VaultService.content_vault_clause())
             results = (await session.exec(stmt)).all()
             return [
                 {
@@ -278,19 +307,13 @@ class VaultService(BaseService):
             ]
 
     async def _content_vault_ids(self) -> list[UUID]:
-        from memex_core.memory.sql_models import Vault
-        from sqlmodel import select
-
         async with self.metastore.session() as session:
-            stmt = select(Vault.id).where(col(Vault.kind) != VaultKind.SYSTEM.value)
+            stmt = VaultService.content_vault_ids_subquery()
             return list((await session.exec(stmt)).all())
 
     async def _system_vault_ids(self) -> list[UUID]:
-        from memex_core.memory.sql_models import Vault
-        from sqlmodel import select
-
         async with self.metastore.session() as session:
-            stmt = select(Vault.id).where(col(Vault.kind) == VaultKind.SYSTEM.value)
+            stmt = VaultService.system_vault_ids_subquery()
             return list((await session.exec(stmt)).all())
 
     async def resolve_vault_scope(

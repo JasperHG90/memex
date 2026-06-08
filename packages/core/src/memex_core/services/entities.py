@@ -13,6 +13,7 @@ from memex_common.exceptions import EntityNotFoundError, ResourceNotFoundError
 
 from memex_core.services.audit import audit_event
 from memex_core.services.base import BaseService
+from memex_core.services.vaults import VaultService
 
 if TYPE_CHECKING:
     from memex_core.memory.sql_models import Entity
@@ -72,12 +73,12 @@ def _content_vault_id_subquery() -> Any:
 
     Used as the default scope for entity reads so system-vault edges/mentions
     don't surface or inflate counts unless a vault is named explicitly.
-    """
-    from memex_common.vault_policy import VaultKind
-    from memex_core.memory.sql_models import Vault
-    from sqlmodel import select
 
-    return select(Vault.id).where(col(Vault.kind) != VaultKind.SYSTEM.value)
+    Delegates to :meth:`VaultService.content_vault_ids_subquery` so all
+    service files share one predicate. A future kind rename or filter
+    change is one diff, not 11.
+    """
+    return VaultService.content_vault_ids_subquery()
 
 
 def _membership_clause(vault_ids: list[UUID] | None, scope_ids: list[UUID]) -> Any:
@@ -222,10 +223,20 @@ class EntityService(BaseService):
         empty metadata dict. Otherwise the entity's mental models across the
         in-scope vaults are aggregated into a single profile (no single-vault
         guess); see :func:`_aggregate_mental_models`.
+
+        .. note::
+           Performance: this method now issues 2–3 queries (entities,
+           cooccurrence centrality, mental-model aggregation) where the old
+           single LEFT JOIN gave one. The split is a deliberate correctness
+           fix for multi-vault scope (the old code joined on a single
+           ``scope_vault_id`` UUID). For single-vault scope on large result
+           sets, consider a single CTE that materialises the in-scope
+           vault ids once and joins models/cooccurrences in one pass.
+           TODO(perf): add a benchmark for ``limit=100, scope=1-vault`` to
+           confirm the regression is bounded before any optimisation.
         """
         from collections import defaultdict
 
-        from memex_common.vault_policy import VaultKind
         from memex_core.memory.sql_models import (
             Entity,
             EntityCooccurrence,
@@ -240,9 +251,11 @@ class EntityService(BaseService):
             if vault_ids:
                 scope_ids = [v if isinstance(v, UUID) else UUID(str(v)) for v in vault_ids]
             else:
-                scope_q = select(Vault.id)
-                if not include_system_vaults:
-                    scope_q = scope_q.where(col(Vault.kind) != VaultKind.SYSTEM.value)
+                scope_q = (
+                    VaultService.content_vault_ids_subquery()
+                    if not include_system_vaults
+                    else select(Vault.id)
+                )
                 scope_ids = list((await session.exec(scope_q)).all())
 
             if not scope_ids:
@@ -1041,15 +1054,16 @@ class EntityService(BaseService):
         Explicit ``vault_ids`` are honoured as given (may name a system vault);
         otherwise the scope is all content vaults (plus system when opted in).
         """
-        from memex_common.vault_policy import VaultKind
         from memex_core.memory.sql_models import Vault
         from sqlmodel import select
 
         if vault_ids:
             return [v if isinstance(v, UUID) else UUID(str(v)) for v in vault_ids]
-        scope_q = select(Vault.id)
-        if not include_system_vaults:
-            scope_q = scope_q.where(col(Vault.kind) != VaultKind.SYSTEM.value)
+        scope_q = (
+            VaultService.content_vault_ids_subquery()
+            if not include_system_vaults
+            else select(Vault.id)
+        )
         return list((await session.exec(scope_q)).all())
 
     async def _aggregate_models_for(

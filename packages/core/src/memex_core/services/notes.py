@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any, ClassVar
+from typing import TYPE_CHECKING, Any
 from uuid import UUID
 
 if TYPE_CHECKING:
@@ -112,28 +112,6 @@ async def _cleanup_entities_after_delete(
 
 class NoteService:
     """Note CRUD, listing, and resource access."""
-
-    # Subquery fragment used by raw text() queries to filter to content vaults
-    # only. The kind literal is interpolated from VaultKind.SYSTEM.value at
-    # class-definition time so a kind rename only touches the enum; the
-    # duplicate string here used to be a silent-drift hazard. Sibling paths
-    # (``list_notes``, ``get_recent_notes``) use the ORM
-    # ``select(Vault.id).where(Vault.kind != VaultKind.SYSTEM.value)`` form
-    # which keeps the same SSOT in one place.
-    from memex_common.vault_policy import VaultKind as _VaultKind
-
-    _CONTENT_VAULT_IDS_SQL: ClassVar[str] = (
-        f"vault_id IN (SELECT id FROM vaults WHERE kind <> '{_VaultKind.SYSTEM.value}')"
-    )
-
-    # Drift guard: the DB CHECK constraint ``vaults_kind_check`` enumerates
-    # the same kind set. If a new VaultKind is added, this assert forces
-    # the SQL fragment to be re-evaluated against the CHECK rather than
-    # silently leaving a stale literal in place.
-    assert 'kind' in _CONTENT_VAULT_IDS_SQL and _VaultKind.SYSTEM.value in _CONTENT_VAULT_IDS_SQL, (
-        '_CONTENT_VAULT_IDS_SQL drifted from VaultKind.SYSTEM.value; '
-        're-derive the f-string when adding a new kind'
-    )
 
     _audit_service: AuditService | None = None
 
@@ -800,8 +778,7 @@ class NoteService:
         from sqlalchemy.dialects.postgresql import JSONB
         from sqlmodel import select
 
-        from memex_common.vault_policy import VaultKind
-        from memex_core.memory.sql_models import Note, Vault
+        from memex_core.memory.sql_models import Note
 
         ids = list(vault_ids) if vault_ids else []
         if vault_id and vault_id not in ids:
@@ -816,8 +793,7 @@ class NoteService:
             else:
                 # No explicit scope → content vaults only (system vaults are
                 # silent on browse surfaces; reach them by naming the vault).
-                content_subq = select(Vault.id).where(col(Vault.kind) != VaultKind.SYSTEM.value)
-                stmt = stmt.where(col(Note.vault_id).in_(content_subq))
+                stmt = stmt.where(col(Note.vault_id).in_(VaultService.content_vault_ids_subquery()))
             if after is not None:
                 stmt = stmt.where(date_col >= after)
             if before is not None:
@@ -869,8 +845,7 @@ class NoteService:
         """Get the most recent notes. ``date_field`` matches ``list_notes``."""
         from sqlmodel import select
 
-        from memex_common.vault_policy import VaultKind
-        from memex_core.memory.sql_models import Note, Vault
+        from memex_core.memory.sql_models import Note
 
         ids = list(vault_ids) if vault_ids else []
         if vault_id and vault_id not in ids:
@@ -883,8 +858,7 @@ class NoteService:
             if ids:
                 stmt = stmt.where(col(Note.vault_id).in_(ids))
             else:
-                content_subq = select(Vault.id).where(col(Vault.kind) != VaultKind.SYSTEM.value)
-                stmt = stmt.where(col(Note.vault_id).in_(content_subq))
+                stmt = stmt.where(col(Note.vault_id).in_(VaultService.content_vault_ids_subquery()))
             if after is not None:
                 stmt = stmt.where(date_col >= after)
             if before is not None:
@@ -959,6 +933,7 @@ class NoteService:
                 text('SELECT set_limit(:threshold)'), params={'threshold': threshold}
             )
 
+            params: dict[str, Any]
             if vault_ids:
                 stmt = text("""
                     SELECT
@@ -971,30 +946,45 @@ class NoteService:
                     ORDER BY score DESC
                     LIMIT :limit
                 """)
-                params: dict[str, Any] = {
+                params = {
                     'query': query,
                     'vault_ids': list(vault_ids),
                     'limit': limit,
                 }
+                result = await session.exec(stmt, params=params)
             else:
                 # No explicit scope → content vaults only (system vaults are
                 # silent on browse surfaces; reach them by naming the vault).
-                # The kind predicate is in NoteService._CONTENT_VAULT_IDS_SQL
-                # to keep it in sync with the ORM VaultKind filter.
-                stmt = text(f"""
-                    SELECT
-                        id, title,
-                        similarity(lower(title), lower(:query)) AS score,
-                        vault_id, created_at, publish_date, status
-                    FROM notes
-                    WHERE lower(title) % lower(:query)
-                      AND {self._CONTENT_VAULT_IDS_SQL}
-                    ORDER BY score DESC
-                    LIMIT :limit
-                """)
-                params = {'query': query, 'limit': limit}
+                # The kind predicate is the SAME subquery the ORM
+                # list_notes / get_recent_notes paths use, so this raw-SQL
+                # branch can't drift from the SSOT.
+                from sqlmodel import select
 
-            result = await session.exec(stmt, params=params)
+                from memex_core.memory.sql_models import Note
+                from memex_core.services.vaults import VaultService
+
+                content_subq = VaultService.content_vault_ids_subquery()
+                score_label = func.similarity(func.lower(Note.title), func.lower(query)).label(
+                    'score'
+                )
+                stmt = (
+                    select(
+                        Note.id,
+                        Note.title,
+                        score_label,
+                        Note.vault_id,
+                        Note.created_at,
+                        Note.publish_date,
+                        Note.status,
+                    )
+                    .where(
+                        func.lower(Note.title).op('%')(func.lower(query)),
+                        Note.vault_id.in_(content_subq),
+                    )
+                    .order_by(score_label.desc())
+                    .limit(limit)
+                )
+                result = await session.exec(stmt)
             rows = []
             for row in result:
                 rows.append(
