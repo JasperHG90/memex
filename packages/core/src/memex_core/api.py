@@ -33,6 +33,7 @@ from memex_common.schemas import (
     SurveyResponse,
     UnitHistoryNodeDTO,
 )
+from memex_common.vault_policy import VaultKind, VaultPolicy
 from memex_core.config import MemexConfig, GLOBAL_VAULT_ID
 from memex_core.models import NoteMetadata
 from memex_core.storage import (
@@ -1605,6 +1606,7 @@ class MemexAPI:
         intent_class: str | None = None,
         risk_class: str | None = None,
         apply_pre_filter: bool = True,
+        include_system_vaults: bool = False,
     ) -> tuple[list[MemoryUnit], Any]:
         """Search with reranking. Delegates to SearchService.
 
@@ -1637,6 +1639,7 @@ class MemexAPI:
             intent_class=intent_class,
             risk_class=risk_class,
             apply_pre_filter=apply_pre_filter,
+            include_system_vaults=include_system_vaults,
         )
 
     async def summarize_search_results(self, query: str, texts: list[str]) -> str:
@@ -1659,6 +1662,7 @@ class MemexAPI:
         before: datetime | None = None,
         tags: list[str] | None = None,
         reference_date: datetime | None = None,
+        include_system_vaults: bool = False,
     ) -> list[NoteSearchResult]:
         """Search notes. Delegates to SearchService."""
         return await self._search.search_notes(
@@ -1676,6 +1680,7 @@ class MemexAPI:
             before=before,
             tags=tags,
             reference_date=reference_date,
+            include_system_vaults=include_system_vaults,
         )
 
     async def resolve_source_notes(self, unit_ids: list[UUID]) -> dict[UUID, UUID]:
@@ -1691,20 +1696,18 @@ class MemexAPI:
         after: datetime | None = None,
         before: datetime | None = None,
         reference_date: datetime | None = None,
+        include_system_vaults: bool = False,
     ) -> SurveyResponse:
-        """Broad topic survey. Delegates to SearchService."""
-        # Resolve vault identifiers to UUIDs
+        """Broad topic survey. Delegates to SearchService.
+
+        A wildcard ``'*'`` expands to content vaults only; system vaults join
+        only when named explicitly or via ``include_system_vaults``.
+        """
         resolved: list[UUID] | None = None
         if vault_ids:
-            from memex_common.vault_utils import ALL_VAULTS_WILDCARD
-
-            if ALL_VAULTS_WILDCARD in [str(v) for v in vault_ids]:
-                all_v = await self.list_vaults()
-                resolved = [v.id for v in all_v]
-            else:
-                resolved = []
-                for v in vault_ids:
-                    resolved.append(await self.resolve_vault_identifier(str(v)))
+            resolved = await self.resolve_vault_scope(
+                vault_ids, include_system_vaults=include_system_vaults
+            )
 
         return await self._search.survey(
             query=query,
@@ -1809,9 +1812,15 @@ class MemexAPI:
         async with self.metastore.session() as owned:
             return await _run(owned, commit=True)
 
-    async def create_vault(self, name: str, description: str | None = None) -> Any:
+    async def create_vault(
+        self,
+        name: str,
+        description: str | None = None,
+        kind: 'VaultKind | str' = 'content',
+        policy: 'VaultPolicy | dict | None' = None,
+    ) -> Any:
         """Create a new vault. Delegates to VaultService."""
-        return await self._vaults.create_vault(name, description)
+        return await self._vaults.create_vault(name, description, kind=kind, policy=policy)
 
     async def delete_vault(self, vault_id: UUID) -> bool:
         """Delete a vault. Delegates to VaultService."""
@@ -2011,13 +2020,23 @@ class MemexAPI:
         """Delete a mental model. Delegates to EntityService."""
         return await self._entities.delete_mental_model(entity_id, vault_id)
 
-    async def list_vaults(self) -> list[Any]:
-        """List all vaults. Delegates to VaultService."""
-        return await self._vaults.list_vaults()
+    async def list_vaults(self, include_system: bool = True) -> list[Any]:
+        """List vaults. Delegates to VaultService."""
+        return await self._vaults.list_vaults(include_system=include_system)
 
-    async def list_vaults_with_counts(self) -> list[dict[str, Any]]:
-        """List all vaults with note counts. Delegates to VaultService."""
-        return await self._vaults.list_vaults_with_counts()
+    async def list_vaults_with_counts(self, include_system: bool = True) -> list[dict[str, Any]]:
+        """List vaults with note counts. Delegates to VaultService."""
+        return await self._vaults.list_vaults_with_counts(include_system=include_system)
+
+    async def resolve_vault_scope(
+        self,
+        identifiers: list[UUID | str] | None,
+        include_system_vaults: bool = False,
+    ) -> list[UUID]:
+        """Resolve a read-scope request to concrete vault ids. Delegates to VaultService."""
+        return await self._vaults.resolve_vault_scope(
+            identifiers, include_system_vaults=include_system_vaults
+        )
 
     async def get_vault_by_name(self, name: str) -> Any | None:
         """Get a vault by name. Delegates to VaultService."""

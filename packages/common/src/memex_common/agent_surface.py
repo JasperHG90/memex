@@ -247,7 +247,9 @@ TOOL DISCOVERY (progressive disclosure)
 
 VAULT DEFAULTS — vault parameters are optional. Writes default to the
 active vault; reads default to search vaults (from .memex.yaml or global
-config). Pass vault_id/vault_ids to override.
+config). Pass vault_id/vault_ids to override. The "*" wildcard expands to
+content vaults only; system vaults (e.g. inbox) join only when named or via
+include_system_vaults=true.
 
 NEVER fabricate IDs. Use only IDs returned from tool output.
 

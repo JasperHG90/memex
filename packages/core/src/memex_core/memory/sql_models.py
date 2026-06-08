@@ -29,6 +29,7 @@ from memex_core.context import get_session_id
 from memex_core.memory.mixins import vault_id_field, created_at_field, updated_at_field
 
 from memex_common.schemas import MemoryUnitBase, FactTypes
+from memex_common.vault_policy import VaultKind
 
 EMBEDDING_DIMENSION = 384
 
@@ -66,6 +67,14 @@ class Vault(SQLModel, table=True):  # type: ignore
         default=MWMode.STATIONARY,
         sa_column=Column(Text, nullable=False, server_default='stationary'),
     )
+    kind: VaultKind = Field(
+        default=VaultKind.CONTENT,
+        sa_column=Column(Text, nullable=False, server_default='content'),
+    )
+    policy: dict = Field(
+        default_factory=dict,
+        sa_column=Column(JSONB, nullable=False, server_default=sql_text("'{}'::jsonb")),
+    )
     created_at: datetime = Field(
         default_factory=lambda: datetime.now(timezone.utc),
         sa_column=Column(TIMESTAMP(timezone=True), server_default=func.now()),
@@ -76,6 +85,10 @@ class Vault(SQLModel, table=True):  # type: ignore
         CheckConstraint(
             "mw_mode IN ('stationary', 'ema')",
             name='vaults_mw_mode_check',
+        ),
+        CheckConstraint(
+            "kind IN ('content', 'system')",
+            name='vaults_kind_check',
         ),
     )
 

@@ -51,7 +51,8 @@ class StatsService(BaseService):
         vault_ids: list[UUID] | None = None,
     ) -> dict[str, int]:
         """Get total counts for notes, memory units, entities, and reflection queue."""
-        from memex_core.memory.sql_models import Entity, MemoryUnit, Note, ReflectionQueue
+        from memex_common.vault_policy import VaultKind
+        from memex_core.memory.sql_models import Entity, MemoryUnit, Note, ReflectionQueue, Vault
         from sqlmodel import func, select
 
         ids = list(vault_ids) if vault_ids else []
@@ -68,6 +69,13 @@ class StatsService(BaseService):
                 note_stmt = note_stmt.where(col(Note.vault_id).in_(ids))
                 memory_stmt = memory_stmt.where(col(MemoryUnit.vault_id).in_(ids))
                 queue_stmt = queue_stmt.where(col(ReflectionQueue.vault_id).in_(ids))
+            else:
+                # No explicit scope → content vaults only for vault-scoped counts.
+                # Entity is global (no vault_id, §4.3) so its count stays global.
+                content_subq = select(Vault.id).where(col(Vault.kind) != VaultKind.SYSTEM.value)
+                note_stmt = note_stmt.where(col(Note.vault_id).in_(content_subq))
+                memory_stmt = memory_stmt.where(col(MemoryUnit.vault_id).in_(content_subq))
+                queue_stmt = queue_stmt.where(col(ReflectionQueue.vault_id).in_(content_subq))
 
             note_count = (await session.exec(note_stmt)).one()
             memory_count = (await session.exec(memory_stmt)).one()

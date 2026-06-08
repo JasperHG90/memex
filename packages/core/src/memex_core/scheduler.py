@@ -215,8 +215,17 @@ async def periodic_vault_summary_task(api: 'MemexAPI'):
     async with background_session('bg-sched-vault-summary'):
         logger.info('Scheduler: Running vault summary check...')
         try:
+            from memex_common.vault_policy import summarize_enabled
+
+            from memex_core.memory.sql_models import Vault
+            from memex_core.metrics import VAULT_SUMMARY_SKIPPED_TOTAL
+
             vaults = await api.list_vaults()
             for vault in vaults:
+                if isinstance(vault, Vault) and not summarize_enabled(vault.kind, vault.policy):
+                    # System vaults (or summarize-disabled vaults) get no narrative.
+                    VAULT_SUMMARY_SKIPPED_TOTAL.labels(reason='vault_policy').inc()
+                    continue
                 summary = await api.vault_summary.get_summary(vault.id)
                 if summary and summary.needs_regeneration:
                     logger.info(
@@ -243,11 +252,17 @@ async def periodic_kv_ttl_cleanup_task(api: 'MemexAPI'):
 
 
 async def periodic_diagnostics_refresh_task(api: 'MemexAPI'):
-    """Weekly UMAP manifold refresh per vault under leader lock."""
+    """Weekly UMAP manifold refresh per content vault under leader lock."""
+    from memex_core.memory.sql_models import Vault
+
     async with background_session('bg-sched-diagnostics-refresh'):
         try:
             vaults = await api.list_vaults()
             for vault in vaults:
+                # Diagnostics is a discovery artifact — skip system vaults (no
+                # manifold for hidden/transient infrastructure vaults).
+                if isinstance(vault, Vault) and vault.kind == 'system':
+                    continue
                 try:
                     await api.diagnostics.get_or_compute_manifold(vault.id, force_refresh=True)
                 except (OSError, RuntimeError, ValueError) as e:

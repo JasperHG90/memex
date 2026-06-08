@@ -26,6 +26,30 @@ def vault_service():
             return svc._resolved[identifier]
 
     svc.resolve_vault_identifier = _resolve
+
+    # Content vault ids the wildcard expands to (settable per test).
+    svc._content_ids = []
+
+    async def _scope(identifiers, include_system_vaults=False):
+        ids: list = []
+        seen: set = set()
+
+        def _add(u):
+            if u not in seen:
+                seen.add(u)
+                ids.append(u)
+
+        identifiers = identifiers or []
+        has_wildcard = any(str(v) == '*' for v in identifiers)
+        named = [v for v in identifiers if str(v) != '*']
+        for n in named:
+            _add(await _resolve(str(n)))
+        if has_wildcard or not named:
+            for c in svc._content_ids:
+                _add(c)
+        return ids
+
+    svc.resolve_vault_scope = _scope
     return svc
 
 
@@ -114,10 +138,10 @@ async def test_search_default_reader_vault_only(vault_service):
 
 
 @pytest.mark.asyncio
-async def test_search_wildcard_resolves_to_all_vaults(vault_service):
-    """When vault_ids=['*'], search should resolve to all vaults."""
+async def test_search_wildcard_resolves_to_content_vaults(vault_service):
+    """When vault_ids=['*'], search resolves to content vaults only."""
     v1, v2 = uuid4(), uuid4()
-    vault_service.list_vaults = AsyncMock(return_value=[MagicMock(id=v1), MagicMock(id=v2)])
+    vault_service._content_ids = [v1, v2]
 
     config = MagicMock()
     config.server.default_reader_vault = 'default'
@@ -144,10 +168,10 @@ async def test_search_wildcard_resolves_to_all_vaults(vault_service):
 
 
 @pytest.mark.asyncio
-async def test_search_notes_wildcard_resolves_to_all_vaults(vault_service):
-    """When vault_ids=['*'], search_notes should resolve to all vaults."""
+async def test_search_notes_wildcard_resolves_to_content_vaults(vault_service):
+    """When vault_ids=['*'], search_notes resolves to content vaults only."""
     v1, v2 = uuid4(), uuid4()
-    vault_service.list_vaults = AsyncMock(return_value=[MagicMock(id=v1), MagicMock(id=v2)])
+    vault_service._content_ids = [v1, v2]
 
     config = MagicMock()
     config.server.default_reader_vault = 'default'

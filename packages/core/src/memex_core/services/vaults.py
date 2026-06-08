@@ -11,6 +11,8 @@ from cachetools_async import cached as cached_async
 from sqlmodel import col
 
 from memex_common.exceptions import VaultNotFoundError, AmbiguousResourceError
+from memex_common.vault_policy import VaultKind, VaultPolicy, coerce_policy
+from memex_common.vault_utils import ALL_VAULTS_WILDCARD
 
 from memex_core.memory.sql_models import Vault, MWMode
 
@@ -75,10 +77,23 @@ class VaultService(BaseService):
 
             return vaults[0].id
 
-    async def create_vault(self, name: str, description: str | None = None) -> Any:
-        """Create a new vault."""
+    async def create_vault(
+        self,
+        name: str,
+        description: str | None = None,
+        kind: VaultKind | str = VaultKind.CONTENT,
+        policy: VaultPolicy | dict | None = None,
+    ) -> Any:
+        """Create a new vault.
+
+        ``kind`` is permanent — there is no update path; to change it, delete and
+        recreate. ``policy`` overrides the kind-derived synthesis defaults.
+        """
         from memex_core.memory.sql_models import Vault
         from sqlmodel import select
+
+        kind = VaultKind(kind)
+        resolved_policy = coerce_policy(policy)
 
         async with self.metastore.session() as session:
             stmt = select(Vault).where(col(Vault.name) == name)
@@ -91,11 +106,24 @@ class VaultService(BaseService):
                 raise ValueError(
                     f"mw_mode_default must be 'stationary' or 'ema', got '{default_mode}'"
                 )
-            vault = Vault(name=name, description=description, mw_mode=default_mode)
+            vault = Vault(
+                name=name,
+                description=description,
+                mw_mode=default_mode,
+                kind=kind,
+                policy=resolved_policy.model_dump(exclude_none=True),
+            )
             session.add(vault)
             await session.commit()
             await session.refresh(vault)
-            audit_event(self._audit_service, 'vault.created', 'vault', str(vault.id), name=name)
+            audit_event(
+                self._audit_service,
+                'vault.created',
+                'vault',
+                str(vault.id),
+                name=name,
+                kind=kind.value,
+            )
             return vault
 
     async def delete_vault(self, vault_id: UUID) -> bool:
@@ -197,17 +225,28 @@ class VaultService(BaseService):
         audit_event(self._audit_service, 'vault.truncated', 'vault', str(vault_id))
         return counts
 
-    async def list_vaults(self) -> list[Any]:
-        """List all vaults."""
+    async def list_vaults(self, include_system: bool = True) -> list[Any]:
+        """List vaults.
+
+        Defaults to *all* vaults — this low-level primitive is unchanged so
+        operational/background callers keep seeing system vaults. User-facing
+        enumeration surfaces pass ``include_system=False`` to hide them.
+        """
         from memex_core.memory.sql_models import Vault
         from sqlmodel import select
 
         async with self.metastore.session() as session:
             stmt = select(Vault)
+            if not include_system:
+                stmt = stmt.where(col(Vault.kind) != VaultKind.SYSTEM.value)
             return list((await session.exec(stmt)).all())
 
-    async def list_vaults_with_counts(self) -> list[dict[str, Any]]:
-        """List all vaults with note counts and last-modified timestamp."""
+    async def list_vaults_with_counts(self, include_system: bool = True) -> list[dict[str, Any]]:
+        """List vaults with note counts and last-modified timestamp.
+
+        ``include_system`` defaults to True (return all); user-facing surfaces
+        pass False to exclude system vaults.
+        """
         from sqlalchemy import func
         from sqlmodel import select
         from memex_core.memory.sql_models import Vault, Note
@@ -226,6 +265,8 @@ class VaultService(BaseService):
                     func.count(Note.id).desc(),
                 )
             )
+            if not include_system:
+                stmt = stmt.where(col(Vault.kind) != VaultKind.SYSTEM.value)
             results = (await session.exec(stmt)).all()
             return [
                 {
@@ -235,6 +276,62 @@ class VaultService(BaseService):
                 }
                 for row in results
             ]
+
+    async def _content_vault_ids(self) -> list[UUID]:
+        from memex_core.memory.sql_models import Vault
+        from sqlmodel import select
+
+        async with self.metastore.session() as session:
+            stmt = select(Vault.id).where(col(Vault.kind) != VaultKind.SYSTEM.value)
+            return list((await session.exec(stmt)).all())
+
+    async def _system_vault_ids(self) -> list[UUID]:
+        from memex_core.memory.sql_models import Vault
+        from sqlmodel import select
+
+        async with self.metastore.session() as session:
+            stmt = select(Vault.id).where(col(Vault.kind) == VaultKind.SYSTEM.value)
+            return list((await session.exec(stmt)).all())
+
+    async def resolve_vault_scope(
+        self,
+        identifiers: list[UUID | str] | None,
+        include_system_vaults: bool = False,
+    ) -> list[UUID]:
+        """Resolve a read-scope request into a concrete set of vault ids.
+
+        Contract (the single source of truth for every user-facing read):
+        - ``None`` / empty / wildcard ``'*'`` → all **content** vault ids.
+        - explicitly named vaults (content or system) → resolved as given.
+        - ``include_system_vaults=True`` → add all system vault ids.
+
+        There is no path that implicitly yields system vaults; they appear only
+        when named or when ``include_system_vaults`` is set.
+        """
+        ids: list[UUID] = []
+        seen: set[UUID] = set()
+
+        def _add(vid: UUID) -> None:
+            if vid not in seen:
+                seen.add(vid)
+                ids.append(vid)
+
+        identifiers = identifiers or []
+        has_wildcard = any(str(v) == ALL_VAULTS_WILDCARD for v in identifiers)
+        named = [v for v in identifiers if str(v) != ALL_VAULTS_WILDCARD]
+
+        for identifier in named:
+            _add(await self.resolve_vault_identifier(identifier))
+
+        if has_wildcard or not named:
+            for vid in await self._content_vault_ids():
+                _add(vid)
+
+        if include_system_vaults:
+            for vid in await self._system_vault_ids():
+                _add(vid)
+
+        return ids
 
     async def get_vault_by_name(self, name: str) -> Any | None:
         """Get a single vault by exact name match."""

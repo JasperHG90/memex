@@ -9,21 +9,22 @@ from memex_core.services.entities import EntityWithMetadata
 async def test_search_entities(api, mock_metastore):
     read_session = mock_metastore.session.return_value.__aenter__.return_value
 
-    # Mock entities — service now returns (Entity, MentalModel|None) tuples from LEFT JOIN
     e1 = Entity(id=uuid4(), canonical_name='Apple Inc.')
     e2 = Entity(id=uuid4(), canonical_name='Pineapple')
 
-    # First exec call: vault resolution (Vault lookup)
-    mock_vault = MagicMock()
-    mock_vault.id = uuid4()
-    mock_vault_res = MagicMock()
-    mock_vault_res.first.return_value = mock_vault
+    # exec #1: content-vault scope resolution -> vault ids.
+    scope_res = MagicMock()
+    scope_res.all.return_value = [uuid4()]
 
-    # Second exec call: actual entity search
-    mock_entity_res = MagicMock()
-    mock_entity_res.all.return_value = [(e1, None), (e2, None)]
+    # exec #2: entity search -> Entity scalars (membership via EXISTS, no join tuples).
+    entity_res = MagicMock()
+    entity_res.all.return_value = [e1, e2]
 
-    read_session.exec.side_effect = [mock_vault_res, mock_entity_res]
+    # exec #3: mental-model aggregation lookup -> none.
+    models_res = MagicMock()
+    models_res.all.return_value = []
+
+    read_session.exec.side_effect = [scope_res, entity_res, models_res]
 
     result = await api.search_entities(query='apple')
 

@@ -285,6 +285,10 @@ class RetrievalRequest(BaseModel):
         default=None,
         description='List of specific vault IDs or names to search. If None or empty, searches ALL vaults.',
     )
+    include_system_vaults: bool = Field(
+        default=False,
+        description='Include system vaults when expanding the wildcard scope.',
+    )
     filters: dict[str, Any] = Field(
         default_factory=dict, description='Optional key-value filters (e.g. fact_type).'
     )
@@ -434,6 +438,16 @@ class CreateVaultRequest(BaseModel):
     name: str = Field(..., description='The name of the vault.')
 
     description: str | None = Field(default=None, description='Optional description.')
+
+    kind: str = Field(
+        default='content',
+        description='Vault kind: "content" (corpus) or "system" (infrastructure). Permanent.',
+    )
+
+    policy: dict | None = Field(
+        default=None,
+        description='Optional per-vault synthesis policy (e.g. {"reflect": false}).',
+    )
 
 
 class MemoryUnitBase(VaultMixin):
@@ -712,6 +726,16 @@ class VaultDTO(BaseModel):
     mw_mode: str = Field(
         default='stationary',
         description='Memory Worth mode for the vault: "stationary" or "ema".',
+    )
+
+    kind: str = Field(
+        default='content',
+        description='Vault kind: "content" (corpus) or "system" (infrastructure).',
+    )
+
+    policy: dict = Field(
+        default_factory=dict,
+        description='Per-vault synthesis policy overrides (reflect / summarize).',
     )
 
     is_active: bool = Field(
@@ -1221,6 +1245,7 @@ class NoteSearchRequest(BaseModel):
     query: str
     limit: int = 10
     vault_ids: list[UUID | str] | None = None
+    include_system_vaults: bool = False
     expand_query: bool = False
     fusion_strategy: str = 'rrf'
     strategies: list[str] = Field(default=['semantic', 'keyword', 'graph', 'temporal'])
@@ -1478,6 +1503,10 @@ class SurveyRequest(BaseModel):
     vault_ids: list[UUID | str] | None = Field(
         default=None,
         description='Vault UUIDs or names to search. If None, uses default reader vault.',
+    )
+    include_system_vaults: bool = Field(
+        default=False,
+        description='Include system vaults when expanding the wildcard scope.',
     )
     limit_per_query: int = Field(
         default=10, ge=1, le=50, description='Max results per sub-question.'

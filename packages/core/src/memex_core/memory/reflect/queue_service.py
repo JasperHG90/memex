@@ -8,9 +8,13 @@ from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import select, col, desc
 from sqlmodel.ext.asyncio.session import AsyncSession
 
-from memex_core.memory.sql_models import Entity, ReflectionQueue, ReflectionStatus
+from memex_common.vault_policy import reflect_enabled
+from memex_core.memory.sql_models import Entity, ReflectionQueue, ReflectionStatus, Vault
 from memex_core.config import ReflectionConfig, GLOBAL_VAULT_ID
-from memex_core.metrics import REFLECTION_QUEUE_PRIORITY_LANE_ENQUEUED_TOTAL
+from memex_core.metrics import (
+    REFLECTION_ENQUEUE_SKIPPED_TOTAL,
+    REFLECTION_QUEUE_PRIORITY_LANE_ENQUEUED_TOTAL,
+)
 
 logger = logging.getLogger('memex.core.memory.reflect.queue_service')
 
@@ -167,10 +171,26 @@ class ReflectionQueueService:
 
         await session.flush()
 
+    async def _reflect_enabled_for_vault(self, session: AsyncSession, vault_id: UUID) -> bool:
+        """Whether reflection should be queued for this vault (kind+policy).
+
+        System vaults default reflection off, so their notes never enter the
+        reflection queue — keeping it from filling with work that would only be
+        discarded. Unknown vaults default to enabled (fail open).
+        """
+        vault = await session.get(Vault, vault_id)
+        if not isinstance(vault, Vault):
+            # Unknown / not loaded → fail open (reflect). Real vaults are checked.
+            return True
+        return reflect_enabled(vault.kind, vault.policy)
+
     async def _ensure_queue_items(
         self, session: AsyncSession, entity_ids: set[UUID], vault_id: UUID
     ):
         if not entity_ids:
+            return
+        if not await self._reflect_enabled_for_vault(session, vault_id):
+            REFLECTION_ENQUEUE_SKIPPED_TOTAL.labels(reason='vault_policy').inc()
             return
 
         stmt = (
@@ -382,6 +402,9 @@ class ReflectionQueueService:
         sensitive integer-literal coercion.
         """
         if not entity_ids:
+            return 0
+        if not await self._reflect_enabled_for_vault(session, vault_id):
+            REFLECTION_ENQUEUE_SKIPPED_TOTAL.labels(reason='vault_policy').inc()
             return 0
 
         rows = [

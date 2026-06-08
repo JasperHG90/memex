@@ -203,21 +203,43 @@ def _validate_vault_ids(vault_ids: list[str]) -> list[str]:
     return vault_ids
 
 
-async def _resolve_vault_ids(api: Any, vault_ids: list[str]) -> list[UUID]:
-    """Resolve and validate that all vault identifiers exist."""
+async def _resolve_vault_ids(
+    api: Any, vault_ids: list[str], include_system_vaults: bool = False
+) -> list[UUID]:
+    """Resolve vault identifiers to UUIDs.
+
+    Union semantics: a wildcard ``'*'`` expands to content vaults only; named
+    vaults (content or system) resolve as given; ``include_system_vaults`` adds
+    all system vaults. System vaults never enter implicitly.
+    """
     from memex_common.vault_utils import ALL_VAULTS_WILDCARD
 
-    if ALL_VAULTS_WILDCARD in vault_ids:
-        vaults = await api.list_vaults()
-        return [v.id for v in vaults]
+    has_wildcard = ALL_VAULTS_WILDCARD in vault_ids
+    named = [v for v in vault_ids if v != ALL_VAULTS_WILDCARD]
 
     resolved: list[UUID] = []
-    for vid in vault_ids:
+    seen: set[UUID] = set()
+
+    def _add(uid: UUID) -> None:
+        if uid not in seen:
+            seen.add(uid)
+            resolved.append(uid)
+
+    for vid in named:
         try:
             r = await api.resolve_vault_identifier(vid)
-            resolved.append(UUID(str(r)) if not isinstance(r, UUID) else r)
         except Exception:
             raise ToolError(f'Vault not found: {vid!r}')
+        _add(UUID(str(r)) if not isinstance(r, UUID) else r)
+
+    if has_wildcard or include_system_vaults:
+        for v in await api.list_vaults(include_system=True):
+            kind = getattr(v, 'kind', 'content')
+            if has_wildcard and kind != 'system':
+                _add(v.id)
+            if include_system_vaults and kind == 'system':
+                _add(v.id)
+
     return resolved
 
 
@@ -1591,13 +1613,22 @@ async def memex_memory_search(
             ),
         ),
     ] = True,
+    include_system_vaults: Annotated[
+        bool,
+        Field(
+            default=False,
+            description='Include system vaults (e.g. inbox) when expanding the "*" wildcard.',
+        ),
+    ] = False,
 ) -> list[McpFact | McpEvent | McpObservation]:
     """Search Memex for relevant information."""
     try:
         api = get_api(ctx)
         vault_ids = vault_ids or _default_read_vaults(ctx)
         _validate_vault_ids(vault_ids)
-        resolved_vids = await _resolve_vault_ids(api, vault_ids)
+        resolved_vids = await _resolve_vault_ids(
+            api, vault_ids, include_system_vaults=include_system_vaults
+        )
 
         from datetime import datetime as _dt
 
@@ -1831,13 +1862,22 @@ async def memex_note_search(
             ),
         ),
     ] = None,
+    include_system_vaults: Annotated[
+        bool,
+        Field(
+            default=False,
+            description='Include system vaults (e.g. inbox) when expanding the "*" wildcard.',
+        ),
+    ] = False,
 ) -> list[McpNoteSearchResult]:
     """Search Memex for source notes by hybrid retrieval."""
     try:
         api = get_api(ctx)
         vault_ids = vault_ids or _default_read_vaults(ctx)
         _validate_vault_ids(vault_ids)
-        resolved_vids = await _resolve_vault_ids(api, vault_ids)
+        resolved_vids = await _resolve_vault_ids(
+            api, vault_ids, include_system_vaults=include_system_vaults
+        )
 
         from datetime import datetime as _dt
 
@@ -2293,25 +2333,29 @@ async def memex_get_nodes(
 
 @mcp.tool(
     name='memex_list_vaults',
-    description='List all vaults with note counts. Each vault includes is_active and note_count.',
+    description=(
+        'List content vaults with note counts (is_active, note_count, kind). '
+        'Pass include_system_vaults=true to also list system vaults (inbox etc.).'
+    ),
     tags={'browse'},
     annotations={'readOnlyHint': True},
 )
-async def memex_list_vaults(ctx: Context) -> list[McpVault]:
-    """List all available vaults with active status and note counts."""
+async def memex_list_vaults(ctx: Context, include_system_vaults: bool = False) -> list[McpVault]:
+    """List vaults with active status and note counts (content vaults by default)."""
     try:
         api = get_api(ctx)
         config = get_config(ctx)
 
         # Use list_vaults_with_counts for local API, fall back for remote
         try:
-            rows = await api.list_vaults_with_counts()
+            rows = await api.list_vaults_with_counts(include_system=include_system_vaults)
             active_vault_id = await api.resolve_vault_identifier(config.server.default_active_vault)
             return [
                 McpVault(
                     id=row['vault'].id,
                     name=row['vault'].name,
                     description=row['vault'].description,
+                    kind=getattr(row['vault'], 'kind', 'content'),
                     is_active=(row['vault'].id == active_vault_id),
                     note_count=row['note_count'],
                     last_note_added_at=row.get('last_note_added_at'),
@@ -2320,12 +2364,13 @@ async def memex_list_vaults(ctx: Context) -> list[McpVault]:
             ]
         except AttributeError:
             # Remote API — fall back to list_vaults (VaultDTO with is_active)
-            vaults = await api.list_vaults()
+            vaults = await api.list_vaults(include_system=include_system_vaults)
             return [
                 McpVault(
                     id=v.id,
                     name=v.name,
                     description=v.description,
+                    kind=getattr(v, 'kind', 'content'),
                     is_active=v.is_active,
                     last_note_added_at=v.last_note_added_at,
                     access=v.access,
@@ -2522,6 +2567,13 @@ async def memex_recent_notes(
             description='Drop per-note summaries to keep the response under hook-output caps.',
         ),
     ] = False,
+    include_system_vaults: Annotated[
+        bool,
+        Field(
+            default=False,
+            description='Include system vaults (e.g. inbox) when expanding the "*" wildcard.',
+        ),
+    ] = False,
 ) -> list[McpNote]:
     """List recent notes."""
     from datetime import datetime as _dt
@@ -2531,7 +2583,9 @@ async def memex_recent_notes(
         resolved_vids = None
         if vault_ids:
             _validate_vault_ids(vault_ids)
-            resolved_vids = await _resolve_vault_ids(api, vault_ids)
+            resolved_vids = await _resolve_vault_ids(
+                api, vault_ids, include_system_vaults=include_system_vaults
+            )
 
         parsed_after = None
         parsed_before = None
@@ -3245,10 +3299,17 @@ async def memex_find_note(
         BeforeValidator(_coerce_list),
         Field(
             default=None,
-            description='Vault UUIDs or names to search in, e.g. [\'rituals\']. Use "*" for all vaults. None = all vaults.',
+            description='Vault UUIDs or names to search in, e.g. [\'rituals\']. "*" or None = all content vaults.',
         ),
     ] = None,
     limit: Annotated[int, BeforeValidator(_coerce_int), Field(description='Max results.')] = 5,
+    include_system_vaults: Annotated[
+        bool,
+        Field(
+            default=False,
+            description='Include system vaults (e.g. inbox) when expanding the "*" wildcard.',
+        ),
+    ] = False,
 ) -> list[McpFindResult]:
     """Find notes by approximate title match."""
     try:
@@ -3257,7 +3318,9 @@ async def memex_find_note(
         resolved_vids: list[UUID] | None = None
         if vault_ids:
             _validate_vault_ids(vault_ids)
-            resolved_vids = await _resolve_vault_ids(api, vault_ids)
+            resolved_vids = await _resolve_vault_ids(
+                api, vault_ids, include_system_vaults=include_system_vaults
+            )
 
         results = await api.find_notes_by_title(
             query=query,
@@ -3547,13 +3610,22 @@ async def memex_survey(
             ),
         ),
     ] = None,
+    include_system_vaults: Annotated[
+        bool,
+        Field(
+            default=False,
+            description='Include system vaults (e.g. inbox) when expanding the "*" wildcard.',
+        ),
+    ] = False,
 ) -> McpSurveyResult:
     """Survey a broad topic — decompose, parallel search, grouped results."""
     try:
         api = get_api(ctx)
         vault_ids = vault_ids or _default_read_vaults(ctx)
         _validate_vault_ids(vault_ids)
-        resolved_vids = await _resolve_vault_ids(api, vault_ids)
+        resolved_vids = await _resolve_vault_ids(
+            api, vault_ids, include_system_vaults=include_system_vaults
+        )
 
         from datetime import datetime as _dt
 

@@ -763,7 +763,8 @@ class NoteService:
     ) -> list[Any]:
         """
         List ingested documents.
-        Filters by the given vault_id(s), or returns all vaults if not provided.
+        Filters by the given vault_id(s); when none are provided, scopes to
+        content vaults only (system vaults are reached by naming them).
         Optional after/before filters compare against ``date_field``:
           - ``'created_at'``  — when Memex ingested the note
           - ``'publish_date'`` — note's authored/publication date
@@ -777,7 +778,8 @@ class NoteService:
         from sqlalchemy.dialects.postgresql import JSONB
         from sqlmodel import select
 
-        from memex_core.memory.sql_models import Note
+        from memex_common.vault_policy import VaultKind
+        from memex_core.memory.sql_models import Note, Vault
 
         ids = list(vault_ids) if vault_ids else []
         if vault_id and vault_id not in ids:
@@ -789,6 +791,11 @@ class NoteService:
             stmt = select(Note)
             if ids:
                 stmt = stmt.where(col(Note.vault_id).in_(ids))
+            else:
+                # No explicit scope → content vaults only (system vaults are
+                # silent on browse surfaces; reach them by naming the vault).
+                content_subq = select(Vault.id).where(col(Vault.kind) != VaultKind.SYSTEM.value)
+                stmt = stmt.where(col(Note.vault_id).in_(content_subq))
             if after is not None:
                 stmt = stmt.where(date_col >= after)
             if before is not None:
@@ -840,7 +847,8 @@ class NoteService:
         """Get the most recent notes. ``date_field`` matches ``list_notes``."""
         from sqlmodel import select
 
-        from memex_core.memory.sql_models import Note
+        from memex_common.vault_policy import VaultKind
+        from memex_core.memory.sql_models import Note, Vault
 
         ids = list(vault_ids) if vault_ids else []
         if vault_id and vault_id not in ids:
@@ -852,6 +860,9 @@ class NoteService:
             stmt = select(Note).order_by(Note.created_at.desc())  # type: ignore[union-attr]
             if ids:
                 stmt = stmt.where(col(Note.vault_id).in_(ids))
+            else:
+                content_subq = select(Vault.id).where(col(Vault.kind) != VaultKind.SYSTEM.value)
+                stmt = stmt.where(col(Note.vault_id).in_(content_subq))
             if after is not None:
                 stmt = stmt.where(date_col >= after)
             if before is not None:
@@ -944,6 +955,8 @@ class NoteService:
                     'limit': limit,
                 }
             else:
+                # No explicit scope → content vaults only (system vaults are
+                # silent on browse surfaces; reach them by naming the vault).
                 stmt = text("""
                     SELECT
                         id, title,
@@ -951,6 +964,7 @@ class NoteService:
                         vault_id, created_at, publish_date, status
                     FROM notes
                     WHERE lower(title) % lower(:query)
+                      AND vault_id IN (SELECT id FROM vaults WHERE kind <> 'system')
                     ORDER BY score DESC
                     LIMIT :limit
                 """)

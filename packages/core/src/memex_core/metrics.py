@@ -94,6 +94,18 @@ REFRESH_OBSERVATION_TASK_ZERO_EVIDENCE_TOTAL = Counter(
     'Refresh tasks that dropped the observation because no surviving evidence remained.',
 )
 
+REFLECTION_ENQUEUE_SKIPPED_TOTAL = Counter(
+    'memex_reflection_enqueue_skipped_total',
+    'Reflection enqueues skipped because the vault disables reflection (kind/policy).',
+    ['reason'],
+)
+
+VAULT_SUMMARY_SKIPPED_TOTAL = Counter(
+    'memex_vault_summary_skipped_total',
+    'Vault-summary generations skipped because the vault disables summarization.',
+    ['reason'],
+)
+
 REFRESH_OBSERVATION_TASK_OBS_ALREADY_PRUNED_TOTAL = Counter(
     'memex_refresh_observation_task_obs_already_pruned_total',
     'Refresh tasks idempotently acked because the observation row was already gone by claim time.',

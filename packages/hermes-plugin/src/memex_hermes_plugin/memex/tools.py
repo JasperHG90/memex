@@ -629,12 +629,18 @@ GET_ENTITY_COOCCURRENCES_SCHEMA: dict[str, Any] = {
 LIST_VAULTS_SCHEMA: dict[str, Any] = {
     'name': 'memex_list_vaults',
     'description': (
-        'List all vaults with note counts and active status. Call this before '
-        'using vault_ids on other tools so you know what vault names/UUIDs exist.'
+        'List content vaults with note counts and active status. Call this before '
+        'using vault_ids on other tools so you know what vault names/UUIDs exist. '
+        'Pass include_system_vaults=true to also list system vaults (inbox, etc.).'
     ),
     'parameters': {
         'type': 'object',
-        'properties': {},
+        'properties': {
+            'include_system_vaults': {
+                'type': 'boolean',
+                'description': 'Also list system vaults (inbox, etc.). Default false.',
+            },
+        },
         'required': [],
     },
 }
@@ -2067,6 +2073,7 @@ def _serialize_vault(vault: Any) -> dict[str, Any]:
         'id': str(getattr(vault, 'id', '')),
         'name': getattr(vault, 'name', ''),
         'description': getattr(vault, 'description', None),
+        'kind': getattr(vault, 'kind', 'content'),
         'is_active': bool(getattr(vault, 'is_active', False)),
         'note_count': int(getattr(vault, 'note_count', 0) or 0),
         'last_note_added_at': last_added.isoformat() if last_added else None,
@@ -2153,8 +2160,9 @@ def _parse_iso_or_raise(value: str, field: str) -> Any:
 def handle_list_vaults(
     api: MemexAPIProtocol, config: HermesMemexConfig, vault_id: UUID | None, args: dict[str, Any]
 ) -> str:
+    include_system = bool(args.get('include_system_vaults', False))
     try:
-        vaults = run_sync(api.list_vaults(), timeout=30.0)
+        vaults = run_sync(api.list_vaults(include_system=include_system), timeout=30.0)
     except Exception as e:
         logger.warning('memex_list_vaults failed: %s', e)
         return tool_error(f'List vaults failed: {e}')

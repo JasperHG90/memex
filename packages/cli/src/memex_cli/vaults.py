@@ -41,16 +41,20 @@ async def list_vaults(
         bool,
         typer.Option('--compact', help='Output as a plain markdown table with note counts.'),
     ] = False,
+    include_system: Annotated[
+        bool,
+        typer.Option('--include-system', help='Also list system vaults (inbox, etc.).'),
+    ] = False,
 ):
     """
-    List all available vaults.
+    List available vaults (content vaults by default; --include-system for all).
     """
     config: MemexConfig = ctx.obj
 
     async with get_api_context(config) as api:
         if compact:
             try:
-                rows = await api.list_vaults_with_counts()
+                rows = await api.list_vaults_with_counts(include_system=include_system)
             except Exception as e:
                 handle_api_error(e)
 
@@ -86,7 +90,7 @@ async def list_vaults(
             return
 
         try:
-            vaults = await api.list_vaults()
+            vaults = await api.list_vaults(include_system=include_system)
         except Exception as e:
             handle_api_error(e)
 
@@ -104,6 +108,7 @@ async def list_vaults(
     table = Table(title='Available Vaults')
     table.add_column('ID', style='dim')
     table.add_column('Name', style='cyan')
+    table.add_column('Kind', style='magenta')
     table.add_column('Memory Worth', style='yellow')
     table.add_column('Description', style='white')
     if has_access:
@@ -113,7 +118,8 @@ async def list_vaults(
         console.print('[yellow]No vaults found.[/yellow]')
     else:
         for v in vaults:
-            row = [str(v.id), v.name, v.mw_mode, v.description or '']
+            kind = getattr(v, 'kind', 'content')
+            row = [str(v.id), v.name, kind, v.mw_mode, v.description or '']
             if has_access:
                 row.append(', '.join(v.access) if v.access else '\u2014')
             table.add_row(*row)
@@ -132,17 +138,49 @@ async def create_vault(
     description: Annotated[
         str | None, typer.Option('--description', '-d', help='Optional description.')
     ] = None,
+    kind: Annotated[
+        str,
+        typer.Option('--kind', help='Vault kind: "content" (corpus) or "system" (infrastructure).'),
+    ] = 'content',
+    no_reflect: Annotated[
+        bool, typer.Option('--no-reflect', help='Disable per-entity reflection for this vault.')
+    ] = False,
+    no_summarize: Annotated[
+        bool,
+        typer.Option('--no-summarize', help='Disable vault-summary generation for this vault.'),
+    ] = False,
+    force: Annotated[bool, typer.Option('--force', '-f', help='Skip confirmation.')] = False,
 ):
     """
-    Create a new vault.
+    Create a new vault. The kind is permanent and cannot be changed later.
     """
     config: MemexConfig = ctx.obj
+
+    if kind not in ('content', 'system'):
+        console.print("[red]--kind must be 'content' or 'system'.[/red]")
+        raise typer.Exit(code=1)
+
+    # The kind is permanent; only the deliberate (non-default) system choice prompts.
+    if (
+        kind == 'system'
+        and not force
+        and not typer.confirm(
+            "Vault kind 'system' is permanent and cannot be changed later. Continue?"
+        )
+    ):
+        raise typer.Exit(code=1)
+
+    policy: dict[str, bool] = {}
+    if no_reflect:
+        policy['reflect'] = False
+    if no_summarize:
+        policy['summarize'] = False
 
     console.print(f'[green]Creating vault:[/green] {name}')
 
     async with get_api_context(config) as api:
         try:
-            vault = await api.create_vault(name, description)
+            vault = await api.create_vault(name, description, kind=kind, policy=policy or None)
         except Exception as e:
             handle_api_error(e)
 

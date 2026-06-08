@@ -109,7 +109,9 @@ def test_create_vault_validation(client, mock_api):
     response = client.post('/api/v1/vaults', json=payload)
 
     assert response.status_code == 200, f'Response: {response.text}'
-    mock_api.create_vault.assert_called_once_with(name='New Vault', description='Secure storage')
+    mock_api.create_vault.assert_called_once_with(
+        name='New Vault', description='Secure storage', kind='content', policy=None
+    )
 
     data = response.json()
     assert data['id'] == str(MOCK_VAULT_ID)
