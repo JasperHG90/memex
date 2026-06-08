@@ -220,11 +220,13 @@ async def periodic_vault_summary_task(api: 'MemexAPI'):
             from memex_core.memory.sql_models import Vault
             from memex_core.metrics import VAULT_SUMMARY_SKIPPED_TOTAL
 
-            # Periodic summary is a content-vault concern — system vaults
-            # are never summarised (their policy defaults that way and an
-            # explicit override would be the only way to opt in). Fetch
-            # content vaults directly to avoid a wasted round-trip.
-            vaults = await api.list_vaults(include_system=False)
+            # Periodic summary must include system vaults whose policy
+            # explicitly opts them in — a system vault that wants
+            # narrative over its contents is a legitimate use case (e.g. a
+            # case-vault the user wants briefed on). summarise_enabled
+            # is the single source of truth: it returns False for system
+            # vaults by default and True if the policy overrides it on.
+            vaults = await api.list_vaults(include_system=True)
             for vault in vaults:
                 if isinstance(vault, Vault) and not summarize_enabled(vault.kind, vault.policy):
                     # summarise_enabled may still be False on a content vault

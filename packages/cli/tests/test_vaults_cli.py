@@ -111,6 +111,46 @@ def test_create_vault_mutually_exclusive_summarize_flags(runner, mock_api, monke
     mock_api.create_vault.assert_not_called()
 
 
+def test_create_vault_mutex_check_runs_before_kind_confirmation(
+    runner, mock_api, monkeypatch, strip_ansi
+):
+    """Regression guard: conflicting policy flags must be rejected BEFORE the
+    [y/N] confirmation prompt for ``--kind system`` (V11 L3 review).
+
+    Without ``--force``, a system-vault creation with conflicting flags used
+    to ask for confirmation first, then bail with a different error — leaving
+    a user who typed 'y' wondering why nothing happened. The mutex check now
+    runs first; no confirmation is ever requested.
+    """
+    mock_api.create_vault.return_value = MagicMock(id=uuid4())
+    monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
+
+    # typer.confirm will explode if it's called — we want to assert it isn't.
+    def _explode(*_a, **_kw):
+        raise AssertionError(
+            'typer.confirm was called — mutex check must run before kind confirmation'
+        )
+
+    monkeypatch.setattr('memex_cli.vaults.typer.confirm', _explode)
+
+    result = runner.invoke(
+        app,
+        [
+            'create',
+            'case-vault',
+            '--kind',
+            'system',
+            '--reflect',
+            '--no-reflect',
+            # NOTE: no --force on purpose; without the order fix this would
+            # reach typer.confirm and raise AssertionError.
+        ],
+    )
+    assert result.exit_code == 1
+    assert '--reflect and --no-reflect' in strip_ansi(result.stdout)
+    mock_api.create_vault.assert_not_called()
+
+
 def test_delete_vault_by_name(runner, mock_api, strip_ansi, monkeypatch):
     vault_uuid = uuid4()
     vault_name = 'test-vault'

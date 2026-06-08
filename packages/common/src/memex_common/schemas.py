@@ -11,6 +11,7 @@ from pydantic import (
     Field,
     PrivateAttr,
     field_serializer,
+    field_validator,
     BeforeValidator,
     ConfigDict,
     model_validator,
@@ -448,6 +449,16 @@ class CreateVaultRequest(BaseModel):
         default=None,
         description='Optional per-vault synthesis policy (e.g. {"reflect": false}).',
     )
+
+    @field_validator('kind')
+    @classmethod
+    def _validate_kind(cls, v: str) -> str:
+        # The DB has a CHECK constraint; we'd rather fail at the API
+        # boundary with a clean 422 than let the INSERT raise a 500
+        # IntegrityError. Keep the literal set in sync with VaultKind.
+        if v not in ('content', 'system'):
+            raise ValueError(f'kind must be "content" or "system", got {v!r}')
+        return v
 
 
 class MemoryUnitBase(VaultMixin):

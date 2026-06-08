@@ -402,3 +402,81 @@ def test_no_inbox_router_job_registered() -> None:
     src = inspect.getsource(scheduler)
     assert 'inbox_router' not in src
     assert 'run_inbox_router_job' not in src
+
+
+@pytest.mark.asyncio
+@patch('memex_core.scheduler.background_session')
+async def test_vault_summary_task_includes_system_vaults_with_summarize_override(
+    mock_bg_session,
+) -> None:
+    """A system vault with ``policy.summarize=True`` MUST be summarised.
+
+    Regression guard: the V11 L2 review pass initially set the summary
+    scheduler to ``list_vaults(include_system=False)`` — that excluded
+    system vaults from the loop entirely, breaking the contract that a
+    system vault can opt into summary via its policy. The fix is
+    ``include_system=True`` plus the in-loop ``summarize_enabled`` check.
+    """
+    from memex_core.memory.sql_models import Vault
+
+    mock_bg_session.return_value.__aenter__ = AsyncMock(return_value='test-session')
+    mock_bg_session.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    system_vault = MagicMock(spec=Vault)
+    system_vault.id = 'system-vault-1'
+    system_vault.name = 'case-vault'
+    system_vault.kind = 'system'
+    system_vault.policy = {'summarize': True}
+
+    api = MagicMock()
+    api.list_vaults = AsyncMock(return_value=[system_vault])
+
+    summary = MagicMock()
+    summary.needs_regeneration = True
+    api.vault_summary.get_summary = AsyncMock(return_value=summary)
+    api.vault_summary.regenerate_summary = AsyncMock()
+    api.vault_summary.update_summary = AsyncMock()
+    api.vault_summary.is_stale = AsyncMock()
+
+    await periodic_vault_summary_task(api)
+
+    # The system vault was passed to list_vaults(include_system=True) and
+    # its policy override is honored — the summary path runs.
+    api.list_vaults.assert_awaited_once_with(include_system=True)
+    api.vault_summary.regenerate_summary.assert_awaited_once_with('system-vault-1')
+
+
+@pytest.mark.asyncio
+@patch('memex_core.scheduler.background_session')
+async def test_vault_summary_task_skips_system_vault_without_summarize_override(
+    mock_bg_session,
+) -> None:
+    """A system vault without ``policy.summarize=True`` MUST be skipped.
+
+    Companion to the override test: with no policy override, the kind
+    default (False) wins and the summary path is not entered.
+    """
+    from memex_core.memory.sql_models import Vault
+
+    mock_bg_session.return_value.__aenter__ = AsyncMock(return_value='test-session')
+    mock_bg_session.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    system_vault = MagicMock(spec=Vault)
+    system_vault.id = 'system-vault-1'
+    system_vault.name = 'inbox'
+    system_vault.kind = 'system'
+    system_vault.policy = {}  # no override — default is off
+
+    api = MagicMock()
+    api.list_vaults = AsyncMock(return_value=[system_vault])
+    api.vault_summary.get_summary = AsyncMock()
+    api.vault_summary.regenerate_summary = AsyncMock()
+    api.vault_summary.update_summary = AsyncMock()
+    api.vault_summary.is_stale = AsyncMock()
+
+    await periodic_vault_summary_task(api)
+
+    api.list_vaults.assert_awaited_once_with(include_system=True)
+    api.vault_summary.get_summary.assert_not_awaited()
+    api.vault_summary.regenerate_summary.assert_not_awaited()
+    api.vault_summary.update_summary.assert_not_awaited()

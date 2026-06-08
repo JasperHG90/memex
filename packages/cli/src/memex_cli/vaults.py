@@ -174,6 +174,19 @@ async def create_vault(
         console.print("[red]--kind must be 'content' or 'system'.[/red]")
         raise typer.Exit(code=1)
 
+    # Mutual exclusion: a user passing both --reflect and --no-reflect is
+    # ambiguous; refuse the call rather than silently picking one. Same for
+    # summarize. (Typer gives us no built-in "exactly one" support for
+    # pairs of bool flags, so the check is manual.) Run BEFORE the
+    # confirmation prompt so a conflicting invocation never gets a "y/N"
+    # response that's immediately discarded.
+    if reflect and no_reflect:
+        console.print('[red]--reflect and --no-reflect are mutually exclusive.[/red]')
+        raise typer.Exit(code=1)
+    if summarize and no_summarize:
+        console.print('[red]--summarize and --no-summarize are mutually exclusive.[/red]')
+        raise typer.Exit(code=1)
+
     # The kind is permanent; only the deliberate (non-default) system choice prompts.
     if (
         kind == 'system'
@@ -193,17 +206,6 @@ async def create_vault(
         policy['summarize'] = True
     if no_summarize:
         policy['summarize'] = False
-
-    # Mutual exclusion: a user passing both --reflect and --no-reflect is
-    # ambiguous; refuse the call rather than silently picking one. Same for
-    # summarize. (Typer gives us no built-in "exactly one" support for
-    # pairs of bool flags, so the check is manual.)
-    if reflect and no_reflect:
-        console.print('[red]--reflect and --no-reflect are mutually exclusive.[/red]')
-        raise typer.Exit(code=1)
-    if summarize and no_summarize:
-        console.print('[red]--summarize and --no-summarize are mutually exclusive.[/red]')
-        raise typer.Exit(code=1)
 
     console.print(f'[green]Creating vault:[/green] {name}')
 

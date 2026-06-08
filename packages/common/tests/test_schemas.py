@@ -265,3 +265,27 @@ class TestSectionAssetAndNodeDTO:
         )
         assert toc.assets[0].path == 'p.png'
         assert TOCNodeDTO(id='x', title='y', level=1).assets == []
+
+
+def test_create_vault_request_kind_validator_accepts_known_values():
+    """CreateVaultRequest must accept both 'content' and 'system' kinds."""
+    from memex_common.schemas import CreateVaultRequest
+
+    assert CreateVaultRequest(name='x').kind == 'content'
+    assert CreateVaultRequest(name='x', kind='system').kind == 'system'
+    assert CreateVaultRequest(name='x', kind='content').kind == 'content'
+
+
+def test_create_vault_request_kind_validator_rejects_unknown():
+    """Unknown kind values must raise ValidationError (422 at the API layer),
+    not propagate to a 500 IntegrityError at the DB layer."""
+    import pytest
+    from pydantic import ValidationError
+    from memex_common.schemas import CreateVaultRequest
+
+    with pytest.raises(ValidationError) as exc_info:
+        CreateVaultRequest(name='x', kind='archive')
+    # The error mentions the field and the bad value so the operator
+    # can act on it without chasing a stack trace.
+    assert 'kind' in str(exc_info.value)
+    assert 'archive' in str(exc_info.value)
