@@ -39,11 +39,8 @@ from uuid import UUID, uuid4
 from . import _outcomes  # noqa: F401
 from . import _setup_actions  # noqa: F401
 
+from memex_common.lint import CandidateEvidence, RouteEvidence
 from memex_common.schemas import NoteCreateDTO
-from memex_core.services.proposal_actions._routing_evidence import (
-    CandidateEvidence,
-    RouteEvidence,
-)
 from memex_eval.suite.base import SuiteMetadata
 from memex_eval.suite.decorator import ScenarioContext, Suite
 from memex_eval.suite.sources import SuiteSources

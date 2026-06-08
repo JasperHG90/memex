@@ -235,12 +235,54 @@ class LintRule(BaseModel):
         )
 
 
+class CandidateEvidence(BaseModel):
+    """One scored candidate vault, surfaced in a routing proposal's evidence."""
+
+    vault_id: str
+    vault_name: str
+    p_match: float = Field(description='Per-note softmax-normalised P(match).')
+    p_match_raw: float = Field(description='Raw pairwise P(match).')
+    ci_half_width: float = Field(description='Credible-interval half-width.')
+
+
+class RouteEvidence(BaseModel):
+    """Typed ``evidence`` payload for an ``inbox_vault_route`` proposal.
+
+    ``top_candidates`` drives the per-candidate cockpit options; ``routing_state``
+    tells the reviewer whether the model is warmed up or cold-starting. Emitted by
+    the triage-inbox routing skill and consumed by the maintenance cockpit — both
+    agree on this one shape. Rides ``LintProposal.evidence`` as the dumped dict.
+    """
+
+    kind: str = 'inbox_vault_route'
+    routing_state: str
+    margin: float
+    source_vault_id: str
+    top_candidates: list[CandidateEvidence]
+
+
+class NoFitEvidence(BaseModel):
+    """Typed ``evidence`` payload for an ``inbox_vault_no_fit`` proposal."""
+
+    kind: str = 'inbox_vault_no_fit'
+    routing_state: str
+    best_p_match_raw: float = Field(
+        description='Highest raw P(match) across vaults — below the t_low floor.'
+    )
+    retry_n: int = Field(default=0, description='Number of no-fit re-evaluations so far.')
+    next_retry_at: str | None = None
+    last_evaluated_at: str | None = None
+
+
 __all__ = [
     'LINT_TYPES',
     'MAX_EVIDENCE_BYTES',
     'RESERVED_EVIDENCE_KEYS',
+    'CandidateEvidence',
     'LintProposal',
     'LintRule',
+    'NoFitEvidence',
     'ProposedAction',
+    'RouteEvidence',
     'validate_rule_name_shape',
 ]

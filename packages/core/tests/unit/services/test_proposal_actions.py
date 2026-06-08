@@ -13,15 +13,12 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from memex_common.lint import CandidateEvidence, RouteEvidence
 from memex_core.services.proposal_actions import (
     ActionValidationError,
     ProposalActionError,
     get_action,
     list_actions,
-)
-from memex_core.services.proposal_actions._routing_evidence import (
-    CandidateEvidence,
-    RouteEvidence,
 )
 from memex_core.services.proposal_actions.route_note_to_vault import RouteNoteToVaultAction
 
@@ -1073,7 +1070,8 @@ class TestRouteNoteToVaultAction:
     async def test_emitter_to_action_evidence_contract(self) -> None:
         # The relocated evidence models are the typed contract the triage-inbox
         # skill emits and the cockpit reads; the chosen candidate's vault_id is
-        # exactly what route_note_to_vault migrates to. Exercises _routing_evidence.
+        # exactly what route_note_to_vault migrates to. Exercises the routing
+        # evidence models now in memex_common.lint.
         src, dst = uuid4(), uuid4()
         evidence = RouteEvidence(
             routing_state='warm',
