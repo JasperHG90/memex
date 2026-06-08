@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 from uuid import UUID
 
 if TYPE_CHECKING:
@@ -112,6 +112,14 @@ async def _cleanup_entities_after_delete(
 
 class NoteService:
     """Note CRUD, listing, and resource access."""
+
+    # Subquery fragment used by raw text() queries to filter to content vaults
+    # only. Mirrors the ORM `Vault.kind != VaultKind.SYSTEM.value` predicate
+    # used elsewhere in this module; if a new VaultKind is added, update both
+    # in lockstep.
+    _CONTENT_VAULT_IDS_SQL: ClassVar[str] = (
+        "vault_id IN (SELECT id FROM vaults WHERE kind <> 'system')"
+    )
 
     _audit_service: AuditService | None = None
 
@@ -957,14 +965,16 @@ class NoteService:
             else:
                 # No explicit scope → content vaults only (system vaults are
                 # silent on browse surfaces; reach them by naming the vault).
-                stmt = text("""
+                # The kind predicate is in NoteService._CONTENT_VAULT_IDS_SQL
+                # to keep it in sync with the ORM VaultKind filter.
+                stmt = text(f"""
                     SELECT
                         id, title,
                         similarity(lower(title), lower(:query)) AS score,
                         vault_id, created_at, publish_date, status
                     FROM notes
                     WHERE lower(title) % lower(:query)
-                      AND vault_id IN (SELECT id FROM vaults WHERE kind <> 'system')
+                      AND {self._CONTENT_VAULT_IDS_SQL}
                     ORDER BY score DESC
                     LIMIT :limit
                 """)

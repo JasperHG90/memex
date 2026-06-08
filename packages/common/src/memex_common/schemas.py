@@ -444,7 +444,7 @@ class CreateVaultRequest(BaseModel):
         description='Vault kind: "content" (corpus) or "system" (infrastructure). Permanent.',
     )
 
-    policy: dict | None = Field(
+    policy: dict[str, Any] | None = Field(
         default=None,
         description='Optional per-vault synthesis policy (e.g. {"reflect": false}).',
     )
@@ -733,7 +733,7 @@ class VaultDTO(BaseModel):
         description='Vault kind: "content" (corpus) or "system" (infrastructure).',
     )
 
-    policy: dict = Field(
+    policy: dict[str, Any] = Field(
         default_factory=dict,
         description='Per-vault synthesis policy overrides (reflect / summarize).',
     )

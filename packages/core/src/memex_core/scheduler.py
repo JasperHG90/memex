@@ -220,10 +220,15 @@ async def periodic_vault_summary_task(api: 'MemexAPI'):
             from memex_core.memory.sql_models import Vault
             from memex_core.metrics import VAULT_SUMMARY_SKIPPED_TOTAL
 
-            vaults = await api.list_vaults()
+            # Periodic summary is a content-vault concern — system vaults
+            # are never summarised (their policy defaults that way and an
+            # explicit override would be the only way to opt in). Fetch
+            # content vaults directly to avoid a wasted round-trip.
+            vaults = await api.list_vaults(include_system=False)
             for vault in vaults:
                 if isinstance(vault, Vault) and not summarize_enabled(vault.kind, vault.policy):
-                    # System vaults (or summarize-disabled vaults) get no narrative.
+                    # summarise_enabled may still be False on a content vault
+                    # whose policy overrides it off; honor the override.
                     VAULT_SUMMARY_SKIPPED_TOTAL.labels(reason='vault_policy').inc()
                     continue
                 summary = await api.vault_summary.get_summary(vault.id)
@@ -253,16 +258,12 @@ async def periodic_kv_ttl_cleanup_task(api: 'MemexAPI'):
 
 async def periodic_diagnostics_refresh_task(api: 'MemexAPI'):
     """Weekly UMAP manifold refresh per content vault under leader lock."""
-    from memex_core.memory.sql_models import Vault
-
     async with background_session('bg-sched-diagnostics-refresh'):
         try:
-            vaults = await api.list_vaults()
+            # Diagnostics (UMAP manifold) is a content-vault concern;
+            # system vaults have no manifold. Fetch content vaults only.
+            vaults = await api.list_vaults(include_system=False)
             for vault in vaults:
-                # Diagnostics is a discovery artifact — skip system vaults (no
-                # manifold for hidden/transient infrastructure vaults).
-                if isinstance(vault, Vault) and vault.kind == 'system':
-                    continue
                 try:
                     await api.diagnostics.get_or_compute_manifold(vault.id, force_refresh=True)
                 except (OSError, RuntimeError, ValueError) as e:

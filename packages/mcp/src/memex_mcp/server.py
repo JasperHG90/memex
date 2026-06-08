@@ -211,9 +211,16 @@ async def _resolve_vault_ids(
     Union semantics: a wildcard ``'*'`` expands to content vaults only; named
     vaults (content or system) resolve as given; ``include_system_vaults`` adds
     all system vaults. System vaults never enter implicitly.
+
+    An empty/None ``vault_ids`` is treated the same as ``['*']`` — it expands
+    to all content vaults. This matches :func:`VaultService.resolve_vault_scope`
+    so a caller that forgets to forward a list still gets the content-only
+    default universe instead of an empty scope.
     """
     from memex_common.vault_utils import ALL_VAULTS_WILDCARD
 
+    if not vault_ids:
+        vault_ids = [ALL_VAULTS_WILDCARD]
     has_wildcard = ALL_VAULTS_WILDCARD in vault_ids
     named = [v for v in vault_ids if v != ALL_VAULTS_WILDCARD]
 

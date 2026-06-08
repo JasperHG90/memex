@@ -170,7 +170,7 @@ async def create_vault(
     ):
         raise typer.Exit(code=1)
 
-    policy: dict[str, bool] = {}
+    policy: dict[str, bool | None] = {}
     if no_reflect:
         policy['reflect'] = False
     if no_summarize:
