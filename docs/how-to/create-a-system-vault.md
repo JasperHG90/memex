@@ -79,7 +79,7 @@ memex note search "webhook" --vault my-integration-buffer
 memex memory search "webhook" --include-system-vaults
 ```
 
-The `--include-system-vaults` flag (and its `?include_system_vaults=true` HTTP/MCP equivalent) is the only way to surface system-vault content on a default-scope search. If you find yourself reaching for it often, consider whether the vault is really a system vault.
+The `--include-system-vaults` flag (and its `?include_system_vaults=true` HTTP/MCP equivalent) is an **unconditional union**: it adds every system vault to the resolved scope, regardless of whether you also passed `--vault`. To read one specific system vault without dragging in the rest, name it (`--vault inbox`) and leave the flag off. If you find yourself reaching for the flag often, consider whether the vault is really a system vault.
 
 ## Step 4 — Verify visibility is what you expect
 

@@ -47,9 +47,9 @@ The `inbox` migration in `060_vault_kind_policy.py` does three things in one go:
 - `*` (or no list) → all **content** vaults. System vaults are not part of the default universe.
 - `[name, ...]` → resolve each name/UUID; system vaults are addressable by name. They are *added* to the content set, never replacing it.
 - `[*, name]` → all content vaults *plus* the named system vault. Same as the previous case in practice; the `*` makes the intent explicit.
-- `include_system_vaults=true` (per-tool flag) → all content vaults *plus* all system vaults, without naming them.
+- `include_system_vaults=true` (per-tool flag) → **unconditional union**: every system vault joins the resolved scope, regardless of whether the caller used `*`, named specific vaults, or omitted the list. The flag is an *opt-in to the system-vault surface as a whole*, not a scope widener. To scope a call to one specific system vault without dragging in the rest, name it and leave the flag off; to read across the system fleet, set the flag.
 
-The practical effect: a user who types `memex memory search` gets the universe they mean — their own content. A user who types `memex memory search --include-system-vaults` widens explicitly. There is no way to type something that *only* returns system vaults (other than naming one by hand), because the synthesis tools exist to find your own work, not infrastructure state.
+The practical effect: a user who types `memex memory search` gets the universe they mean — their own content. A user who types `memex memory search --include-system-vaults` widens explicitly to the system fleet, even if they also passed `--vault research` (in which case the result is research + every system vault — pass `--vault inbox` and omit the flag to scope to just the named system vault). There is no way to type something that *only* returns system vaults (other than naming one by hand), because the synthesis tools exist to find your own work, not infrastructure state.
 
 ## Policy, kind, and immutability
 
