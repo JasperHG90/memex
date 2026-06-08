@@ -12,8 +12,15 @@ evidence-carried options and fall back to the static dict.
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass, field, replace
 from typing import Any, Protocol
+
+# Interactive responsiveness bound for cockpit fetches. The shared HTTP client
+# uses a 240s timeout suited to long ingest/search calls; in a TUI a fetch that
+# hangs that long reads as a frozen app. This is a UI bound, not an operational
+# tunable, so it lives as a module constant rather than a config field.
+_COCKPIT_FETCH_TIMEOUT = 15.0
 
 
 @dataclass(frozen=True)
@@ -891,10 +898,13 @@ class CockpitController:
         # First fetch also swaps the static action catalogue for the server's
         # live registry, so the menus track new server-side actions.
         await self.load_action_catalogue()
-        payload = await self._client.lint_findings(
-            vault_id=self._vault_id,
-            status='pending',
-            limit=limit,
+        payload = await asyncio.wait_for(
+            self._client.lint_findings(
+                vault_id=self._vault_id,
+                status='pending',
+                limit=limit,
+            ),
+            timeout=_COCKPIT_FETCH_TIMEOUT,
         )
         findings = payload.get('findings') or []
         proposals = [CockpitProposal.from_finding(f) for f in findings]
@@ -959,7 +969,9 @@ class CockpitController:
             return
         self._catalogue_loaded = True
         try:
-            payload = await self._client.list_lint_actions()
+            payload = await asyncio.wait_for(
+                self._client.list_lint_actions(), timeout=_COCKPIT_FETCH_TIMEOUT
+            )
         except Exception:  # noqa: BLE001 - offline fallback is the contract
             return
         actions = payload.get('actions') if isinstance(payload, dict) else None

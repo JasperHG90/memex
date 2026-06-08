@@ -163,7 +163,7 @@ You could put every line of Python in one package, import everything from `memex
 
 **Independent deployment.** The MCP server, the Hermes plugin, the Firefox extension, and the Memex server itself are four different runtime artifacts with four different release cadences. The package boundary lets you ship the MCP server without rebuilding the eval suite, or roll the Hermes plugin forward without touching the CLI.
 
-**Optional dependencies.** `memex-core` pulls in heavy machine-learning libraries — embedders, rerankers, ONNX runtimes. A CLI user who only wants to type `memex note add` shouldn't pay that cost on install. `memex-cli` declares `memex-core` as an *extra*: `pip install memex-cli[server]` brings the engine in, plain `pip install memex-cli` does not.
+**Optional dependencies.** `memex-core` pulls in heavy machine-learning libraries — embedders, rerankers, ONNX runtimes. A CLI user who only wants to type `memex note add` shouldn't pay that cost on install. `memex-cli` declares `memex-core` as an *extra*: `uv pip install 'memex-cli[server]'` brings the engine in, plain `uv pip install memex-cli` does not.
 
 **A boundary the type checker can enforce.** When `memex-mcp` imports a type from `memex-core`, mypy makes sure that import goes through the public surface — the schemas in `memex-common`, the facade, or the documented entry points. Imports that reach into private internals get flagged. A single-package layout has no such fence.
 

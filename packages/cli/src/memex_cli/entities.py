@@ -3,7 +3,6 @@ Entity Management Commands.
 """
 
 import asyncio
-import json
 import logging
 from typing import Annotated, Any
 from uuid import UUID
@@ -16,7 +15,13 @@ from rich.table import Table
 
 from memex_common.config import MemexConfig
 from memex_common.schemas import EntityDTO
-from memex_cli.utils import get_api_context, async_command, handle_api_error
+from memex_cli.utils import (
+    VaultOption,
+    emit_json,
+    get_api_context,
+    async_command,
+    handle_api_error,
+)
 
 console = Console()
 
@@ -109,10 +114,7 @@ async def delete_entity(
 async def delete_mental_model(
     ctx: typer.Context,
     identifier: Annotated[str, typer.Argument(help='Name or UUID of the entity.')],
-    vault: Annotated[
-        str | None,
-        typer.Option('--vault', '-v', help='Vault name or UUID. Defaults to the active vault.'),
-    ] = None,
+    vault: VaultOption = None,
     force: Annotated[bool, typer.Option('--force', '-f', help='Skip confirmation.')] = False,
 ):
     """
@@ -160,7 +162,9 @@ async def delete_mental_model(
 @async_command
 async def list_entities(
     ctx: typer.Context,
-    limit: Annotated[int, typer.Option('--limit', '-l', help='Max number of entities.')] = 50,
+    limit: Annotated[
+        int, typer.Option('--limit', '-l', help='Maximum number of entities to return.')
+    ] = 50,
     query: Annotated[str | None, typer.Option('--query', '-q', help='Search query.')] = None,
     entity_type: Annotated[
         str | None,
@@ -200,7 +204,7 @@ async def list_entities(
             handle_api_error(exc)
 
     if json_output:
-        console.print_json(json.dumps([e.model_dump() for e in entities], default=str))
+        emit_json([e.model_dump() for e in entities])
         return
 
     table = Table(title=f'Entities (Top {limit})')
@@ -263,9 +267,9 @@ async def view_entity(
 
     if json_output:
         if len(identifiers) == 1:
-            console.print_json(json.dumps(entities[0].model_dump(), default=str))
+            emit_json(entities[0].model_dump())
         else:
-            console.print_json(json.dumps([e.model_dump() for e in entities], default=str))
+            emit_json([e.model_dump() for e in entities])
         return
 
     for i, entity in enumerate(entities):
@@ -279,7 +283,9 @@ async def view_entity(
 async def list_mentions(
     ctx: typer.Context,
     identifier: Annotated[str, typer.Argument(help='Name or UUID of the entity.')],
-    limit: int = 20,
+    limit: Annotated[
+        int, typer.Option('--limit', '-l', help='Maximum number of mentions to return.')
+    ] = 20,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
     include_stale: Annotated[
         bool,
@@ -320,7 +326,7 @@ async def list_mentions(
         return
 
     if json_output:
-        console.print_json(json.dumps(results, default=str))
+        emit_json(results)
         return
 
     table = Table(title=f'Mentions for {entity.name}')
@@ -394,7 +400,7 @@ async def list_related(
         return
 
     if json_output:
-        console.print_json(json.dumps(edges, default=str))
+        emit_json(edges)
         return
 
     table = Table(title=f'Related to: {entity.name}')
@@ -423,7 +429,8 @@ async def scan_merges_cmd(
     top_n: Annotated[
         int | None,
         typer.Option(
-            '--top-n',
+            '--limit',
+            '-l',
             min=2,
             max=10_000,
             help='Override the config default for how many entities to scan.',

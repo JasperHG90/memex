@@ -103,7 +103,7 @@ memex note template dir --local
 memex note template delete sprint_retrospective
 ```
 
-Add `--yes` to skip the confirmation prompt. Use `--local` to target a project-local template specifically.
+Add `--force` to skip the confirmation prompt. Use `--local` to target a project-local template specifically.
 
 > **Note:** Built-in templates cannot be deleted.
 

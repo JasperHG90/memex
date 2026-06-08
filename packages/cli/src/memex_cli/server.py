@@ -33,13 +33,13 @@ def check_core_installed():
         import asyncpg  # noqa: F401
     except ImportError as e:
         console.print(f"[bold red]Error:[/bold red] Missing dependency '{e.name}'.")
-        console.print('To run the server, install memex-core:')
-        console.print('  [cyan]uv add memex-core[/cyan]')
+        console.print('To run the server, install the server extra:')
+        console.print("  [cyan]uv pip install 'memex-cli\\[server]'[/cyan]")
         raise typer.Exit(1)
 
 
-async def _readiness_check(config: PostgresInstanceConfig):
-    """Attempt to connect to the database."""
+async def _readiness_check(config: PostgresInstanceConfig) -> Exception | None:
+    """Attempt to connect to the database. Returns the failure, or None when reachable."""
     import asyncpg
 
     try:
@@ -52,10 +52,9 @@ async def _readiness_check(config: PostgresInstanceConfig):
         )
         await conn.execute('SELECT 1')
         await conn.close()
-        return True
+        return None
     except Exception as e:
-        console.print(f'[yellow]Database check failed: {e}[/yellow]')
-        return False
+        return e
 
 
 async def _initialize_database(config):
@@ -158,16 +157,16 @@ async def _initialize_models(cache_dir: str):
 @app.command()
 def start(
     ctx: typer.Context,
-    host: str = typer.Option('0.0.0.0', envvar='MEMEX_HOST', help='Host to bind the server to'),
-    port: int | None = typer.Option(None, envvar='MEMEX_PORT', help='Port to bind the server to'),
+    host: str = typer.Option('0.0.0.0', envvar='MEMEX_HOST', help='Host to bind the server to.'),
+    port: int | None = typer.Option(None, envvar='MEMEX_PORT', help='Port to bind the server to.'),
     workers: int = typer.Option(
-        None, '--workers', '-w', envvar='MEMEX_WORKERS', help='Number of worker processes'
+        None, '--workers', '-w', envvar='MEMEX_WORKERS', help='Number of worker processes.'
     ),
     config: str = typer.Option(
-        None, '--config', '-c', envvar='MEMEX_CONFIG_PATH', help='Path to configuration file'
+        None, '--config', '-c', envvar='MEMEX_CONFIG_PATH', help='Path to configuration file.'
     ),
-    reload: bool = typer.Option(False, help='Enable auto-reload for development'),
-    daemon: bool = typer.Option(False, '--daemon', '-d', help='Run the server in the background'),
+    reload: bool = typer.Option(False, help='Enable auto-reload for development.'),
+    daemon: bool = typer.Option(False, '--daemon', '-d', help='Run the server in the background.'),
 ):
     """Start the Memex Core API server."""
     from memex_cli.banner import print_banner
@@ -199,10 +198,17 @@ def start(
     if not check_port_available(host, port):
         console.print(f'[bold red]Error:[/bold red] Port {port} is already in use.')
         raise typer.Exit(1)
-    db_ready = asyncio.run(_readiness_check(conf.server.meta_store.instance))
-    if not db_ready:
+    instance = conf.server.meta_store.instance
+    db_error = asyncio.run(_readiness_check(instance))
+    if db_error is not None:
         console.print(
-            f'[bold red]Error:[/bold red] Unable to connect to database on {conf.server.meta_store.instance.host}:{conf.server.meta_store.instance.port}.'
+            f'[bold red]Error:[/bold red] Unable to connect to database on '
+            f'{instance.host}:{instance.port}: {db_error}'
+        )
+        console.print('  - Check that Postgres is running and reachable at that address.')
+        console.print(
+            '  - Verify credentials and connection settings: '
+            '[bold cyan]memex config show[/bold cyan]'
         )
         raise typer.Exit(1)
 

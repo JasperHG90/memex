@@ -8,7 +8,7 @@ from memex_cli.server import app
 def mock_dependencies():
     with (
         patch('memex_cli.server.check_core_installed'),
-        patch('memex_cli.server._readiness_check', return_value=True),
+        patch('memex_cli.server._readiness_check', return_value=None),
         patch('memex_cli.server._initialize_database'),
         patch('memex_cli.server._initialize_models'),
         patch('memex_cli.server.parse_memex_config') as mock_conf,

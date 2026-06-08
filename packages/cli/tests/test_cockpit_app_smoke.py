@@ -511,3 +511,185 @@ async def test_collapse_mode_empty_cluster_bounces_to_list() -> None:
         await pilot.press('enter')
         await pilot.pause()
         assert app.mode == 'list'  # bounced back, not stuck in 'collapse'
+
+
+@pytest.mark.asyncio
+async def test_s_views_source_note_in_detail() -> None:
+    """In DETAIL mode, [s] (not [n]) triggers the source-note fetch."""
+    finding = _finding()
+    client = _FakeClient([finding])
+    app = ProposalCockpitApp(CockpitController(client), limit=5)
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press('d')
+        await pilot.pause()
+        assert app.mode == 'detail'
+        assert app._viewing_source_note is False
+
+        await pilot.press('s')
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        # [s] triggers the source-note fetch handler. The fake unit has no
+        # linked note, so the handler reports that via the status bar — proving
+        # [s] (not [n]) is wired to the fetch in DETAIL mode.
+        status = str(app.query_one('#status-bar', Static).render())
+        assert 'source note' in status.lower()
+
+
+@pytest.mark.asyncio
+async def test_f5_refreshes_queue() -> None:
+    """F5 re-fetches the queue from the server."""
+    finding = _finding()
+
+    class _CountingClient(_FakeClient):
+        def __init__(self, findings: list[dict[str, Any]]) -> None:
+            super().__init__(findings)
+            self.fetch_count = 0
+
+        async def lint_findings(self, **kwargs: Any) -> dict[str, Any]:
+            self.fetch_count += 1
+            return await super().lint_findings(**kwargs)
+
+    client = _CountingClient([finding])
+    app = ProposalCockpitApp(CockpitController(client), limit=5)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        first = client.fetch_count
+        await pilot.press('f5')
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert client.fetch_count > first
+
+
+@pytest.mark.asyncio
+async def test_queue_load_failure_surfaces_error_not_crash() -> None:
+    """A failing fetch renders an error state with a retry hint, not a traceback."""
+
+    class _BrokenClient(_FakeClient):
+        async def lint_findings(self, **kwargs: Any) -> dict[str, Any]:
+            raise RuntimeError('boom: server down')
+
+    app = ProposalCockpitApp(CockpitController(_BrokenClient([])), limit=5)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        assert app.mode == 'list'
+        header = str(app.query_one('#detail-header', Static).render())
+        assert 'Could not load the proposal queue' in header
+        assert 'boom: server down' in header
+        status = str(app.query_one('#status-bar', Static).render())
+        assert 'Retry' in status
+
+
+@pytest.mark.asyncio
+async def test_reverse_screen_rejects_non_uuid() -> None:
+    """ReverseScreen keeps a malformed finding_id from reaching the server."""
+    from memex_cli.cockpit.app import ReverseScreen
+    from textual.widgets import Input, Label
+
+    app = ProposalCockpitApp(CockpitController(_FakeClient([])), limit=5)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        screen = ReverseScreen()
+        await app.push_screen(screen)
+        await pilot.pause()
+        screen.query_one('#reverse-input', Input).value = 'not-a-uuid'
+        await pilot.press('enter')
+        await pilot.pause()
+        # Still on the modal; an inline error is shown rather than dismissing.
+        assert isinstance(app.screen, ReverseScreen)
+        assert 'Not a valid finding_id' in str(screen.query_one('#reverse-help', Label).render())
+
+
+@pytest.mark.asyncio
+async def test_refresh_failure_from_detail_keeps_retry_hint() -> None:
+    """A refresh that fails while in DETAIL still surfaces the retry affordance.
+
+    Regression guard: dropping to LIST must happen before the error is painted,
+    or watch_mode's footer update would clobber the '[F5] Retry' status hint.
+    """
+
+    class _FailAfterFirst(_FakeClient):
+        def __init__(self, findings: list[dict[str, Any]]) -> None:
+            super().__init__(findings)
+            self.calls = 0
+
+        async def lint_findings(self, **kwargs: Any) -> dict[str, Any]:
+            self.calls += 1
+            if self.calls > 1:
+                raise RuntimeError('server went away')
+            return await super().lint_findings(**kwargs)
+
+    finding = _finding()
+    app = ProposalCockpitApp(CockpitController(_FailAfterFirst([finding])), limit=5)
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press('d')
+        await pilot.pause()
+        assert app.mode == 'detail'
+
+        await pilot.press('f5')
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+        assert app.mode == 'list'
+        status = str(app.query_one('#status-bar', Static).render())
+        assert 'Retry' in status
+        header = str(app.query_one('#detail-header', Static).render())
+        assert 'Could not load the proposal queue' in header
+
+
+@pytest.mark.asyncio
+async def test_flag_one_returns_result_then_error() -> None:
+    """_flag_one returns (result, None) on success and (None, error) on failure —
+    the contract both verdict paths branch on. Guards the (result, error) order."""
+    proposal_finding = _finding()
+
+    ok_app = ProposalCockpitApp(CockpitController(_FakeClient([proposal_finding])), limit=5)
+    async with ok_app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        proposal = ok_app.proposals[0]
+        result, error = await ok_app._flag_one(proposal)
+        assert error is None
+        assert result is not None and result.get('flagged') is True
+        assert proposal.flagged_at == '2026-05-26T00:00:00Z'
+
+    class _FlagBoom(_FakeClient):
+        async def lint_flag(self, finding_id: str) -> dict[str, Any]:
+            raise RuntimeError('flag endpoint down')
+
+    err_app = ProposalCockpitApp(CockpitController(_FlagBoom([proposal_finding])), limit=5)
+    async with err_app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        result, error = await err_app._flag_one(err_app.proposals[0])
+        assert result is None
+        assert error is not None and 'flag endpoint down' in error
+
+
+@pytest.mark.asyncio
+async def test_batch_flag_counts_success_and_failure() -> None:
+    """_submit_batch_async flag branch counts ok on error-None, fail otherwise."""
+
+    class _FlagOddFails(_FakeClient):
+        def __init__(self, findings: list[dict[str, Any]]) -> None:
+            super().__init__(findings)
+            self._n = 0
+
+        async def lint_flag(self, finding_id: str) -> dict[str, Any]:
+            self._n += 1
+            if self._n == 2:
+                raise RuntimeError('transient')
+            return {'finding_id': finding_id, 'flagged': True, 'flagged_at': 'x'}
+
+    findings = [_finding(), _finding(), _finding()]
+    app = ProposalCockpitApp(CockpitController(_FlagOddFails(findings)), limit=5)
+    from memex_cli.cockpit.controller import FLAG_OPTION
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await app._submit_batch_async(list(app.proposals), FLAG_OPTION, None)
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        status = str(app.query_one('#status-bar', Static).render())
+        assert '2 flagged' in status
+        assert '1 failed' in status

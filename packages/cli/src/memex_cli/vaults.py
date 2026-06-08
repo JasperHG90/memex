@@ -2,7 +2,6 @@
 Vault Management Commands.
 """
 
-import json
 from pathlib import Path
 from typing import Annotated
 from uuid import UUID
@@ -12,7 +11,7 @@ from rich.console import Console
 from rich.table import Table
 
 from memex_common.config import MemexConfig
-from memex_cli.utils import get_api_context, async_command, handle_api_error
+from memex_cli.utils import emit_json, get_api_context, async_command, handle_api_error
 
 console = Console()
 
@@ -97,7 +96,7 @@ async def list_vaults(
         return
 
     if json_output:
-        console.print_json(json.dumps([v.model_dump() for v in vaults], default=str))
+        emit_json([v.model_dump() for v in vaults])
         return
 
     has_access = any(v.access is not None for v in vaults)
@@ -150,11 +149,11 @@ async def create_vault(
     console.print(f'[bold green]Vault created successfully![/bold green] ID: {vault.id}')
 
 
-@app.command('truncate')
+@app.command('clear')
 @async_command
-async def truncate_vault(
+async def clear_vault(
     ctx: typer.Context,
-    identifier: Annotated[str, typer.Argument(help='Name or UUID of the vault to truncate.')],
+    identifier: Annotated[str, typer.Argument(help='Name or UUID of the vault to clear.')],
     force: Annotated[bool, typer.Option('--force', '-f', help='Skip confirmation.')] = False,
 ):
     """
@@ -199,13 +198,13 @@ async def truncate_vault(
                 console.print('[yellow]Aborted.[/yellow]')
                 return
 
-        console.print(f'[red]Truncating vault:[/red] {identifier}...')
+        console.print(f'[red]Clearing vault:[/red] {identifier}...')
         try:
             counts = await api.truncate_vault(vault_uuid)
         except Exception as e:
             handle_api_error(e)
 
-    console.print('[bold green]Vault truncated.[/bold green]')
+    console.print('[bold green]Vault cleared.[/bold green]')
     for label, count in counts.items():
         if count > 0:
             console.print(f'  {label}: [dim]{count} removed[/dim]')
@@ -293,7 +292,7 @@ async def vault_summary(
             return
 
     if json_output:
-        console.print_json(json.dumps(summary.model_dump(exclude={'embedding'}), default=str))
+        emit_json(summary.model_dump(exclude={'embedding'}))
         return
 
     if compact:

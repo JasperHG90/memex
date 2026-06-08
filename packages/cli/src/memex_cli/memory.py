@@ -3,7 +3,6 @@ Memory Management Commands (Ingest & Retrieval).
 """
 
 import asyncio
-import json
 import logging
 from typing import Annotated
 from uuid import UUID
@@ -17,7 +16,10 @@ from rich.panel import Panel
 from rich.markdown import Markdown
 
 from memex_cli.utils import (
+    VaultOption,
     async_command,
+    emit_json,
+    resolve_active_vault,
     get_api_context,
     handle_api_error,
     parse_uuid,
@@ -119,11 +121,9 @@ async def view_memory(
         # exclude embedding: vectors are an HTTP/Python-caller capability; CLI
         # JSON shape stays byte-identical to the pre-field era.
         if len(uuids) == 1:
-            console.print_json(json.dumps(units[0].model_dump(exclude={'embedding'}), default=str))
+            emit_json(units[0].model_dump(exclude={'embedding'}))
         else:
-            console.print_json(
-                json.dumps([u.model_dump(exclude={'embedding'}) for u in units], default=str)
-            )
+            emit_json([u.model_dump(exclude={'embedding'}) for u in units])
         return
 
     for i, unit in enumerate(units):
@@ -165,14 +165,7 @@ async def view_memory(
 async def deprioritize_memory(
     ctx: typer.Context,
     unit_id: Annotated[str, typer.Argument(help='UUID of the memory unit to deprioritize.')],
-    vault: Annotated[
-        str | None,
-        typer.Option(
-            '--vault',
-            '-v',
-            help='Vault name or UUID. Defaults to the active vault.',
-        ),
-    ] = None,
+    vault: VaultOption = None,
     reason: Annotated[
         str,
         typer.Option('--reason', '-r', help='Why this unit is being deprioritized.'),
@@ -184,11 +177,10 @@ async def deprioritize_memory(
     """
     config: MemexConfig = ctx.obj
     uuid_obj = parse_uuid(unit_id, 'memory unit')
-    effective_vault = vault if vault is not None else config.write_vault
 
     async with get_api_context(config) as api:
         try:
-            resolved_vault = await api.resolve_vault_identifier(effective_vault)
+            resolved_vault = await resolve_active_vault(api, config, vault)
             unit = await api.deprioritize_memory_unit(
                 uuid_obj, reason=reason, vault_id=resolved_vault
             )
@@ -206,23 +198,15 @@ async def deprioritize_memory(
 async def restore_memory(
     ctx: typer.Context,
     unit_id: Annotated[str, typer.Argument(help='UUID of the memory unit to restore.')],
-    vault: Annotated[
-        str | None,
-        typer.Option(
-            '--vault',
-            '-v',
-            help='Vault name or UUID. Defaults to the active vault.',
-        ),
-    ] = None,
+    vault: VaultOption = None,
 ):
     """Restore a deprioritized memory unit (flips ``is_deprioritized`` back to false)."""
     config: MemexConfig = ctx.obj
     uuid_obj = parse_uuid(unit_id, 'memory unit')
-    effective_vault = vault if vault is not None else config.write_vault
 
     async with get_api_context(config) as api:
         try:
-            resolved_vault = await api.resolve_vault_identifier(effective_vault)
+            resolved_vault = await resolve_active_vault(api, config, vault)
             unit = await api.restore_memory_unit(uuid_obj, vault_id=resolved_vault)
         except Exception as e:
             handle_api_error(e)
@@ -236,10 +220,7 @@ async def restore_memory(
 async def reconsolidate_memory(
     ctx: typer.Context,
     entity_id: Annotated[str, typer.Argument(help='UUID of the entity to reconsolidate.')],
-    vault: Annotated[
-        str | None,
-        typer.Option('--vault', '-v', help='Vault name or UUID. Defaults to the active vault.'),
-    ] = None,
+    vault: VaultOption = None,
 ):
     """Re-evaluate every memory unit linked to one entity. **Use sparingly.**
 
@@ -270,27 +251,23 @@ async def reconsolidate_memory(
     """
     config: MemexConfig = ctx.obj
     entity_uuid = parse_uuid(entity_id, 'entity')
-    effective_vault = vault if vault is not None else config.write_vault
 
     async with get_api_context(config) as api:
         try:
-            vault_uuid = await api.resolve_vault_identifier(effective_vault)
+            vault_uuid = await resolve_active_vault(api, config, vault)
             result = await api.reconsolidate_entity(entity_uuid, vault_uuid)
         except Exception as e:
             handle_api_error(e)
             return
 
-    console.print_json(json.dumps(result, default=str))
+    emit_json(result)
 
 
 @app.command('consolidate')
 @async_command
 async def consolidate_memory(
     ctx: typer.Context,
-    vault: Annotated[
-        str | None,
-        typer.Option('--vault', '-v', help='Vault name or UUID. Defaults to the active vault.'),
-    ] = None,
+    vault: VaultOption = None,
     dry_run: Annotated[
         bool,
         typer.Option('--dry-run', help='Preview without making changes.'),
@@ -324,17 +301,16 @@ async def consolidate_memory(
     writing.
     """
     config: MemexConfig = ctx.obj
-    effective_vault = vault if vault is not None else config.write_vault
 
     async with get_api_context(config) as api:
         try:
-            vault_uuid = await api.resolve_vault_identifier(effective_vault)
+            vault_uuid = await resolve_active_vault(api, config, vault)
             result = await api.consolidate_vault(vault_uuid, dry_run=dry_run)
         except Exception as e:
             handle_api_error(e)
             return
 
-    console.print_json(json.dumps(result, default=str))
+    emit_json(result)
 
 
 @app.command('delete')
@@ -381,9 +357,11 @@ async def search_memory(
             '--vault', '-v', help='Vault(s) to search. Accepts names or UUIDs. Use "*" for all.'
         ),
     ] = None,
-    limit: int = 5,
+    limit: Annotated[
+        int, typer.Option('--limit', '-l', help='Maximum number of results to return.')
+    ] = 5,
     token_budget: Annotated[
-        int | None, typer.Option('--token-budget', '-t', help='Token budget for retrieval.')
+        int | None, typer.Option('--budget', '-b', help='Token budget for retrieval.')
     ] = None,
     answer: Annotated[
         bool, typer.Option('--answer', '-a', help='Generate an AI answer from results.')
@@ -495,7 +473,7 @@ async def search_memory(
             console.print(
                 f'[red]Invalid --intent {intent!r}. Allowed: {sorted(VALID_INTENT_CLASSES)}[/red]'
             )
-            raise typer.Exit(1)
+            raise typer.Exit(2)
         intent_value = IntentClass(intent_str)
 
     risk_value: RiskClass | None = None
@@ -505,7 +483,7 @@ async def search_memory(
             console.print(
                 f'[red]Invalid --risk {risk!r}. Allowed: {sorted(VALID_RISK_CLASSES)}[/red]'
             )
-            raise typer.Exit(1)
+            raise typer.Exit(2)
         risk_value = RiskClass(risk_str)
 
     async with get_api_context(config) as api:
@@ -542,9 +520,7 @@ async def search_memory(
             return
 
         if json_output:
-            console.print_json(
-                json.dumps([u.model_dump(exclude={'embedding'}) for u in results], default=str)
-            )
+            emit_json([u.model_dump(exclude={'embedding'}) for u in results])
             return
 
         # Display Table
@@ -585,7 +561,9 @@ async def reflect(
             help='ID of the entity to reflect on. If omitted, reflects on top entities.'
         ),
     ] = None,
-    limit: int = 5,
+    limit: Annotated[
+        int, typer.Option('--limit', '-l', help='Maximum number of entities to reflect on.')
+    ] = 5,
     batch_size: int = 10,
 ):
     """
@@ -690,7 +668,9 @@ async def memory_links(
         str | None,
         typer.Option('--type', '-t', help='Filter by link type (e.g. contradicts).'),
     ] = None,
-    limit: Annotated[int, typer.Option('--limit', '-l', help='Max links to return.')] = 20,
+    limit: Annotated[
+        int, typer.Option('--limit', '-l', help='Maximum number of links to return.')
+    ] = 20,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
 ):
     """
@@ -712,7 +692,7 @@ async def memory_links(
         return
 
     if json_output:
-        console.print_json(json.dumps([lnk.model_dump() for lnk in links], default=str))
+        emit_json([lnk.model_dump() for lnk in links])
         return
 
     table = Table(title=f'Links for {unit_id[:8]}...')
@@ -739,14 +719,16 @@ async def memory_links(
 async def get_lineage(
     ctx: typer.Context,
     entity_type: Annotated[
-        str, typer.Argument(help='Type: mental_model, observation, memory_unit, note')
+        str, typer.Argument(help='Type: mental_model, observation, memory_unit, note.')
     ],
     entity_id: Annotated[str, typer.Argument(help='UUID of the entity.')],
     direction: Annotated[
         LineageDirection, typer.Option('--direction', '-d', help='Traverse direction.')
     ] = LineageDirection.UPSTREAM,
     depth: Annotated[int, typer.Option('--depth', help='Max recursion depth.')] = 3,
-    limit: Annotated[int, typer.Option('--limit', help='Max children per node.')] = 5,
+    limit: Annotated[
+        int, typer.Option('--limit', '-l', help='Maximum number of children per node to return.')
+    ] = 5,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
 ):
     """
@@ -807,7 +789,7 @@ async def get_lineage(
             return tree
 
         if json_output:
-            console.print_json(json.dumps(response.model_dump(), default=str))
+            emit_json(response.model_dump())
             return
 
         console.print(f'\n[bold green]Lineage Visualization ({direction.value})[/bold green]')

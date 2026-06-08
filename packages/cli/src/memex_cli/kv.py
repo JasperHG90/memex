@@ -2,7 +2,6 @@
 Key-Value Store Commands.
 """
 
-import json
 from typing import Annotated
 
 import typer
@@ -10,7 +9,7 @@ from rich.console import Console
 from rich.table import Table
 
 from memex_common.config import MemexConfig
-from memex_cli.utils import get_api_context, async_command, handle_api_error
+from memex_cli.utils import emit_json, get_api_context, async_command, handle_api_error
 
 console = Console()
 
@@ -103,7 +102,9 @@ async def kv_get(
 async def kv_search(
     ctx: typer.Context,
     query: Annotated[str, typer.Argument(help='Search query.')],
-    limit: Annotated[int, typer.Option('--limit', '-l', help='Max results.')] = 5,
+    limit: Annotated[
+        int, typer.Option('--limit', '-l', help='Maximum number of results to return.')
+    ] = 5,
     namespace: Annotated[
         list[str] | None,
         typer.Option('--namespace', '-n', help='Filter by namespace prefix (repeatable).'),
@@ -126,9 +127,7 @@ async def kv_search(
         return
 
     if json_output:
-        console.print_json(
-            json.dumps([r.model_dump(exclude={'embedding'}) for r in results], default=str)
-        )
+        emit_json([r.model_dump(exclude={'embedding'}) for r in results])
         return
 
     table = Table(title=f'KV Search: "{query}"')
@@ -178,9 +177,7 @@ async def kv_list(
         return
 
     if json_output:
-        console.print_json(
-            json.dumps([e.model_dump(exclude={'embedding'}) for e in entries], default=str)
-        )
+        emit_json([e.model_dump(exclude={'embedding'}) for e in entries])
         return
 
     table = Table(title='KV Entries')

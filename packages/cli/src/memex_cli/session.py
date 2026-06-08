@@ -7,7 +7,12 @@ import httpx
 import typer
 
 from memex_common.config import MemexConfig
-from memex_cli.utils import async_command, get_api_context, handle_api_error
+from memex_cli.utils import (
+    VaultOption,
+    async_command,
+    get_api_context,
+    resolve_active_vault,
+)
 
 app = typer.Typer(
     name='briefing',
@@ -22,10 +27,7 @@ _VALID_BUDGETS = (1000, 2000)
 @async_command
 async def briefing(
     ctx: typer.Context,
-    vault: Annotated[
-        str | None,
-        typer.Option('--vault', '-v', help='Vault name or UUID. Defaults to the active vault.'),
-    ] = None,
+    vault: VaultOption = None,
     budget: Annotated[
         int,
         typer.Option('--budget', '-b', help='Token budget (1000 or 2000).'),
@@ -44,31 +46,31 @@ async def briefing(
             f'Error: --budget must be one of {_VALID_BUDGETS}, got {budget}',
             file=sys.stderr,
         )
-        raise typer.Exit(1)
+        raise typer.Exit(2)
 
     config: MemexConfig = ctx.obj
 
+    # This command is consumed by hooks/scripts: errors go to stderr as plain text,
+    # never through the interactive (stdout, rich) handler used elsewhere.
     try:
         async with get_api_context(config) as api:
-            vault_name = vault or config.write_vault
-            try:
-                vault_uuid = await api.resolve_vault_identifier(vault_name)
-            except Exception as e:
-                handle_api_error(e)
-
-            try:
-                result = await api.get_session_briefing(
-                    vault_id=vault_uuid,
-                    budget=budget,
-                    project_id=project_id,
-                )
-            except Exception as e:
-                handle_api_error(e)
-    except (httpx.ConnectError, httpx.ConnectTimeout, OSError) as e:
+            vault_uuid = await resolve_active_vault(api, config, vault)
+            result = await api.get_session_briefing(
+                vault_id=vault_uuid,
+                budget=budget,
+                project_id=project_id,
+            )
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, OSError) as e:
         print(
-            f'Error: Could not connect to Memex server. Is it running? ({e})',
+            f'Error: Could not reach the Memex server. Is it running? ({e})',
             file=sys.stderr,
         )
+        raise typer.Exit(1)
+    except httpx.HTTPStatusError as e:
+        print(f'Error: Memex server returned {e.response.status_code}.', file=sys.stderr)
+        raise typer.Exit(1)
+    except Exception as e:
+        print(f'Error: Failed to generate briefing ({e}).', file=sys.stderr)
         raise typer.Exit(1)
 
     # Output raw markdown to stdout (no Rich formatting)
