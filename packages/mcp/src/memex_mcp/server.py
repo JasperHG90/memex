@@ -30,6 +30,7 @@ from memex_mcp._layer_primer_descriptions import (
     LAYER_ROUTING_PRIMER_FRAGMENT as _LAYER_ROUTING_PRIMER,
 )
 from memex_common.agent_surface import MCP_TRANSPORT_INSTRUCTIONS
+from memex_common.vault_utils import ALL_VAULTS_WILDCARD, expand_vault_scope
 from memex_common.tool_descriptions import (
     MEMEX_KV_PUT_DESC as _MEMEX_KV_PUT_DESCRIPTION,
 )
@@ -216,38 +217,42 @@ async def _resolve_vault_ids(
     to all content vaults. This matches :func:`VaultService.resolve_vault_scope`
     so a caller that forgets to forward a list still gets the content-only
     default universe instead of an empty scope.
-    """
-    from memex_common.vault_utils import ALL_VAULTS_WILDCARD
 
+    Pure scope-expansion logic lives in
+    :func:`memex_common.vault_utils.expand_vault_scope` (shared SSOT with
+    ``VaultService.resolve_vault_scope``). The MCP layer only does the
+    parts that need the API surface — name resolution and the system-vs-
+    content partition.
+    """
     if not vault_ids:
         vault_ids = [ALL_VAULTS_WILDCARD]
     has_wildcard = ALL_VAULTS_WILDCARD in vault_ids
     named = [v for v in vault_ids if v != ALL_VAULTS_WILDCARD]
 
-    resolved: list[UUID] = []
-    seen: set[UUID] = set()
-
-    def _add(uid: UUID) -> None:
-        if uid not in seen:
-            seen.add(uid)
-            resolved.append(uid)
-
+    named_ids: list[UUID] = []
     for vid in named:
         try:
             r = await api.resolve_vault_identifier(vid)
         except Exception:
             raise ToolError(f'Vault not found: {vid!r}')
-        _add(UUID(str(r)) if not isinstance(r, UUID) else r)
+        named_ids.append(UUID(str(r)) if not isinstance(r, UUID) else r)
 
-    if has_wildcard or include_system_vaults:
+    needs_partition = has_wildcard or include_system_vaults
+    content_vault_ids: list[UUID] = []
+    system_vault_ids: list[UUID] = []
+    if needs_partition:
         for v in await api.list_vaults(include_system=True):
-            kind = getattr(v, 'kind', 'content')
-            if has_wildcard and kind != 'system':
-                _add(v.id)
-            if include_system_vaults and kind == 'system':
-                _add(v.id)
+            (
+                system_vault_ids if getattr(v, 'kind', 'content') == 'system' else content_vault_ids
+            ).append(v.id)
 
-    return resolved
+    return expand_vault_scope(
+        named_ids,
+        content_vault_ids,
+        system_vault_ids,
+        has_wildcard=has_wildcard,
+        include_system_vaults=include_system_vaults,
+    )
 
 
 async def _resolve_vault_id(api: Any, vault_id: str) -> 'UUID':

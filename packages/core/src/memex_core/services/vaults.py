@@ -12,7 +12,7 @@ from sqlmodel import col, select
 
 from memex_common.exceptions import VaultNotFoundError, AmbiguousResourceError
 from memex_common.vault_policy import VaultKind, VaultPolicy, coerce_policy
-from memex_common.vault_utils import ALL_VAULTS_WILDCARD
+from memex_common.vault_utils import ALL_VAULTS_WILDCARD, expand_vault_scope
 
 from memex_core.memory.sql_models import Vault, MWMode
 
@@ -326,35 +326,33 @@ class VaultService(BaseService):
         Contract (the single source of truth for every user-facing read):
         - ``None`` / empty / wildcard ``'*'`` → all **content** vault ids.
         - explicitly named vaults (content or system) → resolved as given.
-        - ``include_system_vaults=True`` → add all system vault ids.
+        - ``include_system_vaults=True`` → unconditionally add all system
+          vault ids (regardless of whether the caller used ``*`` or named
+          specific vaults). To scope a call to one system vault without
+          dragging in the rest, name it and leave the flag off.
 
-        There is no path that implicitly yields system vaults; they appear only
-        when named or when ``include_system_vaults`` is set.
+        Pure scope-expansion logic lives in
+        :func:`memex_common.vault_utils.expand_vault_scope` so the MCP
+        layer can reuse it without taking a ``memex_core`` dependency.
         """
-        ids: list[UUID] = []
-        seen: set[UUID] = set()
-
-        def _add(vid: UUID) -> None:
-            if vid not in seen:
-                seen.add(vid)
-                ids.append(vid)
-
         identifiers = identifiers or []
         has_wildcard = any(str(v) == ALL_VAULTS_WILDCARD for v in identifiers)
-        named = [v for v in identifiers if str(v) != ALL_VAULTS_WILDCARD]
+        named_identifiers = [v for v in identifiers if str(v) != ALL_VAULTS_WILDCARD]
 
-        for identifier in named:
-            _add(await self.resolve_vault_identifier(identifier))
+        named_ids: list[UUID] = []
+        for identifier in named_identifiers:
+            named_ids.append(await self.resolve_vault_identifier(identifier))
 
-        if has_wildcard or not named:
-            for vid in await self._content_vault_ids():
-                _add(vid)
+        content_vault_ids = await self._content_vault_ids() if has_wildcard or not named_ids else []
+        system_vault_ids = await self._system_vault_ids() if include_system_vaults else []
 
-        if include_system_vaults:
-            for vid in await self._system_vault_ids():
-                _add(vid)
-
-        return ids
+        return expand_vault_scope(
+            named_ids,
+            content_vault_ids,
+            system_vault_ids,
+            has_wildcard=has_wildcard,
+            include_system_vaults=include_system_vaults,
+        )
 
     async def get_vault_by_name(self, name: str) -> Any | None:
         """Get a single vault by exact name match."""

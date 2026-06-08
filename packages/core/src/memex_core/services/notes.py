@@ -11,7 +11,7 @@ from uuid import UUID
 if TYPE_CHECKING:
     from memex_core.services.vault_summary import VaultSummaryService
 
-from sqlmodel import col
+from sqlmodel import col, select
 
 from sqlalchemy import func, text
 
@@ -19,6 +19,7 @@ from memex_common.exceptions import NoteNotFoundError, ResourceNotFoundError, Va
 from memex_common.note_utils import derive_note_uuid_from_key
 from memex_common.schemas import BlockSummaryDTO, NodeDTO, filter_toc
 from memex_core.config import MemexConfig
+from memex_core.memory.sql_models import Note
 from memex_core.services.audit import AuditService, audit_event
 from memex_core.services.vaults import VaultService
 from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
@@ -957,11 +958,6 @@ class NoteService:
                 # The kind predicate is the SAME subquery the ORM
                 # list_notes / get_recent_notes paths use, so this raw-SQL
                 # branch can't drift from the SSOT.
-                from sqlmodel import select
-
-                from memex_core.memory.sql_models import Note
-                from memex_core.services.vaults import VaultService
-
                 content_subq = VaultService.content_vault_ids_subquery()
                 score_label = func.similarity(func.lower(Note.title), func.lower(query)).label(
                     'score'
