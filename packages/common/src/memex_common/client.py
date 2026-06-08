@@ -177,16 +177,6 @@ class RemoteMemexAPI:
         result = await self._get('vaults', params={'state': 'active'})
         return VaultDTO(**result[0])
 
-    # --- Inbox router ---
-    async def trigger_inbox_triage(self, dry_run: bool = False) -> dict[str, Any]:
-        """Run one inbox-router triage tick. Returns the per-outcome counts;
-        a dry run additionally returns per-note ``decisions`` without mutating."""
-        return await self._post('inbox/triage', data={}, params={'dry_run': dry_run})
-
-    async def inbox_status(self) -> dict[str, Any]:
-        """Router readiness + pending routing-proposal counts."""
-        return await self._get('inbox/status')
-
     async def get_default_vaults(self) -> DefaultVaultsResponse:
         """Get the active (writer) vault and default reader vaults."""
         result = await self._get('vaults', params={'is_default': True})

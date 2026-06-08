@@ -13,11 +13,14 @@ from uuid import UUID, uuid4
 
 import pytest
 
+from memex_common.lint import CandidateEvidence, RouteEvidence
 from memex_core.services.proposal_actions import (
     ActionValidationError,
+    ProposalActionError,
     get_action,
     list_actions,
 )
+from memex_core.services.proposal_actions.route_note_to_vault import RouteNoteToVaultAction
 
 
 _VAULT = UUID('00000000-0000-0000-0000-000000000001')
@@ -127,6 +130,8 @@ class _FakeApi:
     kv_deleted: list[str] = field(default_factory=list)
     kv_delete_result: bool = True
     outcomes: list[dict[str, Any]] = field(default_factory=list)
+    migrate_calls: list[tuple[UUID, UUID]] = field(default_factory=list)
+    migrate_result: dict[str, Any] = field(default_factory=dict)
 
     async def deprioritize_memory_unit(
         self,
@@ -148,6 +153,13 @@ class _FakeApi:
         background_tasks: Any | None = None,
     ) -> None:
         self.restored.append((unit_id, vault_id, actor))
+
+    async def migrate_note(self, note_id: UUID, target_vault_id: UUID) -> dict[str, Any]:
+        # NOTE: _FakeApi deliberately has NO ``inbox_router`` attribute — the
+        # route action must not reach for one (the in-core router was removed in
+        # V6). A stray ``api.inbox_router`` access raises AttributeError here.
+        self.migrate_calls.append((note_id, target_vault_id))
+        return dict(self.migrate_result)
 
     async def set_note_status(
         self,
@@ -901,3 +913,180 @@ class TestDeleteActions:
                 api, {}, target_id=str(uuid4()), vault_id=_VAULT
             )
             assert 'NOT reversible' in text, action_id
+
+
+_ROUTE = RouteNoteToVaultAction()
+
+
+class TestRouteNoteToVaultAction:
+    """Behavioural coverage for route_note_to_vault after the V6 router removal.
+
+    Ported from the deleted tests/unit/services/inbox_router/test_route_action.py,
+    minus every record_feedback assertion (the in-core learning loop is gone).
+    """
+
+    def test_validate_rejects_wrong_target_type(self) -> None:
+        with pytest.raises(ActionValidationError):
+            _ROUTE.validate(
+                {'target_vault_id': str(uuid4())}, target_type='memory_unit', target_id=str(uuid4())
+            )
+
+    def test_validate_rejects_bad_target_id(self) -> None:
+        with pytest.raises(ActionValidationError):
+            _ROUTE.validate(
+                {'target_vault_id': str(uuid4())}, target_type='note', target_id='not-a-uuid'
+            )
+
+    def test_validate_requires_target_vault_id(self) -> None:
+        with pytest.raises(ActionValidationError):
+            _ROUTE.validate({}, target_type='note', target_id=str(uuid4()))
+
+    def test_validate_rejects_bad_target_vault_id(self) -> None:
+        with pytest.raises(ActionValidationError):
+            _ROUTE.validate({'target_vault_id': 'nope'}, target_type='note', target_id=str(uuid4()))
+
+    def test_validate_accepts_well_formed(self) -> None:
+        _ROUTE.validate(
+            {'target_vault_id': str(uuid4())}, target_type='note', target_id=str(uuid4())
+        )
+
+    @pytest.mark.asyncio
+    async def test_execute_migrates_and_records_state(self) -> None:
+        note_id, target_vault, source_vault = uuid4(), uuid4(), uuid4()
+        api = _FakeApi(migrate_result={'source_vault_id': str(source_vault), 'status': 'ok'})
+        res = await _ROUTE.execute(
+            api,
+            {'target_vault_id': str(target_vault)},
+            target_id=str(note_id),
+            vault_id=source_vault,
+            actor=_ACTOR,
+        )
+        assert api.migrate_calls == [(note_id, target_vault)]
+        assert res.prior_state['source_vault_id'] == str(source_vault)
+        assert res.applied_state['target_vault_id'] == str(target_vault)
+
+    @pytest.mark.asyncio
+    async def test_execute_does_not_touch_inbox_router(self) -> None:
+        # REGRESSION (V6): execute used to call api.inbox_router.record_feedback.
+        # _FakeApi has no inbox_router attribute, so any such call would raise
+        # AttributeError. A clean execute proves the learning loop is gone.
+        note_id, target_vault = uuid4(), uuid4()
+        api = _FakeApi(migrate_result={'source_vault_id': str(uuid4())})
+        assert not hasattr(api, 'inbox_router')
+        res = await _ROUTE.execute(
+            api,
+            {'target_vault_id': str(target_vault)},
+            target_id=str(note_id),
+            vault_id=uuid4(),
+            actor=_ACTOR,
+        )
+        assert res.applied_state['target_vault_id'] == str(target_vault)
+        assert api.migrate_calls == [(note_id, target_vault)]
+
+    @pytest.mark.asyncio
+    async def test_reverse_migrates_back_to_source(self) -> None:
+        note_id, source_vault = uuid4(), uuid4()
+        api = _FakeApi()
+        res = await _ROUTE.reverse(
+            api,
+            {},
+            {'note_id': str(note_id), 'target_vault_id': str(uuid4())},
+            {'source_vault_id': str(source_vault)},
+            target_id=str(note_id),
+            vault_id=uuid4(),
+            actor=_ACTOR,
+        )
+        assert api.migrate_calls == [(note_id, source_vault)]
+        assert res.restored_state['vault_id'] == str(source_vault)
+
+    @pytest.mark.asyncio
+    async def test_reverse_does_not_touch_inbox_router(self) -> None:
+        # Same V6 regression, reverse path: no record_feedback on the rolled-back
+        # vault. _FakeApi lacking inbox_router would surface any such call.
+        note_id, source_vault, applied = uuid4(), uuid4(), uuid4()
+        api = _FakeApi()
+        assert not hasattr(api, 'inbox_router')
+        await _ROUTE.reverse(
+            api,
+            {},
+            {'note_id': str(note_id), 'target_vault_id': str(applied)},
+            {'source_vault_id': str(source_vault)},
+            target_id=str(note_id),
+            vault_id=uuid4(),
+            actor=_ACTOR,
+        )
+        assert api.migrate_calls == [(note_id, source_vault)]
+
+    @pytest.mark.asyncio
+    async def test_reverse_without_source_raises(self) -> None:
+        api = _FakeApi()
+        with pytest.raises(ProposalActionError):
+            await _ROUTE.reverse(
+                api,
+                {},
+                {'note_id': str(uuid4())},
+                {},
+                target_id=str(uuid4()),
+                vault_id=uuid4(),
+                actor=_ACTOR,
+            )
+
+    @pytest.mark.asyncio
+    async def test_global_noop_stores_none_not_string(self) -> None:
+        # REGRESSION: a GLOBAL (NULL-vault) no-op migrate must store
+        # prior_state['source_vault_id'] as None, never the literal 'None'
+        # (which would make reverse() call UUID('None') -> 500).
+        note_id, target_vault = uuid4(), uuid4()
+        api = _FakeApi(migrate_result={'source_vault_id': None, 'status': 'noop'})
+        res = await _ROUTE.execute(
+            api,
+            {'target_vault_id': str(target_vault)},
+            target_id=str(note_id),
+            vault_id=None,
+            actor=_ACTOR,
+        )
+        assert res.prior_state['source_vault_id'] is None
+        with pytest.raises(ProposalActionError):
+            await _ROUTE.reverse(
+                api,
+                {},
+                res.applied_state,
+                res.prior_state,
+                target_id=str(note_id),
+                vault_id=None,
+                actor=_ACTOR,
+            )
+
+    @pytest.mark.asyncio
+    async def test_emitter_to_action_evidence_contract(self) -> None:
+        # The relocated evidence models are the typed contract the triage-inbox
+        # skill emits and the cockpit reads; the chosen candidate's vault_id is
+        # exactly what route_note_to_vault migrates to. Exercises the routing
+        # evidence models now in memex_common.lint.
+        src, dst = uuid4(), uuid4()
+        evidence = RouteEvidence(
+            routing_state='warm',
+            margin=0.3,
+            source_vault_id=str(src),
+            top_candidates=[
+                CandidateEvidence(
+                    vault_id=str(dst),
+                    vault_name='Agentic',
+                    p_match=0.91,
+                    p_match_raw=0.84,
+                    ci_half_width=0.04,
+                )
+            ],
+        ).model_dump()
+        top = evidence['top_candidates'][0]
+        assert top['vault_id'] == str(dst)  # cockpit reads this to build the option
+        note_id = uuid4()
+        api = _FakeApi(migrate_result={'source_vault_id': str(src)})
+        await _ROUTE.execute(
+            api,
+            {'target_vault_id': top['vault_id']},
+            target_id=str(note_id),
+            vault_id=src,
+            actor=_ACTOR,
+        )
+        assert api.migrate_calls == [(note_id, dst)]

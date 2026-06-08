@@ -149,10 +149,7 @@ def test_recommended_resolve_option_inbox_route_carries_vault_param():
     option = recommended_resolve_option(proposal)
     assert option is not None
     assert option.action_id == 'route_note_to_vault'
-    assert option.params == {
-        'target_vault_id': vault_id,
-        'other_vault_ids': [proposal.raw_evidence['top_candidates'][1]['vault_id']],
-    }
+    assert option.params == {'target_vault_id': vault_id}
 
 
 def test_options_for_proposal_dispatches_by_rule():

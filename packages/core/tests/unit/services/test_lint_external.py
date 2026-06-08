@@ -91,6 +91,13 @@ class TestReservedRuleNames:
         with pytest.raises(ValidationError, match='reserved'):
             _request(rule_name='llm_custom_check')
 
+    def test_skill_owned_routing_names_not_reserved(self) -> None:
+        # The in-core router is gone; the external triage-inbox skill now owns
+        # these names, so they must pass the reserved-name gate (no in-core
+        # emitter remains). Guards against re-adding them to _RESERVED_LITERALS.
+        for name in ('inbox_vault_route', 'inbox_vault_no_fit'):
+            assert _request(rule_name=name).rule_name == name
+
 
 class TestRuleNameHygiene:
     @pytest.mark.parametrize('bad', ['Bad Name', 'UPPER', '9starts-with-digit', '-leading', ''])
