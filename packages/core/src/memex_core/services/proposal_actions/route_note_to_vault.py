@@ -34,14 +34,6 @@ if TYPE_CHECKING:
 
 class _RouteNoteToVaultParams(BaseModel):
     target_vault_id: str = Field(description='UUID of the vault to migrate the note into.')
-    other_vault_ids: list[str] = Field(
-        default_factory=list,
-        description=(
-            'UUIDs of the candidate vaults NOT chosen. Accepted for cockpit '
-            'back-compat; no longer consumed (the in-core learning loop was '
-            'removed in V6). Still validated as UUIDs.'
-        ),
-    )
 
 
 class RouteNoteToVaultAction:
@@ -71,15 +63,6 @@ class RouteNoteToVaultAction:
             UUID(str(target_vault))
         except (ValueError, AttributeError):
             raise ActionValidationError(f'target_vault_id {target_vault!r} is not a valid UUID.')
-        other_vault_ids = params.get('other_vault_ids')
-        if other_vault_ids is not None:
-            if not isinstance(other_vault_ids, list):
-                raise ActionValidationError('params.other_vault_ids must be a list of UUIDs.')
-            for other in other_vault_ids:
-                try:
-                    UUID(str(other))
-                except (ValueError, AttributeError):
-                    raise ActionValidationError(f'other_vault_id {other!r} is not a valid UUID.')
 
     async def execute(
         self,

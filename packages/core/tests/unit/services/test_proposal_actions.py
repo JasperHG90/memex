@@ -945,14 +945,6 @@ class TestRouteNoteToVaultAction:
         with pytest.raises(ActionValidationError):
             _ROUTE.validate({'target_vault_id': 'nope'}, target_type='note', target_id=str(uuid4()))
 
-    def test_validate_rejects_non_list_other_vault_ids(self) -> None:
-        with pytest.raises(ActionValidationError):
-            _ROUTE.validate(
-                {'target_vault_id': str(uuid4()), 'other_vault_ids': 'nope'},
-                target_type='note',
-                target_id=str(uuid4()),
-            )
-
     def test_validate_accepts_well_formed(self) -> None:
         _ROUTE.validate(
             {'target_vault_id': str(uuid4())}, target_type='note', target_id=str(uuid4())
@@ -977,14 +969,13 @@ class TestRouteNoteToVaultAction:
     async def test_execute_does_not_touch_inbox_router(self) -> None:
         # REGRESSION (V6): execute used to call api.inbox_router.record_feedback.
         # _FakeApi has no inbox_router attribute, so any such call would raise
-        # AttributeError. A clean execute — even with other_vault_ids supplied —
-        # proves the learning loop is gone.
-        note_id, target_vault, other = uuid4(), uuid4(), uuid4()
+        # AttributeError. A clean execute proves the learning loop is gone.
+        note_id, target_vault = uuid4(), uuid4()
         api = _FakeApi(migrate_result={'source_vault_id': str(uuid4())})
         assert not hasattr(api, 'inbox_router')
         res = await _ROUTE.execute(
             api,
-            {'target_vault_id': str(target_vault), 'other_vault_ids': [str(other)]},
+            {'target_vault_id': str(target_vault)},
             target_id=str(note_id),
             vault_id=uuid4(),
             actor=_ACTOR,
