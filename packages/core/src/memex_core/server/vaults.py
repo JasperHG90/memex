@@ -121,6 +121,11 @@ async def list_vaults(
                         name=vault.name,
                         description=vault.description,
                         mw_mode=vault.mw_mode,
+                        # Migration-compat shim: 060_vault_kind_policy adds
+                        # ``kind``/``policy`` columns. Pre-migration rows (or
+                        # stale ORM caches) may still lack the attribute; the
+                        # getattr default keeps the DTO shape intact. Safe to
+                        # drop after the migration is unavoidable (V12).
                         kind=getattr(vault, 'kind', 'content'),
                         policy=getattr(vault, 'policy', None) or {},
                         access=access,

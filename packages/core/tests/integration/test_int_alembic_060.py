@@ -20,7 +20,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import create_async_engine
 from testcontainers.postgres import PostgresContainer
 
-from _alembic_test_helpers import (  # noqa: F401
+from _alembic_test_helpers import (
     alembic_downgrade as _alembic_downgrade,
     alembic_upgrade as _alembic_upgrade,
     make_fresh_db,

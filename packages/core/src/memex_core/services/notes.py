@@ -933,7 +933,6 @@ class NoteService:
                 text('SELECT set_limit(:threshold)'), params={'threshold': threshold}
             )
 
-            params: dict[str, Any]
             if vault_ids:
                 stmt = text("""
                     SELECT
@@ -946,7 +945,7 @@ class NoteService:
                     ORDER BY score DESC
                     LIMIT :limit
                 """)
-                params = {
+                params: dict[str, Any] = {
                     'query': query,
                     'vault_ids': list(vault_ids),
                     'limit': limit,
