@@ -19,7 +19,7 @@ def test_create_vault_passes_name_and_description_positionally(
 
     result = runner.invoke(app, ['create', 'my-vault', '--description', 'docs'])
     assert result.exit_code == 0, result.stdout
-    mock_api.create_vault.assert_called_once_with('my-vault', 'docs')
+    mock_api.create_vault.assert_called_once_with('my-vault', 'docs', kind='content', policy=None)
 
     clean_stdout = strip_ansi(result.stdout)
     assert 'Creating vault: my-vault' in clean_stdout
@@ -33,7 +33,122 @@ def test_create_vault_with_default_description(runner, mock_api, monkeypatch):
 
     result = runner.invoke(app, ['create', 'bare-vault'])
     assert result.exit_code == 0, result.stdout
-    mock_api.create_vault.assert_called_once_with('bare-vault', None)
+    mock_api.create_vault.assert_called_once_with('bare-vault', None, kind='content', policy=None)
+
+
+def test_create_vault_positive_reflect_and_summarize_flags(runner, mock_api, monkeypatch):
+    """--reflect and --summarize must produce a policy dict with True values.
+
+    Regression guard for the V11 review finding: a system vault that wants
+    synthesis on had no positive CLI flag, so the policy stayed empty and
+    the kind default (False) won.
+    """
+    mock_api.create_vault.return_value = MagicMock(id=uuid4())
+    monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(
+        app,
+        [
+            'create',
+            'case-vault',
+            '--kind',
+            'system',
+            '--reflect',
+            '--summarize',
+            '--force',
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    mock_api.create_vault.assert_called_once_with(
+        'case-vault',
+        None,
+        kind='system',
+        policy={'reflect': True, 'summarize': True},
+    )
+
+
+def test_create_vault_mutually_exclusive_reflect_flags(runner, mock_api, monkeypatch, strip_ansi):
+    """--reflect and --no-reflect must not both be accepted (silent policy)."""
+    mock_api.create_vault.return_value = MagicMock(id=uuid4())
+    monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(
+        app,
+        [
+            'create',
+            'case-vault',
+            '--kind',
+            'system',
+            '--reflect',
+            '--no-reflect',
+            '--force',
+        ],
+    )
+    assert result.exit_code == 1
+    assert '--reflect and --no-reflect' in strip_ansi(result.stdout)
+    mock_api.create_vault.assert_not_called()
+
+
+def test_create_vault_mutually_exclusive_summarize_flags(runner, mock_api, monkeypatch, strip_ansi):
+    """--summarize and --no-summarize must not both be accepted."""
+    mock_api.create_vault.return_value = MagicMock(id=uuid4())
+    monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(
+        app,
+        [
+            'create',
+            'case-vault',
+            '--kind',
+            'system',
+            '--summarize',
+            '--no-summarize',
+            '--force',
+        ],
+    )
+    assert result.exit_code == 1
+    assert '--summarize and --no-summarize' in strip_ansi(result.stdout)
+    mock_api.create_vault.assert_not_called()
+
+
+def test_create_vault_mutex_check_runs_before_kind_confirmation(
+    runner, mock_api, monkeypatch, strip_ansi
+):
+    """Regression guard: conflicting policy flags must be rejected BEFORE the
+    [y/N] confirmation prompt for ``--kind system`` (V11 L3 review).
+
+    Without ``--force``, a system-vault creation with conflicting flags used
+    to ask for confirmation first, then bail with a different error — leaving
+    a user who typed 'y' wondering why nothing happened. The mutex check now
+    runs first; no confirmation is ever requested.
+    """
+    mock_api.create_vault.return_value = MagicMock(id=uuid4())
+    monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
+
+    # typer.confirm will explode if it's called — we want to assert it isn't.
+    def _explode(*_a, **_kw):
+        raise AssertionError(
+            'typer.confirm was called — mutex check must run before kind confirmation'
+        )
+
+    monkeypatch.setattr('memex_cli.vaults.typer.confirm', _explode)
+
+    result = runner.invoke(
+        app,
+        [
+            'create',
+            'case-vault',
+            '--kind',
+            'system',
+            '--reflect',
+            '--no-reflect',
+            # NOTE: no --force on purpose; without the order fix this would
+            # reach typer.confirm and raise AssertionError.
+        ],
+    )
+    assert result.exit_code == 1
+    assert '--reflect and --no-reflect' in strip_ansi(result.stdout)
+    mock_api.create_vault.assert_not_called()
 
 
 def test_delete_vault_by_name(runner, mock_api, strip_ansi, monkeypatch):
@@ -190,5 +305,7 @@ def test_create_vault(runner, mock_api, strip_ansi, monkeypatch):
     assert f'Vault created successfully! ID: {vault_uuid}' in clean_stdout
 
     # Verify arguments — CLI passes (name, description) positionally to
-    # match MemexAPI.create_vault(self, name: str, description: str | None = None).
-    mock_api.create_vault.assert_called_once_with(vault_name, vault_desc)
+    # match MemexAPI.create_vault, plus the kind/policy kwargs (default content).
+    mock_api.create_vault.assert_called_once_with(
+        vault_name, vault_desc, kind='content', policy=None
+    )

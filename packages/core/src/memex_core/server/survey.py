@@ -34,6 +34,7 @@ async def survey(
             after=request.after,
             before=request.before,
             reference_date=request.reference_date,
+            include_system_vaults=request.include_system_vaults,
         )
         return result
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:

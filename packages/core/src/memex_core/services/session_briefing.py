@@ -165,7 +165,10 @@ class SessionBriefingService:
         kv_coro = self._kv.list_entries(namespaces=_build_kv_namespaces(project_id))
 
         if self._vaults:
-            vaults_coro = self._vaults.list_vaults_with_counts()
+            # Available-vaults enumeration is a discovery surface — content only.
+            # The active vault still gets its full briefing even if it is a
+            # system vault (addressability), via summary_coro / models_coro above.
+            vaults_coro = self._vaults.list_vaults_with_counts(include_system=False)
         else:
 
             async def _empty() -> list[Any]:

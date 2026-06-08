@@ -75,25 +75,26 @@ class SearchService:
         intent_class: str | None = None,
         risk_class: str | None = None,
         apply_pre_filter: bool = True,
+        include_system_vaults: bool = False,
     ) -> tuple[list[MemoryUnit], Any]:
         """
         Convenience method for search with reranking.
-        Scopes to default reader vault if vault_ids is not provided.
+        Scopes to default reader vault if vault_ids is not provided. A wildcard
+        ``'*'`` expands to content vaults only; system vaults join only when
+        named explicitly or via ``include_system_vaults``.
         """
-        from memex_common.vault_utils import ALL_VAULTS_WILDCARD
-
-        vaults = []
-
-        if vault_ids and ALL_VAULTS_WILDCARD in [str(v) for v in vault_ids]:
-            all_v = await self._vaults.list_vaults()
-            vaults = [v.id for v in all_v]
-        elif vault_ids:
-            for v in vault_ids:
-                vaults.append(await self._vaults.resolve_vault_identifier(str(v)))
-        else:
-            vaults.append(
-                await self._vaults.resolve_vault_identifier(self.config.server.default_reader_vault)
+        if vault_ids:
+            vaults = await self._vaults.resolve_vault_scope(
+                vault_ids, include_system_vaults=include_system_vaults
             )
+            # Empty resolved scope = nothing to search. Never fall through to an
+            # empty vault_ids list, which the filter layer treats as ALL vaults.
+            if not vaults:
+                return [], None
+        else:
+            vaults = [
+                await self._vaults.resolve_vault_identifier(self.config.server.default_reader_vault)
+            ]
 
         request = RetrievalRequest(
             query=query,
@@ -150,21 +151,23 @@ class SearchService:
         after: dt.datetime | None = None,
         before: dt.datetime | None = None,
         tags: list[str] | None = None,
+        include_system_vaults: bool = False,
     ) -> list[NoteSearchResult]:
-        """Search for documents containing relevant information using raw chunks."""
-        from memex_common.vault_utils import ALL_VAULTS_WILDCARD
+        """Search for documents containing relevant information using raw chunks.
 
-        vaults = []
-        if vault_ids and ALL_VAULTS_WILDCARD in [str(v) for v in vault_ids]:
-            all_v = await self._vaults.list_vaults()
-            vaults = [v.id for v in all_v]
-        elif vault_ids:
-            for v in vault_ids:
-                vaults.append(await self._vaults.resolve_vault_identifier(str(v)))
-        else:
-            vaults.append(
-                await self._vaults.resolve_vault_identifier(self.config.server.default_reader_vault)
+        A wildcard ``'*'`` expands to content vaults only; system vaults join
+        only when named explicitly or via ``include_system_vaults``.
+        """
+        if vault_ids:
+            vaults = await self._vaults.resolve_vault_scope(
+                vault_ids, include_system_vaults=include_system_vaults
             )
+            if not vaults:
+                return []
+        else:
+            vaults = [
+                await self._vaults.resolve_vault_identifier(self.config.server.default_reader_vault)
+            ]
 
         kwargs: dict[str, Any] = {}
         if strategies is not None:
@@ -262,6 +265,17 @@ class SearchService:
             vault_ids = [
                 await self._vaults.resolve_vault_identifier(self.config.server.default_reader_vault)
             ]
+        elif not vault_ids:
+            # Empty resolved scope = nothing to survey. Never pass [] to recall,
+            # which the filter layer treats as ALL vaults.
+            return SurveyResponse(
+                query=query,
+                sub_queries=[],
+                topics=[],
+                total_notes=0,
+                total_facts=0,
+                truncated=False,
+            )
 
         # Decompose query into sub-questions
         decomposer = SurveyDecomposer(self.lm)

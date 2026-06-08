@@ -215,8 +215,24 @@ async def periodic_vault_summary_task(api: 'MemexAPI'):
     async with background_session('bg-sched-vault-summary'):
         logger.info('Scheduler: Running vault summary check...')
         try:
-            vaults = await api.list_vaults()
+            from memex_common.vault_policy import summarize_enabled
+
+            from memex_core.memory.sql_models import Vault
+            from memex_core.metrics import VAULT_SUMMARY_SKIPPED_TOTAL
+
+            # Periodic summary must include system vaults whose policy
+            # explicitly opts them in — a system vault that wants
+            # narrative over its contents is a legitimate use case (e.g. a
+            # case-vault the user wants briefed on). summarise_enabled
+            # is the single source of truth: it returns False for system
+            # vaults by default and True if the policy overrides it on.
+            vaults = await api.list_vaults(include_system=True)
             for vault in vaults:
+                if isinstance(vault, Vault) and not summarize_enabled(vault.kind, vault.policy):
+                    # summarise_enabled may still be False on a content vault
+                    # whose policy overrides it off; honor the override.
+                    VAULT_SUMMARY_SKIPPED_TOTAL.labels(reason='vault_policy').inc()
+                    continue
                 summary = await api.vault_summary.get_summary(vault.id)
                 if summary and summary.needs_regeneration:
                     logger.info(
@@ -243,10 +259,12 @@ async def periodic_kv_ttl_cleanup_task(api: 'MemexAPI'):
 
 
 async def periodic_diagnostics_refresh_task(api: 'MemexAPI'):
-    """Weekly UMAP manifold refresh per vault under leader lock."""
+    """Weekly UMAP manifold refresh per content vault under leader lock."""
     async with background_session('bg-sched-diagnostics-refresh'):
         try:
-            vaults = await api.list_vaults()
+            # Diagnostics (UMAP manifold) is a content-vault concern;
+            # system vaults have no manifold. Fetch content vaults only.
+            vaults = await api.list_vaults(include_system=False)
             for vault in vaults:
                 try:
                     await api.diagnostics.get_or_compute_manifold(vault.id, force_refresh=True)

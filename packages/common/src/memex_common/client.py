@@ -17,6 +17,7 @@ if TYPE_CHECKING:
 
 from memex_common.kv_utils import is_procedure_key
 from memex_common.vault_utils import resolve_vault_list
+from memex_common.vault_policy import VaultKind, VaultPolicy
 from memex_common.schemas import (
     RetrievalRequest,
     ReflectionRequest,
@@ -155,14 +156,14 @@ class RemoteMemexAPI:
         return await self.client.head(path)
 
     # --- Vaults ---
-    async def list_vaults(self) -> list[VaultDTO]:
-        """List all available vaults."""
-        result = await self._get('vaults')
+    async def list_vaults(self, include_system: bool = True) -> list[VaultDTO]:
+        """List available vaults. ``include_system=False`` hides system vaults."""
+        result = await self._get('vaults', params={'include_system': include_system})
         return [VaultDTO(**v) for v in result]
 
-    async def list_vaults_with_counts(self) -> list[dict[str, Any]]:
-        """List all vaults with note counts. Wraps list_vaults for API compat."""
-        vaults = await self.list_vaults()
+    async def list_vaults_with_counts(self, include_system: bool = True) -> list[dict[str, Any]]:
+        """List vaults with note counts. Wraps list_vaults for API compat."""
+        vaults = await self.list_vaults(include_system=include_system)
         return [
             {
                 'vault': v,
@@ -188,12 +189,28 @@ class RemoteMemexAPI:
             reader_vaults=[VaultDTO(**v) for v in result[1:]],
         )
 
-    async def create_vault(self, name: str, description: str | None = None) -> VaultDTO:
+    async def create_vault(
+        self,
+        name: str,
+        description: str | None = None,
+        kind: 'VaultKind | str' = 'content',
+        policy: 'VaultPolicy | dict | None' = None,
+    ) -> VaultDTO:
         """Create a new vault.
 
         Mirrors :pymeth:`memex_core.api.MemexAPI.create_vault`.
         """
-        request = CreateVaultRequest(name=name, description=description)
+        kind_value = kind.value if hasattr(kind, 'value') else str(kind)
+        policy_dict: dict | None
+        if policy is None:
+            policy_dict = None
+        elif hasattr(policy, 'model_dump'):
+            policy_dict = policy.model_dump(exclude_none=True)
+        else:
+            policy_dict = dict(policy)
+        request = CreateVaultRequest(
+            name=name, description=description, kind=kind_value, policy=policy_dict
+        )
         result = await self._post('vaults', request)
         return VaultDTO(**result)
 
@@ -448,6 +465,7 @@ class RemoteMemexAPI:
         intent_class: IntentClass | None = None,
         risk_class: RiskClass | None = None,
         apply_pre_filter: bool = True,
+        include_system_vaults: bool = False,
     ) -> list[MemoryUnitDTO]:
         """Search for memories.
 
@@ -461,6 +479,7 @@ class RemoteMemexAPI:
             limit=limit,
             offset=offset,
             vault_ids=vault_ids,
+            include_system_vaults=include_system_vaults,
             token_budget=token_budget,
             strategies=strategies,
             include_stale=include_stale,
@@ -542,6 +561,7 @@ class RemoteMemexAPI:
         before: dt.datetime | None = None,
         tags: list[str] | None = None,
         reference_date: dt.datetime | None = None,
+        include_system_vaults: bool = False,
     ) -> list[NoteSearchResult]:
         """Search for notes."""
         kwargs: dict[str, Any] = {}
@@ -563,6 +583,7 @@ class RemoteMemexAPI:
             query=query,
             limit=limit,
             vault_ids=vault_ids,
+            include_system_vaults=include_system_vaults,
             expand_query=expand_query,
             fusion_strategy=fusion_strategy,
             reason=reason,
@@ -581,11 +602,13 @@ class RemoteMemexAPI:
         after: dt.datetime | None = None,
         before: dt.datetime | None = None,
         reference_date: dt.datetime | None = None,
+        include_system_vaults: bool = False,
     ) -> SurveyResponse:
         """Broad topic survey — decompose, parallel search, grouped results."""
         request = SurveyRequest(
             query=query,
             vault_ids=vault_ids,
+            include_system_vaults=include_system_vaults,
             limit_per_query=limit_per_query,
             token_budget=token_budget,
             after=after,

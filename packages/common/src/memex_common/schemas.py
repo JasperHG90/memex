@@ -11,6 +11,7 @@ from pydantic import (
     Field,
     PrivateAttr,
     field_serializer,
+    field_validator,
     BeforeValidator,
     ConfigDict,
     model_validator,
@@ -23,6 +24,7 @@ from memex_common.types import MemexTypes, FactTypes
 
 _logger = logging.getLogger('memex.common.schemas')
 from memex_common.mixins import VaultMixin
+from memex_common.vault_policy import VaultPolicy  # noqa: E402
 
 
 # Cold-start posterior variance ceiling. Duplicated from
@@ -285,6 +287,10 @@ class RetrievalRequest(BaseModel):
         default=None,
         description='List of specific vault IDs or names to search. If None or empty, searches ALL vaults.',
     )
+    include_system_vaults: bool = Field(
+        default=False,
+        description='Include system vaults when expanding the wildcard scope.',
+    )
     filters: dict[str, Any] = Field(
         default_factory=dict, description='Optional key-value filters (e.g. fact_type).'
     )
@@ -434,6 +440,45 @@ class CreateVaultRequest(BaseModel):
     name: str = Field(..., description='The name of the vault.')
 
     description: str | None = Field(default=None, description='Optional description.')
+
+    kind: str = Field(
+        default='content',
+        description='Vault kind: "content" (corpus) or "system" (infrastructure). Permanent.',
+    )
+
+    policy: dict[str, Any] | None = Field(
+        default=None,
+        description='Optional per-vault synthesis policy (e.g. {"reflect": false}).',
+    )
+
+    @field_validator('kind')
+    @classmethod
+    def _validate_kind(cls, v: str) -> str:
+        # The DB has a CHECK constraint; we'd rather fail at the API
+        # boundary with a clean 422 than let the INSERT raise a 500
+        # IntegrityError. Keep the literal set in sync with VaultKind.
+        if v not in ('content', 'system'):
+            raise ValueError(f'kind must be "content" or "system", got {v!r}')
+        return v
+
+    @field_validator('policy')
+    @classmethod
+    def _validate_policy(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
+        # Validate at the API boundary so unknown keys surface as 422 (this
+        # validator's ValueError) rather than as a 500 IntegrityError or a
+        # raw pydantic.ValidationError leaking through. VaultPolicy itself
+        # has extra='forbid' and uses ``reflect: bool | None`` etc., so a
+        # stringly-typed {"reflect": "true"} also fails here instead of
+        # silently applying ``bool("true") == True`` downstream.
+        #
+        # Return the normalized form (canonical bools, None fields stripped
+        # via exclude_none) so any code reading ``request.policy`` between
+        # the API boundary and the service call sees coerced types — not
+        # the lax-mode-coerced pydantic internals (``{'reflect': 1}``) which
+        # the service layer would have to re-coerce.
+        if v is None:
+            return v
+        return VaultPolicy.model_validate(v).model_dump(exclude_none=True)
 
 
 class MemoryUnitBase(VaultMixin):
@@ -712,6 +757,16 @@ class VaultDTO(BaseModel):
     mw_mode: str = Field(
         default='stationary',
         description='Memory Worth mode for the vault: "stationary" or "ema".',
+    )
+
+    kind: str = Field(
+        default='content',
+        description='Vault kind: "content" (corpus) or "system" (infrastructure).',
+    )
+
+    policy: dict[str, Any] = Field(
+        default_factory=dict,
+        description='Per-vault synthesis policy overrides (reflect / summarize).',
     )
 
     is_active: bool = Field(
@@ -1221,6 +1276,7 @@ class NoteSearchRequest(BaseModel):
     query: str
     limit: int = 10
     vault_ids: list[UUID | str] | None = None
+    include_system_vaults: bool = False
     expand_query: bool = False
     fusion_strategy: str = 'rrf'
     strategies: list[str] = Field(default=['semantic', 'keyword', 'graph', 'temporal'])
@@ -1478,6 +1534,10 @@ class SurveyRequest(BaseModel):
     vault_ids: list[UUID | str] | None = Field(
         default=None,
         description='Vault UUIDs or names to search. If None, uses default reader vault.',
+    )
+    include_system_vaults: bool = Field(
+        default=False,
+        description='Include system vaults when expanding the wildcard scope.',
     )
     limit_per_query: int = Field(
         default=10, ge=1, le=50, description='Max results per sub-question.'

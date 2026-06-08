@@ -322,6 +322,7 @@ class McpVault(BaseModel):
     id: UUID
     name: str
     description: str | None = None
+    kind: str = 'content'
     is_active: bool = False
     note_count: int = 0
     last_note_added_at: datetime | None = None

@@ -14,6 +14,7 @@ from memex_common.exceptions import MemoryUnitNotFoundError
 from memex_core.config import MemexConfig
 from memex_core.services.base import BaseService
 from memex_core.services.notes import _cleanup_entities_after_delete
+from memex_core.services.vaults import VaultService
 from memex_core.storage.filestore import BaseAsyncFileStore
 from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
 
@@ -68,6 +69,13 @@ class StatsService(BaseService):
                 note_stmt = note_stmt.where(col(Note.vault_id).in_(ids))
                 memory_stmt = memory_stmt.where(col(MemoryUnit.vault_id).in_(ids))
                 queue_stmt = queue_stmt.where(col(ReflectionQueue.vault_id).in_(ids))
+            else:
+                # No explicit scope → content vaults only for vault-scoped counts.
+                # Entity is global (no vault_id, §4.3) so its count stays global.
+                content_subq = VaultService.content_vault_ids_subquery()
+                note_stmt = note_stmt.where(col(Note.vault_id).in_(content_subq))
+                memory_stmt = memory_stmt.where(col(MemoryUnit.vault_id).in_(content_subq))
+                queue_stmt = queue_stmt.where(col(ReflectionQueue.vault_id).in_(content_subq))
 
             note_count = (await session.exec(note_stmt)).one()
             memory_count = (await session.exec(memory_stmt)).one()

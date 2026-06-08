@@ -60,6 +60,7 @@ Recipes for a specific job. Assumes Memex is already installed.
 | [Retrieve data from the CLI](how-to/retrieve-data.md) | Memory search, note search, survey, entity traversal — all from the terminal. |
 | [Use the key-value store](how-to/key-value-store.md) | Set preferences, project conventions, procedures across sessions. |
 | [Organise work with vaults](how-to/vaults.md) | Create vaults, route notes via frontmatter, migrate between vaults. |
+| [Create a system vault](how-to/create-a-system-vault.md) | Make a vault silent on the synthesis surfaces; addressable, fully extracted. |
 | [Use note templates](how-to/note-templates.md) | Pick a template, register a new one. |
 
 ### Curation
@@ -121,6 +122,7 @@ Understand the why.
 |:-----|:------|
 | [About session briefings](explanation/session-briefings.md) | What the briefing carries; how Claude Code and Hermes consume it. |
 | [About mental-model observations](explanation/mental-model-observations.md) | Read-only projections; why deprioritize routes to source units. |
+| [About system vaults vs content vaults](explanation/system-vs-content-vaults.md) | The `kind` contract — visibility opt-in, addressability always-on, retention invariant. |
 | [Design principles (P1–P13)](explanation/design-principles.md) | The thirteen principles that anchor Memex's design. |
 | [How Memex is evaluated](explanation/how-memex-is-evaluated.md) | The internal suite framework, LoCoMo external benchmark, empirical caveats. |
 

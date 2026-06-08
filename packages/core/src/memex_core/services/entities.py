@@ -13,6 +13,7 @@ from memex_common.exceptions import EntityNotFoundError, ResourceNotFoundError
 
 from memex_core.services.audit import audit_event
 from memex_core.services.base import BaseService
+from memex_core.services.vaults import VaultService
 
 if TYPE_CHECKING:
     from memex_core.memory.sql_models import Entity
@@ -65,6 +66,81 @@ def _wrap_with_metadata(entity: Any, mental_model: Any | None) -> EntityWithMeta
     metadata = (mental_model.entity_metadata if mental_model else None) or {}
     observations = (mental_model.observations if mental_model else None) or []
     return EntityWithMetadata(entity=entity, metadata=metadata, observations=observations)
+
+
+def _content_vault_id_subquery() -> Any:
+    """A scalar subquery of content (non-system) vault ids.
+
+    Used as the default scope for entity reads so system-vault edges/mentions
+    don't surface or inflate counts unless a vault is named explicitly.
+
+    Delegates to :meth:`VaultService.content_vault_ids_subquery` so all
+    service files share one predicate. A future kind rename or filter
+    change is one diff, not 11.
+    """
+    return VaultService.content_vault_ids_subquery()
+
+
+def _membership_clause(vault_ids: list[UUID] | None, scope_ids: list[UUID]) -> Any:
+    """WHERE predicate scoping entities to in-scope vaults.
+
+    Explicit ``vault_ids`` → entity must be mentioned in one of them. Default
+    scope → keep content + orphan (un-mentioned) entities, drop system-only ones.
+    """
+    from sqlalchemy import exists
+
+    from memex_core.memory.sql_models import Entity, UnitEntity
+
+    member_in_scope = exists().where(
+        (col(UnitEntity.entity_id) == Entity.id) & col(UnitEntity.vault_id).in_(scope_ids)
+    )
+    if vault_ids:
+        return member_in_scope
+    has_any_membership = exists().where(col(UnitEntity.entity_id) == Entity.id)
+    return member_in_scope | ~has_any_membership
+
+
+def _model_observation_count(model: Any) -> int:
+    meta = model.entity_metadata or {}
+    count = meta.get('observation_count') if isinstance(meta, dict) else None
+    if isinstance(count, int):
+        return count
+    return len(model.observations or [])
+
+
+def _aggregate_mental_models(entity: Any, models: list[Any]) -> EntityWithMetadata:
+    """Aggregate an entity's per-vault mental models into one profile.
+
+    Entities are global; their descriptive content lives on vault-scoped mental
+    models. Rather than guess a single vault, aggregate over the in-scope set:
+    quantitative fields combine (``observation_count`` sums, ``vault_count``
+    counts), qualitative fields take a representative (modal ``category``;
+    ``description`` + ``observations`` from the most-evidenced model).
+    """
+    from collections import Counter
+
+    if not models:
+        return EntityWithMetadata(entity=entity, metadata={}, observations=[])
+
+    representative = max(models, key=_model_observation_count)
+    rep_meta = representative.entity_metadata or {}
+
+    categories = [
+        (m.entity_metadata or {}).get('category')
+        for m in models
+        if (m.entity_metadata or {}).get('category')
+    ]
+    metadata: dict[str, Any] = {}
+    if categories:
+        metadata['category'] = Counter(categories).most_common(1)[0][0]
+    if rep_meta.get('description'):
+        metadata['description'] = rep_meta['description']
+    metadata['observation_count'] = sum(_model_observation_count(m) for m in models)
+    metadata['vault_count'] = len(models)
+
+    return EntityWithMetadata(
+        entity=entity, metadata=metadata, observations=representative.observations or []
+    )
 
 
 def _merge_observations(
@@ -131,75 +207,125 @@ class EntityService(BaseService):
         vault_ids: list[UUID] | None = None,
         entity_type: str | None = None,
         slim: bool = False,
+        include_system_vaults: bool = False,
     ) -> AsyncGenerator[EntityWithMetadata, None]:
         """
         Stream entities ranked by hybrid score.
         Hybrid Score = 0.4 * mention_count + 0.4 * retrieval_count + 0.2 * centrality
 
-        When ``slim`` is True, the MentalModel outerjoin is skipped — callers
-        see an empty metadata dict (no description / observations payload).
+        Scoping: an entity appears only if it is mentioned in an in-scope vault,
+        and centrality sums cooccurrence only within scope — so system-vault
+        entities and edges never surface or inflate ranking by default. Scope is
+        the explicit ``vault_ids`` when given, else all content vaults (plus
+        system vaults when ``include_system_vaults`` is set).
+
+        When ``slim`` is True the per-vault profile is skipped — callers see an
+        empty metadata dict. Otherwise the entity's mental models across the
+        in-scope vaults are aggregated into a single profile (no single-vault
+        guess); see :func:`_aggregate_mental_models`.
+
+        .. note::
+           Performance: this method now issues 2–3 queries (entities,
+           cooccurrence centrality, mental-model aggregation) where the old
+           single LEFT JOIN gave one. The split is a deliberate correctness
+           fix for multi-vault scope (the old code joined on a single
+           ``scope_vault_id`` UUID). For single-vault scope on large result
+           sets, consider a single CTE that materialises the in-scope
+           vault ids once and joins models/cooccurrences in one pass.
+           TODO(perf): add a benchmark for ``limit=100, scope=1-vault`` to
+           confirm the regression is bounded before any optimisation.
         """
-        from memex_core.memory.sql_models import Entity, EntityCooccurrence, MentalModel, UnitEntity
+        from collections import defaultdict
+
+        from memex_core.memory.sql_models import (
+            Entity,
+            EntityCooccurrence,
+            MentalModel,
+            UnitEntity,
+            Vault,
+        )
+        from sqlalchemy import exists
         from sqlmodel import select, func, desc, col
 
-        scope_vault_id = vault_ids[0] if vault_ids else await self._resolve_default_vault_id()
+        async with self.metastore.session() as session:
+            if vault_ids:
+                scope_ids = [v if isinstance(v, UUID) else UUID(str(v)) for v in vault_ids]
+            else:
+                scope_q = (
+                    VaultService.content_vault_ids_subquery()
+                    if not include_system_vaults
+                    else select(Vault.id)
+                )
+                scope_ids = list((await session.exec(scope_q)).all())
 
-        # Subquery for centrality (sum of cooccurrence counts)
-        centrality_stmt = (
-            select(
-                func.coalesce(func.sum(EntityCooccurrence.cooccurrence_count), 0).label(
-                    'centrality'
-                ),
-                Entity.id.label('entity_id'),
-            )
-            .select_from(Entity)
-            .outerjoin(
-                EntityCooccurrence,
-                (EntityCooccurrence.entity_id_1 == Entity.id)
-                | (EntityCooccurrence.entity_id_2 == Entity.id),
-            )
-            .group_by(Entity.id)
-        ).subquery()
+            if not scope_ids:
+                return
 
-        rank_score = (
-            0.4 * Entity.mention_count
-            + 0.4 * Entity.retrieval_count
-            + 0.2 * centrality_stmt.c.centrality
-        ).label('rank_score')
+            # Centrality: cooccurrence summed within the in-scope vaults only.
+            centrality_stmt = (
+                select(
+                    func.coalesce(func.sum(EntityCooccurrence.cooccurrence_count), 0).label(
+                        'centrality'
+                    ),
+                    Entity.id.label('entity_id'),
+                )
+                .select_from(Entity)
+                .outerjoin(
+                    EntityCooccurrence,
+                    (
+                        (EntityCooccurrence.entity_id_1 == Entity.id)
+                        | (EntityCooccurrence.entity_id_2 == Entity.id)
+                    )
+                    & col(EntityCooccurrence.vault_id).in_(scope_ids),
+                )
+                .group_by(Entity.id)
+            ).subquery()
 
-        if slim:
+            rank_score = (
+                0.4 * Entity.mention_count
+                + 0.4 * Entity.retrieval_count
+                + 0.2 * centrality_stmt.c.centrality
+            ).label('rank_score')
+
             stmt = select(Entity, rank_score).join(
                 centrality_stmt, centrality_stmt.c.entity_id == Entity.id
             )
-        else:
-            stmt = (
-                select(Entity, MentalModel, rank_score)
-                .join(centrality_stmt, centrality_stmt.c.entity_id == Entity.id)
-                .outerjoin(
-                    MentalModel,
-                    (MentalModel.entity_id == Entity.id) & (MentalModel.vault_id == scope_vault_id),
+            member_in_scope = exists().where(
+                (col(UnitEntity.entity_id) == Entity.id) & col(UnitEntity.vault_id).in_(scope_ids)
+            )
+            if vault_ids:
+                # Explicit scope: entity must be mentioned in one of those vaults.
+                stmt = stmt.where(member_in_scope)
+            else:
+                # Default: keep content + orphan entities; drop system-only ones
+                # (mentioned, but in no content vault) so system entities stay silent.
+                has_any_membership = exists().where(col(UnitEntity.entity_id) == Entity.id)
+                stmt = stmt.where(member_in_scope | ~has_any_membership)
+            if entity_type:
+                stmt = stmt.where(Entity.entity_type == entity_type)
+            stmt = stmt.order_by(desc(rank_score)).limit(limit)
+
+            entities = [row[0] for row in (await session.exec(stmt)).all()]
+
+            if slim:
+                for entity in entities:
+                    yield _wrap_with_metadata(entity, None)
+                return
+
+            # Rich: aggregate each entity's in-scope mental models into a profile.
+            models_by_entity: dict[UUID, list[Any]] = defaultdict(list)
+            page_ids = [e.id for e in entities]
+            if page_ids:
+                model_stmt = select(MentalModel).where(
+                    col(MentalModel.entity_id).in_(page_ids),
+                    col(MentalModel.vault_id).in_(scope_ids),
+                    col(MentalModel.archived_at).is_(None),
                 )
-            )
+                for model in (await session.exec(model_stmt)).all():
+                    models_by_entity[model.entity_id].append(model)
 
-        if vault_ids:
-            stmt = (
-                stmt.join(UnitEntity, col(UnitEntity.entity_id) == Entity.id)
-                .where(col(UnitEntity.vault_id).in_(vault_ids))
-                .distinct()
-            )
-
-        if entity_type:
-            stmt = stmt.where(Entity.entity_type == entity_type)
-
-        stmt = stmt.order_by(desc(rank_score)).limit(limit)
-
-        async with self.metastore.session() as session:
-            stream = await session.stream(stmt)
-            async for row in stream:
-                if slim:
-                    yield _wrap_with_metadata(row[0], None)
-                else:
-                    yield _wrap_with_metadata(row[0], row[1])
+            for entity in entities:
+                yield _aggregate_mental_models(entity, models_by_entity.get(entity.id, []))
 
     async def get_entity_cooccurrences(
         self,
@@ -238,6 +364,10 @@ class EntityService(BaseService):
             )
             if vault_ids:
                 stmt = stmt.where(col(EntityCooccurrence.vault_id).in_(vault_ids))
+            else:
+                stmt = stmt.where(
+                    col(EntityCooccurrence.vault_id).in_(_content_vault_id_subquery())
+                )
             stmt = stmt.group_by(counterpart).order_by(desc(total)).limit(limit)
             rows = (await session.exec(stmt)).all()
             if not rows:
@@ -291,6 +421,10 @@ class EntityService(BaseService):
             )
             if vault_ids:
                 stmt = stmt.where(col(EntityCooccurrence.vault_id).in_(vault_ids))
+            else:
+                stmt = stmt.where(
+                    col(EntityCooccurrence.vault_id).in_(_content_vault_id_subquery())
+                )
             stmt = stmt.group_by(EntityCooccurrence.entity_id_1, EntityCooccurrence.entity_id_2)
             rows = (await session.exec(stmt)).all()
             return [
@@ -332,6 +466,8 @@ class EntityService(BaseService):
             )
             if vault_ids:
                 stmt = stmt.where(col(MemoryUnit.vault_id).in_(vault_ids))
+            else:
+                stmt = stmt.where(col(MemoryUnit.vault_id).in_(_content_vault_id_subquery()))
             if not include_stale:
                 stmt = stmt.where(col(MemoryUnit.status) == ContentStatus.ACTIVE)
             if not include_deprioritized:
@@ -910,34 +1046,71 @@ class EntityService(BaseService):
         summary['created_canonical_name'] = name
         return summary
 
+    async def _scope_vault_ids(
+        self, session: Any, vault_ids: list[UUID] | None, include_system_vaults: bool = False
+    ) -> list[UUID]:
+        """Resolve the in-scope vault id set for an entity query.
+
+        Explicit ``vault_ids`` are honoured as given (may name a system vault);
+        otherwise the scope is all content vaults (plus system when opted in).
+        """
+        from memex_core.memory.sql_models import Vault
+        from sqlmodel import select
+
+        if vault_ids:
+            return [v if isinstance(v, UUID) else UUID(str(v)) for v in vault_ids]
+        scope_q = (
+            VaultService.content_vault_ids_subquery()
+            if not include_system_vaults
+            else select(Vault.id)
+        )
+        return list((await session.exec(scope_q)).all())
+
+    async def _aggregate_models_for(
+        self, session: Any, entities: list[Any], scope_ids: list[UUID]
+    ) -> list[EntityWithMetadata]:
+        """Attach each entity's aggregated in-scope mental-model profile."""
+        from collections import defaultdict
+
+        from memex_core.memory.sql_models import MentalModel
+        from sqlmodel import select
+
+        models_by_entity: dict[UUID, list[Any]] = defaultdict(list)
+        page_ids = [e.id for e in entities]
+        if page_ids:
+            model_stmt = select(MentalModel).where(
+                col(MentalModel.entity_id).in_(page_ids),
+                col(MentalModel.vault_id).in_(scope_ids),
+                col(MentalModel.archived_at).is_(None),
+            )
+            for model in (await session.exec(model_stmt)).all():
+                models_by_entity[model.entity_id].append(model)
+        return [_aggregate_mental_models(e, models_by_entity.get(e.id, [])) for e in entities]
+
     async def get_top_entities(
         self,
         limit: int = 5,
         vault_ids: list[UUID] | None = None,
         entity_type: str | None = None,
     ) -> list[EntityWithMetadata]:
-        """Get top entities by mention count, with MentalModel metadata attached."""
-        from memex_core.memory.sql_models import Entity, MentalModel, UnitEntity
-        from sqlmodel import select, desc, col
+        """Get top entities by mention count, with aggregated MentalModel profile.
 
-        scope_vault_id = vault_ids[0] if vault_ids else await self._resolve_default_vault_id()
+        Scopes to the explicit ``vault_ids`` when given, else all content vaults
+        (system vaults are silent by default; name one to include it).
+        """
+        from memex_core.memory.sql_models import Entity
+        from sqlmodel import select, desc
 
         async with self.metastore.session() as session:
-            stmt = select(Entity, MentalModel).outerjoin(
-                MentalModel,
-                (MentalModel.entity_id == Entity.id) & (MentalModel.vault_id == scope_vault_id),
-            )
-            if vault_ids:
-                stmt = (
-                    stmt.join(UnitEntity, col(UnitEntity.entity_id) == Entity.id)
-                    .where(col(UnitEntity.vault_id).in_(vault_ids))
-                    .distinct()
-                )
+            scope_ids = await self._scope_vault_ids(session, vault_ids)
+            if not scope_ids:
+                return []
+            stmt = select(Entity).where(_membership_clause(vault_ids, scope_ids))
             if entity_type:
                 stmt = stmt.where(Entity.entity_type == entity_type)
             stmt = stmt.order_by(desc(Entity.mention_count)).limit(limit)
-            results = (await session.exec(stmt)).all()
-            return [_wrap_with_metadata(row[0], row[1]) for row in results]
+            entities = list((await session.exec(stmt)).all())
+            return await self._aggregate_models_for(session, entities, scope_ids)
 
     async def search_entities(
         self,
@@ -946,29 +1119,24 @@ class EntityService(BaseService):
         vault_ids: list[UUID] | None = None,
         entity_type: str | None = None,
     ) -> list[EntityWithMetadata]:
-        """Search for entities by canonical name using trigram similarity or ILIKE."""
-        from memex_core.memory.sql_models import Entity, MentalModel, UnitEntity
+        """Search for entities by canonical name using trigram similarity or ILIKE.
+
+        Scopes to the explicit ``vault_ids`` when given, else all content vaults.
+        """
+        from memex_core.memory.sql_models import Entity
         from sqlmodel import select, col
 
-        scope_vault_id = vault_ids[0] if vault_ids else await self._resolve_default_vault_id()
-
         async with self.metastore.session() as session:
+            scope_ids = await self._scope_vault_ids(session, vault_ids)
+            if not scope_ids:
+                return []
             stmt = (
-                select(Entity, MentalModel)
-                .outerjoin(
-                    MentalModel,
-                    (MentalModel.entity_id == Entity.id) & (MentalModel.vault_id == scope_vault_id),
-                )
+                select(Entity)
+                .where(_membership_clause(vault_ids, scope_ids))
                 .where(col(Entity.canonical_name).ilike(f'%{query}%'))
             )
-            if vault_ids:
-                stmt = (
-                    stmt.join(UnitEntity, col(UnitEntity.entity_id) == Entity.id)
-                    .where(col(UnitEntity.vault_id).in_(vault_ids))
-                    .distinct()
-                )
             if entity_type:
                 stmt = stmt.where(Entity.entity_type == entity_type)
             stmt = stmt.order_by(col(Entity.mention_count).desc()).limit(limit)
-            results = (await session.exec(stmt)).all()
-            return [_wrap_with_metadata(row[0], row[1]) for row in results]
+            entities = list((await session.exec(stmt)).all())
+            return await self._aggregate_models_for(session, entities, scope_ids)

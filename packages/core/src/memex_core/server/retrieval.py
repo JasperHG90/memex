@@ -62,6 +62,7 @@ async def search_memories(
             # exists today, but the explicit check is the safe idiom.
             intent_class=request.intent_class.value if request.intent_class is not None else None,
             risk_class=request.risk_class.value if request.risk_class is not None else None,
+            include_system_vaults=request.include_system_vaults,
         )
         t_search = time.monotonic() - t0
 

@@ -46,16 +46,57 @@ class TestResolveVaultIdsWildcard:
         api.resolve_vault_identifier.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_wildcard_with_other_names_still_returns_all(self):
-        """Wildcard takes precedence — extra names are ignored."""
-        v1 = uuid4()
+    async def test_wildcard_union_with_named(self):
+        """Union: '*' expands to content vaults; named vaults add on top."""
+        vc1, vc2, named = uuid4(), uuid4(), uuid4()
         api = AsyncMock()
-        api.list_vaults = AsyncMock(return_value=[MagicMock(id=v1)])
+        api.list_vaults = AsyncMock(
+            return_value=[MagicMock(id=vc1, kind='content'), MagicMock(id=vc2, kind='content')]
+        )
+        api.resolve_vault_identifier = AsyncMock(return_value=named)
 
         result = await _resolve_vault_ids(api, ['*', 'some-vault'])
 
-        assert result == [v1]
-        api.resolve_vault_identifier.assert_not_called()
+        assert set(result) == {named, vc1, vc2}
+        api.resolve_vault_identifier.assert_called_once_with('some-vault')
+
+    @pytest.mark.asyncio
+    async def test_wildcard_excludes_system_by_default(self):
+        """'*' expands to content vaults only — system vaults are silent."""
+        vc, vs = uuid4(), uuid4()
+        api = AsyncMock()
+        api.list_vaults = AsyncMock(
+            return_value=[MagicMock(id=vc, kind='content'), MagicMock(id=vs, kind='system')]
+        )
+
+        result = await _resolve_vault_ids(api, ['*'])
+
+        assert result == [vc]
+
+    @pytest.mark.asyncio
+    async def test_include_system_vaults_adds_system(self):
+        """include_system_vaults=True unions system vaults onto the wildcard."""
+        vc, vs = uuid4(), uuid4()
+        api = AsyncMock()
+        api.list_vaults = AsyncMock(
+            return_value=[MagicMock(id=vc, kind='content'), MagicMock(id=vs, kind='system')]
+        )
+
+        result = await _resolve_vault_ids(api, ['*'], include_system_vaults=True)
+
+        assert set(result) == {vc, vs}
+
+    @pytest.mark.asyncio
+    async def test_named_system_vault_resolves_regardless_of_kind(self):
+        """A system vault named explicitly is always reachable (addressability)."""
+        vs = uuid4()
+        api = AsyncMock()
+        api.resolve_vault_identifier = AsyncMock(return_value=vs)
+
+        result = await _resolve_vault_ids(api, ['inbox'])
+
+        assert result == [vs]
+        api.list_vaults.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_without_wildcard_resolves_individually(self):

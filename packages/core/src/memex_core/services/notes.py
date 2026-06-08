@@ -11,7 +11,7 @@ from uuid import UUID
 if TYPE_CHECKING:
     from memex_core.services.vault_summary import VaultSummaryService
 
-from sqlmodel import col
+from sqlmodel import col, select
 
 from sqlalchemy import func, text
 
@@ -19,6 +19,7 @@ from memex_common.exceptions import NoteNotFoundError, ResourceNotFoundError, Va
 from memex_common.note_utils import derive_note_uuid_from_key
 from memex_common.schemas import BlockSummaryDTO, NodeDTO, filter_toc
 from memex_core.config import MemexConfig
+from memex_core.memory.sql_models import Note
 from memex_core.services.audit import AuditService, audit_event
 from memex_core.services.vaults import VaultService
 from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
@@ -763,7 +764,8 @@ class NoteService:
     ) -> list[Any]:
         """
         List ingested documents.
-        Filters by the given vault_id(s), or returns all vaults if not provided.
+        Filters by the given vault_id(s); when none are provided, scopes to
+        content vaults only (system vaults are reached by naming them).
         Optional after/before filters compare against ``date_field``:
           - ``'created_at'``  — when Memex ingested the note
           - ``'publish_date'`` — note's authored/publication date
@@ -789,6 +791,10 @@ class NoteService:
             stmt = select(Note)
             if ids:
                 stmt = stmt.where(col(Note.vault_id).in_(ids))
+            else:
+                # No explicit scope → content vaults only (system vaults are
+                # silent on browse surfaces; reach them by naming the vault).
+                stmt = stmt.where(col(Note.vault_id).in_(VaultService.content_vault_ids_subquery()))
             if after is not None:
                 stmt = stmt.where(date_col >= after)
             if before is not None:
@@ -852,6 +858,8 @@ class NoteService:
             stmt = select(Note).order_by(Note.created_at.desc())  # type: ignore[union-attr]
             if ids:
                 stmt = stmt.where(col(Note.vault_id).in_(ids))
+            else:
+                stmt = stmt.where(col(Note.vault_id).in_(VaultService.content_vault_ids_subquery()))
             if after is not None:
                 stmt = stmt.where(date_col >= after)
             if before is not None:
@@ -943,20 +951,35 @@ class NoteService:
                     'vault_ids': list(vault_ids),
                     'limit': limit,
                 }
+                result = await session.exec(stmt, params=params)
             else:
-                stmt = text("""
-                    SELECT
-                        id, title,
-                        similarity(lower(title), lower(:query)) AS score,
-                        vault_id, created_at, publish_date, status
-                    FROM notes
-                    WHERE lower(title) % lower(:query)
-                    ORDER BY score DESC
-                    LIMIT :limit
-                """)
-                params = {'query': query, 'limit': limit}
-
-            result = await session.exec(stmt, params=params)
+                # No explicit scope → content vaults only (system vaults are
+                # silent on browse surfaces; reach them by naming the vault).
+                # The kind predicate is the SAME subquery the ORM
+                # list_notes / get_recent_notes paths use, so this raw-SQL
+                # branch can't drift from the SSOT.
+                content_subq = VaultService.content_vault_ids_subquery()
+                score_label = func.similarity(func.lower(Note.title), func.lower(query)).label(
+                    'score'
+                )
+                stmt = (
+                    select(
+                        Note.id,
+                        Note.title,
+                        score_label,
+                        Note.vault_id,
+                        Note.created_at,
+                        Note.publish_date,
+                        Note.status,
+                    )
+                    .where(
+                        func.lower(Note.title).op('%')(func.lower(query)),
+                        Note.vault_id.in_(content_subq),
+                    )
+                    .order_by(score_label.desc())
+                    .limit(limit)
+                )
+                result = await session.exec(stmt)
             rows = []
             for row in result:
                 rows.append(
