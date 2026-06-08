@@ -470,10 +470,15 @@ class CreateVaultRequest(BaseModel):
         # has extra='forbid' and uses ``reflect: bool | None`` etc., so a
         # stringly-typed {"reflect": "true"} also fails here instead of
         # silently applying ``bool("true") == True`` downstream.
+        #
+        # Return the normalized form (canonical bools, None fields stripped
+        # via exclude_none) so any code reading ``request.policy`` between
+        # the API boundary and the service call sees coerced types — not
+        # the lax-mode-coerced pydantic internals (``{'reflect': 1}``) which
+        # the service layer would have to re-coerce.
         if v is None:
             return v
-        VaultPolicy.model_validate(v)  # raises pydantic.ValidationError -> 422
-        return v
+        return VaultPolicy.model_validate(v).model_dump(exclude_none=True)
 
 
 class MemoryUnitBase(VaultMixin):

@@ -126,6 +126,15 @@ class NoteService:
         f"vault_id IN (SELECT id FROM vaults WHERE kind <> '{_VaultKind.SYSTEM.value}')"
     )
 
+    # Drift guard: the DB CHECK constraint ``vaults_kind_check`` enumerates
+    # the same kind set. If a new VaultKind is added, this assert forces
+    # the SQL fragment to be re-evaluated against the CHECK rather than
+    # silently leaving a stale literal in place.
+    assert 'kind' in _CONTENT_VAULT_IDS_SQL and _VaultKind.SYSTEM.value in _CONTENT_VAULT_IDS_SQL, (
+        '_CONTENT_VAULT_IDS_SQL drifted from VaultKind.SYSTEM.value; '
+        're-derive the f-string when adding a new kind'
+    )
+
     _audit_service: AuditService | None = None
 
     def __init__(

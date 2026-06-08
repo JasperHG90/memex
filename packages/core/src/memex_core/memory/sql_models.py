@@ -71,7 +71,7 @@ class Vault(SQLModel, table=True):  # type: ignore
         default=VaultKind.CONTENT,
         sa_column=Column(Text, nullable=False, server_default='content'),
     )
-    policy: dict = Field(
+    policy: dict[str, Any] = Field(
         default_factory=dict,
         sa_column=Column(JSONB, nullable=False, server_default=sql_text("'{}'::jsonb")),
     )

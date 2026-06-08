@@ -323,26 +323,37 @@ def test_create_vault_request_policy_validator_rejects_unknown_keys():
 
 
 def test_create_vault_request_policy_validator_coerces_through_pydantic():
-    """The validator delegates to ``VaultPolicy.model_validate`` for
-    rejection, but returns the raw dict so the service layer can call
-    ``coerce_policy`` once and reuse the typed result. Verify the
-    round-trip contract: a known shape is accepted and the raw dict
-    passes through; an unrepresentable shape raises ValidationError
-    BEFORE the service layer ever sees it (so the HTTP response is
-    422, not 500)."""
+    """The validator delegates to ``VaultPolicy.model_validate`` and
+    returns the *normalized* dict (canonical bools, ``None`` fields
+    stripped via ``exclude_none``) so any code reading
+    ``request.policy`` between the API boundary and the service call
+    sees coerced types — not pydantic's lax-mode-coerced internals.
+
+    Round-4 review (M): the prior version returned the raw input dict,
+    which let ``{'reflect': 1}`` and ``{'reflect': 'false'}`` survive
+    into downstream consumers. The normalized form is the contract
+    this test pins.
+    """
     import pytest
     from pydantic import ValidationError
     from memex_common.schemas import CreateVaultRequest
 
-    # Accepts and passes through unchanged.
+    # Canonical bools round-trip unchanged.
     assert CreateVaultRequest(name='x', policy={'reflect': True}).policy == {'reflect': True}
-    # Pydantic's lax-mode coercion of int/str is *internal* — the
-    # validator doesn't surface the coerced policy; it returns the
-    # raw dict for downstream typed re-coercion. We assert that the
-    # call DOES NOT raise, which is the load-bearing contract: the
-    # service layer is no longer the first line of defense.
-    CreateVaultRequest(name='x', policy={'reflect': 1})  # no raise
-    CreateVaultRequest(name='x', policy={'reflect': 'false'})  # no raise
-    # Truly unrepresentable: a nested dict is not bool-coercible.
-    with pytest.raises(ValidationError):
+    assert CreateVaultRequest(name='x', policy={'reflect': False}).policy == {'reflect': False}
+    # Lax-mode coercion is normalized to canonical bools.
+    assert CreateVaultRequest(name='x', policy={'reflect': 1}).policy == {'reflect': True}
+    # pydantic v2's smart string coercion (NOT Python bool()) — 'false'
+    # becomes False, then we surface the canonical form.
+    assert CreateVaultRequest(name='x', policy={'reflect': 'false'}).policy == {'reflect': False}
+    # None fields are dropped (exclude_none): the service layer
+    # reconstructs VaultPolicy(reflect=None) from an empty dict the
+    # same way as from no key at all.
+    req = CreateVaultRequest(name='x', policy={'reflect': None})
+    assert req.policy == {}
+    # Truly unrepresentable: a nested dict is not bool-coercible and
+    # the validator surfaces a 422 with the offending field named in
+    # the error so an operator can act on it without a stack trace.
+    with pytest.raises(ValidationError) as exc_info:
         CreateVaultRequest(name='x', policy={'reflect': {'nested': 'obj'}})
+    assert 'reflect' in str(exc_info.value)

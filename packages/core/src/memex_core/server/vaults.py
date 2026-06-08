@@ -86,7 +86,13 @@ async def list_vaults(
         None, description='Filter by state: "active" for active vault'
     ),
     is_default: bool | None = Query(None, description='Filter by default status'),
-    include_system: bool = Query(True, description='Include system vaults in the default listing.'),
+    include_system: bool = Query(
+        False,
+        description=(
+            'Include system vaults (e.g. inbox). Default False — system vaults '
+            'are silent on browse surfaces; pass ?include_system=true to opt in.'
+        ),
+    ),
 ):
     """
     List vaults.
@@ -94,7 +100,9 @@ async def list_vaults(
     Query params:
     - state: Optional filter by state. Use 'active' for the active vault.
     - is_default: Optional filter by default status. True for default vaults.
-    - include_system: Include system vaults in the default listing (default True).
+    - include_system: Include system vaults (default False). Set to true to
+      surface the inbox and other infrastructure vaults. The CLI `--include-system`
+      flag and the service layer `list_vaults(include_system=...)` default match.
     """
     try:
         if state == 'active':
