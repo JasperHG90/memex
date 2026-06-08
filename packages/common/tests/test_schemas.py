@@ -289,3 +289,60 @@ def test_create_vault_request_kind_validator_rejects_unknown():
     # can act on it without chasing a stack trace.
     assert 'kind' in str(exc_info.value)
     assert 'archive' in str(exc_info.value)
+
+
+def test_create_vault_request_policy_validator_accepts_known_keys():
+    """Round-3 review (H1): CreateVaultRequest must accept a policy blob
+    that the underlying VaultPolicy accepts, including empty dict and
+    the known toggle fields."""
+    from memex_common.schemas import CreateVaultRequest
+
+    assert CreateVaultRequest(name='x', policy=None).policy is None
+    assert CreateVaultRequest(name='x', policy={}).policy == {}
+    assert CreateVaultRequest(name='x', policy={'reflect': False}).policy == {'reflect': False}
+    assert CreateVaultRequest(name='x', policy={'summarize': True}).policy == {'summarize': True}
+    # Both toggles together are valid.
+    req = CreateVaultRequest(name='x', policy={'reflect': True, 'summarize': False})
+    assert req.policy == {'reflect': True, 'summarize': False}
+
+
+def test_create_vault_request_policy_validator_rejects_unknown_keys():
+    """Unknown policy keys must surface as 422 at the API boundary, NOT
+    propagate to a 500 from VaultService.coerce_policy's deeper
+    pydantic.ValidationError. Regression: prior to the validator the
+    service layer was the only guard, so the HTTP response code was
+    500 IntegrityError-shaped for what is genuinely a client error.
+    """
+    import pytest
+    from pydantic import ValidationError
+    from memex_common.schemas import CreateVaultRequest
+
+    with pytest.raises(ValidationError) as exc_info:
+        CreateVaultRequest(name='x', policy={'unknown_key': True})
+    assert 'policy' in str(exc_info.value) or 'extra' in str(exc_info.value)
+
+
+def test_create_vault_request_policy_validator_coerces_through_pydantic():
+    """The validator delegates to ``VaultPolicy.model_validate`` for
+    rejection, but returns the raw dict so the service layer can call
+    ``coerce_policy`` once and reuse the typed result. Verify the
+    round-trip contract: a known shape is accepted and the raw dict
+    passes through; an unrepresentable shape raises ValidationError
+    BEFORE the service layer ever sees it (so the HTTP response is
+    422, not 500)."""
+    import pytest
+    from pydantic import ValidationError
+    from memex_common.schemas import CreateVaultRequest
+
+    # Accepts and passes through unchanged.
+    assert CreateVaultRequest(name='x', policy={'reflect': True}).policy == {'reflect': True}
+    # Pydantic's lax-mode coercion of int/str is *internal* — the
+    # validator doesn't surface the coerced policy; it returns the
+    # raw dict for downstream typed re-coercion. We assert that the
+    # call DOES NOT raise, which is the load-bearing contract: the
+    # service layer is no longer the first line of defense.
+    CreateVaultRequest(name='x', policy={'reflect': 1})  # no raise
+    CreateVaultRequest(name='x', policy={'reflect': 'false'})  # no raise
+    # Truly unrepresentable: a nested dict is not bool-coercible.
+    with pytest.raises(ValidationError):
+        CreateVaultRequest(name='x', policy={'reflect': {'nested': 'obj'}})

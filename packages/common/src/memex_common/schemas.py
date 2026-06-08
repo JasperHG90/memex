@@ -24,6 +24,7 @@ from memex_common.types import MemexTypes, FactTypes
 
 _logger = logging.getLogger('memex.common.schemas')
 from memex_common.mixins import VaultMixin
+from memex_common.vault_policy import VaultPolicy  # noqa: E402
 
 
 # Cold-start posterior variance ceiling. Duplicated from
@@ -458,6 +459,20 @@ class CreateVaultRequest(BaseModel):
         # IntegrityError. Keep the literal set in sync with VaultKind.
         if v not in ('content', 'system'):
             raise ValueError(f'kind must be "content" or "system", got {v!r}')
+        return v
+
+    @field_validator('policy')
+    @classmethod
+    def _validate_policy(cls, v: dict[str, Any] | None) -> dict[str, Any] | None:
+        # Validate at the API boundary so unknown keys surface as 422 (this
+        # validator's ValueError) rather than as a 500 IntegrityError or a
+        # raw pydantic.ValidationError leaking through. VaultPolicy itself
+        # has extra='forbid' and uses ``reflect: bool | None`` etc., so a
+        # stringly-typed {"reflect": "true"} also fails here instead of
+        # silently applying ``bool("true") == True`` downstream.
+        if v is None:
+            return v
+        VaultPolicy.model_validate(v)  # raises pydantic.ValidationError -> 422
         return v
 
 

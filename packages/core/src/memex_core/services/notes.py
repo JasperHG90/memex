@@ -114,11 +114,16 @@ class NoteService:
     """Note CRUD, listing, and resource access."""
 
     # Subquery fragment used by raw text() queries to filter to content vaults
-    # only. Mirrors the ORM `Vault.kind != VaultKind.SYSTEM.value` predicate
-    # used elsewhere in this module; if a new VaultKind is added, update both
-    # in lockstep.
+    # only. The kind literal is interpolated from VaultKind.SYSTEM.value at
+    # class-definition time so a kind rename only touches the enum; the
+    # duplicate string here used to be a silent-drift hazard. Sibling paths
+    # (``list_notes``, ``get_recent_notes``) use the ORM
+    # ``select(Vault.id).where(Vault.kind != VaultKind.SYSTEM.value)`` form
+    # which keeps the same SSOT in one place.
+    from memex_common.vault_policy import VaultKind as _VaultKind
+
     _CONTENT_VAULT_IDS_SQL: ClassVar[str] = (
-        "vault_id IN (SELECT id FROM vaults WHERE kind <> 'system')"
+        f"vault_id IN (SELECT id FROM vaults WHERE kind <> '{_VaultKind.SYSTEM.value}')"
     )
 
     _audit_service: AuditService | None = None

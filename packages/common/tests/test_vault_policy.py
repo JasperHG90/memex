@@ -6,7 +6,9 @@ from pydantic import ValidationError
 from memex_common.vault_policy import (
     VaultKind,
     VaultPolicy,
+    UnknownVaultKind,
     coerce_policy,
+    is_content,
     is_system,
     reflect_enabled,
     summarize_enabled,
@@ -68,3 +70,48 @@ class TestPolicyValidation:
     def test_coerce_bad_type(self):
         with pytest.raises(TypeError):
             coerce_policy(42)  # type: ignore[arg-type]
+
+
+class TestUnknownKindFailOpen:
+    """Round-3 review (M): an unrecognised kind string must NOT silently
+    suppress synthesis. We treat it as content (fail-open) so a corrupt
+    row stays visible on browse surfaces, and emit a warning so the
+    issue surfaces in logs. The DB CHECK + the CreateVaultRequest
+    validator are the load-bearing guards in normal operation."""
+
+    def test_is_system_treats_unknown_as_not_system(self):
+        with pytest.warns(UnknownVaultKind):
+            assert is_system('syste') is False
+        with pytest.warns(UnknownVaultKind):
+            assert is_system('archive') is False
+        with pytest.warns(UnknownVaultKind):
+            assert is_system('') is False
+
+    def test_is_content_treats_unknown_as_content(self):
+        with pytest.warns(UnknownVaultKind):
+            assert is_content('syste') is True
+        with pytest.warns(UnknownVaultKind):
+            assert is_content('archive') is True
+        with pytest.warns(UnknownVaultKind):
+            assert is_content('') is True
+
+    def test_reflect_enabled_unknown_kind_defaults_on(self):
+        # Fail-open means synthesis stays on for unknown kinds; a typo
+        # in the DB must NOT silently mute reflection for that vault.
+        with pytest.warns(UnknownVaultKind):
+            assert reflect_enabled('syste') is True
+
+    def test_summarize_enabled_unknown_kind_defaults_on(self):
+        with pytest.warns(UnknownVaultKind):
+            assert summarize_enabled('syste') is True
+
+    def test_known_kinds_do_not_warn(self):
+        # Sanity: the warning is reserved for the unknown branch.
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter('error', UnknownVaultKind)
+            assert is_system('content') is False
+            assert is_system('system') is True
+            assert is_content('content') is True
+            assert is_content('system') is False
