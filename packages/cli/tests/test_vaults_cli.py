@@ -36,6 +36,81 @@ def test_create_vault_with_default_description(runner, mock_api, monkeypatch):
     mock_api.create_vault.assert_called_once_with('bare-vault', None, kind='content', policy=None)
 
 
+def test_create_vault_positive_reflect_and_summarize_flags(runner, mock_api, monkeypatch):
+    """--reflect and --summarize must produce a policy dict with True values.
+
+    Regression guard for the V11 review finding: a system vault that wants
+    synthesis on had no positive CLI flag, so the policy stayed empty and
+    the kind default (False) won.
+    """
+    mock_api.create_vault.return_value = MagicMock(id=uuid4())
+    monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(
+        app,
+        [
+            'create',
+            'case-vault',
+            '--kind',
+            'system',
+            '--reflect',
+            '--summarize',
+            '--force',
+        ],
+    )
+    assert result.exit_code == 0, result.stdout
+    mock_api.create_vault.assert_called_once_with(
+        'case-vault',
+        None,
+        kind='system',
+        policy={'reflect': True, 'summarize': True},
+    )
+
+
+def test_create_vault_mutually_exclusive_reflect_flags(runner, mock_api, monkeypatch, strip_ansi):
+    """--reflect and --no-reflect must not both be accepted (silent policy)."""
+    mock_api.create_vault.return_value = MagicMock(id=uuid4())
+    monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(
+        app,
+        [
+            'create',
+            'case-vault',
+            '--kind',
+            'system',
+            '--reflect',
+            '--no-reflect',
+            '--force',
+        ],
+    )
+    assert result.exit_code == 1
+    assert '--reflect and --no-reflect' in strip_ansi(result.stdout)
+    mock_api.create_vault.assert_not_called()
+
+
+def test_create_vault_mutually_exclusive_summarize_flags(runner, mock_api, monkeypatch, strip_ansi):
+    """--summarize and --no-summarize must not both be accepted."""
+    mock_api.create_vault.return_value = MagicMock(id=uuid4())
+    monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(
+        app,
+        [
+            'create',
+            'case-vault',
+            '--kind',
+            'system',
+            '--summarize',
+            '--no-summarize',
+            '--force',
+        ],
+    )
+    assert result.exit_code == 1
+    assert '--summarize and --no-summarize' in strip_ansi(result.stdout)
+    mock_api.create_vault.assert_not_called()
+
+
 def test_delete_vault_by_name(runner, mock_api, strip_ansi, monkeypatch):
     vault_uuid = uuid4()
     vault_name = 'test-vault'

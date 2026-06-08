@@ -142,8 +142,22 @@ async def create_vault(
         str,
         typer.Option('--kind', help='Vault kind: "content" (corpus) or "system" (infrastructure).'),
     ] = 'content',
+    reflect: Annotated[
+        bool,
+        typer.Option(
+            '--reflect',
+            help='Enable per-entity reflection for this vault. Default: enabled for content, disabled for system.',
+        ),
+    ] = False,
     no_reflect: Annotated[
         bool, typer.Option('--no-reflect', help='Disable per-entity reflection for this vault.')
+    ] = False,
+    summarize: Annotated[
+        bool,
+        typer.Option(
+            '--summarize',
+            help='Enable vault-summary generation for this vault. Default: enabled for content, disabled for system.',
+        ),
     ] = False,
     no_summarize: Annotated[
         bool,
@@ -171,10 +185,25 @@ async def create_vault(
         raise typer.Exit(code=1)
 
     policy: dict[str, bool | None] = {}
+    if reflect:
+        policy['reflect'] = True
     if no_reflect:
         policy['reflect'] = False
+    if summarize:
+        policy['summarize'] = True
     if no_summarize:
         policy['summarize'] = False
+
+    # Mutual exclusion: a user passing both --reflect and --no-reflect is
+    # ambiguous; refuse the call rather than silently picking one. Same for
+    # summarize. (Typer gives us no built-in "exactly one" support for
+    # pairs of bool flags, so the check is manual.)
+    if reflect and no_reflect:
+        console.print('[red]--reflect and --no-reflect are mutually exclusive.[/red]')
+        raise typer.Exit(code=1)
+    if summarize and no_summarize:
+        console.print('[red]--summarize and --no-summarize are mutually exclusive.[/red]')
+        raise typer.Exit(code=1)
 
     console.print(f'[green]Creating vault:[/green] {name}')
 
