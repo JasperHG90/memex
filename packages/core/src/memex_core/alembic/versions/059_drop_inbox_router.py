@@ -17,8 +17,9 @@ What this migration deliberately does NOT do:
   re-narrowing the CHECK — 059 must not replicate that.
 
 Downgrade recreates the tables, views, and POC seed by replaying 055's
-``_CREATE`` / ``_SEED_STATS`` / ``_SEED_CLASS`` blocks (copied verbatim so this
-migration stays self-contained; 055 is historical and will not change).
+``_CREATE`` / ``_SEED_STATS`` / ``_SEED_CLASS`` blocks (``_SEED_*`` byte-identical;
+``_CREATE`` is DDL-equivalent with 055's inline SQL comments omitted) so this
+migration stays self-contained; 055 is historical and will not change.
 
 Revision ID: 059_drop_inbox_router
 Revises: 058_vault_summary_embedding

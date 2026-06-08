@@ -19,6 +19,7 @@ from typing import AsyncGenerator
 import pytest
 import pytest_asyncio
 from sqlalchemy import NullPool, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import create_async_engine
 from testcontainers.postgres import PostgresContainer
 
@@ -120,6 +121,21 @@ async def test_routing_lint_type_accepted_after_drop(fresh_db_url: str) -> None:
             # The skill still emits routing proposals, so the CHECK must accept
             # 'routing' even though the router schema is gone.
             await _insert_routing_proposal(conn, vid)
+        # ...and a bogus lint_type must STILL be rejected — proves the CHECK is
+        # intact, not silently dropped (which would let every insert through and
+        # make the accept-test pass for the wrong reason).
+        async with engine.connect() as conn:
+            with pytest.raises(IntegrityError):
+                await conn.execute(
+                    text(
+                        'INSERT INTO maintenance_proposals '
+                        '(vault_id, lint_type, target_type, target_id, rule_name, '
+                        ' suggested_action, status, source) '
+                        "VALUES (:v, 'not_a_real_type', 'note', gen_random_uuid()::text, "
+                        "'x', 'y', 'pending', 'external')"
+                    ),
+                    {'v': vid},
+                )
     finally:
         await engine.dispose()
 
