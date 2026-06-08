@@ -238,11 +238,17 @@ class LintRule(BaseModel):
 class CandidateEvidence(BaseModel):
     """One scored candidate vault, surfaced in a routing proposal's evidence."""
 
-    vault_id: str
-    vault_name: str
-    p_match: float = Field(description='Per-note softmax-normalised P(match).')
-    p_match_raw: float = Field(description='Raw pairwise P(match).')
-    ci_half_width: float = Field(description='Credible-interval half-width.')
+    vault_id: str = Field(description='UUID of the candidate target vault.')
+    vault_name: str = Field(description='Human-readable vault name, shown in the cockpit option.')
+    p_match: float = Field(
+        description='Per-note P(match), normalised across candidate vaults (sums to 1).'
+    )
+    p_match_raw: float = Field(
+        description='Unnormalised per-pair P(match) for this vault, in [0, 1].'
+    )
+    ci_half_width: float = Field(
+        description='Wald 95% half-width on p_match (uncertainty hint for the reviewer).'
+    )
 
 
 class RouteEvidence(BaseModel):
@@ -254,24 +260,43 @@ class RouteEvidence(BaseModel):
     agree on this one shape. Rides ``LintProposal.evidence`` as the dumped dict.
     """
 
-    kind: str = 'inbox_vault_route'
-    routing_state: str
-    margin: float
-    source_vault_id: str
-    top_candidates: list[CandidateEvidence]
+    kind: str = Field(
+        default='inbox_vault_route', description='Discriminator for the evidence shape.'
+    )
+    routing_state: str = Field(
+        description="Model state when scored, e.g. 'warm' (trained) or 'cold' (below warm-up)."
+    )
+    margin: float = Field(
+        description='Top-1 minus top-2 normalised p_match — the decisiveness of the route.'
+    )
+    source_vault_id: str = Field(
+        description='UUID of the vault the note is being routed out of (the inbox).'
+    )
+    top_candidates: list[CandidateEvidence] = Field(
+        description='Candidate vaults ranked by p_match (highest first); the first is the proposed route.'
+    )
 
 
 class NoFitEvidence(BaseModel):
     """Typed ``evidence`` payload for an ``inbox_vault_no_fit`` proposal."""
 
-    kind: str = 'inbox_vault_no_fit'
-    routing_state: str
+    kind: str = Field(
+        default='inbox_vault_no_fit', description='Discriminator for the evidence shape.'
+    )
+    routing_state: str = Field(
+        description="Model state when scored, e.g. 'warm' (trained) or 'cold' (below warm-up)."
+    )
     best_p_match_raw: float = Field(
-        description='Highest raw P(match) across vaults — below the t_low floor.'
+        description='Highest unnormalised P(match) across vaults — below the t_low floor, hence no fit.'
     )
     retry_n: int = Field(default=0, description='Number of no-fit re-evaluations so far.')
-    next_retry_at: str | None = None
-    last_evaluated_at: str | None = None
+    next_retry_at: str | None = Field(
+        default=None,
+        description='ISO-8601 timestamp when this note becomes eligible for re-evaluation.',
+    )
+    last_evaluated_at: str | None = Field(
+        default=None, description='ISO-8601 timestamp of the most recent no-fit evaluation.'
+    )
 
 
 __all__ = [
