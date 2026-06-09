@@ -46,6 +46,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
+from memex_common.exceptions import MemexError
 from memex_common.experiential_schemas import (
     DerivationQueueStatus,
     ExperientialDerivationQueueClaim,
@@ -107,8 +108,18 @@ _AUDIT_QUEUE_CLAIM = 'experiential_queue_claim'
 _AUDIT_QUEUE_COMPLETE = 'experiential_queue_complete'
 
 
-class ExperientialRepositoryError(Exception):
-    """Base error for the experiential repository."""
+class ExperientialRepositoryError(MemexError):
+    """Base error for the experiential repository.
+
+    Inherits from :class:`MemexError` so the procedural HTTP route's
+    ``except (MemexError, ...)`` clause catches it and the
+    ``_handle_error`` translator in ``server/common.py`` can map the
+    specific subclass to its status code (409 for
+    :class:`ExperientialIdentityConflict`, 404 for
+    :class:`ExperientialEntryNotFound`). A regression to plain
+    ``Exception`` would let the exception bubble up to FastAPI as a 500
+    and look indistinguishable from a real internal failure.
+    """
 
 
 class ExperientialEntryNotFound(ExperientialRepositoryError):
@@ -865,6 +876,10 @@ class ExperientialRepository:
 
     @staticmethod
     def _queue_to_dto(row: DBExperientialDerivationQueue) -> ExperientialDerivationQueueDTO:
+        # ``status`` is a String-stored enum-typed column, so after
+        # session.refresh() it's a plain str. Same defensive pattern
+        # as _to_dto above.
+        status_str = row.status.value if hasattr(row.status, 'value') else str(row.status)
         return ExperientialDerivationQueueDTO(
             id=row.id,
             vault_id=row.vault_id,
@@ -873,7 +888,7 @@ class ExperientialRepository:
             target_scope=row.target_scope,
             target_verb=row.target_verb,
             target_context=row.target_context,
-            status=row.status.value,  # type: ignore[arg-type]
+            status=status_str,  # type: ignore[arg-type]
             attempt_count=int(row.attempt_count),
             last_error=row.last_error,
             result_entry_id=row.result_entry_id,
