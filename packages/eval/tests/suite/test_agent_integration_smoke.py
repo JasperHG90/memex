@@ -64,7 +64,13 @@ class TestSuiteStructure:
         # triggers for KV namespace routing: store_{user,project,global,
         # app,with_ttl} + kv_get + kv_search). They pin the explicit
         # imperative path through agent_surface.RETRIEVAL_ROUTING.
-        assert len(SUITE.scenarios) == 39
+        # 46 = 39 + 7 `procedure_*` scenarios (V4 procedure-routing
+        # wakewords: explicit_project_cue, in_this_codebase_cue,
+        # defaults_global_no_project_cue, ambiguous_no_explicit_scope,
+        # ambiguous_asks_first, standard_practice_ambiguous_asks_first,
+        # wakeword_store_{global,project}). They pin the
+        # "this is how to do X" → memex_kv_put write-routing path.
+        assert len(SUITE.scenarios) == 46
 
     def test_scenario_ids_unique(self) -> None:
         ids = [s.id for s in SUITE.scenarios]
@@ -170,9 +176,43 @@ class TestMutatingDiscipline:
         'lifecycle_archive_legacy_warehouse_note',
         'lifecycle_append_parent_remains_retrievable',
         'asset_lifecycle_detach',
+        # V4 procedure-routing wakeword scenarios — the
+        # ``procedure_wakeword_store_*`` ones write to KV via
+        # memex_kv_put as the procedurally-encoded write path.
+        # The ``procedure_*_cue`` ones write a derived observation
+        # to the observation plane when the agent picks the
+        # wrong scope — both are flagged mutating.
+        'procedure_wakeword_store_global',
+        'procedure_wakeword_store_project',
+        'procedure_defaults_global_no_project_cue',
+        'procedure_explicit_project_cue_scopes_to_project',
+        'procedure_in_this_codebase_cue_scopes_to_project',
     }
 
-    _OVERRIDE_ONE_IDS = _MUTATING_IDS | {
+    # V4 procedure_* scenarios are LLM-judge-only (no LLM-classifier),
+    # and use ``replicates_override=3`` for statistical robustness
+    # (they ask the agent to choose between project/global/ambiguous
+    # paths; a single-shot result is too noisy to gate on). They
+    # are mutating (they write to KV via memex_kv_put) so they
+    # appear in ``_MUTATING_IDS``, but their override semantics
+    # (replicates=3) are tracked in ``_OVERRIDE_THREE_IDS`` —
+    # NOT in ``_OVERRIDE_ONE_IDS``.
+    _OVERRIDE_THREE_IDS = {
+        'procedure_wakeword_store_global',
+        'procedure_wakeword_store_project',
+        'procedure_defaults_global_no_project_cue',
+        'procedure_explicit_project_cue_scopes_to_project',
+        'procedure_in_this_codebase_cue_scopes_to_project',
+        'procedure_ambiguous_no_explicit_scope_asks_first',
+        'procedure_standard_practice_ambiguous_asks_first',
+    }
+
+    # Override-1 means "use replicates_override=1 instead of the suite
+    # default" — applied to scenarios that are LLM-classifier-only
+    # (so a single-shot is stable) and don't need statistical
+    # robustness. The procedure_* wakeword scenarios need replicates=3
+    # for noise dampening, so they're NOT in this set.
+    _OVERRIDE_ONE_IDS = (_MUTATING_IDS - _OVERRIDE_THREE_IDS) | {
         'kv_retrieves_convention',
         'kv_wakeword_kv_get',
         'kv_wakeword_kv_search',
@@ -189,8 +229,20 @@ class TestMutatingDiscipline:
                 bad.append((s.id, s.replicates_override))
         assert not bad, f'expected replicates_override=1, got: {bad}'
 
+    def test_override_three_scenarios_have_replicates_three(self) -> None:
+        """The V4 procedure_* scenarios use ``replicates_override=3``
+        to dampen LLM-judge noise on the project/global/ambiguous
+        routing choices. A regression that drops the override would
+        make the scenarios pass-on-noise."""
+        bad = []
+        for s in SUITE.scenarios:
+            if s.id in self._OVERRIDE_THREE_IDS and s.replicates_override != 3:
+                bad.append((s.id, s.replicates_override))
+        assert not bad, f'expected replicates_override=3, got: {bad}'
+
     def test_non_override_scenarios_have_no_override(self) -> None:
-        non_override = [s for s in SUITE.scenarios if s.id not in self._OVERRIDE_ONE_IDS]
+        allowed = self._OVERRIDE_ONE_IDS | self._OVERRIDE_THREE_IDS
+        non_override = [s for s in SUITE.scenarios if s.id not in allowed]
         bad = [
             (s.id, s.replicates_override) for s in non_override if s.replicates_override is not None
         ]
