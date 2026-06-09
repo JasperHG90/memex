@@ -36,6 +36,10 @@ from memex_common.schemas import (
 from memex_core.api import MemexAPI
 from memex_core.context import get_session_id
 from memex_core.metrics import DTO_ENUM_COERCION_TOTAL
+from memex_core.services.experiential_repository import (
+    ExperientialEntryNotFound,
+    ExperientialIdentityConflict,
+)
 
 logger = logging.getLogger('memex.core.server')
 
@@ -101,6 +105,10 @@ def _handle_error(e: Exception, context: str) -> HTTPException:
         return HTTPException(status_code=400, detail=str(e))
     if isinstance(e, (AppendIdConflictError, NoteNotAppendableError)):
         return HTTPException(status_code=409, detail=str(e))
+    if isinstance(e, ExperientialIdentityConflict):
+        return HTTPException(status_code=409, detail=str(e))
+    if isinstance(e, ExperientialEntryNotFound):
+        return HTTPException(status_code=404, detail=str(e))
     if isinstance(e, AppendLockTimeoutError):
         return HTTPException(
             status_code=503,

@@ -227,13 +227,13 @@ MEMEX_KV_LIST_DESC = (
 
 
 # ---------------------------------------------------------------------------
-# Experiential plane. Identity-anchor doctrine (case/procedure/strategy +
-# pin chain + status lifecycle) lives in agent_surface.EXPERIENTIAL_PLANE;
+# Procedural plane. Identity-anchor doctrine (case/procedure/strategy +
+# pin chain + status lifecycle) lives in agent_surface.PROCEDURAL_PLANE;
 # these descriptions are Tier 1a contract only.
 # ---------------------------------------------------------------------------
 
 
-MEMEX_EXPERIENTIAL_CREATE_DESC = (
+MEMEX_PROCEDURAL_CREATE_DESC = (
     'Write a new experiential entry.\n'
     '\n'
     'Required: vault_id, kind ("case"|"procedure"|"strategy"), scope, title, '
@@ -242,26 +242,26 @@ MEMEX_EXPERIENTIAL_CREATE_DESC = (
     'tags, extra_metadata, origin.\n'
     '\n'
     'Identity-anchor conflict (procedure+strategy with same kind/scope/verb/'
-    'context already exists) → 409. Use memex_experiential_upsert for '
-    'idempotent writes, or memex_experiential_get_by_identity to probe first.'
+    'context already exists) → 409. Use memex_procedural_upsert for '
+    'idempotent writes, or memex_procedural_get_by_identity to probe first.'
 )
 
 
-MEMEX_EXPERIENTIAL_GET_DESC = (
+MEMEX_PROCEDURAL_GET_DESC = (
     'Fetch a single entry by UUID. Optional vault_id (mismatch → 404). '
     'Returns the full entry or 404.'
 )
 
 
-MEMEX_EXPERIENTIAL_GET_BY_IDENTITY_DESC = (
+MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESC = (
     'Fetch a single entry by its (kind, scope, verb, context) identity '
     'anchor. Returns the entry or null. Hot path for "did we already learn '
-    'this?" probes before memex_experiential_create. 400 on shape mismatch '
+    'this?" probes before memex_procedural_create. 400 on shape mismatch '
     '(e.g. verb supplied for a case).'
 )
 
 
-MEMEX_EXPERIENTIAL_UPDATE_DESC = (
+MEMEX_PROCEDURAL_UPDATE_DESC = (
     'Mutate an entry in place (appends a version row). Required: entry_id. '
     'At least one of: title, summary, body, trigger, tags, extra_metadata, '
     'status. Identity anchor is immutable — for identity changes, '
@@ -269,22 +269,22 @@ MEMEX_EXPERIENTIAL_UPDATE_DESC = (
 )
 
 
-MEMEX_EXPERIENTIAL_DEPRECATE_DESC = (
+MEMEX_PROCEDURAL_DEPRECATE_DESC = (
     'Soft-deprecate an entry (status → "deprecated"). Optional '
     'superseded_by_id. Depreciated entries drop from default search; '
-    'remain reachable via memex_experiential_get. Reversible out-of-band.'
+    'remain reachable via memex_procedural_get. Reversible out-of-band.'
 )
 
 
-MEMEX_EXPERIENTIAL_UPSERT_DESC = (
+MEMEX_PROCEDURAL_UPSERT_DESC = (
     'Idempotent write on the identity anchor. Same anchor → UPDATE (new '
     'version row); new anchor → INSERT. Same param shape as '
-    'memex_experiential_create. Status preserved (deprecated stays '
-    'deprecated). For partial in-place edits use memex_experiential_update.'
+    'memex_procedural_create. Status preserved (deprecated stays '
+    'deprecated). For partial in-place edits use memex_procedural_update.'
 )
 
 
-MEMEX_EXPERIENTIAL_SEARCH_DESC = (
+MEMEX_PROCEDURAL_SEARCH_DESC = (
     'Hybrid BM25 + vector search (RRF-merged) across the experiential '
     'plane. Required: query. Optional: kind, scope, status (default '
     '"published"), top_k (default 10), include_pin_chain + pin_contexts, '
@@ -292,7 +292,7 @@ MEMEX_EXPERIENTIAL_SEARCH_DESC = (
 )
 
 
-MEMEX_EXPERIENTIAL_BRIEFING_CARDS_DESC = (
+MEMEX_PROCEDURAL_BRIEFING_CARDS_DESC = (
     'Pin-chain briefing cards. Required: context_keys. Optional: scope, '
     'limit_per_context (default 5). One card per pinned entry ordered by '
     'pin position. Use for the "what you should know going in" block of a '
@@ -345,14 +345,14 @@ MEMEX_SUBMIT_LINT_PROPOSAL_DESC = (
 
 
 __all__ = [
-    'MEMEX_EXPERIENTIAL_BRIEFING_CARDS_DESC',
-    'MEMEX_EXPERIENTIAL_CREATE_DESC',
-    'MEMEX_EXPERIENTIAL_DEPRECATE_DESC',
-    'MEMEX_EXPERIENTIAL_GET_BY_IDENTITY_DESC',
-    'MEMEX_EXPERIENTIAL_GET_DESC',
-    'MEMEX_EXPERIENTIAL_SEARCH_DESC',
-    'MEMEX_EXPERIENTIAL_UPDATE_DESC',
-    'MEMEX_EXPERIENTIAL_UPSERT_DESC',
+    'MEMEX_PROCEDURAL_BRIEFING_CARDS_DESC',
+    'MEMEX_PROCEDURAL_CREATE_DESC',
+    'MEMEX_PROCEDURAL_DEPRECATE_DESC',
+    'MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESC',
+    'MEMEX_PROCEDURAL_GET_DESC',
+    'MEMEX_PROCEDURAL_SEARCH_DESC',
+    'MEMEX_PROCEDURAL_UPDATE_DESC',
+    'MEMEX_PROCEDURAL_UPSERT_DESC',
     'MEMEX_KV_GET_DESC',
     'MEMEX_KV_LIST_DESC',
     'MEMEX_KV_SEARCH_DESC',

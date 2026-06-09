@@ -1,6 +1,6 @@
 """Experiential tool description wiring test.
 
-The 8 ``memex_experiential_*`` tools (V7) are Tier 1a MCP surfaces. Their
+The 8 ``memex_procedural_*`` tools (V7) are Tier 1a MCP surfaces. Their
 per-tool description text is the SSOT constant from
 ``memex_common.tool_descriptions`` (mirrors the deprioritize pattern in
 ``test_deprioritize_tool_descriptions.py``).
@@ -15,26 +15,26 @@ from __future__ import annotations
 import pytest
 
 from memex_common.tool_descriptions import (
-    MEMEX_EXPERIENTIAL_BRIEFING_CARDS_DESC,
-    MEMEX_EXPERIENTIAL_CREATE_DESC,
-    MEMEX_EXPERIENTIAL_DEPRECATE_DESC,
-    MEMEX_EXPERIENTIAL_GET_BY_IDENTITY_DESC,
-    MEMEX_EXPERIENTIAL_GET_DESC,
-    MEMEX_EXPERIENTIAL_SEARCH_DESC,
-    MEMEX_EXPERIENTIAL_UPDATE_DESC,
-    MEMEX_EXPERIENTIAL_UPSERT_DESC,
+    MEMEX_PROCEDURAL_BRIEFING_CARDS_DESC,
+    MEMEX_PROCEDURAL_CREATE_DESC,
+    MEMEX_PROCEDURAL_DEPRECATE_DESC,
+    MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESC,
+    MEMEX_PROCEDURAL_GET_DESC,
+    MEMEX_PROCEDURAL_SEARCH_DESC,
+    MEMEX_PROCEDURAL_UPDATE_DESC,
+    MEMEX_PROCEDURAL_UPSERT_DESC,
 )
 
 
 _ALL_TOOL_WIRING = (
-    ('memex_experiential_briefing_cards', MEMEX_EXPERIENTIAL_BRIEFING_CARDS_DESC),
-    ('memex_experiential_create', MEMEX_EXPERIENTIAL_CREATE_DESC),
-    ('memex_experiential_deprecate', MEMEX_EXPERIENTIAL_DEPRECATE_DESC),
-    ('memex_experiential_get', MEMEX_EXPERIENTIAL_GET_DESC),
-    ('memex_experiential_get_by_identity', MEMEX_EXPERIENTIAL_GET_BY_IDENTITY_DESC),
-    ('memex_experiential_search', MEMEX_EXPERIENTIAL_SEARCH_DESC),
-    ('memex_experiential_update', MEMEX_EXPERIENTIAL_UPDATE_DESC),
-    ('memex_experiential_upsert', MEMEX_EXPERIENTIAL_UPSERT_DESC),
+    ('memex_procedural_briefing_cards', MEMEX_PROCEDURAL_BRIEFING_CARDS_DESC),
+    ('memex_procedural_create', MEMEX_PROCEDURAL_CREATE_DESC),
+    ('memex_procedural_deprecate', MEMEX_PROCEDURAL_DEPRECATE_DESC),
+    ('memex_procedural_get', MEMEX_PROCEDURAL_GET_DESC),
+    ('memex_procedural_get_by_identity', MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESC),
+    ('memex_procedural_search', MEMEX_PROCEDURAL_SEARCH_DESC),
+    ('memex_procedural_update', MEMEX_PROCEDURAL_UPDATE_DESC),
+    ('memex_procedural_upsert', MEMEX_PROCEDURAL_UPSERT_DESC),
 )
 
 
@@ -43,7 +43,7 @@ _ALL_TOOL_WIRING = (
 async def test_experiential_tool_registered_with_common_description(
     tool_name: str, expected_desc: str
 ) -> None:
-    """Each ``memex_experiential_*`` tool is registered and uses the
+    """Each ``memex_procedural_*`` tool is registered and uses the
     common-SSOT description byte-for-byte."""
     from memex_mcp.server import mcp
 
@@ -70,7 +70,7 @@ async def test_eight_experiential_tools_registered() -> None:
         tool = await mcp.get_tool(name)
         assert tool is not None, f'{name} not registered'
         found.append(name)
-    assert len(found) == 8, f'Expected 8 memex_experiential_* tools, got {len(found)}: {found}'
+    assert len(found) == 8, f'Expected 8 memex_procedural_* tools, got {len(found)}: {found}'
     assert found == expected, (
         f'Experiential tool surface drift.\n  Expected: {expected}\n  Got:      {found}'
     )

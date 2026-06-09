@@ -32,14 +32,14 @@ from memex_mcp._layer_primer_descriptions import (
 from memex_common.agent_surface import MCP_TRANSPORT_INSTRUCTIONS
 from memex_common.vault_utils import ALL_VAULTS_WILDCARD, expand_vault_scope
 from memex_common.tool_descriptions import (
-    MEMEX_EXPERIENTIAL_BRIEFING_CARDS_DESC as _MEMEX_EXPERIENTIAL_BRIEFING_CARDS_DESCRIPTION,
-    MEMEX_EXPERIENTIAL_CREATE_DESC as _MEMEX_EXPERIENTIAL_CREATE_DESCRIPTION,
-    MEMEX_EXPERIENTIAL_DEPRECATE_DESC as _MEMEX_EXPERIENTIAL_DEPRECATE_DESCRIPTION,
-    MEMEX_EXPERIENTIAL_GET_BY_IDENTITY_DESC as _MEMEX_EXPERIENTIAL_GET_BY_IDENTITY_DESCRIPTION,
-    MEMEX_EXPERIENTIAL_GET_DESC as _MEMEX_EXPERIENTIAL_GET_DESCRIPTION,
-    MEMEX_EXPERIENTIAL_SEARCH_DESC as _MEMEX_EXPERIENTIAL_SEARCH_DESCRIPTION,
-    MEMEX_EXPERIENTIAL_UPDATE_DESC as _MEMEX_EXPERIENTIAL_UPDATE_DESCRIPTION,
-    MEMEX_EXPERIENTIAL_UPSERT_DESC as _MEMEX_EXPERIENTIAL_UPSERT_DESCRIPTION,
+    MEMEX_PROCEDURAL_BRIEFING_CARDS_DESC as _MEMEX_PROCEDURAL_BRIEFING_CARDS_DESCRIPTION,
+    MEMEX_PROCEDURAL_CREATE_DESC as _MEMEX_PROCEDURAL_CREATE_DESCRIPTION,
+    MEMEX_PROCEDURAL_DEPRECATE_DESC as _MEMEX_PROCEDURAL_DEPRECATE_DESCRIPTION,
+    MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESC as _MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESCRIPTION,
+    MEMEX_PROCEDURAL_GET_DESC as _MEMEX_PROCEDURAL_GET_DESCRIPTION,
+    MEMEX_PROCEDURAL_SEARCH_DESC as _MEMEX_PROCEDURAL_SEARCH_DESCRIPTION,
+    MEMEX_PROCEDURAL_UPDATE_DESC as _MEMEX_PROCEDURAL_UPDATE_DESCRIPTION,
+    MEMEX_PROCEDURAL_UPSERT_DESC as _MEMEX_PROCEDURAL_UPSERT_DESCRIPTION,
     MEMEX_KV_PUT_DESC as _MEMEX_KV_PUT_DESCRIPTION,
 )
 from memex_mcp.models import (
@@ -4528,13 +4528,13 @@ def _dto_to_mcp_entry(dto: ExperientialEntryCreate) -> McpExperientialEntry:
 
 
 @mcp.tool(
-    name='memex_experiential_create',
-    description=_MEMEX_EXPERIENTIAL_CREATE_DESCRIPTION,
-    tags={'storage', 'experiential'},
+    name='memex_procedural_create',
+    description=_MEMEX_PROCEDURAL_CREATE_DESCRIPTION,
+    tags={'storage', 'procedural'},
     annotations={'readOnlyHint': False, 'idempotentHint': False},
     timeout=30.0,
 )
-async def memex_experiential_create(
+async def memex_procedural_create(
     ctx: Context,
     payload: ExperientialEntryCreate,
 ) -> McpExperientialEntry:
@@ -4551,13 +4551,13 @@ async def memex_experiential_create(
 
 
 @mcp.tool(
-    name='memex_experiential_get',
-    description=_MEMEX_EXPERIENTIAL_GET_DESCRIPTION,
-    tags={'storage', 'experiential'},
+    name='memex_procedural_get',
+    description=_MEMEX_PROCEDURAL_GET_DESCRIPTION,
+    tags={'storage', 'procedural'},
     annotations={'readOnlyHint': True},
     timeout=15.0,
 )
-async def memex_experiential_get(
+async def memex_procedural_get(
     ctx: Context,
     entry_id: Annotated[str, Field(description='Experiential entry UUID.')],
     vault_id: Annotated[
@@ -4588,13 +4588,13 @@ async def memex_experiential_get(
 
 
 @mcp.tool(
-    name='memex_experiential_get_by_identity',
-    description=_MEMEX_EXPERIENTIAL_GET_BY_IDENTITY_DESCRIPTION,
-    tags={'storage', 'experiential'},
+    name='memex_procedural_get_by_identity',
+    description=_MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESCRIPTION,
+    tags={'storage', 'procedural'},
     annotations={'readOnlyHint': True},
     timeout=15.0,
 )
-async def memex_experiential_get_by_identity(
+async def memex_procedural_get_by_identity(
     ctx: Context,
     kind: Annotated[
         Literal['case', 'procedure', 'strategy'],
@@ -4662,13 +4662,13 @@ async def memex_experiential_get_by_identity(
 
 
 @mcp.tool(
-    name='memex_experiential_update',
-    description=_MEMEX_EXPERIENTIAL_UPDATE_DESCRIPTION,
-    tags={'storage', 'experiential'},
+    name='memex_procedural_update',
+    description=_MEMEX_PROCEDURAL_UPDATE_DESCRIPTION,
+    tags={'storage', 'procedural'},
     annotations={'readOnlyHint': False, 'idempotentHint': True},
     timeout=30.0,
 )
-async def memex_experiential_update(
+async def memex_procedural_update(
     ctx: Context,
     entry_id: Annotated[str, Field(description='Experiential entry UUID.')],
     payload: ExperientialEntryUpdate,
@@ -4697,13 +4697,13 @@ async def memex_experiential_update(
 
 
 @mcp.tool(
-    name='memex_experiential_deprecate',
-    description=_MEMEX_EXPERIENTIAL_DEPRECATE_DESCRIPTION,
-    tags={'storage', 'experiential'},
+    name='memex_procedural_deprecate',
+    description=_MEMEX_PROCEDURAL_DEPRECATE_DESCRIPTION,
+    tags={'storage', 'procedural'},
     annotations={'readOnlyHint': False, 'idempotentHint': True},
     timeout=15.0,
 )
-async def memex_experiential_deprecate(
+async def memex_procedural_deprecate(
     ctx: Context,
     entry_id: Annotated[str, Field(description='Experiential entry UUID.')],
     superseded_by_id: Annotated[
@@ -4745,13 +4745,13 @@ async def memex_experiential_deprecate(
 
 
 @mcp.tool(
-    name='memex_experiential_upsert',
-    description=_MEMEX_EXPERIENTIAL_UPSERT_DESCRIPTION,
-    tags={'storage', 'experiential'},
+    name='memex_procedural_upsert',
+    description=_MEMEX_PROCEDURAL_UPSERT_DESCRIPTION,
+    tags={'storage', 'procedural'},
     annotations={'readOnlyHint': False, 'idempotentHint': True},
     timeout=30.0,
 )
-async def memex_experiential_upsert(
+async def memex_procedural_upsert(
     ctx: Context,
     payload: ExperientialEntryCreate,
 ) -> McpExperientialEntry:
@@ -4768,13 +4768,13 @@ async def memex_experiential_upsert(
 
 
 @mcp.tool(
-    name='memex_experiential_search',
-    description=_MEMEX_EXPERIENTIAL_SEARCH_DESCRIPTION,
-    tags={'storage', 'experiential'},
+    name='memex_procedural_search',
+    description=_MEMEX_PROCEDURAL_SEARCH_DESCRIPTION,
+    tags={'storage', 'procedural'},
     annotations={'readOnlyHint': True},
     timeout=30.0,
 )
-async def memex_experiential_search(
+async def memex_procedural_search(
     ctx: Context,
     request: ExperientialSearchRequest,
 ) -> McpExperientialSearchResult:
@@ -4811,13 +4811,13 @@ async def memex_experiential_search(
 
 
 @mcp.tool(
-    name='memex_experiential_briefing_cards',
-    description=_MEMEX_EXPERIENTIAL_BRIEFING_CARDS_DESCRIPTION,
-    tags={'storage', 'experiential'},
+    name='memex_procedural_briefing_cards',
+    description=_MEMEX_PROCEDURAL_BRIEFING_CARDS_DESCRIPTION,
+    tags={'storage', 'procedural'},
     annotations={'readOnlyHint': True},
     timeout=15.0,
 )
-async def memex_experiential_briefing_cards(
+async def memex_procedural_briefing_cards(
     ctx: Context,
     context_keys: Annotated[
         list[str],

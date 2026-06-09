@@ -536,7 +536,7 @@ class McpExperientialSearchHit(BaseModel):
 
 
 class McpExperientialSearchResult(BaseModel):
-    """Enveloped hits from memex_experiential_search."""
+    """Enveloped hits from memex_procedural_search."""
 
     model_config = {'extra': 'forbid'}
 
@@ -561,7 +561,7 @@ class McpExperientialBriefingCard(BaseModel):
 
 
 class McpExperientialBriefingResult(BaseModel):
-    """Enveloped cards from memex_experiential_briefing_cards."""
+    """Enveloped cards from memex_procedural_briefing_cards."""
 
     model_config = {'extra': 'forbid'}
 

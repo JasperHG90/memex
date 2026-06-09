@@ -60,6 +60,15 @@ from memex_common.schemas import (
     UnitHistoryNodeDTO,
     SurveyResponse,
 )
+from memex_common.experiential_schemas import (
+    ExperientialBriefingCards,
+    ExperientialEntryCreate,
+    ExperientialEntryDTO,
+    ExperientialEntryUpdate,
+    ExperientialSearchRequest,
+    ExperientialSearchResponse,
+    ShortLabel,
+)
 
 logger = logging.getLogger('memex.common.client')
 
@@ -120,10 +129,13 @@ class RemoteMemexAPI:
     async def _post(
         self,
         path: str,
-        data: BaseModel | dict[str, Any],
+        data: BaseModel | dict[str, Any] | list[Any],
         params: dict[str, Any] | None = None,
     ) -> Any:
-        payload = data.model_dump(mode='json') if isinstance(data, BaseModel) else data
+        if isinstance(data, BaseModel):
+            payload: BaseModel | dict[str, Any] | list[Any] = data.model_dump(mode='json')
+        else:
+            payload = data
         response = await self.client.post(path, json=payload, params=params)
         return await self._handle_response(response)
 
@@ -140,9 +152,14 @@ class RemoteMemexAPI:
         response = await self.client.put(path, json=payload)
         return await self._handle_response(response)
 
-    async def _patch(self, path: str, data: BaseModel | dict[str, Any]) -> Any:
+    async def _patch(
+        self,
+        path: str,
+        data: BaseModel | dict[str, Any],
+        params: dict[str, Any] | None = None,
+    ) -> Any:
         payload = data.model_dump(mode='json') if isinstance(data, BaseModel) else data
-        response = await self.client.patch(path, json=payload)
+        response = await self.client.patch(path, json=payload, params=params)
         return await self._handle_response(response)
 
     async def _head(self, path: str) -> httpx.Response:
@@ -1717,6 +1734,126 @@ class RemoteMemexAPI:
             params['pattern'] = pattern
         result = await self._get('kv', params=params)
         return [KVEntryDTO(**r) for r in result]
+
+    # ------------------------------------------------------------------
+    # Procedural plane (V7)
+    #
+    # The public surface is `/procedural/*`; the engine internals
+    # (SQLModel, DTOs) still ship under the `experiential_*` prefix.
+    # ------------------------------------------------------------------
+
+    async def procedural_create(self, payload: ExperientialEntryCreate) -> ExperientialEntryDTO:
+        """Create a procedural-plane entry.
+
+        Mirrors :py:meth:`memex_core.api.MemexAPI.experiential.create` —
+        409 on identity-anchor collision.
+        """
+        result = await self._post('procedural', payload)
+        return ExperientialEntryDTO(**result)
+
+    async def procedural_get(
+        self,
+        entry_id: UUID,
+        *,
+        vault_id: UUID | None = None,
+    ) -> ExperientialEntryDTO:
+        """Fetch a single procedural-plane entry by UUID.
+
+        404 when missing or vault-mismatched. The client surfaces 404
+        as a raised ``httpx.HTTPStatusError`` (no graceful None return)
+        so callers can distinguish the miss from a valid empty body.
+        """
+        params: dict[str, Any] = {}
+        if vault_id is not None:
+            params['vault_id'] = str(vault_id)
+        result = await self._get(f'procedural/{entry_id}', params=params)
+        return ExperientialEntryDTO(**result)
+
+    async def procedural_get_by_identity(
+        self,
+        *,
+        kind: str,
+        scope: ShortLabel,
+        verb: ShortLabel | None = None,
+        context: ShortLabel | None = None,
+        vault_id: UUID | None = None,
+    ) -> ExperientialEntryDTO | None:
+        """Look up an entry by its (kind, scope, verb, context) anchor.
+
+        Returns ``None`` when the anchor is unbound — the cheap
+        "did we already learn this?" answer. The route never 404s.
+        """
+        params: dict[str, Any] = {'kind': kind, 'scope': scope}
+        if verb is not None:
+            params['verb'] = verb
+        if context is not None:
+            params['context'] = context
+        if vault_id is not None:
+            params['vault_id'] = str(vault_id)
+        result = await self._get('procedural/by-identity', params=params)
+        if result is None:
+            return None
+        return ExperientialEntryDTO(**result)
+
+    async def procedural_update(
+        self,
+        entry_id: UUID,
+        payload: ExperientialEntryUpdate,
+        *,
+        vault_id: UUID | None = None,
+    ) -> ExperientialEntryDTO:
+        """Mutate an entry in place (appends a version row)."""
+        params: dict[str, Any] = {}
+        if vault_id is not None:
+            params['vault_id'] = str(vault_id)
+        result = await self._patch(f'procedural/{entry_id}', payload, params=params)
+        return ExperientialEntryDTO(**result)
+
+    async def procedural_deprecate(
+        self,
+        entry_id: UUID,
+        *,
+        superseded_by_id: UUID | None = None,
+        vault_id: UUID | None = None,
+    ) -> ExperientialEntryDTO:
+        """Soft-deprecate an entry (status → 'deprecated')."""
+        params: dict[str, Any] = {}
+        if superseded_by_id is not None:
+            params['superseded_by_id'] = str(superseded_by_id)
+        if vault_id is not None:
+            params['vault_id'] = str(vault_id)
+        result = await self._post(f'procedural/{entry_id}/deprecate', data={}, params=params)
+        return ExperientialEntryDTO(**result)
+
+    async def procedural_upsert(self, payload: ExperientialEntryCreate) -> ExperientialEntryDTO:
+        """Idempotent write on the (kind, scope, verb, context) anchor."""
+        result = await self._post('procedural/upsert', payload)
+        return ExperientialEntryDTO(**result)
+
+    async def procedural_search(
+        self, request: ExperientialSearchRequest
+    ) -> ExperientialSearchResponse:
+        """Hybrid BM25 + vector search (RRF-merged) on the procedural plane."""
+        result = await self._post('procedural/search', request)
+        return ExperientialSearchResponse(**result)
+
+    async def procedural_briefing_cards(
+        self,
+        context_keys: list[ShortLabel],
+        *,
+        scope: ShortLabel | None = None,
+        limit_per_context: int = 5,
+    ) -> ExperientialBriefingCards:
+        """Pin-chain briefing cards for the session-briefing surface.
+
+        The body is a JSON array of context_keys; ``scope`` and
+        ``limit_per_context`` ride as query parameters.
+        """
+        params: dict[str, Any] = {'limit_per_context': limit_per_context}
+        if scope is not None:
+            params['scope'] = scope
+        result = await self._post('procedural/briefing-cards', list(context_keys), params=params)
+        return ExperientialBriefingCards(**result)
 
     # ------------------------------------------------------------------
     # ------------------------------------------------------------------
