@@ -254,7 +254,23 @@ class ExperientialRepository:
             raise ValueError('update called with no fields set')
 
         async with self._metastore.session() as session:
-            entry = await self._get_entry(session, entry_id, vault_id=vault_id)
+            # Lock the entry row for the read-modify-version-write
+            # cycle so two parallel updaters can't both compute the
+            # same ``max(version)+1`` and race the UNIQUE
+            # ``(entry_id, version)`` constraint on the versions table.
+            # The lock is released at the transaction's end (commit/
+            # rollback). Sequential single-writer workloads pay a
+            # no-op cost here; the only thing the lock prevents is
+            # ``IntegrityError → 500`` under concurrent edits, which
+            # would look indistinguishable from a real DB failure to
+            # the agent.
+            stmt = select(DBExperientialEntry).where(col(DBExperientialEntry.id) == entry_id)
+            if vault_id is not None:
+                stmt = stmt.where(col(DBExperientialEntry.vault_id) == vault_id)
+            stmt = stmt.with_for_update()
+            entry = (await session.exec(stmt)).first()
+            if entry is None:
+                raise ExperientialEntryNotFound(str(entry_id))
 
             pre_status = entry.status
             if payload.title is not None:
@@ -316,7 +332,21 @@ class ExperientialRepository:
                 edit_reason=payload.edit_reason,
             )
             session.add(version)
-            await session.commit()
+            try:
+                await session.commit()
+            except IntegrityError as exc:
+                # Belt-and-suspenders for the row-lock above: if a
+                # parallel worker slipped through (e.g. because the
+                # caller's transaction isolation is
+                # READ COMMITTED + skip-locked on a different
+                # transaction), the UNIQUE (entry_id, version)
+                # constraint will reject the second version insert.
+                # Translate to a domain error so the route returns
+                # 409 (not 500) — the agent's retry loop is supposed
+                # to treat 409 as a transient.
+                raise ExperientialIdentityConflict(
+                    f'concurrent update on entry {entry_id}; retry with the latest version'
+                ) from exc
             await session.refresh(entry)
 
         await self._enqueue_version_audit(
@@ -380,7 +410,17 @@ class ExperientialRepository:
             else:
                 stmt = stmt.where(col(DBExperientialEntry.context) == payload.context)
 
-            existing = (await session.exec(stmt)).first()
+            # FOR UPDATE on the lookup so two parallel upserts with the
+            # same anchor can't both miss and both try to insert. The
+            # unique constraint would catch one of them as
+            # ``IntegrityError`` but only the second worker to commit
+            # would see the conflict — the first one would happily
+            # insert a duplicate and the second would get the 500
+            # path. Locking the (likely-empty) row serialises the
+            # upsert: the second worker waits, then re-reads the row
+            # the first worker inserted, and falls into the
+            # ``existing is not None`` branch below.
+            existing = (await session.exec(stmt.with_for_update())).first()
 
             if existing is None:
                 new_entry = DBExperientialEntry(
@@ -403,7 +443,23 @@ class ExperientialRepository:
                     ),
                 )
                 session.add(new_entry)
-                await session.commit()
+                try:
+                    await session.commit()
+                except IntegrityError as exc:
+                    # Belt-and-suspenders: if the row-lock above was
+                    # bypassed (different isolation level, a lock
+                    # that didn't extend to the commit boundary),
+                    # the unique constraint rejects the duplicate
+                    # insert. Translate to the same domain error the
+                    # ``create`` path raises so the route returns
+                    # 409 (not 500) and the agent's upsert loop can
+                    # re-read + re-merge.
+                    raise ExperientialIdentityConflict(
+                        f'concurrent upsert on '
+                        f'kind={payload.kind!r} scope={payload.scope!r} '
+                        f'verb={payload.verb!r} context={payload.context!r}; '
+                        're-read and retry'
+                    ) from exc
                 await session.refresh(new_entry)
                 merged = await self._get_entry(session, new_entry.id)
             else:
