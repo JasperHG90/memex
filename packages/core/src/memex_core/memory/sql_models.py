@@ -22,6 +22,7 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, ARRAY, TSVECTOR
+from sqlalchemy import event
 from sqlalchemy.types import Uuid as SA_UUID
 from sqlmodel import SQLModel, Field, Relationship
 
@@ -2091,7 +2092,7 @@ class ExperientialEntry(SQLModel, table=True):  # type: ignore
                 "coalesce(title, '') || ' ' || "
                 "coalesce(summary, '') || ' ' || "
                 "coalesce(body, '') || ' ' || "
-                "coalesce(array_to_string(tags, ' '), ''))",
+                "coalesce(memex_experiential_tags_to_text(tags), ''))",
                 persisted=True,
             ),
         ),
@@ -3064,3 +3065,51 @@ class LintLLMSignature(SQLModel, table=True):  # type: ignore
             name='ck_lint_llm_signature_superseded_valid',
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# DDL event hooks
+# ---------------------------------------------------------------------------
+#
+# The experiential_entries.search_tsvector generated column references
+# memex_experiential_tags_to_text() — an IMMUTABLE wrapper around the
+# STABLE array_to_string(text[], text). Migration 061 creates the function
+# in upgrade(); that path is fine for alembic-driven schema setup.
+#
+# Tests that drive schema setup via ``SQLModel.metadata.create_all``
+# (notably the integration ``engine`` fixture in
+# packages/core/tests/integration/conftest.py) never run alembic, so the
+# function would not exist when ``create_all`` reaches the
+# ``experiential_entries`` table. To keep both paths consistent we
+# register a ``before_create`` listener that emits the function DDL
+# before any table DDL, mirroring the migration body.
+# ---------------------------------------------------------------------------
+
+
+_EXPERIENTIAL_TAGS_TO_TEXT_DDL = """
+CREATE OR REPLACE FUNCTION memex_experiential_tags_to_text(
+    tags text[]
+) RETURNS text
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT coalesce(
+        array_to_string(tags, ' '),
+        ''
+    )
+$$
+"""
+
+
+@event.listens_for(SQLModel.metadata, 'before_create', propagate=True)
+def _emit_experiential_tags_to_text(target, connection, **kwargs):  # type: ignore[no-untyped-def]
+    """Emit the experiential tsvector helper before any table that uses it.
+
+    Mirrors the upgrade body of migration 061 — keeps ``create_all`` and
+    ``alembic upgrade`` consistent. Idempotent (``CREATE OR REPLACE``)
+    so re-running setup is safe.
+    """
+    if not connection.dialect.name.startswith('postgresql'):
+        return
+    connection.exec_driver_sql(_EXPERIENTIAL_TAGS_TO_TEXT_DDL)

@@ -130,7 +130,7 @@ async def test_upgrade_backfills_legacy_kv_procedures(fresh_db_url: str) -> None
                 f'expected 2 backfilled experiential_entries rows, got {len(entries)}: {entries!r}'
             )
 
-            by_key = {tuple(row[2:6]): row for row in entries}
+            by_key = {tuple(row[2:5]): row for row in entries}
             # global:procedure:create_alembic:postgres → procedure,
             # scope='global', verb='create_alembic', context='postgres'.
             global_entry = by_key.get(('global', 'create_alembic', 'postgres'))

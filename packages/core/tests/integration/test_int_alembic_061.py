@@ -237,7 +237,8 @@ async def test_upgrade_persists_generated_tsvector_and_index_round_trip(
                 )
             ).scalar()
 
-            # The generated tsvector should now contain 'alembic'.
+            # The generated tsvector should now contain 'alembic' (or its
+            # Porter-stemmed form 'alemb' under the english config).
             tsvector_value = (
                 await conn.execute(
                     text('SELECT search_tsvector FROM experiential_entries WHERE id = :id'),
@@ -246,16 +247,17 @@ async def test_upgrade_persists_generated_tsvector_and_index_round_trip(
             ).scalar()
             assert tsvector_value is not None, 'search_tsvector should be auto-populated on insert'
             tsvector_str = str(tsvector_value)
-            assert 'alembic' in tsvector_str, (
-                f"expected 'alembic' in generated tsvector, got {tsvector_str!r}"
+            assert 'alemb' in tsvector_str, (
+                f"expected 'alemb' (stemmed form of 'alembic') in generated "
+                f'tsvector, got {tsvector_str!r}'
             )
 
-            # GIN reachable: a tsquery on 'alembic' should match.
+            # GIN reachable: a tsquery on the stem matches.
             matches = (
                 await conn.execute(
                     text(
                         'SELECT count(*) FROM experiential_entries '
-                        "WHERE search_tsvector @@ to_tsquery('english', 'alembic')"
+                        "WHERE search_tsvector @@ to_tsquery('english', 'alemb')"
                     )
                 )
             ).scalar()

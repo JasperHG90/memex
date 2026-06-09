@@ -47,7 +47,7 @@ _SEARCH_TSVECTOR_EXPR = (
     "coalesce(title, '') || ' ' || "
     "coalesce(summary, '') || ' ' || "
     "coalesce(body, '') || ' ' || "
-    "coalesce(array_to_string(tags, ' '), ''))"
+    "coalesce(memex_experiential_tags_to_text(tags), ''))"
 )
 
 
@@ -77,7 +77,49 @@ def _index_exists(index_name: str) -> bool:
     )
 
 
+def _function_exists(function_name: str) -> bool:
+    conn = op.get_bind()
+    return bool(
+        conn.execute(
+            sa.text('SELECT EXISTS (SELECT 1 FROM pg_proc WHERE proname = :name)'),
+            {'name': function_name},
+        ).scalar()
+    )
+
+
 def upgrade() -> None:
+    # -------------------------------------------------------------------------
+    # 0. memex_experiential_tags_to_text — IMMUTABLE wrapper around
+    #    array_to_string. Postgres marks array_to_string as STABLE (collation
+    #    sensitive) which disqualifies it from generated-column expressions.
+    #    This wrapper hard-codes an empty-element behaviour (NULL → '')
+    #    so the function body is provably immutable.
+    #
+    #    SQLModel.metadata.create_all (used by integration tests) also emits
+    #    this function via a 'before_create' DDL event in sql_models.py —
+    #    see _emit_experiential_tags_to_text. Both paths use the same
+    #    CREATE OR REPLACE body so they're idempotent against each other.
+    # -------------------------------------------------------------------------
+    if not _function_exists('memex_experiential_tags_to_text'):
+        op.execute(
+            sa.text(
+                """
+                CREATE OR REPLACE FUNCTION memex_experiential_tags_to_text(
+                    tags text[]
+                ) RETURNS text
+                LANGUAGE sql
+                IMMUTABLE
+                PARALLEL SAFE
+                AS $$
+                    SELECT coalesce(
+                        array_to_string(tags, ' '),
+                        ''
+                    )
+                $$
+                """
+            )
+        )
+
     # -------------------------------------------------------------------------
     # 1. experiential_entries
     # -------------------------------------------------------------------------
@@ -508,3 +550,6 @@ def downgrade() -> None:
     ):
         if _table_exists(table):
             op.drop_table(table)
+
+    if _function_exists('memex_experiential_tags_to_text'):
+        op.execute(sa.text('DROP FUNCTION memex_experiential_tags_to_text(text[])'))
