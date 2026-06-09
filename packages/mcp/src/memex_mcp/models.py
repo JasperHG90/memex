@@ -462,3 +462,108 @@ class McpSurveyResult(BaseModel):
     total_notes: int = 0
     total_facts: int = 0
     truncated: bool = False
+
+
+# ── Experiential plane (V7) ──
+
+
+class McpExperientialSource(BaseModel):
+    """Source pointer on an experiential entry."""
+
+    model_config = {'extra': 'forbid'}
+
+    note_id: UUID | None = None
+    memory_unit_id: UUID | None = None
+    role: str
+    excerpt: str | None = None
+
+
+class McpExperientialPin(BaseModel):
+    """Pin linking an entry to a context key in the briefing pin chain."""
+
+    model_config = {'extra': 'forbid'}
+
+    context_key: str
+    position: int
+
+
+class McpExperientialEntry(BaseModel):
+    """Public-facing experiential entry. Embedding vectors are omitted — they
+    are not meaningful at the LLM-tool boundary; they live in the search path.
+    """
+
+    model_config = {'extra': 'forbid'}
+
+    id: UUID
+    vault_id: UUID
+    kind: Literal['case', 'procedure', 'strategy']
+    scope: str
+    verb: str | None = None
+    context: str | None = None
+    title: str
+    summary: str
+    body: str = ''
+    trigger: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    extra_metadata: dict[str, Any] = Field(default_factory=dict)
+    status: Literal['draft', 'published', 'deprecated'] = 'draft'
+    origin: Literal['manual', 'derived', 'imported'] = 'manual'
+    supersedes_id: UUID | None = None
+    superseded_by_id: UUID | None = None
+    published_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+    sources: list[McpExperientialSource] = Field(default_factory=list)
+    pins: list[McpExperientialPin] = Field(default_factory=list)
+
+
+class McpExperientialSearchHit(BaseModel):
+    """One hit from the experiential hybrid search."""
+
+    model_config = {'extra': 'forbid'}
+
+    entry_id: UUID
+    kind: Literal['case', 'procedure', 'strategy']
+    score: float
+    matched_via: Literal['bm25', 'vector', 'pin', 'rrf']
+    title: str
+    summary: str
+    scope: str
+    verb: str | None = None
+    context: str | None = None
+    trigger: str | None = None
+    pin_position: int | None = None
+
+
+class McpExperientialSearchResult(BaseModel):
+    """Enveloped hits from memex_experiential_search."""
+
+    model_config = {'extra': 'forbid'}
+
+    hits: list[McpExperientialSearchHit] = Field(default_factory=list)
+    total: int = 0
+    truncated: bool = False
+    took_ms: float = 0.0
+
+
+class McpExperientialBriefingCard(BaseModel):
+    """One card in the briefing's experiential slot."""
+
+    model_config = {'extra': 'forbid'}
+
+    entry_id: UUID
+    kind: Literal['case', 'procedure', 'strategy']
+    title: str
+    summary: str
+    scope: str
+    pin_position: int
+    matched_via: Literal['pin'] = 'pin'
+
+
+class McpExperientialBriefingResult(BaseModel):
+    """Enveloped cards from memex_experiential_briefing_cards."""
+
+    model_config = {'extra': 'forbid'}
+
+    cards: list[McpExperientialBriefingCard] = Field(default_factory=list)
+    total: int = 0

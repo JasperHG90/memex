@@ -203,6 +203,28 @@ Ambiguous? ASK before writing.
 <example>"When I use Claude Code: always cite" → `app:claude-code:procedure:respond:cite` (app cue)</example>"""
 
 
+EXPERIENTIAL_PLANE = """## Experiential plane
+
+<critical_constraint name="experiential_routing">
+A learning that should survive across sessions — a worked procedure, a recurring case shape, a project strategy → `memex_experiential_create`. NOT `memex_add_note` (that's for facts that flow through extraction) and NOT `memex_kv_put` (operational pointers / settings). Rule: "this is how to do X" → experiential. "X is the case" → note.
+</critical_constraint>
+
+Three kinds under one identity anchor `(kind, scope, verb, context)`:
+- `case` — recurring failure/scenario shape. `verb`+`context` NULL. `trigger` REQUIRED (the signal).
+- `procedure` — worked HOWTO. `verb`+`context` REQUIRED. `trigger` optional.
+- `strategy` — higher-order tactic. `verb`+`context` REQUIRED. `trigger` optional.
+
+<critical_constraint name="experiential_identity_anchor">
+`procedure` and `strategy` UNIQUE on `(kind, scope, verb, context)` → re-submit returns 409. Probe with `memex_experiential_get_by_identity` BEFORE `create`, or use `memex_experiential_upsert` for idempotent re-writes.
+</critical_constraint>
+
+Pin chain: `global → project:<id> → app:<id>` (most specific wins). `memex_experiential_briefing_cards(context_keys=[…])` unions pins across the supplied contexts — pass `["global", f"project:{vault.project_id}", f"app:{identity}"]` to render the briefing's experiential slot.
+
+`status` defaults to `published` for new writes. `memex_experiential_search` defaults to `status="published"`; pass `status="all"` for drafts. `memex_experiential_deprecate(superseded_by_id=…)` soft-deletes (drops from search, remains reachable via `get`).
+
+`memex_experiential_update` edits content on the SAME identity (new version row). To change identity, create+deprecate — the anchor is immutable."""
+
+
 CITATIONS = """## Citations
 
 Cite source notes inline for every claim grounded in Memex content: `…claim [note-title-or-id].`
@@ -303,6 +325,19 @@ def compose_universal() -> str:
     )
 
 
+def compose_with_experiential() -> str:
+    """Tier 1b universal block + the experiential-plane doctrine.
+
+    Opt-in (not in ``compose_universal``) because the 8 ``memex_experiential_*``
+    tools are only mounted by clients that ship the V7 plane — including
+    EXPERIENTIAL_PLANE in the default universal would burn ~1,750 chars on
+    agents that have no experiential tools. Hermes briefing and the Claude
+    Code SessionStart hook append EXPERIENTIAL_PLANE on top of
+    ``compose_universal()`` when V7 is active.
+    """
+    return compose_universal() + '\n\n' + EXPERIENTIAL_PLANE
+
+
 __all__ = [
     # Existing 4-layer routing primer (Tier 1b component).
     'LAYER_ROUTING_PRIMER_FRAGMENT',
@@ -314,6 +349,7 @@ __all__ = [
     'CITATIONS',
     'CRITICAL_FOOTER',
     'CRITICAL_HEADER',
+    'EXPERIENTIAL_PLANE',
     'HISTORICAL_ROUTING',
     'KV_NAMESPACE',
     'RESOLUTION_FLOW',
@@ -323,4 +359,5 @@ __all__ = [
     'VIRTUAL_UNIT',
     # Composer.
     'compose_universal',
+    'compose_with_experiential',
 ]

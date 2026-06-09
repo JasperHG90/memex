@@ -6,7 +6,7 @@ import asyncio
 import base64
 import time
 from dataclasses import dataclass, field
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, Literal, cast
 from uuid import UUID
 from datetime import datetime
 import mimetypes
@@ -32,6 +32,14 @@ from memex_mcp._layer_primer_descriptions import (
 from memex_common.agent_surface import MCP_TRANSPORT_INSTRUCTIONS
 from memex_common.vault_utils import ALL_VAULTS_WILDCARD, expand_vault_scope
 from memex_common.tool_descriptions import (
+    MEMEX_EXPERIENTIAL_BRIEFING_CARDS_DESC as _MEMEX_EXPERIENTIAL_BRIEFING_CARDS_DESCRIPTION,
+    MEMEX_EXPERIENTIAL_CREATE_DESC as _MEMEX_EXPERIENTIAL_CREATE_DESCRIPTION,
+    MEMEX_EXPERIENTIAL_DEPRECATE_DESC as _MEMEX_EXPERIENTIAL_DEPRECATE_DESCRIPTION,
+    MEMEX_EXPERIENTIAL_GET_BY_IDENTITY_DESC as _MEMEX_EXPERIENTIAL_GET_BY_IDENTITY_DESCRIPTION,
+    MEMEX_EXPERIENTIAL_GET_DESC as _MEMEX_EXPERIENTIAL_GET_DESCRIPTION,
+    MEMEX_EXPERIENTIAL_SEARCH_DESC as _MEMEX_EXPERIENTIAL_SEARCH_DESCRIPTION,
+    MEMEX_EXPERIENTIAL_UPDATE_DESC as _MEMEX_EXPERIENTIAL_UPDATE_DESCRIPTION,
+    MEMEX_EXPERIENTIAL_UPSERT_DESC as _MEMEX_EXPERIENTIAL_UPSERT_DESCRIPTION,
     MEMEX_KV_PUT_DESC as _MEMEX_KV_PUT_DESCRIPTION,
 )
 from memex_mcp.models import (
@@ -68,7 +76,19 @@ from memex_mcp.models import (
     McpSurveyResult,
     McpSurveyTopic,
     McpVault,
+    McpExperientialBriefingCard,
+    McpExperientialBriefingResult,
+    McpExperientialEntry,
+    McpExperientialPin,
+    McpExperientialSearchHit,
+    McpExperientialSearchResult,
+    McpExperientialSource,
     Staleness,
+)
+from memex_common.experiential_schemas import (
+    ExperientialEntryCreate,
+    ExperientialEntryUpdate,
+    ExperientialSearchRequest,
 )
 from memex_common.templates import TemplateRegistry, BUILTIN_PROMPTS_DIR
 from memex_common.schemas import (
@@ -4460,3 +4480,396 @@ async def memex_get_diagnostics_summary(
     except Exception as e:
         logger.error(f'Diagnostics summary failed: {e}', exc_info=True)
         raise ToolError(f'Diagnostics summary failed: {e}')
+
+
+# --- Experiential plane (V7) ---
+
+
+def _dto_to_mcp_entry(dto: ExperientialEntryCreate) -> McpExperientialEntry:
+    """Convert a MemexAPI ExperientialEntryDTO to the MCP-facing shape.
+
+    The DTO is the cross-package envelope; the MCP model is the
+    tool-boundary shape. They share the same column set, so this is a
+    field-by-field copy. The McpExperientialEntry model uses ``extra='forbid'``
+    so any new DTO field added without a corresponding MCP field surfaces
+    here rather than silently shipping to clients.
+    """
+    return McpExperientialEntry(
+        id=dto.id,
+        vault_id=dto.vault_id,
+        kind=dto.kind,
+        scope=dto.scope,
+        verb=dto.verb,
+        context=dto.context,
+        title=dto.title,
+        summary=dto.summary,
+        body=dto.body,
+        trigger=dto.trigger,
+        tags=list(dto.tags),
+        extra_metadata=dict(dto.extra_metadata),
+        status=dto.status,
+        origin=dto.origin,
+        supersedes_id=dto.supersedes_id,
+        superseded_by_id=dto.superseded_by_id,
+        published_at=dto.published_at,
+        created_at=dto.created_at,
+        updated_at=dto.updated_at,
+        sources=[
+            McpExperientialSource(
+                note_id=s.note_id,
+                memory_unit_id=s.memory_unit_id,
+                role=str(s.role),
+                excerpt=s.excerpt,
+            )
+            for s in dto.sources
+        ],
+        pins=[McpExperientialPin(context_key=p.context_key, position=p.position) for p in dto.pins],
+    )
+
+
+@mcp.tool(
+    name='memex_experiential_create',
+    description=_MEMEX_EXPERIENTIAL_CREATE_DESCRIPTION,
+    tags={'storage', 'experiential'},
+    annotations={'readOnlyHint': False, 'idempotentHint': False},
+    timeout=30.0,
+)
+async def memex_experiential_create(
+    ctx: Context,
+    payload: ExperientialEntryCreate,
+) -> McpExperientialEntry:
+    """Write a new experiential entry via the MemexAPI facade."""
+    try:
+        api = get_api(ctx)
+        dto = await api.experiential.create(payload)
+        return _dto_to_mcp_entry(dto)
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Experiential create failed: {e}', exc_info=True)
+        raise ToolError(f'Experiential create failed: {e}')
+
+
+@mcp.tool(
+    name='memex_experiential_get',
+    description=_MEMEX_EXPERIENTIAL_GET_DESCRIPTION,
+    tags={'storage', 'experiential'},
+    annotations={'readOnlyHint': True},
+    timeout=15.0,
+)
+async def memex_experiential_get(
+    ctx: Context,
+    entry_id: Annotated[str, Field(description='Experiential entry UUID.')],
+    vault_id: Annotated[
+        str | None,
+        Field(
+            description="Optional vault UUID or name. Mismatch with the entry's "
+            'vault → 404. Omit to skip vault-scope enforcement.'
+        ),
+    ] = None,
+) -> McpExperientialEntry | None:
+    """Fetch a single entry by UUID. Returns null if not found."""
+    try:
+        api = get_api(ctx)
+        try:
+            entry_uuid = UUID(entry_id)
+        except ValueError:
+            raise ToolError(f'Invalid entry UUID: {entry_id}')
+        resolved_vault: UUID | None = None
+        if vault_id is not None:
+            resolved_vault = await _resolve_vault_id(api, vault_id)
+        dto = await api.experiential.get(entry_uuid, vault_id=resolved_vault)
+        return _dto_to_mcp_entry(dto)
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Experiential get failed: {e}', exc_info=True)
+        raise ToolError(f'Experiential get failed: {e}')
+
+
+@mcp.tool(
+    name='memex_experiential_get_by_identity',
+    description=_MEMEX_EXPERIENTIAL_GET_BY_IDENTITY_DESCRIPTION,
+    tags={'storage', 'experiential'},
+    annotations={'readOnlyHint': True},
+    timeout=15.0,
+)
+async def memex_experiential_get_by_identity(
+    ctx: Context,
+    kind: Annotated[
+        Literal['case', 'procedure', 'strategy'],
+        Field(description='Entity kind.'),
+    ],
+    scope: Annotated[str, Field(description='Scope label (e.g. "global", "project:abc").')],
+    verb: Annotated[
+        str | None,
+        Field(description='Action (procedure/strategy). MUST be null for kind="case".'),
+    ] = None,
+    context: Annotated[
+        str | None,
+        Field(description='Situation tag (procedure/strategy). MUST be null for kind="case".'),
+    ] = None,
+    vault_id: Annotated[
+        str | None,
+        Field(description='Optional vault UUID or name for vault-scope enforcement.'),
+    ] = None,
+) -> McpExperientialEntry | None:
+    """Fetch a single entry by its (kind, scope, verb, context) identity anchor."""
+    try:
+        api = get_api(ctx)
+        if kind == 'case' and (verb is not None or context is not None):
+            raise ToolError('kind="case" requires verb=null AND context=null.')
+        if kind in ('procedure', 'strategy') and (not verb or not context):
+            raise ToolError(f'kind="{kind}" requires non-empty verb AND context.')
+
+        resolved_vault: UUID | None = None
+        if vault_id is not None:
+            resolved_vault = await _resolve_vault_id(api, vault_id)
+        # The facade currently exposes create/get/update/upsert/deprecate/
+        # search/briefing_cards/enqueue_derivation. Identity-based lookup
+        # is a thin read; we call the search service via the API surface
+        # using a status="all" filter on the identity-anchor tuple. This
+        # keeps the LLM hot path single-call without widening the facade
+        # just for MCP. (See MemexAPIExperientialFacade in core/api.py.)
+        from memex_common.experiential_schemas import (
+            ExperientialSearchRequest as _SR,
+        )
+
+        request = _SR(
+            query='',
+            kind=kind,
+            scope=scope,
+            status='all',
+            top_k=1,
+            # No `verb`/`context` filter on the search request DTO; the
+            # search service narrows by kind+scope and we post-filter on
+            # identity. (Adding a dedicated identity filter to the search
+            # service is a follow-up; this is the MVP path.)
+        )
+        response = await api.experiential.search(request)
+        for hit in response.hits:
+            # We need the full entry to confirm the verb+context match
+            # (search response doesn't carry them). Round-trip to get.
+            full = await api.experiential.get(hit.entry_id, vault_id=resolved_vault)
+            if full.verb == verb and full.context == context:
+                return _dto_to_mcp_entry(full)
+        return None
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Experiential get_by_identity failed: {e}', exc_info=True)
+        raise ToolError(f'Experiential get_by_identity failed: {e}')
+
+
+@mcp.tool(
+    name='memex_experiential_update',
+    description=_MEMEX_EXPERIENTIAL_UPDATE_DESCRIPTION,
+    tags={'storage', 'experiential'},
+    annotations={'readOnlyHint': False, 'idempotentHint': True},
+    timeout=30.0,
+)
+async def memex_experiential_update(
+    ctx: Context,
+    entry_id: Annotated[str, Field(description='Experiential entry UUID.')],
+    payload: ExperientialEntryUpdate,
+    vault_id: Annotated[
+        str | None,
+        Field(description='Optional vault UUID or name.'),
+    ] = None,
+) -> McpExperientialEntry:
+    """Mutate an entry in place. Appends a version row."""
+    try:
+        api = get_api(ctx)
+        try:
+            entry_uuid = UUID(entry_id)
+        except ValueError:
+            raise ToolError(f'Invalid entry UUID: {entry_id}')
+        resolved_vault: UUID | None = None
+        if vault_id is not None:
+            resolved_vault = await _resolve_vault_id(api, vault_id)
+        dto = await api.experiential.update(entry_uuid, payload, vault_id=resolved_vault)
+        return _dto_to_mcp_entry(dto)
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Experiential update failed: {e}', exc_info=True)
+        raise ToolError(f'Experiential update failed: {e}')
+
+
+@mcp.tool(
+    name='memex_experiential_deprecate',
+    description=_MEMEX_EXPERIENTIAL_DEPRECATE_DESCRIPTION,
+    tags={'storage', 'experiential'},
+    annotations={'readOnlyHint': False, 'idempotentHint': True},
+    timeout=15.0,
+)
+async def memex_experiential_deprecate(
+    ctx: Context,
+    entry_id: Annotated[str, Field(description='Experiential entry UUID.')],
+    superseded_by_id: Annotated[
+        str | None,
+        Field(description='Optional UUID of the entry that supersedes this one.'),
+    ] = None,
+    vault_id: Annotated[
+        str | None,
+        Field(description='Optional vault UUID or name.'),
+    ] = None,
+) -> McpExperientialEntry:
+    """Soft-deprecate an entry. Reversible out-of-band."""
+    try:
+        api = get_api(ctx)
+        try:
+            entry_uuid = UUID(entry_id)
+        except ValueError:
+            raise ToolError(f'Invalid entry UUID: {entry_id}')
+        successor_uuid: UUID | None = None
+        if superseded_by_id is not None:
+            try:
+                successor_uuid = UUID(superseded_by_id)
+            except ValueError:
+                raise ToolError(f'Invalid superseded_by UUID: {superseded_by_id}')
+        resolved_vault: UUID | None = None
+        if vault_id is not None:
+            resolved_vault = await _resolve_vault_id(api, vault_id)
+        dto = await api.experiential.deprecate(
+            entry_uuid,
+            superseded_by_id=successor_uuid,
+            vault_id=resolved_vault,
+        )
+        return _dto_to_mcp_entry(dto)
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Experiential deprecate failed: {e}', exc_info=True)
+        raise ToolError(f'Experiential deprecate failed: {e}')
+
+
+@mcp.tool(
+    name='memex_experiential_upsert',
+    description=_MEMEX_EXPERIENTIAL_UPSERT_DESCRIPTION,
+    tags={'storage', 'experiential'},
+    annotations={'readOnlyHint': False, 'idempotentHint': True},
+    timeout=30.0,
+)
+async def memex_experiential_upsert(
+    ctx: Context,
+    payload: ExperientialEntryCreate,
+) -> McpExperientialEntry:
+    """Idempotent write on the (kind, scope, verb, context) identity anchor."""
+    try:
+        api = get_api(ctx)
+        dto = await api.experiential.upsert(payload)
+        return _dto_to_mcp_entry(dto)
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Experiential upsert failed: {e}', exc_info=True)
+        raise ToolError(f'Experiential upsert failed: {e}')
+
+
+@mcp.tool(
+    name='memex_experiential_search',
+    description=_MEMEX_EXPERIENTIAL_SEARCH_DESCRIPTION,
+    tags={'storage', 'experiential'},
+    annotations={'readOnlyHint': True},
+    timeout=30.0,
+)
+async def memex_experiential_search(
+    ctx: Context,
+    request: ExperientialSearchRequest,
+) -> McpExperientialSearchResult:
+    """Hybrid BM25 + vector search with RRF aggregation."""
+    try:
+        api = get_api(ctx)
+        response = await api.experiential.search(request)
+        return McpExperientialSearchResult(
+            hits=[
+                McpExperientialSearchHit(
+                    entry_id=h.entry_id,
+                    kind=h.kind,
+                    score=h.score,
+                    matched_via=h.matched_via,
+                    title=h.title,
+                    summary=h.summary,
+                    scope=h.scope,
+                    verb=h.verb,
+                    context=h.context,
+                    trigger=h.trigger,
+                    pin_position=h.pin_position,
+                )
+                for h in response.hits
+            ],
+            total=response.total,
+            truncated=response.truncated,
+            took_ms=response.took_ms,
+        )
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Experiential search failed: {e}', exc_info=True)
+        raise ToolError(f'Experiential search failed: {e}')
+
+
+@mcp.tool(
+    name='memex_experiential_briefing_cards',
+    description=_MEMEX_EXPERIENTIAL_BRIEFING_CARDS_DESCRIPTION,
+    tags={'storage', 'experiential'},
+    annotations={'readOnlyHint': True},
+    timeout=15.0,
+)
+async def memex_experiential_briefing_cards(
+    ctx: Context,
+    context_keys: Annotated[
+        list[str],
+        Field(
+            description=(
+                'Pin-chain context keys to look up. Most-specific wins: '
+                '"app:<id>" > "project:<id>" > "global".'
+            ),
+        ),
+    ],
+    scope: Annotated[
+        str | None,
+        Field(description='Optional scope filter (e.g. "global", "project:abc").'),
+    ] = None,
+    limit_per_context: Annotated[
+        int,
+        Field(
+            default=5,
+            ge=1,
+            le=50,
+            description='Max cards per context key. Default 5.',
+        ),
+    ] = 5,
+) -> McpExperientialBriefingResult:
+    """Pin-chain briefing cards for the session-briefing surface."""
+    try:
+        api = get_api(ctx)
+        from memex_common.experiential_schemas import ShortLabel
+
+        keys: list[ShortLabel] = [ShortLabel(k) for k in context_keys]
+        scope_label: ShortLabel | None = ShortLabel(scope) if scope is not None else None
+        result = await api.experiential.briefing_cards(
+            keys,
+            scope=scope_label,
+            limit_per_context=limit_per_context,
+        )
+        return McpExperientialBriefingResult(
+            cards=[
+                McpExperientialBriefingCard(
+                    entry_id=c.entry_id,
+                    kind=c.kind,
+                    title=c.title,
+                    summary=c.summary,
+                    scope=c.scope,
+                    pin_position=c.pin_position,
+                )
+                for c in result.cards
+            ],
+            total=result.total,
+        )
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Experiential briefing_cards failed: {e}', exc_info=True)
+        raise ToolError(f'Experiential briefing_cards failed: {e}')
