@@ -213,6 +213,38 @@ def unregister_backend(name: str) -> None:
     _BACKEND_REGISTRY.pop(name, None)
 
 
+def _build_procedural_create_payload(outcome, *, vault_id: UUID):
+    """Build an ``ExperientialEntryCreate`` from a ``ProceduralEntryRoundtrip`` outcome.
+
+    The outcome carries just the load-bearing shape fields
+    (kind, scope, verb, context, title, trigger) — the rest of the
+    DTO is filled with procedural-plane defaults. The DTO requires
+    ``summary``; we synthesise a minimal one so the create/upsert
+    can dispatch. The case-kind carries a ``trigger`` instead of
+    ``verb``/``context`` — the outcome's ``kind='case'`` path sets
+    verb/context to ``None`` and the DTO accepts that shape.
+    """
+    from memex_common.experiential_schemas import ExperientialEntryCreate
+
+    return ExperientialEntryCreate(
+        vault_id=vault_id,
+        kind=outcome.kind,
+        scope=outcome.scope,
+        verb=outcome.verb,
+        context=outcome.context,
+        title=outcome.title,
+        # DTO requires a non-empty summary. The eval suite doesn't
+        # care about summary content (the outcome's score() only
+        # asserts kind/scope/verb), so a minimal one-line default
+        # is enough to satisfy Pydantic validation.
+        summary=f'Eval-suite seeded entry for {outcome.title!r}.',
+        body='',
+        trigger=outcome.trigger,
+        tags=[],
+        status='published',
+    )
+
+
 def get_backend(name: str) -> AnswerBackend:
     """Resolve a backend by registered name. Raises KeyError on miss."""
     if name not in _BACKEND_REGISTRY:
@@ -247,6 +279,9 @@ class DirectApiBackend(AnswerBackend):
         server_url: str,
         judge: 'Judge | None' = None,
     ) -> AgentAnswer:
+        # Lazy imports keep the registry-driven outcome types side-effect-free
+        # at module load time. Each ``isinstance(outcome, X)`` branch below
+        # dispatches to the right ``api.procedural_*`` call shape.
         from memex_eval.suite.base import (
             EntityCooccurs,
             EntityMentionContains,
@@ -255,6 +290,10 @@ class DirectApiBackend(AnswerBackend):
             LintFindingPresent,
             LLMLintFlagsUnit,
             SummaryNonempty,
+        )
+        from memex_eval.suites.procedural_plane._outcomes import (
+            ProceduralEntryRoundtrip,
+            ProceduralSearchResults,
         )
 
         started = time.monotonic()
@@ -282,6 +321,114 @@ class DirectApiBackend(AnswerBackend):
             elif isinstance(outcome, KvRoundtrip):
                 entry = await api.kv_get(key=outcome.kv_key)
                 out.kv_value = getattr(entry, 'value', None) if entry is not None else None
+            elif isinstance(outcome, ProceduralEntryRoundtrip):
+                # Write/read on a single procedural-plane entry.
+                # Dispatch on the outcome's ``operation`` to the right
+                # ``api.procedural_*`` method. The client methods take
+                # ``ExperientialEntryCreate`` payloads (create/upsert)
+                # or kwargs (get_by_identity) and return
+                # ``ExperientialEntryDTO``. The DTO is packed into
+                # ``out.units[0]``; any raised error (404/409) is
+                # captured in ``out.error`` so the outcome's
+                # ``_classify_outcome`` can map it to a status.
+                op = outcome.operation
+                if op in ('create', 'upsert'):
+                    # ``create`` raises 409 on identity-anchor collision;
+                    # ``upsert`` is idempotent and never raises on a
+                    # matching anchor. We let the exception bubble into
+                    # the ``out.error`` field via the try/except below.
+                    create_payload = _build_procedural_create_payload(outcome, vault_id=vault_id)
+                    if op == 'create':
+                        result_dto = await api.procedural_create(create_payload)
+                    else:
+                        result_dto = await api.procedural_upsert(create_payload)
+                    if result_dto is not None:
+                        out.units = [result_dto]
+                elif op == 'get_by_identity':
+                    # get_by_identity returns ``None`` when the anchor
+                    # is unbound — the cheap "have we learned this?"
+                    # probe. We pack an empty units list and let
+                    # ``_classify_outcome`` see the no-units state as
+                    # ``not_found`` (and an explicit 404 error if the
+                    # client raises instead of returning None).
+                    found_dto = await api.procedural_get_by_identity(
+                        kind=outcome.kind,
+                        scope=outcome.scope,
+                        verb=outcome.verb,
+                        context=outcome.context,
+                        vault_id=vault_id,
+                    )
+                    if found_dto is not None:
+                        out.units = [found_dto]
+            elif isinstance(outcome, ProceduralSearchResults):
+                # Read calls that return a list (search / briefing_cards).
+                # The client wraps the result in an envelope
+                # (``ExperientialSearchResponse`` /
+                # ``ExperientialBriefingCards``); we unpack the
+                # per-hit DTOs into ``out.units`` so the outcome's
+                # ``score()`` can do field-level matching via
+                # ``getattr(hit, 'kind', None)``.
+                op = outcome.operation
+                if op == 'search':
+                    from memex_common.experiential_schemas import (
+                        ExperientialSearchRequest,
+                    )
+
+                    request = ExperientialSearchRequest(
+                        query=outcome.query or scenario.query or None,
+                        kind=outcome.expect_kind,
+                        scope=outcome.expect_scope,
+                        # Status defaults to 'published' on the
+                        # ``ExperientialSearchRequest`` DTO; the draft
+                        # scenario in this suite relies on that
+                        # default to assert "drafts are hidden".
+                        limit=scenario.top_k,
+                    )
+                    response = await api.procedural_search(request)
+                    # Each hit is an ``ExperientialSearchHit`` whose
+                    # ``.entry`` is the ``ExperientialEntryDTO``; we
+                    # unwrap so the field-level match in
+                    # ``ProceduralSearchResults.score()`` finds
+                    # ``kind``/``scope``/``verb`` directly.
+                    out.units = [h.entry for h in (response.hits or [])]
+                elif op == 'briefing_cards':
+                    keys = outcome.context_keys or ['global']
+                    cards_response = await api.procedural_briefing_cards(
+                        context_keys=keys,
+                        limit_per_context=scenario.top_k,
+                    )
+
+                    # Each card is an ``ExperientialBriefingCard``
+                    # whose ``.entry`` is the ``ExperientialEntryDTO``
+                    # and ``.pin_position``/``.context_key`` are the
+                    # briefing-card-specific fields. We synthesise
+                    # lightweight shims whose ``kind``/``scope``/``verb``
+                    # are forwarded from ``.entry`` but whose
+                    # ``pin_position`` is exposed for the briefing
+                    # pin-position contract assertion.
+                    class _CardShim:
+                        __slots__ = (
+                            'entry',
+                            'pin_position',
+                            'context_key',
+                            'kind',
+                            'scope',
+                            'verb',
+                        )
+
+                        def __init__(self, card):
+                            self.entry = card.entry
+                            self.pin_position = card.pin_position
+                            self.context_key = card.context_key
+                            # Forward the entry fields so the
+                            # field-level match in
+                            # ``ProceduralSearchResults.score()``
+                            # finds them via ``getattr(hit, ...)``.
+                            self.kind = getattr(card.entry, 'kind', None)
+                            self.scope = getattr(card.entry, 'scope', None)
+                            self.verb = getattr(card.entry, 'verb', None)
+
+                    out.units = [_CardShim(c) for c in (cards_response.cards or [])]
             elif isinstance(outcome, SummaryNonempty):
                 q = outcome.entity_query or scenario.query
                 found = await api.search_entities(query=q, limit=1, vault_id=vault_id)
