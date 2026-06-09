@@ -1,4 +1,4 @@
-from typing import cast, Self, Any, AsyncGenerator, TYPE_CHECKING
+from typing import cast, Literal, Self, Any, AsyncGenerator, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from memex_core.services.lint_llm import LintLLMService
@@ -20,6 +20,16 @@ import dspy
 from memex_common.exceptions import (
     MemoryUnitNotFoundError,
     VaultNotFoundError,
+)
+from memex_common.experiential_schemas import (
+    ExperientialBriefingCards,
+    ExperientialDerivationQueueDTO,
+    ExperientialEntryCreate,
+    ExperientialEntryDTO,
+    ExperientialEntryUpdate,
+    ExperientialSearchRequest,
+    ExperientialSearchResponse,
+    ShortLabel,
 )
 from memex_common.schemas import (
     IntentClass,
@@ -613,6 +623,23 @@ class MemexAPI:
             vault_service=self._vaults,
         )
 
+        # V7: Experiential Plane (procedural + case memory). The
+        # repository owns CRUD; the search service runs the hybrid
+        # BM25+vector+RRF query and the briefing-card read path.
+        from memex_core.services.experiential_repository import (
+            ExperientialRepository,
+        )
+        from memex_core.services.experiential_search_service import (
+            ExperientialSearchService,
+        )
+
+        self._experiential_repo = ExperientialRepository(metastore=self.metastore)
+        self._experiential_search = ExperientialSearchService(
+            metastore=self.metastore,
+            repository=self._experiential_repo,
+            embedding_model=self.embedding_model,
+        )
+
         self._ingestion = IngestionService(
             metastore=self.metastore,
             filestore=self.filestore,
@@ -640,6 +667,9 @@ class MemexAPI:
             self._units,
         ):
             svc._audit_service = self._audit_svc  # type: ignore[attr-defined]
+
+        # V7: experiential repository gets the same audit service.
+        self._experiential_repo._audit_service = self._audit_svc  # type: ignore[attr-defined]
 
     @property
     def notes(self) -> NoteService:
@@ -2291,3 +2321,117 @@ class MemexAPI:
     async def kv_cleanup_expired(self) -> int:
         """Delete expired KV entries. Returns count of deleted rows."""
         return await self._kv.cleanup_expired()
+
+    # --- V7: Experiential Plane -----------------------------------------
+
+    @property
+    def experiential(self) -> 'MemexAPIExperientialFacade':
+        """The V7 experiential-plane facade. See :class:`MemexAPIExperientialFacade`."""
+        return MemexAPIExperientialFacade(self)
+
+
+class MemexAPIExperientialFacade:
+    """V7 experiential-plane facade.
+
+    Lives on ``MemexAPI.experiential``. The 8 methods below map the
+    repository + search service into a single property group so callers
+    can do ``api.experiential.create(payload)`` etc.
+    """
+
+    def __init__(self, api: 'MemexAPI') -> None:
+        self._api = api
+
+    async def create(
+        self,
+        payload: ExperientialEntryCreate,
+    ) -> ExperientialEntryDTO:
+        """Insert a new experiential entry. See
+        :meth:`ExperientialRepository.create`."""
+        return await self._api._experiential_repo.create(payload)
+
+    async def get(
+        self,
+        entry_id: UUID,
+        *,
+        vault_id: UUID | None = None,
+    ) -> ExperientialEntryDTO:
+        """Look up a single entry. Raises if missing or vault-mismatched."""
+        return await self._api._experiential_repo.get(entry_id, vault_id=vault_id)
+
+    async def update(
+        self,
+        entry_id: UUID,
+        payload: ExperientialEntryUpdate,
+        *,
+        vault_id: UUID | None = None,
+    ) -> ExperientialEntryDTO:
+        """Mutate an existing entry in place. Appends a version row."""
+        return await self._api._experiential_repo.update(entry_id, payload, vault_id=vault_id)
+
+    async def deprecate(
+        self,
+        entry_id: UUID,
+        *,
+        superseded_by_id: UUID | None = None,
+        vault_id: UUID | None = None,
+    ) -> ExperientialEntryDTO:
+        """Soft-deprecate: status→deprecated, optional successor pointer."""
+        return await self._api._experiential_repo.deprecate(
+            entry_id, superseded_by_id=superseded_by_id, vault_id=vault_id
+        )
+
+    async def upsert(
+        self,
+        payload: ExperientialEntryCreate,
+    ) -> ExperientialEntryDTO:
+        """Idempotent write on the (kind, scope, verb, context) anchor.
+
+        Re-write of the same procedure/strategy is one UPDATE.
+        """
+        return await self._api._experiential_repo.upsert_by_identity(payload)
+
+    async def search(
+        self,
+        request: ExperientialSearchRequest,
+    ) -> ExperientialSearchResponse:
+        """Hybrid BM25 + vector search with RRF aggregation.
+
+        Optional pin-chain union when ``request.include_pin_chain`` and
+        ``request.pin_contexts`` are set.
+        """
+        return await self._api._experiential_search.search(request)
+
+    async def briefing_cards(
+        self,
+        context_keys: list[ShortLabel],
+        *,
+        scope: ShortLabel | None = None,
+        limit_per_context: int = 5,
+    ) -> ExperientialBriefingCards:
+        """Pin-chain briefing cards for the session-briefing surface."""
+        return await self._api._experiential_search.briefing_cards(
+            context_keys, scope=scope, limit_per_context=limit_per_context
+        )
+
+    async def enqueue_derivation(
+        self,
+        *,
+        vault_id: UUID,
+        source_entry_ids: list[UUID],
+        target_kind: Literal['procedure', 'strategy'],
+        target_scope: ShortLabel,
+        target_verb: str | None = None,
+        target_context: str | None = None,
+    ) -> ExperientialDerivationQueueDTO:
+        """Enqueue a case → procedure/strategy derivation task.
+
+        Workers claim via :meth:`ExperientialRepository.claim_derivation_tasks`.
+        """
+        return await self._api._experiential_repo.enqueue_derivation(
+            vault_id=vault_id,
+            source_entry_ids=source_entry_ids,
+            target_kind=target_kind,
+            target_scope=target_scope,
+            target_verb=target_verb,
+            target_context=target_context,
+        )
