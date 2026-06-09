@@ -640,6 +640,13 @@ class MemexAPI:
             embedding_model=self.embedding_model,
         )
 
+        # Wire the V7 procedural-search service into the briefing so the
+        # briefing can include pin-chain cards alongside KV procedures.
+        # This is a post-construction patch because the briefing service
+        # is built before the experiential search service (the briefing
+        # has historically been independent of the V7 plane).
+        self.session_briefing._procedural_search = self._experiential_search  # type: ignore[attr-defined]
+
         self._ingestion = IngestionService(
             metastore=self.metastore,
             filestore=self.filestore,

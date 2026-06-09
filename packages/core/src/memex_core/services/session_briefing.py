@@ -112,11 +112,22 @@ class SessionBriefingService:
         metastore: AsyncBaseMetaStoreEngine,
         kv_service: KVService,
         vault_service: VaultService | None = None,
+        procedural_search: Any | None = None,
     ) -> None:
+        """Configure the briefing service.
+
+        ``procedural_search`` is the optional V7 plane handle
+        (:class:`memex_core.services.experiential_search_service.ExperientialSearchService`).
+        When provided, the briefing includes a "Procedural Cards" section
+        surfacing pin-chain entries for the active contexts. When None
+        (the default for tests and installations without the V7 plane),
+        the section is silently omitted — the briefing still works.
+        """
         self._vault_summary = vault_summary_service
         self._metastore = metastore
         self._kv = kv_service
         self._vaults = vault_service
+        self._procedural_search = procedural_search
 
     async def generate(
         self,
@@ -134,10 +145,19 @@ class SessionBriefingService:
         Returns:
             A markdown-formatted briefing string.
         """
-        summary, mental_models, kv_entries, vaults = await self._fetch_all(vault_id, project_id)
+        summary, mental_models, kv_entries, vaults, procedural_cards = await self._fetch_all(
+            vault_id, project_id
+        )
 
         sections = self._build_sections(
-            summary, mental_models, kv_entries, vaults, vault_id, project_id, budget
+            summary,
+            mental_models,
+            kv_entries,
+            vaults,
+            vault_id,
+            project_id,
+            budget,
+            procedural_cards=procedural_cards,
         )
 
         assembled = self._assemble(sections)
@@ -150,6 +170,7 @@ class SessionBriefingService:
                 summary,
                 mental_models,
                 kv_entries,
+                procedural_cards=procedural_cards,
             )
 
         return assembled
@@ -158,8 +179,15 @@ class SessionBriefingService:
         self,
         vault_id: UUID,
         project_id: str | None,
-    ) -> tuple[Any, list[MentalModel], list[Any], list[Any]]:
-        """Fetch all data sources in parallel."""
+    ) -> tuple[Any, list[MentalModel], list[Any], list[Any], Any]:
+        """Fetch all data sources in parallel.
+
+        The 5th element of the returned tuple is the V7 procedural-cards
+        response (``memex_common.experiential_schemas.ExperientialBriefingCards``)
+        or ``None`` when the V7 plane is not wired into this briefing
+        service. A None is treated as an empty-cards state in the
+        downstream section builder — the briefing still renders.
+        """
         summary_coro = self._vault_summary.get_summary(vault_id)
         models_coro = self._fetch_mental_models(vault_id)
         kv_coro = self._kv.list_entries(namespaces=_build_kv_namespaces(project_id))
@@ -176,10 +204,32 @@ class SessionBriefingService:
 
             vaults_coro = _empty()
 
-        summary, mental_models, kv_entries, vaults = await asyncio.gather(
-            summary_coro, models_coro, kv_coro, vaults_coro
+        if self._procedural_search is not None:
+            # Mirror the KV namespace shape for the procedural pin
+            # contexts — `project:<id>`, `app:<agent>`, and `user`. The
+            # briefing reads these from the same context keys it already
+            # uses for KV scoping, so a project-scoped briefing gets
+            # project-scoped cards without an extra knob.
+            card_contexts = _build_kv_namespaces(project_id)
+            cards_coro = self._procedural_search.briefing_cards(
+                card_contexts, scope=None, limit_per_context=3
+            )
+        else:
+
+            async def _empty_cards() -> Any:
+                return None
+
+            cards_coro = _empty_cards()
+
+        summary, mental_models, kv_entries, vaults, procedural_cards = await asyncio.gather(
+            summary_coro, models_coro, kv_coro, vaults_coro, cards_coro
         )
-        return summary, mental_models, kv_entries, vaults
+        # Defensive: if the procedural call failed, drop to None so
+        # downstream treats the briefing as having no cards rather than
+        # propagating a half-populated object.
+        if self._procedural_search is not None and procedural_cards is None:
+            procedural_cards = None
+        return summary, mental_models, kv_entries, vaults, procedural_cards
 
     async def _fetch_mental_models(self, vault_id: UUID) -> list[MentalModel]:
         """Fetch active mental models for the vault, sorted by importance score.
@@ -208,6 +258,7 @@ class SessionBriefingService:
         vault_id: UUID,
         project_id: str | None,
         budget: int,
+        procedural_cards: Any = None,
     ) -> list[tuple[str, str]]:
         """Build all sections in priority order."""
         sections: list[tuple[str, str]] = []
@@ -227,6 +278,15 @@ class SessionBriefingService:
 
         # 2b. Procedures (priority 1b — behavioural rules; high signal)
         sections.append(('procedures', self._build_procedures_section(proc)))
+
+        # 2c. Procedural cards (priority 1c — V7 plane pin-chain entries).
+        # Sits between KV-procedures and vault overview so the agent
+        # sees the most actionable rules first. When the plane is not
+        # wired (procedural_cards is None) the section is empty and
+        # contributes nothing to the briefing.
+        sections.append(
+            ('procedural_cards', self._build_procedural_cards_section(procedural_cards))
+        )
 
         # 3. Vault overview (priority 2 — narrative + compact themes in one section)
         sections.append(
@@ -366,6 +426,46 @@ class SessionBriefingService:
             return ''
         return '\n'.join(lines) + '\n'
 
+    def _build_procedural_cards_section(self, cards: Any) -> str:
+        """Build the procedural-cards section from the V7 plane.
+
+        Render shape: one bullet per card with the entry's kind + title,
+        a 1-line summary, and the pin's context_key. The card list is
+        already in (context_key, position) order from the search service,
+        so the section naturally follows the pin chain priority.
+
+        Returns ``''`` (no section) when the plane is not wired or has
+        no cards — callers treat empty sections as "no content", not as
+        "section omitted".
+        """
+        if cards is None or not getattr(cards, 'cards', None):
+            return ''
+        lines = ['\n## Procedural Cards\n']
+        for card in cards.cards:
+            entry = getattr(card, 'entry', None)
+            if entry is None:
+                continue
+            kind = getattr(entry, 'kind', '')
+            title = getattr(entry, 'title', '') or ''
+            summary = getattr(entry, 'summary', '') or ''
+            ctx = getattr(card, 'context_key', '') or ''
+            # Cap the summary at 240 chars to keep one card ≈ one
+            # briefing line (the briefing's per-card budget is roughly
+            # 50 tokens; 240 chars ≈ 60 tokens).
+            if len(summary) > 240:
+                summary = summary[:239].rstrip() + '…'
+            label = f'**{kind}/{title}**' if title else f'**{kind}**'
+            if summary:
+                line = f'- {label} — {summary}'
+            else:
+                line = f'- {label}'
+            if ctx:
+                line += f' _(pinned: {ctx})_'
+            lines.append(line)
+        if len(lines) == 1:
+            return ''
+        return '\n'.join(lines) + '\n'
+
     def _build_vault_overview(self, summary: Any, compact: bool = False) -> str:
         """Build a single vault overview section: narrative + themes."""
         if not summary:
@@ -482,6 +582,7 @@ class SessionBriefingService:
         summary: Any,
         mental_models: list[MentalModel],
         kv_entries: list[Any],
+        procedural_cards: Any = None,
     ) -> str:
         """Apply overflow degradation to fit within budget."""
         # Snapshot procedure rows BEFORE Step 4 mutates kv_entries — keeps Step 5
@@ -563,6 +664,15 @@ class SessionBriefingService:
                 'procedures',
                 self._build_procedures_section(procs[n_dropped:]),
             )
+            if _estimate_tokens(self._assemble(sections)) <= budget:
+                return self._assemble(sections)
+
+        # Step 5b: Drop the V7 procedural-cards section entirely. The
+        # cards are a discovery surface — the agent can re-fetch them
+        # via the briefing-cards HTTP route when it needs more — so they
+        # are the first thing to go under a tight budget.
+        if procedural_cards is not None:
+            sections = self._replace_section(sections, 'procedural_cards', '')
             if _estimate_tokens(self._assemble(sections)) <= budget:
                 return self._assemble(sections)
 
