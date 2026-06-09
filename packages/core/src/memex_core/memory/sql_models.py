@@ -357,6 +357,17 @@ class Note(SQLModel, table=True):  # type: ignore
         'NULL or < current version means pending.',
     )
 
+    role: str | None = Field(
+        default=None,
+        sa_column=Column(Text, nullable=True),
+        description='V7: classification of note provenance within the experiential plane. '
+        'NULL for ordinary declarative-plane notes. One of '
+        "'case' (raw or derived experience record — parent of a procedure), "
+        "'procedure' (a how-to recipe synthesised from one or more cases), "
+        "'strategy' (an opinionated play-book that picks a procedure for a context). "
+        'Backed by a CHECK constraint and a partial index; see migration 062.',
+    )
+
     created_at: datetime = created_at_field()
     updated_at: datetime = updated_at_field()
 
@@ -374,12 +385,22 @@ class Note(SQLModel, table=True):  # type: ignore
             "status IN ('active', 'superseded')",
             name='ck_notes_status',
         ),
+        CheckConstraint(
+            "role IS NULL OR role IN ('case', 'procedure', 'strategy')",
+            name='ck_notes_role',
+        ),
         Index(
             'idx_notes_title_trgm',
             sql_text('lower(title) gin_trgm_ops'),
             postgresql_using='gin',
         ),
         Index('idx_notes_summary_version', 'vault_id', 'summary_version_incorporated'),
+        Index(
+            'idx_notes_role',
+            'vault_id',
+            'role',
+            postgresql_where=sql_text('role IS NOT NULL'),
+        ),
     )
 
 
@@ -1883,6 +1904,594 @@ class NoteAppend(SQLModel, table=True):  # type: ignore
             ondelete='CASCADE',
         ),
         Index('idx_note_appends_note_id_applied_at', 'note_id', 'applied_at'),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Experiential plane (V7 — procedural & experiential memory)
+# ---------------------------------------------------------------------------
+#
+# The experiential plane sits alongside the declarative plane (notes + memory_units).
+# It tracks three kinds of entity:
+#
+#   * case       — a raw or derived experience record ("what happened")
+#   * procedure  — a how-to recipe synthesised from one or more cases
+#   * strategy   — an opinionated play-book that picks a procedure for a context
+#
+# Identity for procedures and strategies is the (kind, scope, verb, context) tuple
+# (UNIQUE NULLS NOT DISTINCT) so a derived procedure is canonical-by-tuple rather
+# than by random UUID. Cases keep a plain UUID PK and a *trigger* — a free-form
+# phrase that drives on-demand lookup; the trigger embedding is recomputed on
+# every trigger change to avoid stale-vector drift.
+#
+# Context-binding pins form a chain global → project:<id> → app:<agent_identity>
+# (see V7 spike 7) — the same entry can be pinned at multiple positions of
+# different contexts; the (context_key, entry_id) pair is the row key.
+# ---------------------------------------------------------------------------
+
+
+class ExperientialKind(str, Enum):
+    """Taxonomy of the three experiential entity kinds."""
+
+    CASE = 'case'
+    PROCEDURE = 'procedure'
+    STRATEGY = 'strategy'
+
+
+class ExperientialStatus(str, Enum):
+    """Lifecycle state for an experiential entry.
+
+    * draft        — created but not yet promoted; editable in place.
+    * published    — visible to agents via search/briefing.
+    * deprecated   — superseded by another entry; kept for lineage.
+    """
+
+    DRAFT = 'draft'
+    PUBLISHED = 'published'
+    DEPRECATED = 'deprecated'
+
+
+class ExperientialOrigin(str, Enum):
+    """How an experiential entry came to exist."""
+
+    SEED = 'seed'  # boot-time system seed (migration 063)
+    KV_BACKFILL = 'kv_backfill'  # promoted from a legacy <scope>:procedure:* KV row
+    DERIVED = 'derived'  # LLM-derived from cases (derivation queue)
+    MANUAL = 'manual'  # agent-written
+    IMPORT = 'import'  # bulk import
+
+
+class ExperientialSourceRole(str, Enum):
+    """Role an experiential_source row plays in a case → procedure relationship."""
+
+    PROVENANCE = 'provenance'  # case that gave rise to a procedure
+    EVIDENCE = 'evidence'  # supporting fact for a procedure/strategy
+    CONTRADICTION = 'contradiction'  # case that argues against a procedure
+
+
+class DerivationQueueStatus(str, Enum):
+    """State of an entry in the async derivation queue."""
+
+    PENDING = 'pending'
+    IN_PROGRESS = 'in_progress'
+    COMPLETED = 'completed'
+    FAILED = 'failed'
+
+
+class ExperientialEntry(SQLModel, table=True):  # type: ignore
+    """The unit of recall in the experiential plane.
+
+    A case, procedure, or strategy. Procedures and strategies have a stable
+    (kind, scope, verb, context) identity anchor; cases use a free-form
+    *trigger* (text) plus a freshly-computed embedding for on-demand lookup.
+    """
+
+    __tablename__ = 'experiential_entries'
+
+    id: UUID = Field(
+        sa_column=Column(SA_UUID(), primary_key=True, server_default=sql_text('gen_random_uuid()')),
+        description='Unique identifier for the experiential entry.',
+    )
+    vault_id: UUID = vault_id_field()
+
+    kind: ExperientialKind = Field(
+        sa_column=Column(String, nullable=False),
+        description='case | procedure | strategy.',
+    )
+    scope: str = Field(
+        sa_column=Column(Text, nullable=False),
+        description='Origin scope label, e.g. "global", "project:<uuid>", or '
+        '"app:<agent_identity>". Pairs with the context-binding pin chain.',
+    )
+    verb: str | None = Field(
+        default=None,
+        sa_column=Column(Text, nullable=True),
+        description='Procedure/strategy verb (e.g. "create", "migrate"). NULL for cases.',
+    )
+    context: str | None = Field(
+        default=None,
+        sa_column=Column(Text, nullable=True),
+        description='Procedure/strategy context (e.g. "postgres_ddl", "alembic"). '
+        'NULL for cases. Strategies require both verb AND context '
+        '(see ck_strategy_context).',
+    )
+
+    title: str = Field(
+        sa_column=Column(Text, nullable=False),
+        description='Short, imperative title (e.g. "create_alembic_migration").',
+    )
+    summary: str = Field(
+        sa_column=Column(Text, nullable=False),
+        description='One-paragraph explanation of when and how to apply this entry.',
+    )
+    body: str = Field(
+        sa_column=Column(Text, nullable=False, server_default=''),
+        description='Full procedural body — steps, code, references. '
+        'Markdown allowed; rendered as-is by the agent surface.',
+    )
+    trigger: str | None = Field(
+        default=None,
+        sa_column=Column(Text, nullable=True),
+        description='Free-form trigger phrase for cases. Drives on-demand '
+        'trigger search (post-spike-7 amendment). Embedding is recomputed '
+        'on every trigger change.',
+    )
+    trigger_embedding: list[float] | None = Field(
+        default=None,
+        sa_column=Column(Vector(EMBEDDING_DIMENSION), nullable=True),
+        description='Vector(384) embedding of `trigger` (cases only). '
+        'Recomputed on every trigger change.',
+    )
+
+    tags: list[str] = Field(
+        default_factory=list,
+        sa_column=Column(ARRAY(Text), nullable=False, server_default=sql_text('ARRAY[]::text[]')),
+        description='Free-form tags — domain, sub-system, framework.',
+    )
+    extra_metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column('metadata', JSONB, nullable=False, server_default=sql_text("'{}'::jsonb")),
+        description='Arbitrary metadata — confidence, run_count, last_verified_at, etc.',
+    )
+
+    status: ExperientialStatus = Field(
+        default=ExperientialStatus.DRAFT,
+        sa_column=Column(String, nullable=False, server_default=ExperientialStatus.DRAFT.value),
+        description='Lifecycle state. Draft entries are not visible to search/briefing.',
+    )
+    origin: ExperientialOrigin = Field(
+        default=ExperientialOrigin.MANUAL,
+        sa_column=Column(String, nullable=False, server_default=ExperientialOrigin.MANUAL.value),
+        description='How this entry came to exist; used by the audit/replay surface.',
+    )
+
+    supersedes_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(SA_UUID(), nullable=True),
+        description='Entry this one supersedes (lineage).',
+    )
+    superseded_by_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(SA_UUID(), nullable=True),
+        description='Entry that supersedes this one (lineage).',
+    )
+
+    body_embedding: list[float] | None = Field(
+        default=None,
+        sa_column=Column(Vector(EMBEDDING_DIMENSION), nullable=True),
+        description='Vector(384) embedding of `body` for similarity search. '
+        'Procedures and strategies only; cases use trigger_embedding.',
+    )
+    search_tsvector: Any = Field(
+        default=None,
+        sa_column=Column(
+            TSVECTOR,
+            Computed(
+                "to_tsvector('english'::regconfig, "
+                "coalesce(title, '') || ' ' || "
+                "coalesce(summary, '') || ' ' || "
+                "coalesce(body, '') || ' ' || "
+                "coalesce(array_to_string(tags, ' '), ''))",
+                persisted=True,
+            ),
+        ),
+        description='Generated tsvector over title + summary + body + tags.',
+    )
+
+    created_at: datetime = created_at_field()
+    updated_at: datetime = updated_at_field()
+    published_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
+        description='Set when status transitions draft → published.',
+    )
+
+    __table_args__ = (
+        # Identity anchor for procedures and strategies.
+        # NULLS NOT DISTINCT means (kind, 'proc', 'migrate', 'postgres') is unique
+        # even though verb/context are NULLable for cases.
+        UniqueConstraint(
+            'kind',
+            'scope',
+            'verb',
+            'context',
+            name='uq_experiential_identity',
+            postgresql_nulls_not_distinct=True,
+        ),
+        CheckConstraint(
+            "kind IN ('case', 'procedure', 'strategy')",
+            name='ck_experiential_kind',
+        ),
+        CheckConstraint(
+            "status IN ('draft', 'published', 'deprecated')",
+            name='ck_experiential_status',
+        ),
+        CheckConstraint(
+            "origin IN ('seed', 'kv_backfill', 'derived', 'manual', 'import')",
+            name='ck_experiential_origin',
+        ),
+        # Strategies require a (verb, context) tuple; procedures tolerate
+        # either being NULL (verb-only procedures are valid).
+        CheckConstraint(
+            "kind <> 'strategy' OR (verb IS NOT NULL AND context IS NOT NULL)",
+            name='ck_strategy_context',
+        ),
+        # Trigger is required iff a trigger_embedding is set, and vice versa.
+        CheckConstraint(
+            '(trigger IS NULL) = (trigger_embedding IS NULL)',
+            name='ck_experiential_trigger_paired',
+        ),
+        # Body embedding lives only on procedures/strategies.
+        CheckConstraint(
+            "(body_embedding IS NULL) OR (kind IN ('procedure', 'strategy'))",
+            name='ck_experiential_body_embedding_scope',
+        ),
+        ForeignKeyConstraint(
+            ['supersedes_id'],
+            ['experiential_entries.id'],
+            name='experiential_entries_supersedes_fkey',
+            ondelete='SET NULL',
+        ),
+        ForeignKeyConstraint(
+            ['superseded_by_id'],
+            ['experiential_entries.id'],
+            name='experiential_entries_superseded_by_fkey',
+            ondelete='SET NULL',
+        ),
+        Index('idx_experiential_entries_vault_kind', 'vault_id', 'kind'),
+        Index(
+            'idx_experiential_entries_vault_status',
+            'vault_id',
+            'status',
+        ),
+        Index(
+            'idx_experiential_entries_scope_verb',
+            'scope',
+            'verb',
+            postgresql_where=sql_text("kind IN ('procedure', 'strategy')"),
+        ),
+        Index(
+            'idx_experiential_entries_status_published_at',
+            'status',
+            'published_at',
+            postgresql_ops={'published_at': 'DESC'},
+            postgresql_where=sql_text("status = 'published'"),
+        ),
+        Index(
+            'idx_experiential_entries_body_embedding',
+            'body_embedding',
+            postgresql_using='hnsw',
+            postgresql_ops={'body_embedding': 'vector_cosine_ops'},
+            postgresql_where=sql_text("status = 'published' AND kind IN ('procedure', 'strategy')"),
+        ),
+        Index(
+            'idx_experiential_entries_trigger_embedding',
+            'trigger_embedding',
+            postgresql_using='hnsw',
+            postgresql_ops={'trigger_embedding': 'vector_cosine_ops'},
+            postgresql_where=sql_text("status = 'published' AND kind = 'case'"),
+        ),
+        Index(
+            'idx_experiential_entries_search_tsvector',
+            'search_tsvector',
+            postgresql_using='gin',
+        ),
+    )
+
+
+class ExperientialEntryVersion(SQLModel, table=True):  # type: ignore
+    """Append-only version ledger for an experiential entry.
+
+    A row per `edit` call; the latest body is always on ``experiential_entries``
+    (mutable in place — see V7 design §3.2). ``version`` is monotonically
+    increasing per entry_id.
+    """
+
+    __tablename__ = 'experiential_entry_versions'
+
+    id: UUID = Field(
+        sa_column=Column(SA_UUID(), primary_key=True, server_default=sql_text('gen_random_uuid()')),
+        description='Unique identifier for this version row.',
+    )
+    entry_id: UUID = Field(
+        sa_column=Column(SA_UUID(), nullable=False),
+        description='The entry this version belongs to.',
+    )
+    version: int = Field(
+        sa_column=Column(Integer, nullable=False),
+        description='Monotonic version per entry_id (1, 2, 3, …).',
+    )
+    title: str = Field(sa_column=Column(Text, nullable=False))
+    summary: str = Field(sa_column=Column(Text, nullable=False))
+    body: str = Field(sa_column=Column(Text, nullable=False, server_default=''))
+    trigger: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    tags: list[str] = Field(
+        default_factory=list,
+        sa_column=Column(ARRAY(Text), nullable=False, server_default=sql_text('ARRAY[]::text[]')),
+    )
+    extra_metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column('metadata', JSONB, nullable=False, server_default=sql_text("'{}'::jsonb")),
+    )
+    edited_by: str | None = Field(
+        default=None,
+        sa_column=Column(Text, nullable=True),
+        description='Agent identity or "system" that produced this version.',
+    )
+    edit_reason: str | None = Field(
+        default=None,
+        sa_column=Column(Text, nullable=True),
+        description='Free-form explanation of why the edit was made.',
+    )
+    created_at: datetime = created_at_field()
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ['entry_id'],
+            ['experiential_entries.id'],
+            name='experiential_entry_versions_entry_fkey',
+            ondelete='CASCADE',
+        ),
+        UniqueConstraint(
+            'entry_id', 'version', name='uq_experiential_entry_versions_entry_version'
+        ),
+        Index('idx_experiential_entry_versions_entry_id_created_at', 'entry_id', 'created_at'),
+    )
+
+
+class ExperientialSource(SQLModel, table=True):  # type: ignore
+    """Provenance + evidence + contradiction edges between experiential entries.
+
+    For a case → procedure edge the role is ``provenance``. For a procedure →
+    evidence-fact edge the role is ``evidence``. For a case that argues
+    against a procedure the role is ``contradiction``.
+    """
+
+    __tablename__ = 'experiential_sources'
+
+    id: UUID = Field(
+        sa_column=Column(SA_UUID(), primary_key=True, server_default=sql_text('gen_random_uuid()')),
+        description='Unique identifier for this source edge.',
+    )
+    entry_id: UUID = Field(
+        sa_column=Column(SA_UUID(), nullable=False),
+        description='The procedure/strategy that draws on the source.',
+    )
+    source_entry_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(SA_UUID(), nullable=True),
+        description='The case (or other entry) that is being cited.',
+    )
+    source_note_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(SA_UUID(), nullable=True),
+        description='Optional declarative-plane note backing this edge.',
+    )
+    source_memory_unit_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(SA_UUID(), nullable=True),
+        description='Optional memory unit backing this edge.',
+    )
+    role: ExperientialSourceRole = Field(
+        sa_column=Column(String, nullable=False),
+        description='provenance | evidence | contradiction.',
+    )
+    weight: float = Field(
+        default=1.0,
+        sa_column=Column(Float, nullable=False, server_default='1.0'),
+        description='Edge weight used in RRF aggregation; default 1.0.',
+    )
+    created_at: datetime = created_at_field()
+
+    __table_args__ = (
+        CheckConstraint(
+            "role IN ('provenance', 'evidence', 'contradiction')",
+            name='ck_experiential_sources_role',
+        ),
+        CheckConstraint(
+            'weight >= 0.0 AND weight <= 10.0',
+            name='ck_experiential_sources_weight',
+        ),
+        ForeignKeyConstraint(
+            ['entry_id'],
+            ['experiential_entries.id'],
+            name='experiential_sources_entry_fkey',
+            ondelete='CASCADE',
+        ),
+        ForeignKeyConstraint(
+            ['source_entry_id'],
+            ['experiential_entries.id'],
+            name='experiential_sources_source_entry_fkey',
+            ondelete='CASCADE',
+        ),
+        ForeignKeyConstraint(
+            ['source_note_id'],
+            ['notes.id'],
+            name='experiential_sources_source_note_fkey',
+            ondelete='SET NULL',
+        ),
+        ForeignKeyConstraint(
+            ['source_memory_unit_id'],
+            ['memory_units.id'],
+            name='experiential_sources_source_memory_unit_fkey',
+            ondelete='SET NULL',
+        ),
+        # At least one source pointer must be set.
+        CheckConstraint(
+            'source_entry_id IS NOT NULL OR source_note_id IS NOT NULL OR '
+            'source_memory_unit_id IS NOT NULL',
+            name='ck_experiential_sources_pointer_set',
+        ),
+        Index('idx_experiential_sources_entry_id', 'entry_id'),
+        Index('idx_experiential_sources_source_entry_id', 'source_entry_id'),
+    )
+
+
+class ExperientialPin(SQLModel, table=True):  # type: ignore
+    """Context-binding pin: a (context_key, entry_id, position) triple.
+
+    Pins form a chain ``global → project:<id> → app:<agent_identity>`` (see
+    V7 spike 7). The same entry can be pinned at multiple positions of
+    different contexts; the (context_key, entry_id, position) triple is the
+    row key. Lower position = higher priority; agents read pins in ascending
+    position order.
+    """
+
+    __tablename__ = 'experiential_pins'
+
+    id: UUID = Field(
+        sa_column=Column(SA_UUID(), primary_key=True, server_default=sql_text('gen_random_uuid()')),
+        description='Unique identifier for this pin row.',
+    )
+    context_key: str = Field(
+        sa_column=Column(Text, nullable=False),
+        description='Binding key — "global", "project:<uuid>", or '
+        '"app:<agent_identity>". Chain is implicit: agents read all three.',
+    )
+    entry_id: UUID = Field(
+        sa_column=Column(SA_UUID(), nullable=False),
+        description='The entry being pinned.',
+    )
+    position: int = Field(
+        sa_column=Column(Integer, nullable=False),
+        description='Position within the pin list for this context_key. '
+        'Lower = higher priority. 0-based.',
+    )
+    pinned_by: str | None = Field(
+        default=None,
+        sa_column=Column(Text, nullable=True),
+        description='Agent identity or "system" that created the pin.',
+    )
+    created_at: datetime = created_at_field()
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ['entry_id'],
+            ['experiential_entries.id'],
+            name='experiential_pins_entry_fkey',
+            ondelete='CASCADE',
+        ),
+        UniqueConstraint(
+            'context_key',
+            'entry_id',
+            'position',
+            name='uq_experiential_pins_chain_position',
+        ),
+        CheckConstraint('position >= 0', name='ck_experiential_pins_position_nonneg'),
+        Index(
+            'idx_experiential_pins_context_position',
+            'context_key',
+            'position',
+        ),
+    )
+
+
+class ExperientialDerivationQueue(SQLModel, table=True):  # type: ignore
+    """Async derivation queue: cases in, procedures/strategies out.
+
+    Workers claim rows via ``SELECT ... FOR UPDATE SKIP LOCKED`` — same
+    leader-election-free pattern the reflection queue uses (see
+    V7 design §4.4).
+    """
+
+    __tablename__ = 'experiential_derivation_queue'
+
+    id: UUID = Field(
+        sa_column=Column(SA_UUID(), primary_key=True, server_default=sql_text('gen_random_uuid()')),
+        description='Unique identifier for this queue row.',
+    )
+    vault_id: UUID = vault_id_field()
+    source_entry_ids: list[UUID] = Field(
+        sa_column=Column(
+            ARRAY(SA_UUID()),
+            nullable=False,
+            server_default=sql_text('ARRAY[]::uuid[]'),
+        ),
+        description='Cases that should be distilled into a procedure/strategy.',
+    )
+    target_kind: ExperientialKind = Field(
+        sa_column=Column(String, nullable=False),
+        description='What to derive — procedure or strategy.',
+    )
+    target_scope: str = Field(
+        sa_column=Column(Text, nullable=False),
+        description='Scope label for the derived entry (e.g. "global", "project:<uuid>").',
+    )
+    target_verb: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    target_context: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    status: DerivationQueueStatus = Field(
+        default=DerivationQueueStatus.PENDING,
+        sa_column=Column(
+            String,
+            nullable=False,
+            server_default=DerivationQueueStatus.PENDING.value,
+        ),
+        description='Queue state — pending → in_progress → completed | failed.',
+    )
+    attempt_count: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default='0'),
+        description='Worker attempts so far. Bounded by config.derivation_max_attempts.',
+    )
+    last_error: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    result_entry_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(SA_UUID(), nullable=True),
+        description='Set when status=completed; the derived entry.',
+    )
+    claimed_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
+        description='Last worker-claim timestamp.',
+    )
+    completed_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
+    )
+    created_at: datetime = created_at_field()
+
+    __table_args__ = (
+        CheckConstraint(
+            "target_kind IN ('procedure', 'strategy')",
+            name='ck_derivation_queue_target_kind',
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'in_progress', 'completed', 'failed')",
+            name='ck_derivation_queue_status',
+        ),
+        CheckConstraint('attempt_count >= 0', name='ck_derivation_queue_attempt_nonneg'),
+        # Strategies require target_verb and target_context (mirrors ck_strategy_context).
+        CheckConstraint(
+            "target_kind <> 'strategy' OR (target_verb IS NOT NULL AND target_context IS NOT NULL)",
+            name='ck_derivation_queue_strategy_context',
+        ),
+        Index(
+            'idx_derivation_queue_status_created_at',
+            'status',
+            'created_at',
+            postgresql_where=sql_text("status = 'pending'"),
+        ),
+        Index('idx_derivation_queue_vault_id', 'vault_id'),
     )
 
 
