@@ -38,7 +38,6 @@ tests can run the repository in isolation.
 from __future__ import annotations
 
 import logging
-import uuid
 from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
@@ -151,6 +150,14 @@ class ExperientialRepository:
         if payload.kind == 'strategy' and (not payload.verb or not payload.context):
             raise ValueError('strategy entries require both verb and context')
 
+        # Auto-stamp ``published_at`` when the create request lands
+        # directly in the published lifecycle state. ``update()`` does
+        # the same on a draft→published transition; a regression
+        # that drops this branch would let search/briefing return
+        # rows with no published_at, which the briefing's
+        # "freshness" sort relies on.
+        published_at = datetime.now(timezone.utc) if payload.status == 'published' else None
+
         entry = DBExperientialEntry(
             vault_id=payload.vault_id,
             kind=DBExperientialKind(payload.kind),
@@ -166,6 +173,7 @@ class ExperientialRepository:
             status=DBExperientialStatus(payload.status),
             origin=DBExperientialOrigin(payload.origin),
             supersedes_id=payload.supersedes_id,
+            published_at=published_at,
         )
 
         try:
@@ -281,7 +289,7 @@ class ExperientialRepository:
                         col(DBExperientialEntryVersion.entry_id) == entry.id
                     )
                 )
-            ).scalar_one() or 0
+            ).one() or 0
             next_version = int(max_version) + _VERSION_BUMP
 
             version = DBExperientialEntryVersion(
@@ -364,25 +372,29 @@ class ExperientialRepository:
             existing = (await session.exec(stmt)).first()
 
             if existing is None:
-                session.add(
-                    DBExperientialEntry(
-                        vault_id=payload.vault_id,
-                        kind=DBExperientialKind(payload.kind),
-                        scope=payload.scope,
-                        verb=payload.verb,
-                        context=payload.context,
-                        title=payload.title,
-                        summary=payload.summary,
-                        body=payload.body,
-                        trigger=payload.trigger,
-                        tags=payload.tags,
-                        extra_metadata=payload.extra_metadata,
-                        status=DBExperientialStatus(payload.status),
-                        origin=DBExperientialOrigin(payload.origin),
-                        supersedes_id=payload.supersedes_id,
-                    )
+                new_entry = DBExperientialEntry(
+                    vault_id=payload.vault_id,
+                    kind=DBExperientialKind(payload.kind),
+                    scope=payload.scope,
+                    verb=payload.verb,
+                    context=payload.context,
+                    title=payload.title,
+                    summary=payload.summary,
+                    body=payload.body,
+                    trigger=payload.trigger,
+                    tags=payload.tags,
+                    extra_metadata=payload.extra_metadata,
+                    status=DBExperientialStatus(payload.status),
+                    origin=DBExperientialOrigin(payload.origin),
+                    supersedes_id=payload.supersedes_id,
+                    published_at=(
+                        datetime.now(timezone.utc) if payload.status == 'published' else None
+                    ),
                 )
+                session.add(new_entry)
                 await session.commit()
+                await session.refresh(new_entry)
+                merged = await self._get_entry(session, new_entry.id)
             else:
                 existing.title = payload.title
                 existing.summary = payload.summary
@@ -402,8 +414,7 @@ class ExperientialRepository:
                 session.add(existing)
                 await session.commit()
                 await session.refresh(existing)
-
-            merged = await self._get_entry(session, existing.id if existing else uuid.uuid4())
+                merged = await self._get_entry(session, existing.id)
 
         return self._to_dto(merged)
 
@@ -749,13 +760,20 @@ class ExperientialRepository:
         details: dict[str, Any] | None = None,
     ) -> None:
         """Emit an audit event for an entry mutation (fire-and-forget)."""
+        # ``entry.kind`` is read back from a String column as a plain
+        # str (the SQLModel ``ExperientialKind`` annotation is
+        # declarative; the column type drives the runtime value). A
+        # direct ``entry.kind.value`` blows up on the audit path. Use
+        # ``str()`` to handle both the in-memory enum (mocked callers)
+        # and the post-refresh str from the DB.
+        kind_str = entry.kind.value if hasattr(entry.kind, 'value') else str(entry.kind)
         await self._enqueue_simple_audit(
             action,
             resource_type='experiential_entry',
             resource_id=str(entry.id),
             details={
                 'vault_id': str(entry.vault_id),
-                'kind': entry.kind.value,
+                'kind': kind_str,
                 **(details or {}),
             },
         )
@@ -789,10 +807,20 @@ class ExperientialRepository:
 
     @staticmethod
     def _to_dto(entry: DBExperientialEntry) -> ExperientialEntryDTO:
+        # ``kind``/``status``/``origin`` are typed as Python enums on
+        # the SQLModel column annotation but stored as ``String`` in
+        # the DB. After ``await session.refresh(entry)`` the values
+        # come back as plain strings (the declarative annotation is
+        # a type hint, not a runtime converter). Normalise to str
+        # here so the DTO Literal types are satisfied without a
+        # .value lookup that would crash on the str post-refresh.
+        def _str(v: Any) -> str:
+            return v.value if hasattr(v, 'value') else str(v)
+
         return ExperientialEntryDTO(
             id=entry.id,
             vault_id=entry.vault_id,
-            kind=entry.kind.value,  # type: ignore[arg-type]
+            kind=_str(entry.kind),  # type: ignore[arg-type]
             scope=entry.scope,
             verb=entry.verb,
             context=entry.context,
@@ -802,8 +830,8 @@ class ExperientialRepository:
             trigger=entry.trigger,
             tags=list(entry.tags or []),
             extra_metadata=dict(entry.extra_metadata or {}),
-            status=entry.status.value,  # type: ignore[arg-type]
-            origin=entry.origin.value,  # type: ignore[arg-type]
+            status=_str(entry.status),  # type: ignore[arg-type]
+            origin=_str(entry.origin),  # type: ignore[arg-type]
             supersedes_id=entry.supersedes_id,
             superseded_by_id=entry.superseded_by_id,
             published_at=entry.published_at,

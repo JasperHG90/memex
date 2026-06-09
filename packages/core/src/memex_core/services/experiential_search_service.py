@@ -321,21 +321,26 @@ class ExperientialSearchService:
         The score is informational — the search caller uses rank position,
         not the score itself, for RRF.
         """
+        # NB: each filter parameter is referenced twice (once for the
+        # NULL check, once for the value comparison). asyncpg refuses
+        # to infer the type for an ambiguous parameter, so cast each
+        # occurrence explicitly via ``CAST(:x AS ...)`` rather than
+        # relying on context-driven inference.
         sql = text(
             """
             SELECT
                 id,
                 ts_rank_cd(
                     search_tsvector,
-                    plainto_tsquery('english'::regconfig, :q)
+                    plainto_tsquery('english'::regconfig, CAST(:q AS text))
                 ) AS rank
             FROM experiential_entries
-            WHERE search_tsvector @@ plainto_tsquery('english'::regconfig, :q)
-              AND status = :status
-              AND (:scope IS NULL OR scope = :scope)
-              AND (:kind IS NULL OR kind = :kind)
+            WHERE search_tsvector @@ plainto_tsquery('english'::regconfig, CAST(:q AS text))
+              AND status = CAST(:status AS varchar)
+              AND (CAST(:scope AS text) IS NULL OR scope = CAST(:scope AS text))
+              AND (CAST(:kind AS varchar) IS NULL OR kind = CAST(:kind AS varchar))
             ORDER BY rank DESC
-            LIMIT :limit
+            LIMIT CAST(:limit AS int)
             """
         )
         async with self._metastore.session() as session:
@@ -382,6 +387,8 @@ class ExperientialSearchService:
         # results so the search covers all entity types.
         if kind is not None:
             col_name = _VECTOR_COLUMN_BY_KIND[kind]
+            # Explicit CAST on every reused parameter — see the BM25
+            # helper for why asyncpg refuses ambiguous-type params.
             sql = text(
                 f"""
                 SELECT
@@ -389,11 +396,11 @@ class ExperientialSearchService:
                     {col_name} <=> CAST(:vec AS vector) AS distance
                 FROM experiential_entries
                 WHERE {col_name} IS NOT NULL
-                  AND status = :status
-                  AND (:scope IS NULL OR scope = :scope)
-                  AND kind = :kind
+                  AND status = CAST(:status AS varchar)
+                  AND (CAST(:scope AS text) IS NULL OR scope = CAST(:scope AS text))
+                  AND kind = CAST(:kind AS varchar)
                 ORDER BY {col_name} <=> CAST(:vec AS vector)
-                LIMIT :limit
+                LIMIT CAST(:limit AS int)
                 """
             )
             params: dict[str, Any] = {
@@ -415,8 +422,8 @@ class ExperientialSearchService:
                         ) AS distance,
                         kind
                     FROM experiential_entries
-                    WHERE status = :status
-                      AND (:scope IS NULL OR scope = :scope)
+                    WHERE status = CAST(:status AS varchar)
+                      AND (CAST(:scope AS text) IS NULL OR scope = CAST(:scope AS text))
                       AND (
                         (kind = 'case' AND trigger_embedding IS NOT NULL)
                         OR
@@ -426,7 +433,7 @@ class ExperientialSearchService:
                 SELECT id, distance
                 FROM ranked
                 ORDER BY distance ASC
-                LIMIT :limit
+                LIMIT CAST(:limit AS int)
                 """
             )
             params = {
