@@ -6,6 +6,13 @@ Pins:
   content (mcp is intentionally minimal transport-only).
 - ``agent-surface hermes`` and ``agent-surface claude-code`` include the
   universal block.
+- ``agent-surface hermes`` and ``agent-surface claude-code`` include the
+  V7 procedural-plane doctrine block (the routing rules for the 8
+  ``memex_procedural_*`` tools) — the CLI bridge must match what the
+  in-process Hermes plugin path ships.
+- ``agent-surface universal`` and ``agent-surface mcp`` MUST NOT include
+  the V7 doctrine (opt-in: callers without procedural tools would burn
+  the budget for no behavioural gain).
 - ``--output-format=json`` wraps the content in the Claude Code SessionStart
   envelope ``{"systemPromptAdditions": "..."}`` so the hook can pipe it
   directly through.
@@ -291,3 +298,106 @@ def test_critical_constraint_xml_tags_in_universal() -> None:
         assert f'<critical_reminder name="{name}">' in out, (
             f'missing <critical_reminder name="{name}"> tag in universal output'
         )
+
+
+# ---------------------------------------------------------------------------
+# V7 procedural-plane doctrine — opt-in for the agentic profiles.
+# Pin presence in `hermes` and `claude-code` (the agentic surfaces) and
+# absence in `universal` and `mcp` (the terse / transport surfaces).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize('profile', ['hermes', 'claude-code'])
+def test_agentic_profile_includes_v7_procedural_doctrine(profile: str) -> None:
+    """The two agentic surfaces (Hermes plugin path and Claude Code
+    SessionStart hook) MUST ship the V7 procedural-plane doctrine. The
+    doctrine is the routing rule that drives write intents
+    ``"this is how to do X"`` to the procedural plane — without it,
+    agents silently fall back to ``memex_add_note`` (note plane) or
+    ``memex_kv_put`` (KV plane), both of which are wrong for the
+    procedural use case.
+    """
+    out = _run(profile)
+    # Identity marker of the V7 block.
+    assert '## Procedural plane' in out
+    # The three procedural kinds.
+    assert '`case`' in out
+    assert '`procedure`' in out
+    assert '`strategy`' in out
+    # Identity-anchor rule (UNIQUE on (kind, scope, verb, context)).
+    assert '(kind, scope, verb, context)' in out
+    # At least one tool name from the 8-tool procedural surface.
+    assert 'memex_procedural_create' in out
+
+
+@pytest.mark.parametrize('profile', ['universal', 'mcp'])
+def test_terse_profile_does_not_include_v7_procedural_doctrine(profile: str) -> None:
+    """The terse / transport profiles MUST NOT ship the V7 doctrine.
+    ``universal`` is for pre-V7 agents with no procedural tools; ``mcp``
+    is transport-only (Tier 1a). Both would burn ~1,750 chars on
+    routing rules the consumer cannot act on.
+    """
+    out = _run(profile)
+    assert '## Procedural plane' not in out
+    assert 'memex_procedural_create' not in out
+    assert 'memex_procedural_briefing_cards' not in out
+
+
+def test_hermes_profile_uses_compose_with_procedural_not_universal() -> None:
+    """Defence-in-depth trip-wire: a regression that swaps
+    ``compose_with_procedural()`` back to ``compose_universal()`` in
+    ``_compose_for_target`` would still pass the universal-block
+    presence tests but silently drop the V7 doctrine. This test pins
+    the procedural heading directly — the swap would surface here.
+    """
+    out = _run('hermes')
+    assert '## Procedural plane' in out
+
+
+def test_claude_code_profile_uses_compose_with_procedural_not_universal() -> None:
+    """Same as the hermes trip-wire, for the claude-code target. The
+    SessionStart hook reads this string verbatim — if the procedural
+    block is missing, every Claude Code session silently misroutes
+    write intents to the wrong plane.
+    """
+    out = _run('claude-code')
+    assert '## Procedural plane' in out
+
+
+def test_hermes_profile_composition_order() -> None:
+    """The composition order is universal → procedural → harness.
+    Pin the order by checking the procedural heading's offset
+    relative to the universal block's footer marker."""
+    out = _run('hermes')
+    universal_footer = '## Critical reminders'
+    procedural_heading = '## Procedural plane'
+    assert universal_footer in out
+    assert procedural_heading in out
+    assert out.index(universal_footer) < out.index(procedural_heading)
+
+
+def test_claude_code_profile_composition_order() -> None:
+    """Same composition order trip-wire as the hermes profile — both
+    agentic surfaces use the same ``compose_with_procedural()`` +
+    harness composition shape, so the order is identical."""
+    out = _run('claude-code')
+    universal_footer = '## Critical reminders'
+    procedural_heading = '## Procedural plane'
+    assert universal_footer in out
+    assert procedural_heading in out
+    assert out.index(universal_footer) < out.index(procedural_heading)
+
+
+@pytest.mark.parametrize('profile', ['universal', 'hermes', 'claude-code'])
+def test_profile_output_is_deterministic_includes_v7(profile: str) -> None:
+    """The determinism invariant still holds for the V7-aware profiles.
+    A regression that introduces a UUID/timestamp/env probe into
+    PROCEDURAL_PLANE (or anywhere in the V7 composition) would surface
+    here as a byte-difference between two calls.
+    """
+    a = _run(profile)
+    b = _run(profile)
+    assert a == b, (
+        f'profile {profile!r} is non-deterministic after V7 rewire; '
+        f'differs by {len(a) - len(b)} chars'
+    )

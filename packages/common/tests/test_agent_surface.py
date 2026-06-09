@@ -260,3 +260,100 @@ def test_no_bare_metadata_virtual_attribute_path_anywhere() -> None:
         'Bare `metadata.virtual` (wrong attribute path) leaked into '
         '`compose_universal()` output. Use `unit_metadata.virtual`.'
     )
+
+
+# ---------------------------------------------------------------------------
+# V7 procedural-plane composition — opt-in addition to the universal block.
+# Pin determinism, content presence, and the "additive not subtractive"
+# contract: ``compose_with_procedural`` MUST contain everything
+# ``compose_universal`` does (the universal block is the SSOT), plus the
+# procedural-plane doctrine on top.
+# ---------------------------------------------------------------------------
+
+
+def test_compose_with_procedural_is_deterministic() -> None:
+    """The V7 composition must be byte-equal across calls — the
+    cacheable-prompt-prefix invariant still holds for the procedural
+    variant. A regression that introduces a UUID/timestamp/env probe
+    into PROCEDURAL_PLANE would surface here.
+    """
+    a = ags.compose_with_procedural()
+    b = ags.compose_with_procedural()
+    assert a == b
+
+
+def test_compose_with_procedural_is_superset_of_universal() -> None:
+    """Every byte in ``compose_universal()`` MUST appear in
+    ``compose_with_procedural()`` (additive only — the universal block
+    is the SSOT and the procedural variant appends on top, never
+    replaces).
+
+    A regression that "compacts" the V7 variant by reordering or
+    shortening the universal block would break MCP tool routing for
+    agents that consume the V7 surface.
+    """
+    universal = ags.compose_universal()
+    with_procedural = ags.compose_with_procedural()
+    assert universal in with_procedural, (
+        '`compose_with_procedural()` is missing bytes from '
+        '`compose_universal()`. The V7 variant must be purely additive.'
+    )
+
+
+def test_compose_with_procedural_includes_v7_doctrine() -> None:
+    """Pin the load-bearing V7 routing rules. These are the strings
+    that drive an agent to route ``"this is how to do X"`` write intents
+    to ``memex_procedural_create`` instead of ``memex_add_note`` or
+    ``memex_kv_put``. Their absence is a silent routing failure.
+    """
+    out = ags.compose_with_procedural()
+    # The doctrine block's identity marker.
+    assert '## Procedural plane' in out
+    # The three procedural kinds.
+    assert '`case`' in out
+    assert '`procedure`' in out
+    assert '`strategy`' in out
+    # The identity-anchor rule (UNIQUE on (kind, scope, verb, context)).
+    assert '(kind, scope, verb, context)' in out
+    # The pin chain — most specific wins.
+    assert 'global' in out and 'project' in out and 'app' in out
+    # Briefing-cards pin-chain probe.
+    assert 'memex_procedural_briefing_cards' in out
+    # Idempotent re-writes via upsert.
+    assert 'memex_procedural_upsert' in out
+    # Pre-flight probe to avoid 409.
+    assert 'memex_procedural_get_by_identity' in out
+    # Lifecycle — soft-deprecate.
+    assert 'memex_procedural_deprecate' in out
+
+
+def test_compose_universal_does_not_include_v7_doctrine() -> None:
+    """The procedural block is opt-in — it MUST NOT bleed into
+    ``compose_universal()``. Pre-V7 agents (no procedural tools)
+    consuming the universal block would burn ~1,750 chars on routing
+    rules they cannot act on. This is the "do not leak" trip-wire."""
+    out = ags.compose_universal()
+    assert '## Procedural plane' not in out
+    assert 'memex_procedural_create' not in out
+    assert 'memex_procedural_briefing_cards' not in out
+
+
+def test_procedural_plane_constant_exists_and_non_empty() -> None:
+    """``PROCEDURAL_PLANE`` is the SSOT block — directly importable for
+    callers that want to compose it themselves (e.g., a custom surface
+    builder that doesn't go through ``compose_with_procedural``)."""
+    assert isinstance(ags.PROCEDURAL_PLANE, str)
+    assert ags.PROCEDURAL_PLANE.strip()
+    # The block must contain the doctrine markers; if any of these
+    # disappear, the procedural plane is no longer routable.
+    assert 'memex_procedural_create' in ags.PROCEDURAL_PLANE
+    assert 'memex_procedural_upsert' in ags.PROCEDURAL_PLANE
+
+
+def test_compose_with_procedural_exports_in_dunder_all() -> None:
+    """``compose_with_procedural`` and ``PROCEDURAL_PLANE`` are public
+    surface — they MUST appear in ``__all__`` so static importers see
+    them. A regression that renames either function without updating
+    the export list would silently break callers."""
+    assert 'compose_with_procedural' in ags.__all__
+    assert 'PROCEDURAL_PLANE' in ags.__all__
