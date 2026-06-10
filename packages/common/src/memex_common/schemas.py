@@ -1445,6 +1445,11 @@ class TOCNodeDTO(BaseModel):
     token_estimate: int | None = None
     subtree_tokens: int | None = None
     assets: list[SectionAssetDTO] = Field(default_factory=list)
+    chunk_id: UUID | None = Field(
+        default=None,
+        description='Memory chunk UUID linked to this node. '
+        'Pass to memex_get_memory_units() to retrieve extracted memory units.',
+    )
     children: list['TOCNodeDTO'] = Field(default_factory=list)
 
 
