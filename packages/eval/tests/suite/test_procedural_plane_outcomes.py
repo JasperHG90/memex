@@ -388,15 +388,18 @@ def test_suite_default_answer_mode_is_api():
 @pytest.mark.asyncio
 async def test_procedural_upsert_rejects_missing_required_params():
     """The setup action validates required params at the top of ``run``
-    and raises ``ValueError`` with the load-bearing context."""
+    and raises ``ValueError`` with the load-bearing context.
+
+    Param names carry the ``kind_`` prefix to avoid colliding with the
+    ``SetupAction.kind`` discriminator — see the handler docstring."""
     from memex_eval.suites.procedural_plane._setup_actions import _ProceduralUpsert
 
     handler = _ProceduralUpsert()
-    with pytest.raises(ValueError, match='requires kind, scope, and title'):
+    with pytest.raises(ValueError, match='requires kind_kind, kind_scope, and kind_title'):
         await handler.run(
             api=None,  # type: ignore[arg-type]  # validation fires before the call
             vault_id=UUID('00000000-0000-0000-0000-000000000000'),
-            params={'kind': 'procedure'},  # scope and title missing
+            params={'kind_kind': 'procedure'},  # kind_scope and kind_title missing
         )
 
 
@@ -413,8 +416,8 @@ async def test_procedural_upsert_rejects_payload_validation_error():
             api=None,  # type: ignore[arg-type]
             vault_id=UUID('00000000-0000-0000-0000-000000000000'),
             params={
-                'kind': 'not-a-real-kind',  # kind is a Literal — must fail
-                'scope': 'global',
-                'title': 'procedural-suite-malformed',
+                'kind_kind': 'not-a-real-kind',  # kind is a Literal — must fail
+                'kind_scope': 'global',
+                'kind_title': 'procedural-suite-malformed',
             },
         )

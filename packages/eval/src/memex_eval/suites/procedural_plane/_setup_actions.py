@@ -60,18 +60,27 @@ class _ProceduralUpsert(SetupActionHandler):
     """Seed a procedural-plane entry via the ``procedural_upsert``
     API call.
 
-    Required params:
-    - ``kind`` (case | procedure | strategy)
-    - ``scope`` (global | user | project:<id> | app:<id>)
-    - ``verb`` (str, optional for case-kind)
-    - ``context`` (str, optional for case-kind)
-    - ``title`` (str)
-    - ``summary`` (str, optional)
+    Param names are prefixed with ``kind_`` to avoid colliding with
+    the ``SetupAction.kind`` discriminator (the action kind itself,
+    e.g. ``'procedural_upsert'``). When the runner builds the params
+    dict from ``SetupAction.model_dump()`` the discriminator lands
+    under ``params['kind']`` — reading that here would conflate
+    "what action is this" with "what procedure kind should I write".
+    The prefix convention (documented in ``.claude/rules/eval-suites.md``
+    under ``eval-framework-first-pass``) keeps the two clean.
+
+    Required params (with the ``kind_`` prefix):
+    - ``kind_kind`` (case | procedure | strategy)
+    - ``kind_scope`` (global | user | project:<id> | app:<id>)
+    - ``kind_verb`` (str, optional for case-kind)
+    - ``kind_context`` (str, optional for case-kind)
+    - ``kind_title`` (str)
+    - ``kind_summary`` (str, optional)
 
     Optional params:
-    - ``trigger`` (str, required for case-kind entries by the V7
+    - ``kind_trigger`` (str, required for case-kind entries by the V7
       contract — case entries have a trigger signal not a verb)
-    - ``status`` ('published' | 'draft', default 'published')
+    - ``kind_status`` ('published' | 'draft', default 'published')
     - ``deprecate_after`` (bool, default False) — when True, the
       action immediately deprecates the entry it just upserted.
       Used by the ``deprecate_drops_from_published_search`` scenario
@@ -89,16 +98,21 @@ class _ProceduralUpsert(SetupActionHandler):
     async def run(
         self, api: 'RemoteMemexAPI', vault_id: UUID, params: dict[str, Any]
     ) -> dict[str, Any]:
-        kind = (params.get('kind') or '').strip()
-        scope = (params.get('scope') or '').strip()
-        verb = params.get('verb')
-        context = params.get('context')
-        title = (params.get('title') or '').strip()
+        # See class docstring for why every entry-shape param is
+        # ``kind_<name>`` rather than ``<name>``. The prefix is
+        # load-bearing: ``params['kind']`` is the SetupAction
+        # discriminator itself, NOT the procedure kind.
+        kind = (params.get('kind_kind') or '').strip()
+        scope = (params.get('kind_scope') or '').strip()
+        verb = params.get('kind_verb')
+        context = params.get('kind_context')
+        title = (params.get('kind_title') or '').strip()
         deprecate_after = bool(params.get('deprecate_after', False))
         if not kind or not scope or not title:
             raise ValueError(
-                'procedural_upsert setup action requires kind, scope, and title. '
-                f'Got: kind={kind!r}, scope={scope!r}, title={title!r}.'
+                'procedural_upsert setup action requires kind_kind, kind_scope, '
+                f'and kind_title. Got: kind_kind={kind!r}, kind_scope={scope!r}, '
+                f'kind_title={title!r}.'
             )
 
         # Build the payload in the same shape the V7 DTO accepts.
@@ -116,12 +130,12 @@ class _ProceduralUpsert(SetupActionHandler):
             payload['verb'] = verb
         if context is not None:
             payload['context'] = context
-        if 'summary' in params:
-            payload['summary'] = params['summary']
-        if 'trigger' in params:
-            payload['trigger'] = params['trigger']
-        if 'status' in params:
-            payload['status'] = params['status']
+        if 'kind_summary' in params:
+            payload['summary'] = params['kind_summary']
+        if 'kind_trigger' in params:
+            payload['trigger'] = params['kind_trigger']
+        if 'kind_status' in params:
+            payload['status'] = params['kind_status']
 
         # Construct via Pydantic so any required-field validation
         # surfaces here (not deep in the API call).
