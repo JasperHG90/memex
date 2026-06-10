@@ -4524,15 +4524,16 @@ ALL_SCHEMAS.append(GET_UNIT_HISTORY_SCHEMA)
 
 
 # ============================================================
-# V7 — Procedural plane (case / procedure / strategy)
+# V7 — Procedural plane (procedure / strategy)
 #
 # The procedural plane is the agent's "how to do X" surface — distinct
 # from notes (long-form prose) and KV (preferences / bindings). It has
 # an identity anchor (kind, scope, verb, context) UNIQUE NULLS NOT
-# DISTINCT, three kinds (case, procedure, strategy), and four scopes
-# (global, user, project:<id>, app:<id>).
+# DISTINCT, two kinds (procedure, strategy), and scopes global /
+# project:<id> / app:<id> (NO user scope). Cases are NOTES
+# (memex_case_submit), not plane entries.
 #
-# The eight tools mirror the MCP server. Vault_id is sourced from the
+# The eight tools (7 procedural + memex_case_submit) mirror the MCP server. Vault_id is sourced from the
 # Hermes session binding (handler injects from `vault_id` arg); not
 # exposed in the schema since the agent never names a vault directly.
 # ============================================================

@@ -91,7 +91,7 @@ def _record_write_outcome(operation: str, kind: str, exc: BaseException | None) 
 
     Called from the route's ``except`` block, before ``_handle_error`` is
     invoked. ``operation`` is the verb; ``kind`` is the entity class
-    (case | procedure | strategy); ``exc`` is the exception that aborted
+    (procedure | strategy); ``exc`` is the exception that aborted
     the call (None means success).
     """
     if exc is None:

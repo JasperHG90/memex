@@ -627,11 +627,11 @@ FSFM_AUTO_BAND_SKIPPED_TOTAL = Counter(
 # ---------------------------------------------------------------------------
 # Procedural (V7) plane
 # ---------------------------------------------------------------------------
-# Five metrics for the case / procedure / strategy plane. The plane is
+# Five metrics for the procedure / strategy plane. The plane is
 # small but it has a distinct identity-anchor doctrine (kind, scope,
 # verb, context) and a hybrid BM25+vector search with RRF fusion — so
 # its observability needs are not the same as the notes / reflection
-# plane. Labels are deliberately bounded (kind is a 3-value Literal,
+# plane. Labels are deliberately bounded (kind is a 2-value Literal (procedure | strategy),
 # operation is a 4-value verb) so cardinality stays O(dozens), not O(rows).
 
 PROCEDURAL_OPERATIONS_TOTAL = Counter(

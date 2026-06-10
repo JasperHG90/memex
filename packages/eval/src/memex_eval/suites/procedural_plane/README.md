@@ -1,7 +1,7 @@
 # procedural_plane
 
 V7 procedural-plane eval suite. 10 scenarios pin the public contract of
-the third Memex memory plane (case / procedure / strategy) and gate
+the third Memex memory plane (procedure / strategy) and gate
 write-routing for the agentic surfaces (Hermes briefing block, Claude
 Code SessionStart hook).
 
@@ -11,13 +11,16 @@ Code SessionStart hook).
 
 - Identity-anchor uniqueness and idempotency
   (`(kind, scope, verb, context)` UNIQUE NULLS NOT DISTINCT)
-- 3 kinds — `case`, `procedure`, `strategy` — and their distinct
-  shape rules (case has `trigger`, procedure/strategy have
-  `verb`+`context`)
-- 4 scopes — `global`, `user`, `project:<id>`, `app:<id>`
-- Write surface: 8 HTTP routes
-  (create / upsert / get / get_by_identity / update / deprecate /
-  search / briefing_cards)
+- 2 kinds — `procedure` (anchor `verb`+`context`) and `strategy`
+  (anchor `verb`; `context` FORBIDDEN — a strategy generalises the
+  procedures sharing its `(scope, verb)`). Cases are NOTES
+  (`role='case'`), submitted via `case_submit`, never plane entries.
+- Scopes — `global`, `project:<id>`, `app:<id>` (NO `user` scope)
+- `trigger` (when_to_use) is the REQUIRED retrieval key.
+- HTTP surface: create / upsert / get / get_by_identity / update /
+  deprecate / search / pins / versions / rollback (+ /cases for
+  case_submit; briefing-cards is an operator/eval read, not an
+  agent tool)
 - Hybrid search composition (BM25 + vector + RRF)
 - Briefing-cards pin chain
   (`global → project → app`, union, sorted by pin position)

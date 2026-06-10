@@ -39,8 +39,7 @@ Route user write intents to the right tool — failure here is silent ("I'm read
 - `"Remember in this repo / project / codebase: ..."` → `memex_kv_put(key="project:<id>:<field>", ...)`.
 - `"Remember whenever I use <app> ..."` → `memex_kv_put(key="app:<app-id>:<field>", ...)`. The `<app>` cue wins over "I"/"my" — Claude Code preferences go under `app:claude-code:*`, NOT `user:claude-code:*`.
 - `"Remember across our projects / company-wide"` → `memex_kv_put(key="global:<field>", ...)`.
-- `"Always do X / from now on X"` (procedure, no project cue) → `memex_kv_put(key="global:procedure:<verb>:<context>", ...)`. Procedures live UNDER a scope namespace — NEVER write a bare `procedure:*` key.
-- `"For this project, always X / in this repo, X"` (explicit project cue) → `memex_kv_put(key="project:<id>:procedure:<verb>:<context>", ...)`. NO explicit cue? ASK — never infer scope from cwd or active vault.
+- A multi-step WORKFLOW worth reusing ("how we deploy / release / rotate creds") → `memex_procedural_create` on the procedural plane (see the Procedural plane section), NOT a KV `procedure:` key (deprecated). A one-line CONVENTION ("always lint before commit") → `memex_kv_put(key="<scope>:<field>")` — scope by cue, ASK if ambiguous.
 - `"That worked / it's holding / that fixed it"` with a referent in scope → `memex_record_outcome(units=[{unit_id, verb:"helpful", reason}])` on the units search returned. Do NOT `memex_add_note` a "Resolution confirmed" note — paired-write on the existing units.
 - `"Save this insight / decision / lesson"` (new durable knowledge, not a confirmation) → `memex_add_note(...)`.
 <example>User: "The JWT rotation cadence change we landed last sprint — it's been clean."

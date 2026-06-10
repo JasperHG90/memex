@@ -17,9 +17,9 @@ mock the metastore) cannot:
 * mark_derivation_failed below max_attempts re-queues (status back
   to pending) — workers don't lose work to a transient error
 * mark_derivation_failed at max_attempts flips status=failed
-* strategy derivations require both target_verb and target_context
-  (the procedure-only branch is not load-bearing; a missing-target
-  strategy would surface as a 500 at the worker)
+* strategy derivations require target_verb and NO target_context
+  (strategy anchor ≡ (scope, verb); §18.1). A malformed target would
+  otherwise surface as a 500 at the worker.
 """
 
 from __future__ import annotations
@@ -206,16 +206,16 @@ async def test_mark_failed_at_max_attempts_flips_to_failed(metastore):
 
 
 # ---------------------------------------------------------------------------
-# Validation — strategy derivations require both verb and context
+# Validation — strategy derivations require verb and NO context (§18.1)
 # ---------------------------------------------------------------------------
 
 
 @pytest.mark.asyncio
 async def test_enqueue_strategy_without_verb_raises_value_error(metastore):
-    """Strategies need a (verb, context) anchor for the
-    identity-anchor upsert. Enqueueing a strategy derivation
-    without one is a programming error that must fail loud at
-    enqueue time (not 500 in the worker)."""
+    """A strategy anchors on (scope, verb) — verb is required (context
+    is forbidden; §18.1). Enqueueing a strategy derivation without a
+    verb is a programming error that must fail loud at enqueue time
+    (not 500 in the worker)."""
     async with metastore.session() as session:
         vault_id = await _create_vault(session, 'v7_q_strat')
 

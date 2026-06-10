@@ -342,7 +342,7 @@ async def procedural_search(
     ] = None,
     kind: Annotated[
         str | None,
-        typer.Option('--kind', help='case | procedure | strategy. (omit for all)'),
+        typer.Option('--kind', help='procedure | strategy. (omit for all)'),
     ] = None,
     status: Annotated[
         str, typer.Option('--status', help='draft | published | deprecated.')
@@ -869,7 +869,5 @@ async def procedural_tui(
     config: MemexConfig = ctx.obj
     async with get_api_context(config) as api:
         controller = ProceduralCurationController(api)
-        tui = ProceduralCurationApp(
-            controller, project_id=project_id, app_identity=app_identity
-        )
+        tui = ProceduralCurationApp(controller, project_id=project_id, app_identity=app_identity)
         await tui.run_async()

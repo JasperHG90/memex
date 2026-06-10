@@ -177,7 +177,7 @@ def upgrade() -> None:
         sa.text(
             "UPDATE vaults SET name = 'procedural', "
             "description = 'V7 procedural memory plane (system vault).', "
-            "policy = '{\"reflect\": true}'::jsonb "
+            'policy = \'{"reflect": true}\'::jsonb '
             "WHERE name = 'experiential' AND kind = 'system'"
         )
     )

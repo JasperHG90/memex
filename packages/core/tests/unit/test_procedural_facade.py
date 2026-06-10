@@ -70,9 +70,7 @@ async def test_facade_create_delegates_to_repository():
     result = await facade.create(payload)
 
     api._procedural_search.embed_trigger.assert_awaited_once_with(payload.trigger)
-    api._procedural_repo.create.assert_awaited_once_with(
-        payload, trigger_embedding=[0.1] * 384
-    )
+    api._procedural_repo.create.assert_awaited_once_with(payload, trigger_embedding=[0.1] * 384)
     assert result is expected
 
 

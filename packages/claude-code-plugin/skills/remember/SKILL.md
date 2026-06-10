@@ -59,11 +59,9 @@ Follow the 5-step resolution flow in the system prompt (§"5-step resolution flo
 
 Bare `success=true`/`success=false` without `units` returns HTTP 400.
 
-## Procedure KV
+## Procedure KV (legacy — read-only fallback)
 
-For how-tos, write to `<scope>:procedure:<verb>:<context-tag>` (scope = `global` default, `project:<id>` on explicit project cue):
-- Save: `memex_kv_put(value=..., key="global:procedure:<verb>:<context-tag>")` or `memex_kv_put(value=..., key="project:<id>:procedure:<verb>:<context-tag>")` — each write appends a new version; prior versions remain in the history envelope.
-- Read: `memex_kv_get(key)` for the active value; `memex_kv_get(key, include_history=true)` for the full envelope.
+How-tos are written to the **procedural plane** (`memex_procedural_create`; see "Procedural memory (V7)" below), NOT to KV. The `<scope>:procedure:<verb>:<context-tag>` KV convention is the deprecated legacy path — do **not** write new procedures there. It survives only as a read fallback (`memex_kv_get(key)` / `memex_kv_list`) for procedures captured before the plane existed.
 
 ## Procedural memory (V7)
 

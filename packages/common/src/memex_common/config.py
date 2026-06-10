@@ -2000,7 +2000,7 @@ class DeprioritizeScoreConfig(BaseModel):
 
 
 class ProceduralConfig(BaseModel):
-    """Configuration for the procedural (case / procedure / strategy) plane.
+    """Configuration for the procedural (procedure / strategy) plane.
 
     These knobs are operator-level defaults; per-request overrides on
     ``ProceduralSearchRequest`` and ``procedural_briefing_cards`` still
@@ -2214,7 +2214,7 @@ class MemoryConfig(BaseModel):
     procedural: ProceduralConfig = Field(
         default_factory=ProceduralConfig,
         description=(
-            'Configuration for the procedural (case / procedure / strategy) '
+            'Configuration for the procedural (procedure / strategy) '
             'plane — search weight defaults, briefing caps, identity-collision '
             'mode, and the optional background derivation worker.'
         ),
