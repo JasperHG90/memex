@@ -367,6 +367,83 @@ class ProceduralEntryVersionDTO(BaseModel):
     created_at: dt.datetime
 
 
+# --- case submission DTOs ---------------------------------------------------
+#
+# A case is a NOTE (role='case') in the hidden `procedural` system vault —
+# §5.1 / §18.3 / §18.9.0. These DTOs are the case_submit wire shape; the
+# note itself is composed server-side from the episode template.
+
+
+class CaseSubmit(BaseModel):
+    """Submit a worked episode as a case (§5.1 template, §18.9.0 vault).
+
+    ``case_of`` is the PRIMARY assignment API (§18.1): the agent that just
+    enacted a procedure knows which one it was. Without it, the server
+    runs the assignment judge (§19.3); ``separation != 'clean'`` lands in
+    the lint queue (file-then-lint, decision #5) — never an in-session
+    clarification round-trip.
+    """
+
+    model_config = ConfigDict(extra='forbid')
+
+    title: ShortLabel
+    trigger: str = Field(
+        min_length=1,
+        description='What kicked the episode off — embedded for case↔procedure matching.',
+    )
+    situation: str = Field(
+        default='',
+        description='Context going in (prior state, constraints).',
+    )
+    actions: list[str] = Field(
+        default_factory=list,
+        description='Ordered actions taken, one step per item.',
+    )
+    outcome: Literal['success', 'failure', 'mixed']
+    lesson: str = Field(
+        default='',
+        description='What to do differently / confirm next time.',
+    )
+    project_id: str | None = Field(
+        default=None,
+        description='Provenance — recorded in doc_metadata, NOT a vault binding (§18.9.0).',
+    )
+    case_of: UUID | None = Field(
+        default=None,
+        description='Procedural entry this case instantiates (explicit assignment).',
+    )
+    submitted_by: str | None = Field(
+        default=None,
+        description='Submitting app/agent identity (provenance).',
+    )
+    tags: list[str] = Field(default_factory=list)
+
+
+class CaseAssignment(BaseModel):
+    """How the submitted case was routed to the procedural plane."""
+
+    mode: Literal[
+        'explicit',  # caller supplied case_of
+        'auto_assigned',  # judge: instance_of + separation=clean
+        'new_procedure_draft',  # judge: new_procedure + separation=clean → draft anchor
+        'escalated',  # separation != clean OR judge unavailable → lint queue
+        'skipped',  # assignment disabled / nothing to assign against
+    ]
+    entry_id: UUID | None = None
+    finding_id: UUID | None = None
+    decision: str | None = None
+    separation: str | None = None
+    reasoning: str | None = None
+
+
+class CaseSubmitResult(BaseModel):
+    """Result envelope for a case submission."""
+
+    note_id: UUID
+    vault_id: UUID
+    assignment: CaseAssignment
+
+
 # --- derivation queue DTOs ------------------------------------------------
 
 
@@ -500,6 +577,9 @@ class ProceduralBriefingCards(BaseModel):
 
 __all__ = [
     'ANCHOR_LABEL_PATTERN',
+    'CaseAssignment',
+    'CaseSubmit',
+    'CaseSubmitResult',
     'DerivationQueueStatus',
     'DerivationStatusLiteral',
     'ProceduralBriefingCard',

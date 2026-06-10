@@ -2158,13 +2158,12 @@ class ProceduralEntry(SQLModel, table=True):  # type: ignore
             name='ck_procedure_anchor',
         ),
         # NOTE: there is intentionally NO `(trigger IS NULL) = (trigger_embedding IS NULL)`
-        # CHECK. The repository never writes `trigger_embedding` on
-        # create/update (lazy-embedding design — see
-        # procedural_repository.py module docstring). A pairing CHECK
-        # would fire on every create that supplies a trigger. The
-        # semantic invariant — "every row with a trigger eventually has
-        # a corresponding embedding" — is enforced at the search-service
-        # layer by the back-fill worker, not at the DDL layer.
+        # CHECK. The embedding is computed by the caller at write time
+        # (§18.7 — the facade embeds the trigger and threads the vector
+        # into the repository), but an embedder outage degrades to a
+        # NULL vector (BM25 still covers the row) rather than failing
+        # the write — a pairing CHECK would turn that graceful
+        # degradation into a constraint violation.
         ForeignKeyConstraint(
             ['supersedes_id'],
             ['procedural_entries.id'],

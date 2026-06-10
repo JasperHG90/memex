@@ -21,6 +21,11 @@ from memex_common.exceptions import (
     MemoryUnitNotFoundError,
     VaultNotFoundError,
 )
+from typing import TYPE_CHECKING as _TYPE_CHECKING
+
+if _TYPE_CHECKING:
+    from memex_core.services.case_service import CaseService as CaseServiceT
+
 from memex_common.procedural_schemas import (
     ProceduralBriefingCards,
     ProceduralDerivationQueueDTO,
@@ -2338,6 +2343,14 @@ class MemexAPI:
     def procedural(self) -> 'MemexAPIProceduralFacade':
         """The V7 procedural-plane facade. See :class:`MemexAPIProceduralFacade`."""
         return MemexAPIProceduralFacade(self)
+
+    @property
+    def cases(self) -> 'CaseServiceT':
+        """Case submission (§5.1 episode notes into the hidden system
+        vault + assignment). See :class:`memex_core.services.case_service.CaseService`."""
+        from memex_core.services.case_service import CaseService
+
+        return CaseService(self)
 
 
 class MemexAPIProceduralFacade:

@@ -61,6 +61,8 @@ from memex_common.schemas import (
     SurveyResponse,
 )
 from memex_common.procedural_schemas import (
+    CaseSubmitResult,
+    CaseSubmit,
     ProceduralBriefingCards,
     ProceduralEntryCreate,
     ProceduralEntryDTO,
@@ -1916,6 +1918,16 @@ class RemoteMemexAPI:
         """The entry's uncapped version ledger, newest first (§18.8)."""
         result = await self._get(f'procedural/{entry_id}/versions')
         return [ProceduralEntryVersionDTO(**row) for row in result]
+
+    async def case_submit(self, payload: CaseSubmit) -> CaseSubmitResult:
+        """Submit a worked episode as a case (V7 §5.1).
+
+        The note lands in the hidden `procedural` system vault with
+        role='case'; assignment runs synchronously (explicit case_of /
+        judge auto-assign / lint escalation — see the result envelope).
+        """
+        result = await self._post('cases', payload)
+        return CaseSubmitResult(**result)
 
     async def procedural_rollback(
         self,

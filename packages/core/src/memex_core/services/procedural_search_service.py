@@ -13,9 +13,11 @@ Hybrid search across ``procedural_entries``:
 
 Embedding generation is offloaded to a thread via the shared semaphore
 (``get_embedding_semaphore``) and the ``_instrument('embed')`` wrapper,
-mirroring the public ``MemexAPI.embed_text`` path. Search-time
-embeddings are the only time the embedder is called from this module;
-the repository does not embed on write (lazy embedding, see V7 §3.4).
+mirroring the public ``MemexAPI.embed_text`` path. Two call sites: the
+search-time *query* embedding here, and the write-time *trigger*
+embedding the facade requests via :meth:`embed_trigger` (§18.7 —
+embeddings are computed by the caller and stored at write time; there
+is no lazy backfill).
 
 Briefing cards
 --------------
@@ -35,8 +37,8 @@ import time
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import text
-from sqlmodel import col, select
+from sqlalchemy import literal_column
+from sqlmodel import col, func, select
 
 from memex_common.procedural_schemas import (
     ProceduralBriefingCard,
@@ -331,43 +333,26 @@ class ProceduralSearchService:
         The score is informational — the search caller uses rank position,
         not the score itself, for RRF.
         """
-        # NB: each filter parameter is referenced twice (once for the
-        # NULL check, once for the value comparison). asyncpg refuses
-        # to infer the type for an ambiguous parameter, so cast each
-        # occurrence explicitly via ``CAST(:x AS ...)`` rather than
-        # relying on context-driven inference.
-        sql = text(
-            """
-            SELECT
-                id,
-                ts_rank_cd(
-                    search_tsvector,
-                    plainto_tsquery('english'::regconfig, CAST(:q AS text))
-                ) AS rank
-            FROM procedural_entries
-            WHERE search_tsvector @@ plainto_tsquery('english'::regconfig, CAST(:q AS text))
-              AND status = CAST(:status AS varchar)
-              AND (CAST(:scope AS text) IS NULL OR scope = CAST(:scope AS text))
-              AND (CAST(:kind AS varchar) IS NULL OR kind = CAST(:kind AS varchar))
-              AND (CAST(:vault_id AS uuid) IS NULL OR vault_id = CAST(:vault_id AS uuid))
-            ORDER BY rank DESC
-            LIMIT CAST(:limit AS int)
-            """
+        entry = DBProceduralEntry
+        tsquery = func.plainto_tsquery(literal_column("'english'::regconfig"), query)
+        rank = func.ts_rank_cd(entry.search_tsvector, tsquery).label('rank')
+
+        stmt = (
+            select(col(entry.id), rank)
+            .where(entry.search_tsvector.op('@@')(tsquery))
+            .where(col(entry.status) == DBProceduralStatus(status))
+            .order_by(rank.desc())
+            .limit(limit)
         )
+        if scope is not None:
+            stmt = stmt.where(col(entry.scope) == scope)
+        if kind is not None:
+            stmt = stmt.where(col(entry.kind) == kind)
+        if vault_id is not None:
+            stmt = stmt.where(col(entry.vault_id) == vault_id)
+
         async with self._metastore.session() as session:
-            rows = (
-                await session.execute(
-                    sql,
-                    {
-                        'q': query,
-                        'status': status,
-                        'scope': scope,
-                        'kind': kind,
-                        'vault_id': vault_id,
-                        'limit': limit,
-                    },
-                )
-            ).all()
+            rows = (await session.exec(stmt)).all()
         return [(row[0], float(row[1])) for row in rows]
 
     # ------------------------------------------------------------------
@@ -396,37 +381,28 @@ class ProceduralSearchService:
         """
         if not query_vec:
             return []
-        # pgvector accepts the vector as a string '[v1,v2,...]'.
-        vec_literal = '[' + ','.join(f'{x:.7f}' for x in query_vec) + ']'
+        entry = DBProceduralEntry
+        # pgvector's SQLAlchemy comparator — `<=>` (cosine distance),
+        # same idiom as KVEntry.embedding.l2_distance in kv.py.
+        embedding_col = entry.__table__.c.trigger_embedding
+        distance = embedding_col.cosine_distance(query_vec).label('distance')
 
-        # Explicit CAST on every reused parameter — see the BM25
-        # helper for why asyncpg refuses ambiguous-type params.
-        sql = text(
-            """
-            SELECT
-                id,
-                trigger_embedding <=> CAST(:vec AS vector) AS distance
-            FROM procedural_entries
-            WHERE trigger_embedding IS NOT NULL
-              AND status = CAST(:status AS varchar)
-              AND (CAST(:scope AS text) IS NULL OR scope = CAST(:scope AS text))
-              AND (CAST(:kind AS varchar) IS NULL OR kind = CAST(:kind AS varchar))
-              AND (CAST(:vault_id AS uuid) IS NULL OR vault_id = CAST(:vault_id AS uuid))
-            ORDER BY trigger_embedding <=> CAST(:vec AS vector)
-            LIMIT CAST(:limit AS int)
-            """
+        stmt = (
+            select(col(entry.id), distance)
+            .where(embedding_col.is_not(None))
+            .where(col(entry.status) == DBProceduralStatus(status))
+            .order_by(distance.asc())
+            .limit(limit)
         )
-        params: dict[str, Any] = {
-            'vec': vec_literal,
-            'status': status,
-            'scope': scope,
-            'kind': kind,
-            'vault_id': vault_id,
-            'limit': limit,
-        }
+        if scope is not None:
+            stmt = stmt.where(col(entry.scope) == scope)
+        if kind is not None:
+            stmt = stmt.where(col(entry.kind) == kind)
+        if vault_id is not None:
+            stmt = stmt.where(col(entry.vault_id) == vault_id)
 
         async with self._metastore.session() as session:
-            rows = (await session.execute(sql, params)).all()
+            rows = (await session.exec(stmt)).all()
         return [(row[0], float(row[1])) for row in rows]
 
     # ------------------------------------------------------------------
@@ -446,32 +422,25 @@ class ProceduralSearchService:
         the requested contexts. Excludes unpublished entries."""
         if not context_keys:
             return {}
-        sql = text(
-            """
-            SELECT p.entry_id, MIN(p.position) AS position
-            FROM procedural_pins p
-            JOIN procedural_entries e ON e.id = p.entry_id
-            WHERE p.context_key = ANY(:contexts)
-              AND e.status = CAST(:status AS varchar)
-              AND (CAST(:scope AS text) IS NULL OR e.scope = CAST(:scope AS text))
-              AND (CAST(:kind AS varchar) IS NULL OR e.kind = CAST(:kind AS varchar))
-              AND (CAST(:vault_id AS uuid) IS NULL OR e.vault_id = CAST(:vault_id AS uuid))
-            GROUP BY p.entry_id
-            """
+        pin = DBProceduralPin
+        entry = DBProceduralEntry
+
+        stmt = (
+            select(col(pin.entry_id), func.min(pin.position).label('position'))
+            .join(entry, col(entry.id) == col(pin.entry_id))
+            .where(col(pin.context_key).in_(list(context_keys)))
+            .where(col(entry.status) == DBProceduralStatus(status))
+            .group_by(col(pin.entry_id))
         )
+        if scope is not None:
+            stmt = stmt.where(col(entry.scope) == scope)
+        if kind is not None:
+            stmt = stmt.where(col(entry.kind) == kind)
+        if vault_id is not None:
+            stmt = stmt.where(col(entry.vault_id) == vault_id)
+
         async with self._metastore.session() as session:
-            rows = (
-                await session.execute(
-                    sql,
-                    {
-                        'contexts': list(context_keys),
-                        'status': status,
-                        'scope': scope,
-                        'kind': kind,
-                        'vault_id': vault_id,
-                    },
-                )
-            ).all()
+            rows = (await session.exec(stmt)).all()
         return {row[0]: int(row[1]) for row in rows}
 
     # ------------------------------------------------------------------

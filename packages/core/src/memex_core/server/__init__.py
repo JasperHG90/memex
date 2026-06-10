@@ -38,6 +38,7 @@ from memex_core.server.entities import router as entities_router
 from memex_core.server.ingestion import router as ingestion_router
 from memex_core.server.memories import router as memories_router
 from memex_core.server.outcomes import router as outcomes_router
+from memex_core.server.cases import router as cases_router
 from memex_core.server.procedural import router as procedural_router
 from memex_core.server.reflection import router as reflection_router
 from memex_core.server.resources import router as resources_router
@@ -384,3 +385,4 @@ app.include_router(lint_router)
 app.include_router(consolidation_router)
 app.include_router(system_router)
 app.include_router(procedural_router)
+app.include_router(cases_router)
