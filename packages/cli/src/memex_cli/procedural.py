@@ -3,13 +3,12 @@ Procedural-plane commands.
 
 The CLI mirrors the HTTP /procedural/* surface. Two groups:
 
-* ``memex procedural`` — CRUD on case / procedure / strategy entries
-  (the third plane alongside notes and KV).
-* ``memex case`` — short-form submit for cases. Cases are the durable
-  record of specific experiences (what happened, with what trigger);
-  ``memex case submit`` is the most common entry point and gets a
-  top-level group with a single verb so it's discoverable without
-  the heavier ``memex procedural create`` surface.
+* ``memex procedural`` — CRUD on procedure / strategy entries (the
+  third plane alongside notes and KV) + pin/version curation and the
+  ``tui`` curation app.
+* ``memex case`` — short-form submit for cases. Cases are NOTES
+  (role=case) in a hidden system vault — the durable record of a
+  worked episode; ``memex case submit`` is the common entry point.
 
 Engine internals (DTOs, error classes) still ship as
 ``memex_common.procedural_schemas`` and
@@ -146,12 +145,13 @@ async def procedural_create(
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
 ):
     """
-    Create a new procedural-plane entry.
+    Create a new procedural-plane entry (procedure or strategy).
 
-    Cases MUST omit --verb and --context; procedures/strategies REQUIRE
-    --verb. Identity-anchor collision on (kind, scope, verb, context)
-    is rejected; use ``memex procedural upsert`` for idempotent
-    re-writes.
+    procedure REQUIRES --verb AND --context; strategy REQUIRES --verb
+    and FORBIDS --context. --trigger is always required (the retrieval
+    key). Identity-anchor collision on (kind, scope, verb, context) is
+    rejected; use ``memex procedural upsert`` for idempotent re-writes.
+    Cases are notes — use ``memex case submit``.
     """
     config: MemexConfig = ctx.obj
     if kind == 'procedure':
@@ -837,3 +837,39 @@ async def _resolve_vault_id(config: MemexConfig, identifier: str):
             return await api.resolve_vault_identifier(identifier)
         except Exception as e:
             handle_api_error(e)
+
+
+# ---------------------------------------------------------------------------
+# procedural tui — curation app (pins / briefing preview / versions)
+# ---------------------------------------------------------------------------
+
+
+@app.command('tui')
+@async_command
+async def procedural_tui(
+    ctx: typer.Context,
+    project_id: Annotated[
+        str | None,
+        typer.Option('--project-id', '-p', help='project:<id> context for the briefing chain.'),
+    ] = None,
+    app_identity: Annotated[
+        str | None,
+        typer.Option('--app', '-a', help='app:<id> context for the briefing chain.'),
+    ] = None,
+):
+    """Launch the procedural-plane curation TUI.
+
+    Browse + search entries, pin/unpin them into the briefing chain
+    (global → project:<id> → app:<consumer>), preview the assembled
+    briefing, and diff/rollback the version ledger.
+    """
+    from memex_cli.procedural_tui.app import ProceduralCurationApp
+    from memex_cli.procedural_tui.controller import ProceduralCurationController
+
+    config: MemexConfig = ctx.obj
+    async with get_api_context(config) as api:
+        controller = ProceduralCurationController(api)
+        tui = ProceduralCurationApp(
+            controller, project_id=project_id, app_identity=app_identity
+        )
+        await tui.run_async()
