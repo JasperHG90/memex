@@ -113,6 +113,18 @@ class CaseService:
         """File a case note + run assignment. See module docstring."""
         vault_id = await self._resolve_case_vault()
 
+        # Validate an explicit case_of BEFORE filing the note, so a bad
+        # pointer fails fast (clean 404) instead of orphaning a stamped
+        # case note when apply_assignment's get() raises post-ingest.
+        if payload.case_of is not None:
+            try:
+                await self._api._procedural_repo.get(payload.case_of)
+            except Exception as exc:
+                raise CaseSubmissionError(
+                    f'case_of {payload.case_of} does not resolve to a procedural '
+                    'entry — fix the id or omit it to let the judge assign.'
+                ) from exc
+
         # 1+2. Compose + ingest via the normal path (extraction runs).
         from memex_core.api import NoteInput
 
@@ -359,8 +371,16 @@ class CaseService:
         judgment: AssignmentJudgment,
     ) -> ProceduralEntryDTO | None:
         """Create the draft procedure anchor a clean ``new_procedure``
-        verdict proposes. Body stays empty — Phase 3 distillation fills
-        it; the draft is invisible to search/briefing until promoted."""
+        verdict proposes. Body stays empty — distillation fills it; the
+        draft is invisible to search/briefing until promoted.
+
+        Uses ``create`` (NOT ``upsert``): if the proposed anchor already
+        exists — e.g. the judge's "new" verdict was a candidate-recall
+        miss against a real published procedure — the create 409s and we
+        escalate (return None) rather than silently demoting + overwriting
+        that live procedure with a stub draft."""
+        from memex_core.services.procedural_repository import ProceduralIdentityConflict
+
         verb = judgment.proposed_verb or ''
         context = judgment.proposed_context or ''
         if not ANCHOR_LABEL_PATTERN.match(verb) or not ANCHOR_LABEL_PATTERN.match(context):
@@ -372,7 +392,7 @@ class CaseService:
             return None
         scope = f'project:{payload.project_id}' if payload.project_id else 'global'
         try:
-            return await self._api.procedural.upsert(
+            return await self._api.procedural.create(
                 ProceduralEntryCreate(
                     vault_id=await self._resolve_case_vault(),
                     kind='procedure',
@@ -386,6 +406,15 @@ class CaseService:
                     origin='derived',
                 )
             )
+        except ProceduralIdentityConflict:
+            logger.info(
+                'new_procedure anchor (%s, %s, %s) already exists — escalating '
+                'instead of overwriting the live entry',
+                scope,
+                verb,
+                context,
+            )
+            return None
         except Exception:
             logger.exception('draft anchor creation failed; escalating')
             return None

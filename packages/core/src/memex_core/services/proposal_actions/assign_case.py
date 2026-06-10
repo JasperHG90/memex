@@ -131,20 +131,33 @@ class AssignCaseAction:
                     'assign_case (new_procedure) needs the finding vault_id '
                     'to home the draft anchor.'
                 )
-            draft = await api.procedural.upsert(
-                ProceduralEntryCreate(
-                    vault_id=vault_id,
-                    kind='procedure',
-                    scope=str(params['scope']),
-                    verb=str(params['verb']),
-                    context=str(params['context']),
-                    title=str(params['title']),
-                    summary=f'Draft anchor created by assign_case (actor: {actor}).',
-                    trigger=str(params.get('trigger') or params['title']),
-                    status='draft',
-                    origin='derived',
+            # ``create`` (NOT ``upsert``): a 409 means the anchor already
+            # exists as a real entry — the reviewer should pick
+            # mode='assign' against it rather than overwrite it with a
+            # stub draft. Surface that as an actionable validation error.
+            from memex_core.services.procedural_repository import ProceduralIdentityConflict
+
+            try:
+                draft = await api.procedural.create(
+                    ProceduralEntryCreate(
+                        vault_id=vault_id,
+                        kind='procedure',
+                        scope=str(params['scope']),
+                        verb=str(params['verb']),
+                        context=str(params['context']),
+                        title=str(params['title']),
+                        summary=f'Draft anchor created by assign_case (actor: {actor}).',
+                        trigger=str(params.get('trigger') or params['title']),
+                        status='draft',
+                        origin='derived',
+                    )
                 )
-            )
+            except ProceduralIdentityConflict as exc:
+                raise ProposalActionError(
+                    f'a procedure already exists at ({params["scope"]}, '
+                    f'{params["verb"]}, {params["context"]}) — resolve with '
+                    "mode='assign' against it instead of creating a new anchor."
+                ) from exc
             entry_id = draft.id
             created_entry_id = str(entry_id)
         else:

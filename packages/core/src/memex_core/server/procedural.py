@@ -183,12 +183,18 @@ async def procedural_create(
 ):
     """Create a new procedural-plane entry.
 
-    Identity-anchor conflict on (kind, scope, verb, context) → 409.
-    For idempotent writes (re-issue of the same anchor) use
-    ``POST /procedural/upsert``.
+    Identity-anchor conflict on (kind, scope, verb, context) → 409,
+    UNLESS the operator set ``server.memory.procedural.identity_conflict_mode
+    = 'upsert'``, in which case a colliding create transparently updates
+    the existing row (the same effect as ``POST /procedural/upsert``).
     """
+    conflict_mode = api.config.server.memory.procedural.identity_conflict_mode
     try:
-        result = await api.procedural.create(request)
+        if conflict_mode == 'upsert':
+            # Operator opted into silent overwrite-on-collision.
+            result = await api.procedural.upsert(request)
+        else:
+            result = await api.procedural.create(request)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         _record_write_outcome('create', request.kind, e)
         if isinstance(e, ProceduralIdentityConflict):

@@ -268,6 +268,39 @@ def upgrade() -> None:
         "kind <> 'procedure' OR (verb IS NOT NULL AND context IS NOT NULL)",
     )
 
+    # Derivation-queue strategy constraint was backwards (required
+    # target_context), making strategy derivations impossible to enqueue.
+    # Swap to match the entries-table anchor: strategy ≡ (scope, verb),
+    # context FORBIDDEN.
+    op.drop_constraint(
+        'ck_derivation_queue_strategy_context', 'procedural_derivation_queue', type_='check'
+    )
+    op.create_check_constraint(
+        'ck_derivation_queue_strategy_anchor',
+        'procedural_derivation_queue',
+        "target_kind <> 'strategy' OR (target_verb IS NOT NULL AND target_context IS NULL)",
+    )
+
+    # One pin per (context, entry) — the old unique included `position`,
+    # which let the same entry be pinned twice into a context (duplicate
+    # briefing cards, burned budget). Drop any duplicate (context, entry)
+    # pins keeping the lowest position, then swap the constraint.
+    op.execute(
+        """
+        DELETE FROM procedural_pins p
+        USING procedural_pins q
+        WHERE p.context_key = q.context_key
+          AND p.entry_id = q.entry_id
+          AND p.position > q.position
+        """
+    )
+    op.drop_constraint('uq_procedural_pins_chain_position', 'procedural_pins', type_='unique')
+    op.create_unique_constraint(
+        'uq_procedural_pins_context_entry',
+        'procedural_pins',
+        ['context_key', 'entry_id'],
+    )
+
     # ------------------------------------------------------------------
     # Part B.3 — drop body_embedding (one retrieval embedding: the trigger).
     # ------------------------------------------------------------------
@@ -383,6 +416,22 @@ def downgrade() -> None:
         postgresql_using='hnsw',
         postgresql_ops={'body_embedding': 'vector_cosine_ops'},
         postgresql_where=sa.text("status = 'published' AND kind IN ('procedure', 'strategy')"),
+    )
+
+    # Reverse the pin + derivation-queue constraint swaps.
+    op.drop_constraint('uq_procedural_pins_context_entry', 'procedural_pins', type_='unique')
+    op.create_unique_constraint(
+        'uq_procedural_pins_chain_position',
+        'procedural_pins',
+        ['context_key', 'entry_id', 'position'],
+    )
+    op.drop_constraint(
+        'ck_derivation_queue_strategy_anchor', 'procedural_derivation_queue', type_='check'
+    )
+    op.create_check_constraint(
+        'ck_derivation_queue_strategy_context',
+        'procedural_derivation_queue',
+        "target_kind <> 'strategy' OR (target_verb IS NOT NULL AND target_context IS NOT NULL)",
     )
 
     # Reverse B.2 — old constraint set.

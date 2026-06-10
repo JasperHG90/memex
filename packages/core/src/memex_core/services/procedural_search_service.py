@@ -279,10 +279,7 @@ class ProceduralSearchService:
                 )
                 .where(col(DBProceduralPin.context_key).in_(context_keys))
                 .where(col(DBProceduralEntry.status) == DBProceduralStatus.PUBLISHED)
-                .order_by(
-                    col(DBProceduralPin.context_key).asc(),
-                    col(DBProceduralPin.position).asc(),
-                )
+                .order_by(col(DBProceduralPin.position).asc())
             )
             if scope is not None:
                 stmt = stmt.where(col(DBProceduralEntry.scope) == scope)
@@ -291,11 +288,31 @@ class ProceduralSearchService:
 
             results = (await session.exec(stmt)).all()
 
-            # Group by context_key; respect the per-context cap.
+            # Order by the caller's chain priority — the SQL can't know it,
+            # so we sort by the index of each pin's context in
+            # ``context_keys`` (global → project:<id> → app:<consumer>),
+            # then by position. NOT alphabetical context_key (which would
+            # scramble the precedence narrative).
+            chain_rank = {ck: i for i, ck in enumerate(context_keys)}
+            ordered = sorted(
+                results,
+                key=lambda pe: (
+                    chain_rank.get(pe[0].context_key, len(context_keys)),
+                    pe[0].position,
+                ),
+            )
+
+            # Dedup across contexts (§19.8): an entry pinned in two chain
+            # contexts surfaces ONCE, at its highest-priority (earliest in
+            # the chain) context. Per-context cap still applies.
             per_context_count: dict[str, int] = {ck: 0 for ck in context_keys}
-            for pin, entry in results:
+            seen_entries: set = set()
+            for pin, entry in ordered:
+                if entry.id in seen_entries:
+                    continue
                 if per_context_count.get(pin.context_key, 0) >= limit_per_context:
                     continue
+                seen_entries.add(entry.id)
                 per_context_count[pin.context_key] = per_context_count.get(pin.context_key, 0) + 1
                 total_pinned += 1
                 cards.append(

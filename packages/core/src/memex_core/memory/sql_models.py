@@ -2400,11 +2400,15 @@ class ProceduralPin(SQLModel, table=True):  # type: ignore
             name='procedural_pins_entry_fkey',
             ondelete='CASCADE',
         ),
+        # One pin per (context, entry) — prevents double-pinning the
+        # same entry into a context (which would render duplicate
+        # briefing cards and burn the per-context budget). Position is
+        # append-computed (max+1), so it's naturally unique without a
+        # constraint of its own.
         UniqueConstraint(
             'context_key',
             'entry_id',
-            'position',
-            name='uq_procedural_pins_chain_position',
+            name='uq_procedural_pins_context_entry',
         ),
         CheckConstraint('position >= 0', name='ck_procedural_pins_position_nonneg'),
         Index(
@@ -2489,10 +2493,14 @@ class ProceduralDerivationQueue(SQLModel, table=True):  # type: ignore
             name='ck_derivation_queue_status',
         ),
         CheckConstraint('attempt_count >= 0', name='ck_derivation_queue_attempt_nonneg'),
-        # Strategies require target_verb and target_context (mirrors ck_strategy_context).
+        # Strategy derivations anchor on (scope, verb) — verb required,
+        # context FORBIDDEN (mirrors ck_strategy_anchor on the entries
+        # table). The old "context required" rule was backwards: it made
+        # every strategy enqueue impossible (entry.context is NULL for
+        # strategies), so the dirty-event enqueue silently never fired.
         CheckConstraint(
-            "target_kind <> 'strategy' OR (target_verb IS NOT NULL AND target_context IS NOT NULL)",
-            name='ck_derivation_queue_strategy_context',
+            "target_kind <> 'strategy' OR (target_verb IS NOT NULL AND target_context IS NULL)",
+            name='ck_derivation_queue_strategy_anchor',
         ),
         Index(
             'idx_derivation_queue_status_created_at',

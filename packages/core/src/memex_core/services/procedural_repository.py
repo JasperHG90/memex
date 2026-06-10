@@ -764,7 +764,9 @@ class ProceduralRepository:
             details={
                 'context_key': payload.context_key,
                 'entry_id': str(payload.entry_id),
-                'position': payload.position,
+                # The computed position actually written (payload.position
+                # is None on append) — not the requested value.
+                'position': row.position,
             },
         )
         return self._pin_to_dto(row)

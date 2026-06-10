@@ -252,7 +252,9 @@ class ProceduralEntryCreate(BaseModel):
     trigger: str | None = None
     tags: list[str] = Field(default_factory=list)
     extra_metadata: dict[str, Any] = Field(default_factory=dict)
-    status: StatusLiteral = 'draft'
+    status: StatusLiteral = (
+        'published'  # design: new writes default published (visible to search/briefing)
+    )
     origin: OriginLiteral = 'manual'
     supersedes_id: UUID | None = None
 

@@ -150,7 +150,7 @@ def test_entry_create_rejects_unknown_kind(bad_kind):
 
 # ---------------------------------------------------------------------------
 # Status literal — closed set; default-published for the briefing
-# semantics, but the create DTO defaults to 'draft' for safety.
+# semantics; the create DTO ALSO defaults to 'published' (design rule).
 # ---------------------------------------------------------------------------
 
 
@@ -162,19 +162,18 @@ def test_entry_create_accepts_all_three_statuses(status):
     assert dto.status == status
 
 
-def test_entry_create_defaults_status_to_draft():
-    """A create without an explicit status defaults to 'draft' (the
-    safer default — agents must explicitly publish). A regression
-    that flips the default to 'published' would silently surface
-    unvetted entries to search.
-
-    NB: the *search* DTO defaults to 'published' (briefing semantics);
-    the *create* DTO defaults to 'draft' (write-side safety). The
-    asymmetry is intentional — see DTO docstrings."""
+def test_entry_create_defaults_status_to_published():
+    """A create without an explicit status defaults to 'published' —
+    matching the design ("new writes default published"), the
+    server.memory.procedural.default_status config, and the agent
+    surface. An intentional agent write should be immediately
+    searchable; derived/draft entries set status='draft' explicitly.
+    A regression that flipped the default back to 'draft' would make
+    every agent-authored procedure silently invisible to search."""
     payload = _base_payload()
     payload.pop('status')
     dto = ProceduralEntryCreate.model_validate(payload)
-    assert dto.status == 'draft'
+    assert dto.status == 'published'
 
 
 @pytest.mark.parametrize('bad_status', ['PUBLISHED', 'deleted', 'archived', 'active'])
@@ -234,8 +233,8 @@ def test_entry_update_rejects_unknown_field():
 
 # ---------------------------------------------------------------------------
 # Search DTO — default status is 'published' (briefing semantics);
-# the write-side DTO defaults to 'draft' (publish is a deliberate
-# agent action).
+# the write-side Create DTO ALSO defaults to 'published' (the design's
+# new-writes-default-published rule; derived entries set 'draft').
 # ---------------------------------------------------------------------------
 
 
