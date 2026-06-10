@@ -114,25 +114,30 @@ class _ProceduralUpsert(SetupActionHandler):
                 f'kind_title={title!r}.'
             )
 
-        # Build the payload in the same shape the V7 DTO accepts.
+        # Build the payload in the same shape the DTO accepts.
         # ``procedural_upsert`` is idempotent on the identity anchor,
         # so re-running the suite on a dirty vault produces the
         # same state (idempotent by design).
+        #
+        # ``vault_id`` (the runner-supplied scenario vault) and
+        # ``summary`` are REQUIRED by the DTO; ``trigger`` is required
+        # for non-kv_backfill writes. We default summary/trigger from
+        # the title when a scenario doesn't supply them so the seed
+        # always validates.
         from memex_common.procedural_schemas import ProceduralEntryCreate
 
         payload: dict[str, Any] = {
+            'vault_id': str(vault_id),
             'kind': kind,
             'scope': scope,
             'title': title,
+            'summary': params.get('kind_summary') or f'Eval seed: {title}.',
+            'trigger': params.get('kind_trigger') or f'when to {title.lower()}',
         }
         if verb is not None:
             payload['verb'] = verb
         if context is not None:
             payload['context'] = context
-        if 'kind_summary' in params:
-            payload['summary'] = params['kind_summary']
-        if 'kind_trigger' in params:
-            payload['trigger'] = params['kind_trigger']
         if 'kind_status' in params:
             payload['status'] = params['kind_status']
 
