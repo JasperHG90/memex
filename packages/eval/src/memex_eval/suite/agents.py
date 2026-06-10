@@ -219,13 +219,16 @@ def _build_procedural_create_payload(outcome, *, vault_id: UUID):
     The outcome carries just the load-bearing shape fields
     (kind, scope, verb, context, title, trigger) — the rest of the
     DTO is filled with procedural-plane defaults. The DTO requires
-    ``summary``; we synthesise a minimal one so the create/upsert
-    can dispatch. The case-kind carries a ``trigger`` instead of
-    ``verb``/``context`` — the outcome's ``kind='case'`` path sets
-    verb/context to ``None`` and the DTO accepts that shape.
+    ``summary`` and ``trigger``; minimal ones are synthesised so the
+    create/upsert can dispatch (the outcome's score() only asserts
+    kind/scope/verb).
     """
     from memex_common.procedural_schemas import ProceduralEntryCreate
 
+    # The DTO requires a non-empty trigger (the retrieval key, §18.7).
+    # Outcomes that don't specify one get a synthesised when-to-use
+    # phrase from the anchor.
+    trigger = outcome.trigger or f'when to {outcome.verb or "use"} {outcome.context or ""}'.strip()
     return ProceduralEntryCreate(
         vault_id=vault_id,
         kind=outcome.kind,
@@ -239,7 +242,7 @@ def _build_procedural_create_payload(outcome, *, vault_id: UUID):
         # is enough to satisfy Pydantic validation.
         summary=f'Eval-suite seeded entry for {outcome.title!r}.',
         body='',
-        trigger=outcome.trigger,
+        trigger=trigger,
         tags=[],
         status='published',
     )
@@ -292,6 +295,7 @@ class DirectApiBackend(AnswerBackend):
             SummaryNonempty,
         )
         from memex_eval.suites.procedural_plane._outcomes import (
+            CaseSubmitRoundtrip,
             ProceduralEntryRoundtrip,
             ProceduralSearchResults,
         )
@@ -360,6 +364,36 @@ class DirectApiBackend(AnswerBackend):
                     )
                     if found_dto is not None:
                         out.units = [found_dto]
+            elif isinstance(outcome, CaseSubmitRoundtrip):
+                # Cases are NOTES (role='case' in the hidden system
+                # vault) — the eval drives the case_submit path with an
+                # explicit case_of so the LLM judge never runs
+                # (deterministic). The anchor is resolved to an entry
+                # id first; the CaseSubmitResult is packed into
+                # ``out.units[0]`` for the outcome's score().
+                from memex_common.procedural_schemas import CaseSubmit
+
+                case_of = None
+                if outcome.case_of_verb is not None:
+                    anchor_dto = await api.procedural_get_by_identity(
+                        kind='procedure',
+                        scope=outcome.case_of_scope,
+                        verb=outcome.case_of_verb,
+                        context=outcome.case_of_context,
+                    )
+                    if anchor_dto is not None:
+                        case_of = anchor_dto.id
+                result = await api.case_submit(
+                    CaseSubmit(
+                        title=outcome.title,
+                        trigger=outcome.trigger,
+                        outcome=outcome.outcome_value,
+                        actions=['eval action step'],
+                        case_of=case_of,
+                        submitted_by='memex-eval',
+                    )
+                )
+                out.units = [result]
             elif isinstance(outcome, ProceduralSearchResults):
                 # Read calls that return a list (search / briefing_cards).
                 # The client wraps the result in an envelope

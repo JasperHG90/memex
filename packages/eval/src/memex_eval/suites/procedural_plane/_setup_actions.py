@@ -70,16 +70,15 @@ class _ProceduralUpsert(SetupActionHandler):
     under ``eval-framework-first-pass``) keeps the two clean.
 
     Required params (with the ``kind_`` prefix):
-    - ``kind_kind`` (case | procedure | strategy)
-    - ``kind_scope`` (global | user | project:<id> | app:<id>)
-    - ``kind_verb`` (str, optional for case-kind)
-    - ``kind_context`` (str, optional for case-kind)
+    - ``kind_kind`` (procedure | strategy — cases are NOTES via case_submit)
+    - ``kind_scope`` (global | project:<id> | app:<id> — no user scope)
+    - ``kind_verb`` (required for both kinds)
+    - ``kind_context`` (required for procedure; FORBIDDEN for strategy)
     - ``kind_title`` (str)
+    - ``kind_trigger`` (the when_to_use phrase — required by the DTO)
     - ``kind_summary`` (str, optional)
 
     Optional params:
-    - ``kind_trigger`` (str, required for case-kind entries by the V7
-      contract — case entries have a trigger signal not a verb)
     - ``kind_status`` ('published' | 'draft', default 'published')
     - ``deprecate_after`` (bool, default False) — when True, the
       action immediately deprecates the entry it just upserted.

@@ -326,7 +326,7 @@ def test_suite_scenario_ids_are_stable():
         'briefing_cards_pin_position_order',
         'deprecate_drops_from_published_search',
         'status_published_hides_drafts',
-        'case_kind_roundtrip',
+        'case_submit_files_note_with_explicit_assignment',
     }
     suite = load_suite('procedural_plane')
     actual = {s.id for s in suite.scenarios}

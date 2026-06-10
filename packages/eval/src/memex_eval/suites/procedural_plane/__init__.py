@@ -1,13 +1,14 @@
 """V7 Procedural Plane eval suite.
 
-10 scenarios gate the V7 procedural-plane (case / procedure / strategy)
-contract. The plane has 3 kinds, 4 scopes, an identity anchor
-``(kind, scope, verb, context)`` UNIQUE NULLS NOT DISTINCT, and 8
-HTTP routes (create/upsert/get/get_by_identity/update/deprecate/
-search/briefing_cards). This suite covers the routing, identity,
-lifecycle, and pin-chain contracts that an agent depends on for
-write-routing ("this is how to do X" → procedural plane, NOT
-note/KV).
+10 scenarios gate the V7 procedural-plane contract. The plane has TWO
+kinds (procedure / strategy — cases are NOTES filed via case_submit),
+scopes global | project:<id> | app:<id> (no user scope), an identity
+anchor ``(kind, scope, verb, context)`` UNIQUE NULLS NOT DISTINCT
+(procedure ≡ scope+verb+context; strategy ≡ scope+verb), and the
+create/upsert/get/get_by_identity/update/deprecate/search/
+briefing-cards/pins/versions HTTP surface. This suite covers the
+routing, identity, lifecycle, pin-chain, and case-submission
+contracts that an agent depends on.
 
 Order matters — scenarios that depend on seeded state (search
 hits, briefing cards, deprecate-drops-from-search) appear AFTER
@@ -38,7 +39,11 @@ logger = logging.getLogger('memex_eval.suites.procedural_plane')
 # any scenario reference resolves.
 from . import _outcomes  # noqa: F401 — decorator side effect
 from . import _setup_actions  # noqa: F401 — decorator side effect
-from ._outcomes import ProceduralEntryRoundtrip, ProceduralSearchResults
+from ._outcomes import (
+    CaseSubmitRoundtrip,
+    ProceduralEntryRoundtrip,
+    ProceduralSearchResults,
+)
 
 _ROOT = Path(__file__).parent
 
@@ -49,12 +54,12 @@ METADATA = SuiteMetadata(
     suite_version='1.0.0',
     description=(
         'V7 procedural-plane contract — 10 scenarios pinning the '
-        '(kind, scope, verb, context) identity anchor, the 3 kinds '
-        '(case / procedure / strategy), the write/read lifecycle '
+        '(kind, scope, verb, context) identity anchor, the 2 kinds '
+        '(procedure / strategy), the write/read lifecycle '
         '(create/upsert/get_by_identity/deprecate), the hybrid '
-        'BM25+vector+RRF search, and the pin-chain briefing-cards '
-        'union. Every scenario exercises the public surface the '
-        'agent sees — no internals, no shortcuts.'
+        'BM25+vector+RRF search, the pin-chain briefing-cards '
+        'union, and the case_submit notes path. Every scenario '
+        'exercises the public surface — no internals, no shortcuts.'
     ),
     tags=[
         'procedural',
@@ -73,6 +78,7 @@ METADATA = SuiteMetadata(
         'procedural.deprecate',
         'procedural.search',
         'procedural.briefing_cards',
+        'cases.submit',
     ],
     knobs=[
         'server.memory.procedural.enabled',
@@ -128,6 +134,7 @@ suite.register(
             kind_verb='rotate',
             kind_context='api_key',
             kind_title='procedural-suite-rotate-key',
+            kind_trigger='rotating the project API key',
         ),
     ],
     mutating_scenario=True,
@@ -172,6 +179,7 @@ suite.register(
             kind_verb='deploy',
             kind_context='staging',
             kind_title='procedural-suite-deploy-staging',
+            kind_trigger='deploying the service to staging',
         ),
     ],
     mutating_scenario=True,
@@ -197,12 +205,12 @@ suite.register(
         type='procedural_entry_roundtrip',
         operation='get_by_identity',
         kind='procedure',
-        scope='user',
+        scope='app:eval',
         verb='commit',
         context='prefix',
         expect_status='success',
         expect_kind='procedure',
-        expect_scope='user',
+        expect_scope='app:eval',
         expect_verb='commit',
         title='procedural-suite-commit-prefix',
     ),
@@ -210,10 +218,11 @@ suite.register(
         SetupAction(
             kind='procedural_upsert',
             kind_kind='procedure',
-            kind_scope='user',
+            kind_scope='app:eval',
             kind_verb='commit',
             kind_context='prefix',
             kind_title='procedural-suite-commit-prefix',
+            kind_trigger='choosing the commit message prefix',
         ),
     ],
     mutating_scenario=True,
@@ -241,7 +250,7 @@ suite.register(
         kind='strategy',
         scope='global',
         verb='unbound-anchor-probe',
-        context='procedural-suite-unbound',
+        context=None,  # strategy anchor ≡ (scope, verb) — context forbidden
         expect_status='not_found',
         title='procedural-suite-never-seeded',
     ),
@@ -282,6 +291,7 @@ suite.register(
             kind_verb='rollback',
             kind_context='db_migration',
             kind_title='procedural-suite-rollback-migration',
+            kind_trigger='rolling back a failed database migration',
             kind_summary=(
                 'Roll back the database migration by running alembic downgrade '
                 '-1 from the v7-eval project root, then verify the schema with '
@@ -328,6 +338,7 @@ suite.register(
             kind_verb='test',
             kind_context='before_commit',
             kind_title='procedural-suite-test-before-commit-global',
+            kind_trigger='about to commit changes',
             kind_summary='Run the test suite before every commit.',
         ),
         # The project-specific rule that overrides the global one.
@@ -338,6 +349,7 @@ suite.register(
             kind_verb='test',
             kind_context='before_commit',
             kind_title='procedural-suite-test-before-commit-project',
+            kind_trigger='about to commit changes in v7-eval',
             kind_summary=(
                 'Run the test suite AND the procedural-plane eval gate '
                 'before every commit in v7-eval.'
@@ -381,6 +393,7 @@ suite.register(
             kind_verb='lint',
             kind_context='pre_push',
             kind_title='procedural-suite-lint-pre-push-global',
+            kind_trigger='about to push a branch',
             kind_summary='Run lint before every push.',
         ),
         SetupAction(
@@ -390,6 +403,7 @@ suite.register(
             kind_verb='lint',
             kind_context='pre_push',
             kind_title='procedural-suite-lint-pre-push-project',
+            kind_trigger='about to push a branch in v7-eval',
             kind_summary=('Run lint AND the V7 spec-fence test before every push in v7-eval.'),
         ),
     ],
@@ -435,6 +449,7 @@ suite.register(
             kind_verb='deprecate-test-handle',
             kind_context='deprecate-test-context',
             kind_title='procedural-suite-deprecate-handle',
+            kind_trigger='exercising the deprecate-test-handle',
             kind_summary=(
                 'Test handle for the deprecate-drops-from-search scenario — '
                 'this entry MUST disappear from default search after '
@@ -485,6 +500,7 @@ suite.register(
             kind_verb='draft-review-handle',
             kind_context='draft-review-context',
             kind_title='procedural-suite-draft-handle',
+            kind_trigger='exercising the draft-review-handle',
             kind_summary=(
                 'Draft entry for the status-published-hides-drafts scenario. '
                 'This entry has status="draft" and MUST NOT surface in '
@@ -498,50 +514,46 @@ suite.register(
 
 
 # ---------------------------------------------------------------------------
-# 10. Case-kind identity: case entries have NO verb/context — they have a
-#     trigger signal instead. A regression that conflates the case shape
-#     with the procedure shape would 500 on case-create.
+# 10. Case submission: a worked episode files as a NOTE (role='case') in
+#     the hidden system vault — never a plane entry — and the explicit
+#     case_of assignment attaches it to the seeded procedure
+#     (provenance edge + derivation enqueue). Deterministic: with
+#     case_of the LLM judge never runs.
 # ---------------------------------------------------------------------------
 
 suite.register(
-    id='case_kind_roundtrip',
+    id='case_submit_files_note_with_explicit_assignment',
     description=(
-        'A case-kind entry (recurring failure shape) round-trips with '
-        'kind="case", scope set, and no verb/context. The case shape '
-        'is a trigger signal, NOT a verb — a regression that conflates '
-        'the two shapes would 500 on case-create or break the routing '
-        'rules in agent_surface.'
+        'case_submit files the episode as a note (the caller never names '
+        'the vault) and the explicit case_of resolves to '
+        'assignment.mode="explicit". Cases are NOTES, not plane entries — '
+        'a regression that re-adds kind="case" to the plane or breaks the '
+        'notes path surfaces here.'
     ),
     query='',
     top_k=10,
-    expected=ProceduralEntryRoundtrip(
-        type='procedural_entry_roundtrip',
-        operation='upsert',
-        kind='case',
-        scope='global',
-        verb=None,  # case entries have no verb
-        context=None,  # …no context
-        # Case entries carry a trigger signal — the discriminator
-        # between case shape and procedure/strategy shape.
-        trigger='database connection pool exhausted',
-        expect_status='success',
-        expect_kind='case',
-        expect_scope='global',
-        title='procedural-suite-case-handle',
+    expected=CaseSubmitRoundtrip(
+        type='case_submit_roundtrip',
+        title='procedural-suite-case-episode',
+        trigger='database connection pool exhausted during deploy',
+        outcome_value='failure',
+        case_of_scope='global',
+        case_of_verb='restart',
+        case_of_context='db_pool',
+        expect_assignment_modes=['explicit'],
     ),
-    # The setup action passes the trigger via params — case-kind entries
-    # carry a `trigger` field instead of verb/context.
     setup_actions=[
         SetupAction(
             kind='procedural_upsert',
-            kind_kind='case',
+            kind_kind='procedure',
             kind_scope='global',
-            kind_title='procedural-suite-case-handle',
+            kind_verb='restart',
+            kind_context='db_pool',
+            kind_title='procedural-suite-restart-db-pool',
             kind_trigger='database connection pool exhausted',
             kind_summary=(
-                'Recurring failure shape: when the database connection '
-                'pool is exhausted, the agent should restart the service '
-                'and re-run the migration with --pool-size=20.'
+                'Restart the service and re-run the migration with '
+                '--pool-size=20 when the connection pool is exhausted.'
             ),
         ),
     ],

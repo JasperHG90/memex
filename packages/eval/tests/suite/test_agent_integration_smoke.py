@@ -70,7 +70,11 @@ class TestSuiteStructure:
         # ambiguous_asks_first, standard_practice_ambiguous_asks_first,
         # wakeword_store_{global,project}). They pin the
         # "this is how to do X" → memex_kv_put write-routing path.
-        assert len(SUITE.scenarios) == 46
+        # 49 = 46 + 3 V7 procedural-plane agent scenarios
+        # (group='procedural': case_submit routing, plane search,
+        # read-before-write probe). No briefing scenario — pinned
+        # cards arrive inside the session briefing, not via a tool.
+        assert len(SUITE.scenarios) == 49
 
     def test_scenario_ids_unique(self) -> None:
         ids = [s.id for s in SUITE.scenarios]
@@ -187,6 +191,20 @@ class TestMutatingDiscipline:
         'procedure_defaults_global_no_project_cue',
         'procedure_explicit_project_cue_scopes_to_project',
         'procedure_in_this_codebase_cue_scopes_to_project',
+        # V7 procedural-plane agent scenarios (group='procedural') —
+        # both write (case_submit / get_by_identity-then-write) so
+        # they're mutating; replicates_override=2 is tracked in
+        # _OVERRIDE_TWO_IDS below.
+        'procedural_files_case_via_case_submit',
+        'procedural_probes_identity_before_writing',
+    }
+
+    # V7 procedural scenarios use replicates_override=2: the routing
+    # decision (case_submit vs plane write vs KV) is the load-bearing
+    # contract and a single replay can pass by luck.
+    _OVERRIDE_TWO_IDS = {
+        'procedural_files_case_via_case_submit',
+        'procedural_probes_identity_before_writing',
     }
 
     # V4 procedure_* scenarios are LLM-judge-only (no LLM-classifier),
@@ -212,7 +230,7 @@ class TestMutatingDiscipline:
     # (so a single-shot is stable) and don't need statistical
     # robustness. The procedure_* wakeword scenarios need replicates=3
     # for noise dampening, so they're NOT in this set.
-    _OVERRIDE_ONE_IDS = (_MUTATING_IDS - _OVERRIDE_THREE_IDS) | {
+    _OVERRIDE_ONE_IDS = (_MUTATING_IDS - _OVERRIDE_THREE_IDS - _OVERRIDE_TWO_IDS) | {
         'kv_retrieves_convention',
         'kv_wakeword_kv_get',
         'kv_wakeword_kv_search',
@@ -240,8 +258,15 @@ class TestMutatingDiscipline:
                 bad.append((s.id, s.replicates_override))
         assert not bad, f'expected replicates_override=3, got: {bad}'
 
+    def test_override_two_scenarios_have_replicates_two(self) -> None:
+        bad = []
+        for s in SUITE.scenarios:
+            if s.id in self._OVERRIDE_TWO_IDS and s.replicates_override != 2:
+                bad.append((s.id, s.replicates_override))
+        assert not bad, f'expected replicates_override=2, got: {bad}'
+
     def test_non_override_scenarios_have_no_override(self) -> None:
-        allowed = self._OVERRIDE_ONE_IDS | self._OVERRIDE_THREE_IDS
+        allowed = self._OVERRIDE_ONE_IDS | self._OVERRIDE_THREE_IDS | self._OVERRIDE_TWO_IDS
         non_override = [s for s in SUITE.scenarios if s.id not in allowed]
         bad = [
             (s.id, s.replicates_override) for s in non_override if s.replicates_override is not None

@@ -65,7 +65,7 @@ class ProceduralEntryRoundtrip(ExpectedOutcomeBase):
     # The V7 identity-anchor: kind, scope, (verb, context) for
     # procedure/strategy; just (kind, scope) for case-kind entries.
     # DirectApiBackend builds the payload from these.
-    kind: Literal['case', 'procedure', 'strategy']
+    kind: Literal['procedure', 'strategy']
     scope: str
     verb: str | None = None
     context: str | None = None
@@ -243,3 +243,44 @@ def _classify_outcome(answer: AgentAnswer) -> str:
     if '404' in err or 'not found' in err:
         return 'not_found'
     return 'any_error'
+
+
+@register_outcome('case_submit_roundtrip')
+class CaseSubmitRoundtrip(ExpectedOutcomeBase):
+    """Gate the case_submit path: a worked episode files as a NOTE in
+    the hidden system vault and the assignment resolves to one of the
+    accepted modes.
+
+    Determinism note: the eval gives ``case_of`` explicitly (resolved
+    from a seeded anchor by the backend) so the LLM judge never runs —
+    ``assignment.mode='explicit'`` is the deterministic expectation.
+    The backend packs the ``CaseSubmitResult`` into ``answer.units[0]``.
+    """
+
+    type: Literal['case_submit_roundtrip'] = 'case_submit_roundtrip'
+
+    title: str = 'procedural-suite-case'
+    trigger: str = 'eval case trigger'
+    outcome_value: Literal['success', 'failure', 'mixed'] = 'success'
+    # Anchor of the seeded procedure to attach the case to (resolved to
+    # an entry id by the backend via get_by_identity → case_of).
+    case_of_verb: str | None = None
+    case_of_context: str | None = None
+    case_of_scope: str = 'global'
+    expect_assignment_modes: list[str] = ['explicit']
+
+    def metric_keys(self) -> list[str]:
+        return ['pass', 'assignment_mode_match']
+
+    def score(self, answer, *, scenario, context=None) -> dict[str, float]:
+        if answer.error or not answer.units:
+            return {'pass': 0.0, 'assignment_mode_match': 0.0}
+        result = answer.units[0]
+        note_id = getattr(result, 'note_id', None)
+        assignment = getattr(result, 'assignment', None)
+        mode = getattr(assignment, 'mode', None)
+        mode_ok = 1.0 if mode in self.expect_assignment_modes else 0.0
+        return {
+            'pass': 1.0 if (note_id is not None and mode_ok) else 0.0,
+            'assignment_mode_match': mode_ok,
+        }
