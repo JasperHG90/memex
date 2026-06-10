@@ -65,6 +65,12 @@ logger = logging.getLogger('memex.core.services.case_service')
 # The hidden system vault seeded by migration 063 (renamed by 064).
 CASE_VAULT_NAME = 'procedural'
 
+# §18.9.0 policy override for the case system vault: reflection ON
+# (mental models over case entities), vault-summary OFF (the system
+# default). MUST validate against the typed VaultPolicy (extra='forbid')
+# — see migration 063.
+CASE_VAULT_POLICY = {'reflect': True}
+
 # External-proposal rule for escalated assignments. NOT llm_-prefixed —
 # that namespace is reserved for internal emitters (lint.py validator).
 ASSIGNMENT_RULE_NAME = 'case_assignment'
@@ -164,6 +170,16 @@ class CaseService:
     # ------------------------------------------------------------------
 
     async def _resolve_case_vault(self) -> UUID:
+        """Resolve (or create) the hidden ``procedural`` system vault.
+
+        Normally migration 063 seeds it. But a DB stood up via
+        ``SQLModel.metadata.create_all`` (eval-runner resets, some
+        tests) skips migrations, so the vault is absent. We ensure it
+        here with the correct kind + §18.9.0 policy rather than hard-
+        failing — case submission must work regardless of how the
+        schema was created. A concurrent create losing the
+        name-unique race falls back to the now-present row.
+        """
         from memex_core.memory.sql_models import Vault
 
         async with self._api.metastore.session() as session:
@@ -173,12 +189,33 @@ class CaseService:
                 .where(col(Vault.kind) == 'system')
             )
             vault = (await session.exec(stmt)).first()
-        if vault is None:
-            raise CaseSubmissionError(
-                f'system vault {CASE_VAULT_NAME!r} not found — run migrations '
-                '(064 seeds/renames it). Cases are filed there implicitly (§18.9.0).'
+        if vault is not None:
+            return vault.id
+
+        try:
+            created = await self._api._vaults.create_vault(
+                name=CASE_VAULT_NAME,
+                description='V7 procedural memory plane (system vault).',
+                kind='system',
+                policy=CASE_VAULT_POLICY,
             )
-        return vault.id
+            return created.id
+        except ValueError:
+            # Lost the unique-name race (or a non-system vault squats the
+            # name). Re-read; require it to be the system vault.
+            async with self._api.metastore.session() as session:
+                stmt = (
+                    select(Vault)
+                    .where(col(Vault.name) == CASE_VAULT_NAME)
+                    .where(col(Vault.kind) == 'system')
+                )
+                vault = (await session.exec(stmt)).first()
+            if vault is None:
+                raise CaseSubmissionError(
+                    f'could not resolve or create the {CASE_VAULT_NAME!r} system '
+                    'vault (a non-system vault may be squatting the name).'
+                )
+            return vault.id
 
     async def _stamp_case_note(self, note_id: UUID, payload: CaseSubmit) -> None:
         from memex_core.memory.sql_models import Note
