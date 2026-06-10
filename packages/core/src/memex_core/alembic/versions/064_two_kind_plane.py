@@ -167,10 +167,17 @@ def upgrade() -> None:
             'RENAME TO memex_procedural_tags_to_text'
         )
     )
+    # Rename + heal the policy: dev DBs that ran 063 before the seed fix
+    # carry the invalid {"hidden": true} blob (rejected by the typed
+    # VaultPolicy, extra='forbid' — it raises in coerce_policy on every
+    # reflect_enabled/summarize_enabled call). Reset to the §18.9.0
+    # override {"reflect": true} (reflection ON, summary OFF). Idempotent
+    # for fresh chains where 063 already seeds the correct blob.
     conn.execute(
         sa.text(
             "UPDATE vaults SET name = 'procedural', "
-            "description = 'V7 procedural memory plane (system vault).' "
+            "description = 'V7 procedural memory plane (system vault).', "
+            "policy = '{\"reflect\": true}'::jsonb "
             "WHERE name = 'experiential' AND kind = 'system'"
         )
     )

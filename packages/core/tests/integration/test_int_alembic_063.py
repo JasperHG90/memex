@@ -3,7 +3,7 @@
 Verifies via real ``alembic upgrade`` / ``downgrade`` against a Postgres
 testcontainer:
 
-- 063 seeds a hidden ``experiential`` system vault with the right
+- 063 seeds a hidden ``experiential`` system vault (policy {reflect: true}) with the right
   ``kind='system'`` and ``policy={'hidden': true}``;
 - a pre-existing ``<scope>:procedure:<verb>:<context>`` KV row is
   backfilled into ``experiential_entries`` as a draft procedure, with
@@ -92,7 +92,11 @@ async def test_upgrade_seeds_experiential_system_vault(fresh_db_url: str) -> Non
             assert row is not None, f'seeded vault {_VAULT_NAME!r} missing after 063 upgrade'
             kind, policy = row
             assert kind == 'system', f'expected kind=system, got {kind!r}'
-            assert policy == {'hidden': True}, f'expected policy={{"hidden": true}}, got {policy!r}'
+            assert policy == {'reflect': True}, (
+                f'expected policy={{"reflect": true}} (the §18.9.0 system-vault '
+                f'override — reflection ON, summary OFF; must validate against the '
+                f'typed VaultPolicy), got {policy!r}'
+            )
     finally:
         await engine.dispose()
 

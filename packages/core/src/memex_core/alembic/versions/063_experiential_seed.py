@@ -3,7 +3,8 @@
 This migration is data-only. It does two things:
 
   1. **Seed a system vault** named ``experiential`` (kind='system',
-     policy={hidden: true}). This is the dedicated home for V7
+     policy={reflect: true} — the §18.9.0 override: reflection ON,
+     vault-summary OFF). This is the dedicated home for V7
      experiential-plane content. Hidden system vaults are excluded from
      user-facing lists via ``VaultService.kind != 'system'`` filtering
      (V11 introduced that filter; see migration 060).
@@ -79,6 +80,15 @@ def upgrade() -> None:
 
     # -----------------------------------------------------------------------
     # 2. Seed the hidden experiential system vault.
+    #
+    # policy = {"reflect": true} is the §18.9.0 override: this system vault
+    # keeps reflection ON (mental models over case entities) while
+    # vault-summary stays OFF (the system default). The blob MUST validate
+    # against the typed VaultPolicy (extra='forbid') — an unknown key like
+    # "hidden" raises ValidationError in coerce_policy() on every
+    # reflect_enabled/summarize_enabled call that touches this vault, which
+    # would break case-ingest extraction AND abort the vault-summary sweep.
+    # Hiding is driven by kind='system', not a policy flag.
     # -----------------------------------------------------------------------
     if _vault_id_by_name(conn, _EXPERIENTIAL_VAULT_NAME) is None:
         # jsonb is built via the ::jsonb cast in SQL (avoids the asyncpg
@@ -87,7 +97,7 @@ def upgrade() -> None:
             sa.text(
                 'INSERT INTO vaults (id, name, description, mw_mode, kind, policy) '
                 "VALUES (gen_random_uuid(), :name, :desc, 'stationary', 'system', "
-                '\'{"hidden": true}\'::jsonb)'
+                '\'{"reflect": true}\'::jsonb)'
             ),
             {
                 'name': _EXPERIENTIAL_VAULT_NAME,
