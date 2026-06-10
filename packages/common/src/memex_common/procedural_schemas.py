@@ -1,32 +1,42 @@
-"""V7 Experiential Plane — Pydantic DTOs and shared enums.
+"""V7 Procedural Plane — Pydantic DTOs and shared enums.
 
-The experiential plane stores procedural memory as three entity kinds:
+The procedural plane stores procedural memory as exactly two entity kinds:
 
-* **case** — a record of a specific experience (what happened, with what
-  trigger). Embedding lives on ``trigger_embedding``.
-* **procedure** — a synthesised how-to recipe (verb + optional context).
-  Embedding lives on ``body_embedding``.
-* **strategy** — an opinionated play-book that picks a procedure for a
-  (verb, context) tuple. Embedding lives on ``body_embedding``.
+* **procedure** — a how-to recipe. Anchor ≡ (scope, verb, context), all
+  required. Retrieval anchors on ``trigger`` (when_to_use).
+* **strategy** — an opinionated play-book generalising over the procedures
+  that share its (scope, verb). Anchor ≡ (scope, verb, NULL) — context is
+  FORBIDDEN. Retrieval anchors on ``trigger`` (when_to_apply).
+
+**Cases are NOT on this plane.** A case is a note (``notes.role='case'``)
+filed into the hidden ``procedural`` system vault via case_submit
+(design §5.1 / §18.3 / §18.9.0); it feeds procedures/strategies as lineage
+through ``procedural_sources``.
+
+Scope grammar: ``global`` | ``project:<id>`` | ``app:<id>``. There is NO
+``user`` scope — procedures and strategies are shared, auto-generated
+knowledge; per-user briefing curation rides the pin chain's context keys
+(JG decision 2026-06-10).
 
 The DTOs in this module are the public envelope used by the API facade, the
 HTTP routes, the MCP tools, the CLI, and the Hermes plugin. They deliberately
 do not import from ``memex_core`` — the SQLModel enums are mirrored as
 ``Literal`` types so the same string contract is enforced on both sides of
 the boundary. Mismatches are caught at the ORM layer by the DB CHECK
-constraints (see migration 061).
+constraints (see migrations 061 + 064).
 
-The brief and the V7 design doc are the source of truth for the field set.
+The V7 design doc is the source of truth for the field set.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import re
 from enum import Enum
 from typing import Annotated, Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 # --- shared enums (mirror memex_core.memory.sql_models) -------------------
 
@@ -38,16 +48,18 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 #   4. this module (the Literal/StrEnum definitions)
 
 
-class ExperientialKind(str, Enum):
-    """The three entity kinds in the experiential plane."""
+class ProceduralKind(str, Enum):
+    """The two entity kinds in the procedural plane.
 
-    CASE = 'case'
+    Cases are notes (``role='case'``), not procedural entries.
+    """
+
     PROCEDURE = 'procedure'
     STRATEGY = 'strategy'
 
 
-class ExperientialStatus(str, Enum):
-    """Lifecycle state of an experiential entry.
+class ProceduralStatus(str, Enum):
+    """Lifecycle state of an procedural entry.
 
     * draft — created but not yet promoted; not visible to search/briefing.
     * published — visible to agents via search/briefing.
@@ -59,8 +71,8 @@ class ExperientialStatus(str, Enum):
     DEPRECATED = 'deprecated'
 
 
-class ExperientialOrigin(str, Enum):
-    """How an experiential entry came to exist."""
+class ProceduralOrigin(str, Enum):
+    """How an procedural entry came to exist."""
 
     SEED = 'seed'  # boot-time system seed (migration 063)
     KV_BACKFILL = 'kv_backfill'  # promoted from a legacy <scope>:procedure:* KV row
@@ -69,8 +81,8 @@ class ExperientialOrigin(str, Enum):
     IMPORT = 'import'  # bulk import
 
 
-class ExperientialSourceRole(str, Enum):
-    """Role an experiential_source row plays in a relationship."""
+class ProceduralSourceRole(str, Enum):
+    """Role an procedural_source row plays in a relationship."""
 
     PROVENANCE = 'provenance'  # case that gave rise to a procedure
     EVIDENCE = 'evidence'  # supporting fact for a procedure/strategy
@@ -88,7 +100,7 @@ class DerivationQueueStatus(str, Enum):
 
 # Validated string aliases — used in DTOs so the same contract is enforced
 # whether a caller passes a Python enum or a raw string.
-KindLiteral = Literal['case', 'procedure', 'strategy']
+KindLiteral = Literal['procedure', 'strategy']
 StatusLiteral = Literal['draft', 'published', 'deprecated']
 OriginLiteral = Literal['seed', 'kv_backfill', 'derived', 'manual', 'import']
 SourceRoleLiteral = Literal['provenance', 'evidence', 'contradiction']
@@ -99,12 +111,48 @@ DerivationStatusLiteral = Literal['pending', 'in_progress', 'completed', 'failed
 # overly-long values are a UX hazard. Mirrors the existing NoteKey convention.
 ShortLabel = Annotated[str, StringConstraints(min_length=1, max_length=256, strip_whitespace=True)]
 
+# Scope / pin-context grammar (design §18.9.0 + §19.8). One segment for
+# global, two for project:<id> and app:<id>, three for the Hermes
+# per-agent pin context app:hermes:<agent_identity>. NO `user` scope —
+# see module docstring.
+SCOPE_PATTERN = re.compile(
+    r'^(global|project:[A-Za-z0-9._-]+|app:[A-Za-z0-9._-]+(:[A-Za-z0-9._-]+)?)$'
+)
+
+# Anchor verb/context grammar — mirrors the KV procedure-key grammar
+# (kv_utils.py) the 046 migration established; the design relocates that
+# taxonomy into columns (§18.2).
+ANCHOR_LABEL_PATTERN = re.compile(r'^[a-z][a-z0-9_-]*$')
+
+
+def validate_scope_label(value: str, *, field_name: str = 'scope') -> str:
+    """Validate a scope / pin-context label against the V7 grammar.
+
+    Raises ``ValueError`` with an actionable message. ``user`` is called
+    out explicitly because it is a *valid KV scope* and the most likely
+    incorrect carry-over.
+    """
+    candidate = value.strip()
+    if not SCOPE_PATTERN.match(candidate):
+        hint = ''
+        if candidate == 'user' or candidate.startswith('user:'):
+            hint = (
+                ' Procedures/strategies have no user scope — they are shared '
+                'knowledge. Per-user briefing curation is done by pinning '
+                'entries into a pin-chain context, not by scoping the entry.'
+            )
+        raise ValueError(
+            f'{field_name} {candidate!r} does not match the V7 scope grammar '
+            f'(global | project:<id> | app:<id>).{hint}'
+        )
+    return candidate
+
 
 # --- core entry DTOs ------------------------------------------------------
 
 
-class ExperientialSourceDTO(BaseModel):
-    """A single source edge attached to an experiential entry."""
+class ProceduralSourceDTO(BaseModel):
+    """A single source edge attached to an procedural entry."""
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -123,7 +171,7 @@ class ExperientialSourceDTO(BaseModel):
     created_at: dt.datetime
 
 
-class ExperientialPinDTO(BaseModel):
+class ProceduralPinDTO(BaseModel):
     """A context-binding pin that anchors an entry into a pin chain."""
 
     model_config = ConfigDict(from_attributes=True)
@@ -136,8 +184,8 @@ class ExperientialPinDTO(BaseModel):
     created_at: dt.datetime
 
 
-class ExperientialEntryDTO(BaseModel):
-    """Public-facing representation of an experiential entry.
+class ProceduralEntryDTO(BaseModel):
+    """Public-facing representation of an procedural entry.
 
     Mirrors the SQLModel column set with embedding vectors omitted (those
     are not meaningful to call-sites; they live in the search path).
@@ -169,19 +217,26 @@ class ExperientialEntryDTO(BaseModel):
     updated_at: dt.datetime
 
     # Lineage / pointer fields surfaced for agent readability.
-    sources: list[ExperientialSourceDTO] = Field(default_factory=list)
-    pins: list[ExperientialPinDTO] = Field(default_factory=list)
+    sources: list[ProceduralSourceDTO] = Field(default_factory=list)
+    pins: list[ProceduralPinDTO] = Field(default_factory=list)
 
 
 # --- mutation DTOs --------------------------------------------------------
 
 
-class ExperientialEntryCreate(BaseModel):
-    """Create a new experiential entry.
+class ProceduralEntryCreate(BaseModel):
+    """Create a new procedural entry.
 
-    The repository's identity-anchor rule applies: a (kind, scope, verb,
-    context) tuple must be unique for procedures and strategies. Cases
-    ignore the identity anchor (verb and context are NULL).
+    Anchor shapes (§18.1) are enforced here so a malformed write fails at
+    the DTO boundary, not at the DB CHECK:
+
+    * procedure — ``verb`` AND ``context`` required.
+    * strategy — ``verb`` required, ``context`` FORBIDDEN (a strategy is
+      the projection over all procedures sharing (scope, verb)).
+
+    ``trigger`` (when_to_use / when_to_apply) is required for new writes:
+    it is the retrieval key (spike §19.1). Legacy kv_backfill rows may
+    lack one; new entries may not.
     """
 
     model_config = ConfigDict(extra='forbid')
@@ -201,12 +256,43 @@ class ExperientialEntryCreate(BaseModel):
     origin: OriginLiteral = 'manual'
     supersedes_id: UUID | None = None
 
+    @model_validator(mode='after')
+    def _validate_anchor_shape(self) -> 'ProceduralEntryCreate':
+        validate_scope_label(self.scope)
+        if self.kind == 'procedure':
+            if not self.verb or not self.context:
+                raise ValueError(
+                    'procedure entries require both verb and context '
+                    '(anchor ≡ (scope, verb, context); §18.1)'
+                )
+        elif self.kind == 'strategy':
+            if not self.verb:
+                raise ValueError('strategy entries require a verb (anchor ≡ (scope, verb))')
+            if self.context:
+                raise ValueError(
+                    'strategy entries must NOT set context — a strategy groups '
+                    'all procedures sharing (scope, verb) (§18.1)'
+                )
+        for label_name in ('verb', 'context'):
+            label = getattr(self, label_name)
+            if label is not None and not ANCHOR_LABEL_PATTERN.match(label):
+                raise ValueError(
+                    f'{label_name} {label!r} must match ^[a-z][a-z0-9_-]*$ '
+                    '(the anchor-label grammar; §18.2)'
+                )
+        if self.origin != 'kv_backfill' and not (self.trigger or '').strip():
+            raise ValueError(
+                'trigger is required: it is the when_to_use / when_to_apply '
+                'phrase that retrieval anchors on (§6, spike §19.1)'
+            )
+        return self
 
-class ExperientialEntryUpdate(BaseModel):
+
+class ProceduralEntryUpdate(BaseModel):
     """Mutate an existing entry in place.
 
     All fields are optional; only set fields are updated. The repository
-    appends a new ``experiential_entry_versions`` row on every successful
+    appends a new ``procedural_entry_versions`` row on every successful
     update — see V7 design §3.2.
     """
 
@@ -224,7 +310,7 @@ class ExperientialEntryUpdate(BaseModel):
     edited_by: str | None = None
 
 
-class ExperientialSourceCreate(BaseModel):
+class ProceduralSourceCreate(BaseModel):
     """Attach a source edge to an entry."""
 
     model_config = ConfigDict(extra='forbid')
@@ -236,21 +322,55 @@ class ExperientialSourceCreate(BaseModel):
     weight: float = Field(default=1.0, ge=0.0, le=10.0)
 
 
-class ExperientialPinCreate(BaseModel):
-    """Pin an entry into a context-binding chain."""
+class ProceduralPinCreate(BaseModel):
+    """Pin an entry into a context-binding chain.
+
+    Context keys reuse the scope grammar plus the Hermes per-agent form
+    ``app:hermes:<agent_identity>`` (§19.8). No ``user`` context.
+    ``position=None`` appends to the end of the context's chain.
+    """
 
     model_config = ConfigDict(extra='forbid')
 
     context_key: ShortLabel
     entry_id: UUID
-    position: int = Field(ge=0)
+    position: int | None = Field(default=None, ge=0)
     pinned_by: str | None = None
+
+    @model_validator(mode='after')
+    def _validate_context_key(self) -> 'ProceduralPinCreate':
+        validate_scope_label(self.context_key, field_name='context_key')
+        return self
+
+
+class ProceduralEntryVersionDTO(BaseModel):
+    """One row of the uncapped version ledger (diff / rollback surface).
+
+    Each successful ``update`` / ``upsert`` rewrite appends a snapshot;
+    rollback is a read of an old snapshot + a new version write — never
+    destructive (§18.8 / §19.8).
+    """
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: UUID
+    entry_id: UUID
+    version: int
+    title: str
+    summary: str
+    body: str = ''
+    trigger: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    extra_metadata: dict[str, Any] = Field(default_factory=dict)
+    edited_by: str | None = None
+    edit_reason: str | None = None
+    created_at: dt.datetime
 
 
 # --- derivation queue DTOs ------------------------------------------------
 
 
-class ExperientialDerivationQueueDTO(BaseModel):
+class ProceduralDerivationQueueDTO(BaseModel):
     """A pending or in-progress derivation task."""
 
     model_config = ConfigDict(from_attributes=True)
@@ -271,7 +391,7 @@ class ExperientialDerivationQueueDTO(BaseModel):
     created_at: dt.datetime
 
 
-class ExperientialDerivationQueueClaim(BaseModel):
+class ProceduralDerivationQueueClaim(BaseModel):
     """What a worker needs to start working on a queue row."""
 
     model_config = ConfigDict(from_attributes=True)
@@ -288,8 +408,8 @@ class ExperientialDerivationQueueClaim(BaseModel):
 # --- search DTOs ----------------------------------------------------------
 
 
-class ExperientialSearchRequest(BaseModel):
-    """Hybrid BM25 + vector search across the experiential plane.
+class ProceduralSearchRequest(BaseModel):
+    """Hybrid BM25 + vector search across the procedural plane.
 
     At least one of ``query`` and ``scope`` must be set. The kind filter
     scopes the result to a single entity class; status defaults to
@@ -325,12 +445,12 @@ class ExperientialSearchRequest(BaseModel):
     )
 
 
-class ExperientialSearchHit(BaseModel):
-    """A single hit from the experiential search service."""
+class ProceduralSearchHit(BaseModel):
+    """A single hit from the procedural search service."""
 
     model_config = ConfigDict(from_attributes=True)
 
-    entry: ExperientialEntryDTO
+    entry: ProceduralEntryDTO
     score: float = Field(
         description='Final RRF-aggregated score. Higher is better.',
     )
@@ -343,17 +463,17 @@ class ExperientialSearchHit(BaseModel):
     )
 
 
-class ExperientialSearchResponse(BaseModel):
-    """Result envelope for an experiential-plane search."""
+class ProceduralSearchResponse(BaseModel):
+    """Result envelope for an procedural-plane search."""
 
-    hits: list[ExperientialSearchHit] = Field(default_factory=list)
+    hits: list[ProceduralSearchHit] = Field(default_factory=list)
     total: int = 0
     truncated: bool = False
     took_ms: float = 0.0
 
 
-class ExperientialBriefingCard(BaseModel):
-    """A single card in the session briefing's experiential slot.
+class ProceduralBriefingCard(BaseModel):
+    """A single card in the session briefing's procedural slot.
 
     The briefing renders one card per entry with: title, kind badge, a
     truncated summary, and the matched trigger / scope. The agent decides
@@ -362,15 +482,15 @@ class ExperientialBriefingCard(BaseModel):
 
     model_config = ConfigDict(from_attributes=True)
 
-    entry: ExperientialEntryDTO
+    entry: ProceduralEntryDTO
     pin_position: int
     context_key: ShortLabel
 
 
-class ExperientialBriefingCards(BaseModel):
+class ProceduralBriefingCards(BaseModel):
     """Envelope for the briefing surface — the cards pre-sorted by pin order."""
 
-    cards: list[ExperientialBriefingCard] = Field(default_factory=list)
+    cards: list[ProceduralBriefingCard] = Field(default_factory=list)
     context_keys: list[ShortLabel] = Field(
         default_factory=list,
         description='The pin contexts that contributed entries to this briefing.',
@@ -379,29 +499,33 @@ class ExperientialBriefingCards(BaseModel):
 
 
 __all__ = [
+    'ANCHOR_LABEL_PATTERN',
     'DerivationQueueStatus',
     'DerivationStatusLiteral',
-    'ExperientialBriefingCard',
-    'ExperientialBriefingCards',
-    'ExperientialDerivationQueueClaim',
-    'ExperientialDerivationQueueDTO',
-    'ExperientialEntryCreate',
-    'ExperientialEntryDTO',
-    'ExperientialEntryUpdate',
-    'ExperientialKind',
-    'ExperientialOrigin',
-    'ExperientialPinCreate',
-    'ExperientialPinDTO',
-    'ExperientialSearchHit',
-    'ExperientialSearchRequest',
-    'ExperientialSearchResponse',
-    'ExperientialSourceCreate',
-    'ExperientialSourceDTO',
-    'ExperientialSourceRole',
-    'ExperientialStatus',
+    'ProceduralBriefingCard',
+    'ProceduralBriefingCards',
+    'ProceduralDerivationQueueClaim',
+    'ProceduralDerivationQueueDTO',
+    'ProceduralEntryCreate',
+    'ProceduralEntryDTO',
+    'ProceduralEntryUpdate',
+    'ProceduralEntryVersionDTO',
+    'ProceduralKind',
+    'ProceduralOrigin',
+    'ProceduralPinCreate',
+    'ProceduralPinDTO',
+    'ProceduralSearchHit',
+    'ProceduralSearchRequest',
+    'ProceduralSearchResponse',
+    'ProceduralSourceCreate',
+    'ProceduralSourceDTO',
+    'ProceduralSourceRole',
+    'ProceduralStatus',
     'KindLiteral',
     'OriginLiteral',
+    'SCOPE_PATTERN',
     'ShortLabel',
     'SourceRoleLiteral',
     'StatusLiteral',
+    'validate_scope_label',
 ]

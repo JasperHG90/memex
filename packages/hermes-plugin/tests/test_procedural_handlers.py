@@ -22,13 +22,13 @@ from uuid import uuid4
 
 import pytest
 
-from memex_common.experiential_schemas import (
-    ExperientialBriefingCards,
-    ExperientialEntryDTO,
-    ExperientialSearchRequest,
-    ExperientialSearchResponse,
-    ExperientialBriefingCard,
-    ExperientialSearchHit,
+from memex_common.procedural_schemas import (
+    ProceduralBriefingCards,
+    ProceduralEntryDTO,
+    ProceduralSearchRequest,
+    ProceduralSearchResponse,
+    ProceduralBriefingCard,
+    ProceduralSearchHit,
 )
 
 from memex_hermes_plugin.memex.config import HermesMemexConfig
@@ -69,11 +69,11 @@ def _fake_entry_dto(
     verb: str = 'rotate',
     context: str = 'creds',
     title: str = 'rotate API credentials',
-) -> ExperientialEntryDTO:
+) -> ProceduralEntryDTO:
     from datetime import datetime, timezone
 
     now = datetime.now(timezone.utc)
-    return ExperientialEntryDTO(
+    return ProceduralEntryDTO(
         id=uuid4(),
         vault_id=uuid4(),
         kind=kind,  # type: ignore[arg-type]
@@ -160,7 +160,7 @@ def test_schemas_have_required_fields():
 
 
 def test_create_calls_procedural_create_with_payload(config, vault_id):
-    """A procedure-kind create hits api.procedural_create with an ExperientialEntryCreate."""
+    """A procedure-kind create hits api.procedural_create with an ProceduralEntryCreate."""
     api = Mock()
     expected = _fake_entry_dto(kind='procedure', scope='global', verb='rotate', context='creds')
     api.procedural_create = AsyncMock(return_value=expected)
@@ -524,11 +524,11 @@ def test_deprecate_rejects_invalid_superseded_uuid(config, vault_id):
 
 
 def test_search_calls_procedural_search_with_request(config, vault_id):
-    """The handler builds an ExperientialSearchRequest and threads vault_id."""
+    """The handler builds an ProceduralSearchRequest and threads vault_id."""
     api = Mock()
-    expected_response = ExperientialSearchResponse(
+    expected_response = ProceduralSearchResponse(
         hits=[
-            ExperientialSearchHit(
+            ProceduralSearchHit(
                 entry=_fake_entry_dto(),
                 score=0.9,
                 bm25_rank=0,
@@ -553,7 +553,7 @@ def test_search_calls_procedural_search_with_request(config, vault_id):
     api.procedural_search.assert_awaited_once()
     call = api.procedural_search.await_args
     assert call is not None
-    request: ExperientialSearchRequest = call.args[0]
+    request: ProceduralSearchRequest = call.args[0]
     assert request.query == 'rotate creds'
     assert request.kind == 'procedure'
     assert request.limit == 5
@@ -603,9 +603,9 @@ def test_briefing_cards_requires_non_empty_keys(config, vault_id):
 def test_briefing_cards_calls_procedural_briefing_cards(config, vault_id):
     api = Mock()
     entry = _fake_entry_dto()
-    expected_response = ExperientialBriefingCards(
+    expected_response = ProceduralBriefingCards(
         cards=[
-            ExperientialBriefingCard(
+            ProceduralBriefingCard(
                 entry=entry,
                 pin_position=0,
                 context_key='global',

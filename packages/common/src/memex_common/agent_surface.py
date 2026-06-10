@@ -214,11 +214,11 @@ Three kinds under one identity anchor `(kind, scope, verb, context)`:
 - `procedure` — worked HOWTO. `verb`+`context` REQUIRED. `trigger` optional.
 - `strategy` — higher-order tactic. `verb`+`context` REQUIRED. `trigger` optional.
 
-<critical_constraint name="experiential_identity_anchor">
+<critical_constraint name="procedural_identity_anchor">
 `procedure` and `strategy` UNIQUE on `(kind, scope, verb, context)` → re-submit returns 409. Probe with `memex_procedural_get_by_identity` BEFORE `create`, or use `memex_procedural_upsert` for idempotent re-writes.
 </critical_constraint>
 
-Pin chain: `global → project:<id> → app:<id>` (most specific wins). `memex_procedural_briefing_cards(context_keys=[…])` unions pins across the supplied contexts — pass `["global", f"project:{vault.project_id}", f"app:{identity}"]` to render the briefing's experiential slot.
+Pin chain: `global → project:<id> → app:<id>` (most specific wins). `memex_procedural_briefing_cards(context_keys=[…])` unions pins across the supplied contexts — pass `["global", f"project:{vault.project_id}", f"app:{identity}"]` to render the briefing's procedural slot.
 
 `status` defaults to `published` for new writes. `memex_procedural_search` defaults to `status="published"`; pass `status="all"` for drafts. `memex_procedural_deprecate(superseded_by_id=…)` soft-deletes (drops from search, remains reachable via `get`).
 
@@ -331,7 +331,7 @@ def compose_with_procedural() -> str:
     Opt-in (not in ``compose_universal``) because the 8 ``memex_procedural_*``
     tools are only mounted by clients that ship the V7 plane — including
     PROCEDURAL_PLANE in the default universal would burn ~1,750 chars on
-    agents that have no experiential tools. Hermes briefing and the Claude
+    agents that have no procedural tools. Hermes briefing and the Claude
     Code SessionStart hook append PROCEDURAL_PLANE on top of
     ``compose_universal()`` when V7 is active.
     """

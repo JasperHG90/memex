@@ -464,11 +464,11 @@ class McpSurveyResult(BaseModel):
     truncated: bool = False
 
 
-# ── Experiential plane (V7) ──
+# ── Procedural plane (V7) ──
 
 
-class McpExperientialSource(BaseModel):
-    """Source pointer on an experiential entry."""
+class McpProceduralSource(BaseModel):
+    """Source pointer on an procedural entry."""
 
     model_config = {'extra': 'forbid'}
 
@@ -478,7 +478,7 @@ class McpExperientialSource(BaseModel):
     excerpt: str | None = None
 
 
-class McpExperientialPin(BaseModel):
+class McpProceduralPin(BaseModel):
     """Pin linking an entry to a context key in the briefing pin chain."""
 
     model_config = {'extra': 'forbid'}
@@ -487,8 +487,8 @@ class McpExperientialPin(BaseModel):
     position: int
 
 
-class McpExperientialEntry(BaseModel):
-    """Public-facing experiential entry. Embedding vectors are omitted — they
+class McpProceduralEntry(BaseModel):
+    """Public-facing procedural entry. Embedding vectors are omitted — they
     are not meaningful at the LLM-tool boundary; they live in the search path.
     """
 
@@ -513,12 +513,12 @@ class McpExperientialEntry(BaseModel):
     published_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
-    sources: list[McpExperientialSource] = Field(default_factory=list)
-    pins: list[McpExperientialPin] = Field(default_factory=list)
+    sources: list[McpProceduralSource] = Field(default_factory=list)
+    pins: list[McpProceduralPin] = Field(default_factory=list)
 
 
-class McpExperientialSearchHit(BaseModel):
-    """One hit from the experiential hybrid search."""
+class McpProceduralSearchHit(BaseModel):
+    """One hit from the procedural hybrid search."""
 
     model_config = {'extra': 'forbid'}
 
@@ -535,19 +535,19 @@ class McpExperientialSearchHit(BaseModel):
     pin_position: int | None = None
 
 
-class McpExperientialSearchResult(BaseModel):
+class McpProceduralSearchResult(BaseModel):
     """Enveloped hits from memex_procedural_search."""
 
     model_config = {'extra': 'forbid'}
 
-    hits: list[McpExperientialSearchHit] = Field(default_factory=list)
+    hits: list[McpProceduralSearchHit] = Field(default_factory=list)
     total: int = 0
     truncated: bool = False
     took_ms: float = 0.0
 
 
-class McpExperientialBriefingCard(BaseModel):
-    """One card in the briefing's experiential slot."""
+class McpProceduralBriefingCard(BaseModel):
+    """One card in the briefing's procedural slot."""
 
     model_config = {'extra': 'forbid'}
 
@@ -560,10 +560,10 @@ class McpExperientialBriefingCard(BaseModel):
     matched_via: Literal['pin'] = 'pin'
 
 
-class McpExperientialBriefingResult(BaseModel):
+class McpProceduralBriefingResult(BaseModel):
     """Enveloped cards from memex_procedural_briefing_cards."""
 
     model_config = {'extra': 'forbid'}
 
-    cards: list[McpExperientialBriefingCard] = Field(default_factory=list)
+    cards: list[McpProceduralBriefingCard] = Field(default_factory=list)
     total: int = 0

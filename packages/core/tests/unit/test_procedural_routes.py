@@ -4,8 +4,8 @@ Two parallel surfaces are pinned here:
 
 * The HTTP routes are mounted under ``/api/v1/procedural/*`` (the public
   surface name) but the engine-internal error classes
-  (``ExperientialEntryNotFound``, ``ExperientialIdentityConflict``) keep
-  the legacy ``Experiential*`` prefix. Both shapes are locked by these
+  (``ProceduralEntryNotFound``, ``ProceduralIdentityConflict``) keep
+  the legacy ``Procedural*`` prefix. Both shapes are locked by these
   tests so the rename cannot drift.
 * ``_handle_error`` dispatches the two error classes to the right HTTP
   code: not-found → 404, identity conflict → 409. A catch-all
@@ -21,10 +21,10 @@ import pytest
 
 from memex_core.server.common import _handle_error
 from memex_core.server.procedural import router
-from memex_core.services.experiential_repository import (
-    ExperientialEntryNotFound,
-    ExperientialIdentityConflict,
-    ExperientialRepositoryError,
+from memex_core.services.procedural_repository import (
+    ProceduralEntryNotFound,
+    ProceduralIdentityConflict,
+    ProceduralRepositoryError,
 )
 
 
@@ -46,15 +46,15 @@ def _route_paths():
 
 def test_procedural_router_mounts_under_procedural_prefix():
     """All procedural routes live under /api/v1/procedural/* — NOT
-    /api/v1/experiential/* (legacy engine-internal name)."""
+    /api/v1/procedural/* (legacy engine-internal name)."""
     paths = _route_paths()
     assert paths, 'procedural router has no routes registered'
     for path in paths:
         assert path.startswith('/api/v1/procedural'), (
             f'procedural route must be under /api/v1/procedural, got: {path}'
         )
-        assert '/experiential' not in path, (
-            f'procedural route must not carry the legacy prefix /api/v1/experiential: {path}'
+        assert '/procedural' not in path, (
+            f'procedural route must not carry the legacy prefix /api/v1/procedural: {path}'
         )
 
 
@@ -99,22 +99,22 @@ def test_procedural_routes_cover_crud_and_search():
     assert paths['/api/v1/procedural/briefing-cards'] == {'POST'}
 
 
-def test_handle_error_maps_experiential_entry_not_found_to_404():
-    """ExperientialEntryNotFound is a domain error, NOT a
+def test_handle_error_maps_procedural_entry_not_found_to_404():
+    """ProceduralEntryNotFound is a domain error, NOT a
     ResourceNotFoundError — so it does not ride the existing 404
     branch. The procedural group needs its own dispatch so the
     agent gets a clean 404, not a generic 400."""
-    exc = ExperientialEntryNotFound(f'Entry {uuid4()} not found')
+    exc = ProceduralEntryNotFound(f'Entry {uuid4()} not found')
     response = _handle_error(exc, 'context')
     assert response.status_code == 404
     assert str(exc) in str(response.detail)
 
 
-def test_handle_error_maps_experiential_identity_conflict_to_409():
+def test_handle_error_maps_procedural_identity_conflict_to_409():
     """Identity conflicts on (kind, scope, verb, context) are 409s —
     the same code as AppendIdConflictError. Sharing the 409 status
     is intentional; the detail string is the discriminator."""
-    exc = ExperientialIdentityConflict(
+    exc = ProceduralIdentityConflict(
         'Identity anchor (kind=procedure, scope=user, verb=rotate, '
         'context=api_key) already exists with id <other>.'
     )
@@ -127,40 +127,40 @@ def test_handle_error_does_not_fall_through_to_memex_error_400():
     """Defence-in-depth: if a future refactor removes the explicit
     branches, the generic MemexError → 400 fallback would mask
     404s and 409s. This test guards the explicit dispatch."""
-    # Without the explicit branch, ExperientialEntryNotFound is a
+    # Without the explicit branch, ProceduralEntryNotFound is a
     # plain Exception → 500. With the explicit branch → 404.
-    response = _handle_error(ExperientialEntryNotFound('x'), 'c')
+    response = _handle_error(ProceduralEntryNotFound('x'), 'c')
     assert response.status_code != 500
     assert response.status_code != 400, (
-        'ExperientialEntryNotFound must NOT be 400 (the generic '
+        'ProceduralEntryNotFound must NOT be 400 (the generic '
         'MemexError fallback) — a miss is a 404, not a client error.'
     )
-    response = _handle_error(ExperientialIdentityConflict('x'), 'c')
+    response = _handle_error(ProceduralIdentityConflict('x'), 'c')
     assert response.status_code != 500
     assert response.status_code != 400, (
-        'ExperientialIdentityConflict must NOT be 400 — a collision '
+        'ProceduralIdentityConflict must NOT be 400 — a collision '
         'on the identity anchor is a 409, not a client error.'
     )
 
 
-def test_experiential_repository_error_hierarchy():
+def test_procedural_repository_error_hierarchy():
     """The two domain errors must share a common base so callers can
     catch them in a single ``except`` when they only care that the
     plane raised (e.g. a CLI handler)."""
-    assert issubclass(ExperientialEntryNotFound, ExperientialRepositoryError)
-    assert issubclass(ExperientialIdentityConflict, ExperientialRepositoryError)
+    assert issubclass(ProceduralEntryNotFound, ProceduralRepositoryError)
+    assert issubclass(ProceduralIdentityConflict, ProceduralRepositoryError)
     # Deliberately NOT a MemexError subclass: the procedural routes
     # are the only place these errors map to HTTP. The repository
     # stays domain-pure so it can be reused by background workers
     # that don't want a HTTP envelope attached.
-    assert not issubclass(ExperientialRepositoryError, Exception) or True
+    assert not issubclass(ProceduralRepositoryError, Exception) or True
     # (The above is tautological; the real check is below.)
     try:
-        # If a future refactor promotes ExperientialRepositoryError
+        # If a future refactor promotes ProceduralRepositoryError
         # to MemexError, the routes' explicit branches would STILL
         # win because they're typed-specific. This test just ensures
         # the rename did not silently drop the inheritance.
-        isinstance(ExperientialEntryNotFound('x'), ExperientialRepositoryError)
+        isinstance(ProceduralEntryNotFound('x'), ProceduralRepositoryError)
     except Exception as e:
         pytest.fail(f'Inheritance check raised: {e}')
 

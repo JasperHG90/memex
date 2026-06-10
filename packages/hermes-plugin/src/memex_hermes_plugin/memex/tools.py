@@ -4629,7 +4629,7 @@ def handle_procedural_create(
     if vault_id is None:
         return tool_error('No vault bound to this Hermes session; cannot create procedural entry.')
 
-    from memex_common.experiential_schemas import ExperientialEntryCreate
+    from memex_common.procedural_schemas import ProceduralEntryCreate
 
     # V7 contract: case MUST omit verb+context; procedure+strategy REQUIRE both.
     raw_verb = args.get('verb')
@@ -4651,7 +4651,7 @@ def handle_procedural_create(
         verb_value = str(raw_verb)
         context_value = str(raw_context)
 
-    payload = ExperientialEntryCreate(
+    payload = ProceduralEntryCreate(
         vault_id=vault_id,
         kind=kind,  # type: ignore[arg-type]
         scope=str(scope),
@@ -4705,7 +4705,7 @@ def handle_procedural_upsert(
     if vault_id is None:
         return tool_error('No vault bound to this Hermes session; cannot upsert procedural entry.')
 
-    from memex_common.experiential_schemas import ExperientialEntryCreate
+    from memex_common.procedural_schemas import ProceduralEntryCreate
 
     raw_verb = args.get('verb')
     raw_context = args.get('context')
@@ -4720,7 +4720,7 @@ def handle_procedural_upsert(
         verb_value = str(raw_verb)
         context_value = str(raw_context)
 
-    payload = ExperientialEntryCreate(
+    payload = ProceduralEntryCreate(
         vault_id=vault_id,
         kind=kind,  # type: ignore[arg-type]
         scope=str(scope),
@@ -4877,7 +4877,7 @@ def handle_procedural_update(
     except (ValueError, TypeError):
         return tool_error(f'Invalid entry UUID: {raw_id}')
 
-    from memex_common.experiential_schemas import ExperientialEntryUpdate
+    from memex_common.procedural_schemas import ProceduralEntryUpdate
 
     update_kwargs: dict[str, Any] = {}
     for field in ('title', 'summary', 'body', 'trigger', 'tags', 'extra_metadata', 'status'):
@@ -4888,7 +4888,7 @@ def handle_procedural_update(
             'memex_procedural_update requires at least one of: '
             'title, summary, body, trigger, tags, extra_metadata, status.'
         )
-    payload = ExperientialEntryUpdate(**update_kwargs)
+    payload = ProceduralEntryUpdate(**update_kwargs)
 
     try:
         result = run_sync(
@@ -5011,7 +5011,7 @@ def handle_procedural_search(
     if kind is not None and (msg := _validate_kind(kind)) is not None:
         return tool_error(msg)
 
-    from memex_common.experiential_schemas import ExperientialSearchRequest
+    from memex_common.procedural_schemas import ProceduralSearchRequest
 
     # Pydantic 2 + ``extra='forbid'`` rejects ``None`` for fields with
     # non-None defaults (``bool``, ``float``, ``list``). Build the
@@ -5037,7 +5037,7 @@ def handle_procedural_search(
         req_kwargs['vault_id'] = vault_id
 
     try:
-        request = ExperientialSearchRequest(**req_kwargs)
+        request = ProceduralSearchRequest(**req_kwargs)
     except Exception as e:
         return tool_error(f'Invalid search request: {e}')
 

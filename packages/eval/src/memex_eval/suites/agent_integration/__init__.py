@@ -79,6 +79,13 @@ from memex_eval.suite.decorator import Suite
 from memex_eval.suites.agent_integration._outcomes import DeprioRecoversFrom400  # noqa: F401,E402
 from memex_eval.suites.agent_integration import _setup_actions as _seed_actions  # noqa: F401,E402
 
+# V7 procedural-plane scenarios in this suite call ``procedural_upsert`` to
+# pre-seed a procedure on the (procedure, global, rotate, creds) anchor.
+# That handler is registered by the procedural_plane sister suite — the
+# side-effect import below populates the framework's setup-action
+# registry so the scenarios below can reference it by name.
+from memex_eval.suites.procedural_plane import _setup_actions  # noqa: F401,E402
+
 _ROOT = Path(__file__).parent
 _DUR_MS = 180_000.0
 
@@ -1416,6 +1423,236 @@ suite.register(
     expected_failure_modes=['hermes'],
     replicates_override=1,
     mutating_scenario=True,
+)
+
+
+# --- V7 Procedural plane: agent-facing routing ---
+#
+# The procedural plane is the V7 canonical home for "how to do X"
+# knowledge. Its identity anchor (kind, scope, verb, context) and
+# pin-chain briefing surface replace the legacy
+# ``<scope>:procedure:<verb>:<context>`` KV convention. These four
+# scenarios gate the *agent-facing* side: does the agent reach for
+# the right procedural tool with the right kwargs, or does it leak
+# trigger signals / how-tos into the KV path?
+#
+# Filterable as ``--group procedural``.
+
+# 1. Storing a case note — agent must NOT route a trigger signal to
+# memex_kv_put. Cases are briefing-eligible; KV entries are not. If
+# the agent routes here, the trigger is invisible to
+# memex_procedural_briefing_cards and vault briefings silently miss
+# the failure pattern.
+suite.register(
+    id='procedural_stores_a_case_via_create',
+    group='procedural',
+    description=(
+        'User describes a recurring trigger signal. The agent must call '
+        '`memex_procedural_create` with `kind="case"` and a non-empty '
+        '`trigger` field. KV routing is wrong — cases are briefing-eligible '
+        'and KV is not.'
+    ),
+    query=(
+        'Every time CI returns 500 after step 3, you should pause and '
+        'check the artifact upload logs first — not retry blindly.'
+    ),
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_procedural_create'],
+                min_count=1,
+                match_mode='all',
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_procedural_create',
+                arg_name='kind',
+                regex=r'^case$',
+                min_count=1,
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_procedural_create',
+                arg_name='trigger',
+                regex=r'.+',  # non-empty
+                min_count=1,
+            ),
+        ],
+    ),
+    replicates_override=2,
+    mutating_scenario=True,
+)
+
+
+# 2. Retrieving a procedure via search — agent must reach for the
+# procedural plane, not KV. Setup pre-seeds a procedure on the
+# (procedure, global, rotate, creds) anchor so the search has
+# something to find.
+suite.register(
+    id='procedural_retrieves_via_search',
+    group='procedural',
+    description=(
+        'User asks "how do I rotate creds?" and a procedure for '
+        '(kind=procedure, scope=global, verb=rotate, context=creds) is '
+        'pre-seeded. The agent must call `memex_procedural_search` (NOT '
+        'memex_kv_list) and surface the procedure in its answer.'
+    ),
+    query='How do I rotate the project API credentials?',
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_procedural_search'],
+                min_count=1,
+                match_mode='all',
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_procedural_search',
+                arg_name='query',
+                regex=r'rotate|cred|api|key',  # any of these tokens
+                min_count=1,
+            ),
+        ],
+    ),
+    setup_actions=[
+        SetupAction(
+            kind='procedural_upsert',
+            kind_kind='procedure',
+            kind_scope='global',
+            kind_verb='rotate',
+            kind_context='creds',
+            kind_title='Rotate API credentials',
+            kind_summary=(
+                'Steps to rotate the project API credentials: 1) Issue '
+                'new key in the secrets manager. 2) Update CI '
+                'environment. 3) Roll the old key. 4) Verify CI green.'
+            ),
+        ),
+    ],
+)
+
+
+# 3. Read-before-write probe — operational contract. When the user
+# tells the agent to remember a procedure for an anchor that already
+# exists, the agent MUST call memex_procedural_get_by_identity first.
+# Without that probe the agent's create call 409s and the retry loop
+# hammers the server. The ToolCallArgMatches on kind/verb/context
+# pin the exact identity tuple the agent should look up.
+suite.register(
+    id='procedural_probes_identity_before_writing',
+    group='procedural',
+    description=(
+        'A procedure for (kind=procedure, scope=global, verb=rotate, '
+        'context=creds) is pre-seeded. The user tells the agent to '
+        'remember a better way to rotate creds. The agent must call '
+        '`memex_procedural_get_by_identity` BEFORE '
+        '`memex_procedural_create` to avoid a 409 loop.'
+    ),
+    query=(
+        'Update the rotate creds procedure: always roll the old key '
+        'AFTER CI green, not before — otherwise the deploy races.'
+    ),
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_procedural_get_by_identity'],
+                min_count=1,
+                match_mode='all',
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_procedural_get_by_identity',
+                arg_name='kind',
+                regex=r'^procedure$',
+                min_count=1,
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_procedural_get_by_identity',
+                arg_name='verb',
+                regex=r'^rotate$',
+                min_count=1,
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_procedural_get_by_identity',
+                arg_name='context',
+                regex=r'^creds$',
+                min_count=1,
+            ),
+        ],
+    ),
+    setup_actions=[
+        SetupAction(
+            kind='procedural_upsert',
+            kind_kind='procedure',
+            kind_scope='global',
+            kind_verb='rotate',
+            kind_context='creds',
+            kind_title='Rotate API credentials',
+            kind_summary='Original procedure (pre-seeded).',
+        ),
+    ],
+    replicates_override=2,
+    mutating_scenario=True,
+)
+
+
+# 4. Briefing cards at session start — the procedural plane's
+# pin-chain briefing surface is exposed via
+# memex_procedural_briefing_cards. The agent must reach for that
+# tool, not memex_kv_list or memex_get_vault_summary. The
+# ToolCallArgMatches on `context_keys` is the load-bearing
+# assertion (framework JSON-dumps list args, so the regex matches
+# any non-empty list).
+suite.register(
+    id='procedural_loads_briefing_cards_at_session_start',
+    group='procedural',
+    description=(
+        'User asks the agent to brief itself on the project. The agent '
+        'must call `memex_procedural_briefing_cards` with a non-empty '
+        '`context_keys` list. Reaching for KV or vault-summary is wrong.'
+    ),
+    query='Brief me on what you already know about this project.',
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_procedural_briefing_cards'],
+                min_count=1,
+                match_mode='all',
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_procedural_briefing_cards',
+                arg_name='context_keys',
+                regex=r'\[.*\]',  # non-empty list after JSON-dump
+                min_count=1,
+            ),
+        ],
+    ),
+    setup_actions=[
+        SetupAction(
+            kind='procedural_upsert',
+            kind_kind='procedure',
+            kind_scope='global',
+            kind_verb='rotate',
+            kind_context='creds',
+            kind_title='Rotate API credentials',
+            kind_summary='A pinned procedure the briefing should surface.',
+        ),
+    ],
 )
 
 

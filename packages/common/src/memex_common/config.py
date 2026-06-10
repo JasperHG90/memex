@@ -2003,7 +2003,7 @@ class ProceduralConfig(BaseModel):
     """Configuration for the procedural (case / procedure / strategy) plane.
 
     These knobs are operator-level defaults; per-request overrides on
-    ``ExperientialSearchRequest`` and ``procedural_briefing_cards`` still
+    ``ProceduralSearchRequest`` and ``procedural_briefing_cards`` still
     win. Keep the surface narrow — every entry here is a real toggle the
     brief described, not a speculation. The 8 fields below correspond to
     the 8 tunables pinned by the V7 design review.
@@ -2020,7 +2020,7 @@ class ProceduralConfig(BaseModel):
     )
 
     # Hybrid search defaults — overridden per-request by `bm25_weight` /
-    # `vector_weight` on `ExperientialSearchRequest`. Operators tune the
+    # `vector_weight` on `ProceduralSearchRequest`. Operators tune the
     # baseline; the agent can dial it up/down for the immediate query.
     search_default_bm25_weight: float = Field(
         default=0.5,

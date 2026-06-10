@@ -1,20 +1,17 @@
 """Procedural-plane HTTP routes.
 
-7 endpoints under ``/api/v1/procedural/*``. This is the third plane
-(case / procedure / strategy entries) that sits alongside notes and
-KV with its own identity anchor ``(kind, scope, verb, context)``.
-
-The engine internals (SQLModel ``experiential_*`` tables, DTOs in
-``memex_common.experiential_schemas``) ship under the legacy
-``experiential`` prefix; the public HTTP surface is ``procedural``
-because the agent-facing plane is the *procedural* plane.
+Endpoints under ``/api/v1/procedural/*``. The procedural plane holds
+procedure and strategy entries alongside notes and KV, with its own
+identity anchor ``(kind, scope, verb, context)``: procedure ≡ (scope,
+verb, context); strategy ≡ (scope, verb, NULL) — §18.1. Cases are
+NOTES (``role='case'`` in the hidden system vault), not rows here.
 
 Error mapping lives in ``_handle_error`` (server/common.py). The two
-domain errors raised by :class:`ExperientialRepository` get explicit
+domain errors raised by :class:`ProceduralRepository` get explicit
 branches there:
 
-* :class:`ExperientialEntryNotFound` → 404
-* :class:`ExperientialIdentityConflict` → 409
+* :class:`ProceduralEntryNotFound` → 404
+* :class:`ProceduralIdentityConflict` → 409
 
 The search surface is one round-trip — the ``include_pin_chain`` +
 ``pin_contexts`` fields on the request envelope union textual / vector
@@ -30,13 +27,16 @@ from uuid import UUID
 from fastapi import APIRouter, Body, Depends, Query
 
 from memex_common.exceptions import MemexError
-from memex_common.experiential_schemas import (
-    ExperientialBriefingCards,
-    ExperientialEntryCreate,
-    ExperientialEntryDTO,
-    ExperientialEntryUpdate,
-    ExperientialSearchRequest,
-    ExperientialSearchResponse,
+from memex_common.procedural_schemas import (
+    ProceduralBriefingCards,
+    ProceduralEntryCreate,
+    ProceduralEntryDTO,
+    ProceduralEntryUpdate,
+    ProceduralEntryVersionDTO,
+    ProceduralPinCreate,
+    ProceduralPinDTO,
+    ProceduralSearchRequest,
+    ProceduralSearchResponse,
     ShortLabel,
 )
 from memex_core.api import MemexAPI
@@ -48,9 +48,9 @@ from memex_core.metrics import (
 )
 from memex_core.server.auth import require_read, require_write
 from memex_core.server.common import _handle_error, get_api
-from memex_core.services.experiential_repository import (
-    ExperientialEntryNotFound,
-    ExperientialIdentityConflict,
+from memex_core.services.procedural_repository import (
+    ProceduralEntryNotFound,
+    ProceduralIdentityConflict,
 )
 from memex_core.tracing import trace_span
 
@@ -96,16 +96,16 @@ def _record_write_outcome(operation: str, kind: str, exc: BaseException | None) 
     """
     if exc is None:
         outcome = 'success'
-    elif isinstance(exc, ExperientialIdentityConflict):
+    elif isinstance(exc, ProceduralIdentityConflict):
         outcome = 'identity_conflict'
-    elif isinstance(exc, ExperientialEntryNotFound):
+    elif isinstance(exc, ProceduralEntryNotFound):
         outcome = 'not_found'
     else:
         outcome = 'error'
     PROCEDURAL_OPERATIONS_TOTAL.labels(operation=operation, kind=kind, outcome=outcome).inc()
 
 
-def _record_identity_conflict(api: MemexAPI, kind: str, exc: ExperientialIdentityConflict) -> None:
+def _record_identity_conflict(api: MemexAPI, kind: str, exc: ProceduralIdentityConflict) -> None:
     """Record a 409 collision. The ``mode`` label reflects the operator's
     configured behaviour — useful for distinguishing "operator flipped to
     upsert and conflicts disappeared" from "operator flipped to upsert
@@ -117,7 +117,7 @@ def _record_identity_conflict(api: MemexAPI, kind: str, exc: ExperientialIdentit
 def _record_search(
     api: MemexAPI,
     kind: str | None,
-    response: ExperientialSearchResponse,
+    response: ProceduralSearchResponse,
     duration_seconds: float,
 ) -> None:
     """Record the search histogram. The ``streams`` label summarises
@@ -174,11 +174,11 @@ def _record_briefing_cards(context_keys: list[ShortLabel]) -> None:
 
 @router.post(
     '/procedural',
-    response_model=ExperientialEntryDTO,
+    response_model=ProceduralEntryDTO,
     dependencies=[Depends(require_write)],
 )
 async def procedural_create(
-    request: Annotated[ExperientialEntryCreate, Body()],
+    request: Annotated[ProceduralEntryCreate, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
 ):
     """Create a new procedural-plane entry.
@@ -188,10 +188,10 @@ async def procedural_create(
     ``POST /procedural/upsert``.
     """
     try:
-        result = await api.experiential.create(request)
+        result = await api.procedural.create(request)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         _record_write_outcome('create', request.kind, e)
-        if isinstance(e, ExperientialIdentityConflict):
+        if isinstance(e, ProceduralIdentityConflict):
             _record_identity_conflict(api, request.kind, e)
         raise _handle_error(e, 'Failed to create procedural-plane entry')
     # Mirror the success-path increment :meth:`procedural_update`
@@ -202,12 +202,12 @@ async def procedural_create(
 
 @router.get(
     '/procedural/by-identity',
-    response_model=ExperientialEntryDTO | None,
+    response_model=ProceduralEntryDTO | None,
     dependencies=[Depends(require_read)],
 )
 async def procedural_get_by_identity(
     api: Annotated[MemexAPI, Depends(get_api)],
-    kind: Annotated[ShortLabel, Query(description='case | procedure | strategy')],
+    kind: Annotated[ShortLabel, Query(description='procedure | strategy')],
     scope: Annotated[ShortLabel, Query(description='Identity scope.')],
     verb: Annotated[
         ShortLabel | None,
@@ -229,25 +229,31 @@ async def procedural_get_by_identity(
     never 404s — a miss is the cheap answer.
 
     The query is a direct identity-anchor SELECT against the partial
-    unique index ``uq_experiential_identity`` (not a fuzzy search).
-    A previous implementation routed through ``api.experiential.search``
+    unique index ``uq_procedural_identity`` (not a fuzzy search).
+    A previous implementation routed through ``api.procedural.search``
     with no query text, which short-circuited to an empty response and
     silently returned ``None`` for every anchor — that regression broke
     the agent's read-before-write flow and is the reason this route
     now calls the repository's exact-anchor method.
     """
     try:
-        if kind == 'case':
-            if verb is not None or context is not None:
-                raise ValueError(
-                    'kind=case requires verb=null and context=null '
-                    '(cases do not carry an identity anchor beyond scope).'
-                )
-        else:
-            if not verb:
-                raise ValueError(f'kind={kind} requires verb (e.g. "rotate", "audit", "deploy").')
+        if kind not in ('procedure', 'strategy'):
+            raise ValueError(
+                f'kind={kind!r} is not on the procedural plane '
+                "(procedure | strategy). Cases are notes (role='case') — "
+                'submit them via the cases surface, not here.'
+            )
+        if not verb:
+            raise ValueError(f'kind={kind} requires verb (e.g. "rotate", "audit", "deploy").')
+        if kind == 'strategy' and context is not None:
+            raise ValueError(
+                'kind=strategy requires context=null — a strategy is the '
+                'projection over all procedures sharing (scope, verb) (§18.1).'
+            )
+        if kind == 'procedure' and not context:
+            raise ValueError('kind=procedure requires context (e.g. "creds", "nomad").')
 
-        return await api.experiential.get_by_identity(
+        return await api.procedural.get_by_identity(
             kind=kind,  # type: ignore[arg-type]
             scope=scope,
             verb=verb,
@@ -259,8 +265,25 @@ async def procedural_get_by_identity(
 
 
 @router.get(
+    '/procedural/pins',
+    response_model=list[ProceduralPinDTO],
+    dependencies=[Depends(require_read)],
+)
+async def procedural_list_pins(
+    api: Annotated[MemexAPI, Depends(get_api)],
+    context_key: Annotated[ShortLabel, Query(description='Pin-chain context key.')],
+    limit: Annotated[int | None, Query(ge=1, le=100)] = None,
+):
+    """Pins for one context, position ascending (curation surface)."""
+    try:
+        return await api.procedural.list_pins(context_key, limit=limit)
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Failed to list procedural pins')
+
+
+@router.get(
     '/procedural/{entry_id}',
-    response_model=ExperientialEntryDTO,
+    response_model=ProceduralEntryDTO,
     dependencies=[Depends(require_read)],
 )
 async def procedural_get(
@@ -274,7 +297,7 @@ async def procedural_get(
     """Fetch a single entry by UUID."""
     try:
         vid: UUID | None = UUID(vault_id) if vault_id is not None else None
-        return await api.experiential.get(entry_id, vault_id=vid)
+        return await api.procedural.get(entry_id, vault_id=vid)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         # Read path — no operation-counter increment (the histogram is
         # the search-path SLA; reads-by-id are too cheap to be
@@ -284,12 +307,12 @@ async def procedural_get(
 
 @router.patch(
     '/procedural/{entry_id}',
-    response_model=ExperientialEntryDTO,
+    response_model=ProceduralEntryDTO,
     dependencies=[Depends(require_write)],
 )
 async def procedural_update(
     entry_id: UUID,
-    request: Annotated[ExperientialEntryUpdate, Body()],
+    request: Annotated[ProceduralEntryUpdate, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
     vault_id: Annotated[
         ShortLabel | None,
@@ -299,13 +322,13 @@ async def procedural_update(
     """Mutate an entry in place (appends a version row)."""
     try:
         vid: UUID | None = UUID(vault_id) if vault_id is not None else None
-        result = await api.experiential.update(entry_id, request, vault_id=vid)
+        result = await api.procedural.update(entry_id, request, vault_id=vid)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         # `update` body does not carry `kind` — pull it from the entry
         # being updated so the counter label stays bounded. We don't
         # care if the read itself 404s; we record what we can.
         try:
-            existing = await api.experiential.get(entry_id, vault_id=vid)
+            existing = await api.procedural.get(entry_id, vault_id=vid)
             kind_label = existing.kind
         except Exception:
             kind_label = 'unknown'
@@ -317,7 +340,7 @@ async def procedural_update(
 
 @router.post(
     '/procedural/{entry_id}/deprecate',
-    response_model=ExperientialEntryDTO,
+    response_model=ProceduralEntryDTO,
     dependencies=[Depends(require_write)],
 )
 async def procedural_deprecate(
@@ -334,7 +357,7 @@ async def procedural_deprecate(
 ):
     """Soft-deprecate an entry (status → 'deprecated')."""
     try:
-        result = await api.experiential.deprecate(
+        result = await api.procedural.deprecate(
             entry_id, superseded_by_id=superseded_by_id, vault_id=vault_id
         )
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
@@ -345,12 +368,103 @@ async def procedural_deprecate(
 
 
 @router.post(
+    '/procedural/{entry_id}/pin',
+    response_model=ProceduralPinDTO,
+    dependencies=[Depends(require_write)],
+)
+async def procedural_pin(
+    entry_id: UUID,
+    api: Annotated[MemexAPI, Depends(get_api)],
+    context_key: Annotated[ShortLabel, Body(embed=True)],
+    position: Annotated[int | None, Body(embed=True, ge=0)] = None,
+    pinned_by: Annotated[str | None, Body(embed=True)] = None,
+):
+    """Pin an entry into a context-binding chain (§19.8).
+
+    ``position`` omitted appends to the end of the chain. 422 when the
+    context already holds the cap (10) or the context key violates the
+    grammar (global | project:<id> | app:<id>).
+    """
+    try:
+        payload = ProceduralPinCreate(
+            context_key=context_key,
+            entry_id=entry_id,
+            position=position,
+            pinned_by=pinned_by,
+        )
+        # Entry must exist — surface a 404 rather than an FK violation.
+        await api.procedural.get(entry_id)
+        return await api.procedural.pin(payload)
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Failed to pin procedural-plane entry')
+
+
+@router.delete(
+    '/procedural/{entry_id}/pin',
+    response_model=dict,
+    dependencies=[Depends(require_write)],
+)
+async def procedural_unpin(
+    entry_id: UUID,
+    api: Annotated[MemexAPI, Depends(get_api)],
+    context_key: Annotated[ShortLabel, Query(description='Pin-chain context key.')],
+):
+    """Unpin an entry from a context. Idempotent — 200 with removed=0
+    when no pin existed."""
+    try:
+        removed = await api.procedural.unpin(entry_id=entry_id, context_key=context_key)
+        return {'entry_id': str(entry_id), 'context_key': context_key, 'removed': removed}
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Failed to unpin procedural-plane entry')
+
+
+@router.get(
+    '/procedural/{entry_id}/versions',
+    response_model=list[ProceduralEntryVersionDTO],
+    dependencies=[Depends(require_read)],
+)
+async def procedural_list_versions(
+    entry_id: UUID,
+    api: Annotated[MemexAPI, Depends(get_api)],
+):
+    """The entry's uncapped version ledger, newest first (diff /
+    rollback surface, §18.8)."""
+    try:
+        return await api.procedural.list_versions(entry_id)
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Failed to list procedural-plane entry versions')
+
+
+@router.post(
+    '/procedural/{entry_id}/rollback',
+    response_model=ProceduralEntryDTO,
+    dependencies=[Depends(require_write)],
+)
+async def procedural_rollback(
+    entry_id: UUID,
+    api: Annotated[MemexAPI, Depends(get_api)],
+    version: Annotated[int, Body(embed=True, ge=1)],
+    rolled_back_by: Annotated[str | None, Body(embed=True)] = None,
+):
+    """Non-destructive rollback: the requested snapshot is re-applied
+    as a NEW version row; nothing is deleted (§18.8). 404 when the
+    entry has no such version."""
+    try:
+        result = await api.procedural.rollback(entry_id, version, rolled_back_by=rolled_back_by)
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        _record_write_outcome('rollback', 'unknown', e)
+        raise _handle_error(e, 'Failed to roll back procedural-plane entry')
+    _record_write_outcome('rollback', result.kind, None)
+    return result
+
+
+@router.post(
     '/procedural/upsert',
-    response_model=ExperientialEntryDTO,
+    response_model=ProceduralEntryDTO,
     dependencies=[Depends(require_write)],
 )
 async def procedural_upsert(
-    request: Annotated[ExperientialEntryCreate, Body()],
+    request: Annotated[ProceduralEntryCreate, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
 ):
     """Idempotent write on the identity anchor.
@@ -368,7 +482,7 @@ async def procedural_upsert(
         },
     ):
         try:
-            result = await api.experiential.upsert(request)
+            result = await api.procedural.upsert(request)
         except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
             _record_write_outcome('upsert', request.kind, e)
             raise _handle_error(e, 'Failed to upsert procedural-plane entry')
@@ -380,11 +494,11 @@ async def procedural_upsert(
 
 @router.post(
     '/procedural/search',
-    response_model=ExperientialSearchResponse,
+    response_model=ProceduralSearchResponse,
     dependencies=[Depends(require_read)],
 )
 async def procedural_search(
-    request: Annotated[ExperientialSearchRequest, Body()],
+    request: Annotated[ProceduralSearchRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
 ):
     """Hybrid BM25 + vector search (RRF-merged) across the procedural plane."""
@@ -398,7 +512,7 @@ async def procedural_search(
     ):
         started = time.monotonic()
         try:
-            response = await api.experiential.search(request)
+            response = await api.procedural.search(request)
         except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
             # Record nothing on error — the SLA signal is meaningless
             # when the search blew up before producing a result set.
@@ -414,7 +528,7 @@ async def procedural_search(
 
 @router.post(
     '/procedural/briefing-cards',
-    response_model=ExperientialBriefingCards,
+    response_model=ProceduralBriefingCards,
     dependencies=[Depends(require_read)],
 )
 async def procedural_briefing_cards(
@@ -451,7 +565,7 @@ async def procedural_briefing_cards(
         },
     ):
         try:
-            result = await api.experiential.briefing_cards(
+            result = await api.procedural.briefing_cards(
                 context_keys,
                 scope=scope,
                 limit_per_context=limit_per_context,

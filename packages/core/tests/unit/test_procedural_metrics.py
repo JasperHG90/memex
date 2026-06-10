@@ -23,9 +23,9 @@ from memex_core.server.procedural import (
     _record_search,
     _record_write_outcome,
 )
-from memex_core.services.experiential_repository import (
-    ExperientialEntryNotFound,
-    ExperientialIdentityConflict,
+from memex_core.services.procedural_repository import (
+    ProceduralEntryNotFound,
+    ProceduralIdentityConflict,
 )
 
 
@@ -61,7 +61,7 @@ def test_record_write_outcome_success():
 
 
 def test_record_write_outcome_identity_conflict():
-    exc = ExperientialIdentityConflict('x')
+    exc = ProceduralIdentityConflict('x')
     _record_write_outcome('create', 'strategy', exc)
     val = PROCEDURAL_OPERATIONS_TOTAL.labels(
         operation='create', kind='strategy', outcome='identity_conflict'
@@ -70,7 +70,7 @@ def test_record_write_outcome_identity_conflict():
 
 
 def test_record_write_outcome_not_found():
-    exc = ExperientialEntryNotFound('x')
+    exc = ProceduralEntryNotFound('x')
     _record_write_outcome('update', 'procedure', exc)
     val = PROCEDURAL_OPERATIONS_TOTAL.labels(
         operation='update', kind='procedure', outcome='not_found'
@@ -91,7 +91,7 @@ def test_record_write_outcome_generic_error():
 
 
 def _hit(matched_via: str) -> object:
-    """Build a minimal stub that quacks like an ExperientialSearchHit."""
+    """Build a minimal stub that quacks like an ProceduralSearchHit."""
     return type('Hit', (), {'matched_via': matched_via})()
 
 
@@ -194,7 +194,7 @@ def test_record_identity_conflict_uses_config_mode():
     'the agent is now using upsert, not 409-ing')."""
     api = _api_stub_with_mode('upsert')
     before = PROCEDURAL_IDENTITY_CONFLICT_TOTAL.labels(kind='procedure', mode='upsert')._value.get()
-    _record_identity_conflict(api, 'procedure', ExperientialIdentityConflict('x'))
+    _record_identity_conflict(api, 'procedure', ProceduralIdentityConflict('x'))
     after = PROCEDURAL_IDENTITY_CONFLICT_TOTAL.labels(kind='procedure', mode='upsert')._value.get()
     assert after == before + 1
 
@@ -202,7 +202,7 @@ def test_record_identity_conflict_uses_config_mode():
 def test_record_identity_conflict_reject_mode():
     api = _api_stub_with_mode('reject')
     before = PROCEDURAL_IDENTITY_CONFLICT_TOTAL.labels(kind='case', mode='reject')._value.get()
-    _record_identity_conflict(api, 'case', ExperientialIdentityConflict('x'))
+    _record_identity_conflict(api, 'case', ProceduralIdentityConflict('x'))
     after = PROCEDURAL_IDENTITY_CONFLICT_TOTAL.labels(kind='case', mode='reject')._value.get()
     assert after == before + 1
 

@@ -1,4 +1,4 @@
-"""Experiential tool description wiring test.
+"""Procedural tool description wiring test.
 
 The 8 ``memex_procedural_*`` tools (V7) are Tier 1a MCP surfaces. Their
 per-tool description text is the SSOT constant from
@@ -40,7 +40,7 @@ _ALL_TOOL_WIRING = (
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize('tool_name,expected_desc', _ALL_TOOL_WIRING)
-async def test_experiential_tool_registered_with_common_description(
+async def test_procedural_tool_registered_with_common_description(
     tool_name: str, expected_desc: str
 ) -> None:
     """Each ``memex_procedural_*`` tool is registered and uses the
@@ -56,7 +56,7 @@ async def test_experiential_tool_registered_with_common_description(
 
 
 @pytest.mark.asyncio
-async def test_eight_experiential_tools_registered() -> None:
+async def test_eight_procedural_tools_registered() -> None:
     """Sanity check on the count — guards against silent drops of any
     single tool in a future refactor. Uses ``get_tool`` per name rather
     than ``list_tools`` because the latter requires a freshly-spun
@@ -72,5 +72,5 @@ async def test_eight_experiential_tools_registered() -> None:
         found.append(name)
     assert len(found) == 8, f'Expected 8 memex_procedural_* tools, got {len(found)}: {found}'
     assert found == expected, (
-        f'Experiential tool surface drift.\n  Expected: {expected}\n  Got:      {found}'
+        f'Procedural tool surface drift.\n  Expected: {expected}\n  Got:      {found}'
     )

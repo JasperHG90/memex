@@ -28,13 +28,13 @@ from __future__ import annotations
 from typing import Any
 from uuid import UUID
 
-from memex_common.experiential_schemas import (
-    ExperientialBriefingCards,
-    ExperientialEntryCreate,
-    ExperientialEntryDTO,
-    ExperientialEntryUpdate,
-    ExperientialSearchRequest,
-    ExperientialSearchResponse,
+from memex_common.procedural_schemas import (
+    ProceduralBriefingCards,
+    ProceduralEntryCreate,
+    ProceduralEntryDTO,
+    ProceduralEntryUpdate,
+    ProceduralSearchRequest,
+    ProceduralSearchResponse,
     ShortLabel,
 )
 
@@ -48,20 +48,20 @@ _DEFAULT_TIMEOUT: float = 30.0
 
 def create(
     api: Any,
-    payload: ExperientialEntryCreate,
+    payload: ProceduralEntryCreate,
     *,
     timeout: float = _DEFAULT_TIMEOUT,
-) -> ExperientialEntryDTO:
+) -> ProceduralEntryDTO:
     """Create a new procedural-plane entry. 409 on identity collision."""
     return run_sync(api.procedural_create(payload), timeout=timeout)
 
 
 def upsert(
     api: Any,
-    payload: ExperientialEntryCreate,
+    payload: ProceduralEntryCreate,
     *,
     timeout: float = _DEFAULT_TIMEOUT,
-) -> ExperientialEntryDTO:
+) -> ProceduralEntryDTO:
     """Idempotent write on the (kind, scope, verb, context) anchor."""
     return run_sync(api.procedural_upsert(payload), timeout=timeout)
 
@@ -72,7 +72,7 @@ def get(
     *,
     vault_id: str | None = None,
     timeout: float = _DEFAULT_TIMEOUT,
-) -> ExperientialEntryDTO:
+) -> ProceduralEntryDTO:
     """Fetch a single entry by UUID. 404 on miss or vault mismatch."""
     return run_sync(api.procedural_get(entry_id, vault_id=vault_id), timeout=timeout)
 
@@ -86,7 +86,7 @@ def get_by_identity(
     context: ShortLabel | None = None,
     vault_id: str | None = None,
     timeout: float = _DEFAULT_TIMEOUT,
-) -> ExperientialEntryDTO | None:
+) -> ProceduralEntryDTO | None:
     """Look up a single entry by its (kind, scope, verb, context) anchor.
 
     Returns ``None`` when the anchor is unbound — the cheap
@@ -101,11 +101,11 @@ def get_by_identity(
 def update(
     api: Any,
     entry_id: UUID,
-    payload: ExperientialEntryUpdate,
+    payload: ProceduralEntryUpdate,
     *,
     vault_id: str | None = None,
     timeout: float = _DEFAULT_TIMEOUT,
-) -> ExperientialEntryDTO:
+) -> ProceduralEntryDTO:
     """Mutate an entry in place (appends a version row)."""
     return run_sync(
         api.procedural_update(entry_id, payload, vault_id=vault_id),
@@ -120,7 +120,7 @@ def deprecate(
     superseded_by_id: UUID | None = None,
     vault_id: str | None = None,
     timeout: float = _DEFAULT_TIMEOUT,
-) -> ExperientialEntryDTO:
+) -> ProceduralEntryDTO:
     """Soft-deprecate an entry (status → 'deprecated')."""
     return run_sync(
         api.procedural_deprecate(entry_id, superseded_by_id=superseded_by_id, vault_id=vault_id),
@@ -130,10 +130,10 @@ def deprecate(
 
 def search(
     api: Any,
-    request: ExperientialSearchRequest,
+    request: ProceduralSearchRequest,
     *,
     timeout: float = _DEFAULT_TIMEOUT,
-) -> ExperientialSearchResponse:
+) -> ProceduralSearchResponse:
     """Hybrid BM25 + vector search (RRF-merged) across the procedural plane."""
     return run_sync(api.procedural_search(request), timeout=timeout)
 
@@ -145,7 +145,7 @@ def briefing_cards(
     scope: ShortLabel | None = None,
     limit_per_context: int = 5,
     timeout: float = _DEFAULT_TIMEOUT,
-) -> ExperientialBriefingCards:
+) -> ProceduralBriefingCards:
     """Pin-chain briefing cards for the session-briefing surface.
 
     One card per pinned entry, ordered by pin position. The list of

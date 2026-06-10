@@ -19,18 +19,18 @@ from unittest.mock import MagicMock
 import pytest
 from sqlalchemy import text
 
-from memex_common.experiential_schemas import (
-    ExperientialEntryCreate,
-    ExperientialPinCreate,
-    ExperientialSearchRequest,
-    ExperientialEntryUpdate,
+from memex_common.procedural_schemas import (
+    ProceduralEntryCreate,
+    ProceduralPinCreate,
+    ProceduralSearchRequest,
+    ProceduralEntryUpdate,
 )
-from memex_core.services.experiential_repository import (
-    ExperientialIdentityConflict,
-    ExperientialRepository,
+from memex_core.services.procedural_repository import (
+    ProceduralIdentityConflict,
+    ProceduralRepository,
 )
-from memex_core.services.experiential_search_service import (
-    ExperientialSearchService,
+from memex_core.services.procedural_search_service import (
+    ProceduralSearchService,
 )
 
 pytestmark = [pytest.mark.integration]
@@ -55,13 +55,13 @@ async def _create_vault(session, name_prefix: str) -> uuid.UUID:
     return vault_id
 
 
-def _repo(metastore) -> ExperientialRepository:
-    return ExperientialRepository(metastore=metastore)
+def _repo(metastore) -> ProceduralRepository:
+    return ProceduralRepository(metastore=metastore)
 
 
-def _search(metastore, embedding_model) -> ExperientialSearchService:
+def _search(metastore, embedding_model) -> ProceduralSearchService:
     repo = _repo(metastore)
-    return ExperientialSearchService(
+    return ProceduralSearchService(
         metastore=metastore, repository=repo, embedding_model=embedding_model
     )
 
@@ -93,9 +93,9 @@ def _entry_payload(
     trigger: str | None = None,
     status: str = 'published',
     body: str = '',
-) -> ExperientialEntryCreate:
+) -> ProceduralEntryCreate:
     """Build a valid create payload for the procedural plane."""
-    return ExperientialEntryCreate(
+    return ProceduralEntryCreate(
         vault_id=vault_id,
         kind=kind,  # type: ignore[arg-type]
         scope=scope,
@@ -130,7 +130,7 @@ async def test_create_then_create_same_anchor_raises_identity_conflict(metastore
     repo = _repo(metastore)
     await repo.create(_entry_payload(vault_id=vault_id, title=f'first-{uuid.uuid4()}'))
 
-    with pytest.raises(ExperientialIdentityConflict):
+    with pytest.raises(ProceduralIdentityConflict):
         await repo.create(_entry_payload(vault_id=vault_id, title=f'second-{uuid.uuid4()}'))
 
 
@@ -182,9 +182,9 @@ async def test_upsert_on_existing_anchor_returns_merged_row(metastore):
     entry across rewrites.
 
     The version ledger is preserved across upsert: a re-write appends
-    a new ``experiential_entry_versions`` row carrying the post-write
+    a new ``procedural_entry_versions`` row carrying the post-write
     body snapshot. The audit trail is reconstructable from
-    ``experiential_entry_versions`` alone; a regression that dropped
+    ``procedural_entry_versions`` alone; a regression that dropped
     the version row would make upsert look invisible to incident
     response.
     """
@@ -250,7 +250,7 @@ async def test_upsert_preserves_deprecated_status(metastore):
 async def _count_versions(metastore, entry_id: uuid.UUID) -> int:
     async with metastore.session() as session:
         result = await session.execute(
-            text('SELECT count(*) FROM experiential_entry_versions WHERE entry_id = :e'),
+            text('SELECT count(*) FROM procedural_entry_versions WHERE entry_id = :e'),
             {'e': str(entry_id)},
         )
     return int(result.scalar())
@@ -264,7 +264,7 @@ async def _count_versions(metastore, entry_id: uuid.UUID) -> int:
 
 @pytest.mark.asyncio
 async def test_update_appends_version_row_and_bumps_updated_at(metastore):
-    """A successful update appends one row to ``experiential_entry_versions``
+    """A successful update appends one row to ``procedural_entry_versions``
     and bumps ``updated_at`` on the entry. The version row carries
     the post-update body snapshot so the audit trail is reconstructable
     from the table alone."""
@@ -285,7 +285,7 @@ async def test_update_appends_version_row_and_bumps_updated_at(metastore):
 
     updated = await repo.update(
         entry.id,
-        ExperientialEntryUpdate(body='rewritten body', edit_reason='add detail'),
+        ProceduralEntryUpdate(body='rewritten body', edit_reason='add detail'),
     )
 
     assert updated.body == 'rewritten body'
@@ -311,7 +311,7 @@ async def test_update_without_fields_raises_value_error(metastore):
     repo = _repo(metastore)
     entry = await repo.create(_entry_payload(vault_id=vault_id, title=f'noop-{uuid.uuid4()}'))
     with pytest.raises(ValueError, match='no fields set'):
-        await repo.update(entry.id, ExperientialEntryUpdate())
+        await repo.update(entry.id, ProceduralEntryUpdate())
 
 
 # ---------------------------------------------------------------------------
@@ -402,7 +402,7 @@ async def test_search_finds_published_procedure_via_bm25(metastore):
     # Query with a token the body actually contains — the english
     # stemmer turns "rollback" / "roll" into different lexemes so a
     # query like "rollback" doesn't match a body containing "roll".
-    response = await svc.search(ExperientialSearchRequest(query=f'migration {token}', limit=10))
+    response = await svc.search(ProceduralSearchRequest(query=f'migration {token}', limit=10))
 
     titles = [h.entry.title for h in response.hits]
     assert any(t == f'procedure-{token}' for t in titles), (
@@ -448,7 +448,7 @@ async def test_search_respects_kind_filter(metastore):
 
     svc = _search(metastore, _make_embedding_model())
     response = await svc.search(
-        ExperientialSearchRequest(query=f'deploy {strat_token}', kind='strategy', limit=10)
+        ProceduralSearchRequest(query=f'deploy {strat_token}', kind='strategy', limit=10)
     )
 
     assert response.hits, 'strategy filter returned no hits'
@@ -481,11 +481,9 @@ async def test_briefing_cards_unions_pins_across_context_keys(metastore):
         _entry_payload(vault_id=vault_id, title='project-anchor', scope='project:alpha')
     )
 
+    await repo.add_pin(ProceduralPinCreate(context_key='global', entry_id=e_global.id, position=0))
     await repo.add_pin(
-        ExperientialPinCreate(context_key='global', entry_id=e_global.id, position=0)
-    )
-    await repo.add_pin(
-        ExperientialPinCreate(context_key='project:alpha', entry_id=e_project.id, position=0)
+        ProceduralPinCreate(context_key='project:alpha', entry_id=e_project.id, position=0)
     )
 
     svc = _search(metastore, _make_embedding_model())

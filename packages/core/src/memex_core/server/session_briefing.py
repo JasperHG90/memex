@@ -30,6 +30,14 @@ async def get_session_briefing(
     api: Annotated[MemexAPI, Depends(get_api)],
     budget: int = Query(2000, description='Token budget (1000 or 2000).'),
     project_id: str | None = Query(None, description='Optional project ID for KV scoping.'),
+    app: str | None = Query(
+        None,
+        description=(
+            'Consumer identity for the procedural pin chain '
+            '("claude-code", "hermes:<agent_identity>"). Selects the '
+            'app:<id> pin context layered on global + project (§19.8).'
+        ),
+    ),
 ) -> dict:
     """Generate a session briefing for the given vault."""
     if budget not in _VALID_BUDGETS:
@@ -42,6 +50,7 @@ async def get_session_briefing(
             vault_id=vault_id,
             budget=budget,
             project_id=project_id,
+            app=app,
         )
         return {'briefing': briefing, 'vault_id': str(vault_id), 'budget': budget}
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:

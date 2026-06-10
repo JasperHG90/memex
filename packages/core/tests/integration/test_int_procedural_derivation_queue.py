@@ -29,8 +29,8 @@ import uuid
 import pytest
 from sqlalchemy import text
 
-from memex_core.services.experiential_repository import (
-    ExperientialRepository,
+from memex_core.services.procedural_repository import (
+    ProceduralRepository,
 )
 
 pytestmark = [pytest.mark.integration]
@@ -51,8 +51,8 @@ async def _create_vault(session, name_prefix: str) -> uuid.UUID:
     return vault_id
 
 
-def _repo(metastore) -> ExperientialRepository:
-    return ExperientialRepository(metastore=metastore)
+def _repo(metastore) -> ProceduralRepository:
+    return ProceduralRepository(metastore=metastore)
 
 
 # ---------------------------------------------------------------------------
@@ -95,7 +95,7 @@ async def test_enqueue_then_claim_transitions_status_and_increments_attempts(met
             await session.execute(
                 text(
                     'SELECT status, attempt_count, claimed_at IS NOT NULL '
-                    'FROM experiential_derivation_queue WHERE id = :id'
+                    'FROM procedural_derivation_queue WHERE id = :id'
                 ),
                 {'id': str(enqueued.id)},
             )

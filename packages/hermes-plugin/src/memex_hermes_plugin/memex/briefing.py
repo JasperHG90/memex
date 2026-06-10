@@ -41,6 +41,7 @@ class BriefingCache:
         vault_id: UUID,
         budget: int,
         project_id: str | None,
+        app: str | None = None,
     ) -> None:
         """Fire the background briefing fetch. Safe to call multiple times."""
         with self._lock:
@@ -57,6 +58,7 @@ class BriefingCache:
                             vault_id=vault_id,
                             budget=budget,
                             project_id=project_id,
+                            app=app,
                         ),
                         timeout=30.0,
                     )

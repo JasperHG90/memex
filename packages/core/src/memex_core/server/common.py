@@ -36,10 +36,10 @@ from memex_common.schemas import (
 from memex_core.api import MemexAPI
 from memex_core.context import get_session_id
 from memex_core.metrics import DTO_ENUM_COERCION_TOTAL
-from memex_core.services.experiential_repository import (
-    ExperientialConstraintViolation,
-    ExperientialEntryNotFound,
-    ExperientialIdentityConflict,
+from memex_core.services.procedural_repository import (
+    ProceduralConstraintViolation,
+    ProceduralEntryNotFound,
+    ProceduralIdentityConflict,
 )
 
 logger = logging.getLogger('memex.core.server')
@@ -106,16 +106,16 @@ def _handle_error(e: Exception, context: str) -> HTTPException:
         return HTTPException(status_code=400, detail=str(e))
     if isinstance(e, (AppendIdConflictError, NoteNotAppendableError)):
         return HTTPException(status_code=409, detail=str(e))
-    if isinstance(e, ExperientialIdentityConflict):
+    if isinstance(e, ProceduralIdentityConflict):
         return HTTPException(status_code=409, detail=str(e))
-    if isinstance(e, ExperientialConstraintViolation):
+    if isinstance(e, ProceduralConstraintViolation):
         # CHECK / FK / non-anchor UNIQUE → 422 (caller-correctable).
         # The constraint name rides in the exception's ``constraint``
         # attribute so the agent's log surface can tell which rule
         # fired (e.g. ``ck_strategy_context`` vs an FK on
         # ``vault_id``).
         return HTTPException(status_code=422, detail=str(e))
-    if isinstance(e, ExperientialEntryNotFound):
+    if isinstance(e, ProceduralEntryNotFound):
         return HTTPException(status_code=404, detail=str(e))
     if isinstance(e, AppendLockTimeoutError):
         return HTTPException(

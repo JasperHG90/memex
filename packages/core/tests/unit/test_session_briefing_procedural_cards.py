@@ -64,7 +64,7 @@ def _make_card(
     context_key: str = 'project:42',
     pin_position: int = 0,
 ) -> SimpleNamespace:
-    """Bare object matching :class:`ExperientialBriefingCard` attribute access."""
+    """Bare object matching :class:`ProceduralBriefingCard` attribute access."""
     return SimpleNamespace(
         entry=entry,
         context_key=context_key,

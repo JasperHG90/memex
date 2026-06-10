@@ -21,14 +21,17 @@ from memex_common.exceptions import (
     MemoryUnitNotFoundError,
     VaultNotFoundError,
 )
-from memex_common.experiential_schemas import (
-    ExperientialBriefingCards,
-    ExperientialDerivationQueueDTO,
-    ExperientialEntryCreate,
-    ExperientialEntryDTO,
-    ExperientialEntryUpdate,
-    ExperientialSearchRequest,
-    ExperientialSearchResponse,
+from memex_common.procedural_schemas import (
+    ProceduralBriefingCards,
+    ProceduralDerivationQueueDTO,
+    ProceduralEntryCreate,
+    ProceduralEntryDTO,
+    ProceduralEntryUpdate,
+    ProceduralEntryVersionDTO,
+    ProceduralPinCreate,
+    ProceduralPinDTO,
+    ProceduralSearchRequest,
+    ProceduralSearchResponse,
     ShortLabel,
 )
 from memex_common.schemas import (
@@ -623,29 +626,29 @@ class MemexAPI:
             vault_service=self._vaults,
         )
 
-        # V7: Experiential Plane (procedural + case memory). The
+        # V7: Procedural Plane (procedural + case memory). The
         # repository owns CRUD; the search service runs the hybrid
         # BM25+vector+RRF query and the briefing-card read path.
-        from memex_core.services.experiential_repository import (
-            ExperientialRepository,
+        from memex_core.services.procedural_repository import (
+            ProceduralRepository,
         )
-        from memex_core.services.experiential_search_service import (
-            ExperientialSearchService,
+        from memex_core.services.procedural_search_service import (
+            ProceduralSearchService,
         )
 
-        self._experiential_repo = ExperientialRepository(metastore=self.metastore)
-        self._experiential_search = ExperientialSearchService(
+        self._procedural_repo = ProceduralRepository(metastore=self.metastore)
+        self._procedural_search = ProceduralSearchService(
             metastore=self.metastore,
-            repository=self._experiential_repo,
+            repository=self._procedural_repo,
             embedding_model=self.embedding_model,
         )
 
         # Wire the V7 procedural-search service into the briefing so the
         # briefing can include pin-chain cards alongside KV procedures.
         # This is a post-construction patch because the briefing service
-        # is built before the experiential search service (the briefing
+        # is built before the procedural search service (the briefing
         # has historically been independent of the V7 plane).
-        self.session_briefing._procedural_search = self._experiential_search  # type: ignore[attr-defined]
+        self.session_briefing._procedural_search = self._procedural_search  # type: ignore[attr-defined]
 
         self._ingestion = IngestionService(
             metastore=self.metastore,
@@ -675,8 +678,8 @@ class MemexAPI:
         ):
             svc._audit_service = self._audit_svc  # type: ignore[attr-defined]
 
-        # V7: experiential repository gets the same audit service.
-        self._experiential_repo._audit_service = self._audit_svc  # type: ignore[attr-defined]
+        # V7: procedural repository gets the same audit service.
+        self._procedural_repo._audit_service = self._audit_svc  # type: ignore[attr-defined]
 
     @property
     def notes(self) -> NoteService:
@@ -2329,41 +2332,56 @@ class MemexAPI:
         """Delete expired KV entries. Returns count of deleted rows."""
         return await self._kv.cleanup_expired()
 
-    # --- V7: Experiential Plane -----------------------------------------
+    # --- V7: Procedural Plane -----------------------------------------
 
     @property
-    def experiential(self) -> 'MemexAPIExperientialFacade':
-        """The V7 experiential-plane facade. See :class:`MemexAPIExperientialFacade`."""
-        return MemexAPIExperientialFacade(self)
+    def procedural(self) -> 'MemexAPIProceduralFacade':
+        """The V7 procedural-plane facade. See :class:`MemexAPIProceduralFacade`."""
+        return MemexAPIProceduralFacade(self)
 
 
-class MemexAPIExperientialFacade:
-    """V7 experiential-plane facade.
+class MemexAPIProceduralFacade:
+    """V7 procedural-plane facade.
 
-    Lives on ``MemexAPI.experiential``. The 8 methods below map the
+    Lives on ``MemexAPI.procedural``. The 8 methods below map the
     repository + search service into a single property group so callers
-    can do ``api.experiential.create(payload)`` etc.
+    can do ``api.procedural.create(payload)`` etc.
     """
 
     def __init__(self, api: 'MemexAPI') -> None:
         self._api = api
 
+    async def _embed_trigger(self, trigger: str | None) -> list[float] | None:
+        """Caller-side trigger embedding (design §18.7).
+
+        Returns ``None`` when there is no trigger or the embedder
+        fails — the write proceeds and the row stays reachable via the
+        BM25 leg until the next trigger edit re-embeds it.
+        """
+        if not trigger or not trigger.strip():
+            return None
+        vec = await self._api._procedural_search.embed_trigger(trigger)
+        return vec or None
+
     async def create(
         self,
-        payload: ExperientialEntryCreate,
-    ) -> ExperientialEntryDTO:
-        """Insert a new experiential entry. See
-        :meth:`ExperientialRepository.create`."""
-        return await self._api._experiential_repo.create(payload)
+        payload: ProceduralEntryCreate,
+    ) -> ProceduralEntryDTO:
+        """Insert a new procedural entry. Embeds the trigger at write
+        time (§18.7). See :meth:`ProceduralRepository.create`."""
+        return await self._api._procedural_repo.create(
+            payload,
+            trigger_embedding=await self._embed_trigger(payload.trigger),
+        )
 
     async def get(
         self,
         entry_id: UUID,
         *,
         vault_id: UUID | None = None,
-    ) -> ExperientialEntryDTO:
+    ) -> ProceduralEntryDTO:
         """Look up a single entry. Raises if missing or vault-mismatched."""
-        return await self._api._experiential_repo.get(entry_id, vault_id=vault_id)
+        return await self._api._procedural_repo.get(entry_id, vault_id=vault_id)
 
     async def get_by_identity(
         self,
@@ -2374,14 +2392,14 @@ class MemexAPIExperientialFacade:
         context: str | None,
         vault_id: UUID | None = None,
         status: str | None = 'published',
-    ) -> ExperientialEntryDTO | None:
+    ) -> ProceduralEntryDTO | None:
         """Look up a single entry by its identity anchor.
 
         Returns ``None`` on a miss — the route uses this as the
         "have we learned this?" probe. Distinct from
         :meth:`get`, which 404s on a missing id.
         """
-        return await self._api._experiential_repo.get_by_identity(
+        return await self._api._procedural_repo.get_by_identity(
             kind=kind,
             scope=scope,
             verb=verb,
@@ -2393,12 +2411,18 @@ class MemexAPIExperientialFacade:
     async def update(
         self,
         entry_id: UUID,
-        payload: ExperientialEntryUpdate,
+        payload: ProceduralEntryUpdate,
         *,
         vault_id: UUID | None = None,
-    ) -> ExperientialEntryDTO:
-        """Mutate an existing entry in place. Appends a version row."""
-        return await self._api._experiential_repo.update(entry_id, payload, vault_id=vault_id)
+    ) -> ProceduralEntryDTO:
+        """Mutate an existing entry in place. Appends a version row.
+        Re-embeds the trigger when it changes (§19.4 bug class)."""
+        return await self._api._procedural_repo.update(
+            entry_id,
+            payload,
+            vault_id=vault_id,
+            trigger_embedding=await self._embed_trigger(payload.trigger),
+        )
 
     async def deprecate(
         self,
@@ -2406,32 +2430,36 @@ class MemexAPIExperientialFacade:
         *,
         superseded_by_id: UUID | None = None,
         vault_id: UUID | None = None,
-    ) -> ExperientialEntryDTO:
+    ) -> ProceduralEntryDTO:
         """Soft-deprecate: status→deprecated, optional successor pointer."""
-        return await self._api._experiential_repo.deprecate(
+        return await self._api._procedural_repo.deprecate(
             entry_id, superseded_by_id=superseded_by_id, vault_id=vault_id
         )
 
     async def upsert(
         self,
-        payload: ExperientialEntryCreate,
-    ) -> ExperientialEntryDTO:
+        payload: ProceduralEntryCreate,
+    ) -> ProceduralEntryDTO:
         """Idempotent write on the (kind, scope, verb, context) anchor.
 
-        Re-write of the same procedure/strategy is one UPDATE.
+        Re-write of the same procedure/strategy is one UPDATE. Embeds
+        the trigger at write time (§18.7).
         """
-        return await self._api._experiential_repo.upsert_by_identity(payload)
+        return await self._api._procedural_repo.upsert_by_identity(
+            payload,
+            trigger_embedding=await self._embed_trigger(payload.trigger),
+        )
 
     async def search(
         self,
-        request: ExperientialSearchRequest,
-    ) -> ExperientialSearchResponse:
+        request: ProceduralSearchRequest,
+    ) -> ProceduralSearchResponse:
         """Hybrid BM25 + vector search with RRF aggregation.
 
         Optional pin-chain union when ``request.include_pin_chain`` and
         ``request.pin_contexts`` are set.
         """
-        return await self._api._experiential_search.search(request)
+        return await self._api._procedural_search.search(request)
 
     async def briefing_cards(
         self,
@@ -2440,13 +2468,74 @@ class MemexAPIExperientialFacade:
         scope: ShortLabel | None = None,
         limit_per_context: int = 5,
         vault_id: UUID | None = None,
-    ) -> ExperientialBriefingCards:
+    ) -> ProceduralBriefingCards:
         """Pin-chain briefing cards for the session-briefing surface."""
-        return await self._api._experiential_search.briefing_cards(
+        return await self._api._procedural_search.briefing_cards(
             context_keys,
             scope=scope,
             limit_per_context=limit_per_context,
             vault_id=vault_id,
+        )
+
+    async def pin(
+        self,
+        payload: ProceduralPinCreate,
+    ) -> ProceduralPinDTO:
+        """Pin an entry into a context-binding chain (§19.8).
+
+        ``position=None`` appends; the per-context cap (10) is enforced
+        by the repository.
+        """
+        return await self._api._procedural_repo.add_pin(payload)
+
+    async def unpin(
+        self,
+        *,
+        entry_id: UUID,
+        context_key: ShortLabel,
+    ) -> int:
+        """Unpin an entry from a context. Returns pins removed."""
+        return await self._api._procedural_repo.remove_pin(
+            entry_id=entry_id, context_key=context_key
+        )
+
+    async def list_pins(
+        self,
+        context_key: ShortLabel,
+        *,
+        limit: int | None = None,
+    ) -> list[ProceduralPinDTO]:
+        """Pins for one context, position ascending."""
+        return await self._api._procedural_repo.list_pins(context_key, limit=limit)
+
+    async def list_versions(
+        self,
+        entry_id: UUID,
+    ) -> list[ProceduralEntryVersionDTO]:
+        """The entry's uncapped version ledger, newest first (§18.8)."""
+        return await self._api._procedural_repo.list_versions(entry_id)
+
+    async def rollback(
+        self,
+        entry_id: UUID,
+        version: int,
+        *,
+        vault_id: UUID | None = None,
+        rolled_back_by: str | None = None,
+    ) -> ProceduralEntryDTO:
+        """Non-destructive rollback: old snapshot re-applied as a NEW
+        version. Re-embeds the snapshot's trigger (§19.4 bug class)."""
+        versions = await self._api._procedural_repo.list_versions(entry_id)
+        snapshot = next((v for v in versions if v.version == version), None)
+        trigger_embedding = (
+            await self._embed_trigger(snapshot.trigger) if snapshot is not None else None
+        )
+        return await self._api._procedural_repo.rollback(
+            entry_id,
+            version,
+            vault_id=vault_id,
+            trigger_embedding=trigger_embedding,
+            rolled_back_by=rolled_back_by,
         )
 
     async def enqueue_derivation(
@@ -2458,12 +2547,12 @@ class MemexAPIExperientialFacade:
         target_scope: ShortLabel,
         target_verb: str | None = None,
         target_context: str | None = None,
-    ) -> ExperientialDerivationQueueDTO:
+    ) -> ProceduralDerivationQueueDTO:
         """Enqueue a case → procedure/strategy derivation task.
 
-        Workers claim via :meth:`ExperientialRepository.claim_derivation_tasks`.
+        Workers claim via :meth:`ProceduralRepository.claim_derivation_tasks`.
         """
-        return await self._api._experiential_repo.enqueue_derivation(
+        return await self._api._procedural_repo.enqueue_derivation(
             vault_id=vault_id,
             source_entry_ids=source_entry_ids,
             target_kind=target_kind,

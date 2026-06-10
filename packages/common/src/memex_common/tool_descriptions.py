@@ -234,7 +234,7 @@ MEMEX_KV_LIST_DESC = (
 
 
 MEMEX_PROCEDURAL_CREATE_DESC = (
-    'Write a new experiential entry.\n'
+    'Write a new procedural entry.\n'
     '\n'
     'Required: vault_id, kind ("case"|"procedure"|"strategy"), scope, title, '
     'summary. Procedure+strategy REQUIRE verb+context; cases MUST omit both. '
@@ -285,7 +285,7 @@ MEMEX_PROCEDURAL_UPSERT_DESC = (
 
 
 MEMEX_PROCEDURAL_SEARCH_DESC = (
-    'Hybrid BM25 + vector search (RRF-merged) across the experiential '
+    'Hybrid BM25 + vector search (RRF-merged) across the procedural '
     'plane. Required: query. Optional: kind, scope, status (default '
     '"published"), top_k (default 10), include_pin_chain + pin_contexts, '
     'bm25_weight. Returns hits with match provenance (bm25/vector/pin/rrf).'

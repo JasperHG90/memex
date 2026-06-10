@@ -55,8 +55,8 @@ def test_seed_chain_is_linear_and_correct() -> None:
     sd = ScriptDirectory.from_config(cfg)
 
     heads = sd.get_heads()
-    assert heads == ['063_experiential_seed'], (
-        f'Expected single head 063_experiential_seed, got {heads}'
+    assert heads == ['063_procedural_seed'], (
+        f'Expected single head 063_procedural_seed, got {heads}'
     )
 
     walk = list(sd.walk_revisions())
@@ -65,13 +65,13 @@ def test_seed_chain_is_linear_and_correct() -> None:
     # (…→052) and the procedure-to-global chain (046_procedure_to_global) were
     # merged, then 054 (nodes index), 055 (inbox router), 056 (node assets),
     # 057 (external lint source), 058 (vault summary embedding), 059 (drop
-    # inbox router), 060 (vault kind+policy), 061 (experiential_entries),
-    # 062 (notes.role), 063 (experiential vault seed + KV backfill) extend
+    # inbox router), 060 (vault kind+policy), 061 (procedural_entries),
+    # 062 (notes.role), 063 (procedural vault seed + KV backfill) extend
     # linearly from there.
     expected_top10 = [
-        ('063_experiential_seed', '062_notes_role'),
-        ('062_notes_role', '061_experiential_entries'),
-        ('061_experiential_entries', '060_vault_kind_policy'),
+        ('063_procedural_seed', '062_notes_role'),
+        ('062_notes_role', '061_procedural_entries'),
+        ('061_procedural_entries', '060_vault_kind_policy'),
         ('060_vault_kind_policy', '059_drop_inbox_router'),
         ('059_drop_inbox_router', '058_vault_summary_embedding'),
         ('058_vault_summary_embedding', '057_lint_source_external'),

@@ -18,10 +18,10 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-from memex_common.experiential_schemas import (
-    ExperientialEntryCreate,
-    ExperientialEntryUpdate,
-    ExperientialSearchRequest,
+from memex_common.procedural_schemas import (
+    ProceduralEntryCreate,
+    ProceduralEntryUpdate,
+    ProceduralSearchRequest,
 )
 from memex_hermes_plugin.memex import procedural
 
@@ -49,7 +49,7 @@ def _api() -> MagicMock:
 
 def test_create_forwards_payload_and_returns_dto():
     api = _api()
-    payload = ExperientialEntryCreate.model_construct()  # type: ignore[call-arg]
+    payload = ProceduralEntryCreate.model_construct()  # type: ignore[call-arg]
     result = procedural.create(api, payload)
     assert result is api.procedural_create.return_value
     api.procedural_create.assert_awaited_once_with(payload)
@@ -57,7 +57,7 @@ def test_create_forwards_payload_and_returns_dto():
 
 def test_upsert_forwards_payload_and_returns_dto():
     api = _api()
-    payload = ExperientialEntryCreate.model_construct()  # type: ignore[call-arg]
+    payload = ProceduralEntryCreate.model_construct()  # type: ignore[call-arg]
     result = procedural.upsert(api, payload)
     assert result is api.procedural_upsert.return_value
     api.procedural_upsert.assert_awaited_once_with(payload)
@@ -116,7 +116,7 @@ def test_update_forwards_id_payload_and_optional_vault():
     from uuid import uuid4
 
     eid = uuid4()
-    payload = ExperientialEntryUpdate.model_construct()  # type: ignore[call-arg]
+    payload = ProceduralEntryUpdate.model_construct()  # type: ignore[call-arg]
     procedural.update(api, eid, payload, vault_id='v2')
     api.procedural_update.assert_awaited_once_with(eid, payload, vault_id='v2')
 
@@ -133,7 +133,7 @@ def test_deprecate_forwards_optional_successor():
 
 def test_search_forwards_request():
     api = _api()
-    request = ExperientialSearchRequest.model_construct()  # type: ignore[call-arg]
+    request = ProceduralSearchRequest.model_construct()  # type: ignore[call-arg]
     procedural.search(api, request)
     api.procedural_search.assert_awaited_once_with(request)
 
@@ -181,7 +181,7 @@ def test_custom_timeout_is_honored(monkeypatch):
     api = _api()
     proc_mod.create(
         api,
-        ExperientialEntryCreate.model_construct(),
+        ProceduralEntryCreate.model_construct(),
         timeout=0.5,  # type: ignore[call-arg]
     )
     assert seen['timeout'] == 0.5

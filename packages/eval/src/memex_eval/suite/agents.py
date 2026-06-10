@@ -214,7 +214,7 @@ def unregister_backend(name: str) -> None:
 
 
 def _build_procedural_create_payload(outcome, *, vault_id: UUID):
-    """Build an ``ExperientialEntryCreate`` from a ``ProceduralEntryRoundtrip`` outcome.
+    """Build an ``ProceduralEntryCreate`` from a ``ProceduralEntryRoundtrip`` outcome.
 
     The outcome carries just the load-bearing shape fields
     (kind, scope, verb, context, title, trigger) — the rest of the
@@ -224,9 +224,9 @@ def _build_procedural_create_payload(outcome, *, vault_id: UUID):
     ``verb``/``context`` — the outcome's ``kind='case'`` path sets
     verb/context to ``None`` and the DTO accepts that shape.
     """
-    from memex_common.experiential_schemas import ExperientialEntryCreate
+    from memex_common.procedural_schemas import ProceduralEntryCreate
 
-    return ExperientialEntryCreate(
+    return ProceduralEntryCreate(
         vault_id=vault_id,
         kind=outcome.kind,
         scope=outcome.scope,
@@ -325,9 +325,9 @@ class DirectApiBackend(AnswerBackend):
                 # Write/read on a single procedural-plane entry.
                 # Dispatch on the outcome's ``operation`` to the right
                 # ``api.procedural_*`` method. The client methods take
-                # ``ExperientialEntryCreate`` payloads (create/upsert)
+                # ``ProceduralEntryCreate`` payloads (create/upsert)
                 # or kwargs (get_by_identity) and return
-                # ``ExperientialEntryDTO``. The DTO is packed into
+                # ``ProceduralEntryDTO``. The DTO is packed into
                 # ``out.units[0]``; any raised error (404/409) is
                 # captured in ``out.error`` so the outcome's
                 # ``_classify_outcome`` can map it to a status.
@@ -363,30 +363,30 @@ class DirectApiBackend(AnswerBackend):
             elif isinstance(outcome, ProceduralSearchResults):
                 # Read calls that return a list (search / briefing_cards).
                 # The client wraps the result in an envelope
-                # (``ExperientialSearchResponse`` /
-                # ``ExperientialBriefingCards``); we unpack the
+                # (``ProceduralSearchResponse`` /
+                # ``ProceduralBriefingCards``); we unpack the
                 # per-hit DTOs into ``out.units`` so the outcome's
                 # ``score()`` can do field-level matching via
                 # ``getattr(hit, 'kind', None)``.
                 op = outcome.operation
                 if op == 'search':
-                    from memex_common.experiential_schemas import (
-                        ExperientialSearchRequest,
+                    from memex_common.procedural_schemas import (
+                        ProceduralSearchRequest,
                     )
 
-                    request = ExperientialSearchRequest(
+                    request = ProceduralSearchRequest(
                         query=outcome.query or scenario.query or None,
                         kind=outcome.expect_kind,
                         scope=outcome.expect_scope,
                         # Status defaults to 'published' on the
-                        # ``ExperientialSearchRequest`` DTO; the draft
+                        # ``ProceduralSearchRequest`` DTO; the draft
                         # scenario in this suite relies on that
                         # default to assert "drafts are hidden".
                         limit=scenario.top_k,
                     )
                     response = await api.procedural_search(request)
-                    # Each hit is an ``ExperientialSearchHit`` whose
-                    # ``.entry`` is the ``ExperientialEntryDTO``; we
+                    # Each hit is an ``ProceduralSearchHit`` whose
+                    # ``.entry`` is the ``ProceduralEntryDTO``; we
                     # unwrap so the field-level match in
                     # ``ProceduralSearchResults.score()`` finds
                     # ``kind``/``scope``/``verb`` directly.
@@ -398,8 +398,8 @@ class DirectApiBackend(AnswerBackend):
                         limit_per_context=scenario.top_k,
                     )
 
-                    # Each card is an ``ExperientialBriefingCard``
-                    # whose ``.entry`` is the ``ExperientialEntryDTO``
+                    # Each card is an ``ProceduralBriefingCard``
+                    # whose ``.entry`` is the ``ProceduralEntryDTO``
                     # and ``.pin_position``/``.context_key`` are the
                     # briefing-card-specific fields. We synthesise
                     # lightweight shims whose ``kind``/``scope``/``verb``

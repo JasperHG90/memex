@@ -455,7 +455,7 @@ suite.register(
 #    default-published filter is what makes the deprecate-and-fade pattern
 #    work, and it MUST also hide drafts so the draft-review flow doesn't
 #    surface unvetted entries. The full status='all' override would
-#    require extending the StatusLiteral in ``experiential_schemas``;
+#    require extending the StatusLiteral in ``procedural_schemas``;
 #    that's deferred to a follow-up — for now, we test the
 #    "drafts-are-hidden-by-default" half of the contract, which is the
 #    load-bearing piece for agentic surfaces.

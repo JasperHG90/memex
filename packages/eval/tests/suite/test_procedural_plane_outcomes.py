@@ -101,7 +101,7 @@ def test_classify_unknown_error_maps_to_any_error():
 
 
 def _dto(**kwargs) -> SimpleNamespace:
-    """Build a SimpleNamespace that mimics ``ExperientialEntryDTO``."""
+    """Build a SimpleNamespace that mimics ``ProceduralEntryDTO``."""
     return SimpleNamespace(
         id=UUID('00000000-0000-0000-0000-000000000001'),
         kind=kwargs.get('kind'),
@@ -405,7 +405,7 @@ async def test_procedural_upsert_rejects_missing_required_params():
 
 @pytest.mark.asyncio
 async def test_procedural_upsert_rejects_payload_validation_error():
-    """When the params build a malformed ``ExperientialEntryCreate``
+    """When the params build a malformed ``ProceduralEntryCreate``
     (e.g. an unknown kind), the action raises a ValueError that
     surfaces the Pydantic error — not a silent-absorb."""
     from memex_eval.suites.procedural_plane._setup_actions import _ProceduralUpsert

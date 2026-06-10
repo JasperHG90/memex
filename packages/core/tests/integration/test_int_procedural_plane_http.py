@@ -1,7 +1,7 @@
 """HTTP-layer integration tests for the V7 procedural-plane routes.
 
 The unit tests cover the route handlers in isolation (mocked
-``MemexAPI.experiential``). This file drives the full FastAPI
+``MemexAPI.procedural``). This file drives the full FastAPI
 stack against a real Postgres + pgvector, so it pins the wire
 contract — the path an agent or HTTP client actually consumes.
 
@@ -100,15 +100,15 @@ def _entry_dto(
     context: str | None = 'staging',
     body: str = '',
 ):
-    """Build an ``ExperientialEntryCreate`` DTO for direct repository seeding.
+    """Build an ``ProceduralEntryCreate`` DTO for direct repository seeding.
 
     The HTTP path goes through Pydantic's JSON coercion, so a plain dict
     is fine. The repository path does not — it requires a typed DTO
     instance. This helper is the typed variant of :func:`_payload`.
     """
-    from memex_common.experiential_schemas import ExperientialEntryCreate
+    from memex_common.procedural_schemas import ProceduralEntryCreate
 
-    return ExperientialEntryCreate(
+    return ProceduralEntryCreate(
         vault_id=vault_id,
         kind=kind,  # type: ignore[arg-type]
         scope=scope,
@@ -241,7 +241,7 @@ async def test_get_by_identity_returns_null_on_unbound_anchor(http_client, metas
 async def test_get_by_identity_returns_entry_on_hit(http_client, metastore):
     """A bound anchor returns 200 with the DTO body — the read-before-
     write probe must surface a real hit, not silently None. A previous
-    regression routed the lookup through ``api.experiential.search`` with
+    regression routed the lookup through ``api.procedural.search`` with
     no query text, which short-circuited to an empty response and broke
     the agent's idempotency check."""
     async with metastore.session() as session:
@@ -289,13 +289,13 @@ async def test_briefing_cards_unions_pins_across_context_keys(http_client, metas
     briefing. The agent's briefing block reads ``cards`` in
     position order; a regression that returned per-context
     lists would break the flat-render assumption."""
-    from memex_core.services.experiential_repository import ExperientialRepository
-    from memex_common.experiential_schemas import ExperientialPinCreate
+    from memex_core.services.procedural_repository import ProceduralRepository
+    from memex_common.procedural_schemas import ProceduralPinCreate
 
     async with metastore.session() as session:
         vault_id = await _create_vault(session, 'v7_http_briefing')
 
-    repo = ExperientialRepository(metastore=metastore)
+    repo = ProceduralRepository(metastore=metastore)
     e_global = await repo.create(
         _entry_dto(
             vault_id=vault_id,
@@ -314,11 +314,9 @@ async def test_briefing_cards_unions_pins_across_context_keys(http_client, metas
         )
     )
 
+    await repo.add_pin(ProceduralPinCreate(context_key='global', entry_id=e_global.id, position=0))
     await repo.add_pin(
-        ExperientialPinCreate(context_key='global', entry_id=e_global.id, position=0)
-    )
-    await repo.add_pin(
-        ExperientialPinCreate(context_key='project:alpha', entry_id=e_project.id, position=0)
+        ProceduralPinCreate(context_key='project:alpha', entry_id=e_project.id, position=0)
     )
 
     resp = await http_client.post(
@@ -344,7 +342,7 @@ async def test_briefing_cards_unions_pins_across_context_keys(http_client, metas
 @pytest.mark.asyncio
 async def test_post_deprecate_missing_entry_returns_404(http_client, metastore):
     """A deprecate on a non-existent id returns 404. A regression
-    that raised ExperientialEntryNotFound (uncaught) would 500
+    that raised ProceduralEntryNotFound (uncaught) would 500
     and look indistinguishable from a real DB error."""
     async with metastore.session() as session:
         vault_id = await _create_vault(session, 'v7_http_dep_miss')

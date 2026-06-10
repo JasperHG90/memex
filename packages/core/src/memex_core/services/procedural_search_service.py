@@ -1,12 +1,12 @@
-"""V7 Experiential Plane — search service.
+"""V7 Procedural Plane — search service.
 
-Hybrid search across ``experiential_entries``:
+Hybrid search across ``procedural_entries``:
 
 * **BM25** over the generated ``search_tsvector`` column (English config,
   Porter-stemmed). Backed by the GIN index from migration 061.
-* **Vector cosine** over ``body_embedding`` (procedures/strategies) or
-  ``trigger_embedding`` (cases). Backed by the HNSW index from migration
-  061.
+* **Vector cosine** over ``trigger_embedding`` — the single vector leg
+  (design §6/§18.7; spike §19.1). Backed by the partial HNSW index from
+  migration 064.
 * **Reciprocal Rank Fusion (RRF)** merges the two ranked lists.
 * **Pin chain** optionally unions entries pinned at the supplied
   ``pin_contexts`` list — used by the session-briefing surface.
@@ -21,7 +21,7 @@ Briefing cards
 --------------
 
 ``briefing_cards()`` is the read path for the session briefing's
-experiential slot. The caller supplies a list of context keys
+procedural slot. The caller supplies a list of context keys
 (``["global", "project:<id>", "app:<agent>"]``); the service returns
 one card per pin, ordered by ``position`` ascending. Pin positions
 are 0-based and the briefing shows them in chain order.
@@ -38,13 +38,13 @@ from uuid import UUID
 from sqlalchemy import text
 from sqlmodel import col, select
 
-from memex_common.experiential_schemas import (
-    ExperientialBriefingCard,
-    ExperientialBriefingCards,
-    ExperientialEntryDTO,
-    ExperientialSearchHit,
-    ExperientialSearchRequest,
-    ExperientialSearchResponse,
+from memex_common.procedural_schemas import (
+    ProceduralBriefingCard,
+    ProceduralBriefingCards,
+    ProceduralEntryDTO,
+    ProceduralSearchHit,
+    ProceduralSearchRequest,
+    ProceduralSearchResponse,
     KindLiteral,
     ShortLabel,
 )
@@ -55,18 +55,18 @@ from memex_core.memory.retrieval._offload import (
     get_embedding_semaphore,
 )
 from memex_core.memory.sql_models import (
-    ExperientialEntry as DBExperientialEntry,
+    ProceduralEntry as DBProceduralEntry,
 )
 from memex_core.memory.sql_models import (
-    ExperientialPin as DBExperientialPin,
+    ProceduralPin as DBProceduralPin,
 )
 from memex_core.memory.sql_models import (
-    ExperientialStatus as DBExperientialStatus,
+    ProceduralStatus as DBProceduralStatus,
 )
-from memex_core.services.experiential_repository import ExperientialRepository
+from memex_core.services.procedural_repository import ProceduralRepository
 from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
 
-logger = logging.getLogger('memex.core.services.experiential_search')
+logger = logging.getLogger('memex.core.services.procedural_search')
 
 # RRF constant. Mirrors K_RRF in document_search.py:81. Keep in sync if
 # either side is retuned.
@@ -82,25 +82,18 @@ DEFAULT_STATUS = 'published'
 # non-overlapping BM25 and vector lists.
 _OVERFETCH = 5
 
-# The vector column name varies by entity kind.
-_VECTOR_COLUMN_BY_KIND: dict[str, str] = {
-    'case': 'trigger_embedding',
-    'procedure': 'body_embedding',
-    'strategy': 'body_embedding',
-}
+
+class ProceduralSearchError(Exception):
+    """Base error for the procedural search service."""
 
 
-class ExperientialSearchError(Exception):
-    """Base error for the experiential search service."""
-
-
-class ExperientialSearchService:
-    """Hybrid search + briefing cards for the experiential plane."""
+class ProceduralSearchService:
+    """Hybrid search + briefing cards for the procedural plane."""
 
     def __init__(
         self,
         metastore: AsyncBaseMetaStoreEngine,
-        repository: ExperientialRepository,
+        repository: ProceduralRepository,
         embedding_model: EmbeddingsModel,
     ) -> None:
         self._metastore = metastore
@@ -111,7 +104,7 @@ class ExperientialSearchService:
     # Public surface
     # ------------------------------------------------------------------
 
-    async def search(self, request: ExperientialSearchRequest) -> ExperientialSearchResponse:
+    async def search(self, request: ProceduralSearchRequest) -> ProceduralSearchResponse:
         """Run a hybrid BM25 + vector search and RRF-fuse the results.
 
         At least one of ``request.query`` or ``request.pin_contexts`` must
@@ -126,7 +119,7 @@ class ExperientialSearchService:
         started = time.monotonic()
 
         if not request.query and not (request.include_pin_chain and request.pin_contexts):
-            return ExperientialSearchResponse(took_ms=(time.monotonic() - started) * 1000)
+            return ProceduralSearchResponse(took_ms=(time.monotonic() - started) * 1000)
 
         bm25_hits: list[tuple[UUID, float]] = []
         vector_hits: list[tuple[UUID, float]] = []
@@ -142,7 +135,7 @@ class ExperientialSearchService:
                     limit=request.limit * _OVERFETCH,
                 )
             except Exception:
-                logger.exception('experiential BM25 search failed; continuing with vector only')
+                logger.exception('procedural BM25 search failed; continuing with vector only')
 
             try:
                 query_vec = await self._embed_text(request.query)
@@ -155,7 +148,7 @@ class ExperientialSearchService:
                     limit=request.limit * _OVERFETCH,
                 )
             except Exception:
-                logger.exception('experiential vector search failed; continuing with BM25 only')
+                logger.exception('procedural vector search failed; continuing with BM25 only')
 
         bm25_rank = {eid: rank for rank, (eid, _) in enumerate(bm25_hits)}
         vector_rank = {eid: rank for rank, (eid, _) in enumerate(vector_hits)}
@@ -184,7 +177,7 @@ class ExperientialSearchService:
                 scores[eid] = scores.get(eid, 0.0) + 1.0 / (1 + position)
 
         if not scores:
-            return ExperientialSearchResponse(took_ms=(time.monotonic() - started) * 1000)
+            return ProceduralSearchResponse(took_ms=(time.monotonic() - started) * 1000)
 
         # Fetch entries and build hits. Pull a small overshoot so we
         # can truncate after the DTO conversion in case the rank
@@ -193,7 +186,7 @@ class ExperientialSearchService:
         fetch_ids = ordered_ids[: request.limit]
         entries_by_id = {e.id: e for e in await self._repository.get_many(fetch_ids)}
 
-        hits: list[ExperientialSearchHit] = []
+        hits: list[ProceduralSearchHit] = []
         for eid in fetch_ids:
             entry = entries_by_id.get(eid)
             if entry is None:
@@ -211,7 +204,7 @@ class ExperientialSearchService:
                 matched_via = 'vector'
 
             hits.append(
-                ExperientialSearchHit(
+                ProceduralSearchHit(
                     entry=entry,
                     score=scores[eid],
                     bm25_rank=bm25_rank.get(eid),
@@ -228,7 +221,7 @@ class ExperientialSearchService:
             extra = await self._repository.get_many(missing[: request.limit - len(hits)])
             for entry in extra:
                 hits.append(
-                    ExperientialSearchHit(
+                    ProceduralSearchHit(
                         entry=entry,
                         score=scores[entry.id],
                         bm25_rank=bm25_rank.get(entry.id),
@@ -244,7 +237,7 @@ class ExperientialSearchService:
                     )
                 )
 
-        return ExperientialSearchResponse(
+        return ProceduralSearchResponse(
             hits=hits[: request.limit],
             total=len(ordered_ids),
             truncated=len(ordered_ids) > len(hits),
@@ -258,7 +251,7 @@ class ExperientialSearchService:
         scope: ShortLabel | None = None,
         limit_per_context: int = 5,
         vault_id: UUID | None = None,
-    ) -> ExperientialBriefingCards:
+    ) -> ProceduralBriefingCards:
         """Return one briefing card per pin in the requested contexts.
 
         Pins are returned in (context_key, position) order so the briefing
@@ -271,29 +264,29 @@ class ExperientialSearchService:
         appropriate for operator/CLI paths that need a cross-vault view.
         """
         if not context_keys:
-            return ExperientialBriefingCards()
+            return ProceduralBriefingCards()
 
-        cards: list[ExperientialBriefingCard] = []
+        cards: list[ProceduralBriefingCard] = []
         total_pinned = 0
 
         async with self._metastore.session() as session:
             stmt = (
-                select(DBExperientialPin, DBExperientialEntry)
+                select(DBProceduralPin, DBProceduralEntry)
                 .join(
-                    DBExperientialEntry,
-                    col(DBExperientialPin.entry_id) == col(DBExperientialEntry.id),
+                    DBProceduralEntry,
+                    col(DBProceduralPin.entry_id) == col(DBProceduralEntry.id),
                 )
-                .where(col(DBExperientialPin.context_key).in_(context_keys))
-                .where(col(DBExperientialEntry.status) == DBExperientialStatus.PUBLISHED)
+                .where(col(DBProceduralPin.context_key).in_(context_keys))
+                .where(col(DBProceduralEntry.status) == DBProceduralStatus.PUBLISHED)
                 .order_by(
-                    col(DBExperientialPin.context_key).asc(),
-                    col(DBExperientialPin.position).asc(),
+                    col(DBProceduralPin.context_key).asc(),
+                    col(DBProceduralPin.position).asc(),
                 )
             )
             if scope is not None:
-                stmt = stmt.where(col(DBExperientialEntry.scope) == scope)
+                stmt = stmt.where(col(DBProceduralEntry.scope) == scope)
             if vault_id is not None:
-                stmt = stmt.where(col(DBExperientialEntry.vault_id) == vault_id)
+                stmt = stmt.where(col(DBProceduralEntry.vault_id) == vault_id)
 
             results = (await session.exec(stmt)).all()
 
@@ -305,14 +298,14 @@ class ExperientialSearchService:
                 per_context_count[pin.context_key] = per_context_count.get(pin.context_key, 0) + 1
                 total_pinned += 1
                 cards.append(
-                    ExperientialBriefingCard(
-                        entry=ExperientialEntryDTO.model_validate(entry),
+                    ProceduralBriefingCard(
+                        entry=ProceduralEntryDTO.model_validate(entry),
                         pin_position=int(pin.position),
                         context_key=pin.context_key,
                     )
                 )
 
-        return ExperientialBriefingCards(
+        return ProceduralBriefingCards(
             cards=cards,
             context_keys=context_keys,
             total_pinned=total_pinned,
@@ -351,7 +344,7 @@ class ExperientialSearchService:
                     search_tsvector,
                     plainto_tsquery('english'::regconfig, CAST(:q AS text))
                 ) AS rank
-            FROM experiential_entries
+            FROM procedural_entries
             WHERE search_tsvector @@ plainto_tsquery('english'::regconfig, CAST(:q AS text))
               AND status = CAST(:status AS varchar)
               AND (CAST(:scope AS text) IS NULL OR scope = CAST(:scope AS text))
@@ -391,81 +384,46 @@ class ExperientialSearchService:
         vault_id: UUID | None,
         limit: int,
     ) -> list[tuple[UUID, float]]:
-        """Cosine-distance top-k over the appropriate embedding column.
+        """Cosine-distance top-k over ``trigger_embedding``.
 
-        The HNSW index is partial WHERE status='published' AND
-        kind IN (...) — see migration 061. We use ``<=>`` (cosine
-        distance) and sort ascending (smaller distance = closer).
+        The trigger (when_to_use / when_to_apply) is the single vector
+        leg of the hybrid search (design §6/§18.7; spike §19.1:
+        trigger-only beats full-body embedding 18/20 vs 15/20 top-1).
+        Rows without a trigger (legacy kv_backfill) are reachable via
+        the BM25 leg only. The HNSW index is partial WHERE
+        status='published' — see migration 064. ``<=>`` is cosine
+        distance, sorted ascending (smaller = closer).
         """
         if not query_vec:
             return []
         # pgvector accepts the vector as a string '[v1,v2,...]'.
         vec_literal = '[' + ','.join(f'{x:.7f}' for x in query_vec) + ']'
 
-        # The vector column depends on the kind filter. If the caller did
-        # not specify kind, we need to query both columns and union the
-        # results so the search covers all entity types.
-        if kind is not None:
-            col_name = _VECTOR_COLUMN_BY_KIND[kind]
-            # Explicit CAST on every reused parameter — see the BM25
-            # helper for why asyncpg refuses ambiguous-type params.
-            sql = text(
-                f"""
-                SELECT
-                    id,
-                    {col_name} <=> CAST(:vec AS vector) AS distance
-                FROM experiential_entries
-                WHERE {col_name} IS NOT NULL
-                  AND status = CAST(:status AS varchar)
-                  AND (CAST(:scope AS text) IS NULL OR scope = CAST(:scope AS text))
-                  AND kind = CAST(:kind AS varchar)
-                  AND (CAST(:vault_id AS uuid) IS NULL OR vault_id = CAST(:vault_id AS uuid))
-                ORDER BY {col_name} <=> CAST(:vec AS vector)
-                LIMIT CAST(:limit AS int)
-                """
-            )
-            params: dict[str, Any] = {
-                'vec': vec_literal,
-                'status': status,
-                'scope': scope,
-                'kind': kind,
-                'vault_id': vault_id,
-                'limit': limit,
-            }
-        else:
-            sql = text(
-                """
-                WITH ranked AS (
-                    SELECT
-                        id,
-                        least(
-                            coalesce(trigger_embedding <=> CAST(:vec AS vector), 2.0),
-                            coalesce(body_embedding <=> CAST(:vec AS vector), 2.0)
-                        ) AS distance,
-                        kind
-                    FROM experiential_entries
-                    WHERE status = CAST(:status AS varchar)
-                      AND (CAST(:scope AS text) IS NULL OR scope = CAST(:scope AS text))
-                      AND (CAST(:vault_id AS uuid) IS NULL OR vault_id = CAST(:vault_id AS uuid))
-                      AND (
-                        (kind = 'case' AND trigger_embedding IS NOT NULL)
-                        OR
-                        (kind IN ('procedure', 'strategy') AND body_embedding IS NOT NULL)
-                      )
-                )
-                SELECT id, distance
-                FROM ranked
-                ORDER BY distance ASC
-                LIMIT CAST(:limit AS int)
-                """
-            )
-            params = {
-                'vec': vec_literal,
-                'status': status,
-                'scope': scope,
-                'vault_id': vault_id,
-                'limit': limit,
-            }
+        # Explicit CAST on every reused parameter — see the BM25
+        # helper for why asyncpg refuses ambiguous-type params.
+        sql = text(
+            """
+            SELECT
+                id,
+                trigger_embedding <=> CAST(:vec AS vector) AS distance
+            FROM procedural_entries
+            WHERE trigger_embedding IS NOT NULL
+              AND status = CAST(:status AS varchar)
+              AND (CAST(:scope AS text) IS NULL OR scope = CAST(:scope AS text))
+              AND (CAST(:kind AS varchar) IS NULL OR kind = CAST(:kind AS varchar))
+              AND (CAST(:vault_id AS uuid) IS NULL OR vault_id = CAST(:vault_id AS uuid))
+            ORDER BY trigger_embedding <=> CAST(:vec AS vector)
+            LIMIT CAST(:limit AS int)
+            """
+        )
+        params: dict[str, Any] = {
+            'vec': vec_literal,
+            'status': status,
+            'scope': scope,
+            'kind': kind,
+            'vault_id': vault_id,
+            'limit': limit,
+        }
 
         async with self._metastore.session() as session:
             rows = (await session.execute(sql, params)).all()
@@ -491,8 +449,8 @@ class ExperientialSearchService:
         sql = text(
             """
             SELECT p.entry_id, MIN(p.position) AS position
-            FROM experiential_pins p
-            JOIN experiential_entries e ON e.id = p.entry_id
+            FROM procedural_pins p
+            JOIN procedural_entries e ON e.id = p.entry_id
             WHERE p.context_key = ANY(:contexts)
               AND e.status = CAST(:status AS varchar)
               AND (CAST(:scope AS text) IS NULL OR e.scope = CAST(:scope AS text))
@@ -520,6 +478,17 @@ class ExperientialSearchService:
     # Internal: async embedder wrapper
     # ------------------------------------------------------------------
 
+    async def embed_trigger(self, trigger: str) -> list[float]:
+        """Public alias of :meth:`_embed_text` for the write path.
+
+        The facade calls this to compute ``trigger_embedding`` at write
+        time (design §18.7: embeddings are computed by the caller and
+        passed in — there is no background backfill). Returns ``[]`` on
+        failure so the write can proceed; the row stays reachable via
+        the BM25 leg until the next trigger edit re-embeds it.
+        """
+        return await self._embed_text(trigger)
+
     async def _embed_text(self, text_str: str) -> list[float]:
         """Compute a single embedding vector for ``text_str``.
 
@@ -535,7 +504,7 @@ class ExperientialSearchService:
                     timeout=get_embedding_call_timeout(),
                 )
         except Exception:
-            logger.exception('experiential embed failed for query=%r', text_str[:80])
+            logger.exception('procedural embed failed for query=%r', text_str[:80])
             return []
         if result is None or len(result) == 0:
             return []
@@ -543,7 +512,7 @@ class ExperientialSearchService:
 
 
 __all__ = [
-    'ExperientialSearchError',
-    'ExperientialSearchService',
+    'ProceduralSearchError',
+    'ProceduralSearchService',
     'K_RRF',
 ]

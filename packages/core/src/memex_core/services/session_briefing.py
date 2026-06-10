@@ -87,6 +87,24 @@ def _build_kv_namespaces(project_id: str | None) -> list[str]:
     return ns
 
 
+def _build_pin_contexts(project_id: str | None, app: str | None) -> list[str]:
+    """Build the procedural pin-context chain (design §19.8).
+
+    The layered chain is ``global → project:<id> → app:<consumer>``,
+    most-specific last. Distinct from the KV namespaces above: pins
+    have NO ``user`` context (per-user curation rides app/project
+    contexts — JG decision 2026-06-10), and the app segment is the
+    *caller's* identity (``claude-code``, ``hermes:<agent_identity>``)
+    rather than a hardcoded consumer.
+    """
+    contexts = ['global']
+    if project_id:
+        contexts.append(f'project:{project_id}')
+    if app:
+        contexts.append(f'app:{app}')
+    return contexts
+
+
 def _is_operational_kv(key: str) -> bool:
     """Per-app, per-project routing config — plumbing, not a briefing fact.
 
@@ -117,7 +135,7 @@ class SessionBriefingService:
         """Configure the briefing service.
 
         ``procedural_search`` is the optional V7 plane handle
-        (:class:`memex_core.services.experiential_search_service.ExperientialSearchService`).
+        (:class:`memex_core.services.procedural_search_service.ProceduralSearchService`).
         When provided, the briefing includes a "Procedural Cards" section
         surfacing pin-chain entries for the active contexts. When None
         (the default for tests and installations without the V7 plane),
@@ -134,19 +152,25 @@ class SessionBriefingService:
         vault_id: UUID,
         budget: int = 2000,
         project_id: str | None = None,
+        app: str | None = None,
     ) -> str:
         """Generate a session briefing within the given token budget.
 
         Args:
             vault_id: The vault to generate a briefing for.
             budget: Token budget (1000 for compact, 2000 for standard).
-            project_id: Optional project ID for scoping KV entries.
+            project_id: Optional project ID for scoping KV entries and
+                the procedural pin chain.
+            app: Optional consumer identity for the pin chain's app
+                context (``claude-code``, ``hermes:<agent_identity>`` —
+                design §19.8). When None, the chain is global+project
+                only.
 
         Returns:
             A markdown-formatted briefing string.
         """
         summary, mental_models, kv_entries, vaults, procedural_cards = await self._fetch_all(
-            vault_id, project_id
+            vault_id, project_id, app
         )
 
         sections = self._build_sections(
@@ -179,11 +203,12 @@ class SessionBriefingService:
         self,
         vault_id: UUID,
         project_id: str | None,
+        app: str | None = None,
     ) -> tuple[Any, list[MentalModel], list[Any], list[Any], Any]:
         """Fetch all data sources in parallel.
 
         The 5th element of the returned tuple is the V7 procedural-cards
-        response (``memex_common.experiential_schemas.ExperientialBriefingCards``)
+        response (``memex_common.procedural_schemas.ProceduralBriefingCards``)
         or ``None`` when the V7 plane is not wired into this briefing
         service. A None is treated as an empty-cards state in the
         downstream section builder — the briefing still renders.
@@ -205,12 +230,11 @@ class SessionBriefingService:
             vaults_coro = _empty()
 
         if self._procedural_search is not None:
-            # Mirror the KV namespace shape for the procedural pin
-            # contexts — `project:<id>`, `app:<agent>`, and `user`. The
-            # briefing reads these from the same context keys it already
-            # uses for KV scoping, so a project-scoped briefing gets
-            # project-scoped cards without an extra knob.
-            card_contexts = _build_kv_namespaces(project_id)
+            # Pin-context chain per §19.8: global → project:<id> →
+            # app:<consumer>. NOT the KV namespace list — pins have no
+            # `user` context and the app segment is the caller's
+            # identity, not a hardcoded consumer.
+            card_contexts = _build_pin_contexts(project_id, app)
             cards_coro = self._procedural_search.briefing_cards(
                 card_contexts, scope=None, limit_per_context=3
             )

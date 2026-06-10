@@ -31,13 +31,13 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
-from memex_common.experiential_schemas import (
-    ExperientialEntryCreate,
-    ExperientialEntryDTO,
-    ExperientialEntryUpdate,
-    ExperientialSearchRequest,
-    ExperientialBriefingCard,
-    ExperientialBriefingCards,
+from memex_common.procedural_schemas import (
+    ProceduralEntryCreate,
+    ProceduralEntryDTO,
+    ProceduralEntryUpdate,
+    ProceduralSearchRequest,
+    ProceduralBriefingCard,
+    ProceduralBriefingCards,
 )
 
 
@@ -45,7 +45,7 @@ _NOW = dt.datetime(2026, 6, 8, 12, 0, 0, tzinfo=dt.UTC)
 
 
 def _fake_entry_dto(**overrides):
-    """Build a valid ``ExperientialEntryDTO`` for envelope tests.
+    """Build a valid ``ProceduralEntryDTO`` for envelope tests.
 
     The DTO requires ``created_at`` / ``updated_at`` (the public
     representation of a persisted row), so we stub them to a
@@ -61,11 +61,11 @@ def _fake_entry_dto(**overrides):
         'updated_at': _NOW,
     }
     payload.update(overrides)
-    return ExperientialEntryDTO.model_validate(payload)
+    return ProceduralEntryDTO.model_validate(payload)
 
 
 def _base_payload(**overrides):
-    """A baseline valid ``ExperientialEntryCreate`` payload.
+    """A baseline valid ``ProceduralEntryCreate`` payload.
 
     All field-level validation tests start from this and patch
     one field at a time so the failure message points at the
@@ -100,7 +100,7 @@ def test_entry_create_accepts_all_three_kinds(kind):
     payload = _base_payload(kind=kind, verb=None, context=None, trigger=None)
     if kind == 'case':
         payload['trigger'] = 'database connection pool exhausted'
-    dto = ExperientialEntryCreate.model_validate(payload)
+    dto = ProceduralEntryCreate.model_validate(payload)
     assert dto.kind == kind
 
 
@@ -111,7 +111,7 @@ def test_entry_create_rejects_unknown_kind(bad_kind):
     would be a 500)."""
     payload = _base_payload(kind=bad_kind)
     with pytest.raises(ValidationError, match='kind'):
-        ExperientialEntryCreate.model_validate(payload)
+        ProceduralEntryCreate.model_validate(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -124,7 +124,7 @@ def test_entry_create_rejects_unknown_kind(bad_kind):
 def test_entry_create_accepts_all_three_statuses(status):
     """All three V7 lifecycle states are accepted."""
     payload = _base_payload(status=status)
-    dto = ExperientialEntryCreate.model_validate(payload)
+    dto = ProceduralEntryCreate.model_validate(payload)
     assert dto.status == status
 
 
@@ -139,7 +139,7 @@ def test_entry_create_defaults_status_to_draft():
     asymmetry is intentional — see DTO docstrings."""
     payload = _base_payload()
     payload.pop('status')
-    dto = ExperientialEntryCreate.model_validate(payload)
+    dto = ProceduralEntryCreate.model_validate(payload)
     assert dto.status == 'draft'
 
 
@@ -149,7 +149,7 @@ def test_entry_create_rejects_unknown_status(bad_status):
     at the DTO layer."""
     payload = _base_payload(status=bad_status)
     with pytest.raises(ValidationError, match='status'):
-        ExperientialEntryCreate.model_validate(payload)
+        ProceduralEntryCreate.model_validate(payload)
 
 
 # ---------------------------------------------------------------------------
@@ -164,7 +164,7 @@ def test_entry_create_rejects_unknown_status(bad_status):
 def test_entry_create_accepts_all_origins(origin):
     """All five V7 origin values are accepted."""
     payload = _base_payload(origin=origin)
-    dto = ExperientialEntryCreate.model_validate(payload)
+    dto = ProceduralEntryCreate.model_validate(payload)
     assert dto.origin == origin
 
 
@@ -182,7 +182,7 @@ def test_entry_create_rejects_unknown_field():
     default is to ignore extras)."""
     payload = _base_payload(not_a_real_field='oops')
     with pytest.raises(ValidationError, match='not_a_real_field'):
-        ExperientialEntryCreate.model_validate(payload)
+        ProceduralEntryCreate.model_validate(payload)
 
 
 def test_entry_update_rejects_unknown_field():
@@ -195,7 +195,7 @@ def test_entry_update_rejects_unknown_field():
     succeed with no mutation, leaving the operator convinced the
     update took."""
     with pytest.raises(ValidationError, match='not_a_real_field'):
-        ExperientialEntryUpdate.model_validate({'not_a_real_field': 'oops'})
+        ProceduralEntryUpdate.model_validate({'not_a_real_field': 'oops'})
 
 
 # ---------------------------------------------------------------------------
@@ -208,7 +208,7 @@ def test_entry_update_rejects_unknown_field():
 def test_search_request_accepts_query_only():
     """A query alone (no scope) is valid — the search service
     falls back to vault-wide."""
-    req = ExperientialSearchRequest.model_validate({'query': 'rollback'})
+    req = ProceduralSearchRequest.model_validate({'query': 'rollback'})
     assert req.query == 'rollback'
     assert req.scope is None
 
@@ -216,7 +216,7 @@ def test_search_request_accepts_query_only():
 def test_search_request_accepts_scope_only():
     """A scope alone (no query) is valid — the agent pins to a
     specific scope without a textual query."""
-    req = ExperientialSearchRequest.model_validate({'scope': 'project:v7-eval'})
+    req = ProceduralSearchRequest.model_validate({'scope': 'project:v7-eval'})
     assert req.scope == 'project:v7-eval'
     assert req.query is None
 
@@ -225,7 +225,7 @@ def test_search_request_default_limit_is_10():
     """Default limit is 10 — matches the briefing default. A
     regression that bumps the default to 100 would silently
     return too much for the briefing block."""
-    req = ExperientialSearchRequest.model_validate({'query': 'x'})
+    req = ProceduralSearchRequest.model_validate({'query': 'x'})
     assert req.limit == 10
 
 
@@ -234,9 +234,9 @@ def test_search_request_limit_bounds():
     that loosens the upper bound would let a runaway query DOS
     the search service."""
     with pytest.raises(ValidationError, match='limit'):
-        ExperientialSearchRequest.model_validate({'query': 'x', 'limit': 0})
+        ProceduralSearchRequest.model_validate({'query': 'x', 'limit': 0})
     with pytest.raises(ValidationError, match='limit'):
-        ExperientialSearchRequest.model_validate({'query': 'x', 'limit': 1000})
+        ProceduralSearchRequest.model_validate({'query': 'x', 'limit': 1000})
 
 
 def test_search_request_default_status_is_published():
@@ -247,7 +247,7 @@ def test_search_request_default_status_is_published():
     A regression that flipped the DTO default to 'draft' would
     silently return an empty result set for the briefing block
     (since the briefing is published-only by definition)."""
-    req = ExperientialSearchRequest.model_validate({'query': 'x'})
+    req = ProceduralSearchRequest.model_validate({'query': 'x'})
     assert req.status == 'published'
 
 
@@ -259,13 +259,13 @@ def test_search_request_default_status_is_published():
 
 
 def test_briefing_card_requires_pin_position():
-    """An ``ExperientialBriefingCard`` must carry a pin_position
+    """An ``ProceduralBriefingCard`` must carry a pin_position
     (the service computes it from the pin context). A regression
     that made it optional would let ``pin_position=None`` leak
     to the agent briefing block."""
     fake_entry = _fake_entry_dto(title='briefing-suite-dto', summary='Test card entry.')
     with pytest.raises(ValidationError, match='pin_position'):
-        ExperientialBriefingCard.model_validate(
+        ProceduralBriefingCard.model_validate(
             {
                 'entry': fake_entry,
                 # pin_position omitted
@@ -280,10 +280,10 @@ def test_briefing_cards_envelope_round_trip():
     envelope is what the API serialises."""
     fake_entry = _fake_entry_dto(title='briefing-suite-round-trip', summary='Round-trip card.')
     cards = [
-        ExperientialBriefingCard(entry=fake_entry, pin_position=0, context_key='global'),
-        ExperientialBriefingCard(entry=fake_entry, pin_position=1, context_key='project:v7-eval'),
+        ProceduralBriefingCard(entry=fake_entry, pin_position=0, context_key='global'),
+        ProceduralBriefingCard(entry=fake_entry, pin_position=1, context_key='project:v7-eval'),
     ]
-    envelope = ExperientialBriefingCards(cards=cards, context_keys=['global', 'project:v7-eval'])
+    envelope = ProceduralBriefingCards(cards=cards, context_keys=['global', 'project:v7-eval'])
     assert len(envelope.cards) == 2
     assert envelope.cards[0].pin_position == 0
     assert envelope.cards[1].pin_position == 1

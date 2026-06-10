@@ -76,19 +76,19 @@ from memex_mcp.models import (
     McpSurveyResult,
     McpSurveyTopic,
     McpVault,
-    McpExperientialBriefingCard,
-    McpExperientialBriefingResult,
-    McpExperientialEntry,
-    McpExperientialPin,
-    McpExperientialSearchHit,
-    McpExperientialSearchResult,
-    McpExperientialSource,
+    McpProceduralBriefingCard,
+    McpProceduralBriefingResult,
+    McpProceduralEntry,
+    McpProceduralPin,
+    McpProceduralSearchHit,
+    McpProceduralSearchResult,
+    McpProceduralSource,
     Staleness,
 )
-from memex_common.experiential_schemas import (
-    ExperientialEntryCreate,
-    ExperientialEntryUpdate,
-    ExperientialSearchRequest,
+from memex_common.procedural_schemas import (
+    ProceduralEntryCreate,
+    ProceduralEntryUpdate,
+    ProceduralSearchRequest,
 )
 from memex_common.templates import TemplateRegistry, BUILTIN_PROMPTS_DIR
 from memex_common.schemas import (
@@ -4482,19 +4482,19 @@ async def memex_get_diagnostics_summary(
         raise ToolError(f'Diagnostics summary failed: {e}')
 
 
-# --- Experiential plane (V7) ---
+# --- Procedural plane (V7) ---
 
 
-def _dto_to_mcp_entry(dto: ExperientialEntryCreate) -> McpExperientialEntry:
-    """Convert a MemexAPI ExperientialEntryDTO to the MCP-facing shape.
+def _dto_to_mcp_entry(dto: ProceduralEntryCreate) -> McpProceduralEntry:
+    """Convert a MemexAPI ProceduralEntryDTO to the MCP-facing shape.
 
     The DTO is the cross-package envelope; the MCP model is the
     tool-boundary shape. They share the same column set, so this is a
-    field-by-field copy. The McpExperientialEntry model uses ``extra='forbid'``
+    field-by-field copy. The McpProceduralEntry model uses ``extra='forbid'``
     so any new DTO field added without a corresponding MCP field surfaces
     here rather than silently shipping to clients.
     """
-    return McpExperientialEntry(
+    return McpProceduralEntry(
         id=dto.id,
         vault_id=dto.vault_id,
         kind=dto.kind,
@@ -4515,7 +4515,7 @@ def _dto_to_mcp_entry(dto: ExperientialEntryCreate) -> McpExperientialEntry:
         created_at=dto.created_at,
         updated_at=dto.updated_at,
         sources=[
-            McpExperientialSource(
+            McpProceduralSource(
                 note_id=s.note_id,
                 memory_unit_id=s.memory_unit_id,
                 role=str(s.role),
@@ -4523,7 +4523,7 @@ def _dto_to_mcp_entry(dto: ExperientialEntryCreate) -> McpExperientialEntry:
             )
             for s in dto.sources
         ],
-        pins=[McpExperientialPin(context_key=p.context_key, position=p.position) for p in dto.pins],
+        pins=[McpProceduralPin(context_key=p.context_key, position=p.position) for p in dto.pins],
     )
 
 
@@ -4536,18 +4536,18 @@ def _dto_to_mcp_entry(dto: ExperientialEntryCreate) -> McpExperientialEntry:
 )
 async def memex_procedural_create(
     ctx: Context,
-    payload: ExperientialEntryCreate,
-) -> McpExperientialEntry:
-    """Write a new experiential entry via the MemexAPI facade."""
+    payload: ProceduralEntryCreate,
+) -> McpProceduralEntry:
+    """Write a new procedural entry via the MemexAPI facade."""
     try:
         api = get_api(ctx)
-        dto = await api.experiential.create(payload)
+        dto = await api.procedural.create(payload)
         return _dto_to_mcp_entry(dto)
     except ToolError:
         raise
     except Exception as e:
-        logger.error(f'Experiential create failed: {e}', exc_info=True)
-        raise ToolError(f'Experiential create failed: {e}')
+        logger.error(f'Procedural create failed: {e}', exc_info=True)
+        raise ToolError(f'Procedural create failed: {e}')
 
 
 @mcp.tool(
@@ -4559,7 +4559,7 @@ async def memex_procedural_create(
 )
 async def memex_procedural_get(
     ctx: Context,
-    entry_id: Annotated[str, Field(description='Experiential entry UUID.')],
+    entry_id: Annotated[str, Field(description='Procedural entry UUID.')],
     vault_id: Annotated[
         str | None,
         Field(
@@ -4567,7 +4567,7 @@ async def memex_procedural_get(
             'vault → 404. Omit to skip vault-scope enforcement.'
         ),
     ] = None,
-) -> McpExperientialEntry | None:
+) -> McpProceduralEntry | None:
     """Fetch a single entry by UUID. Returns null if not found."""
     try:
         api = get_api(ctx)
@@ -4578,13 +4578,13 @@ async def memex_procedural_get(
         resolved_vault: UUID | None = None
         if vault_id is not None:
             resolved_vault = await _resolve_vault_id(api, vault_id)
-        dto = await api.experiential.get(entry_uuid, vault_id=resolved_vault)
+        dto = await api.procedural.get(entry_uuid, vault_id=resolved_vault)
         return _dto_to_mcp_entry(dto)
     except ToolError:
         raise
     except Exception as e:
-        logger.error(f'Experiential get failed: {e}', exc_info=True)
-        raise ToolError(f'Experiential get failed: {e}')
+        logger.error(f'Procedural get failed: {e}', exc_info=True)
+        raise ToolError(f'Procedural get failed: {e}')
 
 
 @mcp.tool(
@@ -4613,7 +4613,7 @@ async def memex_procedural_get_by_identity(
         str | None,
         Field(description='Optional vault UUID or name for vault-scope enforcement.'),
     ] = None,
-) -> McpExperientialEntry | None:
+) -> McpProceduralEntry | None:
     """Fetch a single entry by its (kind, scope, verb, context) identity anchor."""
     try:
         api = get_api(ctx)
@@ -4626,16 +4626,16 @@ async def memex_procedural_get_by_identity(
         if vault_id is not None:
             resolved_vault = await _resolve_vault_id(api, vault_id)
         # Direct identity-anchor SELECT against the partial unique index
-        # ``uq_experiential_identity`` (not a fuzzy search). A previous
-        # implementation routed through ``api.experiential.search`` with
+        # ``uq_procedural_identity`` (not a fuzzy search). A previous
+        # implementation routed through ``api.procedural.search`` with
         # an empty query, which short-circuited to an empty response and
         # silently returned ``None`` for every anchor — the same
         # regression the HTTP route had before its fix. The facade
         # exposes a dedicated ``get_by_identity`` method (see
-        # ``MemexAPIExperientialFacade.get_by_identity``) so the LLM hot
+        # ``MemexAPIProceduralFacade.get_by_identity``) so the LLM hot
         # path is a single partial-index lookup, not a search +
         # post-filter round-trip.
-        dto = await api.experiential.get_by_identity(
+        dto = await api.procedural.get_by_identity(
             kind=kind,
             scope=scope,
             verb=verb,
@@ -4648,8 +4648,8 @@ async def memex_procedural_get_by_identity(
     except ToolError:
         raise
     except Exception as e:
-        logger.error(f'Experiential get_by_identity failed: {e}', exc_info=True)
-        raise ToolError(f'Experiential get_by_identity failed: {e}')
+        logger.error(f'Procedural get_by_identity failed: {e}', exc_info=True)
+        raise ToolError(f'Procedural get_by_identity failed: {e}')
 
 
 @mcp.tool(
@@ -4661,13 +4661,13 @@ async def memex_procedural_get_by_identity(
 )
 async def memex_procedural_update(
     ctx: Context,
-    entry_id: Annotated[str, Field(description='Experiential entry UUID.')],
-    payload: ExperientialEntryUpdate,
+    entry_id: Annotated[str, Field(description='Procedural entry UUID.')],
+    payload: ProceduralEntryUpdate,
     vault_id: Annotated[
         str | None,
         Field(description='Optional vault UUID or name.'),
     ] = None,
-) -> McpExperientialEntry:
+) -> McpProceduralEntry:
     """Mutate an entry in place. Appends a version row."""
     try:
         api = get_api(ctx)
@@ -4678,13 +4678,13 @@ async def memex_procedural_update(
         resolved_vault: UUID | None = None
         if vault_id is not None:
             resolved_vault = await _resolve_vault_id(api, vault_id)
-        dto = await api.experiential.update(entry_uuid, payload, vault_id=resolved_vault)
+        dto = await api.procedural.update(entry_uuid, payload, vault_id=resolved_vault)
         return _dto_to_mcp_entry(dto)
     except ToolError:
         raise
     except Exception as e:
-        logger.error(f'Experiential update failed: {e}', exc_info=True)
-        raise ToolError(f'Experiential update failed: {e}')
+        logger.error(f'Procedural update failed: {e}', exc_info=True)
+        raise ToolError(f'Procedural update failed: {e}')
 
 
 @mcp.tool(
@@ -4696,7 +4696,7 @@ async def memex_procedural_update(
 )
 async def memex_procedural_deprecate(
     ctx: Context,
-    entry_id: Annotated[str, Field(description='Experiential entry UUID.')],
+    entry_id: Annotated[str, Field(description='Procedural entry UUID.')],
     superseded_by_id: Annotated[
         str | None,
         Field(description='Optional UUID of the entry that supersedes this one.'),
@@ -4705,7 +4705,7 @@ async def memex_procedural_deprecate(
         str | None,
         Field(description='Optional vault UUID or name.'),
     ] = None,
-) -> McpExperientialEntry:
+) -> McpProceduralEntry:
     """Soft-deprecate an entry. Reversible out-of-band."""
     try:
         api = get_api(ctx)
@@ -4722,7 +4722,7 @@ async def memex_procedural_deprecate(
         resolved_vault: UUID | None = None
         if vault_id is not None:
             resolved_vault = await _resolve_vault_id(api, vault_id)
-        dto = await api.experiential.deprecate(
+        dto = await api.procedural.deprecate(
             entry_uuid,
             superseded_by_id=successor_uuid,
             vault_id=resolved_vault,
@@ -4731,8 +4731,8 @@ async def memex_procedural_deprecate(
     except ToolError:
         raise
     except Exception as e:
-        logger.error(f'Experiential deprecate failed: {e}', exc_info=True)
-        raise ToolError(f'Experiential deprecate failed: {e}')
+        logger.error(f'Procedural deprecate failed: {e}', exc_info=True)
+        raise ToolError(f'Procedural deprecate failed: {e}')
 
 
 @mcp.tool(
@@ -4744,18 +4744,18 @@ async def memex_procedural_deprecate(
 )
 async def memex_procedural_upsert(
     ctx: Context,
-    payload: ExperientialEntryCreate,
-) -> McpExperientialEntry:
+    payload: ProceduralEntryCreate,
+) -> McpProceduralEntry:
     """Idempotent write on the (kind, scope, verb, context) identity anchor."""
     try:
         api = get_api(ctx)
-        dto = await api.experiential.upsert(payload)
+        dto = await api.procedural.upsert(payload)
         return _dto_to_mcp_entry(dto)
     except ToolError:
         raise
     except Exception as e:
-        logger.error(f'Experiential upsert failed: {e}', exc_info=True)
-        raise ToolError(f'Experiential upsert failed: {e}')
+        logger.error(f'Procedural upsert failed: {e}', exc_info=True)
+        raise ToolError(f'Procedural upsert failed: {e}')
 
 
 @mcp.tool(
@@ -4767,16 +4767,16 @@ async def memex_procedural_upsert(
 )
 async def memex_procedural_search(
     ctx: Context,
-    request: ExperientialSearchRequest,
-) -> McpExperientialSearchResult:
+    request: ProceduralSearchRequest,
+) -> McpProceduralSearchResult:
     """Hybrid BM25 + vector search with RRF aggregation."""
     try:
         api = get_api(ctx)
-        response = await api.experiential.search(request)
-        return McpExperientialSearchResult(
+        response = await api.procedural.search(request)
+        return McpProceduralSearchResult(
             hits=[
-                McpExperientialSearchHit(
-                    # The ExperientialSearchHit DTO nests the entry
+                McpProceduralSearchHit(
+                    # The ProceduralSearchHit DTO nests the entry
                     # under .entry (so the agent can see both the
                     # RRF score and the full DTO). The MCP tool
                     # boundary wants a flat shape, so project
@@ -4804,8 +4804,8 @@ async def memex_procedural_search(
     except ToolError:
         raise
     except Exception as e:
-        logger.error(f'Experiential search failed: {e}', exc_info=True)
-        raise ToolError(f'Experiential search failed: {e}')
+        logger.error(f'Procedural search failed: {e}', exc_info=True)
+        raise ToolError(f'Procedural search failed: {e}')
 
 
 @mcp.tool(
@@ -4850,28 +4850,28 @@ async def memex_procedural_briefing_cards(
             ),
         ),
     ] = None,
-) -> McpExperientialBriefingResult:
+) -> McpProceduralBriefingResult:
     """Pin-chain briefing cards for the session-briefing surface."""
     try:
         api = get_api(ctx)
-        from memex_common.experiential_schemas import ShortLabel
+        from memex_common.procedural_schemas import ShortLabel
 
         keys: list[ShortLabel] = [ShortLabel(k) for k in context_keys]
         scope_label: ShortLabel | None = ShortLabel(scope) if scope is not None else None
         resolved_vault: UUID | None = None
         if vault_id is not None:
             resolved_vault = await _resolve_vault_id(api, vault_id)
-        result = await api.experiential.briefing_cards(
+        result = await api.procedural.briefing_cards(
             keys,
             scope=scope_label,
             limit_per_context=limit_per_context,
             vault_id=resolved_vault,
         )
-        return McpExperientialBriefingResult(
+        return McpProceduralBriefingResult(
             cards=[
-                McpExperientialBriefingCard(
+                McpProceduralBriefingCard(
                     # Same projection rule as the search tool: the
-                    # ExperientialBriefingCard DTO nests the entry
+                    # ProceduralBriefingCard DTO nests the entry
                     # under .entry, so the flat MCP shape has to
                     # project .entry.* into the tool-boundary
                     # fields. The previous read raised
@@ -4885,7 +4885,7 @@ async def memex_procedural_briefing_cards(
                 )
                 for c in result.cards
             ],
-            # The underlying ``ExperientialBriefingCards`` DTO names
+            # The underlying ``ProceduralBriefingCards`` DTO names
             # the field ``total_pinned`` (the count of pinned entries
             # that contributed to the briefing) — projecting it as
             # the MCP-facing ``total`` is the right shape, but the
@@ -4897,5 +4897,5 @@ async def memex_procedural_briefing_cards(
     except ToolError:
         raise
     except Exception as e:
-        logger.error(f'Experiential briefing_cards failed: {e}', exc_info=True)
-        raise ToolError(f'Experiential briefing_cards failed: {e}')
+        logger.error(f'Procedural briefing_cards failed: {e}', exc_info=True)
+        raise ToolError(f'Procedural briefing_cards failed: {e}')

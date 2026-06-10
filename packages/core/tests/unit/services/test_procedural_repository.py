@@ -1,9 +1,9 @@
-"""Unit tests for the V7 Experiential Plane DTOs and repository contract.
+"""Unit tests for the V7 Procedural Plane DTOs and repository contract.
 
 These tests exercise the *contract* layer — DTO validation, ORM-to-DTO
 conversion, error classes — using a mock metastore. The hybrid search
 path (BM25 + vector + RRF) requires a real Postgres testcontainer; it
-is covered by ``tests/integration/test_int_experiential_search.py``.
+is covered by ``tests/integration/test_int_procedural_search.py``.
 """
 
 from __future__ import annotations
@@ -16,27 +16,27 @@ from uuid import UUID, uuid4
 import pytest
 from pydantic import ValidationError
 
-from memex_common.experiential_schemas import (
-    ExperientialBriefingCard,
-    ExperientialBriefingCards,
-    ExperientialDerivationQueueDTO,
-    ExperientialEntryCreate,
-    ExperientialEntryDTO,
-    ExperientialEntryUpdate,
-    ExperientialKind,
-    ExperientialOrigin,
-    ExperientialPinCreate,
-    ExperientialPinDTO,
-    ExperientialSearchRequest,
-    ExperientialSearchResponse,
-    ExperientialSourceCreate,
-    ExperientialSourceRole,
-    ExperientialStatus,
+from memex_common.procedural_schemas import (
+    ProceduralBriefingCard,
+    ProceduralBriefingCards,
+    ProceduralDerivationQueueDTO,
+    ProceduralEntryCreate,
+    ProceduralEntryDTO,
+    ProceduralEntryUpdate,
+    ProceduralKind,
+    ProceduralOrigin,
+    ProceduralPinCreate,
+    ProceduralPinDTO,
+    ProceduralSearchRequest,
+    ProceduralSearchResponse,
+    ProceduralSourceCreate,
+    ProceduralSourceRole,
+    ProceduralStatus,
 )
-from memex_core.services.experiential_repository import (
-    ExperientialEntryNotFound,
-    ExperientialIdentityConflict,
-    ExperientialRepository,
+from memex_core.services.procedural_repository import (
+    ProceduralEntryNotFound,
+    ProceduralIdentityConflict,
+    ProceduralRepository,
 )
 
 
@@ -60,17 +60,17 @@ def _make_entry_row(
     updated_at: datetime | None = None,
     published_at: datetime | None = None,
 ):
-    """Build a mock DBExperientialEntry that survives the repo's _to_dto call.
+    """Build a mock DBProceduralEntry that survives the repo's _to_dto call.
 
     Uses ``MagicMock(spec=...)`` so attribute access passes through
     cleanly, with explicit values for the columns that ``_to_dto`` reads.
     """
     from memex_core.memory.sql_models import (
-        ExperientialEntry as DBExperientialEntry,
+        ProceduralEntry as DBProceduralEntry,
     )
 
     now = datetime.now(timezone.utc)
-    row = MagicMock(spec=DBExperientialEntry)
+    row = MagicMock(spec=DBProceduralEntry)
     row.id = entry_id or uuid4()
     row.vault_id = vault_id or uuid4()
     row.kind = MagicMock(value=kind)
@@ -111,7 +111,7 @@ def _make_queue_row(
     created_at: datetime | None = None,
 ):
     from memex_core.memory.sql_models import (
-        ExperientialDerivationQueue as DBQueue,
+        ProceduralDerivationQueue as DBQueue,
     )
 
     now = datetime.now(timezone.utc)
@@ -134,7 +134,7 @@ def _make_queue_row(
 
 
 def _make_pin_row(*, context_key: str = 'global', position: int = 0, entry_id: UUID | None = None):
-    from memex_core.memory.sql_models import ExperientialPin as DBPin
+    from memex_core.memory.sql_models import ProceduralPin as DBPin
 
     row = MagicMock(spec=DBPin)
     row.id = uuid4()
@@ -195,7 +195,7 @@ def _mock_session_with(*, exec_results: list[Any], execute_results: list[Any] | 
 def test_create_dto_rejects_extra_fields():
     """``extra='forbid'`` on the create envelope surfaces typos as 422s."""
     with pytest.raises(ValidationError) as exc_info:
-        ExperientialEntryCreate(
+        ProceduralEntryCreate(
             vault_id=uuid4(),
             kind='procedure',
             scope='global',
@@ -217,7 +217,7 @@ async def test_create_strategy_without_verb_and_context_raises():
     ``ck_strategy_context``); the repository surfaces the same rule
     earlier so the API returns a 4xx not a 500.
     """
-    bad = ExperientialEntryCreate(
+    bad = ProceduralEntryCreate(
         vault_id=uuid4(),
         kind='strategy',
         scope='global',
@@ -233,7 +233,7 @@ async def test_create_strategy_without_verb_and_context_raises():
         __aenter__=AsyncMock(return_value=AsyncMock()),
         __aexit__=AsyncMock(return_value=False),
     )
-    repo = ExperientialRepository(metastore=metastore)
+    repo = ProceduralRepository(metastore=metastore)
 
     with pytest.raises(ValueError, match='strategy entries require both verb and context'):
         await repo.create(bad)
@@ -242,11 +242,11 @@ async def test_create_strategy_without_verb_and_context_raises():
 def test_search_request_validates_weight_bounds():
     """bm25_weight / vector_weight must be in [0.0, 1.0]."""
     with pytest.raises(ValidationError):
-        ExperientialSearchRequest(query='x', bm25_weight=1.5)
+        ProceduralSearchRequest(query='x', bm25_weight=1.5)
     with pytest.raises(ValidationError):
-        ExperientialSearchRequest(query='x', vector_weight=-0.1)
+        ProceduralSearchRequest(query='x', vector_weight=-0.1)
     # Boundary values should pass.
-    req = ExperientialSearchRequest(query='x', bm25_weight=0.0, vector_weight=1.0)
+    req = ProceduralSearchRequest(query='x', bm25_weight=0.0, vector_weight=1.0)
     assert req.bm25_weight == 0.0
     assert req.vector_weight == 1.0
 
@@ -254,18 +254,18 @@ def test_search_request_validates_weight_bounds():
 def test_search_request_rejects_extra_fields():
     """``extra='forbid'`` on the search request envelope."""
     with pytest.raises(ValidationError):
-        ExperientialSearchRequest(query='x', made_up_field='oops')
+        ProceduralSearchRequest(query='x', made_up_field='oops')
 
 
 def test_source_create_requires_at_least_one_pointer():
-    """ck_experiential_sources_pointer_set mirrored at the repository boundary.
+    """ck_procedural_sources_pointer_set mirrored at the repository boundary.
 
     The DTO itself doesn't enforce this (so a partial payload is
     validatable), but the repository refuses to INSERT a source row
     with no pointer set.
     """
     # Empty payload is constructable — the DTO is permissive by design.
-    src = ExperientialSourceCreate()
+    src = ProceduralSourceCreate()
     assert src.role == 'evidence'
     assert src.weight == 1.0
 
@@ -275,7 +275,7 @@ def test_source_create_requires_at_least_one_pointer():
         __aenter__=AsyncMock(return_value=AsyncMock()),
         __aexit__=AsyncMock(return_value=False),
     )
-    repo = ExperientialRepository(metastore=metastore)
+    repo = ProceduralRepository(metastore=metastore)
     with pytest.raises(ValueError, match='at least one source pointer must be set'):
         # The repository signature requires entry_id first; we pass
         # a placeholder — the validation fires before any DB call.
@@ -292,9 +292,9 @@ def test_source_create_requires_at_least_one_pointer():
 @pytest.mark.asyncio
 async def test_create_procedure_returns_dto_with_identity_fields():
     """create() persists and the DTO round-trips identity fields."""
-    from memex_core.memory.sql_models import ExperientialEntry as DBEntry
+    from memex_core.memory.sql_models import ProceduralEntry as DBEntry
 
-    payload = ExperientialEntryCreate(
+    payload = ProceduralEntryCreate(
         vault_id=uuid4(),
         kind='procedure',
         scope='global',
@@ -329,7 +329,7 @@ async def test_create_procedure_returns_dto_with_identity_fields():
     metastore = MagicMock()
     metastore.session.return_value = ctx
 
-    repo = ExperientialRepository(metastore=metastore)
+    repo = ProceduralRepository(metastore=metastore)
 
     # Replace the entry-creation flow: capture the inserted DBEntry,
     # then on refresh swap the mock row into it so _to_dto reads our values.
@@ -370,7 +370,7 @@ async def test_create_procedure_returns_dto_with_identity_fields():
 
     result = await repo.create(payload)
 
-    assert isinstance(result, ExperientialEntryDTO)
+    assert isinstance(result, ProceduralEntryDTO)
     assert result.kind == 'procedure'
     assert result.scope == 'global'
     assert result.verb == 'create_alembic'
@@ -384,9 +384,9 @@ async def test_create_procedure_returns_dto_with_identity_fields():
 
 
 @pytest.mark.asyncio
-async def test_identity_anchor_conflict_raises_experiential_identity_conflict():
+async def test_identity_anchor_conflict_raises_procedural_identity_conflict():
     """A second create on a colliding (kind, scope, verb, context) anchor
-    must raise ``ExperientialIdentityConflict``, NOT a raw IntegrityError.
+    must raise ``ProceduralIdentityConflict``, NOT a raw IntegrityError.
 
     The translator inspects ``exc.orig.__cause__.constraint_name`` to
     pick between the identity-anchor UNIQUE (409) and a non-anchor
@@ -395,7 +395,7 @@ async def test_identity_anchor_conflict_raises_experiential_identity_conflict():
     """
     from sqlalchemy.exc import IntegrityError
 
-    payload = ExperientialEntryCreate(
+    payload = ProceduralEntryCreate(
         vault_id=uuid4(),
         kind='procedure',
         scope='global',
@@ -411,7 +411,7 @@ async def test_identity_anchor_conflict_raises_experiential_identity_conflict():
     # (SQLAlchemy's IntegrityError strips the diag; the __cause__ keeps
     # the rich asyncpg fields).
     inner = MagicMock()
-    inner.constraint_name = 'uq_experiential_identity'
+    inner.constraint_name = 'uq_procedural_identity'
     inner.sqlstate = '23505'
     session.commit = AsyncMock(side_effect=IntegrityError('INSERT', {}, inner))
     session.refresh = AsyncMock()
@@ -421,17 +421,17 @@ async def test_identity_anchor_conflict_raises_experiential_identity_conflict():
     metastore = MagicMock()
     metastore.session.return_value = ctx
 
-    repo = ExperientialRepository(metastore=metastore)
+    repo = ProceduralRepository(metastore=metastore)
 
-    with pytest.raises(ExperientialIdentityConflict):
+    with pytest.raises(ProceduralIdentityConflict):
         await repo.create(payload)
 
 
 @pytest.mark.asyncio
 async def test_update_appends_version_row_and_bumps_updated_at():
-    """update() writes a new experiential_entry_versions row and stamps
+    """update() writes a new procedural_entry_versions row and stamps
     ``updated_at`` on the entry."""
-    payload = ExperientialEntryUpdate(
+    payload = ProceduralEntryUpdate(
         summary='updated summary',
         body='updated body',
         edit_reason='spec fix',
@@ -447,7 +447,7 @@ async def test_update_appends_version_row_and_bumps_updated_at():
     metastore = MagicMock()
     metastore.session.return_value = ctx
 
-    repo = ExperientialRepository(metastore=metastore)
+    repo = ProceduralRepository(metastore=metastore)
 
     result = await repo.update(existing.id, payload)
 
@@ -462,7 +462,7 @@ async def test_update_appends_version_row_and_bumps_updated_at():
 @pytest.mark.asyncio
 async def test_upsert_by_identity_inserts_when_missing():
     """First call to upsert_by_identity on a new anchor should INSERT."""
-    payload = ExperientialEntryCreate(
+    payload = ProceduralEntryCreate(
         vault_id=uuid4(),
         kind='procedure',
         scope='project:abc',
@@ -484,7 +484,7 @@ async def test_upsert_by_identity_inserts_when_missing():
     metastore = MagicMock()
     metastore.session.return_value = ctx
 
-    repo = ExperientialRepository(metastore=metastore)
+    repo = ProceduralRepository(metastore=metastore)
 
     # The internal _get_entry will be called after commit/refresh; the
     # mock session's exec() always returns the same MagicMock, so .first()
@@ -503,23 +503,23 @@ async def test_upsert_by_identity_inserts_when_missing():
         return fake_row
 
     # Patch the helper on the class for the duration of the call.
-    from memex_core.services import experiential_repository as exp_repo_module
+    from memex_core.services import procedural_repository as exp_repo_module
 
-    original = exp_repo_module.ExperientialRepository._get_entry
-    exp_repo_module.ExperientialRepository._get_entry = _fake_get_entry  # type: ignore[assignment]
+    original = exp_repo_module.ProceduralRepository._get_entry
+    exp_repo_module.ProceduralRepository._get_entry = _fake_get_entry  # type: ignore[assignment]
     try:
         result = await repo.upsert_by_identity(payload)
     finally:
-        exp_repo_module.ExperientialRepository._get_entry = original  # type: ignore[assignment]
+        exp_repo_module.ProceduralRepository._get_entry = original  # type: ignore[assignment]
 
     assert session.add.call_count == 1
-    assert isinstance(result, ExperientialEntryDTO)
+    assert isinstance(result, ProceduralEntryDTO)
 
 
 @pytest.mark.asyncio
 async def test_upsert_by_identity_updates_existing_row():
     """Second call on the same anchor should UPDATE, not INSERT."""
-    payload = ExperientialEntryCreate(
+    payload = ProceduralEntryCreate(
         vault_id=uuid4(),
         kind='strategy',
         scope='project:abc',
@@ -550,20 +550,20 @@ async def test_upsert_by_identity_updates_existing_row():
     metastore = MagicMock()
     metastore.session.return_value = ctx
 
-    repo = ExperientialRepository(metastore=metastore)
+    repo = ProceduralRepository(metastore=metastore)
 
     async def _fake_get_entry(self_, sess, entry_id, *, vault_id=None):
         # Reflect the in-place mutation by re-reading the existing mock.
         return existing
 
-    from memex_core.services import experiential_repository as exp_repo_module
+    from memex_core.services import procedural_repository as exp_repo_module
 
-    original = exp_repo_module.ExperientialRepository._get_entry
-    exp_repo_module.ExperientialRepository._get_entry = _fake_get_entry  # type: ignore[assignment]
+    original = exp_repo_module.ProceduralRepository._get_entry
+    exp_repo_module.ProceduralRepository._get_entry = _fake_get_entry  # type: ignore[assignment]
     try:
         result = await repo.upsert_by_identity(payload)
     finally:
-        exp_repo_module.ExperientialRepository._get_entry = original  # type: ignore[assignment]
+        exp_repo_module.ProceduralRepository._get_entry = original  # type: ignore[assignment]
 
     # The in-place UPDATE mutates the existing row rather than INSERT.
     assert existing.title == 'deploy to staging'
@@ -572,12 +572,12 @@ async def test_upsert_by_identity_updates_existing_row():
     # ``upsert_by_identity`` always appends (matches the update() path —
     # the audit trail is the whole point of having a version table).
     assert session.add.call_count == 2
-    assert isinstance(result, ExperientialEntryDTO)
+    assert isinstance(result, ProceduralEntryDTO)
 
 
 @pytest.mark.asyncio
 async def test_get_entry_raises_not_found():
-    """get() with a missing id raises ExperientialEntryNotFound."""
+    """get() with a missing id raises ProceduralEntryNotFound."""
     session, exec_mock = _make_async_exec_session(first=None)
     ctx = MagicMock()
     ctx.__aenter__ = AsyncMock(return_value=session)
@@ -585,9 +585,9 @@ async def test_get_entry_raises_not_found():
     metastore = MagicMock()
     metastore.session.return_value = ctx
 
-    repo = ExperientialRepository(metastore=metastore)
+    repo = ProceduralRepository(metastore=metastore)
 
-    with pytest.raises(ExperientialEntryNotFound):
+    with pytest.raises(ProceduralEntryNotFound):
         await repo.get(uuid4())
 
 
@@ -598,9 +598,9 @@ async def test_get_entry_raises_not_found():
 
 def test_search_response_truncation_flag_is_computed():
     """SearchResponse serialises the hit list and the truncation hint."""
-    from memex_common.experiential_schemas import ExperientialSearchHit
+    from memex_common.procedural_schemas import ProceduralSearchHit
 
-    entry = ExperientialEntryDTO(
+    entry = ProceduralEntryDTO(
         id=uuid4(),
         vault_id=uuid4(),
         kind='procedure',
@@ -612,8 +612,8 @@ def test_search_response_truncation_flag_is_computed():
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),
     )
-    hit = ExperientialSearchHit(entry=entry, score=0.7, matched_via='rrf')
-    resp = ExperientialSearchResponse(hits=[hit], total=1, truncated=False, took_ms=1.0)
+    hit = ProceduralSearchHit(entry=entry, score=0.7, matched_via='rrf')
+    resp = ProceduralSearchResponse(hits=[hit], total=1, truncated=False, took_ms=1.0)
     assert resp.hits[0].score == 0.7
     assert resp.truncated is False
     assert resp.took_ms == 1.0
@@ -622,7 +622,7 @@ def test_search_response_truncation_flag_is_computed():
 def test_briefing_cards_orders_by_pin_position():
     """BriefingCards serialises position 0 first, then 1, 2, …"""
     entry_id = uuid4()
-    entry = ExperientialEntryDTO(
+    entry = ProceduralEntryDTO(
         id=entry_id,
         vault_id=uuid4(),
         kind='strategy',
@@ -635,11 +635,11 @@ def test_briefing_cards_orders_by_pin_position():
         updated_at=datetime.now(timezone.utc),
     )
     cards = [
-        ExperientialBriefingCard(entry=entry, pin_position=2, context_key='global'),
-        ExperientialBriefingCard(entry=entry, pin_position=0, context_key='global'),
-        ExperientialBriefingCard(entry=entry, pin_position=1, context_key='global'),
+        ProceduralBriefingCard(entry=entry, pin_position=2, context_key='global'),
+        ProceduralBriefingCard(entry=entry, pin_position=0, context_key='global'),
+        ProceduralBriefingCard(entry=entry, pin_position=1, context_key='global'),
     ]
-    envelope = ExperientialBriefingCards(
+    envelope = ProceduralBriefingCards(
         cards=sorted(cards, key=lambda c: c.pin_position),
         context_keys=['global'],
         total_pinned=3,
@@ -650,7 +650,7 @@ def test_briefing_cards_orders_by_pin_position():
 
 def test_queue_dto_status_round_trip():
     """Queue DTO carries the status string for inspection by the CLI."""
-    payload = ExperientialDerivationQueueDTO(
+    payload = ProceduralDerivationQueueDTO(
         id=uuid4(),
         vault_id=uuid4(),
         target_kind='procedure',
@@ -666,7 +666,7 @@ def test_queue_dto_status_round_trip():
 
 def test_entry_dto_pin_and_source_lists_default_empty():
     """Entry DTO surfaces empty source/pin lists when not provided."""
-    e = ExperientialEntryDTO(
+    e = ProceduralEntryDTO(
         id=uuid4(),
         vault_id=uuid4(),
         kind='case',
@@ -684,9 +684,9 @@ def test_entry_dto_pin_and_source_lists_default_empty():
 
 
 def test_pin_dto_rejects_negative_position():
-    """Pin position must be non-negative (ck_experiential_pins_position_nonneg)."""
+    """Pin position must be non-negative (ck_procedural_pins_position_nonneg)."""
     with pytest.raises(ValidationError):
-        ExperientialPinDTO(
+        ProceduralPinDTO(
             id=uuid4(),
             context_key='global',
             entry_id=uuid4(),
@@ -695,7 +695,7 @@ def test_pin_dto_rejects_negative_position():
         )
     # And the create envelope mirrors the rule.
     with pytest.raises(ValidationError):
-        ExperientialPinCreate(
+        ProceduralPinCreate(
             context_key='global',
             entry_id=uuid4(),
             position=-1,
@@ -714,13 +714,13 @@ def test_kind_status_origin_string_values_match_orm():
     will disagree and a valid create will 500 instead of 201.
     """
     from memex_core.memory.sql_models import (
-        ExperientialKind as DBKind,
-        ExperientialOrigin as DBOrigin,
-        ExperientialSourceRole as DBRole,
-        ExperientialStatus as DBStatus,
+        ProceduralKind as DBKind,
+        ProceduralOrigin as DBOrigin,
+        ProceduralSourceRole as DBRole,
+        ProceduralStatus as DBStatus,
     )
 
-    assert {k.value for k in ExperientialKind} == {k.value for k in DBKind}
-    assert {k.value for k in ExperientialStatus} == {k.value for k in DBStatus}
-    assert {k.value for k in ExperientialOrigin} == {k.value for k in DBOrigin}
-    assert {k.value for k in ExperientialSourceRole} == {k.value for k in DBRole}
+    assert {k.value for k in ProceduralKind} == {k.value for k in DBKind}
+    assert {k.value for k in ProceduralStatus} == {k.value for k in DBStatus}
+    assert {k.value for k in ProceduralOrigin} == {k.value for k in DBOrigin}
+    assert {k.value for k in ProceduralSourceRole} == {k.value for k in DBRole}

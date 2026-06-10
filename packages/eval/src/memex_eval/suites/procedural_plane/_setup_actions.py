@@ -119,7 +119,7 @@ class _ProceduralUpsert(SetupActionHandler):
         # ``procedural_upsert`` is idempotent on the identity anchor,
         # so re-running the suite on a dirty vault produces the
         # same state (idempotent by design).
-        from memex_common.experiential_schemas import ExperientialEntryCreate
+        from memex_common.procedural_schemas import ProceduralEntryCreate
 
         payload: dict[str, Any] = {
             'kind': kind,
@@ -140,7 +140,7 @@ class _ProceduralUpsert(SetupActionHandler):
         # Construct via Pydantic so any required-field validation
         # surfaces here (not deep in the API call).
         try:
-            create = ExperientialEntryCreate.model_validate(payload)
+            create = ProceduralEntryCreate.model_validate(payload)
         except Exception as exc:
             raise ValueError(
                 f'procedural_upsert: payload validation failed: {exc}. Payload was: {payload!r}'

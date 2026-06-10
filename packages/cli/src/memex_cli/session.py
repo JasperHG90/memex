@@ -36,6 +36,18 @@ async def briefing(
         str | None,
         typer.Option('--project-id', '-p', help='Project ID for KV namespace scoping.'),
     ] = None,
+    app_identity: Annotated[
+        str | None,
+        typer.Option(
+            '--app',
+            '-a',
+            help=(
+                'Consumer identity for the procedural pin chain '
+                '("claude-code", "hermes:<agent_identity>"). Selects the '
+                'app:<id> pin context layered on global + project.'
+            ),
+        ),
+    ] = None,
 ):
     """Generate a session briefing for LLM agents.
 
@@ -59,6 +71,7 @@ async def briefing(
                 vault_id=vault_uuid,
                 budget=budget,
                 project_id=project_id,
+                app=app_identity,
             )
     except (httpx.ConnectError, httpx.ConnectTimeout, httpx.ReadTimeout, OSError) as e:
         print(

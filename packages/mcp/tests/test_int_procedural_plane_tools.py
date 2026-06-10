@@ -23,13 +23,13 @@ from unittest.mock import AsyncMock
 
 import pytest
 
-from memex_common.experiential_schemas import (
-    ExperientialBriefingCard,
-    ExperientialBriefingCards,
-    ExperientialEntryDTO,
-    ExperientialSearchHit,
-    ExperientialSearchRequest,
-    ExperientialSearchResponse,
+from memex_common.procedural_schemas import (
+    ProceduralBriefingCard,
+    ProceduralBriefingCards,
+    ProceduralEntryDTO,
+    ProceduralSearchHit,
+    ProceduralSearchRequest,
+    ProceduralSearchResponse,
 )
 
 
@@ -54,8 +54,8 @@ def _make_entry_dto(
     body: str = 'Step 1: ... Step 2: ...',
     trigger: str | None = None,
     status: str = 'published',
-) -> ExperientialEntryDTO:
-    """Build a fully-populated ExperientialEntryDTO for projection tests.
+) -> ProceduralEntryDTO:
+    """Build a fully-populated ProceduralEntryDTO for projection tests.
 
     The MCP tools use this to assert on the DTO's nested ``.entry.*``
     attributes. A previous bug read these off the hit/card itself
@@ -64,7 +64,7 @@ def _make_entry_dto(
     """
     from uuid import uuid4 as _uuid4
 
-    return ExperientialEntryDTO(
+    return ProceduralEntryDTO(
         id=entry_id or _uuid4(),
         vault_id=vault_id or _uuid4(),
         kind=kind,  # type: ignore[arg-type]
@@ -89,14 +89,14 @@ def _make_entry_dto(
     )
 
 
-def _make_search_response(*, entries: list[ExperientialEntryDTO]) -> ExperientialSearchResponse:
+def _make_search_response(*, entries: list[ProceduralEntryDTO]) -> ProceduralSearchResponse:
     """Build a search response where each entry surfaces as a hit with
     the entry nested under .entry. The MCP tool must project
     ``h.entry.id`` etc. (NOT ``h.id``)."""
 
-    return ExperientialSearchResponse(
+    return ProceduralSearchResponse(
         hits=[
-            ExperientialSearchHit(
+            ProceduralSearchHit(
                 entry=entry,
                 score=0.9 - i * 0.1,
                 bm25_rank=i,
@@ -113,11 +113,11 @@ def _make_search_response(*, entries: list[ExperientialEntryDTO]) -> Experientia
 
 
 def _make_briefing_cards_response(
-    *, cards: list[ExperientialBriefingCard]
-) -> ExperientialBriefingCards:
+    *, cards: list[ProceduralBriefingCard]
+) -> ProceduralBriefingCards:
     """Build a briefing-cards response with the entry nested under
     .entry. The MCP tool must project ``c.entry.id`` etc."""
-    return ExperientialBriefingCards(
+    return ProceduralBriefingCards(
         cards=cards,
         context_keys=['global'],
         total_pinned=len(cards),
@@ -130,8 +130,8 @@ def _make_briefing_cards_response(
 
 
 async def test_mcp_get_by_identity_uses_facade_lookup(mock_api, mock_config, mcp_client):
-    """The MCP tool calls ``api.experiential.get_by_identity`` directly,
-    NOT ``api.experiential.search`` followed by a post-filter.
+    """The MCP tool calls ``api.procedural.get_by_identity`` directly,
+    NOT ``api.procedural.search`` followed by a post-filter.
 
     A previous regression routed through search('') which
     short-circuited to an empty response and silently returned
@@ -154,7 +154,7 @@ async def test_mcp_get_by_identity_uses_facade_lookup(mock_api, mock_config, mcp
 
     facade = AsyncMock()
     facade.get_by_identity = AsyncMock(return_value=expected_entry)
-    mock_api.experiential = facade
+    mock_api.procedural = facade
 
     result = await mcp_client.call_tool(
         'memex_procedural_get_by_identity',
@@ -194,7 +194,7 @@ async def test_mcp_get_by_identity_returns_null_on_miss(mock_api, mock_config, m
 
     facade = AsyncMock()
     facade.get_by_identity = AsyncMock(return_value=None)
-    mock_api.experiential = facade
+    mock_api.procedural = facade
 
     await mcp_client.call_tool(
         'memex_procedural_get_by_identity',
@@ -208,7 +208,7 @@ async def test_mcp_get_by_identity_returns_null_on_miss(mock_api, mock_config, m
 
     facade.get_by_identity.assert_awaited_once()
     facade.search.assert_not_called()
-    # The tool's return is `McpExperientialEntry | None`. A null
+    # The tool's return is `McpProceduralEntry | None`. A null
     # result surfaces as empty content. Assert the tool didn't crash
     # and didn't fall through to a search call.
     assert not facade.search.await_count
@@ -221,12 +221,12 @@ async def test_mcp_get_by_identity_returns_null_on_miss(mock_api, mock_config, m
 
 async def test_mcp_search_projects_entry_attributes(mock_api, mock_config, mcp_client):
     """The MCP search tool projects ``h.entry.id``, ``h.entry.title``,
-    etc. into the flat ``McpExperientialSearchHit`` shape.
+    etc. into the flat ``McpProceduralSearchHit`` shape.
 
     A previous bug read these off the hit itself (``h.entry_id``,
     ``h.title``), which raised ``AttributeError`` on every search
     call. This test pins the projection by feeding a real
-    ``ExperientialSearchResponse`` and asserting the tool
+    ``ProceduralSearchResponse`` and asserting the tool
     returns the entry's id, title, kind, etc. without crashing.
     """
     from uuid import uuid4
@@ -253,12 +253,12 @@ async def test_mcp_search_projects_entry_attributes(mock_api, mock_config, mcp_c
 
     facade = AsyncMock()
     facade.search = AsyncMock(return_value=response)
-    mock_api.experiential = facade
+    mock_api.procedural = facade
 
     result = await mcp_client.call_tool(
         'memex_procedural_search',
         {
-            'request': ExperientialSearchRequest(query='rotate').model_dump(mode='json'),
+            'request': ProceduralSearchRequest(query='rotate').model_dump(mode='json'),
         },
     )
 
@@ -301,7 +301,7 @@ async def test_mcp_briefing_cards_projects_entry_attributes(mock_api, mock_confi
         verb='rotate',
         context='creds',
     )
-    briefing_card = ExperientialBriefingCard(
+    briefing_card = ProceduralBriefingCard(
         entry=entry,
         pin_position=0,
         context_key='global',
@@ -310,7 +310,7 @@ async def test_mcp_briefing_cards_projects_entry_attributes(mock_api, mock_confi
 
     facade = AsyncMock()
     facade.briefing_cards = AsyncMock(return_value=response)
-    mock_api.experiential = facade
+    mock_api.procedural = facade
 
     result = await mcp_client.call_tool(
         'memex_procedural_briefing_cards',
@@ -346,7 +346,7 @@ async def test_mcp_briefing_cards_threads_vault_id(mock_api, mock_config, mcp_cl
 
     facade = AsyncMock()
     facade.briefing_cards = AsyncMock(return_value=_make_briefing_cards_response(cards=[]))
-    mock_api.experiential = facade
+    mock_api.procedural = facade
     # The vault_id string is resolved to a UUID via
     # ``api.resolve_vault_identifier`` (the standard MCP vault
     # resolution helper).
@@ -381,7 +381,7 @@ async def test_mcp_briefing_cards_without_vault_id_passes_none(mock_api, mock_co
 
     facade = AsyncMock()
     facade.briefing_cards = AsyncMock(return_value=_make_briefing_cards_response(cards=[]))
-    mock_api.experiential = facade
+    mock_api.procedural = facade
 
     await mcp_client.call_tool(
         'memex_procedural_briefing_cards',

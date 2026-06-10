@@ -1,30 +1,33 @@
-"""V7 Experiential Plane — repository.
+"""V7 Procedural Plane — repository.
 
-The repository owns CRUD + identity-anchor upsert for the ``experiential_*``
+The repository owns CRUD + identity-anchor upsert for the ``procedural_*``
 tables, plus the source-edge, pin, and derivation-queue mutations. The
-search layer (see ``experiential_search_service.py``) is a separate
+search layer (see ``procedural_search_service.py``) is a separate
 service that composes the repository with the embedding model and
 asynchronous RRF.
 
 Identity anchor
 ---------------
 
-Procedures and strategies have a stable identity: ``(kind, scope, verb,
-context)`` is unique (see the ``uq_experiential_identity`` partial unique
-index — NULLS NOT DISTINCT — in migration 061). Cases do not participate
-in the identity anchor; they are free-form experience records keyed by
-``trigger`` text + ``trigger_embedding``. ``upsert_by_identity`` exploits
-the anchor: a re-write of the same procedure (same scope, same verb,
-same context) is one UPDATE, not a new row.
+Every entry has a stable identity: ``(kind, scope, verb, context)`` is
+unique (``uq_procedural_identity``, NULLS NOT DISTINCT). Procedure ≡
+(scope, verb, context); strategy ≡ (scope, verb, NULL) — §18.1.
+``upsert_by_identity`` exploits the anchor: a re-write of the same
+procedure (same scope, same verb, same context) is one UPDATE, not a
+new row. Cases are NOT on this plane (they are notes with
+``role='case'``); they connect to entries via ``procedural_sources``.
 
 Embeddings
 ----------
 
-The repository does **not** compute embeddings. ``body_embedding`` and
-``trigger_embedding`` are stored as ``None`` on create/update; the search
-service is responsible for back-filling them. This keeps the write path
-fast and avoids one shared model mutex per request. (See V7 design
-§3.4 — "lazy embedding".)
+The repository does **not** compute embeddings — the *caller* does
+(design §18.7: embeddings are computed by the caller and passed in;
+the facade embeds the trigger via
+``ProceduralSearchService.embed_trigger`` and threads the vector into
+``create`` / ``update`` / ``upsert_by_identity``). When no embedding
+is supplied alongside a trigger change, the stale vector is nulled so
+retrieval can never serve a vector for text that no longer exists
+(the §19.4 stale-embedding bug class).
 
 Audit
 -----
@@ -47,105 +50,112 @@ from sqlmodel import col, select
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 from memex_common.exceptions import MemexError
-from memex_common.experiential_schemas import (
+from memex_common.procedural_schemas import (
     DerivationQueueStatus,
-    ExperientialDerivationQueueClaim,
-    ExperientialDerivationQueueDTO,
-    ExperientialEntryCreate,
-    ExperientialEntryDTO,
-    ExperientialEntryUpdate,
-    ExperientialPinCreate,
-    ExperientialPinDTO,
-    ExperientialSourceCreate,
-    ExperientialSourceDTO,
+    ProceduralDerivationQueueClaim,
+    ProceduralDerivationQueueDTO,
+    ProceduralEntryCreate,
+    ProceduralEntryDTO,
+    ProceduralEntryUpdate,
+    ProceduralEntryVersionDTO,
+    ProceduralPinCreate,
+    ProceduralPinDTO,
+    ProceduralSourceCreate,
+    ProceduralSourceDTO,
     ShortLabel,
 )
 from memex_core.memory.sql_models import (
     DerivationQueueStatus as DBDerivationQueueStatus,
 )
 from memex_core.memory.sql_models import (
-    ExperientialDerivationQueue as DBExperientialDerivationQueue,
+    ProceduralDerivationQueue as DBProceduralDerivationQueue,
 )
 from memex_core.memory.sql_models import (
-    ExperientialEntry as DBExperientialEntry,
+    ProceduralEntry as DBProceduralEntry,
 )
 from memex_core.memory.sql_models import (
-    ExperientialEntryVersion as DBExperientialEntryVersion,
+    ProceduralEntryVersion as DBProceduralEntryVersion,
 )
 from memex_core.memory.sql_models import (
-    ExperientialKind as DBExperientialKind,
+    ProceduralKind as DBProceduralKind,
 )
 from memex_core.memory.sql_models import (
-    ExperientialOrigin as DBExperientialOrigin,
+    ProceduralOrigin as DBProceduralOrigin,
 )
 from memex_core.memory.sql_models import (
-    ExperientialPin as DBExperientialPin,
+    ProceduralPin as DBProceduralPin,
 )
 from memex_core.memory.sql_models import (
-    ExperientialSource as DBExperientialSource,
+    ProceduralSource as DBProceduralSource,
 )
 from memex_core.memory.sql_models import (
-    ExperientialSourceRole as DBExperientialSourceRole,
+    ProceduralSourceRole as DBProceduralSourceRole,
 )
 from memex_core.memory.sql_models import (
-    ExperientialStatus as DBExperientialStatus,
+    ProceduralStatus as DBProceduralStatus,
 )
 from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
 
-logger = logging.getLogger('memex.core.services.experiential_repository')
+logger = logging.getLogger('memex.core.services.procedural_repository')
 
 # Bumped per claim — used by the audit surface to tell create vs update.
 _VERSION_BUMP = 1
 
+# Hard cap on pins per context key (§19.8 — 10 per assembled chain fits
+# the §19.2 card budget). Enforced at pin time so the briefing never has
+# to truncate a curated chain silently.
+PIN_CAP_PER_CONTEXT = 10
+
 # Actions logged to the audit service.
-_AUDIT_CREATE = 'experiential_entry_create'
-_AUDIT_UPDATE = 'experiential_entry_update'
-_AUDIT_DEPRECATE = 'experiential_entry_deprecate'
-_AUDIT_SOURCE_ADD = 'experiential_source_add'
-_AUDIT_PIN_ADD = 'experiential_pin_add'
-_AUDIT_QUEUE_ENQUEUE = 'experiential_queue_enqueue'
-_AUDIT_QUEUE_CLAIM = 'experiential_queue_claim'
-_AUDIT_QUEUE_COMPLETE = 'experiential_queue_complete'
+_AUDIT_CREATE = 'procedural_entry_create'
+_AUDIT_UPDATE = 'procedural_entry_update'
+_AUDIT_DEPRECATE = 'procedural_entry_deprecate'
+_AUDIT_SOURCE_ADD = 'procedural_source_add'
+_AUDIT_PIN_ADD = 'procedural_pin_add'
+_AUDIT_PIN_REMOVE = 'procedural_pin_remove'
+_AUDIT_QUEUE_ENQUEUE = 'procedural_queue_enqueue'
+_AUDIT_QUEUE_CLAIM = 'procedural_queue_claim'
+_AUDIT_QUEUE_COMPLETE = 'procedural_queue_complete'
 
 
-class ExperientialRepositoryError(MemexError):
-    """Base error for the experiential repository.
+class ProceduralRepositoryError(MemexError):
+    """Base error for the procedural repository.
 
     Inherits from :class:`MemexError` so the procedural HTTP route's
     ``except (MemexError, ...)`` clause catches it and the
     ``_handle_error`` translator in ``server/common.py`` can map the
     specific subclass to its status code (409 for
-    :class:`ExperientialIdentityConflict`, 404 for
-    :class:`ExperientialEntryNotFound`). A regression to plain
+    :class:`ProceduralIdentityConflict`, 404 for
+    :class:`ProceduralEntryNotFound`). A regression to plain
     ``Exception`` would let the exception bubble up to FastAPI as a 500
     and look indistinguishable from a real internal failure.
     """
 
 
-class ExperientialEntryNotFound(ExperientialRepositoryError):
+class ProceduralEntryNotFound(ProceduralRepositoryError):
     """Raised when an entry lookup misses."""
 
 
-class ExperientialIdentityConflict(ExperientialRepositoryError):
+class ProceduralIdentityConflict(ProceduralRepositoryError):
     """Raised when an upsert collides with an existing row that does NOT
     match the (kind, scope, verb, context) anchor of the input — the only
     case where the unique constraint should re-raise to the caller."""
 
 
-class ExperientialConstraintViolation(ExperientialRepositoryError):
+class ProceduralConstraintViolation(ProceduralRepositoryError):
     """Raised when a non-anchor DB constraint rejects a write.
 
-    A check (e.g. ``ck_strategy_context``) or foreign-key violation
+    A check (e.g. ``ck_strategy_anchor``) or foreign-key violation
     surfaces as ``IntegrityError`` from asyncpg. The repository's
     identity-anchor contract is the *one* unique constraint that
-    should re-raise as 409 (``ExperientialIdentityConflict``) — every
+    should re-raise as 409 (``ProceduralIdentityConflict``) — every
     other constraint failure is a *caller-correctable* input error
     and maps to 422 so the agent's loop surfaces the actual cause
     instead of a misleading "concurrent upsert, retry" message.
 
     The ``constraint`` attribute is the asyncpg
     ``diag.constraint_name`` (e.g. ``ck_strategy_context``,
-    ``experiential_entries_vault_id_fkey``) so the agent's log
+    ``procedural_entries_vault_id_fkey``) so the agent's log
     surface can tell which rule fired.
     """
 
@@ -154,8 +164,8 @@ class ExperientialConstraintViolation(ExperientialRepositoryError):
         self.constraint = constraint
 
 
-class ExperientialRepository:
-    """Async CRUD for the experiential plane.
+class ProceduralRepository:
+    """Async CRUD for the procedural plane.
 
     Construction is cheap: the repository is a thin wrapper around the
     metastore's session factory. All methods take an explicit ``vault_id``
@@ -164,10 +174,10 @@ class ExperientialRepository:
 
     # The partial unique index that backs the identity anchor — the
     # only UNIQUE constraint that should re-raise as
-    # :class:`ExperientialIdentityConflict` (409). Every other UNIQUE
+    # :class:`ProceduralIdentityConflict` (409). Every other UNIQUE
     # constraint is a real conflict and uses the same 409 mapping;
     # the distinction is informative for the log line.
-    _ANCHOR_CONSTRAINTS = frozenset({'uq_experiential_identity'})
+    _ANCHOR_CONSTRAINTS = frozenset({'uq_procedural_identity'})
 
     def __init__(self, metastore: AsyncBaseMetaStoreEngine) -> None:
         self._metastore = metastore
@@ -179,15 +189,15 @@ class ExperientialRepository:
         exc: IntegrityError,
         *,
         anchor_label: str,
-    ) -> ExperientialRepositoryError:
+    ) -> ProceduralRepositoryError:
         """Translate a raw asyncpg ``IntegrityError`` into the right
         domain error.
 
         The identity-anchor UNIQUE is the only case that maps to
-        :class:`ExperientialIdentityConflict` (409, "retry"). Every
+        :class:`ProceduralIdentityConflict` (409, "retry"). Every
         other constraint — a CHECK, an FK, a sibling-table UNIQUE
         tripped by a parallel writer — maps to
-        :class:`ExperientialConstraintViolation` (422) so the agent's
+        :class:`ProceduralConstraintViolation` (422) so the agent's
         retry loop can surface the actual cause instead of a
         misleading "concurrent upsert" message.
 
@@ -204,8 +214,8 @@ class ExperientialRepository:
         constraint_name = getattr(asyncpg_exc, 'constraint_name', None)
         sqlstate = getattr(asyncpg_exc, 'sqlstate', None)
 
-        if constraint_name in ExperientialRepository._ANCHOR_CONSTRAINTS:
-            return ExperientialIdentityConflict(anchor_label)
+        if constraint_name in ProceduralRepository._ANCHOR_CONSTRAINTS:
+            return ProceduralIdentityConflict(anchor_label)
         message = anchor_label
         if constraint_name:
             message = f'{anchor_label} (constraint={constraint_name!r})'
@@ -214,24 +224,29 @@ class ExperientialRepository:
             # ours are named) still leaves a SQLSTATE the agent's
             # log surface can pivot on.
             message = f'{anchor_label} (sqlstate={sqlstate!r})'
-        return ExperientialConstraintViolation(message, constraint=constraint_name)
+        return ProceduralConstraintViolation(message, constraint=constraint_name)
 
     # ------------------------------------------------------------------
     # Entry CRUD
     # ------------------------------------------------------------------
 
-    async def create(self, payload: ExperientialEntryCreate) -> ExperientialEntryDTO:
-        """Insert a new experiential entry.
+    async def create(
+        self,
+        payload: ProceduralEntryCreate,
+        *,
+        trigger_embedding: list[float] | None = None,
+    ) -> ProceduralEntryDTO:
+        """Insert a new procedural entry.
 
-        For procedures and strategies, the (kind, scope, verb, context)
-        anchor must be unique; a collision raises
-        :class:`ExperientialIdentityConflict`. For cases, the call is
-        idempotent against repeated identical triggers — a new UUID is
-        minted on every call (cases do not have an identity anchor).
+        The (kind, scope, verb, context) anchor must be unique; a
+        collision raises :class:`ProceduralIdentityConflict`. Anchor
+        shape (procedure: verb+context; strategy: verb only, context
+        forbidden — §18.1) is enforced by the
+        :class:`ProceduralEntryCreate` DTO validator.
+
+        ``trigger_embedding`` is the caller-computed vector for
+        ``payload.trigger`` (§18.7) — the facade supplies it.
         """
-        if payload.kind == 'strategy' and (not payload.verb or not payload.context):
-            raise ValueError('strategy entries require both verb and context')
-
         # Auto-stamp ``published_at`` when the create request lands
         # directly in the published lifecycle state. ``update()`` does
         # the same on a draft→published transition; a regression
@@ -240,9 +255,9 @@ class ExperientialRepository:
         # "freshness" sort relies on.
         published_at = datetime.now(timezone.utc) if payload.status == 'published' else None
 
-        entry = DBExperientialEntry(
+        entry = DBProceduralEntry(
             vault_id=payload.vault_id,
-            kind=DBExperientialKind(payload.kind),
+            kind=DBProceduralKind(payload.kind),
             scope=payload.scope,
             verb=payload.verb,
             context=payload.context,
@@ -250,10 +265,11 @@ class ExperientialRepository:
             summary=payload.summary,
             body=payload.body,
             trigger=payload.trigger,
+            trigger_embedding=trigger_embedding or None,
             tags=payload.tags,
             extra_metadata=payload.extra_metadata,
-            status=DBExperientialStatus(payload.status),
-            origin=DBExperientialOrigin(payload.origin),
+            status=DBProceduralStatus(payload.status),
+            origin=DBProceduralOrigin(payload.origin),
             supersedes_id=payload.supersedes_id,
             published_at=published_at,
         )
@@ -265,7 +281,7 @@ class ExperientialRepository:
                 await session.refresh(entry)
         except IntegrityError as exc:
             logger.info(
-                'experiential.create: integrity error for kind=%s scope=%s verb=%r context=%r: %s',
+                'procedural.create: integrity error for kind=%s scope=%s verb=%r context=%r: %s',
                 payload.kind,
                 payload.scope,
                 payload.verb,
@@ -288,7 +304,7 @@ class ExperientialRepository:
         entry_id: UUID,
         *,
         vault_id: UUID | None = None,
-    ) -> ExperientialEntryDTO:
+    ) -> ProceduralEntryDTO:
         """Look up a single entry by id. Raises if missing or vault-mismatched."""
         async with self._metastore.session() as session:
             entry = await self._get_entry(session, entry_id, vault_id=vault_id)
@@ -299,14 +315,14 @@ class ExperientialRepository:
         entry_ids: list[UUID],
         *,
         vault_id: UUID | None = None,
-    ) -> list[ExperientialEntryDTO]:
+    ) -> list[ProceduralEntryDTO]:
         """Bulk lookup. Missing ids are skipped (not raised)."""
         if not entry_ids:
             return []
         async with self._metastore.session() as session:
-            stmt = select(DBExperientialEntry).where(col(DBExperientialEntry.id).in_(entry_ids))
+            stmt = select(DBProceduralEntry).where(col(DBProceduralEntry.id).in_(entry_ids))
             if vault_id is not None:
-                stmt = stmt.where(col(DBExperientialEntry.vault_id) == vault_id)
+                stmt = stmt.where(col(DBProceduralEntry.vault_id) == vault_id)
             rows = (await session.exec(stmt)).all()
         return [self._to_dto(r) for r in rows]
 
@@ -319,20 +335,20 @@ class ExperientialRepository:
         context: str | None,
         vault_id: UUID | None = None,
         status: str | None = 'published',
-    ) -> ExperientialEntryDTO | None:
+    ) -> ProceduralEntryDTO | None:
         """Look up a single entry by its identity anchor.
 
-        Returns ``None`` on a miss (does NOT raise :class:`ExperientialEntryNotFound`).
+        Returns ``None`` on a miss (does NOT raise :class:`ProceduralEntryNotFound`).
         The route uses this as the "have we learned this?" probe; a 404
         would be a contract violation because an unbound anchor is a
         valid, expected answer.
 
-        The query uses ``IS NOT DISTINCT FROM`` so NULL verb/context
-        match the ``UNIQUE NULLS NOT DISTINCT`` partial index exactly.
-        A case with ``(kind='case', scope, NULL, NULL)`` and a procedure
-        with ``(kind='procedure', scope, 'verb', NULL)`` do NOT collide,
-        and a miss against ``NULL, NULL`` still distinguishes "no row"
-        from "row with NULL verb/context".
+        The query uses ``IS NOT DISTINCT FROM`` so a NULL context
+        matches the ``UNIQUE NULLS NOT DISTINCT`` index exactly: a
+        strategy anchor ``(scope, verb, NULL)`` and a procedure anchor
+        ``(scope, verb, context)`` never collide, and a strategy lookup
+        with ``context=None`` distinguishes "no row" from "row with
+        NULL context".
 
         ``status`` defaults to ``'published'`` so the agent's read-
         before-write loop matches the lifecycle state it would actually
@@ -341,16 +357,16 @@ class ExperientialRepository:
         """
         async with self._metastore.session() as session:
             stmt = (
-                select(DBExperientialEntry)
-                .where(col(DBExperientialEntry.kind) == DBExperientialKind(kind))
-                .where(col(DBExperientialEntry.scope) == scope)
-                .where(col(DBExperientialEntry.verb).is_not_distinct_from(verb))
-                .where(col(DBExperientialEntry.context).is_not_distinct_from(context))
+                select(DBProceduralEntry)
+                .where(col(DBProceduralEntry.kind) == DBProceduralKind(kind))
+                .where(col(DBProceduralEntry.scope) == scope)
+                .where(col(DBProceduralEntry.verb).is_not_distinct_from(verb))
+                .where(col(DBProceduralEntry.context).is_not_distinct_from(context))
             )
             if vault_id is not None:
-                stmt = stmt.where(col(DBExperientialEntry.vault_id) == vault_id)
+                stmt = stmt.where(col(DBProceduralEntry.vault_id) == vault_id)
             if status is not None:
-                stmt = stmt.where(col(DBExperientialEntry.status) == DBExperientialStatus(status))
+                stmt = stmt.where(col(DBProceduralEntry.status) == DBProceduralStatus(status))
             entry = (await session.exec(stmt.limit(1))).first()
         if entry is None:
             return None
@@ -359,13 +375,14 @@ class ExperientialRepository:
     async def update(
         self,
         entry_id: UUID,
-        payload: ExperientialEntryUpdate,
+        payload: ProceduralEntryUpdate,
         *,
         vault_id: UUID | None = None,
-    ) -> ExperientialEntryDTO:
+        trigger_embedding: list[float] | None = None,
+    ) -> ProceduralEntryDTO:
         """Mutate an existing entry in place.
 
-        Always appends a new ``experiential_entry_versions`` row carrying
+        Always appends a new ``procedural_entry_versions`` row carrying
         the post-update body snapshot. Bumps ``updated_at`` on the entry.
         Triggers a status→published transition sets ``published_at`` on
         the entry.
@@ -384,13 +401,13 @@ class ExperientialRepository:
             # ``IntegrityError → 500`` under concurrent edits, which
             # would look indistinguishable from a real DB failure to
             # the agent.
-            stmt = select(DBExperientialEntry).where(col(DBExperientialEntry.id) == entry_id)
+            stmt = select(DBProceduralEntry).where(col(DBProceduralEntry.id) == entry_id)
             if vault_id is not None:
-                stmt = stmt.where(col(DBExperientialEntry.vault_id) == vault_id)
+                stmt = stmt.where(col(DBProceduralEntry.vault_id) == vault_id)
             stmt = stmt.with_for_update()
             entry = (await session.exec(stmt)).first()
             if entry is None:
-                raise ExperientialEntryNotFound(str(entry_id))
+                raise ProceduralEntryNotFound(str(entry_id))
 
             pre_status = entry.status
             if payload.title is not None:
@@ -401,22 +418,23 @@ class ExperientialRepository:
                 entry.body = payload.body
             if payload.trigger is not None:
                 entry.trigger = payload.trigger
-                # Drop the stale trigger embedding; the search service
-                # re-computes it on next index.
-                entry.trigger_embedding = None
+                # Caller-computed embedding follows the trigger; absent
+                # it, null the stale vector (§19.4 bug class) — the row
+                # stays reachable via BM25 until re-embedded.
+                entry.trigger_embedding = trigger_embedding or None
             if payload.tags is not None:
                 entry.tags = payload.tags
             if payload.extra_metadata is not None:
                 entry.extra_metadata = payload.extra_metadata
             if payload.status is not None:
-                entry.status = DBExperientialStatus(payload.status)
+                entry.status = DBProceduralStatus(payload.status)
             if payload.supersedes_id is not None:
                 entry.supersedes_id = payload.supersedes_id
 
             # published_at transitions
             if (
-                entry.status == DBExperientialStatus.PUBLISHED
-                and pre_status != DBExperientialStatus.PUBLISHED
+                entry.status == DBProceduralStatus.PUBLISHED
+                and pre_status != DBProceduralStatus.PUBLISHED
                 and entry.published_at is None
             ):
                 entry.published_at = datetime.now(timezone.utc)
@@ -468,11 +486,11 @@ class ExperientialRepository:
         *,
         superseded_by_id: UUID | None = None,
         vault_id: UUID | None = None,
-    ) -> ExperientialEntryDTO:
+    ) -> ProceduralEntryDTO:
         """Soft-deprecate an entry: status→deprecated + optional successor pointer."""
         async with self._metastore.session() as session:
             entry = await self._get_entry(session, entry_id, vault_id=vault_id)
-            entry.status = DBExperientialStatus.DEPRECATED
+            entry.status = DBProceduralStatus.DEPRECATED
             if superseded_by_id is not None:
                 entry.superseded_by_id = superseded_by_id
             entry.updated_at = datetime.now(timezone.utc)
@@ -489,39 +507,31 @@ class ExperientialRepository:
 
     async def upsert_by_identity(
         self,
-        payload: ExperientialEntryCreate,
-    ) -> ExperientialEntryDTO:
+        payload: ProceduralEntryCreate,
+        *,
+        trigger_embedding: list[float] | None = None,
+    ) -> ProceduralEntryDTO:
         """Idempotent write for procedures and strategies.
 
         If a row already exists for the (kind, scope, verb, context) anchor,
         apply the equivalent of an :meth:`update` and return the merged row.
-        Otherwise insert. Cases are *not* supported — call :meth:`create`
-        directly.
+        Otherwise insert. Anchor shape is enforced by the
+        :class:`ProceduralEntryCreate` DTO validator.
         """
-        if payload.kind == 'case':
-            raise ValueError('upsert_by_identity does not apply to cases')
-        # Mirror the strategy-anchor check from :meth:`create` so a
-        # caller that forgets a required field sees a ValueError
-        # (cheap, validation-style) rather than a CHECK violation
-        # translated to ``ExperientialIdentityConflict`` (a misleading
-        # 409 that would tell the agent to retry).
-        if payload.kind == 'strategy' and (not payload.verb or not payload.context):
-            raise ValueError('strategy entries require both verb and context')
-
         async with self._metastore.session() as session:
             stmt = (
-                select(DBExperientialEntry)
-                .where(col(DBExperientialEntry.kind) == DBExperientialKind(payload.kind))
-                .where(col(DBExperientialEntry.scope) == payload.scope)
+                select(DBProceduralEntry)
+                .where(col(DBProceduralEntry.kind) == DBProceduralKind(payload.kind))
+                .where(col(DBProceduralEntry.scope) == payload.scope)
             )
             if payload.verb is None:
-                stmt = stmt.where(col(DBExperientialEntry.verb).is_(None))
+                stmt = stmt.where(col(DBProceduralEntry.verb).is_(None))
             else:
-                stmt = stmt.where(col(DBExperientialEntry.verb) == payload.verb)
+                stmt = stmt.where(col(DBProceduralEntry.verb) == payload.verb)
             if payload.context is None:
-                stmt = stmt.where(col(DBExperientialEntry.context).is_(None))
+                stmt = stmt.where(col(DBProceduralEntry.context).is_(None))
             else:
-                stmt = stmt.where(col(DBExperientialEntry.context) == payload.context)
+                stmt = stmt.where(col(DBProceduralEntry.context) == payload.context)
 
             # FOR UPDATE on the lookup so two parallel upserts with the
             # same anchor can't both miss and both try to insert. The
@@ -536,9 +546,9 @@ class ExperientialRepository:
             existing = (await session.exec(stmt.with_for_update())).first()
 
             if existing is None:
-                new_entry = DBExperientialEntry(
+                new_entry = DBProceduralEntry(
                     vault_id=payload.vault_id,
-                    kind=DBExperientialKind(payload.kind),
+                    kind=DBProceduralKind(payload.kind),
                     scope=payload.scope,
                     verb=payload.verb,
                     context=payload.context,
@@ -546,10 +556,11 @@ class ExperientialRepository:
                     summary=payload.summary,
                     body=payload.body,
                     trigger=payload.trigger,
+                    trigger_embedding=trigger_embedding or None,
                     tags=payload.tags,
                     extra_metadata=payload.extra_metadata,
-                    status=DBExperientialStatus(payload.status),
-                    origin=DBExperientialOrigin(payload.origin),
+                    status=DBProceduralStatus(payload.status),
+                    origin=DBProceduralOrigin(payload.origin),
                     supersedes_id=payload.supersedes_id,
                     published_at=(
                         datetime.now(timezone.utc) if payload.status == 'published' else None
@@ -596,16 +607,16 @@ class ExperientialRepository:
                 existing.body = payload.body
                 if payload.trigger is not None:
                     existing.trigger = payload.trigger
-                    # Drop the stale trigger embedding; the search
-                    # service re-computes it on next index.
-                    existing.trigger_embedding = None
+                    # Caller-computed embedding follows the trigger;
+                    # absent it, null the stale vector (§19.4 bug class).
+                    existing.trigger_embedding = trigger_embedding or None
                 existing.tags = payload.tags
                 existing.extra_metadata = payload.extra_metadata
-                if pre_status != DBExperientialStatus.DEPRECATED:
-                    existing.status = DBExperientialStatus(payload.status)
+                if pre_status != DBProceduralStatus.DEPRECATED:
+                    existing.status = DBProceduralStatus(payload.status)
                 if (
-                    existing.status == DBExperientialStatus.PUBLISHED
-                    and pre_status != DBExperientialStatus.PUBLISHED
+                    existing.status == DBProceduralStatus.PUBLISHED
+                    and pre_status != DBProceduralStatus.PUBLISHED
                     and existing.published_at is None
                 ):
                     existing.published_at = datetime.now(timezone.utc)
@@ -615,7 +626,7 @@ class ExperientialRepository:
                 # Append a version row to mirror :meth:`update`'s
                 # contract. The version row carries the post-rewrite
                 # body snapshot so the audit trail is reconstructable
-                # from ``experiential_entry_versions`` alone.
+                # from ``procedural_entry_versions`` alone.
                 await self._append_version_row(
                     session, existing, edited_by=None, edit_reason='upsert_by_identity'
                 )
@@ -661,10 +672,10 @@ class ExperientialRepository:
     async def add_source(
         self,
         entry_id: UUID,
-        payload: ExperientialSourceCreate,
+        payload: ProceduralSourceCreate,
         *,
         vault_id: UUID | None = None,
-    ) -> ExperientialSourceDTO:
+    ) -> ProceduralSourceDTO:
         """Attach a source edge to an entry."""
         if (
             payload.source_entry_id is None
@@ -676,12 +687,12 @@ class ExperientialRepository:
         async with self._metastore.session() as session:
             entry = await self._get_entry(session, entry_id, vault_id=vault_id)
 
-            row = DBExperientialSource(
+            row = DBProceduralSource(
                 entry_id=entry.id,
                 source_entry_id=payload.source_entry_id,
                 source_note_id=payload.source_note_id,
                 source_memory_unit_id=payload.source_memory_unit_id,
-                role=DBExperientialSourceRole(payload.role),
+                role=DBProceduralSourceRole(payload.role),
                 weight=payload.weight,
             )
             session.add(row)
@@ -690,34 +701,65 @@ class ExperientialRepository:
 
         await self._enqueue_simple_audit(
             _AUDIT_SOURCE_ADD,
-            resource_type='experiential_source',
+            resource_type='procedural_source',
             resource_id=str(row.id),
             details={'entry_id': str(entry_id), 'role': payload.role},
         )
         return self._source_to_dto(row)
 
-    async def add_pin(self, payload: ExperientialPinCreate) -> ExperientialPinDTO:
-        """Pin an entry into a context-binding chain."""
+    async def add_pin(self, payload: ProceduralPinCreate) -> ProceduralPinDTO:
+        """Pin an entry into a context-binding chain.
+
+        ``payload.position=None`` appends after the context's current
+        maximum. The per-context cap (:data:`PIN_CAP_PER_CONTEXT`, §19.8)
+        is enforced here so an over-full chain fails the *pin*, not the
+        briefing render.
+        """
+        from sqlmodel import func
+
         async with self._metastore.session() as session:
-            row = DBExperientialPin(
+            # Cap check + append-position computation in one aggregate.
+            count_row = (
+                await session.exec(
+                    select(
+                        func.count(col(DBProceduralPin.id)),
+                        func.max(DBProceduralPin.position),
+                    ).where(col(DBProceduralPin.context_key) == payload.context_key)
+                )
+            ).one()
+            pin_count = int(count_row[0] or 0)
+            max_position = count_row[1]
+            if pin_count >= PIN_CAP_PER_CONTEXT:
+                raise ValueError(
+                    f'context {payload.context_key!r} already holds '
+                    f'{pin_count} pins (cap {PIN_CAP_PER_CONTEXT}, §19.8); '
+                    'unpin something first'
+                )
+            position = (
+                payload.position
+                if payload.position is not None
+                else (int(max_position) + 1 if max_position is not None else 0)
+            )
+
+            row = DBProceduralPin(
                 context_key=payload.context_key,
                 entry_id=payload.entry_id,
-                position=payload.position,
+                position=position,
                 pinned_by=payload.pinned_by,
             )
             session.add(row)
             try:
                 await session.commit()
             except IntegrityError as exc:
-                raise ExperientialRepositoryError(
+                raise ProceduralRepositoryError(
                     f'pin already exists at context_key={payload.context_key!r} '
-                    f'entry_id={payload.entry_id} position={payload.position}'
+                    f'entry_id={payload.entry_id} position={position}'
                 ) from exc
             await session.refresh(row)
 
         await self._enqueue_simple_audit(
             _AUDIT_PIN_ADD,
-            resource_type='experiential_pin',
+            resource_type='procedural_pin',
             resource_id=str(row.id),
             details={
                 'context_key': payload.context_key,
@@ -727,18 +769,108 @@ class ExperientialRepository:
         )
         return self._pin_to_dto(row)
 
+    async def remove_pin(
+        self,
+        *,
+        entry_id: UUID,
+        context_key: ShortLabel,
+    ) -> int:
+        """Unpin an entry from a context. Returns the number of pins removed.
+
+        Positions of the remaining pins are left untouched — the chain
+        is ordered, not dense, so a gap costs nothing.
+        """
+        async with self._metastore.session() as session:
+            stmt = (
+                select(DBProceduralPin)
+                .where(col(DBProceduralPin.entry_id) == entry_id)
+                .where(col(DBProceduralPin.context_key) == context_key)
+            )
+            rows = (await session.exec(stmt)).all()
+            for row in rows:
+                await session.delete(row)
+            await session.commit()
+
+        if rows:
+            await self._enqueue_simple_audit(
+                _AUDIT_PIN_REMOVE,
+                resource_type='procedural_pin',
+                resource_id=str(entry_id),
+                details={'context_key': context_key, 'removed': len(rows)},
+            )
+        return len(rows)
+
+    async def list_versions(
+        self,
+        entry_id: UUID,
+    ) -> list[ProceduralEntryVersionDTO]:
+        """Return the full (uncapped) version ledger, newest first."""
+        async with self._metastore.session() as session:
+            stmt = (
+                select(DBProceduralEntryVersion)
+                .where(col(DBProceduralEntryVersion.entry_id) == entry_id)
+                .order_by(col(DBProceduralEntryVersion.version).desc())
+            )
+            rows = (await session.exec(stmt)).all()
+        return [self._version_to_dto(r) for r in rows]
+
+    async def rollback(
+        self,
+        entry_id: UUID,
+        version: int,
+        *,
+        vault_id: UUID | None = None,
+        trigger_embedding: list[float] | None = None,
+        rolled_back_by: str | None = None,
+    ) -> ProceduralEntryDTO:
+        """Non-destructive rollback: re-apply an old snapshot as a NEW version.
+
+        Reads the requested version row and writes its
+        title/summary/body/trigger/tags/metadata back onto the entry via
+        the normal :meth:`update` path — the ledger gains a new row
+        (edit_reason ``rollback to v<N>``); nothing is deleted (§18.8).
+        """
+        async with self._metastore.session() as session:
+            stmt = (
+                select(DBProceduralEntryVersion)
+                .where(col(DBProceduralEntryVersion.entry_id) == entry_id)
+                .where(col(DBProceduralEntryVersion.version) == version)
+            )
+            snapshot = (await session.exec(stmt)).first()
+        if snapshot is None:
+            raise ProceduralEntryNotFound(
+                f'entry {entry_id} has no version {version} in the ledger'
+            )
+
+        payload = ProceduralEntryUpdate(
+            title=snapshot.title,
+            summary=snapshot.summary,
+            body=snapshot.body,
+            trigger=snapshot.trigger,
+            tags=list(snapshot.tags or []),
+            extra_metadata=dict(snapshot.extra_metadata or {}),
+            edit_reason=f'rollback to v{version}',
+            edited_by=rolled_back_by,
+        )
+        return await self.update(
+            entry_id,
+            payload,
+            vault_id=vault_id,
+            trigger_embedding=trigger_embedding,
+        )
+
     async def list_pins(
         self,
         context_key: ShortLabel,
         *,
         limit: int | None = None,
-    ) -> list[ExperientialPinDTO]:
+    ) -> list[ProceduralPinDTO]:
         """Return pins for a context, ordered by position ascending."""
         async with self._metastore.session() as session:
             stmt = (
-                select(DBExperientialPin)
-                .where(col(DBExperientialPin.context_key) == context_key)
-                .order_by(col(DBExperientialPin.position).asc())
+                select(DBProceduralPin)
+                .where(col(DBProceduralPin.context_key) == context_key)
+                .order_by(col(DBProceduralPin.position).asc())
             )
             if limit is not None:
                 stmt = stmt.limit(limit)
@@ -748,15 +880,15 @@ class ExperientialRepository:
     async def list_pins_for_entry(
         self,
         entry_id: UUID,
-    ) -> list[ExperientialPinDTO]:
+    ) -> list[ProceduralPinDTO]:
         """Return all pins pointing at the given entry."""
         async with self._metastore.session() as session:
             stmt = (
-                select(DBExperientialPin)
-                .where(col(DBExperientialPin.entry_id) == entry_id)
+                select(DBProceduralPin)
+                .where(col(DBProceduralPin.entry_id) == entry_id)
                 .order_by(
-                    col(DBExperientialPin.context_key).asc(),
-                    col(DBExperientialPin.position).asc(),
+                    col(DBProceduralPin.context_key).asc(),
+                    col(DBProceduralPin.position).asc(),
                 )
             )
             rows = (await session.exec(stmt)).all()
@@ -767,16 +899,16 @@ class ExperientialRepository:
         entry_id: UUID,
         *,
         role: str | None = None,
-    ) -> list[ExperientialSourceDTO]:
+    ) -> list[ProceduralSourceDTO]:
         """Return source edges attached to the given entry."""
         async with self._metastore.session() as session:
             stmt = (
-                select(DBExperientialSource)
-                .where(col(DBExperientialSource.entry_id) == entry_id)
-                .order_by(col(DBExperientialSource.created_at).asc())
+                select(DBProceduralSource)
+                .where(col(DBProceduralSource.entry_id) == entry_id)
+                .order_by(col(DBProceduralSource.created_at).asc())
             )
             if role is not None:
-                stmt = stmt.where(col(DBExperientialSource.role) == DBExperientialSourceRole(role))
+                stmt = stmt.where(col(DBProceduralSource.role) == DBProceduralSourceRole(role))
             rows = (await session.exec(stmt)).all()
         return [self._source_to_dto(r) for r in rows]
 
@@ -793,18 +925,23 @@ class ExperientialRepository:
         target_scope: ShortLabel,
         target_verb: str | None = None,
         target_context: str | None = None,
-    ) -> ExperientialDerivationQueueDTO:
+    ) -> ProceduralDerivationQueueDTO:
         """Add a row to the derivation queue.
 
         Workers claim via :meth:`claim_derivation_tasks`.
         """
         if target_kind not in ('procedure', 'strategy'):
             raise ValueError(f'target_kind must be procedure|strategy, got {target_kind!r}')
-        if target_kind == 'strategy' and (not target_verb or not target_context):
-            raise ValueError('strategy derivations require both target_verb and target_context')
+        if target_kind == 'procedure' and (not target_verb or not target_context):
+            raise ValueError('procedure derivations require both target_verb and target_context')
+        if target_kind == 'strategy' and (not target_verb or target_context):
+            raise ValueError(
+                'strategy derivations require target_verb and NO target_context '
+                '(strategy anchor ≡ (scope, verb); §18.1)'
+            )
 
         async with self._metastore.session() as session:
-            row = DBExperientialDerivationQueue(
+            row = DBProceduralDerivationQueue(
                 vault_id=vault_id,
                 source_entry_ids=source_entry_ids,
                 target_kind=target_kind,
@@ -818,7 +955,7 @@ class ExperientialRepository:
 
         await self._enqueue_simple_audit(
             _AUDIT_QUEUE_ENQUEUE,
-            resource_type='experiential_derivation_queue',
+            resource_type='procedural_derivation_queue',
             resource_id=str(row.id),
             details={
                 'vault_id': str(vault_id),
@@ -834,7 +971,7 @@ class ExperientialRepository:
         *,
         limit: int = 1,
         vault_id: UUID | None = None,
-    ) -> list[ExperientialDerivationQueueClaim]:
+    ) -> list[ProceduralDerivationQueueClaim]:
         """Claim pending derivation tasks via SELECT ... FOR UPDATE SKIP LOCKED.
 
         Mirrors the reflection queue's pattern. The returned DTOs are
@@ -844,14 +981,14 @@ class ExperientialRepository:
         """
         async with self._metastore.session() as session:
             stmt = (
-                select(DBExperientialDerivationQueue)
-                .where(col(DBExperientialDerivationQueue.status) == DBDerivationQueueStatus.PENDING)
-                .order_by(col(DBExperientialDerivationQueue.created_at).asc())
+                select(DBProceduralDerivationQueue)
+                .where(col(DBProceduralDerivationQueue.status) == DBDerivationQueueStatus.PENDING)
+                .order_by(col(DBProceduralDerivationQueue.created_at).asc())
                 .limit(limit)
                 .with_for_update(skip_locked=True)
             )
             if vault_id is not None:
-                stmt = stmt.where(col(DBExperientialDerivationQueue.vault_id) == vault_id)
+                stmt = stmt.where(col(DBProceduralDerivationQueue.vault_id) == vault_id)
 
             rows = (await session.exec(stmt)).all()
             if not rows:
@@ -869,13 +1006,13 @@ class ExperientialRepository:
 
             await self._enqueue_simple_audit(
                 _AUDIT_QUEUE_CLAIM,
-                resource_type='experiential_derivation_queue',
+                resource_type='procedural_derivation_queue',
                 resource_id=','.join(str(r.id) for r in rows),
                 details={'count': len(rows)},
             )
 
             return [
-                ExperientialDerivationQueueClaim(
+                ProceduralDerivationQueueClaim(
                     queue_id=r.id,
                     vault_id=r.vault_id,
                     source_entry_ids=list(r.source_entry_ids),
@@ -891,7 +1028,7 @@ class ExperientialRepository:
         self,
         queue_id: UUID,
         result_entry_id: UUID,
-    ) -> ExperientialDerivationQueueDTO:
+    ) -> ProceduralDerivationQueueDTO:
         """Mark a claimed derivation task as completed.
 
         ``result_entry_id`` is the entry that the worker produced.
@@ -907,7 +1044,7 @@ class ExperientialRepository:
 
         await self._enqueue_simple_audit(
             _AUDIT_QUEUE_COMPLETE,
-            resource_type='experiential_derivation_queue',
+            resource_type='procedural_derivation_queue',
             resource_id=str(queue_id),
             details={'result_entry_id': str(result_entry_id)},
         )
@@ -919,7 +1056,7 @@ class ExperientialRepository:
         last_error: str,
         *,
         max_attempts: int = 3,
-    ) -> ExperientialDerivationQueueDTO:
+    ) -> ProceduralDerivationQueueDTO:
         """Mark a derivation task as failed (or re-queue if attempts remain)."""
         async with self._metastore.session() as session:
             row = await self._get_queue_row(session, queue_id)
@@ -939,16 +1076,15 @@ class ExperientialRepository:
         *,
         status: DerivationQueueStatus | None = None,
         limit: int = 50,
-    ) -> list[ExperientialDerivationQueueDTO]:
+    ) -> list[ProceduralDerivationQueueDTO]:
         """Inspect the derivation queue (debug / dashboard use)."""
         async with self._metastore.session() as session:
-            stmt = select(DBExperientialDerivationQueue).order_by(
-                col(DBExperientialDerivationQueue.created_at).desc()
+            stmt = select(DBProceduralDerivationQueue).order_by(
+                col(DBProceduralDerivationQueue.created_at).desc()
             )
             if status is not None:
                 stmt = stmt.where(
-                    col(DBExperientialDerivationQueue.status)
-                    == DBDerivationQueueStatus(status.value)
+                    col(DBProceduralDerivationQueue.status) == DBDerivationQueueStatus(status.value)
                 )
             stmt = stmt.limit(limit)
             rows = (await session.exec(stmt)).all()
@@ -964,24 +1100,24 @@ class ExperientialRepository:
         entry_id: UUID,
         *,
         vault_id: UUID | None = None,
-    ) -> DBExperientialEntry:
-        stmt = select(DBExperientialEntry).where(col(DBExperientialEntry.id) == entry_id)
+    ) -> DBProceduralEntry:
+        stmt = select(DBProceduralEntry).where(col(DBProceduralEntry.id) == entry_id)
         if vault_id is not None:
-            stmt = stmt.where(col(DBExperientialEntry.vault_id) == vault_id)
+            stmt = stmt.where(col(DBProceduralEntry.vault_id) == vault_id)
         entry = (await session.exec(stmt)).first()
         if entry is None:
-            raise ExperientialEntryNotFound(str(entry_id))
+            raise ProceduralEntryNotFound(str(entry_id))
         return entry
 
     async def _append_version_row(
         self,
         session: AsyncSession,
-        entry: DBExperientialEntry,
+        entry: DBProceduralEntry,
         *,
         edited_by: str | None,
         edit_reason: str | None,
-    ) -> DBExperientialEntryVersion:
-        """Append a new ``experiential_entry_versions`` row carrying the
+    ) -> DBProceduralEntryVersion:
+        """Append a new ``procedural_entry_versions`` row carrying the
         post-mutation body snapshot.
 
         Used by both :meth:`update` and the upsert rewrite path so the
@@ -996,14 +1132,14 @@ class ExperientialRepository:
 
         max_version = (
             await session.exec(
-                select(func.max(DBExperientialEntryVersion.version)).where(
-                    col(DBExperientialEntryVersion.entry_id) == entry.id
+                select(func.max(DBProceduralEntryVersion.version)).where(
+                    col(DBProceduralEntryVersion.entry_id) == entry.id
                 )
             )
         ).one() or 0
         next_version = int(max_version) + _VERSION_BUMP
 
-        version = DBExperientialEntryVersion(
+        version = DBProceduralEntryVersion(
             entry_id=entry.id,
             version=next_version,
             title=entry.title,
@@ -1022,27 +1158,27 @@ class ExperientialRepository:
         self,
         session: AsyncSession,
         queue_id: UUID,
-    ) -> DBExperientialDerivationQueue:
+    ) -> DBProceduralDerivationQueue:
         row = (
             await session.exec(
-                select(DBExperientialDerivationQueue).where(
-                    col(DBExperientialDerivationQueue.id) == queue_id
+                select(DBProceduralDerivationQueue).where(
+                    col(DBProceduralDerivationQueue.id) == queue_id
                 )
             )
         ).first()
         if row is None:
-            raise ExperientialRepositoryError(f'derivation queue row {queue_id!s} not found')
+            raise ProceduralRepositoryError(f'derivation queue row {queue_id!s} not found')
         return row
 
     async def _enqueue_version_audit(
         self,
         action: str,
-        entry: DBExperientialEntry,
+        entry: DBProceduralEntry,
         details: dict[str, Any] | None = None,
     ) -> None:
         """Emit an audit event for an entry mutation (fire-and-forget)."""
         # ``entry.kind`` is read back from a String column as a plain
-        # str (the SQLModel ``ExperientialKind`` annotation is
+        # str (the SQLModel ``ProceduralKind`` annotation is
         # declarative; the column type drives the runtime value). A
         # direct ``entry.kind.value`` blows up on the audit path. Use
         # ``str()`` to handle both the in-memory enum (mocked callers)
@@ -1050,7 +1186,7 @@ class ExperientialRepository:
         kind_str = entry.kind.value if hasattr(entry.kind, 'value') else str(entry.kind)
         await self._enqueue_simple_audit(
             action,
-            resource_type='experiential_entry',
+            resource_type='procedural_entry',
             resource_id=str(entry.id),
             details={
                 'vault_id': str(entry.vault_id),
@@ -1080,14 +1216,14 @@ class ExperientialRepository:
                 details=details,
             )
         except Exception:
-            logger.exception('experiential audit log failed (action=%s)', action)
+            logger.exception('procedural audit log failed (action=%s)', action)
 
     # ------------------------------------------------------------------
     # ORM → DTO conversion
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _to_dto(entry: DBExperientialEntry) -> ExperientialEntryDTO:
+    def _to_dto(entry: DBProceduralEntry) -> ProceduralEntryDTO:
         # ``kind``/``status``/``origin`` are typed as Python enums on
         # the SQLModel column annotation but stored as ``String`` in
         # the DB. After ``await session.refresh(entry)`` the values
@@ -1098,7 +1234,7 @@ class ExperientialRepository:
         def _str(v: Any) -> str:
             return v.value if hasattr(v, 'value') else str(v)
 
-        return ExperientialEntryDTO(
+        return ProceduralEntryDTO(
             id=entry.id,
             vault_id=entry.vault_id,
             kind=_str(entry.kind),  # type: ignore[arg-type]
@@ -1121,8 +1257,8 @@ class ExperientialRepository:
         )
 
     @staticmethod
-    def _source_to_dto(row: DBExperientialSource) -> ExperientialSourceDTO:
-        # ``role`` is typed as ``ExperientialSourceRole`` (a str-Enum) on
+    def _source_to_dto(row: DBProceduralSource) -> ProceduralSourceDTO:
+        # ``role`` is typed as ``ProceduralSourceRole`` (a str-Enum) on
         # the SQLModel column annotation but stored as ``String`` in
         # the DB. After ``await session.refresh(row)`` the value comes
         # back as a plain ``str`` — the declarative annotation is a
@@ -1134,7 +1270,7 @@ class ExperientialRepository:
         # with ``AttributeError: 'str' object has no attribute 'value'``
         # on the first real-DB read.
         role_value = row.role.value if hasattr(row.role, 'value') else str(row.role)
-        return ExperientialSourceDTO(
+        return ProceduralSourceDTO(
             id=row.id,
             entry_id=row.entry_id,
             source_entry_id=row.source_entry_id,
@@ -1146,8 +1282,25 @@ class ExperientialRepository:
         )
 
     @staticmethod
-    def _pin_to_dto(row: DBExperientialPin) -> ExperientialPinDTO:
-        return ExperientialPinDTO(
+    def _version_to_dto(row: DBProceduralEntryVersion) -> ProceduralEntryVersionDTO:
+        return ProceduralEntryVersionDTO(
+            id=row.id,
+            entry_id=row.entry_id,
+            version=int(row.version),
+            title=row.title,
+            summary=row.summary,
+            body=row.body or '',
+            trigger=row.trigger,
+            tags=list(row.tags or []),
+            extra_metadata=dict(row.extra_metadata or {}),
+            edited_by=row.edited_by,
+            edit_reason=row.edit_reason,
+            created_at=row.created_at,
+        )
+
+    @staticmethod
+    def _pin_to_dto(row: DBProceduralPin) -> ProceduralPinDTO:
+        return ProceduralPinDTO(
             id=row.id,
             context_key=row.context_key,
             entry_id=row.entry_id,
@@ -1157,12 +1310,12 @@ class ExperientialRepository:
         )
 
     @staticmethod
-    def _queue_to_dto(row: DBExperientialDerivationQueue) -> ExperientialDerivationQueueDTO:
+    def _queue_to_dto(row: DBProceduralDerivationQueue) -> ProceduralDerivationQueueDTO:
         # ``status`` is a String-stored enum-typed column, so after
         # session.refresh() it's a plain str. Same defensive pattern
         # as _to_dto above.
         status_str = row.status.value if hasattr(row.status, 'value') else str(row.status)
-        return ExperientialDerivationQueueDTO(
+        return ProceduralDerivationQueueDTO(
             id=row.id,
             vault_id=row.vault_id,
             source_entry_ids=list(row.source_entry_ids or []),
@@ -1181,8 +1334,8 @@ class ExperientialRepository:
 
 
 __all__ = [
-    'ExperientialEntryNotFound',
-    'ExperientialIdentityConflict',
-    'ExperientialRepository',
-    'ExperientialRepositoryError',
+    'ProceduralEntryNotFound',
+    'ProceduralIdentityConflict',
+    'ProceduralRepository',
+    'ProceduralRepositoryError',
 ]

@@ -3,7 +3,7 @@
 The remote client mirrors the HTTP ``/procedural/*`` surface 1:1 — 8
 methods, one per route. These tests guard:
 
-* The method names (``procedural_*``, NOT ``experiential_*`` — the
+* The method names (``procedural_*``, NOT ``procedural_*`` — the
   legacy engine-internal name has leaked into the public HTTP/CLI
   surface in past refactors and must not).
 * The return types are the DTOs the routes emit, not raw dicts.
@@ -18,13 +18,13 @@ import inspect
 from uuid import UUID
 
 from memex_common.client import RemoteMemexAPI
-from memex_common.experiential_schemas import (
-    ExperientialBriefingCards,
-    ExperientialEntryCreate,
-    ExperientialEntryDTO,
-    ExperientialEntryUpdate,
-    ExperientialSearchRequest,
-    ExperientialSearchResponse,
+from memex_common.procedural_schemas import (
+    ProceduralBriefingCards,
+    ProceduralEntryCreate,
+    ProceduralEntryDTO,
+    ProceduralEntryUpdate,
+    ProceduralSearchRequest,
+    ProceduralSearchResponse,
     ShortLabel,
 )
 
@@ -55,13 +55,13 @@ def test_client_exposes_eight_procedural_methods():
     )
 
 
-def test_client_does_not_expose_legacy_experiential_methods():
+def test_client_does_not_expose_legacy_procedural_methods():
     """The legacy engine-internal name must NOT leak into the public
     client surface — agents and the CLI call this the 'procedural'
     plane, and the method names must match."""
     methods = _public_methods(RemoteMemexAPI)
-    assert not any(name.startswith('experiential_') for name in methods), (
-        'RemoteMemexAPI must not expose legacy `experiential_*` methods '
+    assert not any(name.startswith('procedural_') for name in methods), (
+        'RemoteMemexAPI must not expose legacy `procedural_*` methods '
         '— the public surface is the procedural plane.'
     )
 
@@ -70,16 +70,16 @@ def test_procedural_create_signature():
     sig = inspect.signature(RemoteMemexAPI.procedural_create)
     params = sig.parameters
     assert 'payload' in params
-    assert params['payload'].annotation is ExperientialEntryCreate
+    assert params['payload'].annotation is ProceduralEntryCreate
     ret = sig.return_annotation
-    assert ret is ExperientialEntryDTO
+    assert ret is ProceduralEntryDTO
 
 
 def test_procedural_get_signature():
     sig = inspect.signature(RemoteMemexAPI.procedural_get)
     assert sig.parameters['entry_id'].annotation is UUID
     assert sig.parameters['vault_id'].default is None
-    assert sig.return_annotation is ExperientialEntryDTO
+    assert sig.return_annotation is ProceduralEntryDTO
 
 
 def test_procedural_get_by_identity_signature():
@@ -92,16 +92,16 @@ def test_procedural_get_by_identity_signature():
     assert params['vault_id'].default is None
     # Returns the DTO or None — the "did we already learn this?" probe.
     assert sig.return_annotation in (
-        ExperientialEntryDTO | None,
-        'ExperientialEntryDTO | None',
+        ProceduralEntryDTO | None,
+        'ProceduralEntryDTO | None',
     )
 
 
 def test_procedural_update_signature():
     sig = inspect.signature(RemoteMemexAPI.procedural_update)
     assert sig.parameters['entry_id'].annotation is UUID
-    assert sig.parameters['payload'].annotation is ExperientialEntryUpdate
-    assert sig.return_annotation is ExperientialEntryDTO
+    assert sig.parameters['payload'].annotation is ProceduralEntryUpdate
+    assert sig.return_annotation is ProceduralEntryDTO
 
 
 def test_procedural_deprecate_signature():
@@ -109,19 +109,19 @@ def test_procedural_deprecate_signature():
     assert sig.parameters['entry_id'].annotation is UUID
     assert sig.parameters['superseded_by_id'].default is None
     assert sig.parameters['vault_id'].default is None
-    assert sig.return_annotation is ExperientialEntryDTO
+    assert sig.return_annotation is ProceduralEntryDTO
 
 
 def test_procedural_upsert_signature():
     sig = inspect.signature(RemoteMemexAPI.procedural_upsert)
-    assert sig.parameters['payload'].annotation is ExperientialEntryCreate
-    assert sig.return_annotation is ExperientialEntryDTO
+    assert sig.parameters['payload'].annotation is ProceduralEntryCreate
+    assert sig.return_annotation is ProceduralEntryDTO
 
 
 def test_procedural_search_signature():
     sig = inspect.signature(RemoteMemexAPI.procedural_search)
-    assert sig.parameters['request'].annotation is ExperientialSearchRequest
-    assert sig.return_annotation is ExperientialSearchResponse
+    assert sig.parameters['request'].annotation is ProceduralSearchRequest
+    assert sig.return_annotation is ProceduralSearchResponse
 
 
 def test_procedural_briefing_cards_signature():
@@ -137,7 +137,7 @@ def test_procedural_briefing_cards_signature():
     ann = typing.get_type_hints(RemoteMemexAPI.procedural_briefing_cards)
     origin = typing.get_origin(ann['context_keys'])
     assert origin is list
-    assert ann['return'] is ExperientialBriefingCards
+    assert ann['return'] is ProceduralBriefingCards
 
 
 def test_procedural_method_uuids_are_uuid_typed():

@@ -5,7 +5,7 @@ saw in the v7 branch. The two top-level groups — ``memex procedural``
 and ``memex case`` — are the discoverable entry points for the
 procedural plane; their help text must:
 
-* Identify the plane as the *procedural* plane (not "experiential",
+* Identify the plane as the *procedural* plane (not "procedural",
   which is the legacy engine-internal term and a tell that the rename
   to ``procedural`` regressed).
 * Cover the core verbs (create, upsert, get, get-by-identity, search,
@@ -28,20 +28,20 @@ def _normalize(text: str) -> str:
 
 
 def test_procedural_group_registered_with_correct_name():
-    """The top-level group must be named 'procedural' (not 'experiential')."""
+    """The top-level group must be named 'procedural' (not 'procedural')."""
     assert app.info.name == 'procedural'
 
 
 def test_procedural_help_identifies_plane_as_procedural(runner, strip_ansi):
     """The top-level help must call this the 'procedural' plane, not
-    'experiential' (engine-internal legacy term)."""
+    'procedural' (engine-internal legacy term)."""
     result = runner.invoke(app, ['--help'])
     assert result.exit_code == 0
     text = _normalize(strip_ansi(result.stdout))
     assert 'procedural' in text.lower()
-    assert 'experiential' not in text.lower(), (
+    assert 'procedural' not in text.lower(), (
         'Top-level procedural help must not contain the legacy '
-        'engine-internal term "experiential" — that belongs in '
+        'engine-internal term "procedural" — that belongs in '
         'SQLAlchemy and DTO internals only.'
     )
 
@@ -80,12 +80,12 @@ def test_case_group_registered_with_correct_name():
 def test_case_help_routes_to_procedural_plane(runner, strip_ansi):
     """`memex case` is the discoverable shortcut for case submission;
     its help must point at the procedural plane (not the legacy
-    'experiential' label)."""
+    'procedural' label)."""
     result = runner.invoke(case_app, ['--help'])
     assert result.exit_code == 0
     text = _normalize(strip_ansi(result.stdout))
     assert 'procedural' in text.lower()
-    assert 'experiential' not in text.lower()
+    assert 'procedural' not in text.lower()
 
 
 def test_case_submit_help_requires_trigger(runner, strip_ansi):

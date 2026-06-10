@@ -200,9 +200,9 @@ class ProceduralSearchResults(ExpectedOutcomeBase):
 
         pin_pos_ok = True
         if self.expect_first_pin_pos is not None and answer.units:
-            # For briefing_cards, the DTOs are ExperientialBriefingCard
+            # For briefing_cards, the DTOs are ProceduralBriefingCard
             # which expose ``pin_position``. For search, the DTOs are
-            # ExperientialSearchHit which don't — only meaningful for
+            # ProceduralSearchHit which don't — only meaningful for
             # briefing_cards.
             first_pos = getattr(answer.units[0], 'pin_position', None)
             pin_pos_ok = first_pos == self.expect_first_pin_pos

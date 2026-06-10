@@ -12,8 +12,8 @@ The CLI mirrors the HTTP /procedural/* surface. Two groups:
   the heavier ``memex procedural create`` surface.
 
 Engine internals (DTOs, error classes) still ship as
-``memex_common.experiential_schemas`` and
-``memex_core.services.experiential_repository``; the public CLI/HTTP
+``memex_common.procedural_schemas`` and
+``memex_core.services.procedural_repository``; the public CLI/HTTP
 surface is ``procedural``.
 """
 
@@ -24,10 +24,10 @@ from rich.console import Console
 from rich.table import Table
 
 from memex_common.config import MemexConfig
-from memex_common.experiential_schemas import (
-    ExperientialEntryCreate,
-    ExperientialEntryUpdate,
-    ExperientialSearchRequest,
+from memex_common.procedural_schemas import (
+    ProceduralEntryCreate,
+    ProceduralEntryUpdate,
+    ProceduralSearchRequest,
 )
 from memex_cli.utils import (
     async_command,
@@ -163,7 +163,7 @@ async def procedural_create(
         raise typer.Exit(2)
 
     vault_id = await _resolve_vault_id(config, vault)
-    payload = ExperientialEntryCreate(
+    payload = ProceduralEntryCreate(
         vault_id=vault_id,
         kind=kind,  # type: ignore[arg-type]
         scope=scope,
@@ -228,7 +228,7 @@ async def procedural_upsert(
         console.print('[red]--vault is required for procedural upsert.[/red]')
         raise typer.Exit(2)
     vault_id = await _resolve_vault_id(config, vault)
-    payload = ExperientialEntryCreate(
+    payload = ProceduralEntryCreate(
         vault_id=vault_id,
         kind=kind,  # type: ignore[arg-type]
         scope=scope,
@@ -339,7 +339,7 @@ async def procedural_search(
 ):
     """Hybrid BM25 + vector search across the procedural plane."""
     config: MemexConfig = ctx.obj
-    request = ExperientialSearchRequest(
+    request = ProceduralSearchRequest(
         query=query,
         scope=scope,
         kind=kind,  # type: ignore[arg-type]
@@ -454,7 +454,7 @@ async def procedural_update(
     from uuid import UUID
 
     config: MemexConfig = ctx.obj
-    payload = ExperientialEntryUpdate(
+    payload = ProceduralEntryUpdate(
         title=title,  # type: ignore[arg-type]
         summary=summary,
         body=body,
@@ -557,7 +557,7 @@ async def case_submit(
         # authoritative resolver; this is a best-effort default.
         vault = config.server.default_active_vault
     vault_id = await _resolve_vault_id(config, vault)
-    payload = ExperientialEntryCreate(
+    payload = ProceduralEntryCreate(
         vault_id=vault_id,
         kind='case',
         scope=scope,

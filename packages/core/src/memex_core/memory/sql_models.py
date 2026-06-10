@@ -361,7 +361,7 @@ class Note(SQLModel, table=True):  # type: ignore
     role: str | None = Field(
         default=None,
         sa_column=Column(Text, nullable=True),
-        description='V7: classification of note provenance within the experiential plane. '
+        description='V7: classification of note provenance within the procedural plane. '
         'NULL for ordinary declarative-plane notes. One of '
         "'case' (raw or derived experience record — parent of a procedure), "
         "'procedure' (a how-to recipe synthesised from one or more cases), "
@@ -1909,38 +1909,51 @@ class NoteAppend(SQLModel, table=True):  # type: ignore
 
 
 # ---------------------------------------------------------------------------
-# Experiential plane (V7 — procedural & experiential memory)
+# Procedural plane (V7 — procedural memory)
 # ---------------------------------------------------------------------------
 #
-# The experiential plane sits alongside the declarative plane (notes + memory_units).
-# It tracks three kinds of entity:
+# The procedural plane sits alongside the declarative plane (notes + memory_units).
+# It holds exactly two kinds of entity:
 #
-#   * case       — a raw or derived experience record ("what happened")
 #   * procedure  — a how-to recipe synthesised from one or more cases
-#   * strategy   — an opinionated play-book that picks a procedure for a context
+#   * strategy   — an opinionated play-book generalising over procedures
 #
-# Identity for procedures and strategies is the (kind, scope, verb, context) tuple
-# (UNIQUE NULLS NOT DISTINCT) so a derived procedure is canonical-by-tuple rather
-# than by random UUID. Cases keep a plain UUID PK and a *trigger* — a free-form
-# phrase that drives on-demand lookup; the trigger embedding is recomputed on
-# every trigger change to avoid stale-vector drift.
+# CASES ARE NOT ON THIS PLANE. A case is a note (``notes.role = 'case'``)
+# filed into the hidden ``procedural`` system vault via case_submit
+# (V7 design §5.1, §18.3, §18.9.0). Cases feed procedures/strategies as
+# lineage via ``procedural_sources``.
+#
+# Identity is the (kind, scope, verb, context) tuple (UNIQUE NULLS NOT
+# DISTINCT): procedure ≡ (scope, verb, context); strategy ≡ (scope, verb,
+# NULL) — a strategy is the projection over all procedures sharing
+# (scope, verb) (§18.1). Retrieval anchors on the *trigger*
+# (when_to_use / when_to_apply): trigger_embedding is the single vector
+# leg of the hybrid search; the embedding is recomputed on every trigger
+# change to avoid stale-vector drift.
 #
 # Context-binding pins form a chain global → project:<id> → app:<agent_identity>
 # (see V7 spike 7) — the same entry can be pinned at multiple positions of
 # different contexts; the (context_key, entry_id) pair is the row key.
+# NO ``user`` scope/context: per-user curation rides the pin chain's app
+# contexts, not the entries (JG decision 2026-06-10).
 # ---------------------------------------------------------------------------
 
 
-class ExperientialKind(str, Enum):
-    """Taxonomy of the three experiential entity kinds."""
+class ProceduralKind(str, Enum):
+    """Taxonomy of the procedural plane's two entity kinds.
 
-    CASE = 'case'
+    Cases are NOT a kind on this plane — a case is a note
+    (``notes.role = 'case'``) filed into the hidden ``procedural``
+    system vault (V7 design §18.3 / §18.9.0). Procedures and strategies
+    are projections distilled over case clusters.
+    """
+
     PROCEDURE = 'procedure'
     STRATEGY = 'strategy'
 
 
-class ExperientialStatus(str, Enum):
-    """Lifecycle state for an experiential entry.
+class ProceduralStatus(str, Enum):
+    """Lifecycle state for an procedural entry.
 
     * draft        — created but not yet promoted; editable in place.
     * published    — visible to agents via search/briefing.
@@ -1952,8 +1965,8 @@ class ExperientialStatus(str, Enum):
     DEPRECATED = 'deprecated'
 
 
-class ExperientialOrigin(str, Enum):
-    """How an experiential entry came to exist."""
+class ProceduralOrigin(str, Enum):
+    """How an procedural entry came to exist."""
 
     SEED = 'seed'  # boot-time system seed (migration 063)
     KV_BACKFILL = 'kv_backfill'  # promoted from a legacy <scope>:procedure:* KV row
@@ -1962,8 +1975,8 @@ class ExperientialOrigin(str, Enum):
     IMPORT = 'import'  # bulk import
 
 
-class ExperientialSourceRole(str, Enum):
-    """Role an experiential_source row plays in a case → procedure relationship."""
+class ProceduralSourceRole(str, Enum):
+    """Role an procedural_source row plays in a case → procedure relationship."""
 
     PROVENANCE = 'provenance'  # case that gave rise to a procedure
     EVIDENCE = 'evidence'  # supporting fact for a procedure/strategy
@@ -1979,42 +1992,47 @@ class DerivationQueueStatus(str, Enum):
     FAILED = 'failed'
 
 
-class ExperientialEntry(SQLModel, table=True):  # type: ignore
-    """The unit of recall in the experiential plane.
+class ProceduralEntry(SQLModel, table=True):  # type: ignore
+    """The unit of recall in the procedural plane.
 
-    A case, procedure, or strategy. Procedures and strategies have a stable
-    (kind, scope, verb, context) identity anchor; cases use a free-form
-    *trigger* (text) plus a freshly-computed embedding for on-demand lookup.
+    A procedure or strategy with a stable (kind, scope, verb, context)
+    identity anchor (§18.1): procedure ≡ (scope, verb, context);
+    strategy ≡ (scope, verb, NULL) — a strategy is the projection over
+    all procedures sharing (scope, verb). Retrieval is anchored on the
+    *trigger* (when_to_use / when_to_apply): the trigger embedding is the
+    vector leg of the hybrid search; the tsvector covers the full text.
     """
 
-    __tablename__ = 'experiential_entries'
+    __tablename__ = 'procedural_entries'
 
     id: UUID = Field(
         sa_column=Column(SA_UUID(), primary_key=True, server_default=sql_text('gen_random_uuid()')),
-        description='Unique identifier for the experiential entry.',
+        description='Unique identifier for the procedural entry.',
     )
     vault_id: UUID = vault_id_field()
 
-    kind: ExperientialKind = Field(
+    kind: ProceduralKind = Field(
         sa_column=Column(String, nullable=False),
-        description='case | procedure | strategy.',
+        description='procedure | strategy. Cases are notes (role="case"), not rows here.',
     )
     scope: str = Field(
         sa_column=Column(Text, nullable=False),
-        description='Origin scope label, e.g. "global", "project:<uuid>", or '
-        '"app:<agent_identity>". Pairs with the context-binding pin chain.',
+        description='Origin scope label: "global", "project:<id>", or '
+        '"app:<agent_identity>". NO "user" scope — procedures/strategies are '
+        'shared knowledge; per-user briefing customisation lives on the pin '
+        'chain, not the entry (JG decision 2026-06-10).',
     )
     verb: str | None = Field(
         default=None,
         sa_column=Column(Text, nullable=True),
-        description='Procedure/strategy verb (e.g. "create", "migrate"). NULL for cases.',
+        description='Anchor verb (e.g. "deploy", "migrate"). Required for both kinds.',
     )
     context: str | None = Field(
         default=None,
         sa_column=Column(Text, nullable=True),
-        description='Procedure/strategy context (e.g. "postgres_ddl", "alembic"). '
-        'NULL for cases. Strategies require both verb AND context '
-        '(see ck_strategy_context).',
+        description='Anchor context (e.g. "nomad", "alembic"). Required for '
+        'procedures; MUST be NULL for strategies — a strategy groups all '
+        'procedures sharing (scope, verb) (§18.1; see ck_strategy_anchor).',
     )
 
     title: str = Field(
@@ -2033,15 +2051,17 @@ class ExperientialEntry(SQLModel, table=True):  # type: ignore
     trigger: str | None = Field(
         default=None,
         sa_column=Column(Text, nullable=True),
-        description='Free-form trigger phrase for cases. Drives on-demand '
-        'trigger search (post-spike-7 amendment). Embedding is recomputed '
-        'on every trigger change.',
+        description='when_to_use (procedure) / when_to_apply (strategy) — '
+        'THE retrieval key (spike §19.1: trigger-only embedding beats '
+        'full-body 18/20 vs 15/20 top-1). Embedding is recomputed on '
+        'every trigger change. NULL only on legacy kv_backfill rows, '
+        'which stay reachable via the BM25 leg.',
     )
     trigger_embedding: list[float] | None = Field(
         default=None,
         sa_column=Column(Vector(EMBEDDING_DIMENSION), nullable=True),
-        description='Vector(384) embedding of `trigger` (cases only). '
-        'Recomputed on every trigger change.',
+        description='Vector(384) embedding of `trigger` — the single '
+        'vector leg of the hybrid search. Recomputed on every trigger change.',
     )
 
     tags: list[str] = Field(
@@ -2055,14 +2075,14 @@ class ExperientialEntry(SQLModel, table=True):  # type: ignore
         description='Arbitrary metadata — confidence, run_count, last_verified_at, etc.',
     )
 
-    status: ExperientialStatus = Field(
-        default=ExperientialStatus.DRAFT,
-        sa_column=Column(String, nullable=False, server_default=ExperientialStatus.DRAFT.value),
+    status: ProceduralStatus = Field(
+        default=ProceduralStatus.DRAFT,
+        sa_column=Column(String, nullable=False, server_default=ProceduralStatus.DRAFT.value),
         description='Lifecycle state. Draft entries are not visible to search/briefing.',
     )
-    origin: ExperientialOrigin = Field(
-        default=ExperientialOrigin.MANUAL,
-        sa_column=Column(String, nullable=False, server_default=ExperientialOrigin.MANUAL.value),
+    origin: ProceduralOrigin = Field(
+        default=ProceduralOrigin.MANUAL,
+        sa_column=Column(String, nullable=False, server_default=ProceduralOrigin.MANUAL.value),
         description='How this entry came to exist; used by the audit/replay surface.',
     )
 
@@ -2077,12 +2097,6 @@ class ExperientialEntry(SQLModel, table=True):  # type: ignore
         description='Entry that supersedes this one (lineage).',
     )
 
-    body_embedding: list[float] | None = Field(
-        default=None,
-        sa_column=Column(Vector(EMBEDDING_DIMENSION), nullable=True),
-        description='Vector(384) embedding of `body` for similarity search. '
-        'Procedures and strategies only; cases use trigger_embedding.',
-    )
     search_tsvector: Any = Field(
         default=None,
         sa_column=Column(
@@ -2091,12 +2105,13 @@ class ExperientialEntry(SQLModel, table=True):  # type: ignore
                 "to_tsvector('english'::regconfig, "
                 "coalesce(title, '') || ' ' || "
                 "coalesce(summary, '') || ' ' || "
+                "coalesce(trigger, '') || ' ' || "
                 "coalesce(body, '') || ' ' || "
-                "coalesce(memex_experiential_tags_to_text(tags), ''))",
+                "coalesce(memex_procedural_tags_to_text(tags), ''))",
                 persisted=True,
             ),
         ),
-        description='Generated tsvector over title + summary + body + tags.',
+        description='Generated tsvector over title + summary + trigger + body + tags.',
     )
 
     created_at: datetime = created_at_field()
@@ -2116,102 +2131,95 @@ class ExperientialEntry(SQLModel, table=True):  # type: ignore
             'scope',
             'verb',
             'context',
-            name='uq_experiential_identity',
+            name='uq_procedural_identity',
             postgresql_nulls_not_distinct=True,
         ),
         CheckConstraint(
-            "kind IN ('case', 'procedure', 'strategy')",
-            name='ck_experiential_kind',
+            "kind IN ('procedure', 'strategy')",
+            name='ck_procedural_kind',
         ),
         CheckConstraint(
             "status IN ('draft', 'published', 'deprecated')",
-            name='ck_experiential_status',
+            name='ck_procedural_status',
         ),
         CheckConstraint(
             "origin IN ('seed', 'kv_backfill', 'derived', 'manual', 'import')",
-            name='ck_experiential_origin',
+            name='ck_procedural_origin',
         ),
-        # Strategies require a (verb, context) tuple; procedures tolerate
-        # either being NULL (verb-only procedures are valid).
+        # Anchor shapes (§18.1): procedure ≡ (scope, verb, context);
+        # strategy ≡ (scope, verb, NULL) — a strategy groups all
+        # procedures sharing (scope, verb), so its context MUST be NULL.
         CheckConstraint(
-            "kind <> 'strategy' OR (verb IS NOT NULL AND context IS NOT NULL)",
-            name='ck_strategy_context',
+            "kind <> 'strategy' OR (verb IS NOT NULL AND context IS NULL)",
+            name='ck_strategy_anchor',
+        ),
+        CheckConstraint(
+            "kind <> 'procedure' OR (verb IS NOT NULL AND context IS NOT NULL)",
+            name='ck_procedure_anchor',
         ),
         # NOTE: there is intentionally NO `(trigger IS NULL) = (trigger_embedding IS NULL)`
         # CHECK. The repository never writes `trigger_embedding` on
         # create/update (lazy-embedding design — see
-        # experiential_repository.py module docstring). A pairing CHECK
-        # would fire on every case create that supplies a trigger. The
+        # procedural_repository.py module docstring). A pairing CHECK
+        # would fire on every create that supplies a trigger. The
         # semantic invariant — "every row with a trigger eventually has
         # a corresponding embedding" — is enforced at the search-service
         # layer by the back-fill worker, not at the DDL layer.
-        # Body embedding lives only on procedures/strategies.
-        CheckConstraint(
-            "(body_embedding IS NULL) OR (kind IN ('procedure', 'strategy'))",
-            name='ck_experiential_body_embedding_scope',
-        ),
         ForeignKeyConstraint(
             ['supersedes_id'],
-            ['experiential_entries.id'],
-            name='experiential_entries_supersedes_fkey',
+            ['procedural_entries.id'],
+            name='procedural_entries_supersedes_fkey',
             ondelete='SET NULL',
         ),
         ForeignKeyConstraint(
             ['superseded_by_id'],
-            ['experiential_entries.id'],
-            name='experiential_entries_superseded_by_fkey',
+            ['procedural_entries.id'],
+            name='procedural_entries_superseded_by_fkey',
             ondelete='SET NULL',
         ),
-        Index('idx_experiential_entries_vault_kind', 'vault_id', 'kind'),
+        Index('idx_procedural_entries_vault_kind', 'vault_id', 'kind'),
         Index(
-            'idx_experiential_entries_vault_status',
+            'idx_procedural_entries_vault_status',
             'vault_id',
             'status',
         ),
         Index(
-            'idx_experiential_entries_scope_verb',
+            'idx_procedural_entries_scope_verb',
             'scope',
             'verb',
             postgresql_where=sql_text("kind IN ('procedure', 'strategy')"),
         ),
         Index(
-            'idx_experiential_entries_status_published_at',
+            'idx_procedural_entries_status_published_at',
             'status',
             'published_at',
             postgresql_ops={'published_at': 'DESC'},
             postgresql_where=sql_text("status = 'published'"),
         ),
         Index(
-            'idx_experiential_entries_body_embedding',
-            'body_embedding',
-            postgresql_using='hnsw',
-            postgresql_ops={'body_embedding': 'vector_cosine_ops'},
-            postgresql_where=sql_text("status = 'published' AND kind IN ('procedure', 'strategy')"),
-        ),
-        Index(
-            'idx_experiential_entries_trigger_embedding',
+            'idx_procedural_entries_trigger_embedding',
             'trigger_embedding',
             postgresql_using='hnsw',
             postgresql_ops={'trigger_embedding': 'vector_cosine_ops'},
-            postgresql_where=sql_text("status = 'published' AND kind = 'case'"),
+            postgresql_where=sql_text("status = 'published'"),
         ),
         Index(
-            'idx_experiential_entries_search_tsvector',
+            'idx_procedural_entries_search_tsvector',
             'search_tsvector',
             postgresql_using='gin',
         ),
     )
 
 
-class ExperientialEntryVersion(SQLModel, table=True):  # type: ignore
-    """Append-only version ledger for an experiential entry.
+class ProceduralEntryVersion(SQLModel, table=True):  # type: ignore
+    """Append-only version ledger for an procedural entry.
 
-    A row per `edit` call; the latest body is always on ``experiential_entries``
+    A row per `edit` call; the latest body is always on ``procedural_entries``
     (mutable in place — see V7 design §3.2). ``version`` is monotonically
     increasing per entry_id.
     """
 
-    __tablename__ = 'experiential_entry_versions'
+    __tablename__ = 'procedural_entry_versions'
 
     id: UUID = Field(
         sa_column=Column(SA_UUID(), primary_key=True, server_default=sql_text('gen_random_uuid()')),
@@ -2252,26 +2260,24 @@ class ExperientialEntryVersion(SQLModel, table=True):  # type: ignore
     __table_args__ = (
         ForeignKeyConstraint(
             ['entry_id'],
-            ['experiential_entries.id'],
-            name='experiential_entry_versions_entry_fkey',
+            ['procedural_entries.id'],
+            name='procedural_entry_versions_entry_fkey',
             ondelete='CASCADE',
         ),
-        UniqueConstraint(
-            'entry_id', 'version', name='uq_experiential_entry_versions_entry_version'
-        ),
-        Index('idx_experiential_entry_versions_entry_id_created_at', 'entry_id', 'created_at'),
+        UniqueConstraint('entry_id', 'version', name='uq_procedural_entry_versions_entry_version'),
+        Index('idx_procedural_entry_versions_entry_id_created_at', 'entry_id', 'created_at'),
     )
 
 
-class ExperientialSource(SQLModel, table=True):  # type: ignore
-    """Provenance + evidence + contradiction edges between experiential entries.
+class ProceduralSource(SQLModel, table=True):  # type: ignore
+    """Provenance + evidence + contradiction edges between procedural entries.
 
     For a case → procedure edge the role is ``provenance``. For a procedure →
     evidence-fact edge the role is ``evidence``. For a case that argues
     against a procedure the role is ``contradiction``.
     """
 
-    __tablename__ = 'experiential_sources'
+    __tablename__ = 'procedural_sources'
 
     id: UUID = Field(
         sa_column=Column(SA_UUID(), primary_key=True, server_default=sql_text('gen_random_uuid()')),
@@ -2296,7 +2302,7 @@ class ExperientialSource(SQLModel, table=True):  # type: ignore
         sa_column=Column(SA_UUID(), nullable=True),
         description='Optional memory unit backing this edge.',
     )
-    role: ExperientialSourceRole = Field(
+    role: ProceduralSourceRole = Field(
         sa_column=Column(String, nullable=False),
         description='provenance | evidence | contradiction.',
     )
@@ -2310,48 +2316,48 @@ class ExperientialSource(SQLModel, table=True):  # type: ignore
     __table_args__ = (
         CheckConstraint(
             "role IN ('provenance', 'evidence', 'contradiction')",
-            name='ck_experiential_sources_role',
+            name='ck_procedural_sources_role',
         ),
         CheckConstraint(
             'weight >= 0.0 AND weight <= 10.0',
-            name='ck_experiential_sources_weight',
+            name='ck_procedural_sources_weight',
         ),
         ForeignKeyConstraint(
             ['entry_id'],
-            ['experiential_entries.id'],
-            name='experiential_sources_entry_fkey',
+            ['procedural_entries.id'],
+            name='procedural_sources_entry_fkey',
             ondelete='CASCADE',
         ),
         ForeignKeyConstraint(
             ['source_entry_id'],
-            ['experiential_entries.id'],
-            name='experiential_sources_source_entry_fkey',
+            ['procedural_entries.id'],
+            name='procedural_sources_source_entry_fkey',
             ondelete='CASCADE',
         ),
         ForeignKeyConstraint(
             ['source_note_id'],
             ['notes.id'],
-            name='experiential_sources_source_note_fkey',
+            name='procedural_sources_source_note_fkey',
             ondelete='SET NULL',
         ),
         ForeignKeyConstraint(
             ['source_memory_unit_id'],
             ['memory_units.id'],
-            name='experiential_sources_source_memory_unit_fkey',
+            name='procedural_sources_source_memory_unit_fkey',
             ondelete='SET NULL',
         ),
         # At least one source pointer must be set.
         CheckConstraint(
             'source_entry_id IS NOT NULL OR source_note_id IS NOT NULL OR '
             'source_memory_unit_id IS NOT NULL',
-            name='ck_experiential_sources_pointer_set',
+            name='ck_procedural_sources_pointer_set',
         ),
-        Index('idx_experiential_sources_entry_id', 'entry_id'),
-        Index('idx_experiential_sources_source_entry_id', 'source_entry_id'),
+        Index('idx_procedural_sources_entry_id', 'entry_id'),
+        Index('idx_procedural_sources_source_entry_id', 'source_entry_id'),
     )
 
 
-class ExperientialPin(SQLModel, table=True):  # type: ignore
+class ProceduralPin(SQLModel, table=True):  # type: ignore
     """Context-binding pin: a (context_key, entry_id, position) triple.
 
     Pins form a chain ``global → project:<id> → app:<agent_identity>`` (see
@@ -2361,7 +2367,7 @@ class ExperientialPin(SQLModel, table=True):  # type: ignore
     position order.
     """
 
-    __tablename__ = 'experiential_pins'
+    __tablename__ = 'procedural_pins'
 
     id: UUID = Field(
         sa_column=Column(SA_UUID(), primary_key=True, server_default=sql_text('gen_random_uuid()')),
@@ -2391,26 +2397,26 @@ class ExperientialPin(SQLModel, table=True):  # type: ignore
     __table_args__ = (
         ForeignKeyConstraint(
             ['entry_id'],
-            ['experiential_entries.id'],
-            name='experiential_pins_entry_fkey',
+            ['procedural_entries.id'],
+            name='procedural_pins_entry_fkey',
             ondelete='CASCADE',
         ),
         UniqueConstraint(
             'context_key',
             'entry_id',
             'position',
-            name='uq_experiential_pins_chain_position',
+            name='uq_procedural_pins_chain_position',
         ),
-        CheckConstraint('position >= 0', name='ck_experiential_pins_position_nonneg'),
+        CheckConstraint('position >= 0', name='ck_procedural_pins_position_nonneg'),
         Index(
-            'idx_experiential_pins_context_position',
+            'idx_procedural_pins_context_position',
             'context_key',
             'position',
         ),
     )
 
 
-class ExperientialDerivationQueue(SQLModel, table=True):  # type: ignore
+class ProceduralDerivationQueue(SQLModel, table=True):  # type: ignore
     """Async derivation queue: cases in, procedures/strategies out.
 
     Workers claim rows via ``SELECT ... FOR UPDATE SKIP LOCKED`` — same
@@ -2418,7 +2424,7 @@ class ExperientialDerivationQueue(SQLModel, table=True):  # type: ignore
     V7 design §4.4).
     """
 
-    __tablename__ = 'experiential_derivation_queue'
+    __tablename__ = 'procedural_derivation_queue'
 
     id: UUID = Field(
         sa_column=Column(SA_UUID(), primary_key=True, server_default=sql_text('gen_random_uuid()')),
@@ -2433,7 +2439,7 @@ class ExperientialDerivationQueue(SQLModel, table=True):  # type: ignore
         ),
         description='Cases that should be distilled into a procedure/strategy.',
     )
-    target_kind: ExperientialKind = Field(
+    target_kind: ProceduralKind = Field(
         sa_column=Column(String, nullable=False),
         description='What to derive — procedure or strategy.',
     )
@@ -3074,8 +3080,8 @@ class LintLLMSignature(SQLModel, table=True):  # type: ignore
 # DDL event hooks
 # ---------------------------------------------------------------------------
 #
-# The experiential_entries.search_tsvector generated column references
-# memex_experiential_tags_to_text() — an IMMUTABLE wrapper around the
+# The procedural_entries.search_tsvector generated column references
+# memex_procedural_tags_to_text() — an IMMUTABLE wrapper around the
 # STABLE array_to_string(text[], text). Migration 061 creates the function
 # in upgrade(); that path is fine for alembic-driven schema setup.
 #
@@ -3083,14 +3089,14 @@ class LintLLMSignature(SQLModel, table=True):  # type: ignore
 # (notably the integration ``engine`` fixture in
 # packages/core/tests/integration/conftest.py) never run alembic, so the
 # function would not exist when ``create_all`` reaches the
-# ``experiential_entries`` table. To keep both paths consistent we
+# ``procedural_entries`` table. To keep both paths consistent we
 # register a ``before_create`` listener that emits the function DDL
 # before any table DDL, mirroring the migration body.
 # ---------------------------------------------------------------------------
 
 
-_EXPERIENTIAL_TAGS_TO_TEXT_DDL = """
-CREATE OR REPLACE FUNCTION memex_experiential_tags_to_text(
+_PROCEDURAL_TAGS_TO_TEXT_DDL = """
+CREATE OR REPLACE FUNCTION memex_procedural_tags_to_text(
     tags text[]
 ) RETURNS text
 LANGUAGE sql
@@ -3106,8 +3112,8 @@ $$
 
 
 @event.listens_for(SQLModel.metadata, 'before_create', propagate=True)
-def _emit_experiential_tags_to_text(target, connection, **kwargs):  # type: ignore[no-untyped-def]
-    """Emit the experiential tsvector helper before any table that uses it.
+def _emit_procedural_tags_to_text(target, connection, **kwargs):  # type: ignore[no-untyped-def]
+    """Emit the procedural tsvector helper before any table that uses it.
 
     Mirrors the upgrade body of migration 061 — keeps ``create_all`` and
     ``alembic upgrade`` consistent. Idempotent (``CREATE OR REPLACE``)
@@ -3115,4 +3121,4 @@ def _emit_experiential_tags_to_text(target, connection, **kwargs):  # type: igno
     """
     if not connection.dialect.name.startswith('postgresql'):
         return
-    connection.exec_driver_sql(_EXPERIENTIAL_TAGS_TO_TEXT_DDL)
+    connection.exec_driver_sql(_PROCEDURAL_TAGS_TO_TEXT_DDL)
