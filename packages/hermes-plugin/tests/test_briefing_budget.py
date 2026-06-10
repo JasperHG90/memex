@@ -54,7 +54,11 @@ _HERMES_HARNESS_TOKEN_CAP = 400
 # ``compose_with_procedural`` documents the opt-in rationale (callers
 # without the procedural tools would otherwise burn the budget for no
 # behavioural gain).
-_TOTAL_STATIC_PREFIX_CHAR_CAP = 12_600
+# Bumped 12,600 → 12,800 when the V7 design dropped kind='case' from the
+# plane and PROCEDURAL_PLANE grew the case-submission doctrine (cases are
+# notes via ``memex_case_submit``; no briefing tool — pinned cards arrive
+# inside the session briefing automatically). Net delta ~80 chars.
+_TOTAL_STATIC_PREFIX_CHAR_CAP = 12_800
 
 
 def _approx_tokens(text: str) -> int:

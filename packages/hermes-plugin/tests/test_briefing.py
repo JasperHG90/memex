@@ -240,19 +240,20 @@ def test_format_block_carries_v7_procedural_doctrine():
     )
     # The doctrine block identity marker.
     assert '## Procedural plane' in block
-    # The three procedural kinds — every kind routes through the
-    # procedural plane, not the note/KV plane.
-    assert '`case`' in block
+    # The two plane kinds — both route through the procedural plane,
+    # not the note/KV plane. Cases are NOTES (memex_case_submit).
     assert '`procedure`' in block
     assert '`strategy`' in block
     # Identity-anchor rule (UNIQUE on (kind, scope, verb, context)).
     assert '(kind, scope, verb, context)' in block
-    # Tool-name markers — at least one of the 8 memex_procedural_* tools
+    # Tool-name markers — at least one of the 7 memex_procedural_* tools
     # must be visible so the agent knows the routing surface exists.
     assert 'memex_procedural_create' in block
-    # Briefing-cards pin-chain probe — the agent can request procedural
-    # cards for the active session.
-    assert 'memex_procedural_briefing_cards' in block
+    # Case routing — worked episodes go through memex_case_submit, and
+    # the removed briefing tool must NOT be advertised: pinned cards
+    # arrive inside the session briefing automatically.
+    assert 'memex_case_submit' in block
+    assert 'memex_procedural_briefing_cards' not in block
 
 
 def test_format_block_uses_compose_with_procedural_not_universal():

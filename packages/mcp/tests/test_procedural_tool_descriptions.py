@@ -1,9 +1,11 @@
 """Procedural tool description wiring test.
 
-The 8 ``memex_procedural_*`` tools (V7) are Tier 1a MCP surfaces. Their
-per-tool description text is the SSOT constant from
-``memex_common.tool_descriptions`` (mirrors the deprioritize pattern in
-``test_deprioritize_tool_descriptions.py``).
+The 7 ``memex_procedural_*`` tools + ``memex_case_submit`` (V7) are
+Tier 1a MCP surfaces. Their per-tool description text is the SSOT
+constant from ``memex_common.tool_descriptions`` (mirrors the
+deprioritize pattern in ``test_deprioritize_tool_descriptions.py``).
+There is NO briefing tool — pinned cards arrive inside the session
+briefing (JG decision 2026-06-10).
 
 This file pins the wiring — the MCP tool description = the common SSOT
 constant. Content is pinned in
@@ -15,7 +17,7 @@ from __future__ import annotations
 import pytest
 
 from memex_common.tool_descriptions import (
-    MEMEX_PROCEDURAL_BRIEFING_CARDS_DESC,
+    MEMEX_CASE_SUBMIT_DESC,
     MEMEX_PROCEDURAL_CREATE_DESC,
     MEMEX_PROCEDURAL_DEPRECATE_DESC,
     MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESC,
@@ -27,7 +29,7 @@ from memex_common.tool_descriptions import (
 
 
 _ALL_TOOL_WIRING = (
-    ('memex_procedural_briefing_cards', MEMEX_PROCEDURAL_BRIEFING_CARDS_DESC),
+    ('memex_case_submit', MEMEX_CASE_SUBMIT_DESC),
     ('memex_procedural_create', MEMEX_PROCEDURAL_CREATE_DESC),
     ('memex_procedural_deprecate', MEMEX_PROCEDURAL_DEPRECATE_DESC),
     ('memex_procedural_get', MEMEX_PROCEDURAL_GET_DESC),
@@ -56,12 +58,11 @@ async def test_procedural_tool_registered_with_common_description(
 
 
 @pytest.mark.asyncio
-async def test_eight_procedural_tools_registered() -> None:
-    """Sanity check on the count — guards against silent drops of any
-    single tool in a future refactor. Uses ``get_tool`` per name rather
-    than ``list_tools`` because the latter requires a freshly-spun
-    event loop in this pytest-asyncio=auto config; ``get_tool`` works
-    in either loop context."""
+async def test_procedural_surface_tool_set() -> None:
+    """Sanity check on the surface — guards against silent drops of any
+    single tool in a future refactor, AND against the briefing tool
+    sneaking back (cards arrive in the session briefing; agents never
+    call a tool for them)."""
     from memex_mcp.server import mcp
 
     expected = sorted(name for name, _ in _ALL_TOOL_WIRING)
@@ -70,7 +71,15 @@ async def test_eight_procedural_tools_registered() -> None:
         tool = await mcp.get_tool(name)
         assert tool is not None, f'{name} not registered'
         found.append(name)
-    assert len(found) == 8, f'Expected 8 memex_procedural_* tools, got {len(found)}: {found}'
+    assert len(found) == 8, f'Expected 8 V7 tools, got {len(found)}: {found}'
     assert found == expected, (
         f'Procedural tool surface drift.\n  Expected: {expected}\n  Got:      {found}'
+    )
+    try:
+        gone = await mcp.get_tool('memex_procedural_briefing_cards')
+    except Exception:
+        gone = None
+    assert gone is None, (
+        'memex_procedural_briefing_cards must NOT be registered — pinned '
+        'cards arrive inside the session briefing (JG decision 2026-06-10).'
     )

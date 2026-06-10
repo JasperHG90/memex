@@ -79,7 +79,7 @@ def _base_payload(**overrides):
         'title': 'procedural-suite-dto-test',
         'summary': 'Test entry.',
         'body': '',
-        'trigger': None,
+        'trigger': 'deploying a service to the staging cluster',
         'tags': [],
         'extra_metadata': {},
         'status': 'published',
@@ -94,14 +94,48 @@ def _base_payload(**overrides):
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize('kind', ['case', 'procedure', 'strategy'])
-def test_entry_create_accepts_all_three_kinds(kind):
-    """All three V7 kinds are accepted at the DTO layer."""
-    payload = _base_payload(kind=kind, verb=None, context=None, trigger=None)
-    if kind == 'case':
-        payload['trigger'] = 'database connection pool exhausted'
+@pytest.mark.parametrize('kind', ['procedure', 'strategy'])
+def test_entry_create_accepts_both_kinds(kind):
+    """Both V7 kinds are accepted with their anchor shapes (§18.1):
+    procedure ≡ (scope, verb, context); strategy ≡ (scope, verb, NULL)."""
+    if kind == 'strategy':
+        payload = _base_payload(kind=kind, context=None)
+    else:
+        payload = _base_payload(kind=kind)
     dto = ProceduralEntryCreate.model_validate(payload)
     assert dto.kind == kind
+
+
+def test_entry_create_rejects_case_kind():
+    """Cases are NOTES (role='case'), never plane entries — kind='case'
+    must fail the Literal."""
+    with pytest.raises(ValidationError):
+        ProceduralEntryCreate.model_validate(_base_payload(kind='case'))
+
+
+def test_entry_create_rejects_strategy_with_context():
+    """Strategy anchor is (scope, verb) — context is FORBIDDEN (§18.1)."""
+    with pytest.raises(ValidationError):
+        ProceduralEntryCreate.model_validate(_base_payload(kind='strategy'))
+
+
+def test_entry_create_rejects_procedure_without_context():
+    with pytest.raises(ValidationError):
+        ProceduralEntryCreate.model_validate(_base_payload(context=None))
+
+
+def test_entry_create_rejects_user_scope():
+    """NO user scope on the plane (JG 2026-06-10) — per-user curation
+    rides the pin chain."""
+    with pytest.raises(ValidationError):
+        ProceduralEntryCreate.model_validate(_base_payload(scope='user'))
+
+
+def test_entry_create_requires_trigger():
+    """The trigger (when_to_use) is the retrieval key (§6, spike §19.1)
+    — required for new writes (kv_backfill rows are the only exemption)."""
+    with pytest.raises(ValidationError):
+        ProceduralEntryCreate.model_validate(_base_payload(trigger=None))
 
 
 @pytest.mark.parametrize('bad_kind', ['procedre', 'CASE', 'case ', 'observations', ''])

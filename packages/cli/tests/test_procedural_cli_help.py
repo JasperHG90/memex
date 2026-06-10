@@ -39,10 +39,10 @@ def test_procedural_help_identifies_plane_as_procedural(runner, strip_ansi):
     assert result.exit_code == 0
     text = _normalize(strip_ansi(result.stdout))
     assert 'procedural' in text.lower()
-    assert 'procedural' not in text.lower(), (
+    assert 'experiential' not in text.lower(), (
         'Top-level procedural help must not contain the legacy '
-        'engine-internal term "procedural" — that belongs in '
-        'SQLAlchemy and DTO internals only.'
+        'term "experiential" — the plane is named procedural '
+        'everywhere (JG directive 2026-06-10).'
     )
 
 
@@ -85,7 +85,7 @@ def test_case_help_routes_to_procedural_plane(runner, strip_ansi):
     assert result.exit_code == 0
     text = _normalize(strip_ansi(result.stdout))
     assert 'procedural' in text.lower()
-    assert 'procedural' not in text.lower()
+    assert 'experiential' not in text.lower()
 
 
 def test_case_submit_help_requires_trigger(runner, strip_ansi):

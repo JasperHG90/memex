@@ -41,9 +41,10 @@ console = Console()
 app = typer.Typer(
     name='procedural',
     help=(
-        'Manage procedural-plane entries — cases (specific experiences), '
-        'procedures (synthesised how-tos), and strategies (play-books). '
-        'Identity-anchored on (kind, scope, verb, context).'
+        'Manage procedural-plane entries — procedures (worked how-tos) and '
+        'strategies (play-books generalising procedures). Identity-anchored '
+        'on (kind, scope, verb, context); strategies anchor on (scope, verb). '
+        'Cases are NOTES — submit them via `memex case submit`.'
     ),
     no_args_is_help=True,
 )
@@ -51,9 +52,9 @@ app = typer.Typer(
 case_app = typer.Typer(
     name='case',
     help=(
-        'Case-specific shortcuts. Cases are durable records of a specific '
-        'experience — what happened, with what trigger. They are the input '
-        'side of the procedural plane; procedures and strategies are derived.'
+        'Submit worked episodes as cases. A case is a NOTE (role=case) in a '
+        'hidden system vault — the input side of the procedural plane; '
+        'procedures and strategies are derived from case clusters.'
     ),
     no_args_is_help=True,
 )
@@ -95,28 +96,38 @@ async def procedural_create(
     ctx: typer.Context,
     kind: Annotated[
         str,
-        typer.Argument(help='case | procedure | strategy.'),
+        typer.Argument(help='procedure | strategy. (Cases are notes — `memex case submit`.)'),
     ],
     scope: Annotated[
-        str, typer.Option('--scope', '-s', help='Identity scope (e.g. "user", "project:foo").')
+        str,
+        typer.Option(
+            '--scope', '-s', help='Identity scope: "global" | "project:<id>" | "app:<id>".'
+        ),
     ],
     title: Annotated[str, typer.Option('--title', '-t', help='Entry title.')],
     summary: Annotated[str, typer.Option('--summary', help='One-paragraph summary.')],
     verb: Annotated[
         str | None,
-        typer.Option('--verb', help='Required for procedure/strategy. Omit for case.'),
+        typer.Option('--verb', help='Anchor verb — required for both kinds.'),
     ] = None,
     context: Annotated[
         str | None,
-        typer.Option('--context', '-c', help='Optional context within (kind, scope, verb).'),
+        typer.Option(
+            '--context',
+            '-c',
+            help='Anchor context — required for procedure; FORBIDDEN for strategy.',
+        ),
     ] = None,
     body: Annotated[
         str | None,
-        typer.Option('--body', '-b', help='Long-form body (procedure/strategy).'),
+        typer.Option('--body', '-b', help='Long-form body (steps, references).'),
     ] = None,
     trigger: Annotated[
         str | None,
-        typer.Option('--trigger', help='Required for case. What triggered the experience.'),
+        typer.Option(
+            '--trigger',
+            help='when_to_use / when_to_apply — the retrieval key. REQUIRED.',
+        ),
     ] = None,
     tags: Annotated[
         list[str] | None,
@@ -143,19 +154,28 @@ async def procedural_create(
     re-writes.
     """
     config: MemexConfig = ctx.obj
-    if kind == 'case':
-        if verb is not None or context is not None:
-            console.print('[red]kind=case requires --verb and --context to be OMITTED.[/red]')
+    if kind == 'procedure':
+        if not verb or not context:
+            console.print('[red]kind=procedure requires --verb AND --context.[/red]')
             raise typer.Exit(2)
-        if not trigger:
-            console.print('[red]kind=case requires --trigger.[/red]')
-            raise typer.Exit(2)
-    elif kind in ('procedure', 'strategy'):
+    elif kind == 'strategy':
         if not verb:
-            console.print(f'[red]kind={kind} requires --verb.[/red]')
+            console.print('[red]kind=strategy requires --verb.[/red]')
+            raise typer.Exit(2)
+        if context is not None:
+            console.print(
+                '[red]kind=strategy FORBIDS --context — a strategy covers all '
+                'procedures sharing (scope, verb).[/red]'
+            )
             raise typer.Exit(2)
     else:
-        console.print(f'[red]Unknown kind: {kind!r}. Expected case|procedure|strategy.[/red]')
+        console.print(
+            f'[red]Unknown kind: {kind!r}. Expected procedure|strategy. '
+            '(Cases are notes — use `memex case submit`.)[/red]'
+        )
+        raise typer.Exit(2)
+    if not trigger:
+        console.print('[red]--trigger is required (it is what retrieval matches on).[/red]')
         raise typer.Exit(2)
 
     if vault is None:
@@ -199,7 +219,7 @@ async def procedural_create(
 @async_command
 async def procedural_upsert(
     ctx: typer.Context,
-    kind: Annotated[str, typer.Argument(help='case | procedure | strategy.')],
+    kind: Annotated[str, typer.Argument(help='procedure | strategy.')],
     scope: Annotated[str, typer.Option('--scope', '-s')],
     title: Annotated[str, typer.Option('--title', '-t')],
     summary: Annotated[str, typer.Option('--summary')],
@@ -280,7 +300,7 @@ async def procedural_get(
 @async_command
 async def procedural_get_by_identity(
     ctx: typer.Context,
-    kind: Annotated[str, typer.Argument(help='case | procedure | strategy.')],
+    kind: Annotated[str, typer.Argument(help='procedure | strategy.')],
     scope: Annotated[str, typer.Option('--scope', '-s')],
     verb: Annotated[str | None, typer.Option('--verb')] = None,
     context: Annotated[str | None, typer.Option('--context', '-c')] = None,
@@ -513,73 +533,289 @@ async def case_submit(
     title: Annotated[str, typer.Option('--title', '-t', help='Case title.')],
     trigger: Annotated[
         str,
-        typer.Option(
-            '--trigger',
-            help='What triggered the experience — required for findability.',
-        ),
+        typer.Option('--trigger', help='What kicked the episode off — required.'),
     ],
-    summary: Annotated[
+    outcome: Annotated[
         str,
-        typer.Option('--summary', help='One-paragraph summary of the experience.'),
+        typer.Option('--outcome', '-o', help='success | failure | mixed.'),
     ],
-    body: Annotated[
+    situation: Annotated[
+        str,
+        typer.Option('--situation', help='Context going in (prior state, constraints).'),
+    ] = '',
+    action: Annotated[
+        list[str] | None,
+        typer.Option('--action', '-a', help='Repeatable. One ordered step per flag.'),
+    ] = None,
+    lesson: Annotated[
+        str,
+        typer.Option('--lesson', '-l', help='What to do differently / confirm next time.'),
+    ] = '',
+    project_id: Annotated[
+        str | None,
+        typer.Option('--project-id', '-p', help='Provenance — recorded in metadata.'),
+    ] = None,
+    case_of: Annotated[
         str | None,
         typer.Option(
-            '--body',
-            '-b',
-            help='Long-form body — what happened, what was tried, the outcome.',
+            '--case-of',
+            help='UUID of the procedural entry this case instantiates (skips the judge).',
         ),
     ] = None,
-    scope: Annotated[
-        str, typer.Option('--scope', '-s', help='Identity scope. (e.g. "user", "project:foo")')
-    ] = 'user',
     tags: Annotated[list[str] | None, typer.Option('--tag')] = None,
-    vault: Annotated[
-        str | None,
-        typer.Option(
-            '--vault',
-            '-v',
-            help='Vault name or UUID. (defaults to active vault)',
-        ),
-    ] = None,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
 ):
     """
-    Submit a new case — durable record of a specific experience.
+    Submit a worked episode as a case.
 
-    Cases are the input side of the procedural plane: they record what
-    happened, with what trigger. The derivation worker can later
-    consolidate them into procedures or strategies.
+    The case is filed as a NOTE (role=case) in the hidden system
+    vault — no --vault flag; the server owns the placement. Without
+    --case-of the server judges which procedure the case instances;
+    contested judgments land in the lint queue.
     """
+    from uuid import UUID as _UUID
+
+    from memex_common.procedural_schemas import CaseSubmit
+
     config: MemexConfig = ctx.obj
-    if vault is None:
-        # Fall back to the active vault. The HTTP facade is the
-        # authoritative resolver; this is a best-effort default.
-        vault = config.server.default_active_vault
-    vault_id = await _resolve_vault_id(config, vault)
-    payload = ProceduralEntryCreate(
-        vault_id=vault_id,
-        kind='case',
-        scope=scope,
-        verb=None,
-        context=None,
+    if outcome not in ('success', 'failure', 'mixed'):
+        console.print(f'[red]--outcome must be success|failure|mixed, got {outcome!r}.[/red]')
+        raise typer.Exit(2)
+    case_of_uuid = None
+    if case_of is not None:
+        try:
+            case_of_uuid = _UUID(case_of)
+        except ValueError:
+            console.print(f'[red]--case-of is not a valid UUID: {case_of!r}[/red]')
+            raise typer.Exit(2)
+
+    payload = CaseSubmit(
         title=title,
-        summary=summary,
-        body=body or '',
         trigger=trigger,
+        situation=situation,
+        actions=action or [],
+        outcome=outcome,  # type: ignore[arg-type]
+        lesson=lesson,
+        project_id=project_id,
+        case_of=case_of_uuid,
+        submitted_by='memex-cli',
         tags=tags or [],
-        status='draft',
-        origin='manual',
     )
     async with get_api_context(config) as api:
         try:
-            entry = await api.procedural_create(payload)
+            result = await api.case_submit(payload)
+        except Exception as e:
+            handle_api_error(e)
+
+    if json_output:
+        emit_json(result.model_dump(mode='json'))
+        return
+    console.print(f'[green]Case filed:[/green] note {result.note_id}')
+    a = result.assignment
+    if a.mode == 'explicit':
+        console.print(f'  assigned to entry {a.entry_id} (explicit --case-of)')
+    elif a.mode == 'auto_assigned':
+        console.print(f'  auto-assigned to entry {a.entry_id} (separation={a.separation})')
+    elif a.mode == 'new_procedure_draft':
+        console.print(f'  seeded draft procedure {a.entry_id} (separation={a.separation})')
+    elif a.mode == 'escalated':
+        console.print(
+            f'  [yellow]assignment contested[/yellow] — lint finding {a.finding_id}; '
+            'resolve via `memex lint resolve --action assign_case`'
+        )
+
+
+# ---------------------------------------------------------------------------
+# pin / unpin / pins — briefing-chain curation (§18.8 / §19.8)
+# ---------------------------------------------------------------------------
+
+
+@app.command('pin')
+@async_command
+async def procedural_pin(
+    ctx: typer.Context,
+    entry_id: Annotated[str, typer.Argument(help='Procedural entry UUID.')],
+    context_key: Annotated[
+        str,
+        typer.Option(
+            '--context',
+            '-c',
+            help='Pin-chain context: "global" | "project:<id>" | "app:<id>".',
+        ),
+    ],
+    position: Annotated[
+        int | None,
+        typer.Option('--position', help='0-based chain position. Omit to append.'),
+    ] = None,
+    json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
+):
+    """Pin an entry into a briefing context chain (cap 10 per context)."""
+    from uuid import UUID as _UUID
+
+    config: MemexConfig = ctx.obj
+    async with get_api_context(config) as api:
+        try:
+            pin = await api.procedural_pin(
+                _UUID(entry_id),
+                context_key=context_key,
+                position=position,
+                pinned_by='memex-cli',
+            )
+        except Exception as e:
+            handle_api_error(e)
+    if json_output:
+        emit_json(pin.model_dump(mode='json'))
+    else:
+        console.print(f'[green]Pinned[/green] {entry_id} at {pin.context_key}[{pin.position}]')
+
+
+@app.command('unpin')
+@async_command
+async def procedural_unpin(
+    ctx: typer.Context,
+    entry_id: Annotated[str, typer.Argument(help='Procedural entry UUID.')],
+    context_key: Annotated[str, typer.Option('--context', '-c', help='Pin-chain context key.')],
+):
+    """Unpin an entry from a context (idempotent)."""
+    from uuid import UUID as _UUID
+
+    config: MemexConfig = ctx.obj
+    async with get_api_context(config) as api:
+        try:
+            removed = await api.procedural_unpin(_UUID(entry_id), context_key=context_key)
+        except Exception as e:
+            handle_api_error(e)
+    if removed:
+        console.print(f'[green]Unpinned[/green] {entry_id} from {context_key}')
+    else:
+        console.print(f'[yellow]No pin found[/yellow] for {entry_id} at {context_key}')
+
+
+@app.command('pins')
+@async_command
+async def procedural_pins(
+    ctx: typer.Context,
+    context_key: Annotated[str, typer.Option('--context', '-c', help='Pin-chain context key.')],
+    json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
+):
+    """List pins for a context, position ascending."""
+    config: MemexConfig = ctx.obj
+    async with get_api_context(config) as api:
+        try:
+            pins = await api.procedural_list_pins(context_key)
+        except Exception as e:
+            handle_api_error(e)
+    if json_output:
+        emit_json([p.model_dump(mode='json') for p in pins])
+        return
+    if not pins:
+        console.print(f'[dim]No pins at {context_key}.[/dim]')
+        return
+    for p_ in pins:
+        console.print(f'  [{p_.position}] {p_.entry_id}  [dim]{p_.pinned_by or ""}[/dim]')
+
+
+# ---------------------------------------------------------------------------
+# versions / diff / rollback — the non-destructive ledger (§18.8)
+# ---------------------------------------------------------------------------
+
+
+@app.command('versions')
+@async_command
+async def procedural_versions(
+    ctx: typer.Context,
+    entry_id: Annotated[str, typer.Argument(help='Procedural entry UUID.')],
+    json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
+):
+    """List the entry's uncapped version ledger, newest first."""
+    from uuid import UUID as _UUID
+
+    config: MemexConfig = ctx.obj
+    async with get_api_context(config) as api:
+        try:
+            versions = await api.procedural_list_versions(_UUID(entry_id))
+        except Exception as e:
+            handle_api_error(e)
+    if json_output:
+        emit_json([v.model_dump(mode='json') for v in versions])
+        return
+    if not versions:
+        console.print('[dim]No versions yet (versions appear after the first edit).[/dim]')
+        return
+    for v in versions:
+        reason = f'  [dim]{v.edit_reason}[/dim]' if v.edit_reason else ''
+        console.print(f'  v{v.version}  {v.created_at.isoformat()}  {v.title}{reason}')
+
+
+@app.command('diff')
+@async_command
+async def procedural_diff(
+    ctx: typer.Context,
+    entry_id: Annotated[str, typer.Argument(help='Procedural entry UUID.')],
+    from_version: Annotated[int, typer.Option('--from', help='Older version number.')],
+    to_version: Annotated[
+        int | None,
+        typer.Option('--to', help='Newer version number. Omit for the newest.'),
+    ] = None,
+):
+    """Unified diff between two ledger versions (body + trigger + title)."""
+    import difflib
+    from uuid import UUID as _UUID
+
+    config: MemexConfig = ctx.obj
+    async with get_api_context(config) as api:
+        try:
+            versions = await api.procedural_list_versions(_UUID(entry_id))
+        except Exception as e:
+            handle_api_error(e)
+    by_num = {v.version: v for v in versions}
+    if from_version not in by_num:
+        console.print(f'[red]No version {from_version} in the ledger.[/red]')
+        raise typer.Exit(2)
+    newest = max(by_num) if by_num else None
+    target = to_version if to_version is not None else newest
+    if target not in by_num:
+        console.print(f'[red]No version {target} in the ledger.[/red]')
+        raise typer.Exit(2)
+
+    def _render(v) -> list[str]:
+        return (f'title: {v.title}\ntrigger: {v.trigger or ""}\n\n{v.body}').splitlines(
+            keepends=True
+        )
+
+    diff = difflib.unified_diff(
+        _render(by_num[from_version]),
+        _render(by_num[target]),
+        fromfile=f'v{from_version}',
+        tofile=f'v{target}',
+    )
+    out = ''.join(diff)
+    console.print(out if out else f'[dim]v{from_version} and v{target} are identical.[/dim]')
+
+
+@app.command('rollback')
+@async_command
+async def procedural_rollback(
+    ctx: typer.Context,
+    entry_id: Annotated[str, typer.Argument(help='Procedural entry UUID.')],
+    version: Annotated[int, typer.Option('--to', help='Version number to restore.')],
+    json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
+):
+    """Non-destructive rollback: the snapshot is re-applied as a NEW version."""
+    from uuid import UUID as _UUID
+
+    config: MemexConfig = ctx.obj
+    async with get_api_context(config) as api:
+        try:
+            entry = await api.procedural_rollback(
+                _UUID(entry_id), version, rolled_back_by='memex-cli'
+            )
         except Exception as e:
             handle_api_error(e)
     if json_output:
         emit_json(entry.model_dump(mode='json'))
     else:
-        console.print(f'[green]Case submitted:[/green] {entry.id}')
+        console.print(f'[green]Rolled back[/green] {entry.id} to v{version} (as a new version)')
         _print_entry(entry, json_output=False)
 
 

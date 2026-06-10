@@ -50,6 +50,7 @@ from memex_common.schemas import (
     RiskClass,
 )
 from memex_common.tool_descriptions import (
+    MEMEX_CASE_SUBMIT_DESC,
     MEMEX_KV_GET_DESC,
     MEMEX_KV_LIST_DESC,
     MEMEX_KV_SEARCH_DESC,
@@ -60,7 +61,6 @@ from memex_common.tool_descriptions import (
     MEMEX_MEMORY_RECONSOLIDATE_DESC,
     MEMEX_MEMORY_RESTORE_DESC,
     MEMEX_MEMORY_SUMMARIZE_NODE_DESC,
-    MEMEX_PROCEDURAL_BRIEFING_CARDS_DESC,
     MEMEX_PROCEDURAL_CREATE_DESC,
     MEMEX_PROCEDURAL_DEPRECATE_DESC,
     MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESC,
@@ -173,7 +173,7 @@ class MemexAPIProtocol(Protocol):
     async def reconsolidate_entity(self, *args: Any, **kwargs: Any) -> Any: ...
     async def consolidate_vault(self, *args: Any, **kwargs: Any) -> Any: ...
 
-    # V7 — Procedural plane (case / procedure / strategy)
+    # V7 — Procedural plane (procedure / strategy) + case submission
     async def procedural_create(self, *args: Any, **kwargs: Any) -> Any: ...
     async def procedural_upsert(self, *args: Any, **kwargs: Any) -> Any: ...
     async def procedural_get(self, *args: Any, **kwargs: Any) -> Any: ...
@@ -181,7 +181,7 @@ class MemexAPIProtocol(Protocol):
     async def procedural_update(self, *args: Any, **kwargs: Any) -> Any: ...
     async def procedural_deprecate(self, *args: Any, **kwargs: Any) -> Any: ...
     async def procedural_search(self, *args: Any, **kwargs: Any) -> Any: ...
-    async def procedural_briefing_cards(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def case_submit(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
 # ---------------------------------------------------------------------------
@@ -3493,8 +3493,8 @@ __all__ = [
     'RECORD_OUTCOME_SCHEMA',
     # --- F49 contradiction-graph timeline ---
     'GET_UNIT_HISTORY_SCHEMA',
-    # --- V7 — Procedural plane (case / procedure / strategy) ---
-    'PROC_BRIEFING_CARDS_SCHEMA',
+    # --- V7 — Procedural plane (procedure / strategy) + case submission ---
+    'CASE_SUBMIT_SCHEMA',
     'PROC_CREATE_SCHEMA',
     'PROC_DEPRECATE_SCHEMA',
     'PROC_GET_BY_IDENTITY_SCHEMA',
@@ -4537,7 +4537,7 @@ ALL_SCHEMAS.append(GET_UNIT_HISTORY_SCHEMA)
 # exposed in the schema since the agent never names a vault directly.
 # ============================================================
 
-_VALID_PROCEDURAL_KINDS: tuple[str, ...] = ('case', 'procedure', 'strategy')
+_VALID_PROCEDURAL_KINDS: tuple[str, ...] = ('procedure', 'strategy')
 
 
 def _validate_kind(raw: Any) -> str | None:
@@ -4562,7 +4562,7 @@ PROC_CREATE_SCHEMA: dict[str, Any] = {
             'scope': {
                 'type': 'string',
                 'description': (
-                    'One of: "global", "user", "project:<id>", "app:<id>". '
+                    'One of: "global", "project:<id>", "app:<id>". '
                     'Use "global" for cross-vault conventions; "project:<id>" '
                     'for project-scoped procedures.'
                 ),
@@ -4573,22 +4573,21 @@ PROC_CREATE_SCHEMA: dict[str, Any] = {
             'verb': {
                 'type': 'string',
                 'description': (
-                    'REQUIRED for procedure+strategy. MUST be null/omitted for case. '
-                    'The action verb (e.g. "rotate", "deploy", "audit").'
+                    'REQUIRED for both kinds. The action verb (e.g. "rotate", "deploy", "audit").'
                 ),
             },
             'context': {
                 'type': 'string',
                 'description': (
-                    'REQUIRED for procedure+strategy. MUST be null/omitted for case. '
+                    'REQUIRED for procedure; MUST be omitted for strategy '
+                    '(a strategy groups all procedures sharing scope+verb). '
                     'The context identifier (e.g. "creds", "iam", "ci").'
                 ),
             },
             'trigger': {
                 'type': 'string',
                 'description': (
-                    'For case: the trigger signal. For procedure/strategy: optional '
-                    'auto-fire condition. Required for case-kind entries.'
+                    'when_to_use / when_to_apply — the phrase retrieval anchors on. REQUIRED.'
                 ),
             },
             'tags': {
@@ -4606,7 +4605,7 @@ PROC_CREATE_SCHEMA: dict[str, Any] = {
                 'description': 'Default "published" — only set "draft" if you want it hidden from search.',
             },
         },
-        'required': ['kind', 'scope', 'title', 'summary'],
+        'required': ['kind', 'scope', 'title', 'summary', 'trigger'],
     },
 }
 
@@ -4631,41 +4630,29 @@ def handle_procedural_create(
 
     from memex_common.procedural_schemas import ProceduralEntryCreate
 
-    # V7 contract: case MUST omit verb+context; procedure+strategy REQUIRE both.
+    # Anchor-shape rules (procedure: verb+context; strategy: verb only;
+    # trigger required for both) are enforced by the DTO validator —
+    # mirror of the server-side 422.
     raw_verb = args.get('verb')
     raw_context = args.get('context')
-    if kind == 'case':
-        verb_value: str | None = None
-        context_value: str | None = None
-        if raw_verb or raw_context:
-            return tool_error(
-                'kind="case" entries MUST omit verb and context. Use procedure or strategy '
-                'if you need an identity-anchored (verb, context) pair.'
-            )
-    else:
-        if not raw_verb or not raw_context:
-            return tool_error(
-                f'kind={kind!r} entries REQUIRE both verb and context. '
-                'Use kind="case" for trigger-only entries.'
-            )
-        verb_value = str(raw_verb)
-        context_value = str(raw_context)
-
-    payload = ProceduralEntryCreate(
-        vault_id=vault_id,
-        kind=kind,  # type: ignore[arg-type]
-        scope=str(scope),
-        title=str(title),
-        summary=str(summary),
-        body=args.get('body') or '',
-        verb=verb_value,
-        context=context_value,
-        trigger=args.get('trigger'),
-        tags=args.get('tags') or [],
-        extra_metadata=args.get('extra_metadata') or {},
-        status=args.get('status', 'published'),  # type: ignore[arg-type]
-        origin='manual',
-    )
+    try:
+        payload = ProceduralEntryCreate(
+            vault_id=vault_id,
+            kind=kind,  # type: ignore[arg-type]
+            scope=str(scope),
+            title=str(title),
+            summary=str(summary),
+            body=args.get('body') or '',
+            verb=str(raw_verb) if raw_verb else None,
+            context=str(raw_context) if raw_context else None,
+            trigger=args.get('trigger'),
+            tags=args.get('tags') or [],
+            extra_metadata=args.get('extra_metadata') or {},
+            status=args.get('status', 'published'),  # type: ignore[arg-type]
+            origin='manual',
+        )
+    except Exception as e:
+        return tool_error(f'Invalid procedural entry: {e}')
     try:
         result = run_sync(api.procedural_create(payload), timeout=30.0)
     except Exception as e:
@@ -4709,32 +4696,24 @@ def handle_procedural_upsert(
 
     raw_verb = args.get('verb')
     raw_context = args.get('context')
-    if kind == 'case':
-        verb_value: str | None = None
-        context_value: str | None = None
-        if raw_verb or raw_context:
-            return tool_error('kind="case" entries MUST omit verb and context.')
-    else:
-        if not raw_verb or not raw_context:
-            return tool_error(f'kind={kind!r} entries REQUIRE both verb and context.')
-        verb_value = str(raw_verb)
-        context_value = str(raw_context)
-
-    payload = ProceduralEntryCreate(
-        vault_id=vault_id,
-        kind=kind,  # type: ignore[arg-type]
-        scope=str(scope),
-        title=str(title),
-        summary=str(summary),
-        body=args.get('body') or '',
-        verb=verb_value,
-        context=context_value,
-        trigger=args.get('trigger'),
-        tags=args.get('tags') or [],
-        extra_metadata=args.get('extra_metadata') or {},
-        status=args.get('status', 'published'),  # type: ignore[arg-type]
-        origin='manual',
-    )
+    try:
+        payload = ProceduralEntryCreate(
+            vault_id=vault_id,
+            kind=kind,  # type: ignore[arg-type]
+            scope=str(scope),
+            title=str(title),
+            summary=str(summary),
+            body=args.get('body') or '',
+            verb=str(raw_verb) if raw_verb else None,
+            context=str(raw_context) if raw_context else None,
+            trigger=args.get('trigger'),
+            tags=args.get('tags') or [],
+            extra_metadata=args.get('extra_metadata') or {},
+            status=args.get('status', 'published'),  # type: ignore[arg-type]
+            origin='manual',
+        )
+    except Exception as e:
+        return tool_error(f'Invalid procedural entry: {e}')
     try:
         result = run_sync(api.procedural_upsert(payload), timeout=30.0)
     except Exception as e:
@@ -4797,12 +4776,15 @@ PROC_GET_BY_IDENTITY_SCHEMA: dict[str, Any] = {
             },
             'scope': {
                 'type': 'string',
-                'description': 'Scope (global / user / project:<id> / app:<id>).',
+                'description': 'One of: "global", "project:<id>", "app:<id>".',
             },
-            'verb': {'type': 'string', 'description': 'Verb (omit for case).'},
-            'context': {'type': 'string', 'description': 'Context (omit for case).'},
+            'verb': {'type': 'string', 'description': 'Verb — required for both kinds.'},
+            'context': {
+                'type': 'string',
+                'description': 'Required for procedure; MUST be omitted for strategy.',
+            },
         },
-        'required': ['kind', 'scope'],
+        'required': ['kind', 'scope', 'verb'],
     },
 }
 
@@ -4822,6 +4804,18 @@ def handle_procedural_get_by_identity(
         return tool_error(msg)
     if vault_id is None:
         return tool_error('No vault bound to this Hermes session; cannot probe identity anchor.')
+
+    verb = args.get('verb')
+    context = args.get('context')
+    if not verb:
+        return tool_error('verb is required (both procedure and strategy anchor on it).')
+    if kind == 'procedure' and not context:
+        return tool_error('kind="procedure" anchors require context.')
+    if kind == 'strategy' and context:
+        return tool_error(
+            'kind="strategy" anchors MUST omit context — a strategy groups all '
+            'procedures sharing (scope, verb).'
+        )
 
     try:
         result = run_sync(
@@ -4970,7 +4964,7 @@ PROC_SEARCH_SCHEMA: dict[str, Any] = {
             },
             'scope': {
                 'type': 'string',
-                'description': 'Optional scope filter (global / user / project:<id> / app:<id>).',
+                'description': 'Optional scope filter (global / project:<id> / app:<id>).',
             },
             'status': {
                 'type': 'string',
@@ -5049,53 +5043,119 @@ def handle_procedural_search(
     return _dump_dto(result)
 
 
-PROC_BRIEFING_CARDS_SCHEMA: dict[str, Any] = {
-    'name': 'memex_procedural_briefing_cards',
-    'description': MEMEX_PROCEDURAL_BRIEFING_CARDS_DESC,
+CASE_SUBMIT_SCHEMA: dict[str, Any] = {
+    'name': 'memex_case_submit',
+    'description': MEMEX_CASE_SUBMIT_DESC,
     'parameters': {
         'type': 'object',
         'properties': {
-            'context_keys': {
+            'title': {'type': 'string', 'description': 'Short title (max 256 chars).'},
+            'trigger': {
+                'type': 'string',
+                'description': (
+                    'What kicked the episode off — embedded for case↔procedure matching. REQUIRED.'
+                ),
+            },
+            'situation': {
+                'type': 'string',
+                'description': 'Context going in (prior state, constraints).',
+            },
+            'actions': {
                 'type': 'array',
                 'items': {'type': 'string'},
-                'description': 'Non-empty list of context keys (e.g. ["global"], ["project:alpha"]).',
+                'description': 'Ordered actions taken, one step per item.',
             },
-            'scope': {
+            'outcome': {
                 'type': 'string',
-                'description': 'Optional scope filter.',
+                'enum': ['success', 'failure', 'mixed'],
+                'description': 'How the episode ended.',
             },
-            'limit_per_context': {
-                'type': 'integer',
-                'description': 'Max cards per context (default 5).',
+            'lesson': {
+                'type': 'string',
+                'description': 'What to do differently / confirm next time.',
+            },
+            'project_id': {
+                'type': 'string',
+                'description': 'Provenance — recorded in doc_metadata, NOT a vault binding.',
+            },
+            'case_of': {
+                'type': 'string',
+                'description': (
+                    'UUID of the procedural entry this case instantiates '
+                    '(explicit assignment — supply it whenever you know it; '
+                    'skips the assignment judge).'
+                ),
+            },
+            'submitted_by': {
+                'type': 'string',
+                'description': 'Submitting app/agent identity (provenance).',
+            },
+            'tags': {
+                'type': 'array',
+                'items': {'type': 'string'},
+                'description': 'Optional tags for searchability.',
             },
         },
-        'required': ['context_keys'],
+        'required': ['title', 'trigger', 'outcome'],
     },
 }
 
 
-def handle_procedural_briefing_cards(
+def handle_case_submit(
     api: MemexAPIProtocol,
     config: HermesMemexConfig,
     vault_id: UUID | None,
     args: dict[str, Any],
 ) -> str:
-    keys = args.get('context_keys')
-    if not keys or not isinstance(keys, list) or not all(isinstance(k, str) for k in keys):
-        return tool_error('context_keys is required and must be a non-empty list of strings.')
+    try:
+        title = _require(args, 'title')
+        trigger = _require(args, 'trigger')
+        outcome = _require(args, 'outcome')
+    except ValueError as e:
+        return tool_error(str(e))
+
+    from memex_common.procedural_schemas import CaseSubmit
+
+    raw_case_of = args.get('case_of')
+    case_of_uuid: UUID | None = None
+    if raw_case_of:
+        try:
+            case_of_uuid = UUID(str(raw_case_of))
+        except (ValueError, TypeError):
+            return tool_error(f'Invalid case_of UUID: {raw_case_of}')
+
+    # CaseSubmit uses ``extra='forbid'`` and non-None defaults — build the
+    # kwargs conditionally (same pattern as handle_procedural_search).
+    submit_kwargs: dict[str, Any] = {
+        'title': str(title),
+        'trigger': str(trigger),
+        'outcome': outcome,
+    }
+    if args.get('situation') is not None:
+        submit_kwargs['situation'] = str(args['situation'])
+    if args.get('actions') is not None:
+        submit_kwargs['actions'] = [str(a) for a in args['actions']]
+    if args.get('lesson') is not None:
+        submit_kwargs['lesson'] = str(args['lesson'])
+    if args.get('project_id') is not None:
+        submit_kwargs['project_id'] = str(args['project_id'])
+    if case_of_uuid is not None:
+        submit_kwargs['case_of'] = case_of_uuid
+    if args.get('submitted_by') is not None:
+        submit_kwargs['submitted_by'] = str(args['submitted_by'])
+    if args.get('tags') is not None:
+        submit_kwargs['tags'] = [str(t) for t in args['tags']]
 
     try:
-        result = run_sync(
-            api.procedural_briefing_cards(
-                list(keys),
-                scope=args.get('scope'),
-                limit_per_context=int(args.get('limit_per_context', 5)),
-            ),
-            timeout=30.0,
-        )
+        payload = CaseSubmit(**submit_kwargs)
     except Exception as e:
-        logger.warning('memex_procedural_briefing_cards failed: %s', e)
-        return tool_error(f'Procedural briefing_cards failed: {e}')
+        return tool_error(f'Invalid case submission: {e}')
+
+    try:
+        result = run_sync(api.case_submit(payload), timeout=30.0)
+    except Exception as e:
+        logger.warning('memex_case_submit failed: %s', e)
+        return tool_error(f'Case submit failed: {e}')
     return _dump_dto(result)
 
 
@@ -5119,7 +5179,7 @@ HANDLERS['memex_procedural_get_by_identity'] = handle_procedural_get_by_identity
 HANDLERS['memex_procedural_update'] = handle_procedural_update
 HANDLERS['memex_procedural_deprecate'] = handle_procedural_deprecate
 HANDLERS['memex_procedural_search'] = handle_procedural_search
-HANDLERS['memex_procedural_briefing_cards'] = handle_procedural_briefing_cards
+HANDLERS['memex_case_submit'] = handle_case_submit
 ALL_SCHEMAS.append(PROC_CREATE_SCHEMA)
 ALL_SCHEMAS.append(PROC_UPSERT_SCHEMA)
 ALL_SCHEMAS.append(PROC_GET_SCHEMA)
@@ -5127,4 +5187,4 @@ ALL_SCHEMAS.append(PROC_GET_BY_IDENTITY_SCHEMA)
 ALL_SCHEMAS.append(PROC_UPDATE_SCHEMA)
 ALL_SCHEMAS.append(PROC_DEPRECATE_SCHEMA)
 ALL_SCHEMAS.append(PROC_SEARCH_SCHEMA)
-ALL_SCHEMAS.append(PROC_BRIEFING_CARDS_SCHEMA)
+ALL_SCHEMAS.append(CASE_SUBMIT_SCHEMA)

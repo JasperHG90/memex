@@ -320,14 +320,17 @@ def test_agentic_profile_includes_v7_procedural_doctrine(profile: str) -> None:
     out = _run(profile)
     # Identity marker of the V7 block.
     assert '## Procedural plane' in out
-    # The three procedural kinds.
-    assert '`case`' in out
+    # The two procedural kinds — cases are NOTES via memex_case_submit.
     assert '`procedure`' in out
     assert '`strategy`' in out
+    assert 'memex_case_submit' in out
     # Identity-anchor rule (UNIQUE on (kind, scope, verb, context)).
     assert '(kind, scope, verb, context)' in out
-    # At least one tool name from the 8-tool procedural surface.
+    # At least one tool name from the procedural surface.
     assert 'memex_procedural_create' in out
+    # The agent-facing briefing tool is gone — cards arrive in the
+    # session briefing (JG decision 2026-06-10).
+    assert 'memex_procedural_briefing_cards' not in out
 
 
 @pytest.mark.parametrize('profile', ['universal', 'mcp'])

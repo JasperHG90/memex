@@ -227,23 +227,29 @@ MEMEX_KV_LIST_DESC = (
 
 
 # ---------------------------------------------------------------------------
-# Procedural plane. Identity-anchor doctrine (case/procedure/strategy +
-# pin chain + status lifecycle) lives in agent_surface.PROCEDURAL_PLANE;
-# these descriptions are Tier 1a contract only.
+# Procedural plane. Identity-anchor doctrine (procedure/strategy + pin
+# chain + status lifecycle + the cases-are-notes rule) lives in
+# agent_surface.PROCEDURAL_PLANE; these descriptions are Tier 1a
+# contract only. Cases are NOT plane entries — memex_case_submit files
+# them as notes. There is NO briefing tool: pinned cards arrive inside
+# the session briefing automatically.
 # ---------------------------------------------------------------------------
 
 
 MEMEX_PROCEDURAL_CREATE_DESC = (
-    'Write a new procedural entry.\n'
+    'Write a new procedural entry (procedure or strategy — NOT cases; '
+    'cases are notes, use memex_case_submit).\n'
     '\n'
-    'Required: vault_id, kind ("case"|"procedure"|"strategy"), scope, title, '
-    'summary. Procedure+strategy REQUIRE verb+context; cases MUST omit both. '
-    'Optional: body, trigger (REQUIRED for cases — needed to be findable), '
-    'tags, extra_metadata, origin.\n'
+    'Required: vault_id, kind ("procedure"|"strategy"), scope ("global" | '
+    '"project:<id>" | "app:<id>" — NO user scope), title, summary, trigger '
+    '(the when_to_use phrase retrieval anchors on). Procedure REQUIRES '
+    'verb+context; strategy REQUIRES verb and FORBIDS context (a strategy '
+    'groups all procedures sharing scope+verb). Optional: body, tags, '
+    'extra_metadata, origin.\n'
     '\n'
-    'Identity-anchor conflict (procedure+strategy with same kind/scope/verb/'
-    'context already exists) → 409. Use memex_procedural_upsert for '
-    'idempotent writes, or memex_procedural_get_by_identity to probe first.'
+    'Identity-anchor conflict (same kind/scope/verb/context already '
+    'exists) → 409. Use memex_procedural_upsert for idempotent writes, or '
+    'memex_procedural_get_by_identity to probe first.'
 )
 
 
@@ -257,7 +263,8 @@ MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESC = (
     'Fetch a single entry by its (kind, scope, verb, context) identity '
     'anchor. Returns the entry or null. Hot path for "did we already learn '
     'this?" probes before memex_procedural_create. 400 on shape mismatch '
-    '(e.g. verb supplied for a case).'
+    '(e.g. context supplied for a strategy — strategies anchor on '
+    'scope+verb only).'
 )
 
 
@@ -292,11 +299,21 @@ MEMEX_PROCEDURAL_SEARCH_DESC = (
 )
 
 
-MEMEX_PROCEDURAL_BRIEFING_CARDS_DESC = (
-    'Pin-chain briefing cards. Required: context_keys. Optional: scope, '
-    'limit_per_context (default 5). One card per pinned entry ordered by '
-    'pin position. Use for the "what you should know going in" block of a '
-    'session briefing.'
+MEMEX_CASE_SUBMIT_DESC = (
+    'Submit a worked episode as a case — the intentional capture of "what '
+    'happened" after a multi-step task, a diagnosed bug, or a resolved '
+    'incident. Cases are NOTES in a hidden system vault, never procedural '
+    'entries.\n'
+    '\n'
+    'Required: title, trigger (what kicked the episode off), outcome '
+    '("success"|"failure"|"mixed"). Recommended: situation, actions (ordered '
+    'steps), lesson, project_id (provenance), case_of (UUID of the procedure '
+    'you just enacted — supply it whenever you know; it skips the assignment '
+    'judge).\n'
+    '\n'
+    'Without case_of the server judges which procedure the case instances; '
+    'contested judgments land in the lint queue (result.assignment.mode='
+    '"escalated" + finding_id) — resolve via lint tools or leave for review.'
 )
 
 
@@ -345,7 +362,7 @@ MEMEX_SUBMIT_LINT_PROPOSAL_DESC = (
 
 
 __all__ = [
-    'MEMEX_PROCEDURAL_BRIEFING_CARDS_DESC',
+    'MEMEX_CASE_SUBMIT_DESC',
     'MEMEX_PROCEDURAL_CREATE_DESC',
     'MEMEX_PROCEDURAL_DEPRECATE_DESC',
     'MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESC',

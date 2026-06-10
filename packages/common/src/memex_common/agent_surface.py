@@ -206,23 +206,23 @@ Ambiguous? ASK before writing.
 PROCEDURAL_PLANE = """## Procedural plane
 
 <critical_constraint name="procedural_routing">
-A learning that should survive across sessions — a worked procedure, a recurring case shape, a project strategy → `memex_procedural_create`. NOT `memex_add_note` (that's for facts that flow through extraction) and NOT `memex_kv_put` (operational pointers / settings). Rule: "this is how to do X" → procedural. "X is the case" → note.
+"This is how to do X" (worked HOWTO, project play-book) → `memex_procedural_create`. A worked EPISODE — what just happened, with outcome (finished a multi-step task, diagnosed a bug, resolved an incident) → `memex_case_submit`. Plain facts → `memex_add_note`. Operational pointers / settings → `memex_kv_put`.
 </critical_constraint>
 
-Three kinds under one identity anchor `(kind, scope, verb, context)`:
-- `case` — recurring failure/scenario shape. `verb`+`context` NULL. `trigger` REQUIRED (the signal).
-- `procedure` — worked HOWTO. `verb`+`context` REQUIRED. `trigger` optional.
-- `strategy` — higher-order tactic. `verb`+`context` REQUIRED. `trigger` optional.
+Two kinds under one identity anchor `(kind, scope, verb, context)`:
+- `procedure` — worked HOWTO. `verb`+`context` REQUIRED.
+- `strategy` — higher-order tactic generalising the procedures that share its `(scope, verb)`. `verb` REQUIRED, `context` FORBIDDEN.
+`trigger` (when_to_use / when_to_apply) REQUIRED on create — it is what retrieval matches. Scope: `global` | `project:<id>` | `app:<id>` — there is NO user scope.
 
 <critical_constraint name="procedural_identity_anchor">
-`procedure` and `strategy` UNIQUE on `(kind, scope, verb, context)` → re-submit returns 409. Probe with `memex_procedural_get_by_identity` BEFORE `create`, or use `memex_procedural_upsert` for idempotent re-writes.
+Anchors are UNIQUE → re-submit returns 409. Probe with `memex_procedural_get_by_identity` BEFORE `create`, or use `memex_procedural_upsert` for idempotent re-writes.
 </critical_constraint>
 
-Pin chain: `global → project:<id> → app:<id>` (most specific wins). `memex_procedural_briefing_cards(context_keys=[…])` unions pins across the supplied contexts — pass `["global", f"project:{vault.project_id}", f"app:{identity}"]` to render the briefing's procedural slot.
+Cases are NOTES, never plane entries. `memex_case_submit(title, trigger, actions, outcome, lesson, case_of?)` files the episode into a hidden system vault; pass `case_of=<entry-id>` when you know which procedure you just enacted (you usually do — you retrieved it). Contested assignments land in the lint queue (`assignment.mode="escalated"`).
 
-`status` defaults to `published` for new writes. `memex_procedural_search` defaults to `status="published"`; pass `status="all"` for drafts. `memex_procedural_deprecate(superseded_by_id=…)` soft-deletes (drops from search, remains reachable via `get`).
+Pinned procedure cards arrive automatically inside your session briefing — there is no briefing tool to call. Curation (pin/unpin) is an operator surface.
 
-`memex_procedural_update` edits content on the SAME identity (new version row). To change identity, create+deprecate — the anchor is immutable."""
+`status` defaults to `published` for new writes. `memex_procedural_search` defaults to `status="published"`; pass `status="all"` for drafts. `memex_procedural_deprecate(superseded_by_id=…)` soft-deletes. `memex_procedural_update` edits content on the SAME identity (new version row) — the anchor is immutable."""
 
 
 CITATIONS = """## Citations

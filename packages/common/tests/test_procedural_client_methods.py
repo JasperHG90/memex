@@ -37,9 +37,12 @@ def _public_methods(cls):
     }
 
 
-def test_client_exposes_eight_procedural_methods():
+def test_client_exposes_the_procedural_surface():
     methods = {name for name in _public_methods(RemoteMemexAPI) if name.startswith('procedural_')}
     expected = {
+        # briefing_cards remains a CLI/eval/operator read — the
+        # AGENT-facing briefing tool is gone (cards arrive inside the
+        # session briefing), but the HTTP composition surface stays.
         'procedural_briefing_cards',
         'procedural_create',
         'procedural_deprecate',
@@ -48,6 +51,12 @@ def test_client_exposes_eight_procedural_methods():
         'procedural_search',
         'procedural_update',
         'procedural_upsert',
+        # Curation + version-ledger surface (§18.8 / §19.8).
+        'procedural_pin',
+        'procedural_unpin',
+        'procedural_list_pins',
+        'procedural_list_versions',
+        'procedural_rollback',
     }
     assert methods == expected, (
         f'Procedural client surface drift.\n  Expected: {sorted(expected)}\n  '
@@ -55,13 +64,19 @@ def test_client_exposes_eight_procedural_methods():
     )
 
 
-def test_client_does_not_expose_legacy_procedural_methods():
+def test_client_exposes_case_submit():
+    """Cases are notes — the submission path is its own method, not a
+    procedural_* plane write (§18.3 / §18.9.0)."""
+    assert 'case_submit' in _public_methods(RemoteMemexAPI)
+
+
+def test_client_does_not_expose_legacy_experiential_methods():
     """The legacy engine-internal name must NOT leak into the public
-    client surface — agents and the CLI call this the 'procedural'
-    plane, and the method names must match."""
+    client surface — the plane is named *procedural* everywhere
+    (JG directive 2026-06-10)."""
     methods = _public_methods(RemoteMemexAPI)
-    assert not any(name.startswith('procedural_') for name in methods), (
-        'RemoteMemexAPI must not expose legacy `procedural_*` methods '
+    assert not any(name.startswith('experiential_') for name in methods), (
+        'RemoteMemexAPI must not expose legacy `experiential_*` methods '
         '— the public surface is the procedural plane.'
     )
 

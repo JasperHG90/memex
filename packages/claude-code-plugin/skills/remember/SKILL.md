@@ -10,9 +10,9 @@ argument-hint: "[what to remember]"
 
 2. **Route by shape, NOT by trigger word** — this is the most important step. Pick the storage layer first:
    - **Preferences / conventions / settings** ("I prefer X", "we use Y in this repo", "for Claude Code: dark theme", "company-wide: Python 3.12") → `memex_kv_put` with the scope-qualifier-derived namespace (`user:`, `project:<id>:`, `app:<app-id>:`, `global:`). See KV-namespace rules in the system prompt. **Do NOT save these as notes.**
-   - **Learned how-tos / procedures** (how to rotate creds, how to deploy, audit checklist) → **`memex_procedural_create`** on the V7 procedural plane (see "Procedural memory" below). The KV-namespace procedure convention (`<scope>:procedure:<verb>:<context>`) is the legacy path; prefer the procedural plane when the V7 MCP tools are available — they carry the identity anchor `(kind, scope, verb, context)`, versioned writes, lifecycle states, and pin-chain briefings.
-   - **Cases / trigger signals** (a recurring failure pattern the agent should watch for: "when CI returns 500 after step 3", "when Stripe webhook delivers duplicate events") → **`memex_procedural_create` with `kind="case"` and a `trigger` field**. Cases are pin-chain-friendly and surface in `memex_procedural_briefing_cards`.
-   - **Strategies** (a procedure paired with a trigger: "on prod outage: do X") → **`memex_procedural_create` with `kind="strategy"`** — verb+context for the procedure, trigger for the auto-fire condition.
+   - **Learned how-tos / procedures** (how to rotate creds, how to deploy, audit checklist) → **`memex_procedural_create`** on the V7 procedural plane (see "Procedural memory" below). The KV-namespace procedure convention (`<scope>:procedure:<verb>:<context>`) is the legacy path; prefer the procedural plane when the V7 MCP tools are available — they carry the identity anchor `(kind, scope, verb, context)`, versioned writes, and lifecycle states.
+   - **Worked episodes / cases** (you just finished a multi-step task, diagnosed a bug, or resolved an incident, and the episode is worth remembering) → **`memex_case_submit`** — composes the episode template (trigger / situation / actions / outcome / lesson) and files it as a case NOTE in a hidden system vault. Pass `case_of=<entry-id>` when you know which procedure you enacted (you usually do — you retrieved it). NOT `memex_procedural_create` — cases are not plane entries.
+   - **Strategies** (a higher-order tactic generalising several procedures: "treat every deploy as reversible-first") → **`memex_procedural_create` with `kind="strategy"`** — verb required, context FORBIDDEN (a strategy covers all procedures sharing scope+verb).
    - **Facts / decisions / context / observations** that belong as a paragraph → `memex_add_note` (or `memex_append_note` to extend an existing note). Use the note-format guidance below.
 
 3. **Note format** (only when step 2 picked `memex_add_note`):
@@ -69,48 +69,51 @@ For how-tos, write to `<scope>:procedure:<verb>:<context-tag>` (scope = `global`
 
 The V7 procedural plane is the canonical home for "how to do X" knowledge — distinct from notes (long-form prose) and KV (preferences / bindings). It carries an identity anchor, versioned writes, and a pin-chain briefing surface.
 
-**8 tools** (all available via the `memex` MCP server — exposed automatically by the plugin's `.mcp.json`):
+**Tools** (exposed automatically by the plugin's `.mcp.json`):
 
 | Tool | When |
 | --- | --- |
-| `memex_procedural_create` | Write a new entry. Required: `kind`, `scope`, `title`, `summary`. Procedure+strategy REQUIRE `verb`+`context`; case MUST omit both and supplies a `trigger` instead. 409 on identity-anchor collision — use `memex_procedural_get_by_identity` to probe first. |
-| `memex_procedural_upsert` | Idempotent write on the anchor. Same shape as `create`. Use when retrying after an uncertain 409. |
+| `memex_procedural_create` | Write a new entry. Required: `kind` (`procedure`\|`strategy`), `scope`, `title`, `summary`, `trigger` (the when-to-use phrase retrieval anchors on). Procedure REQUIRES `verb`+`context`; strategy REQUIRES `verb` and FORBIDS `context`. 409 on anchor collision — probe first. |
+| `memex_procedural_upsert` | Idempotent write on the anchor. Same shape as `create`. |
 | `memex_procedural_get` | Fetch a single entry by UUID. |
-| `memex_procedural_get_by_identity` | Look up by `(kind, scope, verb, context)`. Returns `null` on miss — the cheap "did we already learn this?" probe. **Always call this before `create` to avoid 409s.** |
-| `memex_procedural_update` | Mutate an entry in place (appends a version row). At least one of `title`, `summary`, `body`, `trigger`, `tags`, `extra_metadata`, `status` must be supplied. The identity anchor is immutable. |
-| `memex_procedural_deprecate` | Soft-deprecate (status → `deprecated`). Optional `superseded_by_id` for the supersession chain. |
-| `memex_procedural_search` | Hybrid BM25 + vector search (RRF-merged). Required: `query`. Optional: `kind`, `scope`, `status` (default `"published"`), `top_k`, `include_pin_chain`, `pin_contexts`, `bm25_weight`. |
-| `memex_procedural_briefing_cards` | Pin-chain briefing cards. Required: `context_keys` (non-empty list). One card per pinned entry. Use to load the "what you should know going in" block at session start. |
+| `memex_procedural_get_by_identity` | Look up by `(kind, scope, verb, context)`. Returns `null` on miss — the cheap "did we already learn this?" probe. **Always call this before `create`.** |
+| `memex_procedural_update` | Mutate in place (appends a version row). The identity anchor is immutable. |
+| `memex_procedural_deprecate` | Soft-deprecate (status → `deprecated`). Optional `superseded_by_id`. |
+| `memex_procedural_search` | Hybrid BM25 + vector search (RRF-merged). Required: `query`. |
+| `memex_case_submit` | File a worked episode as a case NOTE (hidden system vault). Required: `title`, `trigger`, `outcome`. Pass `case_of` when known; contested assignments land in the lint queue (`assignment.mode="escalated"`). |
 
 **Kind matrix** (the load-bearing piece):
 
-- `kind="case"` — a trigger signal. `verb` and `context` MUST be omitted. `trigger` is required. E.g. "When CI returns 500 after step 3: do X" → case with `trigger="CI returns 500 after step 3"`.
 - `kind="procedure"` — a how-to. `verb` and `context` REQUIRED. E.g. `verb="rotate", context="creds"`.
-- `kind="strategy"` — a procedure + trigger. `verb` and `context` REQUIRED (the procedure part), `trigger` optional (the auto-fire condition).
+- `kind="strategy"` — a higher-order tactic covering all procedures that share `(scope, verb)`. `verb` REQUIRED, `context` FORBIDDEN.
+- Cases are NOT a kind — a worked episode goes through `memex_case_submit` as a note.
 
-**Scope matrix** (the pin chain, most-specific wins):
+**Scope matrix** (also the pin-chain context grammar):
 
-- `global` — cross-vault convention.
-- `user` — single-user.
+- `global` — cross-project convention.
 - `project:<id>` — one project.
 - `app:<id>` — one application (e.g. `app:claude-code`).
+- There is NO `user` scope — per-user briefing curation is done by pinning (an operator surface), not by scoping entries.
 
-**Write-before-read rule** (the load-bearing operational pattern):
+**Read-before-write rule** (the load-bearing operational pattern):
 
 ```
 # 1. probe for an existing entry on the anchor
 existing = memex_procedural_get_by_identity(kind="procedure", scope="global", verb="rotate", context="creds")
 # 2. if None → create; if not None → update (or upsert if unsure)
 if existing is None:
-    memex_procedural_create(kind="procedure", scope="global", verb="rotate", context="creds", ...)
+    memex_procedural_create(kind="procedure", scope="global", verb="rotate", context="creds", trigger="rotating the project API credentials", ...)
 else:
-    memex_procedural_update(entry_id=existing["id"], title=..., body=...)
+    memex_procedural_update(entry_id=existing["id"], body=...)
 ```
+
+**Briefing**: pinned procedure cards arrive automatically inside the SessionStart briefing (the plugin passes `--app claude-code` so the `app:claude-code` pin context is included). There is no briefing tool to call.
 
 **When to choose procedural vs. KV vs. note**:
 
-- **Procedural** — "how to do X" with an identity anchor. Discoverable by search. Briefing-eligible.
-- **KV** (`<scope>:procedure:<verb>:<context>`) — legacy procedure path. Still works but lacks search, briefings, and lifecycle.
+- **Procedural** — "how to do X" with an identity anchor. Discoverable by search; pinnable into briefings.
+- **Case** — "what just happened" with an outcome → `memex_case_submit`.
+- **KV** (`<scope>:procedure:<verb>:<context>`) — legacy procedure path. Read-only fallback.
 - **Note** — long-form prose, context, decisions, history. NOT a procedure.
 
 ## Consolidation

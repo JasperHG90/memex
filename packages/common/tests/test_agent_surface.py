@@ -309,16 +309,25 @@ def test_compose_with_procedural_includes_v7_doctrine() -> None:
     out = ags.compose_with_procedural()
     # The doctrine block's identity marker.
     assert '## Procedural plane' in out
-    # The three procedural kinds.
-    assert '`case`' in out
+    # The two procedural kinds — cases are NOTES, not plane entries.
     assert '`procedure`' in out
     assert '`strategy`' in out
+    assert 'Cases are NOTES' in out
+    # Strategy anchor: (scope, verb) only — context forbidden (§18.1).
+    assert 'FORBIDDEN' in out
+    # No user scope on the plane.
+    assert 'NO user scope' in out
     # The identity-anchor rule (UNIQUE on (kind, scope, verb, context)).
     assert '(kind, scope, verb, context)' in out
-    # The pin chain — most specific wins.
+    # The scope/pin grammar.
     assert 'global' in out and 'project' in out and 'app' in out
-    # Briefing-cards pin-chain probe.
-    assert 'memex_procedural_briefing_cards' in out
+    # Cases enter via case_submit, with explicit case_of preferred.
+    assert 'memex_case_submit' in out
+    assert 'case_of' in out
+    # There is NO agent-facing briefing tool — cards arrive in the
+    # session briefing (JG decision 2026-06-10).
+    assert 'memex_procedural_briefing_cards' not in out
+    assert 'session briefing' in out
     # Idempotent re-writes via upsert.
     assert 'memex_procedural_upsert' in out
     # Pre-flight probe to avoid 409.

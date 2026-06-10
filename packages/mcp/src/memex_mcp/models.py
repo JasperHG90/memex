@@ -496,7 +496,7 @@ class McpProceduralEntry(BaseModel):
 
     id: UUID
     vault_id: UUID
-    kind: Literal['case', 'procedure', 'strategy']
+    kind: Literal['procedure', 'strategy']
     scope: str
     verb: str | None = None
     context: str | None = None
@@ -523,7 +523,7 @@ class McpProceduralSearchHit(BaseModel):
     model_config = {'extra': 'forbid'}
 
     entry_id: UUID
-    kind: Literal['case', 'procedure', 'strategy']
+    kind: Literal['procedure', 'strategy']
     score: float
     matched_via: Literal['bm25', 'vector', 'pin', 'rrf']
     title: str
@@ -546,24 +546,22 @@ class McpProceduralSearchResult(BaseModel):
     took_ms: float = 0.0
 
 
-class McpProceduralBriefingCard(BaseModel):
-    """One card in the briefing's procedural slot."""
+class McpCaseSubmitResult(BaseModel):
+    """Result envelope for memex_case_submit.
+
+    ``assignment_mode='escalated'`` means a contested assignment landed
+    in the lint queue (``finding_id``) — resolve via the lint tools or
+    leave it for human review (file-then-lint).
+    """
 
     model_config = {'extra': 'forbid'}
 
-    entry_id: UUID
-    kind: Literal['case', 'procedure', 'strategy']
-    title: str
-    summary: str
-    scope: str
-    pin_position: int
-    matched_via: Literal['pin'] = 'pin'
-
-
-class McpProceduralBriefingResult(BaseModel):
-    """Enveloped cards from memex_procedural_briefing_cards."""
-
-    model_config = {'extra': 'forbid'}
-
-    cards: list[McpProceduralBriefingCard] = Field(default_factory=list)
-    total: int = 0
+    note_id: UUID
+    vault_id: UUID
+    assignment_mode: Literal[
+        'explicit', 'auto_assigned', 'new_procedure_draft', 'escalated', 'skipped'
+    ]
+    entry_id: UUID | None = None
+    finding_id: UUID | None = None
+    separation: str | None = None
+    reasoning: str | None = None

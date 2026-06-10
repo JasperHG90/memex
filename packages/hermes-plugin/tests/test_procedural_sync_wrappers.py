@@ -19,6 +19,7 @@ from unittest.mock import AsyncMock, MagicMock
 import pytest
 
 from memex_common.procedural_schemas import (
+    CaseSubmit,
     ProceduralEntryCreate,
     ProceduralEntryUpdate,
     ProceduralSearchRequest,
@@ -40,7 +41,7 @@ def _api() -> MagicMock:
         'procedural_update',
         'procedural_deprecate',
         'procedural_search',
-        'procedural_briefing_cards',
+        'case_submit',
     ):
         method = AsyncMock(return_value=sentinel)
         setattr(api, name, method)
@@ -138,27 +139,12 @@ def test_search_forwards_request():
     api.procedural_search.assert_awaited_once_with(request)
 
 
-def test_briefing_cards_forwards_context_keys():
+def test_case_submit_forwards_payload_and_returns_result():
     api = _api()
-    procedural.briefing_cards(
-        api,
-        context_keys=['project:42', 'app:claude-code'],
-        scope='user',
-        limit_per_context=3,
-    )
-    api.procedural_briefing_cards.assert_awaited_once_with(
-        ['project:42', 'app:claude-code'],
-        scope='user',
-        limit_per_context=3,
-    )
-
-
-def test_briefing_cards_default_limit_is_5():
-    """The wrapper's default must match the operator-config default so
-    the briefing surface never silently overshoots the per-context cap."""
-    api = _api()
-    procedural.briefing_cards(api, context_keys=['k'])
-    api.procedural_briefing_cards.assert_awaited_once_with(['k'], scope=None, limit_per_context=5)
+    payload = CaseSubmit.model_construct()  # type: ignore[call-arg]
+    result = procedural.case_submit(api, payload)
+    assert result is api.case_submit.return_value
+    api.case_submit.assert_awaited_once_with(payload)
 
 
 def test_custom_timeout_is_honored(monkeypatch):
@@ -206,7 +192,7 @@ def test_default_timeout_is_30s():
         'update',
         'deprecate',
         'search',
-        'briefing_cards',
+        'case_submit',
     ],
 )
 def test_all_eight_procedural_methods_exposed(fn_name):
@@ -228,6 +214,6 @@ def test_eight_methods_in_dunder_all():
             'update',
             'deprecate',
             'search',
-            'briefing_cards',
+            'case_submit',
         ]
     )

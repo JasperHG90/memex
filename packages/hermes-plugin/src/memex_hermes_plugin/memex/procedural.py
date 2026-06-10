@@ -16,7 +16,7 @@ The eight methods here mirror the HTTP routes 1:1 (see V7 design §6):
 * ``update``       → PATCH  /procedural/{id}
 * ``deprecate``    → POST   /procedural/{id}/deprecate
 * ``search``       → POST   /procedural/search
-* ``briefing_cards`` → POST  /procedural/briefing-cards
+* ``case_submit``  → POST   /cases
 
 All eight accept and return the same DTOs the async client does — the
 sync wrapper is purely a coroutine-marshalling shim, not a re-shape.
@@ -29,7 +29,8 @@ from typing import Any
 from uuid import UUID
 
 from memex_common.procedural_schemas import (
-    ProceduralBriefingCards,
+    CaseSubmit,
+    CaseSubmitResult,
     ProceduralEntryCreate,
     ProceduralEntryDTO,
     ProceduralEntryUpdate,
@@ -138,27 +139,19 @@ def search(
     return run_sync(api.procedural_search(request), timeout=timeout)
 
 
-def briefing_cards(
+def case_submit(
     api: Any,
-    context_keys: list[ShortLabel],
+    payload: CaseSubmit,
     *,
-    scope: ShortLabel | None = None,
-    limit_per_context: int = 5,
     timeout: float = _DEFAULT_TIMEOUT,
-) -> ProceduralBriefingCards:
-    """Pin-chain briefing cards for the session-briefing surface.
+) -> CaseSubmitResult:
+    """Submit a worked episode as a case (V7 §5.1).
 
-    One card per pinned entry, ordered by pin position. The list of
-    ``context_keys`` MUST be non-empty (the HTTP route enforces
-    ``min_length=1``); passing an empty list here is a programming
-    error and will surface as a 422 from the server.
+    The note lands in the hidden ``procedural`` system vault with
+    ``role='case'``; assignment runs synchronously (explicit ``case_of``
+    / judge auto-assign / lint escalation — see the result envelope).
     """
-    return run_sync(
-        api.procedural_briefing_cards(
-            context_keys, scope=scope, limit_per_context=limit_per_context
-        ),
-        timeout=timeout,
-    )
+    return run_sync(api.case_submit(payload), timeout=timeout)
 
 
 __all__ = [
@@ -169,5 +162,5 @@ __all__ = [
     'update',
     'deprecate',
     'search',
-    'briefing_cards',
+    'case_submit',
 ]

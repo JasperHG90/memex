@@ -19,8 +19,8 @@ argument-hint: "[search query]"
 3. **Present results**: summarize clearly, include source Note IDs.
 
 4. **Procedure recall**: for "how do I X?" queries, check the procedural plane first, then fall back to KV:
-   - **Procedural plane (preferred)**: `memex_procedural_search(query="...", kind="procedure")` for hybrid BM25+vector search; `memex_procedural_get_by_identity(kind="procedure", scope="global", verb="...", context="...")` for an exact anchor lookup. The plane carries `case` / `procedure` / `strategy` kinds and an identity anchor.
-   - **Briefing surface**: at session start, `memex_procedural_briefing_cards(context_keys=["global", "project:<id>"])` returns the pinned entries the agent should load into working memory.
+   - **Procedural plane (preferred)**: `memex_procedural_search(query="...", kind="procedure")` for hybrid BM25+vector search; `memex_procedural_get_by_identity(kind="procedure", scope="global", verb="...", context="...")` for an exact anchor lookup. The plane carries `procedure` / `strategy` kinds under the identity anchor `(kind, scope, verb, context)`; strategies anchor on `(scope, verb)` with no context.
+   - **Pinned cards**: the highest-value procedures are already in your SessionStart briefing (pin chain `global → project:<id> → app:claude-code`) — answer from there before searching.
    - **KV fallback** (legacy): `memex_kv_list(namespaces=["global:procedure"])` for global procedures; `memex_kv_list(namespaces=["project:<id>:procedure"])` for project-scoped (the trailing `:` is appended server-side) → `memex_kv_get(key)` for active value.
 
 5. **Memory hygiene**: when asked about stale facts, call `memex_get_lint_flags(vault_id=...)`. Act autonomously on low-risk findings. When a finding has `rule_name='propose_contradiction_winner'`, call `memex_lint_apply_winner` after surfacing the proposal to the user.

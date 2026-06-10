@@ -1,15 +1,17 @@
 """Tests for the V7 procedural-plane Hermes handlers.
 
-The procedural plane ships 8 tools (create / upsert / get /
-get_by_identity / update / deprecate / search / briefing_cards). These
-tests pin the Hermes-side handler wiring:
+The procedural plane ships 7 tools (create / upsert / get /
+get_by_identity / update / deprecate / search) plus memex_case_submit
+(cases are NOTES, not plane entries). These tests pin the Hermes-side
+handler wiring:
 
-- Each handler dispatches to the right ``api.procedural_*`` method
-  with the right kwargs.
+- Each handler dispatches to the right ``api.procedural_*`` /
+  ``api.case_submit`` method with the right kwargs.
 - Vault_id is sourced from the session binding, NOT from the agent's
   args (the agent never names a vault directly).
 - The kind/scope/verb/context matrix is enforced at the boundary
-  (case MUST omit verb+context; procedure+strategy REQUIRE both).
+  (procedure REQUIRES verb+context; strategy REQUIRES verb and
+  FORBIDS context).
 - Missing required fields and bad kinds return ``tool_error`` JSON
   without touching the API.
 """
@@ -18,16 +20,17 @@ from __future__ import annotations
 
 import json
 from unittest.mock import AsyncMock, Mock
-from uuid import uuid4
+from uuid import UUID, uuid4
 
 import pytest
 
 from memex_common.procedural_schemas import (
-    ProceduralBriefingCards,
+    CaseAssignment,
+    CaseSubmit,
+    CaseSubmitResult,
     ProceduralEntryDTO,
     ProceduralSearchRequest,
     ProceduralSearchResponse,
-    ProceduralBriefingCard,
     ProceduralSearchHit,
 )
 
@@ -35,7 +38,7 @@ from memex_hermes_plugin.memex.config import HermesMemexConfig
 from memex_hermes_plugin.memex.tools import (
     ALL_SCHEMAS,
     HANDLERS,
-    PROC_BRIEFING_CARDS_SCHEMA,
+    CASE_SUBMIT_SCHEMA,
     PROC_CREATE_SCHEMA,
     PROC_DEPRECATE_SCHEMA,
     PROC_GET_BY_IDENTITY_SCHEMA,
@@ -103,8 +106,8 @@ def _fake_entry_dto(
 # ---------------------------------------------------------------------------
 
 
-def test_all_eight_procedural_schemas_in_all_schemas():
-    """The 8 procedural schemas are in ALL_SCHEMAS so the agent sees them."""
+def test_all_seven_procedural_schemas_in_all_schemas():
+    """The 7 procedural schemas are in ALL_SCHEMAS so the agent sees them."""
     proc_schemas = [s['name'] for s in ALL_SCHEMAS if s['name'].startswith('memex_procedural_')]
     assert proc_schemas == [
         'memex_procedural_create',
@@ -114,12 +117,33 @@ def test_all_eight_procedural_schemas_in_all_schemas():
         'memex_procedural_update',
         'memex_procedural_deprecate',
         'memex_procedural_search',
-        'memex_procedural_briefing_cards',
     ]
 
 
-def test_all_eight_procedural_handlers_registered():
-    """The 8 procedural handlers are wired in HANDLERS so dispatch() routes to them."""
+def test_case_submit_schema_registered():
+    """memex_case_submit is in ALL_SCHEMAS with the CaseSubmit wire shape."""
+    names = [s['name'] for s in ALL_SCHEMAS]
+    assert names.count('memex_case_submit') == 1
+    assert 'memex_procedural_briefing_cards' not in names
+    params = CASE_SUBMIT_SCHEMA['parameters']
+    assert sorted(params['required']) == ['outcome', 'title', 'trigger']
+    assert set(params['properties']) == {
+        'title',
+        'trigger',
+        'situation',
+        'actions',
+        'outcome',
+        'lesson',
+        'project_id',
+        'case_of',
+        'submitted_by',
+        'tags',
+    }
+    assert params['properties']['outcome']['enum'] == ['success', 'failure', 'mixed']
+
+
+def test_all_procedural_handlers_registered():
+    """The 7 plane handlers + case_submit are wired in HANDLERS."""
     for name in (
         'memex_procedural_create',
         'memex_procedural_upsert',
@@ -128,9 +152,10 @@ def test_all_eight_procedural_handlers_registered():
         'memex_procedural_update',
         'memex_procedural_deprecate',
         'memex_procedural_search',
-        'memex_procedural_briefing_cards',
+        'memex_case_submit',
     ):
         assert name in HANDLERS, f'{name} missing from HANDLERS'
+    assert 'memex_procedural_briefing_cards' not in HANDLERS
 
 
 def test_schemas_have_required_fields():
@@ -143,7 +168,7 @@ def test_schemas_have_required_fields():
         PROC_UPDATE_SCHEMA,
         PROC_DEPRECATE_SCHEMA,
         PROC_SEARCH_SCHEMA,
-        PROC_BRIEFING_CARDS_SCHEMA,
+        CASE_SUBMIT_SCHEMA,
     ):
         assert 'name' in schema
         assert 'description' in schema
@@ -175,6 +200,7 @@ def test_create_calls_procedural_create_with_payload(config, vault_id):
             'title': 'rotate API credentials',
             'summary': 'How to rotate creds.',
             'body': 'Step 1: ...',
+            'trigger': 'an API credential is about to expire',
         },
         api=api,
         config=config,
@@ -196,8 +222,8 @@ def test_create_calls_procedural_create_with_payload(config, vault_id):
     assert data['kind'] == 'procedure'
 
 
-def test_create_case_kind_omits_verb_and_context(config, vault_id):
-    """kind="case" MUST omit verb and context. Handler rejects payloads that violate this."""
+def test_create_case_kind_rejected(config, vault_id):
+    """kind="case" no longer exists on the plane — cases go via memex_case_submit."""
     api = Mock()
     api.procedural_create = AsyncMock()
 
@@ -206,8 +232,6 @@ def test_create_case_kind_omits_verb_and_context(config, vault_id):
         {
             'kind': 'case',
             'scope': 'global',
-            'verb': 'rotate',  # WRONG — case has no verb
-            'context': 'creds',
             'title': 'rotation failure',
             'summary': 'When API rotation fails',
             'trigger': 'rotation step 3 returns 500',
@@ -218,7 +242,7 @@ def test_create_case_kind_omits_verb_and_context(config, vault_id):
     )
     data = json.loads(out)
     assert 'error' in data
-    assert 'kind="case"' in data['error']
+    assert 'Invalid kind' in data['error']
     api.procedural_create.assert_not_awaited()
 
 
@@ -235,6 +259,7 @@ def test_create_procedure_kind_requires_verb_and_context(config, vault_id):
             'verb': 'rotate',  # missing context
             'title': 't',
             'summary': 's',
+            'trigger': 'creds about to expire',
         },
         api=api,
         config=config,
@@ -242,7 +267,58 @@ def test_create_procedure_kind_requires_verb_and_context(config, vault_id):
     )
     data = json.loads(out)
     assert 'error' in data
-    assert 'REQUIRE' in data['error']
+    assert 'verb and context' in data['error']
+    api.procedural_create.assert_not_awaited()
+
+
+def test_create_strategy_kind_forbids_context(config, vault_id):
+    """kind="strategy" with a context → tool_error, no API call."""
+    api = Mock()
+    api.procedural_create = AsyncMock()
+
+    out = dispatch(
+        'memex_procedural_create',
+        {
+            'kind': 'strategy',
+            'scope': 'global',
+            'verb': 'rotate',
+            'context': 'creds',  # WRONG — strategies anchor on scope+verb only
+            'title': 't',
+            'summary': 's',
+            'trigger': 'when deciding how to rotate anything',
+        },
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert 'context' in data['error']
+    api.procedural_create.assert_not_awaited()
+
+
+def test_create_requires_trigger(config, vault_id):
+    """trigger is the retrieval key — missing trigger → tool_error, no API call."""
+    api = Mock()
+    api.procedural_create = AsyncMock()
+
+    out = dispatch(
+        'memex_procedural_create',
+        {
+            'kind': 'procedure',
+            'scope': 'global',
+            'verb': 'rotate',
+            'context': 'creds',
+            'title': 't',
+            'summary': 's',
+        },
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert 'trigger' in data['error']
     api.procedural_create.assert_not_awaited()
 
 
@@ -324,6 +400,7 @@ def test_upsert_calls_procedural_upsert(config, vault_id):
             'context': 'creds',
             'title': 'rotate API credentials',
             'summary': 'How to rotate creds.',
+            'trigger': 'an API credential is about to expire',
         },
         api=api,
         config=config,
@@ -425,6 +502,59 @@ def test_get_by_identity_returns_dto_on_hit(config, vault_id):
     assert call.kwargs['verb'] == 'rotate'
     assert call.kwargs['context'] == 'creds'
     assert call.kwargs['vault_id'] == vault_id
+
+
+def test_get_by_identity_requires_verb(config, vault_id):
+    """verb is required for both kinds — missing verb → tool_error, no API call."""
+    api = Mock()
+    api.procedural_get_by_identity = AsyncMock()
+
+    out = dispatch(
+        'memex_procedural_get_by_identity',
+        {'kind': 'procedure', 'scope': 'global', 'context': 'creds'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert 'verb' in data['error']
+    api.procedural_get_by_identity.assert_not_awaited()
+
+
+def test_get_by_identity_procedure_requires_context(config, vault_id):
+    api = Mock()
+    api.procedural_get_by_identity = AsyncMock()
+
+    out = dispatch(
+        'memex_procedural_get_by_identity',
+        {'kind': 'procedure', 'scope': 'global', 'verb': 'rotate'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert 'context' in data['error']
+    api.procedural_get_by_identity.assert_not_awaited()
+
+
+def test_get_by_identity_strategy_forbids_context(config, vault_id):
+    """Strategy anchors on (scope, verb) only — context supplied → tool_error."""
+    api = Mock()
+    api.procedural_get_by_identity = AsyncMock()
+
+    out = dispatch(
+        'memex_procedural_get_by_identity',
+        {'kind': 'strategy', 'scope': 'global', 'verb': 'rotate', 'context': 'creds'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    assert 'omit context' in data['error']
+    api.procedural_get_by_identity.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
@@ -580,54 +710,137 @@ def test_search_rejects_unknown_kind(config, vault_id):
 
 
 # ---------------------------------------------------------------------------
-# briefing_cards — required context_keys list
+# case_submit — cases are notes; assignment envelope returned verbatim
 # ---------------------------------------------------------------------------
 
 
-def test_briefing_cards_requires_non_empty_keys(config, vault_id):
+def _fake_case_submit_result(**assignment_kwargs) -> CaseSubmitResult:
+    return CaseSubmitResult(
+        note_id=uuid4(),
+        vault_id=uuid4(),
+        assignment=CaseAssignment(**{'mode': 'skipped', **assignment_kwargs}),
+    )
+
+
+def test_case_submit_builds_payload_and_dispatches(config, vault_id):
+    """The handler builds a CaseSubmit DTO and routes it to api.case_submit."""
     api = Mock()
-    api.procedural_briefing_cards = AsyncMock()
+    expected = _fake_case_submit_result(mode='explicit')
+    api.case_submit = AsyncMock(return_value=expected)
+
+    case_of = uuid4()
+    out = dispatch(
+        'memex_case_submit',
+        {
+            'title': 'rotation step 3 returned 500',
+            'trigger': 'rotating creds for service X',
+            'situation': 'cert had expired mid-rotation',
+            'actions': ['re-issued cert', 'retried rotation'],
+            'outcome': 'success',
+            'lesson': 'check cert expiry before rotating',
+            'project_id': 'proj-alpha',
+            'case_of': str(case_of),
+            'submitted_by': 'hermes',
+            'tags': ['rotation'],
+        },
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+
+    api.case_submit.assert_awaited_once()
+    call = api.case_submit.await_args
+    assert call is not None
+    payload = call.args[0]
+    assert isinstance(payload, CaseSubmit)
+    assert payload.title == 'rotation step 3 returned 500'
+    assert payload.trigger == 'rotating creds for service X'
+    assert payload.situation == 'cert had expired mid-rotation'
+    assert payload.actions == ['re-issued cert', 'retried rotation']
+    assert payload.outcome == 'success'
+    assert payload.lesson == 'check cert expiry before rotating'
+    assert payload.project_id == 'proj-alpha'
+    assert payload.case_of == case_of  # UUID-parsed, not a raw string
+    assert isinstance(payload.case_of, UUID)
+    assert payload.submitted_by == 'hermes'
+    assert payload.tags == ['rotation']
+
+    data = json.loads(out)
+    assert data['note_id'] == str(expected.note_id)
+    assert data['assignment']['mode'] == 'explicit'
+
+
+def test_case_submit_minimal_payload_omits_optional_fields(config, vault_id):
+    """Only title/trigger/outcome supplied → DTO defaults, no None kwargs."""
+    api = Mock()
+    api.case_submit = AsyncMock(return_value=_fake_case_submit_result())
 
     out = dispatch(
-        'memex_procedural_briefing_cards',
-        {'context_keys': []},
+        'memex_case_submit',
+        {'title': 't', 'trigger': 'tr', 'outcome': 'failure'},
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    call = api.case_submit.await_args
+    assert call is not None
+    payload = call.args[0]
+    assert payload.outcome == 'failure'
+    assert payload.situation == ''
+    assert payload.actions == []
+    assert payload.lesson == ''
+    assert payload.project_id is None
+    assert payload.case_of is None
+    assert payload.submitted_by is None
+    assert payload.tags == []
+    data = json.loads(out)
+    assert data['assignment']['mode'] == 'skipped'
+
+
+def test_case_submit_rejects_invalid_case_of_uuid(config, vault_id):
+    api = Mock()
+    api.case_submit = AsyncMock()
+
+    out = dispatch(
+        'memex_case_submit',
+        {'title': 't', 'trigger': 'tr', 'outcome': 'mixed', 'case_of': 'not-a-uuid'},
         api=api,
         config=config,
         vault_id=vault_id,
     )
     data = json.loads(out)
     assert 'error' in data
-    api.procedural_briefing_cards.assert_not_awaited()
+    assert 'case_of' in data['error']
+    api.case_submit.assert_not_awaited()
 
 
-def test_briefing_cards_calls_procedural_briefing_cards(config, vault_id):
+def test_case_submit_rejects_invalid_outcome(config, vault_id):
     api = Mock()
-    entry = _fake_entry_dto()
-    expected_response = ProceduralBriefingCards(
-        cards=[
-            ProceduralBriefingCard(
-                entry=entry,
-                pin_position=0,
-                context_key='global',
-            )
-        ],
-        context_keys=['global'],
-        total_pinned=1,
-    )
-    api.procedural_briefing_cards = AsyncMock(return_value=expected_response)
+    api.case_submit = AsyncMock()
 
     out = dispatch(
-        'memex_procedural_briefing_cards',
-        {'context_keys': ['global'], 'limit_per_context': 3},
+        'memex_case_submit',
+        {'title': 't', 'trigger': 'tr', 'outcome': 'oops'},
         api=api,
         config=config,
         vault_id=vault_id,
     )
-    api.procedural_briefing_cards.assert_awaited_once()
-    call = api.procedural_briefing_cards.await_args
-    assert call is not None
-    assert call.args[0] == ['global']
-    assert call.kwargs['limit_per_context'] == 3
     data = json.loads(out)
-    assert data['total_pinned'] == 1
-    assert len(data['cards']) == 1
+    assert 'error' in data
+    api.case_submit.assert_not_awaited()
+
+
+def test_case_submit_missing_required_fields(config, vault_id):
+    api = Mock()
+    api.case_submit = AsyncMock()
+
+    out = dispatch(
+        'memex_case_submit',
+        {'title': 't'},  # missing trigger + outcome
+        api=api,
+        config=config,
+        vault_id=vault_id,
+    )
+    data = json.loads(out)
+    assert 'error' in data
+    api.case_submit.assert_not_awaited()

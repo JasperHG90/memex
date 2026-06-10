@@ -207,7 +207,7 @@ def test_get_tool_schemas_in_hybrid_mode(provider_with_stubbed_api):
         'memex_memory_consolidate',
         # Tier A WS-history (F49 — contradiction-graph timeline)
         'memex_get_unit_history',
-        # V7 — Procedural plane (case / procedure / strategy)
+        # V7 — Procedural plane (procedure / strategy) + case submission
         'memex_procedural_create',
         'memex_procedural_upsert',
         'memex_procedural_get',
@@ -215,7 +215,7 @@ def test_get_tool_schemas_in_hybrid_mode(provider_with_stubbed_api):
         'memex_procedural_update',
         'memex_procedural_deprecate',
         'memex_procedural_search',
-        'memex_procedural_briefing_cards',
+        'memex_case_submit',
     }
     assert names == expected
 
@@ -299,7 +299,7 @@ class TestGetToolSchemasBeforeInitialize:
             'memex_memory_consolidate',
             # Tier A WS-history (F49 — contradiction-graph timeline)
             'memex_get_unit_history',
-            # V7 — Procedural plane (case / procedure / strategy)
+            # V7 — Procedural plane (procedure / strategy) + case submission
             'memex_procedural_create',
             'memex_procedural_upsert',
             'memex_procedural_get',
@@ -307,7 +307,7 @@ class TestGetToolSchemasBeforeInitialize:
             'memex_procedural_update',
             'memex_procedural_deprecate',
             'memex_procedural_search',
-            'memex_procedural_briefing_cards',
+            'memex_case_submit',
         }
         assert names == expected
 

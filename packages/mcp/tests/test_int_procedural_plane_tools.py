@@ -24,8 +24,6 @@ from unittest.mock import AsyncMock
 import pytest
 
 from memex_common.procedural_schemas import (
-    ProceduralBriefingCard,
-    ProceduralBriefingCards,
     ProceduralEntryDTO,
     ProceduralSearchHit,
     ProceduralSearchRequest,
@@ -109,18 +107,6 @@ def _make_search_response(*, entries: list[ProceduralEntryDTO]) -> ProceduralSea
         total=len(entries),
         truncated=False,
         took_ms=12.3,
-    )
-
-
-def _make_briefing_cards_response(
-    *, cards: list[ProceduralBriefingCard]
-) -> ProceduralBriefingCards:
-    """Build a briefing-cards response with the entry nested under
-    .entry. The MCP tool must project ``c.entry.id`` etc."""
-    return ProceduralBriefingCards(
-        cards=cards,
-        context_keys=['global'],
-        total_pinned=len(cards),
     )
 
 
@@ -282,118 +268,110 @@ async def test_mcp_search_projects_entry_attributes(mock_api, mock_config, mcp_c
 
 
 # ---------------------------------------------------------------------------
-# memex_procedural_briefing_cards — DTO projection + vault_id threading
+# memex_case_submit — result projection + assignment surfacing
 # ---------------------------------------------------------------------------
 
 
-async def test_mcp_briefing_cards_projects_entry_attributes(mock_api, mock_config, mcp_client):
-    """The MCP briefing_cards tool projects ``c.entry.id``,
-    ``c.entry.title``, etc. Same DTO-nesting bug as the search
-    tool — the briefing surface was crashing on every call.
-    """
+async def test_mcp_case_submit_projects_result(mock_api, mock_config, mcp_client):
+    """The MCP case_submit tool flattens the CaseSubmitResult envelope:
+    note/vault ids + the assignment block (mode, entry, finding,
+    separation) so the agent can see whether a lint finding needs
+    attention without a second call."""
     from uuid import uuid4
 
-    entry = _make_entry_dto(
-        entry_id=uuid4(),
-        title='pinned procedure',
-        kind='procedure',
-        scope='global',
-        verb='rotate',
-        context='creds',
-    )
-    briefing_card = ProceduralBriefingCard(
-        entry=entry,
-        pin_position=0,
-        context_key='global',
-    )
-    response = _make_briefing_cards_response(cards=[briefing_card])
+    from memex_common.procedural_schemas import CaseAssignment, CaseSubmitResult
 
-    facade = AsyncMock()
-    facade.briefing_cards = AsyncMock(return_value=response)
-    mock_api.procedural = facade
+    note_id, vault_id, entry_id = uuid4(), uuid4(), uuid4()
+    cases = AsyncMock()
+    cases.submit = AsyncMock(
+        return_value=CaseSubmitResult(
+            note_id=note_id,
+            vault_id=vault_id,
+            assignment=CaseAssignment(
+                mode='auto_assigned',
+                entry_id=entry_id,
+                separation='clean',
+                reasoning='matched the rotate/creds candidate',
+            ),
+        )
+    )
+    mock_api.cases = cases
 
     result = await mcp_client.call_tool(
-        'memex_procedural_briefing_cards',
+        'memex_case_submit',
         {
-            'context_keys': ['global'],
+            'payload': {
+                'title': 'Rotated the API creds',
+                'trigger': 'rotating the project API credentials',
+                'actions': ['issued new key', 'updated CI', 'rolled old key'],
+                'outcome': 'success',
+            },
         },
     )
 
-    facade.briefing_cards.assert_awaited_once()
+    cases.submit.assert_awaited_once()
+    submitted = cases.submit.await_args.args[0]
+    assert submitted.title == 'Rotated the API creds'
+    assert submitted.outcome == 'success'
+
     parsed = result.structured_content or {}
-    cards = parsed.get('cards', [])
-    assert len(cards) == 1
-    c0 = cards[0]
-    assert c0['title'] == 'pinned procedure'
-    assert c0['kind'] == 'procedure'
-    assert c0['entry_id'] == str(entry.id)
-    assert c0['pin_position'] == 0
-    assert c0['matched_via'] == 'pin'
+    assert parsed['note_id'] == str(note_id)
+    assert parsed['vault_id'] == str(vault_id)
+    assert parsed['assignment_mode'] == 'auto_assigned'
+    assert parsed['entry_id'] == str(entry_id)
+    assert parsed['separation'] == 'clean'
 
 
-async def test_mcp_briefing_cards_threads_vault_id(mock_api, mock_config, mcp_client):
-    """The MCP briefing_cards tool accepts a ``vault_id`` parameter and
-    threads it to the facade's ``briefing_cards`` call as the
-    multi-tenancy guardrail.
-
-    A previous regression accepted no vault_id at the MCP boundary
-    and the service call had no filter — a vault-A caller would
-    silently receive vault-B pinned entries in their briefing
-    (a P0 IDOR on the briefing surface, which feeds the agent's
-    working memory).
-    """
+async def test_mcp_case_submit_surfaces_escalation(mock_api, mock_config, mcp_client):
+    """A contested assignment surfaces the lint finding id so the agent
+    can resolve it (file-then-lint, decision #5)."""
     from uuid import uuid4
 
-    facade = AsyncMock()
-    facade.briefing_cards = AsyncMock(return_value=_make_briefing_cards_response(cards=[]))
-    mock_api.procedural = facade
-    # The vault_id string is resolved to a UUID via
-    # ``api.resolve_vault_identifier`` (the standard MCP vault
-    # resolution helper).
-    expected_vault = uuid4()
-    mock_api.resolve_vault_identifier = AsyncMock(return_value=expected_vault)
+    from memex_common.procedural_schemas import CaseAssignment, CaseSubmitResult
 
-    await mcp_client.call_tool(
-        'memex_procedural_briefing_cards',
+    finding_id = uuid4()
+    cases = AsyncMock()
+    cases.submit = AsyncMock(
+        return_value=CaseSubmitResult(
+            note_id=uuid4(),
+            vault_id=uuid4(),
+            assignment=CaseAssignment(
+                mode='escalated',
+                finding_id=finding_id,
+                separation='close_call',
+            ),
+        )
+    )
+    mock_api.cases = cases
+
+    result = await mcp_client.call_tool(
+        'memex_case_submit',
         {
-            'context_keys': ['global'],
-            'vault_id': 'my-vault',
+            'payload': {
+                'title': 'Ambiguous deploy episode',
+                'trigger': 'deploying the new service',
+                'outcome': 'mixed',
+            },
         },
     )
 
-    facade.briefing_cards.assert_awaited_once()
-    call = facade.briefing_cards.await_args
-    assert call is not None
-    kwargs = call.kwargs
-    # The resolved vault_id (UUID, not the string the caller passed)
-    # was threaded through to the facade.
-    assert kwargs.get('vault_id') == expected_vault
-    mock_api.resolve_vault_identifier.assert_awaited_once_with('my-vault')
+    parsed = result.structured_content or {}
+    assert parsed['assignment_mode'] == 'escalated'
+    assert parsed['finding_id'] == str(finding_id)
 
 
-async def test_mcp_briefing_cards_without_vault_id_passes_none(mock_api, mock_config, mcp_client):
-    """Omitting the ``vault_id`` parameter threads ``None`` to the
-    facade — the operator-only cross-vault briefing path. The
-    briefing service applies the strict no-tenant filter only
-    when a non-None vault_id is passed; passing None retains
-    the global result set for operator/CLI contexts.
-    """
+async def test_mcp_briefing_cards_tool_is_gone(mcp_client):
+    """The agent-facing briefing tool MUST NOT exist — pinned cards
+    arrive inside the session briefing (JG decision 2026-06-10).
+    Anything that re-registers it re-introduces the brittle
+    call-a-tool-at-startup pattern."""
+    from fastmcp.exceptions import ToolError as McpToolError
 
-    facade = AsyncMock()
-    facade.briefing_cards = AsyncMock(return_value=_make_briefing_cards_response(cards=[]))
-    mock_api.procedural = facade
-
-    await mcp_client.call_tool(
-        'memex_procedural_briefing_cards',
-        {
-            'context_keys': ['global'],
-        },
-    )
-
-    facade.briefing_cards.assert_awaited_once()
-    call = facade.briefing_cards.await_args
-    assert call is not None
-    kwargs = call.kwargs
-    assert kwargs.get('vault_id') is None
-    # Vault resolution must NOT be called when no vault_id is supplied.
-    mock_api.resolve_vault_identifier.assert_not_awaited()
+    try:
+        await mcp_client.call_tool(
+            'memex_procedural_briefing_cards',
+            {'context_keys': ['global']},
+        )
+        raise AssertionError('memex_procedural_briefing_cards should not be registered')
+    except McpToolError:
+        pass

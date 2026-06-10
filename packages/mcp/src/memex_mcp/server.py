@@ -32,7 +32,7 @@ from memex_mcp._layer_primer_descriptions import (
 from memex_common.agent_surface import MCP_TRANSPORT_INSTRUCTIONS
 from memex_common.vault_utils import ALL_VAULTS_WILDCARD, expand_vault_scope
 from memex_common.tool_descriptions import (
-    MEMEX_PROCEDURAL_BRIEFING_CARDS_DESC as _MEMEX_PROCEDURAL_BRIEFING_CARDS_DESCRIPTION,
+    MEMEX_CASE_SUBMIT_DESC as _MEMEX_CASE_SUBMIT_DESCRIPTION,
     MEMEX_PROCEDURAL_CREATE_DESC as _MEMEX_PROCEDURAL_CREATE_DESCRIPTION,
     MEMEX_PROCEDURAL_DEPRECATE_DESC as _MEMEX_PROCEDURAL_DEPRECATE_DESCRIPTION,
     MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESC as _MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESCRIPTION,
@@ -76,8 +76,7 @@ from memex_mcp.models import (
     McpSurveyResult,
     McpSurveyTopic,
     McpVault,
-    McpProceduralBriefingCard,
-    McpProceduralBriefingResult,
+    McpCaseSubmitResult,
     McpProceduralEntry,
     McpProceduralPin,
     McpProceduralSearchHit,
@@ -86,6 +85,7 @@ from memex_mcp.models import (
     Staleness,
 )
 from memex_common.procedural_schemas import (
+    CaseSubmit,
     ProceduralEntryCreate,
     ProceduralEntryUpdate,
     ProceduralSearchRequest,
@@ -4597,17 +4597,23 @@ async def memex_procedural_get(
 async def memex_procedural_get_by_identity(
     ctx: Context,
     kind: Annotated[
-        Literal['case', 'procedure', 'strategy'],
-        Field(description='Entity kind.'),
+        Literal['procedure', 'strategy'],
+        Field(description='Entity kind. Cases are notes — not on this plane.'),
     ],
-    scope: Annotated[str, Field(description='Scope label (e.g. "global", "project:abc").')],
+    scope: Annotated[
+        str,
+        Field(description='Scope label: "global" | "project:<id>" | "app:<id>" (no user scope).'),
+    ],
     verb: Annotated[
         str | None,
-        Field(description='Action (procedure/strategy). MUST be null for kind="case".'),
+        Field(description='Anchor verb — required for both kinds.'),
     ] = None,
     context: Annotated[
         str | None,
-        Field(description='Situation tag (procedure/strategy). MUST be null for kind="case".'),
+        Field(
+            description='Anchor context — required for procedures; MUST be null for '
+            'strategies (a strategy groups all procedures sharing scope+verb).'
+        ),
     ] = None,
     vault_id: Annotated[
         str | None,
@@ -4617,10 +4623,14 @@ async def memex_procedural_get_by_identity(
     """Fetch a single entry by its (kind, scope, verb, context) identity anchor."""
     try:
         api = get_api(ctx)
-        if kind == 'case' and (verb is not None or context is not None):
-            raise ToolError('kind="case" requires verb=null AND context=null.')
-        if kind in ('procedure', 'strategy') and (not verb or not context):
-            raise ToolError(f'kind="{kind}" requires non-empty verb AND context.')
+        if not verb:
+            raise ToolError(f'kind="{kind}" requires a non-empty verb.')
+        if kind == 'procedure' and not context:
+            raise ToolError('kind="procedure" requires a non-empty context.')
+        if kind == 'strategy' and context is not None:
+            raise ToolError(
+                'kind="strategy" requires context=null — strategies anchor on scope+verb.'
+            )
 
         resolved_vault: UUID | None = None
         if vault_id is not None:
@@ -4809,93 +4819,37 @@ async def memex_procedural_search(
 
 
 @mcp.tool(
-    name='memex_procedural_briefing_cards',
-    description=_MEMEX_PROCEDURAL_BRIEFING_CARDS_DESCRIPTION,
+    name='memex_case_submit',
+    description=_MEMEX_CASE_SUBMIT_DESCRIPTION,
     tags={'storage', 'procedural'},
-    annotations={'readOnlyHint': True},
-    timeout=15.0,
+    annotations={'readOnlyHint': False, 'idempotentHint': False},
+    timeout=120.0,
 )
-async def memex_procedural_briefing_cards(
+async def memex_case_submit(
     ctx: Context,
-    context_keys: Annotated[
-        list[str],
-        Field(
-            description=(
-                'Pin-chain context keys to look up. Most-specific wins: '
-                '"app:<id>" > "project:<id>" > "global".'
-            ),
-        ),
-    ],
-    scope: Annotated[
-        str | None,
-        Field(description='Optional scope filter (e.g. "global", "project:abc").'),
-    ] = None,
-    limit_per_context: Annotated[
-        int,
-        Field(
-            default=5,
-            ge=1,
-            le=50,
-            description='Max cards per context key. Default 5.',
-        ),
-    ] = 5,
-    vault_id: Annotated[
-        str | None,
-        Field(
-            description=(
-                'Optional vault UUID or name for vault-scope enforcement. '
-                'The multi-tenancy guardrail — the briefing is only '
-                "served from entries in the caller's vault. Pass None "
-                'for operator-only cross-vault briefings.'
-            ),
-        ),
-    ] = None,
-) -> McpProceduralBriefingResult:
-    """Pin-chain briefing cards for the session-briefing surface."""
+    payload: CaseSubmit,
+) -> McpCaseSubmitResult:
+    """File a worked episode as a case note + run assignment.
+
+    The note lands in the hidden `procedural` system vault with
+    role='case'; the caller never names the vault. Assignment runs
+    synchronously (explicit case_of / judge auto-assign / lint
+    escalation) — see the result's assignment block.
+    """
     try:
         api = get_api(ctx)
-        from memex_common.procedural_schemas import ShortLabel
-
-        keys: list[ShortLabel] = [ShortLabel(k) for k in context_keys]
-        scope_label: ShortLabel | None = ShortLabel(scope) if scope is not None else None
-        resolved_vault: UUID | None = None
-        if vault_id is not None:
-            resolved_vault = await _resolve_vault_id(api, vault_id)
-        result = await api.procedural.briefing_cards(
-            keys,
-            scope=scope_label,
-            limit_per_context=limit_per_context,
-            vault_id=resolved_vault,
-        )
-        return McpProceduralBriefingResult(
-            cards=[
-                McpProceduralBriefingCard(
-                    # Same projection rule as the search tool: the
-                    # ProceduralBriefingCard DTO nests the entry
-                    # under .entry, so the flat MCP shape has to
-                    # project .entry.* into the tool-boundary
-                    # fields. The previous read raised
-                    # AttributeError on every briefing call.
-                    entry_id=c.entry.id,
-                    kind=c.entry.kind,
-                    title=c.entry.title,
-                    summary=c.entry.summary,
-                    scope=c.entry.scope,
-                    pin_position=c.pin_position,
-                )
-                for c in result.cards
-            ],
-            # The underlying ``ProceduralBriefingCards`` DTO names
-            # the field ``total_pinned`` (the count of pinned entries
-            # that contributed to the briefing) — projecting it as
-            # the MCP-facing ``total`` is the right shape, but the
-            # attribute access must match. Reading ``result.total``
-            # here raised ``AttributeError`` on every briefing call
-            # before the fix.
-            total=result.total_pinned,
+        result = await api.cases.submit(payload)
+        return McpCaseSubmitResult(
+            note_id=result.note_id,
+            vault_id=result.vault_id,
+            assignment_mode=result.assignment.mode,
+            entry_id=result.assignment.entry_id,
+            finding_id=result.assignment.finding_id,
+            separation=result.assignment.separation,
+            reasoning=result.assignment.reasoning,
         )
     except ToolError:
         raise
     except Exception as e:
-        logger.error(f'Procedural briefing_cards failed: {e}', exc_info=True)
-        raise ToolError(f'Procedural briefing_cards failed: {e}')
+        logger.error(f'Case submit failed: {e}', exc_info=True)
+        raise ToolError(f'Case submit failed: {e}')

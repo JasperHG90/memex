@@ -200,7 +200,7 @@ def test_all_schemas_have_required_fields():
         'memex_procedural_update',
         'memex_procedural_deprecate',
         'memex_procedural_search',
-        'memex_procedural_briefing_cards',
+        'memex_case_submit',
     }
     expected = (
         stream_1_baseline
