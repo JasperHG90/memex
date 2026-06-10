@@ -626,14 +626,19 @@ class ExperientialRepository:
                     # the version row UNIQUE (entry_id, version)
                     # constraint. If a parallel upsert slipped
                     # through, the constraint catches it. Translate
-                    # to the same domain error so the route returns
-                    # 409 (not 500) and the agent's upsert loop can
-                    # re-read + re-merge.
-                    raise ExperientialIdentityConflict(
-                        f'concurrent upsert on '
-                        f'kind={payload.kind!r} scope={payload.scope!r} '
-                        f'verb={payload.verb!r} context={payload.context!r}; '
-                        're-read and retry'
+                    # through the constraint-name router so a
+                    # version-row collision surfaces as 409 (retry)
+                    # but an unrelated constraint (FK, CHECK) surfaces
+                    # as 422 (caller-correctable) — mirrors the
+                    # convention in :meth:`create` and :meth:`update`.
+                    raise self._translate_integrity_error(
+                        exc,
+                        anchor_label=(
+                            f'concurrent upsert on '
+                            f'kind={payload.kind!r} scope={payload.scope!r} '
+                            f'verb={payload.verb!r} context={payload.context!r}; '
+                            're-read and retry'
+                        ),
                     ) from exc
                 await session.refresh(existing)
                 merged = await self._get_entry(session, existing.id)
