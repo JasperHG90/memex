@@ -195,13 +195,18 @@ def upgrade() -> None:
                 "CHECK (kind <> 'strategy' OR (verb IS NOT NULL AND context IS NOT NULL))"
             )
         )
-        op.execute(
-            sa.text(
-                'ALTER TABLE experiential_entries '
-                'ADD CONSTRAINT ck_experiential_trigger_paired '
-                'CHECK ((trigger IS NULL) = (trigger_embedding IS NULL))'
-            )
-        )
+        # NOTE: there is no `ck_experiential_trigger_paired` CHECK. The
+        # repository never writes `trigger_embedding` on create/update
+        # (lazy-embedding design — see experiential_repository.py
+        # module docstring). A CHECK requiring
+        # `(trigger IS NULL) = (trigger_embedding IS NULL)` would fire on
+        # every case create that supplies a trigger, surfacing a
+        # `CheckViolationError` that the repository would mis-translate
+        # as `ExperientialIdentityConflict` (409). The intent of the
+        # pairing — "a trigger must have a corresponding embedding" — is
+        # enforced at the search-service layer, where the back-fill
+        # worker promotes a `trigger IS NOT NULL` row to having a
+        # `trigger_embedding`.
         op.execute(
             sa.text(
                 'ALTER TABLE experiential_entries '

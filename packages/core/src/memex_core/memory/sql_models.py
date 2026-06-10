@@ -2137,11 +2137,14 @@ class ExperientialEntry(SQLModel, table=True):  # type: ignore
             "kind <> 'strategy' OR (verb IS NOT NULL AND context IS NOT NULL)",
             name='ck_strategy_context',
         ),
-        # Trigger is required iff a trigger_embedding is set, and vice versa.
-        CheckConstraint(
-            '(trigger IS NULL) = (trigger_embedding IS NULL)',
-            name='ck_experiential_trigger_paired',
-        ),
+        # NOTE: there is intentionally NO `(trigger IS NULL) = (trigger_embedding IS NULL)`
+        # CHECK. The repository never writes `trigger_embedding` on
+        # create/update (lazy-embedding design — see
+        # experiential_repository.py module docstring). A pairing CHECK
+        # would fire on every case create that supplies a trigger. The
+        # semantic invariant — "every row with a trigger eventually has
+        # a corresponding embedding" — is enforced at the search-service
+        # layer by the back-fill worker, not at the DDL layer.
         # Body embedding lives only on procedures/strategies.
         CheckConstraint(
             "(body_embedding IS NULL) OR (kind IN ('procedure', 'strategy'))",

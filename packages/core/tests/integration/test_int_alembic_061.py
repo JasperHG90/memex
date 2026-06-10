@@ -46,7 +46,6 @@ _EXPECTED_CHECKS: dict[str, tuple[str, ...]] = {
         'ck_experiential_status',
         'ck_experiential_origin',
         'ck_strategy_context',
-        'ck_experiential_trigger_paired',
         'ck_experiential_body_embedding_scope',
     ),
     'experiential_sources': (
