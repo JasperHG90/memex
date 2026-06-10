@@ -77,7 +77,10 @@ class TestSuiteStructure:
         # read-before-write probe, two retrieve-first (deploy / release)
         # scenarios, and how-to-to-plane-not-KV. No briefing scenario —
         # pinned cards arrive inside the session briefing, not a tool.
-        assert len(SUITE.scenarios) == 45
+        # +5 longer-horizon procedural flows (group='procedural_lh':
+        # retrieve→record, probe→update, search→create, enact→case,
+        # strategy-fallback) — multi-step loops with ToolCallOrder gates.
+        assert len(SUITE.scenarios) == 50
 
     def test_scenario_ids_unique(self) -> None:
         ids = [s.id for s in SUITE.scenarios]
@@ -196,6 +199,12 @@ class TestMutatingDiscipline:
         'procedural_searches_before_deploying',
         'procedural_searches_before_release',
         'procedural_routes_howto_to_plane_not_kv',
+        # Longer-horizon multi-step flows (group='procedural_lh').
+        'procedural_deploy_then_records_outcome',
+        'procedural_probe_then_update',
+        'procedural_search_miss_then_create',
+        'procedural_files_case_after_enacting',
+        'procedural_strategy_fallback_on_novel_task',
     }
 
     # V7 procedural scenarios use replicates_override=2: the routing
@@ -207,6 +216,11 @@ class TestMutatingDiscipline:
         'procedural_searches_before_deploying',
         'procedural_searches_before_release',
         'procedural_routes_howto_to_plane_not_kv',
+        'procedural_deploy_then_records_outcome',
+        'procedural_probe_then_update',
+        'procedural_search_miss_then_create',
+        'procedural_files_case_after_enacting',
+        'procedural_strategy_fallback_on_novel_task',
     }
 
     # The legacy ``procedure_*`` KV-routing scenarios (replicates=3)

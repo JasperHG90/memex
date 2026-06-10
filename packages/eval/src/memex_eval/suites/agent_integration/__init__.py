@@ -76,7 +76,10 @@ from memex_eval.suite.decorator import Suite
 # (must run BEFORE any ``suite.register(...)`` call that references the
 # registered names). See ``.claude/rules/eval-suites.md``
 # (baseline-anchor-stability rule, import-order subsection).
-from memex_eval.suites.agent_integration._outcomes import DeprioRecoversFrom400  # noqa: F401,E402
+from memex_eval.suites.agent_integration._outcomes import (  # noqa: F401,E402
+    DeprioRecoversFrom400,
+    ToolCallOrder,
+)
 from memex_eval.suites.agent_integration import _setup_actions as _seed_actions  # noqa: F401,E402
 
 # V7 procedural-plane scenarios in this suite call ``procedural_upsert`` to
@@ -1380,7 +1383,6 @@ suite.register(
 )
 
 
-
 # 4. RETRIEVE-FIRST on a deploy task. A `deploy`/`payments` procedure is
 # pre-seeded; the user hands the agent the deploy task. The agent MUST
 # search the plane before improvising the steps — reuse over re-derive.
@@ -1529,6 +1531,300 @@ suite.register(
             ),
         ],
     ),
+    replicates_override=2,
+    mutating_scenario=True,
+)
+
+
+# ---------------------------------------------------------------------------
+# Longer-horizon procedural flows (group='procedural_lh')
+# ---------------------------------------------------------------------------
+#
+# The scenarios above gate single decisions (one tool, right kwargs).
+# These gate the multi-STEP loops the procedural plane exists for
+# (design §11.2: retrieve → enact → submit → re-derive). Each requires
+# the agent to chain ≥2 tool calls in the right order — the
+# ToolCallOrder outcome pins "probe/search BEFORE write" so the agent
+# reuses learned knowledge instead of blindly re-creating it.
+
+# LH-1. retrieve → enact → record. Handed a deploy task with a seeded
+# procedure, the agent should search for the workflow AND, having done
+# the work, record what happened (a case or an outcome). Two distinct
+# phases of the loop in one turn.
+suite.register(
+    id='procedural_deploy_then_records_outcome',
+    group='procedural_lh',
+    description=(
+        'A deploy procedure is pre-seeded. The user asks the agent to deploy '
+        'AND report how it went. The agent must `memex_procedural_search` '
+        '(retrieve the workflow) and then record the run via '
+        '`memex_case_submit` or `memex_record_outcome` (close the loop).'
+    ),
+    query=(
+        'Deploy the payments service to staging using our usual process, then '
+        'log how the run went so we have a record.'
+    ),
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_procedural_search'],
+                min_count=1,
+                match_mode='all',
+            ),
+            ToolCallCountAcross(
+                type='tool_call_count_across',
+                expected_tools=['memex_case_submit', 'memex_record_outcome'],
+                min_total=1,
+            ),
+        ],
+    ),
+    setup_actions=[
+        SetupAction(
+            kind='procedural_upsert',
+            kind_kind='procedure',
+            kind_scope='global',
+            kind_verb='deploy',
+            kind_context='payments',
+            kind_title='Deploy the payments service',
+            kind_trigger='deploying the payments service to any environment',
+            kind_summary=(
+                'Check the running allocation, verify secrets, confirm DB '
+                'migrations applied, push the spec, gate on the health check.'
+            ),
+        ),
+    ],
+    replicates_override=2,
+    mutating_scenario=True,
+)
+
+
+# LH-2. read-before-write → update. A procedure exists; the user wants
+# it improved. The agent must PROBE (get_by_identity) BEFORE it writes,
+# then UPDATE the existing entry — not blindly create (which 409s). The
+# ToolCallOrder gate is the load-bearing assertion.
+suite.register(
+    id='procedural_probe_then_update',
+    group='procedural_lh',
+    description=(
+        'A (procedure, global, rotate, creds) entry is pre-seeded. The user '
+        'asks to improve it. The agent must call '
+        '`memex_procedural_get_by_identity` BEFORE `memex_procedural_update` '
+        '(probe-then-mutate), not blindly create.'
+    ),
+    query=(
+        'Update our rotate-creds procedure: always roll the old key AFTER CI '
+        'goes green, never before — otherwise the deploy races.'
+    ),
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_procedural_get_by_identity'],
+                min_count=1,
+                match_mode='all',
+            ),
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_procedural_update'],
+                min_count=1,
+                match_mode='all',
+            ),
+            ToolCallOrder(
+                type='tool_call_order',
+                before='memex_procedural_get_by_identity',
+                after='memex_procedural_update',
+            ),
+        ],
+    ),
+    setup_actions=[
+        SetupAction(
+            kind='procedural_upsert',
+            kind_kind='procedure',
+            kind_scope='global',
+            kind_verb='rotate',
+            kind_context='creds',
+            kind_title='Rotate API credentials',
+            kind_trigger='rotating the project API credentials',
+            kind_summary='Issue a new key, update CI, roll the old key, verify green.',
+        ),
+    ],
+    replicates_override=2,
+    mutating_scenario=True,
+)
+
+
+# LH-3. search-miss → create. The user asks a how-to question whose
+# answer is NOT seeded, then dictates the steps. The agent should search
+# first (find nothing), then persist the new workflow to the plane — in
+# that order.
+suite.register(
+    id='procedural_search_miss_then_create',
+    group='procedural_lh',
+    description=(
+        'No matching procedure is seeded. The user asks how to set up the '
+        'staging database, then dictates the steps. The agent should '
+        '`memex_procedural_search` first (miss) and then '
+        '`memex_procedural_create` the new workflow — search before write.'
+    ),
+    query=(
+        'How do we set up the staging database from scratch? If we have not '
+        'saved that yet, here is how: provision the instance, run the schema '
+        'migrations, seed the fixtures, then smoke-test the connection. Save '
+        'it so you can follow it next time.'
+    ),
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_procedural_search'],
+                min_count=1,
+                match_mode='all',
+            ),
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_procedural_create'],
+                min_count=1,
+                match_mode='all',
+            ),
+            ToolCallOrder(
+                type='tool_call_order',
+                before='memex_procedural_search',
+                after='memex_procedural_create',
+            ),
+        ],
+    ),
+    replicates_override=2,
+    mutating_scenario=True,
+)
+
+
+# LH-4. enact-known-procedure → file case with case_of. The agent
+# follows a seeded procedure and records the worked episode, linking it
+# to the procedure it enacted (case_of). Retrieve + case_submit in one
+# loop; the case_of linkage is the §18.1 primary-assignment API.
+suite.register(
+    id='procedural_files_case_after_enacting',
+    group='procedural_lh',
+    description=(
+        'A release procedure is pre-seeded. The user reports they just ran a '
+        'release that succeeded. The agent should `memex_procedural_search` '
+        'to locate the procedure it enacted and `memex_case_submit` the '
+        'worked episode (ideally with case_of + a valid outcome).'
+    ),
+    query=(
+        'I just cut a release following our usual steps and it went through '
+        'clean. Make a record of the run.'
+    ),
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_procedural_search'],
+                min_count=1,
+                match_mode='all',
+            ),
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_case_submit'],
+                min_count=1,
+                match_mode='all',
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_case_submit',
+                arg_name='outcome',
+                regex=r'^(success|failure|mixed)$',
+                min_count=1,
+            ),
+        ],
+    ),
+    setup_actions=[
+        SetupAction(
+            kind='procedural_upsert',
+            kind_kind='procedure',
+            kind_scope='global',
+            kind_verb='release',
+            kind_context='package',
+            kind_title='Release a package',
+            kind_trigger='cutting a release or publishing a package',
+            kind_summary=(
+                'Confirm CI green, update the changelog, bump the version, tag '
+                'and push, verify the published artifact.'
+            ),
+        ),
+    ],
+    replicates_override=2,
+    mutating_scenario=True,
+)
+
+
+# LH-5. novel task → strategy fallback. Only a STRATEGY is seeded (no
+# concrete procedure). Handed a task the strategy generalises over, the
+# agent should search the plane and reason from the retrieved heuristic
+# rather than inventing an approach from nothing. LLM-judged on whether
+# the answer reflects the strategy's principles.
+suite.register(
+    id='procedural_strategy_fallback_on_novel_task',
+    group='procedural_lh',
+    description=(
+        'A "safe rollout" strategy (scope=global, verb=rollout) is seeded; no '
+        'concrete procedure exists. The user asks how to approach a rollout '
+        'shape the strategy generalises over. The agent must '
+        '`memex_procedural_search` AND its answer must reflect the retrieved '
+        'strategy (reversible-first, gate on health, keep a rollback path).'
+    ),
+    query=(
+        'We have never done a blue-green cutover on this service before. How '
+        'should I approach it safely?'
+    ),
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_procedural_search'],
+                min_count=1,
+                match_mode='all',
+            ),
+            LLMJudge(
+                type='llm_judge',
+                rubric=(
+                    'The answer reflects a safe-rollout heuristic consistent with '
+                    'the retrieved strategy: verify preconditions before mutating, '
+                    'gate promotion on post-cutover health (not just a successful '
+                    'switch), and keep a tested rollback/fallback path. The answer '
+                    'should read as APPLYING a learned strategy, not improvising '
+                    'from scratch.'
+                ),
+                threshold=0.6,
+            ),
+        ],
+    ),
+    setup_actions=[
+        SetupAction(
+            kind='procedural_upsert',
+            kind_kind='strategy',
+            kind_scope='global',
+            kind_verb='rollout',
+            kind_title='Safe rollout',
+            kind_trigger='rolling out any change to a live service',
+            kind_summary=(
+                'Treat every rollout as reversible-first: confirm preconditions '
+                'before the change, gate promotion on post-rollout health after, '
+                'and always keep a tested rollback path.'
+            ),
+        ),
+    ],
     replicates_override=2,
     mutating_scenario=True,
 )
