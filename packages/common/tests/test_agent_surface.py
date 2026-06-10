@@ -132,15 +132,11 @@ _REQUIRED_KEYWORDS: tuple[str, ...] = (
     'project:<id>:',
     'global:',
     'app:<app-id>:',
-    # Procedures live UNDER a scope namespace, never bare. The table cell
-    # uses `<scope>:procedure:*` as the general form; per-scope examples
-    # ground each of the four valid scopes (global / project / user / app).
-    '<scope>:procedure:<verb>:<context-tag>',
-    'global:procedure:',
-    'project:<id>:procedure:',
-    'user:procedure:',
-    'app:claude-code:procedure:',
-    'procedure_scope_default',
+    # KV holds preferences/settings/conventions; how-to WORKFLOWS go to
+    # the procedural plane (memex_procedural_create), NOT KV `procedure:`
+    # keys (the deprecated path). The kv_vs_procedural constraint pins
+    # that boundary.
+    'kv_vs_procedural',
     # KV scope-qualifier rule.
     'scope qualifier',
     # 5-step flow anchors.
@@ -316,7 +312,11 @@ def test_compose_with_procedural_includes_v7_doctrine() -> None:
     # Strategy anchor: (scope, verb) only — context forbidden (§18.1).
     assert 'FORBIDDEN' in out
     # No user scope on the plane.
-    assert 'NO user scope' in out
+    assert 'no user scope' in out
+    # The load-bearing retrieve-first behavior: face a known task →
+    # search the plane BEFORE re-deriving the workflow.
+    assert 'procedural_retrieve_first' in out
+    assert 'memex_procedural_search' in out
     # The identity-anchor rule (UNIQUE on (kind, scope, verb, context)).
     assert '(kind, scope, verb, context)' in out
     # The scope/pin grammar.

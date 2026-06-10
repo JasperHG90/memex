@@ -74,6 +74,7 @@ def _payload(
     scope: str = 'global',
     verb: str | None = 'deploy',
     context: str | None = 'staging',
+    trigger: str = 'when to exercise this integration-test entry',
     body: str = '',
 ) -> dict:
     """Build a valid create payload for the HTTP body."""
@@ -85,6 +86,7 @@ def _payload(
         'context': context,
         'title': title,
         'summary': f'Integration-test entry {title!r}.',
+        'trigger': trigger,
         'body': body,
         'status': 'published',
     }
@@ -98,6 +100,7 @@ def _entry_dto(
     scope: str = 'global',
     verb: str | None = 'deploy',
     context: str | None = 'staging',
+    trigger: str = 'when to exercise this integration-test entry',
     body: str = '',
 ):
     """Build an ``ProceduralEntryCreate`` DTO for direct repository seeding.
@@ -116,6 +119,7 @@ def _entry_dto(
         context=context,
         title=title,
         summary=f'Integration-test entry {title!r}.',
+        trigger=trigger,
         body=body,
         status='published',  # type: ignore[arg-type]
     )

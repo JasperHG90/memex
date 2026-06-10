@@ -1049,247 +1049,6 @@ suite.register(
 )
 
 
-# --- Procedure wake-words: deterministic write under explicit scope ---
-#
-# `Store procedure: ...` and `Store procedure for this project: ...` are
-# hard wake-words documented in agent_surface.RETRIEVAL_ROUTING. They
-# bypass any scope-inference reasoning and force the agent to write the
-# exact `<scope>:procedure:<verb>:<context>` key with verb/context picked
-# from the user's text. These two scenarios pin the routing pass rate at
-# 100% — if either fails, an agent surface edit broke the wake-word
-# escape hatch.
-
-suite.register(
-    id='procedure_wakeword_store_global',
-    group='kv',
-    description=(
-        'Hard wake-word write — `Store procedure: <text>` forces the agent '
-        'to call `memex_kv_put` with a `global:procedure:<verb>:<context>` '
-        'key (no scope inference, no ASK).'
-    ),
-    query='Store procedure: always run prek before committing.',
-    max_duration_ms=_DUR_MS,
-    expected=CompositeOutcome(
-        type='composite',
-        children=[
-            ToolCallContains(
-                type='tool_call_contains',
-                expected_tools=['memex_kv_put'],
-                min_count=1,
-                match_mode='any',
-            ),
-            ToolCallArgMatches(
-                type='tool_call_arg_matches',
-                tool='memex_kv_put',
-                arg_name='key',
-                regex=r'^global:procedure:[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$',
-                min_count=1,
-            ),
-        ],
-    ),
-    replicates_override=3,
-    mutating_scenario=True,
-)
-
-suite.register(
-    id='procedure_wakeword_store_project',
-    group='kv',
-    description=(
-        'Hard wake-word write — `Store procedure for this project: <text>` '
-        'forces the agent to call `memex_kv_put` with a '
-        '`project:<id>:procedure:<verb>:<context>` key.'
-    ),
-    query='Store procedure for this project: all commits land via PR — never direct push.',
-    max_duration_ms=_DUR_MS,
-    expected=CompositeOutcome(
-        type='composite',
-        children=[
-            ToolCallContains(
-                type='tool_call_contains',
-                expected_tools=['memex_kv_put'],
-                min_count=1,
-                match_mode='any',
-            ),
-            ToolCallArgMatches(
-                type='tool_call_arg_matches',
-                tool='memex_kv_put',
-                arg_name='key',
-                regex=r'^project:[^:]+:procedure:[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$',
-                min_count=1,
-            ),
-        ],
-    ),
-    replicates_override=3,
-    mutating_scenario=True,
-)
-
-
-# --- Procedure scoping: default-to-global + ASK-on-ambiguity ---
-#
-# Pin the routing rule encoded in `agent_surface.KV_NAMESPACE`
-# ("procedure_scope_default" critical_constraint) + `CLAUDE_CODE_HARNESS`
-# write_routing entries. Procedures default to GLOBAL; project scope only
-# applies on an EXPLICIT cue ("for this project", "in this repo"); ambiguous
-# inputs MUST trigger a clarifying question, NOT a guessed kv_put.
-#
-# Why these scenarios exist (per .claude/rules/eval-suites.md): the rule is
-# behavioral prose in the agent surface — no unit test can catch a regression
-# in the routing decision. Real-LLM scenarios with `ToolCallArgMatches` +
-# `LLMJudge` are the only gate.
-
-suite.register(
-    id='procedure_defaults_global_no_project_cue',
-    group='kv',
-    description=(
-        "User states a procedure ('always lint before commit') with no project "
-        'cue. The agent MUST write under `procedure:` (global default), NOT '
-        '`project:<id>:procedure:` — there is no explicit project scope cue.'
-    ),
-    query='From now on, always run lint before commit.',
-    max_duration_ms=_DUR_MS,
-    expected=CompositeOutcome(
-        type='composite',
-        children=[
-            ToolCallContains(
-                type='tool_call_contains',
-                expected_tools=['memex_kv_put'],
-                min_count=1,
-                match_mode='any',
-            ),
-            ToolCallArgMatches(
-                type='tool_call_arg_matches',
-                tool='memex_kv_put',
-                arg_name='key',
-                regex=r'^global:procedure:[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$',
-                min_count=1,
-            ),
-        ],
-    ),
-    replicates_override=3,
-    mutating_scenario=True,
-)
-
-suite.register(
-    id='procedure_explicit_project_cue_scopes_to_project',
-    group='kv',
-    description=(
-        'Explicit project cue ("for the memex repo") MUST route to '
-        '`project:<id>:procedure:*` rather than the global `procedure:*` form. '
-        'This is the only path that produces a project-scoped procedure key.'
-    ),
-    query='For the memex repo, all commits land via PR — never a direct push.',
-    max_duration_ms=_DUR_MS,
-    expected=CompositeOutcome(
-        type='composite',
-        children=[
-            ToolCallContains(
-                type='tool_call_contains',
-                expected_tools=['memex_kv_put'],
-                min_count=1,
-                match_mode='any',
-            ),
-            # `[^:]+` intentionally excludes colons here even though the parser
-            # supports them in project IDs (for SSH-form git remotes). The eval
-            # query says "the memex repo" — agents pick a simple identifier
-            # like `memex`; pinning the regex looser would weaken the test.
-            ToolCallArgMatches(
-                type='tool_call_arg_matches',
-                tool='memex_kv_put',
-                arg_name='key',
-                regex=r'^project:[^:]+:procedure:[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$',
-                min_count=1,
-            ),
-        ],
-    ),
-    replicates_override=3,
-    mutating_scenario=True,
-)
-
-suite.register(
-    id='procedure_in_this_codebase_cue_scopes_to_project',
-    group='kv',
-    description=(
-        '"In this codebase / in this repo" is an explicit project cue and '
-        'MUST route to `project:<id>:procedure:*`, not the global `procedure:*` '
-        'form. Tests the in-this-codebase wording variant.'
-    ),
-    query='In this codebase, always use uv — never pip.',
-    max_duration_ms=_DUR_MS,
-    expected=CompositeOutcome(
-        type='composite',
-        children=[
-            ToolCallContains(
-                type='tool_call_contains',
-                expected_tools=['memex_kv_put'],
-                min_count=1,
-                match_mode='any',
-            ),
-            ToolCallArgMatches(
-                type='tool_call_arg_matches',
-                tool='memex_kv_put',
-                arg_name='key',
-                regex=r'^project:[^:]+:procedure:[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$',
-                min_count=1,
-            ),
-        ],
-    ),
-    replicates_override=3,
-    mutating_scenario=True,
-)
-
-suite.register(
-    id='procedure_ambiguous_no_explicit_scope_asks_first',
-    group='kv',
-    description=(
-        'Procedure-shaped intent ("remember to bump rc tags after green CI") '
-        'with NO explicit project cue. The agent MUST ask whether to scope to '
-        'the project or save globally — never auto-scope from cwd / active '
-        'vault. Pins the ASK-on-ambiguity escape in the procedure_scope_default '
-        'critical_constraint.'
-    ),
-    query='Remember to bump rc tags after green CI.',
-    max_duration_ms=_DUR_MS,
-    expected=LLMJudge(
-        type='llm_judge',
-        rubric=(
-            'The answer asks the user a clarifying question about whether this '
-            'procedure should be global or scoped to a specific project (or '
-            'asks for the project name / scope), AND the answer does NOT claim '
-            'to have already saved the procedure. The answer should NOT silently '
-            'scope to a project based on context the user did not provide.'
-        ),
-        threshold=0.7,
-    ),
-    replicates_override=3,
-    mutating_scenario=False,
-)
-
-suite.register(
-    id='procedure_standard_practice_ambiguous_asks_first',
-    group='kv',
-    description=(
-        '"Standard practice: every PR gets adversarial review" is procedure-'
-        'shaped but ambiguous — "standard practice" could be global ("our team\'s '
-        'practice") or project-scoped ("standard for this repo"). The agent '
-        'MUST ask before writing.'
-    ),
-    query='Standard practice: every PR gets adversarial review.',
-    max_duration_ms=_DUR_MS,
-    expected=LLMJudge(
-        type='llm_judge',
-        rubric=(
-            'The answer asks the user whether this is a global procedure or '
-            'scoped to a specific project (or asks for the project name), AND '
-            'does NOT claim to have already saved the procedure. The answer '
-            'should NOT silently guess project scope.'
-        ),
-        threshold=0.7,
-    ),
-    replicates_override=3,
-    mutating_scenario=False,
-)
-
-
 # --- Lifecycle ---
 
 suite.register(
@@ -1429,15 +1188,22 @@ suite.register(
 # --- V7 Procedural plane: agent-facing routing ---
 #
 # The procedural plane is the V7 canonical home for "how to do X"
-# knowledge. Its identity anchor (kind, scope, verb, context) and
-# pin-chain briefing surface replace the legacy
-# ``<scope>:procedure:<verb>:<context>`` KV convention. These three
-# scenarios gate the *agent-facing* side: does the agent reach for
-# the right tool with the right kwargs — case_submit for episodes,
-# procedural_search for how-tos, get_by_identity before writes — or
-# does it leak them into the KV/notes path? (There is no briefing
-# scenario: pinned cards arrive inside the session briefing; the
-# agent never calls a tool for them.)
+# knowledge — it replaces the legacy ``<scope>:procedure:*`` KV
+# convention (the old KV-procedure routing scenarios this suite used
+# to carry were removed; that path is deprecated). These scenarios
+# gate the *agent-facing* contract across the two halves that matter:
+#
+#   RETRIEVE-FIRST (the high-value behavior): when the agent is handed
+#   a task it might have a learned procedure for (deploy, release,
+#   rotate creds), it must SEARCH the plane before re-deriving the
+#   workflow from scratch.
+#
+#   WRITE-ROUTING: a worked episode → case_submit; a reusable how-to →
+#   procedural_create (NOT memex_kv_put); read-before-write via
+#   get_by_identity to dodge a 409.
+#
+# (There is no briefing scenario: pinned cards arrive inside the
+# session briefing; the agent never calls a tool for them.)
 #
 # Filterable as ``--group procedural``.
 
@@ -1613,6 +1379,159 @@ suite.register(
     mutating_scenario=True,
 )
 
+
+
+# 4. RETRIEVE-FIRST on a deploy task. A `deploy`/`payments` procedure is
+# pre-seeded; the user hands the agent the deploy task. The agent MUST
+# search the plane before improvising the steps — reuse over re-derive.
+# This is the load-bearing V7 behavior: learned procedures only pay off
+# if the agent actually looks for them when handed work.
+suite.register(
+    id='procedural_searches_before_deploying',
+    group='procedural',
+    description=(
+        'A procedure for (procedure, global, deploy, payments) is pre-seeded. '
+        'The user asks the agent to deploy the payments service. The agent '
+        'MUST call `memex_procedural_search` (reuse the learned workflow) '
+        'rather than only narrating improvised steps.'
+    ),
+    query=(
+        'Deploy the payments service to staging for me — walk me through it '
+        'and do the steps you can.'
+    ),
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_procedural_search'],
+                min_count=1,
+                match_mode='all',
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_procedural_search',
+                arg_name='query',
+                regex=r'deploy|payment|stag|pipeline|ship|release',
+                min_count=1,
+            ),
+        ],
+    ),
+    setup_actions=[
+        SetupAction(
+            kind='procedural_upsert',
+            kind_kind='procedure',
+            kind_scope='global',
+            kind_verb='deploy',
+            kind_context='payments',
+            kind_title='Deploy the payments service',
+            kind_trigger='deploying the payments service to any environment',
+            kind_summary=(
+                '1) Check the current allocation is healthy. 2) Verify the '
+                'secrets/lease are fresh. 3) Confirm pending DB migrations are '
+                'applied. 4) Push the new spec. 5) Gate promotion on the health '
+                'check; roll back on failure.'
+            ),
+        ),
+    ],
+    replicates_override=2,
+    mutating_scenario=True,
+)
+
+
+# 5. RETRIEVE-FIRST on a release / version bump. A `release` strategy is
+# pre-seeded under (strategy, global, release). "Cut a release" / "bump
+# the version" is exactly the kind of recurring task the agent should
+# pull a learned play-book for before acting.
+suite.register(
+    id='procedural_searches_before_release',
+    group='procedural',
+    description=(
+        'A release play-book is pre-seeded. The user asks the agent to cut a '
+        'release / bump the version. The agent MUST call '
+        '`memex_procedural_search` to pull the learned steps before acting.'
+    ),
+    query='Can you cut a new release of the core package and bump the version?',
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_procedural_search'],
+                min_count=1,
+                match_mode='all',
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_procedural_search',
+                arg_name='query',
+                regex=r'release|version|bump|tag|publish|ship',
+                min_count=1,
+            ),
+        ],
+    ),
+    setup_actions=[
+        SetupAction(
+            kind='procedural_upsert',
+            kind_kind='strategy',
+            kind_scope='global',
+            kind_verb='release',
+            kind_title='Release a package',
+            kind_trigger='cutting a release or bumping a package version',
+            kind_summary=(
+                'Confirm CI is green and no open blockers; update the '
+                'changelog; bump the version; tag and push; verify the '
+                'published artifact.'
+            ),
+        ),
+    ],
+    replicates_override=2,
+    mutating_scenario=True,
+)
+
+
+# 6. WRITE-ROUTING: a reusable multi-step how-to goes to the procedural
+# plane, NOT a KV `procedure:` key (the deprecated path). The
+# discriminator is the tool: memex_procedural_create, never
+# memex_kv_put.
+suite.register(
+    id='procedural_routes_howto_to_plane_not_kv',
+    group='procedural',
+    description=(
+        'User dictates a reusable multi-step workflow ("here is how we roll '
+        'back a migration"). The agent must persist it via '
+        '`memex_procedural_create` (the searchable, briefing-eligible plane) '
+        'and MUST NOT write it as a `memex_kv_put` procedure key.'
+    ),
+    query=(
+        'Remember how we roll back a bad migration: run alembic downgrade -1, '
+        'verify the schema, restart the workers, then re-run the health check. '
+        'Save that so you can follow it next time.'
+    ),
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_procedural_create'],
+                min_count=1,
+                match_mode='all',
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_procedural_create',
+                arg_name='trigger',
+                regex=r'.+',
+                min_count=1,
+            ),
+        ],
+    ),
+    replicates_override=2,
+    mutating_scenario=True,
+)
 
 
 SUITE = suite.build()

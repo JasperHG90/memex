@@ -183,13 +183,9 @@ Namespace by scope cue (NOT grammatical person). `app:`/`project:`/`global:` ALL
 | "this repo/project", "in this codebase" | `project:<id>:` |
 | "company-wide", "we standardise on" | `global:` |
 | "when I use <app>", "in Claude Code/Hermes" | `app:<app-id>:` |
-| learned procedure (any scope; default `global`) | `<scope>:procedure:<verb>:<context-tag>` |
-| repo/project-scoped procedure | `project:<id>:procedure:<verb>:<context-tag>` |
 
-<critical_constraint name="procedure_scope_default">
-Procedures live UNDER a scope, never bare `procedure:*`. Scope picks the SAME way as preferences — cue wins: `user:` / `project:<id>:` / `app:<id>:` / `global:` (default). Ambiguous? ASK.
-
-**Imperatives = procedures.** "Always X / never X / from now on / must Y / via Z / use Y not Z" → `<scope>:procedure:<verb>:<context>` (with the `procedure:` infix). Plain facts ("Python 3.10") → `<scope>:<field>` (no infix). Rule about HOW = procedure; static fact = preference.
+<critical_constraint name="kv_vs_procedural">
+KV holds a single PREFERENCE / SETTING / CONVENTION — a static binding ("Python 3.12", "dark theme", "lint before commit"). A multi-step WORKFLOW you'd want to reuse and search ("how we deploy", "release steps") is NOT KV — it belongs on the procedural plane (see "Procedural plane" if that section is present). Writing a how-to as a KV `procedure:` key is the deprecated path — don't.
 </critical_constraint>
 
 Ambiguous? ASK before writing.
@@ -198,31 +194,33 @@ Ambiguous? ASK before writing.
 <example>"For this project: Python 3.10" → `project:<id>:lang:python`</example>
 <example>"Company-wide: Python 3.12 min" → `global:lang:python:min`</example>
 <example>"When I use Claude Code: dark theme" → `app:claude-code:theme` (<app> cue wins over "I"/"my")</example>
-<example>"Always lint before commit" → `global:procedure:commit:lint-first` (no cue → global)</example>
-<example>"From now on: greet me casually" → `user:procedure:greet:casual` ("I/me" → user)</example>
-<example>"When I use Claude Code: always cite" → `app:claude-code:procedure:respond:cite` (app cue)</example>"""
+<example>"Always lint before commit" → `global:lint:commit` (a one-line convention, not a workflow)</example>
+<example>"How we deploy: check status, verify secrets, push, health-check" → procedural plane, NOT KV</example>"""
 
 
-PROCEDURAL_PLANE = """## Procedural plane
+PROCEDURAL_PLANE = """## Procedural plane — how-to memory
 
-<critical_constraint name="procedural_routing">
-"This is how to do X" (worked HOWTO, project play-book) → `memex_procedural_create`. A worked EPISODE — what just happened, with outcome (finished a multi-step task, diagnosed a bug, resolved an incident) → `memex_case_submit`. Plain facts → `memex_add_note`. Operational pointers / settings → `memex_kv_put`.
+<critical_constraint name="procedural_retrieve_first">
+Before doing a non-trivial task you might have done before (deploy, release, rotate creds, run a migration, set up an env, cut a build): FIRST `memex_procedural_search(query="<the task>")`. A hit is a learned procedure — follow it instead of re-deriving. Don't reinvent a workflow the plane already holds.
 </critical_constraint>
 
-Two kinds under one identity anchor `(kind, scope, verb, context)`:
-- `procedure` — worked HOWTO. `verb`+`context` REQUIRED.
-- `strategy` — higher-order tactic generalising the procedures that share its `(scope, verb)`. `verb` REQUIRED, `context` FORBIDDEN.
-`trigger` (when_to_use / when_to_apply) REQUIRED on create — it is what retrieval matches. Scope: `global` | `project:<id>` | `app:<id>` — there is NO user scope.
-
-<critical_constraint name="procedural_identity_anchor">
-Anchors are UNIQUE → re-submit returns 409. Probe with `memex_procedural_get_by_identity` BEFORE `create`, or use `memex_procedural_upsert` for idempotent re-writes.
+<critical_constraint name="procedural_write_routing">
+- HOW to do X (a workflow worth reusing) → `memex_procedural_create`.
+- A worked EPISODE just happened (finished a multi-step task, diagnosed a bug, fixed an incident) → `memex_case_submit` — pass `case_of=<id>` when you followed a known procedure.
+- A single preference / setting / convention → `memex_kv_put`.
+- A plain fact → `memex_add_note`.
 </critical_constraint>
 
-Cases are NOTES, never plane entries. `memex_case_submit(title, trigger, actions, outcome, lesson, case_of?)` files the episode into a hidden system vault; pass `case_of=<entry-id>` when you know which procedure you just enacted (you usually do — you retrieved it). Contested assignments land in the lint queue (`assignment.mode="escalated"`).
+Two kinds, identity anchor `(kind, scope, verb, context)`:
+- `procedure` — a workflow. `verb`+`context` REQUIRED (e.g. verb=`deploy`, context=`nomad`).
+- `strategy` — a heuristic spanning the procedures that share its `(scope, verb)`. `verb` REQUIRED, `context` FORBIDDEN.
+`trigger` (when-to-use) REQUIRED — it is what search matches. Scope: `global` | `project:<id>` | `app:<id>` (no user scope).
 
-Pinned procedure cards arrive automatically inside your session briefing — there is no briefing tool to call. Curation (pin/unpin) is an operator surface.
+<critical_constraint name="procedural_write_before_read">
+Anchors are UNIQUE (create → 409 on collision). Probe `memex_procedural_get_by_identity` BEFORE `create`; or `memex_procedural_upsert` to write idempotently.
+</critical_constraint>
 
-`status` defaults to `published` for new writes. `memex_procedural_search` defaults to `status="published"`; pass `status="all"` for drafts. `memex_procedural_deprecate(superseded_by_id=…)` soft-deletes. `memex_procedural_update` edits content on the SAME identity (new version row) — the anchor is immutable."""
+Cases are NOTES, not plane entries. Pinned procedures arrive in your session briefing automatically — there is no briefing tool to call. `memex_procedural_search` defaults to `status="published"`; `memex_procedural_deprecate(superseded_by_id=…)` soft-deletes; `memex_procedural_update` edits in place (the anchor is immutable)."""
 
 
 CITATIONS = """## Citations

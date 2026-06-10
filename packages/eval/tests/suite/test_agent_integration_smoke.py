@@ -70,11 +70,14 @@ class TestSuiteStructure:
         # ambiguous_asks_first, standard_practice_ambiguous_asks_first,
         # wakeword_store_{global,project}). They pin the
         # "this is how to do X" → memex_kv_put write-routing path.
-        # 49 = 46 + 3 V7 procedural-plane agent scenarios
-        # (group='procedural': case_submit routing, plane search,
-        # read-before-write probe). No briefing scenario — pinned
-        # cards arrive inside the session briefing, not via a tool.
-        assert len(SUITE.scenarios) == 49
+        # 45 = 39 (smoke+triage+…+kv-wakewords) + 6 V7 procedural-plane
+        # agent scenarios (group='procedural'). The 7 legacy procedure_*
+        # KV-routing scenarios were removed (deprecated write path). The
+        # 6 procedural scenarios: case_submit routing, plane search,
+        # read-before-write probe, two retrieve-first (deploy / release)
+        # scenarios, and how-to-to-plane-not-KV. No briefing scenario —
+        # pinned cards arrive inside the session briefing, not a tool.
+        assert len(SUITE.scenarios) == 45
 
     def test_scenario_ids_unique(self) -> None:
         ids = [s.id for s in SUITE.scenarios]
@@ -180,50 +183,36 @@ class TestMutatingDiscipline:
         'lifecycle_archive_legacy_warehouse_note',
         'lifecycle_append_parent_remains_retrievable',
         'asset_lifecycle_detach',
-        # V4 procedure-routing wakeword scenarios — the
-        # ``procedure_wakeword_store_*`` ones write to KV via
-        # memex_kv_put as the procedurally-encoded write path.
-        # The ``procedure_*_cue`` ones write a derived observation
-        # to the observation plane when the agent picks the
-        # wrong scope — both are flagged mutating.
-        'procedure_wakeword_store_global',
-        'procedure_wakeword_store_project',
-        'procedure_defaults_global_no_project_cue',
-        'procedure_explicit_project_cue_scopes_to_project',
-        'procedure_in_this_codebase_cue_scopes_to_project',
-        # V7 procedural-plane agent scenarios (group='procedural') —
-        # both write (case_submit / get_by_identity-then-write) so
-        # they're mutating; replicates_override=2 is tracked in
-        # _OVERRIDE_TWO_IDS below.
+        # V7 procedural-plane agent scenarios (group='procedural').
+        # The legacy ``procedure_*`` KV-routing scenarios were removed
+        # (that write path is deprecated — how-tos go to the plane, not
+        # KV). These five write: case_submit files a note;
+        # get_by_identity-then-write; the two retrieve-first scenarios
+        # pre-seed via a mutating setup action and may write; the
+        # how-to scenario calls procedural_create. replicates_override=2
+        # is tracked in _OVERRIDE_TWO_IDS below.
         'procedural_files_case_via_case_submit',
         'procedural_probes_identity_before_writing',
+        'procedural_searches_before_deploying',
+        'procedural_searches_before_release',
+        'procedural_routes_howto_to_plane_not_kv',
     }
 
     # V7 procedural scenarios use replicates_override=2: the routing
-    # decision (case_submit vs plane write vs KV) is the load-bearing
-    # contract and a single replay can pass by luck.
+    # decision (search-first / case_submit / plane-write vs KV) is the
+    # load-bearing contract and a single replay can pass by luck.
     _OVERRIDE_TWO_IDS = {
         'procedural_files_case_via_case_submit',
         'procedural_probes_identity_before_writing',
+        'procedural_searches_before_deploying',
+        'procedural_searches_before_release',
+        'procedural_routes_howto_to_plane_not_kv',
     }
 
-    # V4 procedure_* scenarios are LLM-judge-only (no LLM-classifier),
-    # and use ``replicates_override=3`` for statistical robustness
-    # (they ask the agent to choose between project/global/ambiguous
-    # paths; a single-shot result is too noisy to gate on). They
-    # are mutating (they write to KV via memex_kv_put) so they
-    # appear in ``_MUTATING_IDS``, but their override semantics
-    # (replicates=3) are tracked in ``_OVERRIDE_THREE_IDS`` —
-    # NOT in ``_OVERRIDE_ONE_IDS``.
-    _OVERRIDE_THREE_IDS = {
-        'procedure_wakeword_store_global',
-        'procedure_wakeword_store_project',
-        'procedure_defaults_global_no_project_cue',
-        'procedure_explicit_project_cue_scopes_to_project',
-        'procedure_in_this_codebase_cue_scopes_to_project',
-        'procedure_ambiguous_no_explicit_scope_asks_first',
-        'procedure_standard_practice_ambiguous_asks_first',
-    }
+    # The legacy ``procedure_*`` KV-routing scenarios (replicates=3)
+    # were removed with the deprecated KV-procedure write path. No
+    # scenario currently uses replicates_override=3.
+    _OVERRIDE_THREE_IDS: set[str] = set()
 
     # Override-1 means "use replicates_override=1 instead of the suite
     # default" — applied to scenarios that are LLM-classifier-only

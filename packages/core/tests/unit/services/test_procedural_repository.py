@@ -209,34 +209,54 @@ def test_create_dto_rejects_extra_fields():
     assert any(e['loc'] == ('unknown_field',) for e in errors), errors
 
 
-@pytest.mark.asyncio
-async def test_create_strategy_without_verb_and_context_raises():
-    """Strategy create payloads need both verb AND context.
+def test_create_strategy_without_verb_and_context_raises():
+    """Anchor shape (§18.1) is enforced by the ``ProceduralEntryCreate``
+    DTO validator — the repository no longer validates anchor shape, so
+    a malformed payload fails at *construction* with a pydantic
+    ``ValidationError``, before any repository (or DB) call.
 
-    The schema CHECK enforces this at the DB layer (migration 061's
-    ``ck_strategy_context``); the repository surfaces the same rule
-    earlier so the API returns a 4xx not a 500.
+    * procedure — verb AND context required.
+    * strategy — verb required, context FORBIDDEN.
     """
-    bad = ProceduralEntryCreate(
-        vault_id=uuid4(),
-        kind='strategy',
-        scope='global',
-        verb=None,  # missing on purpose
-        context=None,  # missing on purpose
-        title='bad strategy',
-        summary='should not insert',
-    )
+    # (a) strategy without verb.
+    with pytest.raises(ValidationError, match='strategy entries require a verb'):
+        ProceduralEntryCreate(
+            vault_id=uuid4(),
+            kind='strategy',
+            scope='global',
+            verb=None,  # missing on purpose
+            context=None,
+            title='bad strategy',
+            summary='should not validate',
+            trigger='deciding how to roll out a change',
+        )
 
-    # The mock metastore is fine — the check fires before any DB call.
-    metastore = MagicMock()
-    metastore.session.return_value = MagicMock(
-        __aenter__=AsyncMock(return_value=AsyncMock()),
-        __aexit__=AsyncMock(return_value=False),
-    )
-    repo = ProceduralRepository(metastore=metastore)
+    # (b) strategy WITH context — forbidden (a strategy is the projection
+    # over all procedures sharing (scope, verb)).
+    with pytest.raises(ValidationError, match='must NOT set context'):
+        ProceduralEntryCreate(
+            vault_id=uuid4(),
+            kind='strategy',
+            scope='global',
+            verb='deploy',
+            context='staging',  # forbidden on purpose
+            title='bad strategy',
+            summary='should not validate',
+            trigger='deciding how to roll out a change',
+        )
 
-    with pytest.raises(ValueError, match='strategy entries require both verb and context'):
-        await repo.create(bad)
+    # (c) procedure missing context.
+    with pytest.raises(ValidationError, match='procedure entries require both verb and context'):
+        ProceduralEntryCreate(
+            vault_id=uuid4(),
+            kind='procedure',
+            scope='global',
+            verb='deploy',
+            context=None,  # missing on purpose
+            title='bad procedure',
+            summary='should not validate',
+            trigger='deploying the service to staging',
+        )
 
 
 def test_search_request_validates_weight_bounds():
@@ -303,6 +323,7 @@ async def test_create_procedure_returns_dto_with_identity_fields():
         title='create alembic migration',
         summary='how to add a new alembic migration',
         body='run alembic revision -m "msg"',
+        trigger='adding a new alembic migration to the postgres schema',
         tags=['alembic', 'postgres'],
     )
 
@@ -316,6 +337,7 @@ async def test_create_procedure_returns_dto_with_identity_fields():
         verb=payload.verb,
         context=payload.context,
         body=payload.body,
+        trigger=payload.trigger,
         tags=payload.tags,
         status='draft',
         origin='manual',
@@ -403,6 +425,7 @@ async def test_identity_anchor_conflict_raises_procedural_identity_conflict():
         context='postgres',
         title='first',
         summary='one',
+        trigger='adding a new alembic migration to the postgres schema',
     )
 
     session = AsyncMock()
@@ -470,6 +493,7 @@ async def test_upsert_by_identity_inserts_when_missing():
         context='ruff',
         title='lint with ruff',
         summary='run ruff check',
+        trigger='linting the project before committing',
     )
 
     session, exec_mock = _make_async_exec_session(first=None)
@@ -521,16 +545,17 @@ async def test_upsert_by_identity_updates_existing_row():
     """Second call on the same anchor should UPDATE, not INSERT."""
     payload = ProceduralEntryCreate(
         vault_id=uuid4(),
-        kind='strategy',
+        kind='procedure',
         scope='project:abc',
         verb='deploy',
         context='staging',
         title='deploy to staging',
         summary='run the deploy playbook',
+        trigger='deploying the service to staging',
     )
 
     existing = _make_entry_row(
-        kind='strategy',
+        kind='procedure',
         scope='project:abc',
         verb='deploy',
         context='staging',
@@ -669,9 +694,9 @@ def test_entry_dto_pin_and_source_lists_default_empty():
     e = ProceduralEntryDTO(
         id=uuid4(),
         vault_id=uuid4(),
-        kind='case',
+        kind='procedure',
         scope='global',
-        title='outage on staging',
+        title='recover from staging outage',
         summary='db connection pool exhausted',
         created_at=datetime.now(timezone.utc),
         updated_at=datetime.now(timezone.utc),

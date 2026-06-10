@@ -46,33 +46,40 @@ def _route_paths():
 
 def test_procedural_router_mounts_under_procedural_prefix():
     """All procedural routes live under /api/v1/procedural/* — NOT
-    /api/v1/procedural/* (legacy engine-internal name)."""
+    under the legacy /api/v1/experiential/* prefix."""
     paths = _route_paths()
     assert paths, 'procedural router has no routes registered'
     for path in paths:
         assert path.startswith('/api/v1/procedural'), (
             f'procedural route must be under /api/v1/procedural, got: {path}'
         )
-        assert '/procedural' not in path, (
-            f'procedural route must not carry the legacy prefix /api/v1/procedural: {path}'
+        assert 'experiential' not in path, (
+            f'procedural route must not carry the legacy experiential name: {path}'
         )
 
 
-def test_procedural_router_has_eight_routes():
-    """8 endpoint definitions, but one path ({entry_id}) carries two
-    methods (GET + PATCH) so the path-keyed view counts 7. The route
-    count is the per-(path, method) total, which is 8.
+def test_procedural_router_route_surface():
+    """13 (method, path) routes across 10 distinct paths — the
+    {entry_id} path carries GET+PATCH and {entry_id}/pin carries
+    POST+DELETE. Covers CRUD, search, briefing-cards (the operator/
+    CLI read — the agent gets cards in the session briefing, not via
+    a tool), and the §18.8/§19.8 curation surface (pin/unpin/pins,
+    versions, rollback).
     """
     routes = list(router.routes)
     method_paths = [(tuple(sorted(route.methods or set())), route.path) for route in routes]
-    assert len(method_paths) == 8, (
-        f'Expected 8 procedural (method,path) routes, got {len(method_paths)}: {method_paths}'
+    assert len(method_paths) == 13, (
+        f'Expected 13 procedural (method,path) routes, got {len(method_paths)}: {method_paths}'
     )
     assert {p for _, p in method_paths} == {
         '/api/v1/procedural',
         '/api/v1/procedural/by-identity',
+        '/api/v1/procedural/pins',
         '/api/v1/procedural/{entry_id}',
         '/api/v1/procedural/{entry_id}/deprecate',
+        '/api/v1/procedural/{entry_id}/pin',
+        '/api/v1/procedural/{entry_id}/versions',
+        '/api/v1/procedural/{entry_id}/rollback',
         '/api/v1/procedural/upsert',
         '/api/v1/procedural/search',
         '/api/v1/procedural/briefing-cards',

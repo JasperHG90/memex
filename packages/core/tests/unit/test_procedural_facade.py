@@ -58,14 +58,21 @@ async def test_facade_create_delegates_to_repository():
         context='postgres',
         title='x',
         summary='y',
+        trigger='creating an alembic migration for postgres',
     )
     expected = MagicMock(spec=ProceduralEntryDTO)
     api._procedural_repo.create = AsyncMock(return_value=expected)
+    # The facade embeds the trigger at write time (§18.7) and threads
+    # the vector into the repository call.
+    api._procedural_search.embed_trigger = AsyncMock(return_value=[0.1] * 384)
 
     facade = MemexAPIProceduralFacade(api)
     result = await facade.create(payload)
 
-    api._procedural_repo.create.assert_awaited_once_with(payload)
+    api._procedural_search.embed_trigger.assert_awaited_once_with(payload.trigger)
+    api._procedural_repo.create.assert_awaited_once_with(
+        payload, trigger_embedding=[0.1] * 384
+    )
     assert result is expected
 
 
@@ -77,13 +84,17 @@ async def test_facade_update_passes_vault_id_through():
     api = _fake_api()
     entry_id = uuid4()
     vault_id = uuid4()
+    # No trigger change → the facade computes no embedding and threads
+    # trigger_embedding=None (the repo nulls any stale vector).
     payload = ProceduralEntryUpdate(summary='updated')
     api._procedural_repo.update = AsyncMock()
 
     facade = MemexAPIProceduralFacade(api)
     await facade.update(entry_id, payload, vault_id=vault_id)
 
-    api._procedural_repo.update.assert_awaited_once_with(entry_id, payload, vault_id=vault_id)
+    api._procedural_repo.update.assert_awaited_once_with(
+        entry_id, payload, vault_id=vault_id, trigger_embedding=None
+    )
 
 
 @pytest.mark.asyncio

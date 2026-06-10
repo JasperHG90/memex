@@ -1,5 +1,5 @@
 {
-  "alembic_head": "045_drop_procedure_outcomes",
+  "alembic_head": "064_two_kind_plane",
   "embedding_model": {
     "dim": 384,
     "hash": "main",
