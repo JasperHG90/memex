@@ -207,6 +207,15 @@ def test_get_tool_schemas_in_hybrid_mode(provider_with_stubbed_api):
         'memex_memory_consolidate',
         # Tier A WS-history (F49 — contradiction-graph timeline)
         'memex_get_unit_history',
+        # V7 — Procedural plane (case / procedure / strategy)
+        'memex_procedural_create',
+        'memex_procedural_upsert',
+        'memex_procedural_get',
+        'memex_procedural_get_by_identity',
+        'memex_procedural_update',
+        'memex_procedural_deprecate',
+        'memex_procedural_search',
+        'memex_procedural_briefing_cards',
     }
     assert names == expected
 
@@ -290,6 +299,15 @@ class TestGetToolSchemasBeforeInitialize:
             'memex_memory_consolidate',
             # Tier A WS-history (F49 — contradiction-graph timeline)
             'memex_get_unit_history',
+            # V7 — Procedural plane (case / procedure / strategy)
+            'memex_procedural_create',
+            'memex_procedural_upsert',
+            'memex_procedural_get',
+            'memex_procedural_get_by_identity',
+            'memex_procedural_update',
+            'memex_procedural_deprecate',
+            'memex_procedural_search',
+            'memex_procedural_briefing_cards',
         }
         assert names == expected
 
@@ -304,10 +322,11 @@ class TestGetToolSchemasBeforeInitialize:
         """A fresh provider with no config always exposes tools. Only an
         initialized provider whose config explicitly says ``context`` hides them.
         """
-        # Pre-init: full 49-tool set (Stream 1-5 baseline + Tier A
-        # quick-wins + diagnostics + lint (5) + locks + history).
+        # Pre-init: full 57-tool set (Stream 1-5 baseline + Tier A
+        # quick-wins + diagnostics + lint (5) + locks + history +
+        # V7 procedural plane (8)).
         p = MemexMemoryProvider()
-        assert len(p.get_tool_schemas()) == 49
+        assert len(p.get_tool_schemas()) == 57
 
         # After init in context mode: empty.
         monkeypatch.setenv('HERMES_HOME', str(tmp_path))

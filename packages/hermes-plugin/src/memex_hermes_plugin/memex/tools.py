@@ -60,6 +60,14 @@ from memex_common.tool_descriptions import (
     MEMEX_MEMORY_RECONSOLIDATE_DESC,
     MEMEX_MEMORY_RESTORE_DESC,
     MEMEX_MEMORY_SUMMARIZE_NODE_DESC,
+    MEMEX_PROCEDURAL_BRIEFING_CARDS_DESC,
+    MEMEX_PROCEDURAL_CREATE_DESC,
+    MEMEX_PROCEDURAL_DEPRECATE_DESC,
+    MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESC,
+    MEMEX_PROCEDURAL_GET_DESC,
+    MEMEX_PROCEDURAL_SEARCH_DESC,
+    MEMEX_PROCEDURAL_UPDATE_DESC,
+    MEMEX_PROCEDURAL_UPSERT_DESC,
     MEMEX_RECORD_OUTCOME_DESC,
     MEMEX_SUBMIT_LINT_PROPOSAL_DESC,
 )
@@ -164,6 +172,16 @@ class MemexAPIProtocol(Protocol):
     # F9 — Per-entity advisory lock + vault-wide consolidate
     async def reconsolidate_entity(self, *args: Any, **kwargs: Any) -> Any: ...
     async def consolidate_vault(self, *args: Any, **kwargs: Any) -> Any: ...
+
+    # V7 — Procedural plane (case / procedure / strategy)
+    async def procedural_create(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def procedural_upsert(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def procedural_get(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def procedural_get_by_identity(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def procedural_update(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def procedural_deprecate(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def procedural_search(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def procedural_briefing_cards(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
 # ---------------------------------------------------------------------------
@@ -3475,6 +3493,15 @@ __all__ = [
     'RECORD_OUTCOME_SCHEMA',
     # --- F49 contradiction-graph timeline ---
     'GET_UNIT_HISTORY_SCHEMA',
+    # --- V7 — Procedural plane (case / procedure / strategy) ---
+    'PROC_BRIEFING_CARDS_SCHEMA',
+    'PROC_CREATE_SCHEMA',
+    'PROC_DEPRECATE_SCHEMA',
+    'PROC_GET_BY_IDENTITY_SCHEMA',
+    'PROC_GET_SCHEMA',
+    'PROC_SEARCH_SCHEMA',
+    'PROC_UPDATE_SCHEMA',
+    'PROC_UPSERT_SCHEMA',
 ]
 
 
@@ -4494,3 +4521,610 @@ def handle_get_unit_history(
 
 HANDLERS['memex_get_unit_history'] = handle_get_unit_history
 ALL_SCHEMAS.append(GET_UNIT_HISTORY_SCHEMA)
+
+
+# ============================================================
+# V7 — Procedural plane (case / procedure / strategy)
+#
+# The procedural plane is the agent's "how to do X" surface — distinct
+# from notes (long-form prose) and KV (preferences / bindings). It has
+# an identity anchor (kind, scope, verb, context) UNIQUE NULLS NOT
+# DISTINCT, three kinds (case, procedure, strategy), and four scopes
+# (global, user, project:<id>, app:<id>).
+#
+# The eight tools mirror the MCP server. Vault_id is sourced from the
+# Hermes session binding (handler injects from `vault_id` arg); not
+# exposed in the schema since the agent never names a vault directly.
+# ============================================================
+
+_VALID_PROCEDURAL_KINDS: tuple[str, ...] = ('case', 'procedure', 'strategy')
+
+
+def _validate_kind(raw: Any) -> str | None:
+    if not isinstance(raw, str):
+        return f'kind must be a string, got {type(raw).__name__}'
+    if raw not in _VALID_PROCEDURAL_KINDS:
+        return f'Invalid kind {raw!r}. Valid values: {" | ".join(_VALID_PROCEDURAL_KINDS)}'
+    return None
+
+
+PROC_CREATE_SCHEMA: dict[str, Any] = {
+    'name': 'memex_procedural_create',
+    'description': MEMEX_PROCEDURAL_CREATE_DESC,
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'kind': {
+                'type': 'string',
+                'enum': list(_VALID_PROCEDURAL_KINDS),
+                'description': 'Entry kind discriminator.',
+            },
+            'scope': {
+                'type': 'string',
+                'description': (
+                    'One of: "global", "user", "project:<id>", "app:<id>". '
+                    'Use "global" for cross-vault conventions; "project:<id>" '
+                    'for project-scoped procedures.'
+                ),
+            },
+            'title': {'type': 'string', 'description': 'Short title (max 256 chars).'},
+            'summary': {'type': 'string', 'description': 'One-paragraph summary.'},
+            'body': {'type': 'string', 'description': 'Full procedural body (markdown ok).'},
+            'verb': {
+                'type': 'string',
+                'description': (
+                    'REQUIRED for procedure+strategy. MUST be null/omitted for case. '
+                    'The action verb (e.g. "rotate", "deploy", "audit").'
+                ),
+            },
+            'context': {
+                'type': 'string',
+                'description': (
+                    'REQUIRED for procedure+strategy. MUST be null/omitted for case. '
+                    'The context identifier (e.g. "creds", "iam", "ci").'
+                ),
+            },
+            'trigger': {
+                'type': 'string',
+                'description': (
+                    'For case: the trigger signal. For procedure/strategy: optional '
+                    'auto-fire condition. Required for case-kind entries.'
+                ),
+            },
+            'tags': {
+                'type': 'array',
+                'items': {'type': 'string'},
+                'description': 'Optional tags for searchability.',
+            },
+            'extra_metadata': {
+                'type': 'object',
+                'description': 'Optional arbitrary metadata dict.',
+            },
+            'status': {
+                'type': 'string',
+                'enum': ['draft', 'published', 'deprecated'],
+                'description': 'Default "published" — only set "draft" if you want it hidden from search.',
+            },
+        },
+        'required': ['kind', 'scope', 'title', 'summary'],
+    },
+}
+
+
+def handle_procedural_create(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    try:
+        kind = _require(args, 'kind')
+        scope = _require(args, 'scope')
+        title = _require(args, 'title')
+        summary = _require(args, 'summary')
+    except ValueError as e:
+        return tool_error(str(e))
+    if (msg := _validate_kind(kind)) is not None:
+        return tool_error(msg)
+    if vault_id is None:
+        return tool_error('No vault bound to this Hermes session; cannot create procedural entry.')
+
+    from memex_common.experiential_schemas import ExperientialEntryCreate
+
+    # V7 contract: case MUST omit verb+context; procedure+strategy REQUIRE both.
+    raw_verb = args.get('verb')
+    raw_context = args.get('context')
+    if kind == 'case':
+        verb_value: str | None = None
+        context_value: str | None = None
+        if raw_verb or raw_context:
+            return tool_error(
+                'kind="case" entries MUST omit verb and context. Use procedure or strategy '
+                'if you need an identity-anchored (verb, context) pair.'
+            )
+    else:
+        if not raw_verb or not raw_context:
+            return tool_error(
+                f'kind={kind!r} entries REQUIRE both verb and context. '
+                'Use kind="case" for trigger-only entries.'
+            )
+        verb_value = str(raw_verb)
+        context_value = str(raw_context)
+
+    payload = ExperientialEntryCreate(
+        vault_id=vault_id,
+        kind=kind,  # type: ignore[arg-type]
+        scope=str(scope),
+        title=str(title),
+        summary=str(summary),
+        body=args.get('body') or '',
+        verb=verb_value,
+        context=context_value,
+        trigger=args.get('trigger'),
+        tags=args.get('tags') or [],
+        extra_metadata=args.get('extra_metadata') or {},
+        status=args.get('status', 'published'),  # type: ignore[arg-type]
+        origin='manual',
+    )
+    try:
+        result = run_sync(api.procedural_create(payload), timeout=30.0)
+    except Exception as e:
+        logger.warning('memex_procedural_create failed: %s', e)
+        return tool_error(f'Procedural create failed: {e}')
+    return _dump_dto(result)
+
+
+PROC_UPSERT_SCHEMA: dict[str, Any] = {
+    'name': 'memex_procedural_upsert',
+    'description': MEMEX_PROCEDURAL_UPSERT_DESC,
+    'parameters': PROC_CREATE_SCHEMA['parameters'],
+}
+
+
+def handle_procedural_upsert(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    """Idempotent write on the identity anchor — same schema as create.
+
+    Same anchor → UPDATE in place (new version row). New anchor →
+    INSERT. Status is preserved (a deprecated entry stays deprecated).
+    For partial in-place edits prefer memex_procedural_update.
+    """
+    try:
+        kind = _require(args, 'kind')
+        scope = _require(args, 'scope')
+        title = _require(args, 'title')
+        summary = _require(args, 'summary')
+    except ValueError as e:
+        return tool_error(str(e))
+    if (msg := _validate_kind(kind)) is not None:
+        return tool_error(msg)
+    if vault_id is None:
+        return tool_error('No vault bound to this Hermes session; cannot upsert procedural entry.')
+
+    from memex_common.experiential_schemas import ExperientialEntryCreate
+
+    raw_verb = args.get('verb')
+    raw_context = args.get('context')
+    if kind == 'case':
+        verb_value: str | None = None
+        context_value: str | None = None
+        if raw_verb or raw_context:
+            return tool_error('kind="case" entries MUST omit verb and context.')
+    else:
+        if not raw_verb or not raw_context:
+            return tool_error(f'kind={kind!r} entries REQUIRE both verb and context.')
+        verb_value = str(raw_verb)
+        context_value = str(raw_context)
+
+    payload = ExperientialEntryCreate(
+        vault_id=vault_id,
+        kind=kind,  # type: ignore[arg-type]
+        scope=str(scope),
+        title=str(title),
+        summary=str(summary),
+        body=args.get('body') or '',
+        verb=verb_value,
+        context=context_value,
+        trigger=args.get('trigger'),
+        tags=args.get('tags') or [],
+        extra_metadata=args.get('extra_metadata') or {},
+        status=args.get('status', 'published'),  # type: ignore[arg-type]
+        origin='manual',
+    )
+    try:
+        result = run_sync(api.procedural_upsert(payload), timeout=30.0)
+    except Exception as e:
+        logger.warning('memex_procedural_upsert failed: %s', e)
+        return tool_error(f'Procedural upsert failed: {e}')
+    return _dump_dto(result)
+
+
+PROC_GET_SCHEMA: dict[str, Any] = {
+    'name': 'memex_procedural_get',
+    'description': MEMEX_PROCEDURAL_GET_DESC,
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'entry_id': {
+                'type': 'string',
+                'description': 'Entry UUID.',
+            },
+        },
+        'required': ['entry_id'],
+    },
+}
+
+
+def handle_procedural_get(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    try:
+        raw_id = _require(args, 'entry_id')
+    except ValueError as e:
+        return tool_error(str(e))
+    try:
+        entry_uuid = UUID(str(raw_id))
+    except (ValueError, TypeError):
+        return tool_error(f'Invalid entry UUID: {raw_id}')
+    try:
+        result = run_sync(
+            api.procedural_get(entry_uuid, vault_id=vault_id),
+            timeout=30.0,
+        )
+    except Exception as e:
+        logger.warning('memex_procedural_get failed: %s', e)
+        return tool_error(f'Procedural get failed: {e}')
+    return _dump_dto(result)
+
+
+PROC_GET_BY_IDENTITY_SCHEMA: dict[str, Any] = {
+    'name': 'memex_procedural_get_by_identity',
+    'description': MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESC,
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'kind': {
+                'type': 'string',
+                'enum': list(_VALID_PROCEDURAL_KINDS),
+                'description': 'Entry kind.',
+            },
+            'scope': {
+                'type': 'string',
+                'description': 'Scope (global / user / project:<id> / app:<id>).',
+            },
+            'verb': {'type': 'string', 'description': 'Verb (omit for case).'},
+            'context': {'type': 'string', 'description': 'Context (omit for case).'},
+        },
+        'required': ['kind', 'scope'],
+    },
+}
+
+
+def handle_procedural_get_by_identity(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    try:
+        kind = _require(args, 'kind')
+        scope = _require(args, 'scope')
+    except ValueError as e:
+        return tool_error(str(e))
+    if (msg := _validate_kind(kind)) is not None:
+        return tool_error(msg)
+    if vault_id is None:
+        return tool_error('No vault bound to this Hermes session; cannot probe identity anchor.')
+
+    try:
+        result = run_sync(
+            api.procedural_get_by_identity(
+                kind=str(kind),
+                scope=str(scope),
+                verb=args.get('verb'),
+                context=args.get('context'),
+                vault_id=vault_id,
+            ),
+            timeout=30.0,
+        )
+    except Exception as e:
+        logger.warning('memex_procedural_get_by_identity failed: %s', e)
+        return tool_error(f'Procedural get_by_identity failed: {e}')
+    if result is None:
+        return json.dumps(None)
+    return _dump_dto(result)
+
+
+PROC_UPDATE_SCHEMA: dict[str, Any] = {
+    'name': 'memex_procedural_update',
+    'description': MEMEX_PROCEDURAL_UPDATE_DESC,
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'entry_id': {'type': 'string', 'description': 'Entry UUID.'},
+            'title': {'type': 'string'},
+            'summary': {'type': 'string'},
+            'body': {'type': 'string'},
+            'trigger': {'type': 'string'},
+            'tags': {'type': 'array', 'items': {'type': 'string'}},
+            'extra_metadata': {'type': 'object'},
+            'status': {'type': 'string', 'enum': ['draft', 'published', 'deprecated']},
+        },
+        'required': ['entry_id'],
+    },
+}
+
+
+def handle_procedural_update(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    try:
+        raw_id = _require(args, 'entry_id')
+    except ValueError as e:
+        return tool_error(str(e))
+    try:
+        entry_uuid = UUID(str(raw_id))
+    except (ValueError, TypeError):
+        return tool_error(f'Invalid entry UUID: {raw_id}')
+
+    from memex_common.experiential_schemas import ExperientialEntryUpdate
+
+    update_kwargs: dict[str, Any] = {}
+    for field in ('title', 'summary', 'body', 'trigger', 'tags', 'extra_metadata', 'status'):
+        if field in args and args[field] is not None:
+            update_kwargs[field] = args[field]
+    if not update_kwargs:
+        return tool_error(
+            'memex_procedural_update requires at least one of: '
+            'title, summary, body, trigger, tags, extra_metadata, status.'
+        )
+    payload = ExperientialEntryUpdate(**update_kwargs)
+
+    try:
+        result = run_sync(
+            api.procedural_update(entry_uuid, payload, vault_id=vault_id),
+            timeout=30.0,
+        )
+    except Exception as e:
+        logger.warning('memex_procedural_update failed: %s', e)
+        return tool_error(f'Procedural update failed: {e}')
+    return _dump_dto(result)
+
+
+PROC_DEPRECATE_SCHEMA: dict[str, Any] = {
+    'name': 'memex_procedural_deprecate',
+    'description': MEMEX_PROCEDURAL_DEPRECATE_DESC,
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'entry_id': {'type': 'string', 'description': 'Entry UUID to deprecate.'},
+            'superseded_by_id': {
+                'type': 'string',
+                'description': 'Optional UUID of the entry that supersedes this one.',
+            },
+        },
+        'required': ['entry_id'],
+    },
+}
+
+
+def handle_procedural_deprecate(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    try:
+        raw_id = _require(args, 'entry_id')
+    except ValueError as e:
+        return tool_error(str(e))
+    try:
+        entry_uuid = UUID(str(raw_id))
+    except (ValueError, TypeError):
+        return tool_error(f'Invalid entry UUID: {raw_id}')
+
+    superseded_by: UUID | None = None
+    raw_superseded = args.get('superseded_by_id')
+    if raw_superseded:
+        try:
+            superseded_by = UUID(str(raw_superseded))
+        except (ValueError, TypeError):
+            return tool_error(f'Invalid superseded_by_id UUID: {raw_superseded}')
+
+    try:
+        result = run_sync(
+            api.procedural_deprecate(
+                entry_uuid,
+                superseded_by_id=superseded_by,
+                vault_id=vault_id,
+            ),
+            timeout=30.0,
+        )
+    except Exception as e:
+        logger.warning('memex_procedural_deprecate failed: %s', e)
+        return tool_error(f'Procedural deprecate failed: {e}')
+    return _dump_dto(result)
+
+
+PROC_SEARCH_SCHEMA: dict[str, Any] = {
+    'name': 'memex_procedural_search',
+    'description': MEMEX_PROCEDURAL_SEARCH_DESC,
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'query': {'type': 'string', 'description': 'Search query text.'},
+            'kind': {
+                'type': 'string',
+                'enum': list(_VALID_PROCEDURAL_KINDS),
+                'description': 'Optional kind filter.',
+            },
+            'scope': {
+                'type': 'string',
+                'description': 'Optional scope filter (global / user / project:<id> / app:<id>).',
+            },
+            'status': {
+                'type': 'string',
+                'enum': ['draft', 'published', 'deprecated', 'all'],
+                'description': 'Default "published" (drafts hidden). Pass "all" to include everything.',
+            },
+            'top_k': {'type': 'integer', 'description': 'Max hits (default 10, max 100).'},
+            'include_pin_chain': {
+                'type': 'boolean',
+                'description': 'Union in pinned entries from related contexts.',
+            },
+            'pin_contexts': {
+                'type': 'array',
+                'items': {'type': 'string'},
+                'description': 'Contexts whose pinned entries to include (when include_pin_chain=true).',
+            },
+            'bm25_weight': {
+                'type': 'number',
+                'description': 'BM25 fusion weight (0-1); vector weight is 1 - this.',
+            },
+        },
+        'required': ['query'],
+    },
+}
+
+
+def handle_procedural_search(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    try:
+        query = _require(args, 'query')
+    except ValueError as e:
+        return tool_error(str(e))
+    kind = args.get('kind')
+    if kind is not None and (msg := _validate_kind(kind)) is not None:
+        return tool_error(msg)
+
+    from memex_common.experiential_schemas import ExperientialSearchRequest
+
+    # Pydantic 2 + ``extra='forbid'`` rejects ``None`` for fields with
+    # non-None defaults (``bool``, ``float``, ``list``). Build the
+    # request conditionally — only set fields the agent actually
+    # supplied, and use the DTO's defaults for the rest.
+    req_kwargs: dict[str, Any] = {
+        'query': str(query),
+        'status': args.get('status', 'published'),  # type: ignore[arg-type]
+    }
+    if kind is not None:
+        req_kwargs['kind'] = kind  # type: ignore[assignment]
+    if args.get('scope') is not None:
+        req_kwargs['scope'] = args['scope']
+    if args.get('top_k') is not None:
+        req_kwargs['limit'] = int(args['top_k'])
+    if args.get('include_pin_chain') is not None:
+        req_kwargs['include_pin_chain'] = bool(args['include_pin_chain'])
+    if args.get('pin_contexts') is not None:
+        req_kwargs['pin_contexts'] = list(args['pin_contexts'])
+    if args.get('bm25_weight') is not None:
+        req_kwargs['bm25_weight'] = float(args['bm25_weight'])
+    if vault_id is not None:
+        req_kwargs['vault_id'] = vault_id
+
+    try:
+        request = ExperientialSearchRequest(**req_kwargs)
+    except Exception as e:
+        return tool_error(f'Invalid search request: {e}')
+
+    try:
+        result = run_sync(api.procedural_search(request), timeout=30.0)
+    except Exception as e:
+        logger.warning('memex_procedural_search failed: %s', e)
+        return tool_error(f'Procedural search failed: {e}')
+    return _dump_dto(result)
+
+
+PROC_BRIEFING_CARDS_SCHEMA: dict[str, Any] = {
+    'name': 'memex_procedural_briefing_cards',
+    'description': MEMEX_PROCEDURAL_BRIEFING_CARDS_DESC,
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'context_keys': {
+                'type': 'array',
+                'items': {'type': 'string'},
+                'description': 'Non-empty list of context keys (e.g. ["global"], ["project:alpha"]).',
+            },
+            'scope': {
+                'type': 'string',
+                'description': 'Optional scope filter.',
+            },
+            'limit_per_context': {
+                'type': 'integer',
+                'description': 'Max cards per context (default 5).',
+            },
+        },
+        'required': ['context_keys'],
+    },
+}
+
+
+def handle_procedural_briefing_cards(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    keys = args.get('context_keys')
+    if not keys or not isinstance(keys, list) or not all(isinstance(k, str) for k in keys):
+        return tool_error('context_keys is required and must be a non-empty list of strings.')
+
+    try:
+        result = run_sync(
+            api.procedural_briefing_cards(
+                list(keys),
+                scope=args.get('scope'),
+                limit_per_context=int(args.get('limit_per_context', 5)),
+            ),
+            timeout=30.0,
+        )
+    except Exception as e:
+        logger.warning('memex_procedural_briefing_cards failed: %s', e)
+        return tool_error(f'Procedural briefing_cards failed: {e}')
+    return _dump_dto(result)
+
+
+def _dump_dto(result: Any) -> str:
+    """Serialize a Pydantic DTO (or dict / None) to JSON. Mirrors the
+    pattern used by other handlers — ``model_dump(mode='json')`` when
+    available, otherwise fall back to ``str()`` so handlers don't crash
+    on schema-drifted test mocks."""
+    dump = getattr(result, 'model_dump', None)
+    if callable(dump):
+        return json.dumps(dump(mode='json'))
+    if isinstance(result, (list, dict)):
+        return json.dumps(result, default=str)
+    return json.dumps(result, default=str)
+
+
+HANDLERS['memex_procedural_create'] = handle_procedural_create
+HANDLERS['memex_procedural_upsert'] = handle_procedural_upsert
+HANDLERS['memex_procedural_get'] = handle_procedural_get
+HANDLERS['memex_procedural_get_by_identity'] = handle_procedural_get_by_identity
+HANDLERS['memex_procedural_update'] = handle_procedural_update
+HANDLERS['memex_procedural_deprecate'] = handle_procedural_deprecate
+HANDLERS['memex_procedural_search'] = handle_procedural_search
+HANDLERS['memex_procedural_briefing_cards'] = handle_procedural_briefing_cards
+ALL_SCHEMAS.append(PROC_CREATE_SCHEMA)
+ALL_SCHEMAS.append(PROC_UPSERT_SCHEMA)
+ALL_SCHEMAS.append(PROC_GET_SCHEMA)
+ALL_SCHEMAS.append(PROC_GET_BY_IDENTITY_SCHEMA)
+ALL_SCHEMAS.append(PROC_UPDATE_SCHEMA)
+ALL_SCHEMAS.append(PROC_DEPRECATE_SCHEMA)
+ALL_SCHEMAS.append(PROC_SEARCH_SCHEMA)
+ALL_SCHEMAS.append(PROC_BRIEFING_CARDS_SCHEMA)

@@ -192,6 +192,16 @@ def test_all_schemas_have_required_fields():
     tier_a_history = {
         'memex_get_unit_history',
     }
+    v7_procedural_plane = {
+        'memex_procedural_create',
+        'memex_procedural_upsert',
+        'memex_procedural_get',
+        'memex_procedural_get_by_identity',
+        'memex_procedural_update',
+        'memex_procedural_deprecate',
+        'memex_procedural_search',
+        'memex_procedural_briefing_cards',
+    }
     expected = (
         stream_1_baseline
         | stream_2_read_discovery
@@ -203,6 +213,7 @@ def test_all_schemas_have_required_fields():
         | tier_a_linter
         | tier_a_locks
         | tier_a_history
+        | v7_procedural_plane
     )
     assert names == expected
     for s in ALL_SCHEMAS:
