@@ -4625,35 +4625,26 @@ async def memex_procedural_get_by_identity(
         resolved_vault: UUID | None = None
         if vault_id is not None:
             resolved_vault = await _resolve_vault_id(api, vault_id)
-        # The facade currently exposes create/get/update/upsert/deprecate/
-        # search/briefing_cards/enqueue_derivation. Identity-based lookup
-        # is a thin read; we call the search service via the API surface
-        # using a status="all" filter on the identity-anchor tuple. This
-        # keeps the LLM hot path single-call without widening the facade
-        # just for MCP. (See MemexAPIExperientialFacade in core/api.py.)
-        from memex_common.experiential_schemas import (
-            ExperientialSearchRequest as _SR,
-        )
-
-        request = _SR(
-            query='',
+        # Direct identity-anchor SELECT against the partial unique index
+        # ``uq_experiential_identity`` (not a fuzzy search). A previous
+        # implementation routed through ``api.experiential.search`` with
+        # an empty query, which short-circuited to an empty response and
+        # silently returned ``None`` for every anchor — the same
+        # regression the HTTP route had before its fix. The facade
+        # exposes a dedicated ``get_by_identity`` method (see
+        # ``MemexAPIExperientialFacade.get_by_identity``) so the LLM hot
+        # path is a single partial-index lookup, not a search +
+        # post-filter round-trip.
+        dto = await api.experiential.get_by_identity(
             kind=kind,
             scope=scope,
-            status='all',
-            top_k=1,
-            # No `verb`/`context` filter on the search request DTO; the
-            # search service narrows by kind+scope and we post-filter on
-            # identity. (Adding a dedicated identity filter to the search
-            # service is a follow-up; this is the MVP path.)
+            verb=verb,
+            context=context,
+            vault_id=resolved_vault,
         )
-        response = await api.experiential.search(request)
-        for hit in response.hits:
-            # We need the full entry to confirm the verb+context match
-            # (search response doesn't carry them). Round-trip to get.
-            full = await api.experiential.get(hit.entry_id, vault_id=resolved_vault)
-            if full.verb == verb and full.context == context:
-                return _dto_to_mcp_entry(full)
-        return None
+        if dto is None:
+            return None
+        return _dto_to_mcp_entry(dto)
     except ToolError:
         raise
     except Exception as e:
@@ -4785,16 +4776,23 @@ async def memex_procedural_search(
         return McpExperientialSearchResult(
             hits=[
                 McpExperientialSearchHit(
-                    entry_id=h.entry_id,
-                    kind=h.kind,
+                    # The ExperientialSearchHit DTO nests the entry
+                    # under .entry (so the agent can see both the
+                    # RRF score and the full DTO). The MCP tool
+                    # boundary wants a flat shape, so project
+                    # entry.* into the hit fields. Reading these
+                    # off the hit itself raised AttributeError on
+                    # every search call before the fix.
+                    entry_id=h.entry.id,
+                    kind=h.entry.kind,
                     score=h.score,
                     matched_via=h.matched_via,
-                    title=h.title,
-                    summary=h.summary,
-                    scope=h.scope,
-                    verb=h.verb,
-                    context=h.context,
-                    trigger=h.trigger,
+                    title=h.entry.title,
+                    summary=h.entry.summary,
+                    scope=h.entry.scope,
+                    verb=h.entry.verb,
+                    context=h.entry.context,
+                    trigger=h.entry.trigger,
                     pin_position=h.pin_position,
                 )
                 for h in response.hits
@@ -4841,6 +4839,17 @@ async def memex_procedural_briefing_cards(
             description='Max cards per context key. Default 5.',
         ),
     ] = 5,
+    vault_id: Annotated[
+        str | None,
+        Field(
+            description=(
+                'Optional vault UUID or name for vault-scope enforcement. '
+                'The multi-tenancy guardrail — the briefing is only '
+                "served from entries in the caller's vault. Pass None "
+                'for operator-only cross-vault briefings.'
+            ),
+        ),
+    ] = None,
 ) -> McpExperientialBriefingResult:
     """Pin-chain briefing cards for the session-briefing surface."""
     try:
@@ -4849,24 +4858,41 @@ async def memex_procedural_briefing_cards(
 
         keys: list[ShortLabel] = [ShortLabel(k) for k in context_keys]
         scope_label: ShortLabel | None = ShortLabel(scope) if scope is not None else None
+        resolved_vault: UUID | None = None
+        if vault_id is not None:
+            resolved_vault = await _resolve_vault_id(api, vault_id)
         result = await api.experiential.briefing_cards(
             keys,
             scope=scope_label,
             limit_per_context=limit_per_context,
+            vault_id=resolved_vault,
         )
         return McpExperientialBriefingResult(
             cards=[
                 McpExperientialBriefingCard(
-                    entry_id=c.entry_id,
-                    kind=c.kind,
-                    title=c.title,
-                    summary=c.summary,
-                    scope=c.scope,
+                    # Same projection rule as the search tool: the
+                    # ExperientialBriefingCard DTO nests the entry
+                    # under .entry, so the flat MCP shape has to
+                    # project .entry.* into the tool-boundary
+                    # fields. The previous read raised
+                    # AttributeError on every briefing call.
+                    entry_id=c.entry.id,
+                    kind=c.entry.kind,
+                    title=c.entry.title,
+                    summary=c.entry.summary,
+                    scope=c.entry.scope,
                     pin_position=c.pin_position,
                 )
                 for c in result.cards
             ],
-            total=result.total,
+            # The underlying ``ExperientialBriefingCards`` DTO names
+            # the field ``total_pinned`` (the count of pinned entries
+            # that contributed to the briefing) — projecting it as
+            # the MCP-facing ``total`` is the right shape, but the
+            # attribute access must match. Reading ``result.total``
+            # here raised ``AttributeError`` on every briefing call
+            # before the fix.
+            total=result.total_pinned,
         )
     except ToolError:
         raise
