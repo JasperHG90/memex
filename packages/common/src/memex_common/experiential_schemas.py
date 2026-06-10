@@ -311,6 +311,18 @@ class ExperientialSearchRequest(BaseModel):
         '`pin_contexts` list (in addition to the textual/vector hits).',
     )
     pin_contexts: list[ShortLabel] = Field(default_factory=list)
+    vault_id: UUID | None = Field(
+        default=None,
+        description=(
+            'Optional vault UUID to scope the search. When set, every '
+            'BM25, vector, and pin-chain candidate is restricted to '
+            'this vault — the multi-tenancy guardrail that prevents a '
+            'vault-A caller from reading vault-B entries by accident. '
+            'A non-null value here is the expected production call '
+            'shape; leaving it None retains the cross-vault result '
+            'set for operator/CLI paths that need a global view.'
+        ),
+    )
 
 
 class ExperientialSearchHit(BaseModel):

@@ -2365,6 +2365,31 @@ class MemexAPIExperientialFacade:
         """Look up a single entry. Raises if missing or vault-mismatched."""
         return await self._api._experiential_repo.get(entry_id, vault_id=vault_id)
 
+    async def get_by_identity(
+        self,
+        *,
+        kind: str,
+        scope: ShortLabel,
+        verb: str | None,
+        context: str | None,
+        vault_id: UUID | None = None,
+        status: str | None = 'published',
+    ) -> ExperientialEntryDTO | None:
+        """Look up a single entry by its identity anchor.
+
+        Returns ``None`` on a miss — the route uses this as the
+        "have we learned this?" probe. Distinct from
+        :meth:`get`, which 404s on a missing id.
+        """
+        return await self._api._experiential_repo.get_by_identity(
+            kind=kind,
+            scope=scope,
+            verb=verb,
+            context=context,
+            vault_id=vault_id,
+            status=status,
+        )
+
     async def update(
         self,
         entry_id: UUID,
@@ -2414,10 +2439,14 @@ class MemexAPIExperientialFacade:
         *,
         scope: ShortLabel | None = None,
         limit_per_context: int = 5,
+        vault_id: UUID | None = None,
     ) -> ExperientialBriefingCards:
         """Pin-chain briefing cards for the session-briefing surface."""
         return await self._api._experiential_search.briefing_cards(
-            context_keys, scope=scope, limit_per_context=limit_per_context
+            context_keys,
+            scope=scope,
+            limit_per_context=limit_per_context,
+            vault_id=vault_id,
         )
 
     async def enqueue_derivation(

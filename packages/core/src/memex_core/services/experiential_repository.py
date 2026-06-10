@@ -132,6 +132,28 @@ class ExperientialIdentityConflict(ExperientialRepositoryError):
     case where the unique constraint should re-raise to the caller."""
 
 
+class ExperientialConstraintViolation(ExperientialRepositoryError):
+    """Raised when a non-anchor DB constraint rejects a write.
+
+    A check (e.g. ``ck_strategy_context``) or foreign-key violation
+    surfaces as ``IntegrityError`` from asyncpg. The repository's
+    identity-anchor contract is the *one* unique constraint that
+    should re-raise as 409 (``ExperientialIdentityConflict``) — every
+    other constraint failure is a *caller-correctable* input error
+    and maps to 422 so the agent's loop surfaces the actual cause
+    instead of a misleading "concurrent upsert, retry" message.
+
+    The ``constraint`` attribute is the asyncpg
+    ``diag.constraint_name`` (e.g. ``ck_strategy_context``,
+    ``experiential_entries_vault_id_fkey``) so the agent's log
+    surface can tell which rule fired.
+    """
+
+    def __init__(self, message: str, *, constraint: str | None = None) -> None:
+        super().__init__(message)
+        self.constraint = constraint
+
+
 class ExperientialRepository:
     """Async CRUD for the experiential plane.
 
@@ -140,10 +162,59 @@ class ExperientialRepository:
     wherever multi-tenancy is at risk.
     """
 
+    # The partial unique index that backs the identity anchor — the
+    # only UNIQUE constraint that should re-raise as
+    # :class:`ExperientialIdentityConflict` (409). Every other UNIQUE
+    # constraint is a real conflict and uses the same 409 mapping;
+    # the distinction is informative for the log line.
+    _ANCHOR_CONSTRAINTS = frozenset({'uq_experiential_identity'})
+
     def __init__(self, metastore: AsyncBaseMetaStoreEngine) -> None:
         self._metastore = metastore
         # Optional — set by MemexAPI after construction (see V11 pattern).
         self._audit_service: Any | None = None
+
+    @staticmethod
+    def _translate_integrity_error(
+        exc: IntegrityError,
+        *,
+        anchor_label: str,
+    ) -> ExperientialRepositoryError:
+        """Translate a raw asyncpg ``IntegrityError`` into the right
+        domain error.
+
+        The identity-anchor UNIQUE is the only case that maps to
+        :class:`ExperientialIdentityConflict` (409, "retry"). Every
+        other constraint — a CHECK, an FK, a sibling-table UNIQUE
+        tripped by a parallel writer — maps to
+        :class:`ExperientialConstraintViolation` (422) so the agent's
+        retry loop can surface the actual cause instead of a
+        misleading "concurrent upsert" message.
+
+        SQLAlchemy wraps the asyncpg error in its own
+        ``IntegrityError`` (``exc.orig``); the underlying asyncpg
+        exception — with the rich ``diag`` (``constraint_name``,
+        ``sqlstate``, ``message_primary``) — is the ``__cause__``.
+        The wrapping strips the diag, so we have to walk one
+        level down.
+        """
+        asyncpg_exc = getattr(getattr(exc, 'orig', None), '__cause__', None)
+        if asyncpg_exc is None:
+            asyncpg_exc = exc.orig
+        constraint_name = getattr(asyncpg_exc, 'constraint_name', None)
+        sqlstate = getattr(asyncpg_exc, 'sqlstate', None)
+
+        if constraint_name in ExperientialRepository._ANCHOR_CONSTRAINTS:
+            return ExperientialIdentityConflict(anchor_label)
+        message = anchor_label
+        if constraint_name:
+            message = f'{anchor_label} (constraint={constraint_name!r})'
+        elif sqlstate:
+            # CHECK / FK without a named constraint (rare — most of
+            # ours are named) still leaves a SQLSTATE the agent's
+            # log surface can pivot on.
+            message = f'{anchor_label} (sqlstate={sqlstate!r})'
+        return ExperientialConstraintViolation(message, constraint=constraint_name)
 
     # ------------------------------------------------------------------
     # Entry CRUD
@@ -194,16 +265,19 @@ class ExperientialRepository:
                 await session.refresh(entry)
         except IntegrityError as exc:
             logger.info(
-                'experiential.create: identity anchor conflict for '
-                'kind=%s scope=%s verb=%r context=%r',
+                'experiential.create: integrity error for kind=%s scope=%s verb=%r context=%r: %s',
                 payload.kind,
                 payload.scope,
                 payload.verb,
                 payload.context,
+                exc,
             )
-            raise ExperientialIdentityConflict(
-                f'an entry with kind={payload.kind!r} scope={payload.scope!r} '
-                f'verb={payload.verb!r} context={payload.context!r} already exists'
+            raise self._translate_integrity_error(
+                exc,
+                anchor_label=(
+                    f'an entry with kind={payload.kind!r} scope={payload.scope!r} '
+                    f'verb={payload.verb!r} context={payload.context!r} already exists'
+                ),
             ) from exc
 
         await self._enqueue_version_audit(_AUDIT_CREATE, entry, payload.extra_metadata)
@@ -235,6 +309,52 @@ class ExperientialRepository:
                 stmt = stmt.where(col(DBExperientialEntry.vault_id) == vault_id)
             rows = (await session.exec(stmt)).all()
         return [self._to_dto(r) for r in rows]
+
+    async def get_by_identity(
+        self,
+        *,
+        kind: str,
+        scope: ShortLabel,
+        verb: str | None,
+        context: str | None,
+        vault_id: UUID | None = None,
+        status: str | None = 'published',
+    ) -> ExperientialEntryDTO | None:
+        """Look up a single entry by its identity anchor.
+
+        Returns ``None`` on a miss (does NOT raise :class:`ExperientialEntryNotFound`).
+        The route uses this as the "have we learned this?" probe; a 404
+        would be a contract violation because an unbound anchor is a
+        valid, expected answer.
+
+        The query uses ``IS NOT DISTINCT FROM`` so NULL verb/context
+        match the ``UNIQUE NULLS NOT DISTINCT`` partial index exactly.
+        A case with ``(kind='case', scope, NULL, NULL)`` and a procedure
+        with ``(kind='procedure', scope, 'verb', NULL)`` do NOT collide,
+        and a miss against ``NULL, NULL`` still distinguishes "no row"
+        from "row with NULL verb/context".
+
+        ``status`` defaults to ``'published'`` so the agent's read-
+        before-write loop matches the lifecycle state it would actually
+        get back from search. Pass ``status=None`` to ignore lifecycle
+        state and surface drafts (operator-only path).
+        """
+        async with self._metastore.session() as session:
+            stmt = (
+                select(DBExperientialEntry)
+                .where(col(DBExperientialEntry.kind) == DBExperientialKind(kind))
+                .where(col(DBExperientialEntry.scope) == scope)
+                .where(col(DBExperientialEntry.verb).is_not_distinct_from(verb))
+                .where(col(DBExperientialEntry.context).is_not_distinct_from(context))
+            )
+            if vault_id is not None:
+                stmt = stmt.where(col(DBExperientialEntry.vault_id) == vault_id)
+            if status is not None:
+                stmt = stmt.where(col(DBExperientialEntry.status) == DBExperientialStatus(status))
+            entry = (await session.exec(stmt.limit(1))).first()
+        if entry is None:
+            return None
+        return self._to_dto(entry)
 
     async def update(
         self,
@@ -305,33 +425,15 @@ class ExperientialRepository:
             session.add(entry)
             await session.flush()
 
-            # Compute the next version within the same transaction. The
-            # UNIQUE (entry_id, version) constraint catches a parallel
-            # worker's race if one slips through.
-            from sqlmodel import func
-
-            max_version = (
-                await session.exec(
-                    select(func.max(DBExperientialEntryVersion.version)).where(
-                        col(DBExperientialEntryVersion.entry_id) == entry.id
-                    )
-                )
-            ).one() or 0
-            next_version = int(max_version) + _VERSION_BUMP
-
-            version = DBExperientialEntryVersion(
-                entry_id=entry.id,
-                version=next_version,
-                title=entry.title,
-                summary=entry.summary,
-                body=entry.body,
-                trigger=entry.trigger,
-                tags=entry.tags,
-                extra_metadata=entry.extra_metadata,
+            # Append a version row. The UNIQUE (entry_id, version)
+            # constraint catches a parallel worker's race that slipped
+            # through the row lock above.
+            await self._append_version_row(
+                session,
+                entry,
                 edited_by=payload.edited_by,
                 edit_reason=payload.edit_reason,
             )
-            session.add(version)
             try:
                 await session.commit()
             except IntegrityError as exc:
@@ -341,11 +443,15 @@ class ExperientialRepository:
                 # READ COMMITTED + skip-locked on a different
                 # transaction), the UNIQUE (entry_id, version)
                 # constraint will reject the second version insert.
-                # Translate to a domain error so the route returns
-                # 409 (not 500) — the agent's retry loop is supposed
-                # to treat 409 as a transient.
-                raise ExperientialIdentityConflict(
-                    f'concurrent update on entry {entry_id}; retry with the latest version'
+                # Translate via the constraint-name router so a
+                # version-row collision surfaces as 409 (retry) but
+                # an unrelated constraint (FK, CHECK) surfaces as
+                # 422 (caller-correctable).
+                raise self._translate_integrity_error(
+                    exc,
+                    anchor_label=(
+                        f'concurrent update on entry {entry_id}; retry with the latest version'
+                    ),
                 ) from exc
             await session.refresh(entry)
 
@@ -394,6 +500,13 @@ class ExperientialRepository:
         """
         if payload.kind == 'case':
             raise ValueError('upsert_by_identity does not apply to cases')
+        # Mirror the strategy-anchor check from :meth:`create` so a
+        # caller that forgets a required field sees a ValueError
+        # (cheap, validation-style) rather than a CHECK violation
+        # translated to ``ExperientialIdentityConflict`` (a misleading
+        # 409 that would tell the agent to retry).
+        if payload.kind == 'strategy' and (not payload.verb or not payload.context):
+            raise ValueError('strategy entries require both verb and context')
 
         async with self._metastore.session() as session:
             stmt = (
@@ -451,7 +564,69 @@ class ExperientialRepository:
                     # that didn't extend to the commit boundary),
                     # the unique constraint rejects the duplicate
                     # insert. Translate to the same domain error the
-                    # ``create`` path raises so the route returns
+                    # ``create`` path raises — 409 for the
+                    # identity-anchor collision, 422 for any other
+                    # constraint (CHECK, FK, sibling-table UNIQUE).
+                    raise self._translate_integrity_error(
+                        exc,
+                        anchor_label=(
+                            f'concurrent upsert on '
+                            f'kind={payload.kind!r} scope={payload.scope!r} '
+                            f'verb={payload.verb!r} context={payload.context!r}; '
+                            're-read and retry'
+                        ),
+                    ) from exc
+                await session.refresh(new_entry)
+                merged = await self._get_entry(session, new_entry.id)
+            else:
+                # Rewrite path: preserve the same audit-and-version
+                # guarantees as :meth:`update` so the agent's
+                # "I learned something new" loop writes through
+                # upsert without dropping the version ledger.
+                #
+                # Status is preserved unless the caller explicitly
+                # promotes (draft → published) — deprecated stays
+                # deprecated even when a stale upsert payload carries
+                # ``status='draft'`` (a regression that would let a
+                # noisy caller accidentally undelete a superseded
+                # entry).
+                pre_status = existing.status
+                existing.title = payload.title
+                existing.summary = payload.summary
+                existing.body = payload.body
+                if payload.trigger is not None:
+                    existing.trigger = payload.trigger
+                    # Drop the stale trigger embedding; the search
+                    # service re-computes it on next index.
+                    existing.trigger_embedding = None
+                existing.tags = payload.tags
+                existing.extra_metadata = payload.extra_metadata
+                if pre_status != DBExperientialStatus.DEPRECATED:
+                    existing.status = DBExperientialStatus(payload.status)
+                if (
+                    existing.status == DBExperientialStatus.PUBLISHED
+                    and pre_status != DBExperientialStatus.PUBLISHED
+                    and existing.published_at is None
+                ):
+                    existing.published_at = datetime.now(timezone.utc)
+                existing.updated_at = datetime.now(timezone.utc)
+                session.add(existing)
+                await session.flush()
+                # Append a version row to mirror :meth:`update`'s
+                # contract. The version row carries the post-rewrite
+                # body snapshot so the audit trail is reconstructable
+                # from ``experiential_entry_versions`` alone.
+                await self._append_version_row(
+                    session, existing, edited_by=None, edit_reason='upsert_by_identity'
+                )
+                try:
+                    await session.commit()
+                except IntegrityError as exc:
+                    # Belt-and-suspenders: the row-lock above plus
+                    # the version row UNIQUE (entry_id, version)
+                    # constraint. If a parallel upsert slipped
+                    # through, the constraint catches it. Translate
+                    # to the same domain error so the route returns
                     # 409 (not 500) and the agent's upsert loop can
                     # re-read + re-merge.
                     raise ExperientialIdentityConflict(
@@ -460,29 +635,18 @@ class ExperientialRepository:
                         f'verb={payload.verb!r} context={payload.context!r}; '
                         're-read and retry'
                     ) from exc
-                await session.refresh(new_entry)
-                merged = await self._get_entry(session, new_entry.id)
-            else:
-                existing.title = payload.title
-                existing.summary = payload.summary
-                existing.body = payload.body
-                if payload.trigger is not None:
-                    existing.trigger = payload.trigger
-                    existing.trigger_embedding = None
-                existing.tags = payload.tags
-                existing.extra_metadata = payload.extra_metadata
-                existing.status = DBExperientialStatus(payload.status)
-                existing.updated_at = datetime.now(timezone.utc)
-                if (
-                    existing.status == DBExperientialStatus.PUBLISHED
-                    and existing.published_at is None
-                ):
-                    existing.published_at = existing.updated_at
-                session.add(existing)
-                await session.commit()
                 await session.refresh(existing)
                 merged = await self._get_entry(session, existing.id)
 
+        # Emit the audit event outside the session so a hung audit
+        # service doesn't block the commit. The ``_AUDIT_UPDATE``
+        # action lets the audit surface tell create-vs-upsert
+        # apart from the version row alone.
+        await self._enqueue_version_audit(
+            _AUDIT_UPDATE if existing is not None else _AUDIT_CREATE,
+            merged,
+            {'edit_reason': 'upsert_by_identity', 'edited_by': None},
+        )
         return self._to_dto(merged)
 
     # ------------------------------------------------------------------
@@ -804,6 +968,51 @@ class ExperientialRepository:
             raise ExperientialEntryNotFound(str(entry_id))
         return entry
 
+    async def _append_version_row(
+        self,
+        session: AsyncSession,
+        entry: DBExperientialEntry,
+        *,
+        edited_by: str | None,
+        edit_reason: str | None,
+    ) -> DBExperientialEntryVersion:
+        """Append a new ``experiential_entry_versions`` row carrying the
+        post-mutation body snapshot.
+
+        Used by both :meth:`update` and the upsert rewrite path so the
+        version ledger is complete regardless of which write surface
+        mutated the entry. Computes ``max(version) + 1`` within the
+        caller's open session; the UNIQUE ``(entry_id, version)``
+        constraint catches a parallel-worker's race that slipped
+        through the row lock. Sequential single-writer workloads pay
+        a single aggregate query per write.
+        """
+        from sqlmodel import func
+
+        max_version = (
+            await session.exec(
+                select(func.max(DBExperientialEntryVersion.version)).where(
+                    col(DBExperientialEntryVersion.entry_id) == entry.id
+                )
+            )
+        ).one() or 0
+        next_version = int(max_version) + _VERSION_BUMP
+
+        version = DBExperientialEntryVersion(
+            entry_id=entry.id,
+            version=next_version,
+            title=entry.title,
+            summary=entry.summary,
+            body=entry.body,
+            trigger=entry.trigger,
+            tags=entry.tags,
+            extra_metadata=entry.extra_metadata,
+            edited_by=edited_by,
+            edit_reason=edit_reason,
+        )
+        session.add(version)
+        return version
+
     async def _get_queue_row(
         self,
         session: AsyncSession,
@@ -908,13 +1117,25 @@ class ExperientialRepository:
 
     @staticmethod
     def _source_to_dto(row: DBExperientialSource) -> ExperientialSourceDTO:
+        # ``role`` is typed as ``ExperientialSourceRole`` (a str-Enum) on
+        # the SQLModel column annotation but stored as ``String`` in
+        # the DB. After ``await session.refresh(row)`` the value comes
+        # back as a plain ``str`` — the declarative annotation is a
+        # type hint, not a runtime converter. The defensive
+        # ``.value if hasattr(...) else str(...)`` pattern is what the
+        # other DTO converters (``_to_dto`` at line 876,
+        # ``_queue_to_dto`` at line 934) already use; this is the
+        # same pattern. Calling ``row.role.value`` directly crashes
+        # with ``AttributeError: 'str' object has no attribute 'value'``
+        # on the first real-DB read.
+        role_value = row.role.value if hasattr(row.role, 'value') else str(row.role)
         return ExperientialSourceDTO(
             id=row.id,
             entry_id=row.entry_id,
             source_entry_id=row.source_entry_id,
             source_note_id=row.source_note_id,
             source_memory_unit_id=row.source_memory_unit_id,
-            role=row.role.value,  # type: ignore[arg-type]
+            role=role_value,  # type: ignore[arg-type]
             weight=float(row.weight),
             created_at=row.created_at,
         )

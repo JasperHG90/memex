@@ -116,6 +116,12 @@ class ExperientialSearchService:
 
         At least one of ``request.query`` or ``request.pin_contexts`` must
         contribute — otherwise the response is empty and ``total=0``.
+
+        When ``request.vault_id`` is set, every BM25, vector, and
+        pin-chain candidate is restricted to that vault. This is the
+        multi-tenancy guardrail — leaving it None returns the global
+        result set, which is only appropriate for operator/CLI
+        contexts.
         """
         started = time.monotonic()
 
@@ -132,6 +138,7 @@ class ExperientialSearchService:
                     scope=request.scope,
                     kind=request.kind,
                     status=request.status,
+                    vault_id=request.vault_id,
                     limit=request.limit * _OVERFETCH,
                 )
             except Exception:
@@ -144,6 +151,7 @@ class ExperientialSearchService:
                     scope=request.scope,
                     kind=request.kind,
                     status=request.status,
+                    vault_id=request.vault_id,
                     limit=request.limit * _OVERFETCH,
                 )
             except Exception:
@@ -168,6 +176,7 @@ class ExperientialSearchService:
                 scope=request.scope,
                 kind=request.kind,
                 status=request.status,
+                vault_id=request.vault_id,
             )
             for eid, position in pin_hits.items():
                 # Position 0 is the top of the chain — give it the full
@@ -248,6 +257,7 @@ class ExperientialSearchService:
         *,
         scope: ShortLabel | None = None,
         limit_per_context: int = 5,
+        vault_id: UUID | None = None,
     ) -> ExperientialBriefingCards:
         """Return one briefing card per pin in the requested contexts.
 
@@ -255,6 +265,10 @@ class ExperientialSearchService:
         can render the chain in priority order. The implicit chain
         ``global → project:<id> → app:<agent>`` is the caller's job to
         materialise — this method does not auto-expand.
+
+        When ``vault_id`` is set, only entries in that vault are surfaced.
+        Leaving it None returns the global result set, which is only
+        appropriate for operator/CLI paths that need a cross-vault view.
         """
         if not context_keys:
             return ExperientialBriefingCards()
@@ -278,6 +292,8 @@ class ExperientialSearchService:
             )
             if scope is not None:
                 stmt = stmt.where(col(DBExperientialEntry.scope) == scope)
+            if vault_id is not None:
+                stmt = stmt.where(col(DBExperientialEntry.vault_id) == vault_id)
 
             results = (await session.exec(stmt)).all()
 
@@ -313,6 +329,7 @@ class ExperientialSearchService:
         scope: ShortLabel | None,
         kind: KindLiteral | None,
         status: str,
+        vault_id: UUID | None,
         limit: int,
     ) -> list[tuple[UUID, float]]:
         """Run a tsvector match + ts_rank_cd ordering.
@@ -339,6 +356,7 @@ class ExperientialSearchService:
               AND status = CAST(:status AS varchar)
               AND (CAST(:scope AS text) IS NULL OR scope = CAST(:scope AS text))
               AND (CAST(:kind AS varchar) IS NULL OR kind = CAST(:kind AS varchar))
+              AND (CAST(:vault_id AS uuid) IS NULL OR vault_id = CAST(:vault_id AS uuid))
             ORDER BY rank DESC
             LIMIT CAST(:limit AS int)
             """
@@ -352,6 +370,7 @@ class ExperientialSearchService:
                         'status': status,
                         'scope': scope,
                         'kind': kind,
+                        'vault_id': vault_id,
                         'limit': limit,
                     },
                 )
@@ -369,6 +388,7 @@ class ExperientialSearchService:
         scope: ShortLabel | None,
         kind: KindLiteral | None,
         status: str,
+        vault_id: UUID | None,
         limit: int,
     ) -> list[tuple[UUID, float]]:
         """Cosine-distance top-k over the appropriate embedding column.
@@ -399,6 +419,7 @@ class ExperientialSearchService:
                   AND status = CAST(:status AS varchar)
                   AND (CAST(:scope AS text) IS NULL OR scope = CAST(:scope AS text))
                   AND kind = CAST(:kind AS varchar)
+                  AND (CAST(:vault_id AS uuid) IS NULL OR vault_id = CAST(:vault_id AS uuid))
                 ORDER BY {col_name} <=> CAST(:vec AS vector)
                 LIMIT CAST(:limit AS int)
                 """
@@ -408,6 +429,7 @@ class ExperientialSearchService:
                 'status': status,
                 'scope': scope,
                 'kind': kind,
+                'vault_id': vault_id,
                 'limit': limit,
             }
         else:
@@ -424,6 +446,7 @@ class ExperientialSearchService:
                     FROM experiential_entries
                     WHERE status = CAST(:status AS varchar)
                       AND (CAST(:scope AS text) IS NULL OR scope = CAST(:scope AS text))
+                      AND (CAST(:vault_id AS uuid) IS NULL OR vault_id = CAST(:vault_id AS uuid))
                       AND (
                         (kind = 'case' AND trigger_embedding IS NOT NULL)
                         OR
@@ -440,6 +463,7 @@ class ExperientialSearchService:
                 'vec': vec_literal,
                 'status': status,
                 'scope': scope,
+                'vault_id': vault_id,
                 'limit': limit,
             }
 
@@ -458,6 +482,7 @@ class ExperientialSearchService:
         scope: ShortLabel | None,
         kind: KindLiteral | None,
         status: str,
+        vault_id: UUID | None,
     ) -> dict[UUID, int]:
         """Return ``{entry_id: position}`` for entries pinned at any of
         the requested contexts. Excludes unpublished entries."""
@@ -469,9 +494,10 @@ class ExperientialSearchService:
             FROM experiential_pins p
             JOIN experiential_entries e ON e.id = p.entry_id
             WHERE p.context_key = ANY(:contexts)
-              AND e.status = :status
-              AND (:scope IS NULL OR e.scope = :scope)
-              AND (:kind IS NULL OR e.kind = :kind)
+              AND e.status = CAST(:status AS varchar)
+              AND (CAST(:scope AS text) IS NULL OR e.scope = CAST(:scope AS text))
+              AND (CAST(:kind AS varchar) IS NULL OR e.kind = CAST(:kind AS varchar))
+              AND (CAST(:vault_id AS uuid) IS NULL OR e.vault_id = CAST(:vault_id AS uuid))
             GROUP BY p.entry_id
             """
         )
@@ -484,6 +510,7 @@ class ExperientialSearchService:
                         'status': status,
                         'scope': scope,
                         'kind': kind,
+                        'vault_id': vault_id,
                     },
                 )
             ).all()

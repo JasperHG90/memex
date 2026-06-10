@@ -188,12 +188,16 @@ async def procedural_create(
     ``POST /procedural/upsert``.
     """
     try:
-        return await api.experiential.create(request)
+        result = await api.experiential.create(request)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         _record_write_outcome('create', request.kind, e)
         if isinstance(e, ExperientialIdentityConflict):
             _record_identity_conflict(api, request.kind, e)
         raise _handle_error(e, 'Failed to create procedural-plane entry')
+    # Mirror the success-path increment :meth:`procedural_update`
+    # emits — the metric is otherwise biased toward failure counts.
+    _record_write_outcome('create', request.kind, None)
+    return result
 
 
 @router.get(
@@ -223,6 +227,14 @@ async def procedural_get_by_identity(
     Returns 200 with the entry, or 200 with ``null`` when the anchor
     is unbound (the "did we already learn this?" probe). The route
     never 404s — a miss is the cheap answer.
+
+    The query is a direct identity-anchor SELECT against the partial
+    unique index ``uq_experiential_identity`` (not a fuzzy search).
+    A previous implementation routed through ``api.experiential.search``
+    with no query text, which short-circuited to an empty response and
+    silently returned ``None`` for every anchor — that regression broke
+    the agent's read-before-write flow and is the reason this route
+    now calls the repository's exact-anchor method.
     """
     try:
         if kind == 'case':
@@ -235,18 +247,13 @@ async def procedural_get_by_identity(
             if not verb:
                 raise ValueError(f'kind={kind} requires verb (e.g. "rotate", "audit", "deploy").')
 
-        results = await api.experiential.search(
-            ExperientialSearchRequest(
-                kind=kind,  # type: ignore[arg-type]
-                scope=scope,
-                status='published',
-                limit=1,
-            )
+        return await api.experiential.get_by_identity(
+            kind=kind,  # type: ignore[arg-type]
+            scope=scope,
+            verb=verb,
+            context=context,
+            vault_id=vault_id,
         )
-        for hit in results.hits:
-            if hit.entry.verb == verb and hit.entry.context == context:
-                return hit.entry
-        return None
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to look up procedural-plane entry by identity')
 
@@ -361,10 +368,14 @@ async def procedural_upsert(
         },
     ):
         try:
-            return await api.experiential.upsert(request)
+            result = await api.experiential.upsert(request)
         except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
             _record_write_outcome('upsert', request.kind, e)
             raise _handle_error(e, 'Failed to upsert procedural-plane entry')
+        # Mirror the success-path increment :meth:`procedural_update`
+        # emits — the metric is otherwise biased toward failure counts.
+        _record_write_outcome('upsert', request.kind, None)
+        return result
 
 
 @router.post(
@@ -417,11 +428,19 @@ async def procedural_briefing_cards(
         int,
         Query(ge=1, le=20, description='Cap per-context card count (default 5).'),
     ] = 5,
+    vault_id: Annotated[
+        UUID | None,
+        Query(description='Restrict cards to a single vault (multi-tenancy guard).'),
+    ] = None,
 ):
     """Pin-chain briefing cards for the session-briefing surface.
 
     One card per pinned entry, ordered by pin position. Use for the
     "what you should know going in" block of a session briefing.
+
+    The ``vault_id`` parameter, when set, restricts the cards to
+    entries in the caller's vault — the multi-tenancy guardrail.
+    Leaving it None returns the global result set (operator-only).
     """
     with trace_span(
         'memex_core.procedural',
@@ -433,7 +452,10 @@ async def procedural_briefing_cards(
     ):
         try:
             result = await api.experiential.briefing_cards(
-                context_keys, scope=scope, limit_per_context=limit_per_context
+                context_keys,
+                scope=scope,
+                limit_per_context=limit_per_context,
+                vault_id=vault_id,
             )
         except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
             raise _handle_error(e, 'Failed to load briefing cards')
