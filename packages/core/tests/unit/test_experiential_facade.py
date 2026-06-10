@@ -117,7 +117,10 @@ async def test_facade_briefing_cards_delegates_with_default_limit():
     await facade.briefing_cards(['global', 'project:abc'])
 
     api._experiential_search.briefing_cards.assert_awaited_once_with(
-        ['global', 'project:abc'], scope=None, limit_per_context=5
+        ['global', 'project:abc'],
+        scope=None,
+        limit_per_context=5,
+        vault_id=None,
     )
 
 

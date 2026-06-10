@@ -135,6 +135,43 @@ async def test_create_then_create_same_anchor_raises_identity_conflict(metastore
 
 
 @pytest.mark.asyncio
+async def test_create_case_with_trigger_succeeds(metastore):
+    """A case create with a non-null ``trigger`` succeeds. A previous
+    migration added a CHECK ``(trigger IS NULL) = (trigger_embedding IS NULL)``
+    on the assumption that the repository would set
+    ``trigger_embedding`` on create — but the lazy-embedding design
+    leaves it NULL. The CHECK fired on every case create, and the
+    repository's blanket IntegrityError → IdentityConflict translation
+    surfaced the constraint failure as a misleading 409. The CHECK
+    was dropped (see migration 061 inline note); this test pins the
+    happy path against a regression that re-introduces it.
+    """
+    async with metastore.session() as session:
+        vault_id = await _create_vault(session, 'v7_case_trigger')
+
+    repo = _repo(metastore)
+    entry = await repo.create(
+        _entry_payload(
+            vault_id=vault_id,
+            kind='case',
+            scope=f'case-{uuid.uuid4().hex[:8]}',
+            verb=None,
+            context=None,
+            title='case-with-trigger',
+            trigger='user reported slow API on 2026-05-01',
+        )
+    )
+    assert entry.trigger == 'user reported slow API on 2026-05-01'
+    # DTO does not surface embeddings — confirm the row round-tripped by
+    # re-reading it via the repository. The lazy-embedding design leaves
+    # trigger_embedding NULL on the row, and the dropped CHECK no longer
+    # forces a paired-NULL invariant.
+    fetched = await repo.get(entry.id, vault_id=vault_id)
+    assert fetched is not None
+    assert fetched.trigger == 'user reported slow API on 2026-05-01'
+
+
+@pytest.mark.asyncio
 async def test_upsert_on_existing_anchor_returns_merged_row(metastore):
     """A second upsert with the same anchor updates the existing row
     in place — the title/summary/body change but the id is stable.
@@ -142,7 +179,15 @@ async def test_upsert_on_existing_anchor_returns_merged_row(metastore):
     The id-stability property is what lets an agent re-write a
     procedure after learning something new, and the briefing pin chain
     (which references entries by id) keeps pointing at the same
-    entry across rewrites."""
+    entry across rewrites.
+
+    The version ledger is preserved across upsert: a re-write appends
+    a new ``experiential_entry_versions`` row carrying the post-write
+    body snapshot. The audit trail is reconstructable from
+    ``experiential_entry_versions`` alone; a regression that dropped
+    the version row would make upsert look invisible to incident
+    response.
+    """
     async with metastore.session() as session:
         vault_id = await _create_vault(session, 'v7_upsert')
 
@@ -161,12 +206,45 @@ async def test_upsert_on_existing_anchor_returns_merged_row(metastore):
     assert rewritten.title == 'upsert-rewritten', 'upsert must update title'
     assert rewritten.body == 'v2 body', 'upsert must update body'
     post_upsert_version_count = await _count_versions(metastore, initial_id)
-    # Upsert is the "I have nothing better to track" path — version
-    # rows are written by .update(), not .upsert_by_identity. The
-    # audit trail for the upsert lives in the audit log, not in
-    # _versions. A regression that double-counted would bloat
-    # the version table.
-    assert post_upsert_version_count == initial_version_count
+    # The upsert rewrite appends a new version row, mirroring
+    # :meth:`update`. A regression that dropped the version row would
+    # make the upsert look invisible to the version ledger.
+    assert post_upsert_version_count == initial_version_count + 1
+
+
+@pytest.mark.asyncio
+async def test_upsert_preserves_deprecated_status(metastore):
+    """Re-issuing an upsert on a deprecated entry does NOT undelete it.
+
+    The route's contract is "deprecated stays deprecated" — a noisy
+    caller that re-sends a stale ``status='draft'`` payload should not
+    silently demote a superseded entry. A regression that overwrote
+    the status unconditionally would let a buggy agent un-deprecate
+    entries that the platform's deprecation path marked final.
+    """
+    async with metastore.session() as session:
+        vault_id = await _create_vault(session, 'v7_upsert_dep')
+
+    repo = _repo(metastore)
+    initial = await repo.upsert_by_identity(
+        _entry_payload(vault_id=vault_id, title='upsert-dep-initial', body='v1 body')
+    )
+    deprecated = await repo.deprecate(initial.id, vault_id=vault_id)
+    assert deprecated.status == 'deprecated'
+
+    # Re-upsert with status='draft'. Status must NOT flip back.
+    rewritten = await repo.upsert_by_identity(
+        _entry_payload(
+            vault_id=vault_id,
+            title='upsert-dep-rewritten',
+            body='v2 body',
+            status='draft',
+        )
+    )
+    assert rewritten.status == 'deprecated', (
+        f'upsert must preserve deprecated status, got {rewritten.status!r}'
+    )
+    assert rewritten.title == 'upsert-dep-rewritten', 'other fields still update'
 
 
 async def _count_versions(metastore, entry_id: uuid.UUID) -> int:

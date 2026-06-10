@@ -237,6 +237,47 @@ async def test_get_by_identity_returns_null_on_unbound_anchor(http_client, metas
     assert resp.json() is None, f'unbound anchor must return null, got {resp.text!r}'
 
 
+@pytest.mark.asyncio
+async def test_get_by_identity_returns_entry_on_hit(http_client, metastore):
+    """A bound anchor returns 200 with the DTO body — the read-before-
+    write probe must surface a real hit, not silently None. A previous
+    regression routed the lookup through ``api.experiential.search`` with
+    no query text, which short-circuited to an empty response and broke
+    the agent's idempotency check."""
+    async with metastore.session() as session:
+        vault_id = await _create_vault(session, 'v7_http_hit')
+
+    create = await http_client.post(
+        '/api/v1/procedural',
+        json=_payload(
+            vault_id=vault_id,
+            title='http-by-identity-hit',
+            verb='by_identity_verb',
+            context='by_identity_context',
+        ),
+    )
+    assert create.status_code == 200, create.text
+    created_id = create.json()['id']
+
+    resp = await http_client.get(
+        '/api/v1/procedural/by-identity',
+        params={
+            'kind': 'procedure',
+            'scope': 'global',
+            'verb': 'by_identity_verb',
+            'context': 'by_identity_context',
+            'vault_id': str(vault_id),
+        },
+    )
+    assert resp.status_code == 200, resp.text
+    body = resp.json()
+    assert body is not None, 'bound anchor must return the entry, not null'
+    assert body['id'] == created_id
+    assert body['title'] == 'http-by-identity-hit'
+    assert body['verb'] == 'by_identity_verb'
+    assert body['context'] == 'by_identity_context'
+
+
 # ---------------------------------------------------------------------------
 # briefing_cards — pin-chain union across context keys
 # ---------------------------------------------------------------------------

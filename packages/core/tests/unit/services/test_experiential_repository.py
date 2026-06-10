@@ -386,7 +386,13 @@ async def test_create_procedure_returns_dto_with_identity_fields():
 @pytest.mark.asyncio
 async def test_identity_anchor_conflict_raises_experiential_identity_conflict():
     """A second create on a colliding (kind, scope, verb, context) anchor
-    must raise ``ExperientialIdentityConflict``, NOT a raw IntegrityError."""
+    must raise ``ExperientialIdentityConflict``, NOT a raw IntegrityError.
+
+    The translator inspects ``exc.orig.__cause__.constraint_name`` to
+    pick between the identity-anchor UNIQUE (409) and a non-anchor
+    constraint (422). The mock stands in for asyncpg's
+    ``UniqueViolationError`` carrying the partial-index name.
+    """
     from sqlalchemy.exc import IntegrityError
 
     payload = ExperientialEntryCreate(
@@ -401,7 +407,13 @@ async def test_identity_anchor_conflict_raises_experiential_identity_conflict():
 
     session = AsyncMock()
     session.add = MagicMock()
-    session.commit = AsyncMock(side_effect=IntegrityError('INSERT', {}, Exception('dup')))
+    # The asyncpg error carries constraint_name on the inner exception
+    # (SQLAlchemy's IntegrityError strips the diag; the __cause__ keeps
+    # the rich asyncpg fields).
+    inner = MagicMock()
+    inner.constraint_name = 'uq_experiential_identity'
+    inner.sqlstate = '23505'
+    session.commit = AsyncMock(side_effect=IntegrityError('INSERT', {}, inner))
     session.refresh = AsyncMock()
     ctx = MagicMock()
     ctx.__aenter__ = AsyncMock(return_value=session)
@@ -556,8 +568,10 @@ async def test_upsert_by_identity_updates_existing_row():
     # The in-place UPDATE mutates the existing row rather than INSERT.
     assert existing.title == 'deploy to staging'
     assert existing.summary == 'run the deploy playbook'
-    # session.add was called once with the existing row (the UPDATE).
-    assert session.add.call_count == 1
+    # Two adds: the entry UPDATE and the version ledger row that
+    # ``upsert_by_identity`` always appends (matches the update() path —
+    # the audit trail is the whole point of having a version table).
+    assert session.add.call_count == 2
     assert isinstance(result, ExperientialEntryDTO)
 
 
