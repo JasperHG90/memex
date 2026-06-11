@@ -421,7 +421,7 @@ EXPECTED_GATED_SITES = [
     ('memory/retrieval/engine.py', '_NER'),
     ('memory/retrieval/engine.py', '_RERANKER'),
     ('services/vault_summary.py', '_EMBEDDING'),
-    # V7: ProceduralSearchService.search() embeds the query for the
+    # ProceduralSearchService.search() embeds the query for the
     # vector side of the hybrid BM25+vector RRF. Same gate as
     # api.embed_text — the shared _EMBEDDING semaphore + _instrument('embed').
     ('services/procedural_search_service.py', '_EMBEDDING'),
@@ -484,7 +484,7 @@ class TestToThreadAudit:
         polarity work, the inbox-router vault-anchor embedding offload, and
         the vault-summary narrative embedding offload), bringing the
         classified total to 21. V6 then removed the inbox router, dropping its
-        vault-anchor embedding offload — back to 20. V7 added the
+        vault-anchor embedding offload — back to 20. added the
         procedural search service's query embedder, bringing the total
         to 21.
         AC-009 (d): if origin/main adds a new asyncio.to_thread between

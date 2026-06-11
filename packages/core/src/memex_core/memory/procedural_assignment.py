@@ -1,4 +1,4 @@
-"""Case → procedure assignment judge (V7 design §18.1 / §19.3 / spike #3c).
+"""Case → procedure assignment judge (the design §18.1 / §19.3 / spike #3c).
 
 One LLM judgment per submitted case: does this episode *instance* an
 existing procedure, or seed a new one? The judge is FORCED to commit

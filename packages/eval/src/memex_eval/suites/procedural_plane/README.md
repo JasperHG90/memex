@@ -1,13 +1,13 @@
 # procedural_plane
 
-V7 procedural-plane eval suite. 10 scenarios pin the public contract of
+procedural-plane eval suite. 10 scenarios pin the public contract of
 the third Memex memory plane (procedure / strategy) and gate
 write-routing for the agentic surfaces (Hermes briefing block, Claude
 Code SessionStart hook).
 
 ## Scope
 
-**In scope** — V7 procedural-plane behaviour that an agent depends on:
+**In scope** — procedural-plane behaviour that an agent depends on:
 
 - Identity-anchor uniqueness and idempotency
   (`(kind, scope, verb, context)` UNIQUE NULLS NOT DISTINCT)
@@ -30,13 +30,13 @@ Code SessionStart hook).
 
 **Out of scope** — things the suite deliberately does NOT cover:
 
-- Extraction-driven upsert (V7 is a direct write surface; the suite
+- Extraction-driven upsert (is a direct write surface; the suite
   bypasses LLM extraction via `procedural_upsert` setup action so the
   seeded state is deterministic)
-- Cross-vault routing (V7 is vault-scoped like the note plane)
-- Lineage tracking (V7 entries don't carry upstream/downstream
+- Cross-vault routing (is vault-scoped like the note plane)
+- Lineage tracking (entries don't carry upstream/downstream
   provenance chains)
-- Backfill / migration from V6 to V7 (handled by the V6→V7 migration
+- Backfill / migration from V6 to (handled by the V6→migration
   suite, not here)
 - Performance / latency (covered by the benchmark suite under
   `packages/eval/benchmarks/`)
@@ -64,7 +64,7 @@ memex-eval suite run procedural_plane
 memex-eval suite list  # confirms the suite is discoverable
 ```
 
-The suite requires a running Memex server with the V7 procedural
+The suite requires a running Memex server with the procedural
 plane enabled (`server.memory.procedural.enabled=true`) and an
 LLM-free setup path — the seeded entries are written directly via
 the `procedural_upsert` API call, bypassing the LLM extraction
@@ -76,7 +76,7 @@ The suite is **read-side heavy** — 8 of 10 scenarios are
 `procedural_search_results` or `procedural_entry_roundtrip`, both of
 which read back the seeded state. The other 2 are pure
 write/lifecycle scenarios (collision, deprecate). The split mirrors
-the V7 contract: the plane is a write surface, but the agent's value
+the procedural contract: the plane is a write surface, but the agent's value
 is in the read path (search, briefing cards, identity probe).
 
 **Determinism** — setup actions use deterministic UUIDv5 anchored on

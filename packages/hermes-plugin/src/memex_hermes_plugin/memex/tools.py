@@ -173,7 +173,7 @@ class MemexAPIProtocol(Protocol):
     async def reconsolidate_entity(self, *args: Any, **kwargs: Any) -> Any: ...
     async def consolidate_vault(self, *args: Any, **kwargs: Any) -> Any: ...
 
-    # V7 — Procedural plane (procedure / strategy) + case submission
+    # Procedural plane (procedure / strategy) + case submission
     async def procedural_create(self, *args: Any, **kwargs: Any) -> Any: ...
     async def procedural_upsert(self, *args: Any, **kwargs: Any) -> Any: ...
     async def procedural_get(self, *args: Any, **kwargs: Any) -> Any: ...
@@ -3493,7 +3493,7 @@ __all__ = [
     'RECORD_OUTCOME_SCHEMA',
     # --- F49 contradiction-graph timeline ---
     'GET_UNIT_HISTORY_SCHEMA',
-    # --- V7 — Procedural plane (procedure / strategy) + case submission ---
+    # --- Procedural plane (procedure / strategy) + case submission ---
     'CASE_SUBMIT_SCHEMA',
     'PROC_CREATE_SCHEMA',
     'PROC_DEPRECATE_SCHEMA',
@@ -4524,7 +4524,7 @@ ALL_SCHEMAS.append(GET_UNIT_HISTORY_SCHEMA)
 
 
 # ============================================================
-# V7 — Procedural plane (procedure / strategy)
+# Procedural plane (procedure / strategy)
 #
 # The procedural plane is the agent's "how to do X" surface — distinct
 # from notes (long-form prose) and KV (preferences / bindings). It has

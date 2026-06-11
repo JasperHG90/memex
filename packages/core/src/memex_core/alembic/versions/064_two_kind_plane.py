@@ -1,4 +1,4 @@
-"""Rename the plane to *procedural* and conform it to the V7 design.
+"""Rename the plane to *procedural* and conform it to the design.
 
 Design authority: ``.claude/reports/2026-06-04-procedural-experiential-memory-design.md``
 (§1 decisions table, §18.1, §18.2, §18.9.0) plus the 2026-06-10 JG
@@ -176,7 +176,7 @@ def upgrade() -> None:
     conn.execute(
         sa.text(
             "UPDATE vaults SET name = 'procedural', "
-            "description = 'V7 procedural memory plane (system vault).', "
+            "description = 'procedural memory plane (system vault).', "
             'policy = \'{"reflect": true}\'::jsonb '
             "WHERE name = 'experiential' AND kind = 'system'"
         )
@@ -453,7 +453,7 @@ def downgrade() -> None:
     conn.execute(
         sa.text(
             "UPDATE vaults SET name = 'experiential', "
-            "description = 'V7 procedural & experiential memory plane (system vault).' "
+            "description = 'procedural & experiential memory plane (system vault).' "
             "WHERE name = 'procedural' AND kind = 'system'"
         )
     )

@@ -1,4 +1,4 @@
-"""Unit tests for the V7 procedural-plane eval suite contracts.
+"""Unit tests for the procedural-plane eval suite contracts.
 
 The suite is integration-tested against a real Memex server (see
 ``memex-eval suite run procedural_plane``). This file pins the parts
@@ -262,7 +262,7 @@ def test_search_results_briefing_pin_position_passes():
     outcome = ProceduralSearchResults(
         type='procedural_search_results',
         operation='briefing_cards',
-        context_keys=['global', 'project:v7-eval', 'app:eval'],
+        context_keys=['global', 'project:proc-eval', 'app:eval'],
         min_hits=1,
         expect_first_pin_pos=0,
     )
@@ -282,14 +282,14 @@ def test_search_results_briefing_pin_position_fails_when_wrong():
     outcome = ProceduralSearchResults(
         type='procedural_search_results',
         operation='briefing_cards',
-        context_keys=['global', 'project:v7-eval', 'app:eval'],
+        context_keys=['global', 'project:proc-eval', 'app:eval'],
         min_hits=1,
         expect_first_pin_pos=0,  # expect global first
     )
     first = SimpleNamespace(
-        entry=_dto(kind='procedure', scope='project:v7-eval', verb='test'),
+        entry=_dto(kind='procedure', scope='project:proc-eval', verb='test'),
         pin_position=2,  # …but the first card is at pin 2
-        context_key='project:v7-eval',
+        context_key='project:proc-eval',
     )
     ans = AgentAnswer(units=[first])
     metrics = outcome.score(ans, scenario=None)
@@ -305,7 +305,7 @@ def test_search_results_briefing_pin_position_fails_when_wrong():
 def test_suite_loads_with_ten_scenarios():
     """The suite package is discoverable via ``load_suite`` and has 10 scenarios.
 
-    The number 10 is the V7 contract; a regression that drops a
+    The number 10 is the procedural contract; a regression that drops a
     scenario (e.g. round-3 review cut) surfaces here."""
     suite = load_suite('procedural_plane')
     assert len(suite.scenarios) == 10, (
@@ -336,11 +336,11 @@ def test_suite_scenario_ids_are_stable():
 
 
 def test_suite_metadata_knobs_match_v7_contracts():
-    """The METADATA.knobs list names the V7 server-side tunables. A
+    """The METADATA.knobs list names the procedural server-side tunables. A
     regression that drops a knob surfaces here."""
     suite = load_suite('procedural_plane')
     knobs = set(suite.metadata.knobs)
-    # The five load-bearing V7 knobs.
+    # The five load-bearing knobs.
     assert 'server.memory.procedural.enabled' in knobs
     assert 'server.memory.procedural.search_default_bm25_weight' in knobs
     assert 'server.memory.procedural.search_default_vector_weight' in knobs
@@ -349,7 +349,7 @@ def test_suite_metadata_knobs_match_v7_contracts():
 
 
 def test_suite_metadata_components_under_test_pinned():
-    """The METADATA.components_under_test names the V7 components."""
+    """The METADATA.components_under_test names the components."""
     suite = load_suite('procedural_plane')
     cuts = set(suite.metadata.components_under_test)
     expected = {

@@ -1,6 +1,6 @@
-"""experiential_entries + 4 sibling tables (V7 — procedural & experiential memory).
+"""experiential_entries + 4 sibling tables (procedural memory plane).
 
-Adds the V7 experiential plane schema:
+Adds the experiential plane schema:
 
   * ``experiential_entries``           — case | procedure | strategy rows
   * ``experiential_entry_versions``    — append-only version ledger

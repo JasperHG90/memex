@@ -70,7 +70,7 @@ class TestSuiteStructure:
         # ambiguous_asks_first, standard_practice_ambiguous_asks_first,
         # wakeword_store_{global,project}). They pin the
         # "this is how to do X" → memex_kv_put write-routing path.
-        # 45 = 39 (smoke+triage+…+kv-wakewords) + 6 V7 procedural-plane
+        # 45 = 39 (smoke+triage+…+kv-wakewords) + 6 procedural-plane
         # agent scenarios (group='procedural'). The 7 legacy procedure_*
         # KV-routing scenarios were removed (deprecated write path). The
         # 6 procedural scenarios: case_submit routing, plane search,
@@ -186,7 +186,7 @@ class TestMutatingDiscipline:
         'lifecycle_archive_legacy_warehouse_note',
         'lifecycle_append_parent_remains_retrievable',
         'asset_lifecycle_detach',
-        # V7 procedural-plane agent scenarios (group='procedural').
+        # procedural-plane agent scenarios (group='procedural').
         # The legacy ``procedure_*`` KV-routing scenarios were removed
         # (that write path is deprecated — how-tos go to the plane, not
         # KV). These five write: case_submit files a note;
@@ -207,7 +207,7 @@ class TestMutatingDiscipline:
         'procedural_strategy_fallback_on_novel_task',
     }
 
-    # V7 procedural scenarios use replicates_override=2: the routing
+    # procedural scenarios use replicates_override=2: the routing
     # decision (search-first / case_submit / plane-write vs KV) is the
     # load-bearing contract and a single replay can pass by luck.
     _OVERRIDE_TWO_IDS = {

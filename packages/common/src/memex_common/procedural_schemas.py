@@ -1,4 +1,4 @@
-"""V7 Procedural Plane — Pydantic DTOs and shared enums.
+"""Procedural Plane — Pydantic DTOs and shared enums.
 
 The procedural plane stores procedural memory as exactly two entity kinds:
 
@@ -25,7 +25,7 @@ do not import from ``memex_core`` — the SQLModel enums are mirrored as
 the boundary. Mismatches are caught at the ORM layer by the DB CHECK
 constraints (see migrations 061 + 064).
 
-The V7 design doc is the source of truth for the field set.
+The design doc is the source of truth for the field set.
 """
 
 from __future__ import annotations
@@ -126,7 +126,7 @@ ANCHOR_LABEL_PATTERN = re.compile(r'^[a-z][a-z0-9_-]*$')
 
 
 def validate_scope_label(value: str, *, field_name: str = 'scope') -> str:
-    """Validate a scope / pin-context label against the V7 grammar.
+    """Validate a scope / pin-context label against the scope grammar.
 
     Raises ``ValueError`` with an actionable message. ``user`` is called
     out explicitly because it is a *valid KV scope* and the most likely
@@ -142,7 +142,7 @@ def validate_scope_label(value: str, *, field_name: str = 'scope') -> str:
                 'entries into a pin-chain context, not by scoping the entry.'
             )
         raise ValueError(
-            f'{field_name} {candidate!r} does not match the V7 scope grammar '
+            f'{field_name} {candidate!r} does not match the scope grammar '
             f'(global | project:<id> | app:<id>).{hint}'
         )
     return candidate
@@ -295,7 +295,7 @@ class ProceduralEntryUpdate(BaseModel):
 
     All fields are optional; only set fields are updated. The repository
     appends a new ``procedural_entry_versions`` row on every successful
-    update — see V7 design §3.2.
+    update — see design §3.2.
     """
 
     model_config = ConfigDict(extra='forbid')

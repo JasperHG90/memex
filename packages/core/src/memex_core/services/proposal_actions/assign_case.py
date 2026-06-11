@@ -1,6 +1,6 @@
 """`assign_case` — resolve a contested case → procedure assignment.
 
-The Phase-1 prerequisite action from V7 design §19.7: ``case_submit``
+The Phase-1 prerequisite action from the design §19.7: ``case_submit``
 escalates non-clean assignments (§19.3c separability rule) to the lint
 surface with the candidates + judgment as evidence; the reviewer (human
 or agent — file-then-lint, decision #5) resolves the finding with this

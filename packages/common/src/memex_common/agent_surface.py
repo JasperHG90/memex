@@ -327,11 +327,11 @@ def compose_with_procedural() -> str:
     """Tier 1b universal block + the procedural-plane doctrine.
 
     Opt-in (not in ``compose_universal``) because the 8 ``memex_procedural_*``
-    tools are only mounted by clients that ship the V7 plane — including
+    tools are only mounted by clients that ship the procedural plane — including
     PROCEDURAL_PLANE in the default universal would burn ~1,750 chars on
     agents that have no procedural tools. Hermes briefing and the Claude
     Code SessionStart hook append PROCEDURAL_PLANE on top of
-    ``compose_universal()`` when V7 is active.
+    ``compose_universal()`` when the procedural plane is active.
     """
     return compose_universal() + '\n\n' + PROCEDURAL_PLANE
 

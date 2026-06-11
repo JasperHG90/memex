@@ -7,7 +7,7 @@ in :mod:`memex_hermes_plugin.memex.provider` — a thin layer of
 sync-shaped functions that marshal each call onto the shared event loop
 in :mod:`memex_hermes_plugin.memex.async_bridge`.
 
-The eight methods here mirror the HTTP routes 1:1 (see V7 design §6):
+The eight methods here mirror the HTTP routes 1:1 (see the design §6):
 
 * ``create``       → POST   /procedural
 * ``upsert``       → POST   /procedural/upsert
@@ -145,7 +145,7 @@ def case_submit(
     *,
     timeout: float = _DEFAULT_TIMEOUT,
 ) -> CaseSubmitResult:
-    """Submit a worked episode as a case (V7 §5.1).
+    """Submit a worked episode as a case (§5.1).
 
     The note lands in the hidden ``procedural`` system vault with
     ``role='case'``; assignment runs synchronously (explicit ``case_of``

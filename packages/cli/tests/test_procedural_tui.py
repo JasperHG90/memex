@@ -30,7 +30,7 @@ from memex_cli.procedural_tui.controller import (
 
 @pytest.mark.parametrize(
     'key',
-    ['global', 'project:memex', 'project:v7-eval', 'app:claude-code', 'app:hermes:trader'],
+    ['global', 'project:memex', 'project:proc-eval', 'app:claude-code', 'app:hermes:trader'],
 )
 def test_context_key_accepts_grammar(key: str) -> None:
     assert validate_context_key(key) == key

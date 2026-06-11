@@ -1,6 +1,6 @@
 """Suite-private outcomes for ``procedural_plane``.
 
-Two outcomes pin the V7 procedural-plane contract:
+Two outcomes pin the procedural-plane contract:
 
 * ``procedural_entry_roundtrip`` — exercises a write→read cycle
   (create, upsert, get_by_identity). The DirectApiBackend issues the
@@ -16,7 +16,7 @@ Two outcomes pin the V7 procedural-plane contract:
   on the (kind, scope, verb) tuple.
 
 Both outcomes are suite-private. They live in the suite package (not
-in ``memex_eval.suite.base``) because V7 procedural-plane behaviour
+in ``memex_eval.suite.base``) because procedural-plane behaviour
 is a single-suite concern today — promotion to core happens when a
 SECOND suite needs the same outcome shape.
 """
@@ -55,14 +55,14 @@ class ProceduralEntryRoundtrip(ExpectedOutcomeBase):
 
     When ``expect_kind`` (or ``expect_scope`` / ``expect_verb``) is set,
     the outcome additionally asserts the returned DTO carries that
-    field. ``expect_verb`` is optional because the V7 contract permits
+    field. ``expect_verb`` is optional because the procedural contract permits
     ``verb`` to be NULL for ``case``-kind entries.
     """
 
     type: Literal['procedural_entry_roundtrip']
     # Which API call to make. Drives DirectApiBackend dispatch.
     operation: Literal['create', 'upsert', 'get_by_identity']
-    # The V7 identity-anchor: kind, scope, (verb, context) for
+    # The identity-anchor: kind, scope, (verb, context) for
     # procedure/strategy; just (kind, scope) for case-kind entries.
     # DirectApiBackend builds the payload from these.
     kind: Literal['procedure', 'strategy']
@@ -144,7 +144,7 @@ class ProceduralSearchResults(ExpectedOutcomeBase):
     # these into the right API call shape.
     query: str | None = None
     context_keys: list[str] | None = None
-    # Cardinality floor — the V7 contract guarantees at least this
+    # Cardinality floor — the procedural contract guarantees at least this
     # many hits in the seeded scenario.
     min_hits: int = 1
     # Field-level match (at least one hit must carry these).

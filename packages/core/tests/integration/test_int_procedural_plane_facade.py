@@ -1,4 +1,4 @@
-"""Integration tests for the V7 procedural-plane facade against real Postgres.
+"""Integration tests for the procedural-plane facade against real Postgres.
 
 Covers the behaviours the unit tests can't — DB CHECK constraints, the
 UNIQUE NULLS NOT DISTINCT identity-anchor index, the version row append
@@ -125,7 +125,7 @@ async def test_create_then_create_same_anchor_raises_identity_conflict(metastore
     DISTINCT) would let duplicate anchors coexist, which would break
     upsert_by_identity and the briefing pin chain."""
     async with metastore.session() as session:
-        vault_id = await _create_vault(session, 'v7_idem')
+        vault_id = await _create_vault(session, 'proc_idem')
 
     repo = _repo(metastore)
     await repo.create(_entry_payload(vault_id=vault_id, title=f'first-{uuid.uuid4()}'))
@@ -147,7 +147,7 @@ async def test_create_case_with_trigger_succeeds(metastore):
     happy path against a regression that re-introduces it.
     """
     async with metastore.session() as session:
-        vault_id = await _create_vault(session, 'v7_case_trigger')
+        vault_id = await _create_vault(session, 'proc_case_trigger')
 
     repo = _repo(metastore)
     entry = await repo.create(
@@ -189,7 +189,7 @@ async def test_upsert_on_existing_anchor_returns_merged_row(metastore):
     response.
     """
     async with metastore.session() as session:
-        vault_id = await _create_vault(session, 'v7_upsert')
+        vault_id = await _create_vault(session, 'proc_upsert')
 
     repo = _repo(metastore)
     initial = await repo.upsert_by_identity(
@@ -223,7 +223,7 @@ async def test_upsert_preserves_deprecated_status(metastore):
     entries that the platform's deprecation path marked final.
     """
     async with metastore.session() as session:
-        vault_id = await _create_vault(session, 'v7_upsert_dep')
+        vault_id = await _create_vault(session, 'proc_upsert_dep')
 
     repo = _repo(metastore)
     initial = await repo.upsert_by_identity(
@@ -269,11 +269,11 @@ async def test_update_appends_version_row_and_bumps_updated_at(metastore):
     the post-update body snapshot so the audit trail is reconstructable
     from the table alone."""
     async with metastore.session() as session:
-        vault_id = await _create_vault(session, 'v7_update')
+        vault_id = await _create_vault(session, 'proc_update')
 
     repo = _repo(metastore)
     entry = await repo.create(
-        _entry_payload(vault_id=vault_id, title='v7-update-target', body='original body')
+        _entry_payload(vault_id=vault_id, title='update-target', body='original body')
     )
     assert entry.published_at is not None
     published_at_before = entry.published_at
@@ -291,7 +291,7 @@ async def test_update_appends_version_row_and_bumps_updated_at(metastore):
     assert updated.body == 'rewritten body'
     assert updated.updated_at > entry.updated_at, 'updated_at must advance'
     # The published_at was already set on create; the update must
-    # NOT clobber it (V7 contract: published_at is a one-way transition).
+    # NOT clobber it (procedural contract: published_at is a one-way transition).
     assert updated.published_at == published_at_before
 
     version_count = await _count_versions(metastore, entry.id)
@@ -306,7 +306,7 @@ async def test_update_without_fields_raises_value_error(metastore):
     'update' a row with no fields, leaving the operator convinced
     something had changed when in fact nothing had."""
     async with metastore.session() as session:
-        vault_id = await _create_vault(session, 'v7_update_empty')
+        vault_id = await _create_vault(session, 'proc_update_empty')
 
     repo = _repo(metastore)
     entry = await repo.create(_entry_payload(vault_id=vault_id, title=f'noop-{uuid.uuid4()}'))
@@ -325,7 +325,7 @@ async def test_deprecate_sets_status_and_superseded_by_pointer(metastore):
     successor entry id, and bumps updated_at. The row stays in the
     table (soft deprecate) so the audit trail is intact."""
     async with metastore.session() as session:
-        vault_id = await _create_vault(session, 'v7_dep')
+        vault_id = await _create_vault(session, 'proc_dep')
 
     repo = _repo(metastore)
     # Two distinct anchors: the deprecated one and its successor.
@@ -371,7 +371,7 @@ async def test_search_finds_published_procedure_via_bm25(metastore):
     dropped the BM25 index in migration 061) would make this test
     return zero hits."""
     async with metastore.session() as session:
-        vault_id = await _create_vault(session, 'v7_search')
+        vault_id = await _create_vault(session, 'proc_search')
 
     repo = _repo(metastore)
     # A unique token in the title lets BM25 find the row deterministically.
@@ -419,7 +419,7 @@ async def test_search_respects_kind_filter(metastore):
     but procedures are not. A regression that dropped the kind
     filter would let procedures pollute the strategy briefing."""
     async with metastore.session() as session:
-        vault_id = await _create_vault(session, 'v7_kind')
+        vault_id = await _create_vault(session, 'proc_kind')
 
     repo = _repo(metastore)
     await repo.create(
@@ -471,7 +471,7 @@ async def test_briefing_cards_unions_pins_across_context_keys(metastore):
     position). This is the load-bearing read path the agent's
     briefing block consumes."""
     async with metastore.session() as session:
-        vault_id = await _create_vault(session, 'v7_pins')
+        vault_id = await _create_vault(session, 'proc_pins')
 
     repo = _repo(metastore)
     e_global = await repo.create(

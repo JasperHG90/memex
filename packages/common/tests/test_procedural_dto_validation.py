@@ -1,4 +1,4 @@
-"""Pydantic DTO validation tests for the V7 procedural-plane envelopes.
+"""Pydantic DTO validation tests for the procedural-plane envelopes.
 
 The procedural plane has 3 distinct shapes — case / procedure /
 strategy — and a strict ``extra='forbid'`` config on the create /
@@ -96,7 +96,7 @@ def _base_payload(**overrides):
 
 @pytest.mark.parametrize('kind', ['procedure', 'strategy'])
 def test_entry_create_accepts_both_kinds(kind):
-    """Both V7 kinds are accepted with their anchor shapes (§18.1):
+    """Both kinds are accepted with their anchor shapes (§18.1):
     procedure ≡ (scope, verb, context); strategy ≡ (scope, verb, NULL)."""
     if kind == 'strategy':
         payload = _base_payload(kind=kind, context=None)
@@ -156,7 +156,7 @@ def test_entry_create_rejects_unknown_kind(bad_kind):
 
 @pytest.mark.parametrize('status', ['draft', 'published', 'deprecated'])
 def test_entry_create_accepts_all_three_statuses(status):
-    """All three V7 lifecycle states are accepted."""
+    """All three lifecycle states are accepted."""
     payload = _base_payload(status=status)
     dto = ProceduralEntryCreate.model_validate(payload)
     assert dto.status == status
@@ -195,7 +195,7 @@ def test_entry_create_rejects_unknown_status(bad_status):
 
 @pytest.mark.parametrize('origin', ['seed', 'kv_backfill', 'derived', 'manual', 'import'])
 def test_entry_create_accepts_all_origins(origin):
-    """All five V7 origin values are accepted."""
+    """All five origin values are accepted."""
     payload = _base_payload(origin=origin)
     dto = ProceduralEntryCreate.model_validate(payload)
     assert dto.origin == origin
@@ -249,8 +249,8 @@ def test_search_request_accepts_query_only():
 def test_search_request_accepts_scope_only():
     """A scope alone (no query) is valid — the agent pins to a
     specific scope without a textual query."""
-    req = ProceduralSearchRequest.model_validate({'scope': 'project:v7-eval'})
-    assert req.scope == 'project:v7-eval'
+    req = ProceduralSearchRequest.model_validate({'scope': 'project:proc-eval'})
+    assert req.scope == 'project:proc-eval'
     assert req.query is None
 
 
@@ -314,10 +314,10 @@ def test_briefing_cards_envelope_round_trip():
     fake_entry = _fake_entry_dto(title='briefing-suite-round-trip', summary='Round-trip card.')
     cards = [
         ProceduralBriefingCard(entry=fake_entry, pin_position=0, context_key='global'),
-        ProceduralBriefingCard(entry=fake_entry, pin_position=1, context_key='project:v7-eval'),
+        ProceduralBriefingCard(entry=fake_entry, pin_position=1, context_key='project:proc-eval'),
     ]
-    envelope = ProceduralBriefingCards(cards=cards, context_keys=['global', 'project:v7-eval'])
+    envelope = ProceduralBriefingCards(cards=cards, context_keys=['global', 'project:proc-eval'])
     assert len(envelope.cards) == 2
     assert envelope.cards[0].pin_position == 0
     assert envelope.cards[1].pin_position == 1
-    assert envelope.context_keys == ['global', 'project:v7-eval']
+    assert envelope.context_keys == ['global', 'project:proc-eval']

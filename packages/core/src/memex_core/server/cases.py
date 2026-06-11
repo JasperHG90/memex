@@ -1,4 +1,4 @@
-"""Case submission endpoint (V7 §5.1 / §18.3 / §18.9.0).
+"""Case submission endpoint (§5.1 / §18.3 / §18.9.0).
 
 One route: ``POST /api/v1/cases``. A case is a NOTE (``role='case'``)
 filed into the hidden ``procedural`` system vault — the caller never

@@ -1,6 +1,6 @@
-"""V7 Procedural Plane eval suite.
+"""Procedural Plane eval suite.
 
-10 scenarios gate the V7 procedural-plane contract. The plane has TWO
+10 scenarios gate the procedural-plane contract. The plane has TWO
 kinds (procedure / strategy — cases are NOTES filed via case_submit),
 scopes global | project:<id> | app:<id> (no user scope), an identity
 anchor ``(kind, scope, verb, context)`` UNIQUE NULLS NOT DISTINCT
@@ -53,7 +53,7 @@ METADATA = SuiteMetadata(
     schema_version='1',
     suite_version='1.0.0',
     description=(
-        'V7 procedural-plane contract — 10 scenarios pinning the '
+        'procedural-plane contract — 10 scenarios pinning the '
         '(kind, scope, verb, context) identity anchor, the 2 kinds '
         '(procedure / strategy), the write/read lifecycle '
         '(create/upsert/get_by_identity/deprecate), the hybrid '
@@ -63,7 +63,6 @@ METADATA = SuiteMetadata(
     ),
     tags=[
         'procedural',
-        'v7',
         'identity-anchor',
         'pin-chain',
         'lifecycle',
@@ -93,7 +92,7 @@ METADATA = SuiteMetadata(
 
 suite = Suite(
     metadata=METADATA,
-    sources=SuiteSources(notes=[]),  # no source corpus — V7 is its own write surface
+    sources=SuiteSources(notes=[]),  # no source corpus is its own write surface
     readme_path=_ROOT / 'README.md',
 )
 
@@ -143,7 +142,7 @@ suite.register(
 
 # ---------------------------------------------------------------------------
 # 2. Upsert idempotency: re-submitting the same anchor updates the existing
-#    entry rather than 409ing. The V7 contract is the GET-then-INSERT-or-UPDATE
+#    entry rather than 409ing. The procedural contract is the GET-then-INSERT-or-UPDATE
 #    pattern; if the GET path is broken (e.g. wrong identity-anchor parsing),
 #    upsert silently creates a new row and breaks search.
 # ---------------------------------------------------------------------------
@@ -153,7 +152,7 @@ suite.register(
     description=(
         'A second procedural_upsert on the same (kind, scope, verb, context) '
         'anchor is a no-op conflict — the entry is the SAME row, not a new one. '
-        'V7 identity-anchor resolution correctly maps the second call to the '
+        'identity-anchor resolution correctly maps the second call to the '
         'existing row.'
     ),
     query='',
@@ -260,7 +259,7 @@ suite.register(
 
 # ---------------------------------------------------------------------------
 # 5. Hybrid search returns the seeded entry. The BM25 + vector + RRF
-#    composition is the V7 retrieval surface; a regression that drops
+#    composition is the procedural retrieval surface; a regression that drops
 #    either stream would surface here.
 # ---------------------------------------------------------------------------
 
@@ -269,7 +268,7 @@ suite.register(
     description=(
         'procedural_search with a query that matches the seeded entry '
         'returns at least one hit. The hybrid BM25 + vector + RRF '
-        'composition is the V7 retrieval surface; a regression that '
+        'composition is the procedural retrieval surface; a regression that '
         'drops either stream would silently surface zero hits.'
     ),
     query='rollback database migration',
@@ -280,21 +279,21 @@ suite.register(
         query='rollback database migration',
         min_hits=1,
         expect_kind='procedure',
-        expect_scope='project:v7-eval',
+        expect_scope='project:proc-eval',
         expect_verb='rollback',
     ),
     setup_actions=[
         SetupAction(
             kind='procedural_upsert',
             kind_kind='procedure',
-            kind_scope='project:v7-eval',
+            kind_scope='project:proc-eval',
             kind_verb='rollback',
             kind_context='db_migration',
             kind_title='procedural-suite-rollback-migration',
             kind_trigger='rolling back a failed database migration',
             kind_summary=(
                 'Roll back the database migration by running alembic downgrade '
-                '-1 from the v7-eval project root, then verify the schema with '
+                '-1 from the proc-eval project root, then verify the schema with '
                 'memex database verify.'
             ),
         ),
@@ -313,9 +312,9 @@ suite.register(
 suite.register(
     id='briefing_cards_pin_chain_union',
     description=(
-        'procedural_briefing_cards with [global, project:v7-eval, app:eval] '
+        'procedural_briefing_cards with [global, project:proc-eval, app:eval] '
         'returns the pin-chain union — both the global-scope rule AND the '
-        'project:v7-eval-specific rule. The chain is the precedence rule '
+        'project:proc-eval-specific rule. The chain is the precedence rule '
         'that drives which entry surfaces for a given context; a regression '
         'that drops the union (e.g. only most-specific wins) would lose the '
         'global rule that applies to every project.'
@@ -325,7 +324,7 @@ suite.register(
     expected=ProceduralSearchResults(
         type='procedural_search_results',
         operation='briefing_cards',
-        context_keys=['global', 'project:v7-eval', 'app:eval'],
+        context_keys=['global', 'project:proc-eval', 'app:eval'],
         min_hits=2,
         expect_scope='global',
     ),
@@ -345,14 +344,14 @@ suite.register(
         SetupAction(
             kind='procedural_upsert',
             kind_kind='procedure',
-            kind_scope='project:v7-eval',
+            kind_scope='project:proc-eval',
             kind_verb='test',
             kind_context='before_commit',
             kind_title='procedural-suite-test-before-commit-project',
-            kind_trigger='about to commit changes in v7-eval',
+            kind_trigger='about to commit changes in proc-eval',
             kind_summary=(
                 'Run the test suite AND the procedural-plane eval gate '
-                'before every commit in v7-eval.'
+                'before every commit in proc-eval.'
             ),
         ),
     ],
@@ -380,7 +379,7 @@ suite.register(
     expected=ProceduralSearchResults(
         type='procedural_search_results',
         operation='briefing_cards',
-        context_keys=['global', 'project:v7-eval', 'app:eval'],
+        context_keys=['global', 'project:proc-eval', 'app:eval'],
         min_hits=2,
         expect_scope='global',
         expect_first_pin_pos=0,  # global is the first pin in the chain
@@ -399,12 +398,12 @@ suite.register(
         SetupAction(
             kind='procedural_upsert',
             kind_kind='procedure',
-            kind_scope='project:v7-eval',
+            kind_scope='project:proc-eval',
             kind_verb='lint',
             kind_context='pre_push',
             kind_title='procedural-suite-lint-pre-push-project',
-            kind_trigger='about to push a branch in v7-eval',
-            kind_summary=('Run lint AND the V7 spec-fence test before every push in v7-eval.'),
+            kind_trigger='about to push a branch in proc-eval',
+            kind_summary=('Run lint AND the spec-fence test before every push in proc-eval.'),
         ),
     ],
     mutating_scenario=True,
@@ -445,7 +444,7 @@ suite.register(
         SetupAction(
             kind='procedural_upsert',
             kind_kind='procedure',
-            kind_scope='project:v7-eval',
+            kind_scope='project:proc-eval',
             kind_verb='deprecate-test-handle',
             kind_context='deprecate-test-context',
             kind_title='procedural-suite-deprecate-handle',
@@ -496,7 +495,7 @@ suite.register(
         SetupAction(
             kind='procedural_upsert',
             kind_kind='procedure',
-            kind_scope='project:v7-eval',
+            kind_scope='project:proc-eval',
             kind_verb='draft-review-handle',
             kind_context='draft-review-context',
             kind_title='procedural-suite-draft-handle',

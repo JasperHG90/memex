@@ -317,7 +317,7 @@ class RemoteMemexAPI:
 
         ``app`` is the consumer identity for the procedural pin chain
         ("claude-code", "hermes:<agent_identity>") — selects the
-        app:<id> pin context layered on global + project (V7 §19.8).
+        app:<id> pin context layered on global + project (design §19.8).
         """
         params: dict[str, Any] = {'budget': budget}
         if project_id is not None:
@@ -1748,7 +1748,7 @@ class RemoteMemexAPI:
         return [KVEntryDTO(**r) for r in result]
 
     # ------------------------------------------------------------------
-    # Procedural plane (V7)
+    # Procedural plane
     #
     # The public surface is `/procedural/*`; the engine internals
     # (SQLModel, DTOs) still ship under the `procedural_*` prefix.
@@ -1920,7 +1920,7 @@ class RemoteMemexAPI:
         return [ProceduralEntryVersionDTO(**row) for row in result]
 
     async def case_submit(self, payload: CaseSubmit) -> CaseSubmitResult:
-        """Submit a worked episode as a case (V7 §5.1).
+        """Submit a worked episode as a case (design §5.1).
 
         The note lands in the hidden `procedural` system vault with
         role='case'; assignment runs synchronously (explicit case_of /

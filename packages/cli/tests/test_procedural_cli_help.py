@@ -1,7 +1,6 @@
 """Procedural-plane CLI help text regression fences.
 
-Guards against the V7 procedural-plane CLI drift that the v11 worktree
-saw in the v7 branch. The two top-level groups — ``memex procedural``
+Guards against procedural-plane CLI drift. The two top-level groups — ``memex procedural``
 and ``memex case`` — are the discoverable entry points for the
 procedural plane; their help text must:
 
@@ -11,7 +10,7 @@ procedural plane; their help text must:
 * Cover the core verbs (create, upsert, get, get-by-identity, search,
   update, deprecate, briefing-cards) for ``procedural`` and ``submit``
   for ``case``.
-* Not include "(V7)" or ticket references in user-facing prose — the
+* Not include "" or ticket references in user-facing prose — the
   rename removed those deliberately.
 """
 
@@ -65,12 +64,15 @@ def test_procedural_help_lists_eight_subcommands(runner, strip_ansi):
 
 
 def test_procedural_help_has_no_ticket_marker(runner, strip_ansi):
-    """User-facing prose must not carry ticket markers like '(V7)'."""
+    """User-facing prose must not carry a parenthesised ticket-version
+    marker like ``(v7)`` / ``(v8)`` — ticket names don't belong in
+    surfaced help text."""
+    import re
+
     result = runner.invoke(app, ['--help'])
     assert result.exit_code == 0
     text = _normalize(strip_ansi(result.stdout))
-    assert '(V7)' not in text
-    assert '(v7)' not in text.lower()
+    assert not re.search(r'\(v\d+\)', text.lower()), 'help text leaks a ticket-version marker'
 
 
 def test_case_group_registered_with_correct_name():

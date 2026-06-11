@@ -1,4 +1,4 @@
-"""V7 Procedural Plane — repository.
+"""Procedural Plane — repository.
 
 The repository owns CRUD + identity-anchor upsert for the ``procedural_*``
 tables, plus the source-edge, pin, and derivation-queue mutations. The

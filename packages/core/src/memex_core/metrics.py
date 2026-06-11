@@ -625,7 +625,7 @@ FSFM_AUTO_BAND_SKIPPED_TOTAL = Counter(
 
 
 # ---------------------------------------------------------------------------
-# Procedural (V7) plane
+# Procedural  plane
 # ---------------------------------------------------------------------------
 # Five metrics for the procedure / strategy plane. The plane is
 # small but it has a distinct identity-anchor doctrine (kind, scope,

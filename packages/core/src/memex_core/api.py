@@ -631,7 +631,7 @@ class MemexAPI:
             vault_service=self._vaults,
         )
 
-        # V7: Procedural Plane (procedural + case memory). The
+        # Procedural Plane (procedural + case memory). The
         # repository owns CRUD; the search service runs the hybrid
         # BM25+vector+RRF query and the briefing-card read path.
         from memex_core.services.procedural_repository import (
@@ -648,11 +648,11 @@ class MemexAPI:
             embedding_model=self.embedding_model,
         )
 
-        # Wire the V7 procedural-search service into the briefing so the
+        # Wire the procedural-search service into the briefing so the
         # briefing can include pin-chain cards alongside KV procedures.
         # This is a post-construction patch because the briefing service
         # is built before the procedural search service (the briefing
-        # has historically been independent of the V7 plane).
+        # has historically been independent of the plane).
         self.session_briefing._procedural_search = self._procedural_search  # type: ignore[attr-defined]
 
         self._ingestion = IngestionService(
@@ -683,7 +683,7 @@ class MemexAPI:
         ):
             svc._audit_service = self._audit_svc  # type: ignore[attr-defined]
 
-        # V7: procedural repository gets the same audit service.
+        # procedural repository gets the same audit service.
         self._procedural_repo._audit_service = self._audit_svc  # type: ignore[attr-defined]
 
     @property
@@ -2337,11 +2337,11 @@ class MemexAPI:
         """Delete expired KV entries. Returns count of deleted rows."""
         return await self._kv.cleanup_expired()
 
-    # --- V7: Procedural Plane -----------------------------------------
+    # --- Procedural Plane -----------------------------------------
 
     @property
     def procedural(self) -> 'MemexAPIProceduralFacade':
-        """The V7 procedural-plane facade. See :class:`MemexAPIProceduralFacade`."""
+        """The procedural-plane facade. See :class:`MemexAPIProceduralFacade`."""
         return MemexAPIProceduralFacade(self)
 
     @property
@@ -2354,7 +2354,7 @@ class MemexAPI:
 
 
 class MemexAPIProceduralFacade:
-    """V7 procedural-plane facade.
+    """procedural-plane facade.
 
     Lives on ``MemexAPI.procedural``. The 8 methods below map the
     repository + search service into a single property group so callers

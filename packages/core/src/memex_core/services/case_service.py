@@ -207,7 +207,7 @@ class CaseService:
         try:
             created = await self._api._vaults.create_vault(
                 name=CASE_VAULT_NAME,
-                description='V7 procedural memory plane (system vault).',
+                description='procedural memory plane (system vault).',
                 kind='system',
                 policy=CASE_VAULT_POLICY,
             )

@@ -2,7 +2,7 @@
 
 After 2026-05-14 (three-tier agent-surface architecture): the briefing
 composes ``memex_common.agent_surface.compose_with_procedural()`` (Tier 1b
-universal + V7 procedural-plane doctrine) plus a hermes-specific harness
+universal + procedural-plane doctrine) plus a hermes-specific harness
 block (Tier 2). Universal content lives in
 ``memex_common.agent_surface``; this file pins how Hermes assembles it
 on top of agent-specific framing.
@@ -214,17 +214,17 @@ def test_hermes_harness_within_budget():
 
 
 # ---------------------------------------------------------------------------
-# V7 procedural-plane doctrine in the briefing block.
+# procedural-plane doctrine in the briefing block.
 # The briefing composes `compose_with_procedural()` (universal + procedural
 # block) on top of the Hermes-specific harness. These tests pin that the
 # procedural routing rules are visible to the agent — a regression that
-# silently fell back to `compose_universal()` would break V7 write routing
+# silently fell back to `compose_universal()` would break procedural write routing
 # for every Hermes session.
 # ---------------------------------------------------------------------------
 
 
 def test_format_block_carries_v7_procedural_doctrine():
-    """The V7 procedural-plane doctrine MUST appear in the briefing
+    """The procedural-plane doctrine MUST appear in the briefing
     block. Without it, a Hermes agent has no doctrine for routing
     ``"this is how to do X"`` write intents to the procedural plane —
     the eval-driven failure mode is that the agent falls back to
@@ -260,7 +260,7 @@ def test_format_block_uses_compose_with_procedural_not_universal():
     """Defence-in-depth trip-wire: a regression that swaps
     ``compose_with_procedural()`` back to ``compose_universal()``
     in ``briefing.py`` would still pass the universal-block presence
-    tests but silently drop the V7 doctrine. This test pins the
+    tests but silently drop the doctrine. This test pins the
     procedural block ITSELF (which is not in the universal block) as
     a positive marker — if the procedural heading is absent, the
     swap has happened.
@@ -272,7 +272,7 @@ def test_format_block_uses_compose_with_procedural_not_universal():
         session_note_key='k',
         kv_instructions_if_no_vault=False,
     )
-    # The V7 block lives BELOW the universal block in
+    # The block lives BELOW the universal block in
     # ``compose_with_procedural()``. It is NOT in ``compose_universal()``.
     # If the briefing falls back to the universal-only composition,
     # this heading vanishes.

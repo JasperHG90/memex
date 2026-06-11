@@ -259,7 +259,7 @@ def test_no_bare_metadata_virtual_attribute_path_anywhere() -> None:
 
 
 # ---------------------------------------------------------------------------
-# V7 procedural-plane composition — opt-in addition to the universal block.
+# Procedural-plane composition — opt-in addition to the universal block.
 # Pin determinism, content presence, and the "additive not subtractive"
 # contract: ``compose_with_procedural`` MUST contain everything
 # ``compose_universal`` does (the universal block is the SSOT), plus the
@@ -268,7 +268,7 @@ def test_no_bare_metadata_virtual_attribute_path_anywhere() -> None:
 
 
 def test_compose_with_procedural_is_deterministic() -> None:
-    """The V7 composition must be byte-equal across calls — the
+    """The procedural composition must be byte-equal across calls — the
     cacheable-prompt-prefix invariant still holds for the procedural
     variant. A regression that introduces a UUID/timestamp/env probe
     into PROCEDURAL_PLANE would surface here.
@@ -284,20 +284,20 @@ def test_compose_with_procedural_is_superset_of_universal() -> None:
     is the SSOT and the procedural variant appends on top, never
     replaces).
 
-    A regression that "compacts" the V7 variant by reordering or
+    A regression that "compacts" the procedural variant by reordering or
     shortening the universal block would break MCP tool routing for
-    agents that consume the V7 surface.
+    agents that consume the procedural surface.
     """
     universal = ags.compose_universal()
     with_procedural = ags.compose_with_procedural()
     assert universal in with_procedural, (
         '`compose_with_procedural()` is missing bytes from '
-        '`compose_universal()`. The V7 variant must be purely additive.'
+        '`compose_universal()`. The procedural variant must be purely additive.'
     )
 
 
-def test_compose_with_procedural_includes_v7_doctrine() -> None:
-    """Pin the load-bearing V7 routing rules. These are the strings
+def test_compose_with_procedural_includes_procedural_doctrine() -> None:
+    """Pin the load-bearing procedural routing rules. These are the strings
     that drive an agent to route ``"this is how to do X"`` write intents
     to ``memex_procedural_create`` instead of ``memex_add_note`` or
     ``memex_kv_put``. Their absence is a silent routing failure.
@@ -336,9 +336,9 @@ def test_compose_with_procedural_includes_v7_doctrine() -> None:
     assert 'memex_procedural_deprecate' in out
 
 
-def test_compose_universal_does_not_include_v7_doctrine() -> None:
+def test_compose_universal_does_not_include_procedural_doctrine() -> None:
     """The procedural block is opt-in — it MUST NOT bleed into
-    ``compose_universal()``. Pre-V7 agents (no procedural tools)
+    ``compose_universal()``. Agents with no procedural tools
     consuming the universal block would burn ~1,750 chars on routing
     rules they cannot act on. This is the "do not leak" trip-wire."""
     out = ags.compose_universal()

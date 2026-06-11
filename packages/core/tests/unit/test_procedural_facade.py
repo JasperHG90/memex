@@ -1,4 +1,4 @@
-"""Unit tests for the V7 ``MemexAPI.procedural`` facade.
+"""Unit tests for the ``MemexAPI.procedural`` facade.
 
 The facade is a thin delegation layer over :class:`ProceduralRepository`
 and :class:`ProceduralSearchService`. These tests cover the *wiring*

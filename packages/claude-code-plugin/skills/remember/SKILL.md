@@ -10,7 +10,7 @@ argument-hint: "[what to remember]"
 
 2. **Route by shape, NOT by trigger word** — this is the most important step. Pick the storage layer first:
    - **Preferences / conventions / settings** ("I prefer X", "we use Y in this repo", "for Claude Code: dark theme", "company-wide: Python 3.12") → `memex_kv_put` with the scope-qualifier-derived namespace (`user:`, `project:<id>:`, `app:<app-id>:`, `global:`). See KV-namespace rules in the system prompt. **Do NOT save these as notes.**
-   - **Learned how-tos / procedures** (how to rotate creds, how to deploy, audit checklist) → **`memex_procedural_create`** on the V7 procedural plane (see "Procedural memory" below). The KV-namespace procedure convention (`<scope>:procedure:<verb>:<context>`) is the legacy path; prefer the procedural plane when the V7 MCP tools are available — they carry the identity anchor `(kind, scope, verb, context)`, versioned writes, and lifecycle states.
+   - **Learned how-tos / procedures** (how to rotate creds, how to deploy, audit checklist) → **`memex_procedural_create`** on the procedural plane (see "Procedural memory" below). The KV-namespace procedure convention (`<scope>:procedure:<verb>:<context>`) is the legacy path; prefer the procedural plane when the procedural MCP tools are available — they carry the identity anchor `(kind, scope, verb, context)`, versioned writes, and lifecycle states.
    - **Worked episodes / cases** (you just finished a multi-step task, diagnosed a bug, or resolved an incident, and the episode is worth remembering) → **`memex_case_submit`** — composes the episode template (trigger / situation / actions / outcome / lesson) and files it as a case NOTE in a hidden system vault. Pass `case_of=<entry-id>` when you know which procedure you enacted (you usually do — you retrieved it). NOT `memex_procedural_create` — cases are not plane entries.
    - **Strategies** (a higher-order tactic generalising several procedures: "treat every deploy as reversible-first") → **`memex_procedural_create` with `kind="strategy"`** — verb required, context FORBIDDEN (a strategy covers all procedures sharing scope+verb).
    - **Facts / decisions / context / observations** that belong as a paragraph → `memex_add_note` (or `memex_append_note` to extend an existing note). Use the note-format guidance below.
@@ -61,11 +61,11 @@ Bare `success=true`/`success=false` without `units` returns HTTP 400.
 
 ## Procedure KV (legacy — read-only fallback)
 
-How-tos are written to the **procedural plane** (`memex_procedural_create`; see "Procedural memory (V7)" below), NOT to KV. The `<scope>:procedure:<verb>:<context-tag>` KV convention is the deprecated legacy path — do **not** write new procedures there. It survives only as a read fallback (`memex_kv_get(key)` / `memex_kv_list`) for procedures captured before the plane existed.
+How-tos are written to the **procedural plane** (`memex_procedural_create`; see "Procedural memory" below), NOT to KV. The `<scope>:procedure:<verb>:<context-tag>` KV convention is the deprecated legacy path — do **not** write new procedures there. It survives only as a read fallback (`memex_kv_get(key)` / `memex_kv_list`) for procedures captured before the plane existed.
 
-## Procedural memory (V7)
+## Procedural memory
 
-The V7 procedural plane is the canonical home for "how to do X" knowledge — distinct from notes (long-form prose) and KV (preferences / bindings). It carries an identity anchor, versioned writes, and a pin-chain briefing surface.
+The procedural plane is the canonical home for "how to do X" knowledge — distinct from notes (long-form prose) and KV (preferences / bindings). It carries an identity anchor, versioned writes, and a pin-chain briefing surface.
 
 **Tools** (exposed automatically by the plugin's `.mcp.json`):
 

@@ -1,15 +1,15 @@
-"""Seed the hidden ``experiential`` system vault and backfill KV procedures (V7).
+"""Seed the hidden ``experiential`` system vault and backfill KV procedures.
 
 This migration is data-only. It does two things:
 
   1. **Seed a system vault** named ``experiential`` (kind='system',
      policy={reflect: true} — the §18.9.0 override: reflection ON,
-     vault-summary OFF). This is the dedicated home for V7
+     vault-summary OFF). This is the dedicated home for
      experiential-plane content. Hidden system vaults are excluded from
      user-facing lists via ``VaultService.kind != 'system'`` filtering
      (V11 introduced that filter; see migration 060).
   2. **Backfill legacy KV procedures.** Any ``<scope>:procedure:*`` rows
-     already in ``kv_entries`` (V7's precursor storage) are duplicated as
+     already in ``kv_entries`` (the precursor storage) are duplicated as
      draft ``experiential_entries`` rows so the search/briefing surface
      can find them. The original KV rows are kept (read-only) for
      backwards compatibility. Backfilled rows are stamped with
@@ -22,7 +22,7 @@ partial application is a no-op.
 
 Downgrade removes the sidecar's derived rows and deletes the seeded
 system vault. The original ``kv_entries`` rows are NOT deleted on
-downgrade (they predate the V7 schema and are not owned by it).
+downgrade (they predate the experiential schema and are not owned by it).
 
 Revision ID: 063_experiential_seed
 Revises: 062_notes_role
@@ -101,7 +101,7 @@ def upgrade() -> None:
             ),
             {
                 'name': _EXPERIENTIAL_VAULT_NAME,
-                'desc': 'V7 procedural & experiential memory plane (system vault).',
+                'desc': 'procedural & experiential memory plane (system vault).',
             },
         )
 

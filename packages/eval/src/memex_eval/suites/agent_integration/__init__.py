@@ -82,7 +82,7 @@ from memex_eval.suites.agent_integration._outcomes import (  # noqa: F401,E402
 )
 from memex_eval.suites.agent_integration import _setup_actions as _seed_actions  # noqa: F401,E402
 
-# V7 procedural-plane scenarios in this suite call ``procedural_upsert`` to
+# procedural-plane scenarios in this suite call ``procedural_upsert`` to
 # pre-seed a procedure on the (procedure, global, rotate, creds) anchor.
 # That handler is registered by the procedural_plane sister suite — the
 # side-effect import below populates the framework's setup-action
@@ -1188,9 +1188,9 @@ suite.register(
 )
 
 
-# --- V7 Procedural plane: agent-facing routing ---
+# --- Procedural plane: agent-facing routing ---
 #
-# The procedural plane is the V7 canonical home for "how to do X"
+# The procedural plane is the canonical home for "how to do X"
 # knowledge — it replaces the legacy ``<scope>:procedure:*`` KV
 # convention (the old KV-procedure routing scenarios this suite used
 # to carry were removed; that path is deprecated). These scenarios
@@ -1386,7 +1386,7 @@ suite.register(
 # 4. RETRIEVE-FIRST on a deploy task. A `deploy`/`payments` procedure is
 # pre-seeded; the user hands the agent the deploy task. The agent MUST
 # search the plane before improvising the steps — reuse over re-derive.
-# This is the load-bearing V7 behavior: learned procedures only pay off
+# This is the load-bearing behavior: learned procedures only pay off
 # if the agent actually looks for them when handed work.
 suite.register(
     id='procedural_searches_before_deploying',

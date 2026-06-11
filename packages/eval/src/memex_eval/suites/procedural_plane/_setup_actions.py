@@ -1,15 +1,14 @@
 """Suite-private setup actions for ``procedural_plane``.
 
-The V7 procedural plane has 8 HTTP routes. Scenarios that need a
+The procedural plane has 8 HTTP routes. Scenarios that need a
 known state pre-seed (search hits, briefing cards, identity-anchor
 collisions) call ``procedural_upsert`` to write a deterministic
-entry. Direct write via the API bypasses the LLM extraction path —
-V7 is a first-class write surface, so the seeding is faithful to
+entry. Direct write via the API bypasses the LLM extraction path; it is a first-class write surface, so the seeding is faithful to
 the production write shape.
 
 The seeded entry IDs are deterministic UUIDv5 derived from the
 (kind, scope, verb, context) anchor + the entry title, so re-running
-the suite produces the same IDs across machines (the V7 contract
+the suite produces the same IDs across machines (the procedural contract
 permits a different entry UUID for the same anchor — only the anchor
 is UNIQUE — but for eval-test repeatability we want the IDs
 stable).
@@ -37,7 +36,7 @@ if TYPE_CHECKING:
 logger = logging.getLogger('memex_eval.suites.procedural_plane')
 
 
-# Fixed namespace UUID for V7 procedural-plane eval test entries.
+# Fixed namespace UUID for procedural-plane eval test entries.
 # Distinct from any production namespace; this is purely a
 # repeatability anchor.
 _PROC_NS = uuid.UUID('f1a2b3c4-d5e6-4a7b-8c9d-0e1f2a3b4c5d')
@@ -48,7 +47,7 @@ def _deterministic_entry_id(
 ) -> UUID:
     """Stable UUIDv5 over the identity-anchor + title.
 
-    The V7 contract permits the entry UUID to be different from
+    The procedural contract permits the entry UUID to be different from
     the anchor — but for eval-test repeatability, a fixed UUID
     means the suite baselines survive cross-machine runs."""
     parts = [kind, scope, verb or '', context or '', title]
@@ -194,7 +193,7 @@ class _ProceduralUpsert(SetupActionHandler):
     ) -> None:
         """Best-effort deprecate the seeded entry.
 
-        Deprecation is preferred over deletion: the V7 contract
+        Deprecation is preferred over deletion: the procedural contract
         treats deprecation as the lifecycle exit (status →
         'deprecated'), and a future test-reuse scenario (``--reuse-vault``)
         would otherwise see the seeded entry re-appear in any

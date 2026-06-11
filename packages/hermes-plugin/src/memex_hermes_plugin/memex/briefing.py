@@ -118,11 +118,11 @@ def format_briefing_block(
     else:
         lines.append(f'Project: `{project_id}` · **No vault bound to this project.**')
 
-    # Tier 1b (universal SSOT) + V7 procedural-plane doctrine — same bytes
+    # Tier 1b (universal SSOT) + procedural-plane doctrine — same bytes
     # every call; cacheable prefix. ``compose_with_procedural`` is the SSOT
-    # that ships the V7 ``memex_procedural_*`` tool routing rules to any
+    # that ships the ``memex_procedural_*`` tool routing rules to any
     # Memex-aware agent. The procedural block is opt-in (not in
-    # ``compose_universal``) because pre-V7 agents with no procedural
+    # ``compose_universal``) because pre-agents with no procedural
     # tools would otherwise burn ~1,750 chars on routing rules they
     # cannot act on.
     lines.append('\n## Memex — system instructions\n\n' + compose_with_procedural())

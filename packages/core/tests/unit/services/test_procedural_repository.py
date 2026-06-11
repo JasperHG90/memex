@@ -1,4 +1,4 @@
-"""Unit tests for the V7 Procedural Plane DTOs and repository contract.
+"""Unit tests for the Procedural Plane DTOs and repository contract.
 
 These tests exercise the *contract* layer — DTO validation, ORM-to-DTO
 conversion, error classes — using a mock metastore. The hybrid search

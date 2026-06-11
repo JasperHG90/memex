@@ -1,6 +1,6 @@
 """Unit tests for the procedural-cards section in SessionBriefingService.
 
-The V7 procedural plane exposes a pin-chain briefing surface. The
+The procedural plane exposes a pin-chain briefing surface. The
 session-briefing service renders those cards in its own section
 (``## Procedural Cards``) when the plane is wired into the service.
 This module exercises that path in isolation — the rest of the briefing
@@ -78,7 +78,7 @@ def _make_cards_response(cards: list[SimpleNamespace]) -> SimpleNamespace:
 
 
 def _make_procedural_search(cards_response: object) -> AsyncMock:
-    """Mock the V7 search service to a fixed ``briefing_cards`` response."""
+    """Mock the procedural search service to a fixed ``briefing_cards`` response."""
     svc = MagicMock()
     svc.briefing_cards = AsyncMock(return_value=cards_response)
     return svc
@@ -142,7 +142,7 @@ def _make_service(
 class TestProceduralCardsPlaneNotWired:
     """The procedural_search dep is optional — the briefing MUST still
     render successfully when it is None. This is the upgrade path for
-    callers on the pre-V7 wiring."""
+    callers on the pre-wiring."""
 
     @pytest.mark.asyncio
     async def test_section_absent_when_plane_not_wired(self):

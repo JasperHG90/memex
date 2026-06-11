@@ -80,14 +80,14 @@ def _compose_for_target(target: Target) -> str:
     if target in (Target.universal, Target.generic):
         return compose_universal()
     if target == Target.hermes:
-        # Tier 1b universal + V7 procedural-plane doctrine + Hermes harness.
+        # Tier 1b universal + procedural-plane doctrine + Hermes harness.
         # The procedural block ships the routing rules for the 8
         # ``memex_procedural_*`` MCP tools. Non-Python agent harnesses
         # embedding Hermes go through this CLI bridge; in-process Hermes
         # consumers use the same SSOT in ``memex_hermes_plugin.briefing``.
         return compose_with_procedural() + '\n\n' + HERMES_HARNESS
     if target == Target.claude_code:
-        # Same surface the SessionStart hook reads — the V7 procedural
+        # Same surface the SessionStart hook reads — the procedural
         # block is appended to every Memex-aware Claude Code session,
         # matching what the in-process plugin path ships to Hermes.
         return compose_with_procedural() + '\n\n' + CLAUDE_CODE_HARNESS

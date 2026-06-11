@@ -4482,7 +4482,7 @@ async def memex_get_diagnostics_summary(
         raise ToolError(f'Diagnostics summary failed: {e}')
 
 
-# --- Procedural plane (V7) ---
+# --- Procedural plane  ---
 
 
 def _dto_to_mcp_entry(dto: ProceduralEntryCreate) -> McpProceduralEntry:

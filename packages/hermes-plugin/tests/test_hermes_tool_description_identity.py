@@ -37,7 +37,7 @@ _PAIRINGS: list[tuple[str, str]] = [
     ('MEMEX_MEMORY_CONSOLIDATE_DESC', 'MEMORY_CONSOLIDATE_SCHEMA'),
     ('MEMEX_LIST_LINT_ACTIONS_DESC', 'LIST_LINT_ACTIONS_SCHEMA'),
     ('MEMEX_SUBMIT_LINT_PROPOSAL_DESC', 'SUBMIT_LINT_PROPOSAL_SCHEMA'),
-    # V7 — Procedural plane (procedure / strategy) + case submission
+    # Procedural plane (procedure / strategy) + case submission
     ('MEMEX_PROCEDURAL_CREATE_DESC', 'PROC_CREATE_SCHEMA'),
     ('MEMEX_PROCEDURAL_UPSERT_DESC', 'PROC_UPSERT_SCHEMA'),
     ('MEMEX_PROCEDURAL_GET_DESC', 'PROC_GET_SCHEMA'),

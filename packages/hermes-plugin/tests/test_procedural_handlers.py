@@ -1,4 +1,4 @@
-"""Tests for the V7 procedural-plane Hermes handlers.
+"""Tests for the procedural-plane Hermes handlers.
 
 The procedural plane ships 7 tools (create / upsert / get /
 get_by_identity / update / deprecate / search) plus memex_case_submit

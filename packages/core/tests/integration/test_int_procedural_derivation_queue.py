@@ -1,4 +1,4 @@
-"""Integration tests for the V7 derivation-queue worker contract.
+"""Integration tests for the derivation-queue worker contract.
 
 The derivation queue is the async path by which cases graduate into
 procedures / strategies. The queue's claim path uses
@@ -68,7 +68,7 @@ async def test_enqueue_then_claim_transitions_status_and_increments_attempts(met
     parallel workers don't double-claim. After claim, the row's
     status is in_progress and attempt_count is 1."""
     async with metastore.session() as session:
-        vault_id = await _create_vault(session, 'v7_q_claim')
+        vault_id = await _create_vault(session, 'proc_q_claim')
 
     repo = _repo(metastore)
     enqueued = await repo.enqueue_derivation(
@@ -117,7 +117,7 @@ async def test_mark_completed_records_result_entry_id_and_completed_at(metastore
     """A successful worker completion sets status=completed, stamps
     result_entry_id (the entry the worker produced) and completed_at."""
     async with metastore.session() as session:
-        vault_id = await _create_vault(session, 'v7_q_complete')
+        vault_id = await _create_vault(session, 'proc_q_complete')
 
     repo = _repo(metastore)
     enqueued = await repo.enqueue_derivation(
@@ -152,7 +152,7 @@ async def test_mark_failed_below_max_attempts_requeues(metastore):
     A regression that flipped failure to immediately-failed would
     silently drop work on any transient LLM API blip."""
     async with metastore.session() as session:
-        vault_id = await _create_vault(session, 'v7_q_retry')
+        vault_id = await _create_vault(session, 'proc_q_retry')
 
     repo = _repo(metastore)
     enqueued = await repo.enqueue_derivation(
@@ -180,7 +180,7 @@ async def test_mark_failed_at_max_attempts_flips_to_failed(metastore):
     'failed' (not 'pending'). A regression that re-queued forever
     would let a poison-pill task starve workers indefinitely."""
     async with metastore.session() as session:
-        vault_id = await _create_vault(session, 'v7_q_exhausted')
+        vault_id = await _create_vault(session, 'proc_q_exhausted')
 
     repo = _repo(metastore)
     enqueued = await repo.enqueue_derivation(
@@ -217,7 +217,7 @@ async def test_enqueue_strategy_without_verb_raises_value_error(metastore):
     verb is a programming error that must fail loud at enqueue time
     (not 500 in the worker)."""
     async with metastore.session() as session:
-        vault_id = await _create_vault(session, 'v7_q_strat')
+        vault_id = await _create_vault(session, 'proc_q_strat')
 
     repo = _repo(metastore)
     with pytest.raises(ValueError, match='strategy derivations require'):
@@ -238,7 +238,7 @@ async def test_enqueue_rejects_invalid_target_kind(metastore):
     not deep in the worker where the resulting
     ``IdentityAnchorConflict`` would be confusing."""
     async with metastore.session() as session:
-        vault_id = await _create_vault(session, 'v7_q_kind')
+        vault_id = await _create_vault(session, 'proc_q_kind')
 
     repo = _repo(metastore)
     with pytest.raises(ValueError, match='target_kind must be procedure|strategy'):

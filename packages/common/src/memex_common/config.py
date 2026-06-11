@@ -2006,7 +2006,7 @@ class ProceduralConfig(BaseModel):
     ``ProceduralSearchRequest`` and ``procedural_briefing_cards`` still
     win. Keep the surface narrow — every entry here is a real toggle the
     brief described, not a speculation. The 8 fields below correspond to
-    the 8 tunables pinned by the V7 design review.
+    the 8 tunables pinned by the design review.
     """
 
     enabled: bool = Field(

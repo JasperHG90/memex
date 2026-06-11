@@ -1497,8 +1497,9 @@ async def export_notes(
 
 def _get_template_registry(ctx: typer.Context) -> TemplateRegistry:
     """Build a TemplateRegistry from the CLI config."""
-    import logging as _log
+    import logging
 
+    _log = logging.getLogger(__name__)
     config: MemexConfig = ctx.obj
     dirs: list[tuple[str, pathlib.Path]] = [('builtin', BUILTIN_PROMPTS_DIR)]
     root = config.server.file_store.root

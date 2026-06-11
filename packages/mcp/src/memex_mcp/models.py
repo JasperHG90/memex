@@ -464,7 +464,7 @@ class McpSurveyResult(BaseModel):
     truncated: bool = False
 
 
-# ── Procedural plane (V7) ──
+# ── Procedural plane  ──
 
 
 class McpProceduralSource(BaseModel):

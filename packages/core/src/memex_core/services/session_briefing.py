@@ -134,11 +134,11 @@ class SessionBriefingService:
     ) -> None:
         """Configure the briefing service.
 
-        ``procedural_search`` is the optional V7 plane handle
+        ``procedural_search`` is the optional plane handle
         (:class:`memex_core.services.procedural_search_service.ProceduralSearchService`).
         When provided, the briefing includes a "Procedural Cards" section
         surfacing pin-chain entries for the active contexts. When None
-        (the default for tests and installations without the V7 plane),
+        (the default for tests and installations without the plane),
         the section is silently omitted — the briefing still works.
         """
         self._vault_summary = vault_summary_service
@@ -207,9 +207,9 @@ class SessionBriefingService:
     ) -> tuple[Any, list[MentalModel], list[Any], list[Any], Any]:
         """Fetch all data sources in parallel.
 
-        The 5th element of the returned tuple is the V7 procedural-cards
+        The 5th element of the returned tuple is the procedural-cards
         response (``memex_common.procedural_schemas.ProceduralBriefingCards``)
-        or ``None`` when the V7 plane is not wired into this briefing
+        or ``None`` when the plane is not wired into this briefing
         service. A None is treated as an empty-cards state in the
         downstream section builder — the briefing still renders.
         """
@@ -303,7 +303,7 @@ class SessionBriefingService:
         # 2b. Procedures (priority 1b — behavioural rules; high signal)
         sections.append(('procedures', self._build_procedures_section(proc)))
 
-        # 2c. Procedural cards (priority 1c — V7 plane pin-chain entries).
+        # 2c. Procedural cards (priority 1c plane pin-chain entries).
         # Sits between KV-procedures and vault overview so the agent
         # sees the most actionable rules first. When the plane is not
         # wired (procedural_cards is None) the section is empty and
@@ -451,7 +451,7 @@ class SessionBriefingService:
         return '\n'.join(lines) + '\n'
 
     def _build_procedural_cards_section(self, cards: Any) -> str:
-        """Build the procedural-cards section from the V7 plane.
+        """Build the procedural-cards section from the plane.
 
         Render shape: one bullet per card with the entry's kind + title,
         a 1-line summary, and the pin's context_key. The card list is
@@ -691,7 +691,7 @@ class SessionBriefingService:
             if _estimate_tokens(self._assemble(sections)) <= budget:
                 return self._assemble(sections)
 
-        # Step 5b: Drop the V7 procedural-cards section entirely. The
+        # Step 5b: Drop the procedural-cards section entirely. The
         # cards are a discovery surface — the agent can re-fetch them
         # via the briefing-cards HTTP route when it needs more — so they
         # are the first thing to go under a tight budget.

@@ -1,4 +1,4 @@
-"""V7 Procedural Plane — search service.
+"""Procedural Plane — search service.
 
 Hybrid search across ``procedural_entries``:
 

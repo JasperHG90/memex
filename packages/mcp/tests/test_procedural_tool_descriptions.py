@@ -1,6 +1,6 @@
 """Procedural tool description wiring test.
 
-The 7 ``memex_procedural_*`` tools + ``memex_case_submit`` (V7) are
+The 7 ``memex_procedural_*`` tools + ``memex_case_submit``  are
 Tier 1a MCP surfaces. Their per-tool description text is the SSOT
 constant from ``memex_common.tool_descriptions`` (mirrors the
 deprioritize pattern in ``test_deprioritize_tool_descriptions.py``).
@@ -71,7 +71,7 @@ async def test_procedural_surface_tool_set() -> None:
         tool = await mcp.get_tool(name)
         assert tool is not None, f'{name} not registered'
         found.append(name)
-    assert len(found) == 8, f'Expected 8 V7 tools, got {len(found)}: {found}'
+    assert len(found) == 8, f'Expected 8 procedural tools, got {len(found)}: {found}'
     assert found == expected, (
         f'Procedural tool surface drift.\n  Expected: {expected}\n  Got:      {found}'
     )

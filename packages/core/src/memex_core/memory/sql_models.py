@@ -361,7 +361,7 @@ class Note(SQLModel, table=True):  # type: ignore
     role: str | None = Field(
         default=None,
         sa_column=Column(Text, nullable=True),
-        description='V7: classification of note provenance within the procedural plane. '
+        description='classification of note provenance within the procedural plane. '
         'NULL for ordinary declarative-plane notes. One of '
         "'case' (raw or derived experience record — parent of a procedure), "
         "'procedure' (a how-to recipe synthesised from one or more cases), "
@@ -1909,7 +1909,7 @@ class NoteAppend(SQLModel, table=True):  # type: ignore
 
 
 # ---------------------------------------------------------------------------
-# Procedural plane (V7 — procedural memory)
+# Procedural plane (procedural memory)
 # ---------------------------------------------------------------------------
 #
 # The procedural plane sits alongside the declarative plane (notes + memory_units).
@@ -1920,7 +1920,7 @@ class NoteAppend(SQLModel, table=True):  # type: ignore
 #
 # CASES ARE NOT ON THIS PLANE. A case is a note (``notes.role = 'case'``)
 # filed into the hidden ``procedural`` system vault via case_submit
-# (V7 design §5.1, §18.3, §18.9.0). Cases feed procedures/strategies as
+# (the design §5.1, §18.3, §18.9.0). Cases feed procedures/strategies as
 # lineage via ``procedural_sources``.
 #
 # Identity is the (kind, scope, verb, context) tuple (UNIQUE NULLS NOT
@@ -1932,7 +1932,7 @@ class NoteAppend(SQLModel, table=True):  # type: ignore
 # change to avoid stale-vector drift.
 #
 # Context-binding pins form a chain global → project:<id> → app:<agent_identity>
-# (see V7 spike 7) — the same entry can be pinned at multiple positions of
+# (see spike 7) — the same entry can be pinned at multiple positions of
 # different contexts; the (context_key, entry_id) pair is the row key.
 # NO ``user`` scope/context: per-user curation rides the pin chain's app
 # contexts, not the entries (JG decision 2026-06-10).
@@ -1944,7 +1944,7 @@ class ProceduralKind(str, Enum):
 
     Cases are NOT a kind on this plane — a case is a note
     (``notes.role = 'case'``) filed into the hidden ``procedural``
-    system vault (V7 design §18.3 / §18.9.0). Procedures and strategies
+    system vault (the design §18.3 / §18.9.0). Procedures and strategies
     are projections distilled over case clusters.
     """
 
@@ -2214,7 +2214,7 @@ class ProceduralEntryVersion(SQLModel, table=True):  # type: ignore
     """Append-only version ledger for an procedural entry.
 
     A row per `edit` call; the latest body is always on ``procedural_entries``
-    (mutable in place — see V7 design §3.2). ``version`` is monotonically
+    (mutable in place — see the design §3.2). ``version`` is monotonically
     increasing per entry_id.
     """
 
@@ -2360,7 +2360,7 @@ class ProceduralPin(SQLModel, table=True):  # type: ignore
     """Context-binding pin: a (context_key, entry_id, position) triple.
 
     Pins form a chain ``global → project:<id> → app:<agent_identity>`` (see
-    V7 spike 7). The same entry can be pinned at multiple positions of
+    spike 7). The same entry can be pinned at multiple positions of
     different contexts; the (context_key, entry_id, position) triple is the
     row key. Lower position = higher priority; agents read pins in ascending
     position order.
@@ -2424,7 +2424,7 @@ class ProceduralDerivationQueue(SQLModel, table=True):  # type: ignore
 
     Workers claim rows via ``SELECT ... FOR UPDATE SKIP LOCKED`` — same
     leader-election-free pattern the reflection queue uses (see
-    V7 design §4.4).
+    the design §4.4).
     """
 
     __tablename__ = 'procedural_derivation_queue'

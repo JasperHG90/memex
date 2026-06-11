@@ -1,4 +1,4 @@
-"""Add ``role`` column to ``notes`` for V7 experiential plane classification.
+"""Add ``role`` column to ``notes`` for experiential plane classification.
 
 Adds a nullable ``role`` column to ``notes`` — NULL for ordinary
 declarative-plane notes, one of:

@@ -262,7 +262,7 @@ class MemexMemoryProvider(MemoryProvider):
                 vault_id=self._vault_id,
                 budget=self._config.briefing_budget,
                 project_id=self._project_id,
-                # Pin-chain consumer identity (V7 §19.8): the
+                # Pin-chain consumer identity (§19.8): the
                 # per-agent app context is app:hermes:<agent_identity>
                 # so a trader and a researcher get different pinned
                 # procedure cards without new identity plumbing.
@@ -442,7 +442,7 @@ class MemexMemoryProvider(MemoryProvider):
                 vault_id=self._vault_id,
                 budget=self._config.briefing_budget,
                 project_id=self._project_id,
-                # Pin-chain consumer identity (V7 §19.8): the
+                # Pin-chain consumer identity (§19.8): the
                 # per-agent app context is app:hermes:<agent_identity>
                 # so a trader and a researcher get different pinned
                 # procedure cards without new identity plumbing.

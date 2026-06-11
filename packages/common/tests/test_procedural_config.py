@@ -1,8 +1,8 @@
-"""`ProceduralConfig` — operator-level tunables for the V7 plane.
+"""`ProceduralConfig` — operator-level tunables for the procedural plane.
 
 Eight fields, eight tests (plus a couple of integration guards):
 
-* Defaults match the V7 design review pin.
+* Defaults match the design review pin.
 * Each field can be overridden at construction.
 * ``MemexConfig`` carries a ``memory.procedural`` node and propagates
   overrides from YAML.
@@ -30,7 +30,7 @@ from memex_common.config import (
 
 
 def test_procedural_config_defaults():
-    """The 8 tunables land on the values the V7 design review pinned."""
+    """The 8 tunables land on the values the design review pinned."""
     config = ProceduralConfig()
     assert config.enabled is True
     assert config.search_default_bm25_weight == 0.5

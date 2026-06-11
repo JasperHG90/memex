@@ -1,4 +1,4 @@
-"""HTTP-layer integration tests for the V7 procedural-plane routes.
+"""HTTP-layer integration tests for the procedural-plane routes.
 
 The unit tests cover the route handlers in isolation (mocked
 ``MemexAPI.procedural``). This file drives the full FastAPI
@@ -52,7 +52,7 @@ async def http_client(api) -> AsyncGenerator[httpx.AsyncClient, None]:
     """ASGI client wired to the test's own event loop (a sync TestClient
     would run requests on a second loop and trip the session-scoped
     async engine). Auth is disabled for the procedural-plane gate —
-    authz is the F4 work, not the V7 contract under test here."""
+    authz is the F4 work, not the procedural contract under test here."""
     from memex_core.server import app
     from memex_core.server.auth import get_auth_context
 
@@ -135,7 +135,7 @@ async def test_post_procedural_returns_201_on_success(http_client, metastore):
     """A well-formed create returns 201 with the DTO body (the agent's
     audit log can read the id directly off the response)."""
     async with metastore.session() as session:
-        vault_id = await _create_vault(session, 'v7_http_create')
+        vault_id = await _create_vault(session, 'proc_http_create')
 
     resp = await http_client.post(
         '/api/v1/procedural', json=_payload(vault_id=vault_id, title='http-create-1')
@@ -153,7 +153,7 @@ async def test_post_procedural_collision_returns_409(http_client, metastore):
     anchor returns 409 (not 200, not 500) — the agent's write
     loop is supposed to switch to /upsert on a 409."""
     async with metastore.session() as session:
-        vault_id = await _create_vault(session, 'v7_http_409')
+        vault_id = await _create_vault(session, 'proc_http_409')
 
     first = await http_client.post(
         '/api/v1/procedural',
@@ -191,7 +191,7 @@ async def test_post_procedural_upsert_is_idempotent(http_client, metastore):
     same id and the updated body. The agent's "I learned something
     new" loop re-writes in place without surfacing as an error."""
     async with metastore.session() as session:
-        vault_id = await _create_vault(session, 'v7_http_upsert')
+        vault_id = await _create_vault(session, 'proc_http_upsert')
 
     body = _payload(
         vault_id=vault_id,
@@ -225,7 +225,7 @@ async def test_get_by_identity_returns_null_on_unbound_anchor(http_client, metas
     that flipped to 404 would break the agent's read-before-write
     decision tree."""
     async with metastore.session() as session:
-        vault_id = await _create_vault(session, 'v7_http_miss')
+        vault_id = await _create_vault(session, 'proc_http_miss')
 
     resp = await http_client.get(
         '/api/v1/procedural/by-identity',
@@ -249,7 +249,7 @@ async def test_get_by_identity_returns_entry_on_hit(http_client, metastore):
     no query text, which short-circuited to an empty response and broke
     the agent's idempotency check."""
     async with metastore.session() as session:
-        vault_id = await _create_vault(session, 'v7_http_hit')
+        vault_id = await _create_vault(session, 'proc_http_hit')
 
     create = await http_client.post(
         '/api/v1/procedural',
@@ -297,7 +297,7 @@ async def test_briefing_cards_unions_pins_across_context_keys(http_client, metas
     from memex_common.procedural_schemas import ProceduralPinCreate
 
     async with metastore.session() as session:
-        vault_id = await _create_vault(session, 'v7_http_briefing')
+        vault_id = await _create_vault(session, 'proc_http_briefing')
 
     repo = ProceduralRepository(metastore=metastore)
     e_global = await repo.create(
@@ -349,7 +349,7 @@ async def test_post_deprecate_missing_entry_returns_404(http_client, metastore):
     that raised ProceduralEntryNotFound (uncaught) would 500
     and look indistinguishable from a real DB error."""
     async with metastore.session() as session:
-        vault_id = await _create_vault(session, 'v7_http_dep_miss')
+        vault_id = await _create_vault(session, 'proc_http_dep_miss')
 
     missing_id = uuid.uuid4()
     resp = await http_client.post(

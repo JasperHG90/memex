@@ -207,7 +207,7 @@ def test_get_tool_schemas_in_hybrid_mode(provider_with_stubbed_api):
         'memex_memory_consolidate',
         # Tier A WS-history (F49 — contradiction-graph timeline)
         'memex_get_unit_history',
-        # V7 — Procedural plane (procedure / strategy) + case submission
+        # Procedural plane (procedure / strategy) + case submission
         'memex_procedural_create',
         'memex_procedural_upsert',
         'memex_procedural_get',
@@ -299,7 +299,7 @@ class TestGetToolSchemasBeforeInitialize:
             'memex_memory_consolidate',
             # Tier A WS-history (F49 — contradiction-graph timeline)
             'memex_get_unit_history',
-            # V7 — Procedural plane (procedure / strategy) + case submission
+            # Procedural plane (procedure / strategy) + case submission
             'memex_procedural_create',
             'memex_procedural_upsert',
             'memex_procedural_get',
@@ -324,7 +324,7 @@ class TestGetToolSchemasBeforeInitialize:
         """
         # Pre-init: full 57-tool set (Stream 1-5 baseline + Tier A
         # quick-wins + diagnostics + lint (5) + locks + history +
-        # V7 procedural plane (8)).
+        # procedural plane (8)).
         p = MemexMemoryProvider()
         assert len(p.get_tool_schemas()) == 57
 
