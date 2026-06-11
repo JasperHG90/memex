@@ -33,6 +33,7 @@ from memex_core.services.proposal_actions import (  # noqa: F401  (registration 
     note_metadata,
     record_outcome,
     route_note_to_vault,
+    set_note_role,
     set_note_status,
 )
 
