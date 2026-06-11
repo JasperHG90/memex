@@ -168,16 +168,17 @@ def upgrade() -> None:
         )
     )
     # Rename + heal the policy: dev DBs that ran 063 before the seed fix
-    # carry the invalid {"hidden": true} blob (rejected by the typed
-    # VaultPolicy, extra='forbid' — it raises in coerce_policy on every
-    # reflect_enabled/summarize_enabled call). Reset to the §18.9.0
-    # override {"reflect": true} (reflection ON, summary OFF). Idempotent
-    # for fresh chains where 063 already seeds the correct blob.
+    # carry an invalid blob (rejected by the typed VaultPolicy,
+    # extra='forbid' — it raises in coerce_policy on every
+    # reflect_enabled/summarize_enabled call). Reset to {"reflect": false}
+    # (reflection OFF, summary OFF — the derivation pipeline reads cases
+    # directly, not reflected mental models). Idempotent for fresh chains
+    # where 063 already seeds the correct blob.
     conn.execute(
         sa.text(
             "UPDATE vaults SET name = 'procedural', "
             "description = 'procedural memory plane (system vault).', "
-            'policy = \'{"reflect": true}\'::jsonb '
+            'policy = \'{"reflect": false}\'::jsonb '
             "WHERE name = 'experiential' AND kind = 'system'"
         )
     )

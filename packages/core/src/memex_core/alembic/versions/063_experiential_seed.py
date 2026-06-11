@@ -49,9 +49,11 @@ def upgrade() -> None:
     # -----------------------------------------------------------------------
     # Seed the hidden experiential system vault.
     #
-    # policy = {"reflect": true} is the §18.9.0 override: this system vault
-    # keeps reflection ON (mental models over case entities) while
-    # vault-summary stays OFF (the system default). The blob MUST validate
+    # policy = {"reflect": false}: reflection OFF, summary OFF (both the
+    # system-vault default). §18.9.0 originally specced reflection ON, but
+    # the derivation pipeline reads cases directly — it never consumes the
+    # per-entity mental models reflection produces — so reflecting over the
+    # hidden case vault is wasted LLM compute. The blob MUST validate
     # against the typed VaultPolicy (extra='forbid') — an unknown key like
     # "hidden" raises ValidationError in coerce_policy() on every
     # reflect_enabled/summarize_enabled call that touches this vault, which
@@ -65,7 +67,7 @@ def upgrade() -> None:
             sa.text(
                 'INSERT INTO vaults (id, name, description, mw_mode, kind, policy) '
                 "VALUES (gen_random_uuid(), :name, :desc, 'stationary', 'system', "
-                '\'{"reflect": true}\'::jsonb)'
+                '\'{"reflect": false}\'::jsonb)'
             ),
             {
                 'name': _EXPERIENTIAL_VAULT_NAME,

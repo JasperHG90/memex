@@ -65,11 +65,15 @@ logger = logging.getLogger('memex.core.services.case_service')
 # The hidden system vault seeded by migration 063 (renamed by 064).
 CASE_VAULT_NAME = 'procedural'
 
-# §18.9.0 policy override for the case system vault: reflection ON
-# (mental models over case entities), vault-summary OFF (the system
-# default). MUST validate against the typed VaultPolicy (extra='forbid')
-# — see migration 063.
-CASE_VAULT_POLICY = {'reflect': True}
+# Policy for the case system vault: reflection OFF, summary OFF (both the
+# system-vault default). §18.9.0 originally specced reflection ON, but the
+# cases → procedures → strategies derivation pipeline reads the cases
+# DIRECTLY (procedural_distillation), never the per-entity mental models
+# reflection produces — so reflection over the hidden case vault would
+# spend LLM calls building models nothing consumes. Set explicitly to
+# document the deliberate OFF. MUST validate against the typed VaultPolicy
+# (extra='forbid') — see migration 063.
+CASE_VAULT_POLICY = {'reflect': False}
 
 # External-proposal rule for escalated assignments. NOT llm_-prefixed —
 # that namespace is reserved for internal emitters (lint.py validator).
