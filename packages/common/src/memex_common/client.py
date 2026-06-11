@@ -1912,6 +1912,11 @@ class RemoteMemexAPI:
         result = await self._post('cases', payload)
         return CaseSubmitResult(**result)
 
+    async def procedural_derive(self, *, limit: int = 10) -> dict[str, Any]:
+        """Drain pending derivation tasks (cases → procedure, procedures →
+        strategy). Returns ``{'completed': int, 'queue_ids': [...]}``."""
+        return await self._post('procedural/derive', {}, params={'limit': limit})
+
     async def procedural_rollback(
         self,
         entry_id: UUID,

@@ -254,3 +254,134 @@ class _ProceduralUpsert(SetupActionHandler):
                 entry_id,
                 exc,
             )
+
+
+@register_setup_action('derive_from_cases')
+class _DeriveFromCases(SetupActionHandler):
+    """Exercise the full cases → procedure derivation pipeline (design §9).
+
+    1. Create a draft procedure anchor (the empty stub assignment would
+       create).
+    2. Submit ``kind_n_cases`` worked episodes via ``case_submit`` with an
+       explicit ``case_of`` (direct assignment — deterministic, no judge),
+       each carrying the same load-bearing quantitative anchor in its
+       actions (e.g. "roll the canary at 10%").
+    3. Trigger derivation (``POST /procedural/derive``) — the §9 distillation
+       pass fills the draft's body/trigger/summary.
+    4. GATE: assert the distilled body is non-empty AND preserves every
+       expected quantitative anchor verbatim (§9 rule 6 / §19.5 — the one
+       failure mode the spike found). ``required=True``, so a regression in
+       distillation fidelity errors the scenario.
+    5. Promote the entry draft → published (the §9 confirm step) so the
+       paired ``procedural_entry_roundtrip`` outcome can retrieve it.
+
+    Params (``kind_``-prefixed, per the suite convention):
+    - ``kind_scope`` / ``kind_verb`` / ``kind_context`` — the procedure anchor.
+    - ``kind_trigger`` — the stub's when_to_use.
+    - ``kind_n_cases`` (int, default 3 — the §9 N≥3 floor).
+    - ``kind_anchors`` (list[str]) — quantitative tokens that MUST survive
+      distillation; embedded in the case actions and asserted in the body.
+
+    Returns ``{'entry_id', 'identity_anchor', 'derived_body'}``.
+    """
+
+    required: ClassVar[bool] = True
+
+    async def run(
+        self, api: 'RemoteMemexAPI', vault_id: UUID, params: dict[str, Any]
+    ) -> dict[str, Any]:
+        from memex_common.procedural_schemas import (
+            CaseSubmit,
+            ProceduralEntryCreate,
+            ProceduralEntryUpdate,
+        )
+
+        scope = (params.get('kind_scope') or 'global').strip()
+        verb = (params.get('kind_verb') or '').strip()
+        context = (params.get('kind_context') or '').strip()
+        trigger = params.get('kind_trigger') or f'about to {verb} on {context}'
+        n_cases = int(params.get('kind_n_cases') or 3)
+        anchors: list[str] = list(params.get('kind_anchors') or ['10%', '15 minutes'])
+        if not verb or not context:
+            raise ValueError('derive_from_cases requires kind_verb and kind_context')
+
+        # 1. Draft anchor (the empty stub assignment creates).
+        draft = await api.procedural_create(
+            ProceduralEntryCreate(
+                vault_id=vault_id,
+                kind='procedure',
+                scope=scope,
+                verb=verb,
+                context=context,
+                title=f'draft {verb}:{context}',
+                summary='draft stub awaiting distillation',
+                body='',
+                trigger=trigger,
+                status='draft',
+                origin='derived',
+            )
+        )
+        entry_id = UUID(str(draft.id))
+
+        # 2. N worked episodes, each citing the load-bearing anchors so the
+        #    distiller has shared, quantitative signal to preserve.
+        anchor_phrase = ', '.join(anchors)
+        for i in range(n_cases):
+            await api.case_submit(
+                CaseSubmit(
+                    title=f'{verb} {context} run {i}',
+                    trigger=trigger,
+                    situation=f'Routine {verb} on {context}; case {i}.',
+                    actions=[
+                        f'Roll out the change and watch the canary at {anchors[0]}.',
+                        f'Hold the watch window for {anchors[1] if len(anchors) > 1 else "the window"}.',
+                        f'Promote once healthy (anchors: {anchor_phrase}).',
+                    ],
+                    outcome='success',
+                    lesson=f'Keep the canary at {anchors[0]} before promoting.',
+                    case_of=entry_id,
+                )
+            )
+
+        # 3. Drain the derivation queue — distils the procedure.
+        await api.procedural_derive(limit=20)
+
+        # 4. GATE: the distilled body must exist and preserve the anchors.
+        derived = await api.procedural_get(entry_id)
+        body = derived.body or ''
+        if not body.strip():
+            raise ValueError(
+                f'derive_from_cases: distillation produced an empty body for '
+                f'{scope}/{verb}/{context} after {n_cases} cases (§9 N≥3 path).'
+            )
+        missing = [a for a in anchors if a not in body]
+        if missing:
+            raise ValueError(
+                f'derive_from_cases: distilled body dropped quantitative anchors '
+                f'{missing} (§9 rule 6 / §19.5). Body was: {body[:400]!r}'
+            )
+
+        # 5. Confirm (draft → published) so the entry is retrievable.
+        await api.procedural_update(entry_id, ProceduralEntryUpdate(status='published'))
+
+        return {
+            'entry_id': str(entry_id),
+            'identity_anchor': f'{scope}/{verb}/{context}',
+            'derived_body': body,
+        }
+
+    async def teardown(
+        self,
+        api: 'RemoteMemexAPI',
+        vault_id: UUID,
+        params: dict[str, Any],
+        setup_context: dict[str, Any] | None,
+    ) -> None:
+        ctx = setup_context or {}
+        entry_id = ctx.get('entry_id') or ctx.get('derive_from_cases.entry_id')
+        if not entry_id:
+            return
+        try:
+            await api.procedural_deprecate(entry_id=UUID(str(entry_id)))
+        except Exception as exc:
+            logger.warning('derive_from_cases teardown: deprecate(%s) failed: %s', entry_id, exc)
