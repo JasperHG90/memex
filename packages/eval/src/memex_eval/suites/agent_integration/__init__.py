@@ -1606,21 +1606,21 @@ suite.register(
 )
 
 
-# LH-2. recall → file correction as a case. A procedure exists; the user
-# wants it improved. The agent recalls it (procedural_search) and files
-# the correction as a worked episode (case_submit) — there is no direct
-# procedural write; derivation re-distills the procedure. Search BEFORE
-# case_submit; the how-to correction must NOT go to memex_add_note.
+# LH-2. correct an existing procedure → just file a case. A procedure
+# exists; the user dictates an improvement. The agent's whole job is to
+# file the correction as a worked episode via memex_case_submit — it does
+# NOT search/probe/edit the procedure first (derivation re-distills the
+# procedure from the accumulated cases automatically). The correction
+# must NOT go to memex_add_note.
 suite.register(
     id='procedural_probe_then_update',
     group='procedural_lh',
     description=(
         'A (procedure, global, rotate, creds) entry is pre-seeded. The user '
-        'asks to improve it. The agent must recall it with '
-        '`memex_procedural_search`, then file the correction as a worked '
-        'episode via `memex_case_submit` (search-before-write) — there is '
-        'no direct procedural write; derivation re-distills. It must NOT '
-        'capture the how-to as a `memex_add_note`.'
+        'dictates an improvement. The agent simply files the correction as a '
+        'worked episode via `memex_case_submit`; derivation re-distills the '
+        'procedure automatically — the agent does NOT search/edit it first. '
+        'It must NOT capture the how-to as a `memex_add_note`.'
     ),
     query=(
         'Update our rotate-creds procedure: always roll the old key AFTER CI '
@@ -1632,20 +1632,9 @@ suite.register(
         children=[
             ToolCallContains(
                 type='tool_call_contains',
-                expected_tools=['memex_procedural_search'],
-                min_count=1,
-                match_mode='all',
-            ),
-            ToolCallContains(
-                type='tool_call_contains',
                 expected_tools=['memex_case_submit'],
                 min_count=1,
                 match_mode='all',
-            ),
-            ToolCallOrder(
-                type='tool_call_order',
-                before='memex_procedural_search',
-                after='memex_case_submit',
             ),
             ToolCallArgMatches(
                 type='tool_call_arg_matches',
@@ -1673,18 +1662,18 @@ suite.register(
 )
 
 
-# LH-3. search-miss → file new workflow as a case. The user asks a how-to
-# whose answer is NOT seeded, then dictates the steps. The agent should
-# search first (miss), then file the new workflow as a case
-# (case_submit) — procedures are derived from cases — in that order.
+# LH-3. new how-to → just file a case. The user dictates a workflow that
+# is NOT seeded. The agent files it as a worked episode via
+# memex_case_submit (procedures are derived from cases); it does not need
+# to search the plane first, and must NOT route it to memex_add_note.
 suite.register(
     id='procedural_search_miss_then_create',
     group='procedural_lh',
     description=(
-        'No matching procedure is seeded. The user asks how to set up the '
-        'staging database, then dictates the steps. The agent should '
-        '`memex_procedural_search` first (miss) and then `memex_case_submit` '
-        'the new workflow — search before write; NOT a `memex_add_note`.'
+        'No matching procedure is seeded. The user dictates how to set up the '
+        'staging database. The agent files the new workflow as a worked '
+        'episode via `memex_case_submit` — NOT a `memex_add_note`. '
+        'Derivation distills the procedure from the accumulated cases.'
     ),
     query=(
         'How do we set up the staging database from scratch? If we have not '
@@ -1698,20 +1687,9 @@ suite.register(
         children=[
             ToolCallContains(
                 type='tool_call_contains',
-                expected_tools=['memex_procedural_search'],
-                min_count=1,
-                match_mode='all',
-            ),
-            ToolCallContains(
-                type='tool_call_contains',
                 expected_tools=['memex_case_submit'],
                 min_count=1,
                 match_mode='all',
-            ),
-            ToolCallOrder(
-                type='tool_call_order',
-                before='memex_procedural_search',
-                after='memex_case_submit',
             ),
             ToolCallArgMatches(
                 type='tool_call_arg_matches',
