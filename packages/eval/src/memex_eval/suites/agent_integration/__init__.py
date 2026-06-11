@@ -1321,7 +1321,7 @@ suite.register(
 # procedure through governance). Routing the how-to to memex_add_note
 # (semantic note plane) is the failure this gates against.
 suite.register(
-    id='procedural_probes_identity_before_writing',
+    id='procedural_corrects_procedure_via_case',
     group='procedural',
     description=(
         'A procedure for (kind=procedure, scope=global, verb=rotate, '
@@ -1606,103 +1606,13 @@ suite.register(
 )
 
 
-# LH-2. correct an existing procedure → just file a case. A procedure
-# exists; the user dictates an improvement. The agent's whole job is to
-# file the correction as a worked episode via memex_case_submit — it does
-# NOT search/probe/edit the procedure first (derivation re-distills the
-# procedure from the accumulated cases automatically). The correction
-# must NOT go to memex_add_note.
-suite.register(
-    id='procedural_probe_then_update',
-    group='procedural_lh',
-    description=(
-        'A (procedure, global, rotate, creds) entry is pre-seeded. The user '
-        'dictates an improvement. The agent simply files the correction as a '
-        'worked episode via `memex_case_submit`; derivation re-distills the '
-        'procedure automatically — the agent does NOT search/edit it first. '
-        'It must NOT capture the how-to as a `memex_add_note`.'
-    ),
-    query=(
-        'Update our rotate-creds procedure: always roll the old key AFTER CI '
-        'goes green, never before — otherwise the deploy races.'
-    ),
-    max_duration_ms=_DUR_MS,
-    expected=CompositeOutcome(
-        type='composite',
-        children=[
-            ToolCallContains(
-                type='tool_call_contains',
-                expected_tools=['memex_case_submit'],
-                min_count=1,
-                match_mode='all',
-            ),
-            ToolCallArgMatches(
-                type='tool_call_arg_matches',
-                tool='memex_add_note',
-                arg_name='title',
-                regex=r'.*',
-                expect_absent=True,
-            ),
-        ],
-    ),
-    setup_actions=[
-        SetupAction(
-            kind='procedural_upsert',
-            kind_kind='procedure',
-            kind_scope='global',
-            kind_verb='rotate',
-            kind_context='creds',
-            kind_title='Rotate API credentials',
-            kind_trigger='rotating the project API credentials',
-            kind_summary='Issue a new key, update CI, roll the old key, verify green.',
-        ),
-    ],
-    replicates_override=2,
-    mutating_scenario=True,
-)
-
-
-# LH-3. new how-to → just file a case. The user dictates a workflow that
-# is NOT seeded. The agent files it as a worked episode via
-# memex_case_submit (procedures are derived from cases); it does not need
-# to search the plane first, and must NOT route it to memex_add_note.
-suite.register(
-    id='procedural_search_miss_then_create',
-    group='procedural_lh',
-    description=(
-        'No matching procedure is seeded. The user dictates how to set up the '
-        'staging database. The agent files the new workflow as a worked '
-        'episode via `memex_case_submit` — NOT a `memex_add_note`. '
-        'Derivation distills the procedure from the accumulated cases.'
-    ),
-    query=(
-        'How do we set up the staging database from scratch? If we have not '
-        'saved that yet, here is how: provision the instance, run the schema '
-        'migrations, seed the fixtures, then smoke-test the connection. Save '
-        'it so you can follow it next time.'
-    ),
-    max_duration_ms=_DUR_MS,
-    expected=CompositeOutcome(
-        type='composite',
-        children=[
-            ToolCallContains(
-                type='tool_call_contains',
-                expected_tools=['memex_case_submit'],
-                min_count=1,
-                match_mode='all',
-            ),
-            ToolCallArgMatches(
-                type='tool_call_arg_matches',
-                tool='memex_add_note',
-                arg_name='title',
-                regex=r'.*',
-                expect_absent=True,
-            ),
-        ],
-    ),
-    replicates_override=2,
-    mutating_scenario=True,
-)
+# NOTE: the former LH-2 (probe_then_update) and LH-3 (search_miss_then_create)
+# were removed (2026-06-11). Once the agent's only procedural write became
+# `memex_case_submit` and a single case derives a procedure, both collapsed
+# into single-step "dictate → case_submit" checks already covered by
+# `procedural_corrects_procedure_via_case` (correction) and
+# `procedural_routes_howto_to_plane_not_kv` (new how-to). The longer-horizon
+# group keeps only genuinely multi-step loops.
 
 
 # LH-4. enact-known-procedure → file case with case_of. The agent
