@@ -2254,19 +2254,14 @@ class MemexAPI:
         self,
         key: str,
         *,
-        include_history: bool = False,
         include_vectors: bool = False,
     ) -> Any | None:
         """Get a KV entry by key. Delegates to KVService.
 
-        For ``procedure:`` keys, ``include_history=True`` swaps the
-        returned entry's ``value`` field from the unwrapped active string to
-        a dict ``{value, version, history}``. Default behavior is unchanged.
-
         ``include_vectors`` exists for signature parity with
         ``RemoteMemexAPI``; in-process rows expose ``.embedding`` regardless.
         """
-        return await self._kv.get(key=key, include_history=include_history)
+        return await self._kv.get(key=key)
 
     async def kv_search(
         self,

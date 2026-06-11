@@ -185,7 +185,7 @@ def upgrade() -> None:
             sa.text(
                 'ALTER TABLE experiential_entries '
                 'ADD CONSTRAINT ck_experiential_origin '
-                "CHECK (origin IN ('seed', 'kv_backfill', 'derived', 'manual', 'import'))"
+                "CHECK (origin IN ('seed', 'derived', 'manual', 'import'))"
             )
         )
         op.execute(

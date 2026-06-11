@@ -1968,8 +1968,7 @@ class ProceduralStatus(str, Enum):
 class ProceduralOrigin(str, Enum):
     """How an procedural entry came to exist."""
 
-    SEED = 'seed'  # boot-time system seed (migration 063)
-    KV_BACKFILL = 'kv_backfill'  # promoted from a legacy <scope>:procedure:* KV row
+    SEED = 'seed'  # boot-time system seed
     DERIVED = 'derived'  # LLM-derived from cases (derivation queue)
     MANUAL = 'manual'  # agent-written
     IMPORT = 'import'  # bulk import
@@ -2053,9 +2052,8 @@ class ProceduralEntry(SQLModel, table=True):  # type: ignore
         sa_column=Column(Text, nullable=True),
         description='when_to_use (procedure) / when_to_apply (strategy) — '
         'THE retrieval key (spike §19.1: trigger-only embedding beats '
-        'full-body 18/20 vs 15/20 top-1). Embedding is recomputed on '
-        'every trigger change. NULL only on legacy kv_backfill rows, '
-        'which stay reachable via the BM25 leg.',
+        'full-body 18/20 vs 15/20 top-1). Required at the DTO boundary; '
+        'the embedding is recomputed on every trigger change.',
     )
     trigger_embedding: list[float] | None = Field(
         default=None,
@@ -2143,7 +2141,7 @@ class ProceduralEntry(SQLModel, table=True):  # type: ignore
             name='ck_procedural_status',
         ),
         CheckConstraint(
-            "origin IN ('seed', 'kv_backfill', 'derived', 'manual', 'import')",
+            "origin IN ('seed', 'derived', 'manual', 'import')",
             name='ck_procedural_origin',
         ),
         # Anchor shapes (§18.1): procedure ≡ (scope, verb, context);

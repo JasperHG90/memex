@@ -124,10 +124,9 @@ class _ProceduralUpsert(SetupActionHandler):
         # so re-running the suite on a dirty vault produces the
         # same state (idempotent by design).
         #
-        # ``vault_id`` (the runner-supplied scenario vault) and
-        # ``summary`` are REQUIRED by the DTO; ``trigger`` is required
-        # for non-kv_backfill writes. We default summary/trigger from
-        # the title when a scenario doesn't supply them so the seed
+        # ``vault_id`` (the runner-supplied scenario vault), ``summary``,
+        # and ``trigger`` are REQUIRED by the DTO. We default summary/trigger
+        # from the title when a scenario doesn't supply them so the seed
         # always validates.
         from memex_common.procedural_schemas import ProceduralEntryCreate
 

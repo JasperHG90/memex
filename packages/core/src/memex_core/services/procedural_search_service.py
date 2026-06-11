@@ -390,10 +390,10 @@ class ProceduralSearchService:
         The trigger (when_to_use / when_to_apply) is the single vector
         leg of the hybrid search (design §6/§18.7; spike §19.1:
         trigger-only beats full-body embedding 18/20 vs 15/20 top-1).
-        Rows without a trigger (legacy kv_backfill) are reachable via
-        the BM25 leg only. The HNSW index is partial WHERE
-        status='published' — see migration 064. ``<=>`` is cosine
-        distance, sorted ascending (smaller = closer).
+        ``trigger`` is required at write time, so every published row has
+        an embedding. The HNSW index is partial WHERE status='published'
+        — see migration 064. ``<=>`` is cosine distance, sorted ascending
+        (smaller = closer).
         """
         if not query_vec:
             return []

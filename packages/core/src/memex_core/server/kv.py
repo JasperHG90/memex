@@ -9,15 +9,12 @@ from memex_common.exceptions import MemexError
 from memex_core.server.auth import require_delete, require_read, require_write
 from memex_common.schemas import (
     KVEntryDTO,
-    KVProcedureEntryDTO,
-    KVProcedureValueDTO,
     KVPutRequest,
     KVSearchRequest,
 )
 
 from memex_core.api import MemexAPI
 from memex_core.server.common import _handle_error, get_api, vector_to_list
-from memex_core.services.kv import is_procedure_key
 
 router = APIRouter(prefix='/api/v1')
 
@@ -82,44 +79,22 @@ async def kv_put(
 
 @router.get(
     '/kv/get',
-    response_model=KVEntryDTO | KVProcedureEntryDTO,
+    response_model=KVEntryDTO,
     dependencies=[Depends(require_read)],
 )
 async def kv_get(
     api: Annotated[MemexAPI, Depends(get_api)],
     key: str = Query(description='Key to look up'),
-    include_history: bool = Query(
-        False,
-        description=(
-            'For procedure: keys, return the full envelope (value, version, history) '
-            'instead of just the active value. Ignored for non-procedure keys.'
-        ),
-    ),
     include_vectors: bool = Query(
         False,
         description="Include the entry's stored value vector in the response.",
     ),
 ):
-    """Get a key-value entry by key.
-
-    For ``procedure:`` keys, the default response contains only
-    the active value (back-compat — same shape as any other KV entry). Pass
-    ``include_history=true`` to expose the structured envelope as
-    :class:`KVProcedureEntryDTO`.
-    """
+    """Get a key-value entry by key."""
     try:
-        entry = await api.kv_get(key=key, include_history=include_history)
+        entry = await api.kv_get(key=key)
         if entry is None:
             raise HTTPException(status_code=404, detail=f'KV entry not found: {key}')
-        if include_history and is_procedure_key(key) and isinstance(entry.value, dict):
-            return KVProcedureEntryDTO(
-                id=entry.id,
-                key=entry.key,
-                value=KVProcedureValueDTO.model_validate(entry.value),
-                expires_at=entry.expires_at,
-                created_at=entry.created_at,
-                updated_at=entry.updated_at,
-            )
         return _kv_entry_dto(entry, include_vectors=include_vectors)
     except HTTPException:
         raise

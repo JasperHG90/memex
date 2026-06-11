@@ -74,28 +74,23 @@ def test_deprioritize_marks_non_destructive() -> None:
 
 def test_kv_put_specifies_namespace_regex() -> None:
     """The namespace prefix is server-enforced; the description must
-    spell out the regex so the agent constructs valid keys."""
+    spell out the four valid prefixes so the agent constructs valid keys.
+
+    Procedures are NOT a KV namespace — they live in the procedural plane
+    (memex_procedural_create), so the KV description must route how-tos away
+    from KV rather than documenting a `procedure:` key shape.
+    """
     desc = td.MEMEX_KV_PUT_DESC
     for prefix in (
         'global:',
         'user:',
         'project:<id>:',
         'app:<app-id>:',
-        '<scope>:procedure:<verb>:<context-tag>',
     ):
         assert prefix in desc
     assert '400' in desc  # rejection on invalid prefix
-    # Bare `procedure:*` is NOT a valid namespace — procedures live UNDER a scope.
-    assert 'never bare' in desc.lower() or 'never write a bare' in desc.lower()
-
-
-def test_kv_put_carries_procedure_scope_default_directive() -> None:
-    """Without this directive the agent silently project-scopes procedures
-    by cwd / git remote / active vault. Pin the routing rule + ASK escape."""
-    desc = td.MEMEX_KV_PUT_DESC
-    assert 'PROCEDURES default to GLOBAL' in desc or 'procedures default to global' in desc.lower()
-    assert 'explicit cue' in desc.lower() or 'EXPLICIT cue' in desc
-    assert 'ASK' in desc
+    # How-tos route to the plane, not KV.
+    assert 'memex_procedural_create' in desc
 
 
 def test_kv_put_rejects_content_facts() -> None:

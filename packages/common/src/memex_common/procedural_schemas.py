@@ -74,8 +74,7 @@ class ProceduralStatus(str, Enum):
 class ProceduralOrigin(str, Enum):
     """How an procedural entry came to exist."""
 
-    SEED = 'seed'  # boot-time system seed (migration 063)
-    KV_BACKFILL = 'kv_backfill'  # promoted from a legacy <scope>:procedure:* KV row
+    SEED = 'seed'  # boot-time system seed
     DERIVED = 'derived'  # LLM-derived from cases (derivation queue)
     MANUAL = 'manual'  # agent-written
     IMPORT = 'import'  # bulk import
@@ -102,7 +101,7 @@ class DerivationQueueStatus(str, Enum):
 # whether a caller passes a Python enum or a raw string.
 KindLiteral = Literal['procedure', 'strategy']
 StatusLiteral = Literal['draft', 'published', 'deprecated']
-OriginLiteral = Literal['seed', 'kv_backfill', 'derived', 'manual', 'import']
+OriginLiteral = Literal['seed', 'derived', 'manual', 'import']
 SourceRoleLiteral = Literal['provenance', 'evidence', 'contradiction']
 DerivationStatusLiteral = Literal['pending', 'in_progress', 'completed', 'failed']
 
@@ -234,9 +233,8 @@ class ProceduralEntryCreate(BaseModel):
     * strategy — ``verb`` required, ``context`` FORBIDDEN (a strategy is
       the projection over all procedures sharing (scope, verb)).
 
-    ``trigger`` (when_to_use / when_to_apply) is required for new writes:
-    it is the retrieval key (spike §19.1). Legacy kv_backfill rows may
-    lack one; new entries may not.
+    ``trigger`` (when_to_use / when_to_apply) is required for every write:
+    it is the retrieval key (spike §19.1).
     """
 
     model_config = ConfigDict(extra='forbid')
@@ -282,7 +280,7 @@ class ProceduralEntryCreate(BaseModel):
                     f'{label_name} {label!r} must match ^[a-z][a-z0-9_-]*$ '
                     '(the anchor-label grammar; §18.2)'
                 )
-        if self.origin != 'kv_backfill' and not (self.trigger or '').strip():
+        if not (self.trigger or '').strip():
             raise ValueError(
                 'trigger is required: it is the when_to_use / when_to_apply '
                 'phrase that retrieval anchors on (§6, spike §19.1)'

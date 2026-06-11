@@ -133,7 +133,7 @@ def test_entry_create_rejects_user_scope():
 
 def test_entry_create_requires_trigger():
     """The trigger (when_to_use) is the retrieval key (§6, spike §19.1)
-    — required for new writes (kv_backfill rows are the only exemption)."""
+    — required for every write."""
     with pytest.raises(ValidationError):
         ProceduralEntryCreate.model_validate(_base_payload(trigger=None))
 
@@ -186,16 +186,16 @@ def test_entry_create_rejects_unknown_status(bad_status):
 
 
 # ---------------------------------------------------------------------------
-# Origin literal — closed set; 'seed' / 'kv_backfill' / 'derived' /
-# 'manual' / 'import'. The eval suite uses 'seed' (procedural_upsert
-# setup action); a regression that drops 'seed' from the literal
-# would break the suite.
+# Origin literal — closed set; 'seed' / 'derived' / 'manual' / 'import'.
+# (KV-procedure backfill was removed — there is no 'kv_backfill' origin.)
+# The eval suite uses 'seed' (procedural_upsert setup action); a
+# regression that drops 'seed' from the literal would break the suite.
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.parametrize('origin', ['seed', 'kv_backfill', 'derived', 'manual', 'import'])
+@pytest.mark.parametrize('origin', ['seed', 'derived', 'manual', 'import'])
 def test_entry_create_accepts_all_origins(origin):
-    """All five origin values are accepted."""
+    """All four origin values are accepted."""
     payload = _base_payload(origin=origin)
     dto = ProceduralEntryCreate.model_validate(payload)
     assert dto.origin == origin

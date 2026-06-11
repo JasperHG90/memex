@@ -15,7 +15,6 @@ from pydantic import BaseModel
 if TYPE_CHECKING:
     from memex_common.lint import LintProposal
 
-from memex_common.kv_utils import is_procedure_key
 from memex_common.vault_utils import resolve_vault_list
 from memex_common.vault_policy import VaultKind, VaultPolicy
 from memex_common.schemas import (
@@ -43,7 +42,6 @@ from memex_common.schemas import (
     IngestResponse,
     EntityDTO,
     KVEntryDTO,
-    KVProcedureEntryDTO,
     KVPutRequest,
     KVSearchRequest,
     LineageResponse,
@@ -1629,34 +1627,19 @@ class RemoteMemexAPI:
         self,
         key: str,
         *,
-        include_history: bool = False,
         include_vectors: bool = False,
-    ) -> KVEntryDTO | KVProcedureEntryDTO | None:
+    ) -> KVEntryDTO | None:
         """Get a KV entry by exact key. Returns None if not found.
 
-        For procedure keys (``<scope>:procedure:<verb>:<context>`` where
-        scope is one of `global`, `user`, `project:<id>`, `app:<id>`),
-        ``include_history=True`` returns a :class:`KVProcedureEntryDTO`
-        whose ``value`` field is the structured envelope
-        ({value, version, history}).
-
         ``include_vectors=True`` populates ``embedding`` with the entry's
-        stored value vector (plain entries only — procedure envelopes don't
-        carry vectors).
+        stored value vector.
         """
         params: dict[str, Any] = {
             'key': key,
-            'include_history': include_history,
             'include_vectors': include_vectors,
         }
         try:
             result = await self._get('kv/get', params=params)
-            # Procedure DTO routing: a `<scope>:procedure:<verb>:<context>`
-            # key carries an envelope dict ({value, version, history}) when
-            # `include_history=True`. Route those to KVProcedureEntryDTO.
-            if include_history and isinstance(result.get('value'), dict):
-                if is_procedure_key(key):
-                    return KVProcedureEntryDTO(**result)
             return KVEntryDTO(**result)
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:

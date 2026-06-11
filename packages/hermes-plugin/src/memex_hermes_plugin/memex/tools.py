@@ -1358,15 +1358,6 @@ KV_GET_SCHEMA: dict[str, Any] = {
                 'type': 'string',
                 'description': 'Exact key to look up.',
             },
-            'include_history': {
-                'type': 'boolean',
-                'description': (
-                    'For procedure keys (`<scope>:procedure:<verb>:<context>`), '
-                    'return the full envelope (value, version, capped history '
-                    'of 5 prior versions) instead of just the active value. '
-                    'Ignored for non-procedure keys.'
-                ),
-            },
         },
         'required': ['key'],
     },

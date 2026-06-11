@@ -140,7 +140,7 @@ async def procedural_create(
         str, typer.Option('--status', help='draft | published | deprecated.')
     ] = 'draft',
     origin: Annotated[
-        str, typer.Option('--origin', help='manual | derived | imported | kv_backfill | seed.')
+        str, typer.Option('--origin', help='manual | derived | import | seed.')
     ] = 'manual',
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
 ):

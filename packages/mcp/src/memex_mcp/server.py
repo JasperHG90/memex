@@ -3440,12 +3440,7 @@ async def memex_kv_put(
 
 @mcp.tool(
     name='memex_kv_get',
-    description=(
-        'Get a KV entry by exact key. For procedure: keys, the '
-        'default response value is the unwrapped active procedure text. Pass '
-        'include_history=true to receive the structured envelope '
-        '({value, version, history}) so you can review prior versions.'
-    ),
+    description='Get a KV entry by exact key.',
     tags={'storage'},
     annotations={'readOnlyHint': True},
     timeout=15.0,
@@ -3453,30 +3448,15 @@ async def memex_kv_put(
 async def memex_kv_get(
     ctx: Context,
     key: Annotated[str, Field(description='Exact key to look up.')],
-    include_history: Annotated[
-        bool,
-        BeforeValidator(_coerce_bool),
-        Field(
-            default=False,
-            description=(
-                'For procedure: keys, return the full envelope '
-                '(value, version, capped history of 5 prior versions) instead '
-                'of just the active value. Ignored for non-procedure keys.'
-            ),
-        ),
-    ] = False,
 ) -> McpKVEntry | None:
     """Exact key lookup in the KV store."""
     try:
         api = get_api(ctx)
-        entry = await api.kv_get(key=key, include_history=include_history)
+        entry = await api.kv_get(key=key)
 
         if entry is None:
             return None
 
-        # When include_history=True for procedure keys, entry.value is a dict;
-        # for everything else it is the unwrapped string. McpKVEntry.value is
-        # typed loosely so both shapes flow through.
         return McpKVEntry(
             key=entry.key,
             value=entry.value,
