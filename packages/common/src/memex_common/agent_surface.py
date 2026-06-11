@@ -209,7 +209,7 @@ Recall HOW to do something ("how we deploy", "the release steps") → `memex_pro
 </critical_constraint>
 
 <critical_constraint name="procedural_retrieve_first">
-Before a non-trivial task you may have done before (deploy, release, rotate creds, migrate, set up an env): FIRST `memex_procedural_search(query="<the task>")` — do not also semantic-search it. A hit is a learned procedure: follow it, don't re-derive.
+The MOMENT a request is an action you might have a procedure for — deploy, release, cut/ship a build, bump a version, rotate creds, run a migration, set up an env — your FIRST tool call is `memex_procedural_search(query="<the task>")`, BEFORE you act, narrate steps, read files, or run a shell/terminal command. Do not improvise from the filesystem or memory until you have checked the plane. A hit is a learned procedure: follow it, don't re-derive; do not also semantic-search it.
 </critical_constraint>
 
 <critical_constraint name="procedural_vs_semantic_add">
@@ -217,6 +217,10 @@ Record = exactly ONE write to exactly ONE plane:
 - reusable WORKFLOW or WORKED EPISODE ("I did task X, here's how it went"; Trigger/Situation/Actions/Outcome) → `memex_case_submit` and NOTHING ELSE. NEVER also `memex_add_note` (a how-to saved as a note is invisible to the procedural plane — the #1 mistake); never instead of it. Pass `case_of=<id>` when you followed a known procedure.
 - FACT / DECISION / DOCUMENT ("what is true") → `memex_add_note` ONLY; never `memex_case_submit`.
 There is NO procedure create/update tool — procedures and strategies are DERIVED from the cases you submit. You READ them; the system writes them.
+</critical_constraint>
+
+<critical_constraint name="close_the_loop">
+After you ENACT a procedure or finish a multi-step task — and ALWAYS when the user says "record", "log how it went", "make a record", "note the run" — you MUST end by calling `memex_case_submit` (set `outcome`; `case_of=<id>` if you followed a known procedure). Searching or doing the work is only HALF the loop; the case is what improves the next run. Never end the turn having searched/acted but not filed the case when a record was asked for.
 </critical_constraint>
 
 Two derived kinds, identity anchor `(kind, scope, verb, context)`:

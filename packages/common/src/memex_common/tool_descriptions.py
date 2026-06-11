@@ -222,8 +222,10 @@ MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESC = (
 
 
 MEMEX_PROCEDURAL_SEARCH_DESC = (
-    'Call to find a how-to / workflow / strategy by query before re-deriving a '
-    'task you may have done before (deploy, release, rotate creds): hybrid '
+    'Call FIRST — before you act, narrate steps, read files, or run a shell '
+    'command — to find a how-to / workflow / strategy for a task you may have '
+    'done before (deploy, release, cut/ship a build, bump a version, rotate '
+    'creds, migrate): hybrid '
     'BM25 + vector search (RRF-merged) across the procedural plane. Use '
     'memex_procedural_get when you already have the UUID; use memex_kv_search '
     'for context adaptations (procedural-observations), not the procedures '
@@ -242,7 +244,9 @@ MEMEX_CASE_SUBMIT_DESC = (
     'content — a how-to saved as a note is invisible to the procedural plane. '
     'Cases are NOTES in a hidden system vault, never procedural entries; '
     'procedures are DERIVED from the cases you submit (there is no '
-    'procedure-write tool).\n'
+    'procedure-write tool). CLOSE THE LOOP: call this after you enact a '
+    'procedure or whenever asked to record / log / note a run — do not end '
+    'the turn without it.\n'
     '\n'
     'Required: title, trigger (what kicked it off), outcome '
     '("success"|"failure"|"mixed"). Recommended: situation, actions (ordered '
