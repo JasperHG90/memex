@@ -938,7 +938,11 @@ async def memex_active_vault(ctx: Context) -> str:
 @mcp.tool(
     name='memex_add_note',
     description=(
-        'Add a new note or document to Memex. Ingest content into a vault. Confirm '
+        'Add a new note or document to Memex — a FACT / DECISION / DOCUMENT '
+        '("what is true"). NOT for how-to workflows, procedures, or worked '
+        'episodes ("how we deploy", "how the run went") — those go to '
+        'memex_case_submit, NEVER here (and never both). Ingest content into a '
+        'vault. Confirm '
         'vault with user first, or pass vault_id. For structured captures (ADRs, '
         'retros, technical briefs, RFCs), call memex_list_templates first and pass '
         'the chosen slug as `template` for provenance and downstream filtering. '

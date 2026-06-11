@@ -200,22 +200,21 @@ Ambiguous? ASK before writing.
 
 PROCEDURAL_PLANE = """## Procedural plane — how-to memory
 
-<critical_constraint name="procedural_vs_semantic_commit">
-Procedural memory (HOW to do things — workflows, procedures, strategies, worked episodes) is a SEPARATE plane from semantic memory (WHAT is true — facts/notes via `memex_memory_search`/`memex_add_note`). CLASSIFY the task, then COMMIT to ONE plane — never hedge:
-- a how-to / recurring task / worked episode → `memex_procedural_search` to recall, `memex_case_submit` to write. Do NOT also `memex_memory_search` or `memex_add_note` it.
-- a fact / "what is X" → semantic memory ONLY.
-Double-writing a workflow as a note throws away the learned-workflow value. Pick one.
+<critical_constraint name="procedural_vs_semantic_search">
+HOW-to memory (workflows / procedures / strategies / worked episodes) is a SEPARATE plane from semantic memory (facts/notes). When you RECALL, search ONLY the matching plane — never both for one need:
+- HOW to do something ("how we deploy", "the release steps") → `memex_procedural_search` ONLY. Do NOT `memex_memory_search` or `memex_note_search` for it — they search the semantic plane and will NOT return procedures.
+- a FACT / "what is X" / a document → `memex_memory_search` / `memex_note_search` ONLY; never `memex_procedural_search` it.
 </critical_constraint>
 
 <critical_constraint name="procedural_retrieve_first">
 Before a non-trivial task you may have done before (deploy, release, rotate creds, migrate, set up an env): FIRST `memex_procedural_search(query="<the task>")` — do NOT also semantic-search it. A hit is a learned procedure — follow it instead of re-deriving.
 </critical_constraint>
 
-<critical_constraint name="add_note_vs_case_submit">
-`memex_add_note` and `memex_case_submit` are NOT interchangeable:
-- `memex_add_note` → a FACT / DECISION / DOCUMENT ("what is true").
-- `memex_case_submit` → a WORKED EPISODE ("I performed task X, here is how it went"; Trigger/Situation/Actions/Outcome). Pass `case_of=<id>` when you followed a known procedure.
-You do NOT write or edit procedures/strategies directly — there is NO procedure create/update tool. They are DERIVED from the cases you submit. To teach a NEW workflow OR fix an existing one, `memex_case_submit` the episode — never `memex_add_note` a how-to.
+<critical_constraint name="procedural_vs_semantic_add">
+When you RECORD, exactly ONE write goes to exactly ONE plane:
+- a reusable WORKFLOW, or a WORKED EPISODE ("I did task X, here is how it went"; Trigger/Situation/Actions/Outcome) → `memex_case_submit` and NOTHING ELSE. NEVER also `memex_add_note` it (a how-to saved as a note is invisible to the procedural plane — the #1 mistake), and NEVER instead of it. Pass `case_of=<id>` when you followed a known procedure.
+- a FACT / DECISION / DOCUMENT ("what is true") → `memex_add_note` ONLY; never `memex_case_submit` it.
+You do NOT write or edit procedures/strategies directly — there is NO procedure create/update tool; they are DERIVED from the cases you submit.
 </critical_constraint>
 
 Two kinds live on the plane (you READ them; the system DERIVES them), identity anchor `(kind, scope, verb, context)`:

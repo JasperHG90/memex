@@ -326,8 +326,10 @@ def test_compose_with_procedural_includes_procedural_doctrine() -> None:
     # ONLY agent-facing procedural write.
     assert 'memex_case_submit' in out
     assert 'case_of' in out
-    # The sharp add_note vs case_submit boundary must be present.
-    assert 'add_note_vs_case_submit' in out
+    # The commit boundary is split into two sharp constraints — one for
+    # the search side, one for the add/write side.
+    assert 'procedural_vs_semantic_search' in out
+    assert 'procedural_vs_semantic_add' in out
     # There is NO agent-facing briefing tool — cards arrive in the
     # session briefing (JG decision 2026-06-10).
     assert 'memex_procedural_briefing_cards' not in out
