@@ -187,3 +187,58 @@ async def test_derive_procedure_fills_draft_then_rolls_up_strategy(api, monkeypa
     assert strat.context is None  # strategy anchor ≡ (scope, verb), no context
     assert strat.origin == 'derived'
     assert strat.body  # distilled heuristic written
+
+
+async def test_distillation_files_activation_proposal_then_activate_publishes(api, monkeypatch):
+    """§18.6.1: a distilled draft is NOT auto-published — derivation files a
+    governance lint proposal, and the activate_procedural_entry action
+    confirms it (draft → published), reversibly."""
+    from sqlmodel import col, select
+
+    from memex_core.memory.sql_models import MaintenanceProposal
+    from memex_core.services.proposal_actions import get_action
+
+    _patch_distillers(monkeypatch)
+    vault = await _mk_vault(api)
+    p1 = await _make_procedure_with_cases(api, vault, verb='deploy', context='nomad', n_cases=3)
+    await api.procedural.derive_pending(limit=10)
+
+    # 1. The draft was distilled but stays draft (not auto-published).
+    before = await api.procedural.get(p1.id)
+    assert before.status == 'draft'
+    assert before.body  # distillation ran
+
+    # 2. Derivation filed a governance activation proposal targeting the entry.
+    async with api.metastore.session() as session:
+        props = (
+            await session.exec(
+                select(MaintenanceProposal)
+                .where(col(MaintenanceProposal.target_type) == 'procedural_entry')
+                .where(col(MaintenanceProposal.target_id) == str(p1.id))
+            )
+        ).all()
+    assert len(props) == 1
+    prop = props[0]
+    assert prop.rule_name == 'procedural_distillation'
+    assert str(prop.status).endswith('pending')
+    assert str(prop.lint_type).endswith('governance')
+
+    # 3. Confirm via the activate action → published.
+    action = get_action('activate_procedural_entry')
+    action.validate({}, target_type='procedural_entry', target_id=str(p1.id))
+    result = await action.execute(api, {}, target_id=str(p1.id), vault_id=vault, actor='reviewer')
+    after = await api.procedural.get(p1.id)
+    assert after.status == 'published'
+
+    # 4. Reverse → back to draft (non-destructive).
+    await action.reverse(
+        api,
+        {},
+        result.applied_state,
+        result.prior_state,
+        target_id=str(p1.id),
+        vault_id=vault,
+        actor='reviewer',
+    )
+    reverted = await api.procedural.get(p1.id)
+    assert reverted.status == 'draft'

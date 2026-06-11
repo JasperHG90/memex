@@ -49,6 +49,10 @@ logger = logging.getLogger('memex.core.services.procedural_derivation')
 # heuristic over a single procedure (that's just the procedure).
 MIN_PROCEDURES_FOR_STRATEGY = 2
 
+# rule_name on the §18.6.1 confirmation proposals. NOT llm_-prefixed —
+# that namespace is reserved for the internal lint validator.
+DISTILLATION_RULE_NAME = 'procedural_distillation'
+
 
 class ProceduralDerivationError(RuntimeError):
     """A derivation task failed in a way the worker maps to retry/fail."""
@@ -146,9 +150,63 @@ class ProceduralDerivationService:
             ),
         )
 
+        # §18.6.1: the distilled draft rides the lint surface for confirmation.
+        await self._file_activation_proposal(
+            entry_id=entry_id,
+            vault_id=claim.vault_id,
+            kind='procedure',
+            title=distilled.title,
+            summary=distilled.summary,
+            source_case_ids=[cid for cid, _ in cases],
+        )
+
         # §9 dirty event: a (re-)derived procedure feeds its parent strategy.
         await self._maybe_enqueue_strategy(claim)
         return entry_id
+
+    async def _file_activation_proposal(
+        self,
+        *,
+        entry_id: UUID,
+        vault_id: UUID,
+        kind: str,
+        title: str,
+        summary: str,
+        source_case_ids: list[str],
+    ) -> None:
+        """File a governance lint proposal to confirm a distilled draft
+        (§18.6.1). The `activate_procedural_entry` action is pre-selected;
+        the lint surface's pending-dedup means re-derivation won't re-nag.
+        A filing failure is logged, not raised — the entry is already a
+        valid draft, retrievable once confirmed by any other path."""
+        from memex_core.services.lint_external import (
+            ExternalProposalRequest,
+            insert_external_proposal,
+        )
+
+        try:
+            req = ExternalProposalRequest(
+                rule_name=DISTILLATION_RULE_NAME,
+                lint_type='governance',
+                target_type='procedural_entry',
+                target_id=str(entry_id),
+                description=f'Distilled {kind} draft ready to activate: {title[:140]}',
+                suggested_action=(
+                    'Review the distilled draft and activate it (draft → published) '
+                    'via activate_procedural_entry.'
+                ),
+                vault_id=str(vault_id),
+                evidence={'summary': summary, 'source_cases': source_case_ids},
+                proposed_action={'action_name': 'activate_procedural_entry', 'params': {}},
+            )
+            status, finding_id = await insert_external_proposal(
+                self._api, req, vault_id=vault_id, actor='system:derivation'
+            )
+            logger.info('derivation filed activation proposal: %s (finding=%s)', status, finding_id)
+        except Exception as exc:  # noqa: BLE001 — proposal filing is best-effort
+            logger.warning(
+                'derivation: activation proposal filing failed for %s: %s', entry_id, exc
+            )
 
     async def _maybe_enqueue_strategy(self, claim: 'ProceduralDerivationQueueClaim') -> None:
         """Enqueue a strategy derivation for ``(scope, verb)`` once it has
@@ -231,6 +289,16 @@ class ProceduralDerivationService:
                 status='draft',
                 origin='derived',
             )
+        )
+
+        # §18.6.1: the distilled strategy draft also rides the lint surface.
+        await self._file_activation_proposal(
+            entry_id=dto.id,
+            vault_id=claim.vault_id,
+            kind='strategy',
+            title=distilled.title,
+            summary=distilled.summary,
+            source_case_ids=[p.get('title', '') for p in procedures],
         )
         return dto.id
 
