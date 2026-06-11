@@ -79,6 +79,11 @@ class _ProceduralUpsert(SetupActionHandler):
 
     Optional params:
     - ``kind_status`` ('published' | 'draft', default 'published')
+    - ``pin_to`` (context-key str, default None) — when set, pins the
+      upserted entry into that context-binding chain after the write.
+      The briefing-cards endpoint only surfaces PINNED entries, so any
+      scenario that gates ``briefing_cards`` MUST pin its seed into the
+      context key it queries (e.g. 'global', 'project:proc-eval').
     - ``deprecate_after`` (bool, default False) — when True, the
       action immediately deprecates the entry it just upserted.
       Used by the ``deprecate_drops_from_published_search`` scenario
@@ -106,6 +111,7 @@ class _ProceduralUpsert(SetupActionHandler):
         context = params.get('kind_context')
         title = (params.get('kind_title') or '').strip()
         deprecate_after = bool(params.get('deprecate_after', False))
+        pin_to = params.get('pin_to')
         if not kind or not scope or not title:
             raise ValueError(
                 'procedural_upsert setup action requires kind_kind, kind_scope, '
@@ -152,6 +158,19 @@ class _ProceduralUpsert(SetupActionHandler):
         dto = await api.procedural_upsert(create)
         entry_id = UUID(str(dto.id))
 
+        # Optional pin into a briefing context-binding chain. The
+        # briefing-cards endpoint only surfaces PINNED entries, so a
+        # scenario that gates briefing_cards must pin the seed into the
+        # context key it queries (e.g. 'global', 'project:proc-eval').
+        # Append (position=None); the server enforces the per-context cap.
+        if pin_to:
+            try:
+                await api.procedural_pin(entry_id, context_key=str(pin_to))
+            except Exception as exc:
+                raise ValueError(
+                    f'procedural_upsert: pin_to={pin_to!r} failed for {entry_id}: {exc}'
+                ) from exc
+
         # Optional immediate deprecate — flips the entry to
         # ``status='deprecated'`` so the search call (which filters
         # by default ``status='published'``) sees the post-deprecation
@@ -179,10 +198,20 @@ class _ProceduralUpsert(SetupActionHandler):
             anchor_parts.append(context)
         identity_anchor = '/'.join(anchor_parts)
 
-        return {
+        result: dict[str, Any] = {
             'entry_id': str(entry_id),
             'identity_anchor': identity_anchor,
         }
+        if pin_to:
+            # Recorded so teardown can UNPIN (not just deprecate) — pins are
+            # keyed by context_key, which is shared across scenarios. The
+            # append-position is computed as max(position)+1 over ALL pins in
+            # the context (deprecated entries included), so a leaked pin from a
+            # prior scenario would push this scenario's pin off position 0 and
+            # break the pin-position-order contract. Unpinning in teardown
+            # keeps each scenario's briefing chain isolated.
+            result['pinned_context'] = str(pin_to)
+        return result
 
     async def teardown(
         self,
@@ -203,6 +232,21 @@ class _ProceduralUpsert(SetupActionHandler):
         entry_id = ctx.get('entry_id') or ctx.get('procedural_upsert.entry_id')
         if not entry_id:
             return
+        # Unpin FIRST so the pin state doesn't leak into later scenarios that
+        # share the same context_key chain (see run() for why position leakage
+        # breaks the pin-position-order contract). Deprecation alone leaves the
+        # pin row in place, and append-position is computed over all pins.
+        pinned_context = ctx.get('pinned_context') or ctx.get('procedural_upsert.pinned_context')
+        if pinned_context:
+            try:
+                await api.procedural_unpin(UUID(str(entry_id)), context_key=str(pinned_context))
+            except Exception as exc:
+                logger.warning(
+                    'procedural_upsert teardown: unpin(%s from %s) failed: %s',
+                    entry_id,
+                    pinned_context,
+                    exc,
+                )
         try:
             await api.procedural_deprecate(entry_id=UUID(str(entry_id)))
         except Exception as exc:

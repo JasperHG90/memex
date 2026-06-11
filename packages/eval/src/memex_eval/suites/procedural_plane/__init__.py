@@ -339,6 +339,7 @@ suite.register(
             kind_title='procedural-suite-test-before-commit-global',
             kind_trigger='about to commit changes',
             kind_summary='Run the test suite before every commit.',
+            pin_to='global',
         ),
         # The project-specific rule that overrides the global one.
         SetupAction(
@@ -353,6 +354,7 @@ suite.register(
                 'Run the test suite AND the procedural-plane eval gate '
                 'before every commit in proc-eval.'
             ),
+            pin_to='project:proc-eval',
         ),
     ],
     mutating_scenario=True,
@@ -394,6 +396,7 @@ suite.register(
             kind_title='procedural-suite-lint-pre-push-global',
             kind_trigger='about to push a branch',
             kind_summary='Run lint before every push.',
+            pin_to='global',
         ),
         SetupAction(
             kind='procedural_upsert',
@@ -404,6 +407,7 @@ suite.register(
             kind_title='procedural-suite-lint-pre-push-project',
             kind_trigger='about to push a branch in proc-eval',
             kind_summary=('Run lint AND the spec-fence test before every push in proc-eval.'),
+            pin_to='project:proc-eval',
         ),
     ],
     mutating_scenario=True,
