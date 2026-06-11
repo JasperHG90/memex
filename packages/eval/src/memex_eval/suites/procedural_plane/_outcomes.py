@@ -272,7 +272,7 @@ class CaseSubmitRoundtrip(ExpectedOutcomeBase):
     def metric_keys(self) -> list[str]:
         return ['pass', 'assignment_mode_match']
 
-    def score(self, answer, *, scenario, context=None) -> dict[str, float]:
+    def score(self, answer, *, scenario, context=None, **_kw) -> dict[str, float]:
         if answer.error or not answer.units:
             return {'pass': 0.0, 'assignment_mode_match': 0.0}
         result = answer.units[0]
