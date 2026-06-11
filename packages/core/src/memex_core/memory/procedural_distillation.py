@@ -61,7 +61,13 @@ DISTILLATION_DISCIPLINE = """\
    counts, and named windows from the cases (e.g. "10%", "15 minutes",
    "three times in a row", "the batch window") must appear verbatim in the
    step text or condition that uses them; never paraphrase a number into
-   vague prose."""
+   vague prose.
+7. SKILL HINTS ARE CAPABILITY DESCRIPTIONS, NOT SPECIFIC SKILLS. When a step
+   would obviously be executed by a recognizable KIND of automation, set
+   skill_hint to a short platform-agnostic capability description ("a skill
+   that can bump, tag, and push a release") — never a concrete skill id or
+   tool name. Leave skill_hint null when no skill obviously fits; the prose
+   action is always authoritative."""
 
 
 # Strategy distillation discipline: a strategy is the *heuristic above* its
@@ -92,6 +98,16 @@ class DistilledStep(BaseModel):
     source_cases: list[str] = Field(
         default_factory=list,
         description='Case ids whose text supports this step (rule 1).',
+    )
+    skill_hint: str | None = Field(
+        default=None,
+        description=(
+            '§18.8 capability description: the KIND of agent skill that would '
+            'execute this step (e.g. "a skill that can bump, tag, and push a '
+            'release"), platform-agnostic. NOT a specific skill id — the '
+            'retrieving agent matches it against its own registry; the prose '
+            'action stays authoritative. Null when no skill obviously fits.'
+        ),
     )
 
 
@@ -193,6 +209,11 @@ def _render_steps_markdown(steps: list[DistilledStep], notes: str | None) -> str
         cites = [c for c in (step.source_cases or []) if c and str(c).strip()]
         if cites:
             line += f' _(cases: {", ".join(str(c) for c in cites)})_'
+        hint = (step.skill_hint or '').strip()
+        if hint and hint.lower() not in ('none', 'null'):
+            # §18.8: advisory capability description; the agent may map it
+            # to one of its own skills, else follow the prose action.
+            line += f' _[skill: {hint}]_'
         lines.append(line)
     body = '\n'.join(lines)
     note_text = (notes or '').strip()
