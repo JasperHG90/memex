@@ -390,7 +390,10 @@ SURVEY_SCHEMA: dict[str, Any] = {
 RETAIN_SCHEMA: dict[str, Any] = {
     'name': 'memex_add_note',
     'description': (
-        'Ingest a NEW note into Memex, or fully replace the body of an existing one. '
+        'Ingest a NEW note into Memex (a FACT / DECISION / DOCUMENT — "what is true"), '
+        'or fully replace the body of an existing one. NOT for how-to workflows, '
+        'procedures, or worked episodes ("how we deploy", "how the run went") — those '
+        'go to memex_case_submit, NEVER here (and never both). '
         'If note_key matches an existing note the content is upserted. For appending '
         'NEW content to a session note (or any existing note) prefer memex_append_note — '
         'it sends only the delta and is atomic, avoiding the full-body re-send. '

@@ -316,8 +316,9 @@ if os.environ.get('MEMEX_MCP_PROGRESSIVE_DISCLOSURE', '').lower() in ('1', 'true
 @mcp.tool(
     name='memex_list_assets',
     description=(
-        'List file attachments (assets) for a note — images, audio, PDFs, documents. '
-        'REQUIRED when has_assets is true. Feed paths to memex_get_resources to retrieve files.'
+        "List a note's file attachments (images, audio, PDFs, docs). Call when "
+        'has_assets is true to get asset paths, then pass them to '
+        'memex_get_resources to fetch the bytes. Requires note_id.'
     ),
     tags={'assets'},
     annotations={'readOnlyHint': True},
@@ -372,7 +373,12 @@ async def memex_list_assets(
 
 @mcp.tool(
     name='memex_read_note',
-    description='Read full note. ONLY when total_tokens < 500 (use force=True to override). Otherwise: memex_get_page_indices + memex_get_nodes.',
+    description=(
+        'Read a whole note in one shot. Use ONLY when total_tokens < 500. For '
+        'larger notes do NOT set force — page through instead: '
+        'memex_get_page_indices (TOC) then memex_get_nodes (sections). '
+        'Errors if total_tokens >= 500 unless force=True. Requires note_id.'
+    ),
     tags={'read'},
     annotations={'readOnlyHint': True},
     timeout=30.0,
@@ -436,19 +442,17 @@ async def memex_read_note(
 @mcp.tool(
     name='memex_set_note_status',
     description=(
-        'Set note lifecycle status: active, superseded, archived. '
-        '**Cascades:** `superseded` flags every memory unit extracted from '
-        'the note as stale. `archived` records an `archived_at` timestamp '
-        'and flips the note units to `is_deprioritized=true` (FSFM '
-        'suppression) — the units stay active and can be surfaced via '
-        '`include_deprioritized=True` retrieval, then restored individually '
-        'with `memex_memory_restore`. To append content to an existing '
-        'note, use `memex_append_note`; that is the only path that sets '
-        'the `appended_to` relation. Prefer letting contradiction detection '
-        'auto-supersede facts via a new ingested note; reach for this tool '
-        'only for explicit archival or when an immediate state change is '
-        'required. Optionally link to the replacing/parent note via '
-        'linked_note_id.'
+        'Set a note lifecycle status: active, superseded, or archived. '
+        'Use ONLY for explicit archival or an immediate forced state change; '
+        'prefer ingesting a new note and letting contradiction detection '
+        'auto-supersede facts. NOT for adding content (use memex_append_note, '
+        'the only path that sets the appended_to relation). Cascades: '
+        '`superseded` flags every extracted unit as stale; `archived` stamps '
+        '`archived_at` and sets the units `is_deprioritized=true` (FSFM '
+        'suppression) — they stay active, resurface via '
+        '`include_deprioritized=True`, restore one-by-one with '
+        'memex_memory_restore. Optionally pass linked_note_id to point at the '
+        'replacing/parent note.'
     ),
     tags={'write'},
     annotations={'readOnlyHint': False, 'idempotentHint': True},
@@ -496,12 +500,11 @@ async def memex_set_note_status(
 @mcp.tool(
     name='memex_update_user_notes',
     description=(
-        'Update the `user_notes` field on an existing note and reprocess it '
-        'into the memory graph. Pass null to clear the field. Note: this is '
-        "one of the few surfaces where a note's extracted memory units are "
-        'deleted rather than superseded — old `user_notes` memory units are '
-        'removed and new ones are extracted from the new text. Use sparingly; '
-        'for content that should remain auditable, ingest a new note instead.'
+        'Replace the `user_notes` field on an existing note and re-extract it '
+        'into the memory graph. Pass null to clear it. DESTRUCTIVE: old '
+        'user_notes units are DELETED (not superseded) and new ones extracted '
+        'from the new text — so history is lost. Use sparingly; for anything '
+        'that must stay auditable, ingest a new note instead.'
     ),
     tags={'write'},
     annotations={'readOnlyHint': False},
@@ -534,7 +537,11 @@ async def memex_update_user_notes(
 
 @mcp.tool(
     name='memex_rename_note',
-    description='Rename a note. Updates title in metadata, page index, and doc_metadata.',
+    description=(
+        'Rename a note (title only). Updates the title across metadata, page '
+        'index, and doc_metadata; leaves body content and extracted units '
+        'untouched. To change content use memex_append_note. Requires note_id, new_title.'
+    ),
     tags={'write'},
     annotations={'readOnlyHint': False, 'idempotentHint': True},
 )
@@ -662,7 +669,12 @@ async def memex_resize_image(
 
 @mcp.tool(
     name='memex_add_assets',
-    description='Add one or more file assets to an existing note. Provide local file paths.',
+    description=(
+        'Attach 1+ file assets (images, audio, PDFs, docs) to an existing note. '
+        'For text content use memex_append_note instead. Requires note_id and '
+        'absolute local file_paths. Errors if the note is not found or no path '
+        'resolves to a file.'
+    ),
     tags={'assets'},
     annotations={'readOnlyHint': False},
     timeout=60.0,
@@ -735,7 +747,11 @@ async def memex_add_assets(
 
 @mcp.tool(
     name='memex_delete_assets',
-    description='Delete one or more asset files from an existing note. Get paths from memex_list_assets.',
+    description=(
+        'Detach 1+ asset files from a note. Get exact asset_paths from '
+        'memex_list_assets first. Requires note_id. Returns deleted and '
+        'not_found lists; errors if the note is not found.'
+    ),
     tags={'assets'},
     annotations={'readOnlyHint': False},
     timeout=30.0,
@@ -1163,12 +1179,12 @@ async def memex_add_note(
 @mcp.tool(
     name='memex_append_note',
     description=(
-        'Atomically append new content to an existing note. Send only the delta '
-        '— the server reads the existing body and concatenates server-side. Use '
-        'this in preference to memex_add_note when adding to a '
-        'known existing note (e.g. a session log, an ongoing reflection). '
-        'Identify the note by the note_key you set when creating it (preferred); '
-        'note_id is also accepted if you already have one from a search.'
+        'Atomically append a delta to an existing note. Prefer over '
+        'memex_add_note whenever extending a note you already created (session '
+        'log, ongoing reflection) — send ONLY the new snippet; the server reads '
+        'and concatenates the existing body for you. Identify by note_key + '
+        'vault_id (preferred) or note_id from a search. Reusing an append_id '
+        'with a different delta/parent returns a 409.'
     ),
     tags={'write'},
     annotations={'readOnlyHint': False},
@@ -2417,10 +2433,10 @@ async def memex_list_vaults(ctx: Context, include_system_vaults: bool = False) -
 @mcp.tool(
     name='memex_list_notes',
     description=(
-        'List notes with optional date, tag, and status filters. '
-        "Use after/before for temporal queries like 'documents from 2026'. "
-        'Use tags for topic filtering (AND semantics). '
-        'Use status to filter by lifecycle (active, archived, etc.).'
+        'List notes in one vault with optional date/tag/status/template filters. '
+        'Use for "documents from 2026" (after/before), topic filtering (tags, AND '
+        'semantics), or lifecycle (status: active, archived). For a cross-vault '
+        'newest-first feed use memex_recent_notes.'
     ),
     tags={'browse'},
     annotations={'readOnlyHint': True},
@@ -2545,8 +2561,12 @@ async def memex_list_notes(
 
 @mcp.tool(
     name='memex_recent_notes',
-    description='Browse recent notes. Defaults to all vaults. '
-    'Filter by vault names/UUIDs and optional date range.',
+    description=(
+        'Browse the most recently added notes (newest first), all vaults by '
+        'default. Use for "what did I capture lately". For tag/status/template '
+        'filtering within one vault use memex_list_notes. Optional vault_ids and '
+        'after/before date range.'
+    ),
     tags={'browse'},
     annotations={'readOnlyHint': True},
     timeout=30.0,
@@ -3439,7 +3459,11 @@ async def memex_kv_put(
 
 @mcp.tool(
     name='memex_kv_get',
-    description='Get a KV entry by exact key.',
+    description=(
+        'Fetch one KV entry by its exact full key (e.g. "global:preferences:editor"). '
+        'Returns null if absent. When you do not know the exact key, use '
+        'memex_kv_search (fuzzy) or memex_kv_list (browse by namespace).'
+    ),
     tags={'storage'},
     annotations={'readOnlyHint': True},
     timeout=15.0,
@@ -3521,8 +3545,10 @@ async def memex_kv_search(
 @mcp.tool(
     name='memex_kv_list',
     description=(
-        'List KV entries (preferences, project bindings, conventions). '
-        'Optionally filter by namespace prefixes (global, user, project).'
+        'Browse KV entries (preferences, project bindings, conventions) by '
+        'namespace. Filter via namespaces (global, user, project) or a trailing-'
+        'wildcard pattern. For exact-key fetch use memex_kv_get; for fuzzy lookup '
+        'use memex_kv_search.'
     ),
     tags={'storage'},
     annotations={'readOnlyHint': True},
