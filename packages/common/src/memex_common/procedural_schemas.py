@@ -76,6 +76,7 @@ class ProceduralOrigin(str, Enum):
 
     SEED = 'seed'  # boot-time system seed
     DERIVED = 'derived'  # LLM-derived from cases (derivation queue)
+    AUTHORED = 'authored'  # hand-edited by a human/agent — sticky (§18.6.4)
     MANUAL = 'manual'  # agent-written
     IMPORT = 'import'  # bulk import
 
@@ -101,7 +102,7 @@ class DerivationQueueStatus(str, Enum):
 # whether a caller passes a Python enum or a raw string.
 KindLiteral = Literal['procedure', 'strategy']
 StatusLiteral = Literal['draft', 'published', 'deprecated']
-OriginLiteral = Literal['seed', 'derived', 'manual', 'import']
+OriginLiteral = Literal['seed', 'derived', 'authored', 'manual', 'import']
 SourceRoleLiteral = Literal['provenance', 'evidence', 'contradiction']
 DerivationStatusLiteral = Literal['pending', 'in_progress', 'completed', 'failed']
 

@@ -138,6 +138,20 @@ class ProceduralDerivationService:
             anchor=anchor,
         )
 
+        # §18.6.4: NEVER auto-update a hand-edited (authored) entry — file a
+        # proposal carrying the diff instead. ``origin='derived'`` entries
+        # keep §9's silent version bump.
+        current = await self._api.procedural.get(entry_id)
+        if current.origin == 'authored':
+            await self._file_apply_derivation_proposal(
+                entry_id=entry_id,
+                vault_id=claim.vault_id,
+                distilled=distilled,
+                source_case_ids=[cid for cid, _ in cases],
+            )
+            await self._maybe_enqueue_strategy(claim)
+            return entry_id
+
         await self._api.procedural.update(
             entry_id,
             ProceduralEntryUpdate(
@@ -163,6 +177,53 @@ class ProceduralDerivationService:
         # §9 dirty event: a (re-)derived procedure feeds its parent strategy.
         await self._maybe_enqueue_strategy(claim)
         return entry_id
+
+    async def _file_apply_derivation_proposal(
+        self,
+        *,
+        entry_id: UUID,
+        vault_id: UUID,
+        distilled,
+        source_case_ids: list[str],
+    ) -> None:
+        """File an apply_derivation proposal for an authored entry (§18.6.4):
+        derivation never overwrites a hand-edit — it proposes the diff,
+        resolved by applying a new version (origin stays authored) or
+        dismissed. Pending-dedup → one open proposal per entry."""
+        from memex_core.services.lint_external import (
+            ExternalProposalRequest,
+            insert_external_proposal,
+        )
+
+        try:
+            req = ExternalProposalRequest(
+                rule_name=DISTILLATION_RULE_NAME,
+                lint_type='governance',
+                target_type='procedural_entry',
+                target_id=str(entry_id),
+                description=f'Derivation proposes an update to authored entry: {distilled.title[:120]}',
+                suggested_action=(
+                    'Review the distilled diff and apply_derivation (new version, '
+                    'origin stays authored) or dismiss.'
+                ),
+                vault_id=str(vault_id),
+                evidence={'summary': distilled.summary, 'source_cases': source_case_ids},
+                proposed_action={
+                    'action_name': 'apply_derivation',
+                    'params': {
+                        'title': distilled.title,
+                        'summary': distilled.summary,
+                        'body': distilled.body,
+                        'trigger': distilled.trigger,
+                    },
+                },
+            )
+            status, finding_id = await insert_external_proposal(
+                self._api, req, vault_id=vault_id, actor='system:derivation'
+            )
+            logger.info('derivation filed apply_derivation proposal: %s (%s)', status, finding_id)
+        except Exception as exc:  # noqa: BLE001 — best-effort
+            logger.warning('derivation: apply_derivation proposal failed for %s: %s', entry_id, exc)
 
     async def _file_activation_proposal(
         self,

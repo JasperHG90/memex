@@ -431,6 +431,19 @@ class ProceduralRepository:
             if payload.supersedes_id is not None:
                 entry.supersedes_id = payload.supersedes_id
 
+            # §18.6.4: a human/agent CONTENT edit makes the entry 'authored'
+            # (sticky — once authored, always authored). Derivation then
+            # PROPOSES updates instead of auto-applying. The derivation
+            # worker (edited_by='system:derivation') and the activate action
+            # (status-only, no content) never trip this.
+            _content_edited = any(
+                getattr(payload, f) is not None for f in ('title', 'summary', 'body', 'trigger')
+            )
+            _by = (payload.edited_by or '').strip()
+            _origin = entry.origin.value if hasattr(entry.origin, 'value') else str(entry.origin)
+            if _content_edited and not _by.startswith('system:') and _origin != 'authored':
+                entry.origin = DBProceduralOrigin.AUTHORED
+
             # published_at transitions
             if (
                 entry.status == DBProceduralStatus.PUBLISHED

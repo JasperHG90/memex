@@ -1970,6 +1970,7 @@ class ProceduralOrigin(str, Enum):
 
     SEED = 'seed'  # boot-time system seed
     DERIVED = 'derived'  # LLM-derived from cases (derivation queue)
+    AUTHORED = 'authored'  # hand-edited by a human/agent — sticky (§18.6.4)
     MANUAL = 'manual'  # agent-written
     IMPORT = 'import'  # bulk import
 
@@ -2173,7 +2174,7 @@ class ProceduralEntry(SQLModel, table=True):  # type: ignore
             name='ck_procedural_status',
         ),
         CheckConstraint(
-            "origin IN ('seed', 'derived', 'manual', 'import')",
+            "origin IN ('seed', 'derived', 'authored', 'manual', 'import')",
             name='ck_procedural_origin',
         ),
         # Anchor shapes (§18.1): procedure ≡ (scope, verb, context);

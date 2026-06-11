@@ -242,3 +242,65 @@ async def test_distillation_files_activation_proposal_then_activate_publishes(ap
     )
     reverted = await api.procedural.get(p1.id)
     assert reverted.status == 'draft'
+
+
+async def test_hand_edit_authors_entry_and_derivation_proposes_not_overwrites(api, monkeypatch):
+    """§18.6.4: a hand edit flips origin→authored (sticky); derivation then
+    PROPOSES (apply_derivation) rather than overwriting; the action applies
+    the diff (origin stays authored) and reverse restores the prior content."""
+    from memex_common.procedural_schemas import ProceduralEntryUpdate
+    from memex_core.services.proposal_actions import get_action
+
+    _patch_distillers(monkeypatch)
+    vault = await _mk_vault(api)
+    p1 = await _make_procedure_with_cases(api, vault, verb='deploy', context='nomad', n_cases=3)
+    await api.procedural.derive_pending(limit=10)
+    assert (await api.procedural.get(p1.id)).origin == 'derived'
+
+    # Hand edit (non-system actor, content change) → authored, sticky.
+    edited = await api.procedural.update(
+        p1.id, ProceduralEntryUpdate(body='HAND EDITED BODY', edited_by='jasper')
+    )
+    assert edited.origin == 'authored'
+    assert edited.body == 'HAND EDITED BODY'
+
+    # A 4th case + re-derive. Authored → NOT overwritten.
+    case_id = await _mk_case(api, vault, 'Case 4 — rolled the canary at 10%.')
+    await api._procedural_repo.add_source(
+        p1.id, ProceduralSourceCreate(source_note_id=case_id, role='provenance')
+    )
+    await api._procedural_repo.enqueue_derivation(
+        vault_id=vault,
+        source_entry_ids=[p1.id],
+        target_kind='procedure',
+        target_scope='global',
+        target_verb='deploy',
+        target_context='nomad',
+    )
+    await api.procedural.derive_pending(limit=10)
+    after = await api.procedural.get(p1.id)
+    assert after.body == 'HAND EDITED BODY'  # derivation did NOT overwrite
+    assert after.origin == 'authored'
+
+    # apply_derivation applies the diff (origin stays authored)…
+    action = get_action('apply_derivation')
+    params = {'body': 'DISTILLED BODY', 'title': 'D', 'summary': 's', 'trigger': 't'}
+    action.validate(params, target_type='procedural_entry', target_id=str(p1.id))
+    result = await action.execute(
+        api, params, target_id=str(p1.id), vault_id=vault, actor='reviewer'
+    )
+    applied = await api.procedural.get(p1.id)
+    assert applied.body == 'DISTILLED BODY'
+    assert applied.origin == 'authored'
+
+    # …and reverse restores the prior hand-edited content.
+    await action.reverse(
+        api,
+        params,
+        result.applied_state,
+        result.prior_state,
+        target_id=str(p1.id),
+        vault_id=vault,
+        actor='reviewer',
+    )
+    assert (await api.procedural.get(p1.id)).body == 'HAND EDITED BODY'
