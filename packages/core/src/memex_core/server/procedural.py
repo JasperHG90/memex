@@ -374,6 +374,28 @@ async def procedural_deprecate(
 
 
 @router.post(
+    '/procedural/derive',
+    dependencies=[Depends(require_write)],
+)
+async def procedural_derive(
+    api: Annotated[MemexAPI, Depends(get_api)],
+    limit: Annotated[
+        int,
+        Query(ge=1, le=100, description='Max pending derivation tasks to drain this call.'),
+    ] = 10,
+):
+    """Drain pending derivation tasks (cases → procedure, procedures →
+    strategy). Runs the §9 distillation passes synchronously and writes the
+    derived entries. Used by the background scheduler and exposed here for
+    ops + deterministic eval triggering. Returns the completed queue ids."""
+    try:
+        completed = await api.procedural.derive_pending(limit=limit)
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Failed to run procedural derivation')
+    return {'completed': len(completed), 'queue_ids': [str(q) for q in completed]}
+
+
+@router.post(
     '/procedural/{entry_id}/pin',
     response_model=ProceduralPinDTO,
     dependencies=[Depends(require_write)],

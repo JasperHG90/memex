@@ -2568,3 +2568,17 @@ class MemexAPIProceduralFacade:
             target_verb=target_verb,
             target_context=target_context,
         )
+
+    async def derive_pending(self, *, limit: int = 1) -> list[UUID]:
+        """Drain up to ``limit`` pending derivation tasks (cases → procedure,
+        procedures → strategy). Runs the distillation passes synchronously and
+        writes the derived entries. Returns the completed queue ids.
+
+        The background scheduler calls this on its loop; the HTTP route
+        exposes it for ops + deterministic eval triggering.
+        """
+        from memex_core.services.procedural_derivation_service import (
+            ProceduralDerivationService,
+        )
+
+        return await ProceduralDerivationService(self._api).process_pending(limit=limit)
