@@ -200,8 +200,15 @@ Ambiguous? ASK before writing.
 
 PROCEDURAL_PLANE = """## Procedural plane — how-to memory
 
+<critical_constraint name="procedural_vs_semantic_commit">
+Procedural memory (HOW to do things — workflows, procedures, strategies, worked episodes) is a SEPARATE plane from semantic memory (WHAT is true — facts, notes via `memex_memory_search`/`memex_add_note`). They are not interchangeable. CLASSIFY the task first, then COMMIT to ONE plane — never hedge across both:
+- A how-to / recurring task / "how we do X" / a worked episode → procedural plane ONLY: `memex_procedural_search` to recall, `memex_procedural_create` / `memex_case_submit` to write. Do NOT also `memex_memory_search` it, and NEVER also `memex_add_note` the same workflow.
+- A fact / "what is X" / content question → semantic memory ONLY. Do NOT route it to the procedural plane.
+Searching semantic memory for a procedure, or double-writing a workflow as a note, is the hedge that throws away the learned-workflow value. Pick one and commit.
+</critical_constraint>
+
 <critical_constraint name="procedural_retrieve_first">
-Before doing a non-trivial task you might have done before (deploy, release, rotate creds, run a migration, set up an env, cut a build): FIRST `memex_procedural_search(query="<the task>")`. A hit is a learned procedure — follow it instead of re-deriving. Don't reinvent a workflow the plane already holds.
+Before doing a non-trivial task you might have done before (deploy, release, rotate creds, run a migration, set up an env, cut a build): FIRST `memex_procedural_search(query="<the task>")` — and do NOT also semantic-search it. A hit is a learned procedure — follow it instead of re-deriving. Don't reinvent a workflow the plane already holds.
 </critical_constraint>
 
 <critical_constraint name="procedural_write_routing">

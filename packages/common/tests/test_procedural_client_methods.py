@@ -57,6 +57,8 @@ def test_client_exposes_the_procedural_surface():
         'procedural_list_pins',
         'procedural_list_versions',
         'procedural_rollback',
+        # §9 derivation drain (drains cases → procedures/strategies).
+        'procedural_derive',
     }
     assert methods == expected, (
         f'Procedural client surface drift.\n  Expected: {sorted(expected)}\n  '
