@@ -1212,9 +1212,9 @@ suite.register(
 
 # 1. Filing a worked episode — the agent must route it to
 # memex_case_submit (cases are NOTES in a hidden system vault), NOT to
-# memex_procedural_create (kind=case no longer exists on the plane) and
-# NOT to memex_kv_put / memex_add_note. The outcome + trigger args are
-# the discriminators.
+# memex_kv_put / memex_add_note. There is no agent-facing procedural
+# write tool — procedures are derived from the cases submitted here. The
+# outcome + trigger args are the discriminators.
 suite.register(
     id='procedural_files_case_via_case_submit',
     group='procedural',
@@ -1313,21 +1313,24 @@ suite.register(
 )
 
 
-# 3. Read-before-write probe — operational contract. When the user
-# tells the agent to remember a procedure for an anchor that already
-# exists, the agent MUST call memex_procedural_get_by_identity first.
-# Without that probe the agent's create call 409s and the retry loop
-# hammers the server. The ToolCallArgMatches on kind/verb/context
-# pin the exact identity tuple the agent should look up.
+# 3. Correct-an-existing-procedure → file a case, never a direct write.
+# A procedure for the anchor already exists and the user dictates a
+# better way. There is NO agent-facing procedural write tool: procedures
+# are DERIVED from cases. The right move is to file the correction as a
+# worked episode via memex_case_submit (derivation re-distills the
+# procedure through governance). Routing the how-to to memex_add_note
+# (semantic note plane) is the failure this gates against.
 suite.register(
     id='procedural_probes_identity_before_writing',
     group='procedural',
     description=(
         'A procedure for (kind=procedure, scope=global, verb=rotate, '
-        'context=creds) is pre-seeded. The user tells the agent to '
-        'remember a better way to rotate creds. The agent must call '
-        '`memex_procedural_get_by_identity` BEFORE '
-        '`memex_procedural_create` to avoid a 409 loop.'
+        'context=creds) is pre-seeded. The user dictates a better way to '
+        'rotate creds. The agent does NOT edit the procedure directly '
+        '(no agent-facing procedural write exists) — it files the '
+        'correction as a worked episode via `memex_case_submit`, which '
+        'feeds derivation. It must NOT capture the how-to as a '
+        '`memex_add_note`.'
     ),
     query=(
         'Update the rotate creds procedure: always roll the old key '
@@ -1339,30 +1342,19 @@ suite.register(
         children=[
             ToolCallContains(
                 type='tool_call_contains',
-                expected_tools=['memex_procedural_get_by_identity'],
+                expected_tools=['memex_case_submit'],
                 min_count=1,
                 match_mode='all',
             ),
+            # The how-to correction must NOT be written to the semantic
+            # note plane — title is a required add_note arg, so its
+            # absence means add_note was never called.
             ToolCallArgMatches(
                 type='tool_call_arg_matches',
-                tool='memex_procedural_get_by_identity',
-                arg_name='kind',
-                regex=r'^procedure$',
-                min_count=1,
-            ),
-            ToolCallArgMatches(
-                type='tool_call_arg_matches',
-                tool='memex_procedural_get_by_identity',
-                arg_name='verb',
-                regex=r'^rotate$',
-                min_count=1,
-            ),
-            ToolCallArgMatches(
-                type='tool_call_arg_matches',
-                tool='memex_procedural_get_by_identity',
-                arg_name='context',
-                regex=r'^creds$',
-                min_count=1,
+                tool='memex_add_note',
+                arg_name='title',
+                regex=r'.*',
+                expect_absent=True,
             ),
         ],
     ),
@@ -1495,17 +1487,19 @@ suite.register(
 
 
 # 6. WRITE-ROUTING: a reusable multi-step how-to goes to the procedural
-# plane, NOT a KV `procedure:` key (the deprecated path). The
-# discriminator is the tool: memex_procedural_create, never
-# memex_kv_put.
+# plane via memex_case_submit (procedures are DERIVED from cases), NOT a
+# KV `procedure:` key (the deprecated path) and NOT a memex_add_note
+# (semantic note plane). The discriminators are: case_submit present,
+# kv_put + add_note absent.
 suite.register(
     id='procedural_routes_howto_to_plane_not_kv',
     group='procedural',
     description=(
         'User dictates a reusable multi-step workflow ("here is how we roll '
-        'back a migration"). The agent must persist it via '
-        '`memex_procedural_create` (the searchable, briefing-eligible plane) '
-        'and MUST NOT write it as a `memex_kv_put` procedure key.'
+        'back a migration"). The agent must persist it to the procedural '
+        'plane via `memex_case_submit` (procedures are derived from the '
+        'cases you submit) — and MUST NOT write it as a `memex_kv_put` '
+        'procedure key or a `memex_add_note`.'
     ),
     query=(
         'Remember how we roll back a bad migration: run alembic downgrade -1, '
@@ -1516,18 +1510,29 @@ suite.register(
     expected=CompositeOutcome(
         type='composite',
         children=[
+            # The how-to is persisted via case_submit (the only agent-facing
+            # procedural write — derivation distills the procedure).
             ToolCallContains(
                 type='tool_call_contains',
-                expected_tools=['memex_procedural_create'],
+                expected_tools=['memex_case_submit'],
                 min_count=1,
                 match_mode='all',
             ),
+            # NOT a KV procedure key.
             ToolCallArgMatches(
                 type='tool_call_arg_matches',
-                tool='memex_procedural_create',
-                arg_name='trigger',
-                regex=r'.+',
-                min_count=1,
+                tool='memex_kv_put',
+                arg_name='key',
+                regex=r'.*',
+                expect_absent=True,
+            ),
+            # NOT the semantic note plane.
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_add_note',
+                arg_name='title',
+                regex=r'.*',
+                expect_absent=True,
             ),
         ],
     ),
@@ -1601,18 +1606,21 @@ suite.register(
 )
 
 
-# LH-2. read-before-write → update. A procedure exists; the user wants
-# it improved. The agent must PROBE (get_by_identity) BEFORE it writes,
-# then UPDATE the existing entry — not blindly create (which 409s). The
-# ToolCallOrder gate is the load-bearing assertion.
+# LH-2. recall → file correction as a case. A procedure exists; the user
+# wants it improved. The agent recalls it (procedural_search) and files
+# the correction as a worked episode (case_submit) — there is no direct
+# procedural write; derivation re-distills the procedure. Search BEFORE
+# case_submit; the how-to correction must NOT go to memex_add_note.
 suite.register(
     id='procedural_probe_then_update',
     group='procedural_lh',
     description=(
         'A (procedure, global, rotate, creds) entry is pre-seeded. The user '
-        'asks to improve it. The agent must call '
-        '`memex_procedural_get_by_identity` BEFORE `memex_procedural_update` '
-        '(probe-then-mutate), not blindly create.'
+        'asks to improve it. The agent must recall it with '
+        '`memex_procedural_search`, then file the correction as a worked '
+        'episode via `memex_case_submit` (search-before-write) — there is '
+        'no direct procedural write; derivation re-distills. It must NOT '
+        'capture the how-to as a `memex_add_note`.'
     ),
     query=(
         'Update our rotate-creds procedure: always roll the old key AFTER CI '
@@ -1624,20 +1632,27 @@ suite.register(
         children=[
             ToolCallContains(
                 type='tool_call_contains',
-                expected_tools=['memex_procedural_get_by_identity'],
+                expected_tools=['memex_procedural_search'],
                 min_count=1,
                 match_mode='all',
             ),
             ToolCallContains(
                 type='tool_call_contains',
-                expected_tools=['memex_procedural_update'],
+                expected_tools=['memex_case_submit'],
                 min_count=1,
                 match_mode='all',
             ),
             ToolCallOrder(
                 type='tool_call_order',
-                before='memex_procedural_get_by_identity',
-                after='memex_procedural_update',
+                before='memex_procedural_search',
+                after='memex_case_submit',
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_add_note',
+                arg_name='title',
+                regex=r'.*',
+                expect_absent=True,
             ),
         ],
     ),
@@ -1658,18 +1673,18 @@ suite.register(
 )
 
 
-# LH-3. search-miss → create. The user asks a how-to question whose
-# answer is NOT seeded, then dictates the steps. The agent should search
-# first (find nothing), then persist the new workflow to the plane — in
-# that order.
+# LH-3. search-miss → file new workflow as a case. The user asks a how-to
+# whose answer is NOT seeded, then dictates the steps. The agent should
+# search first (miss), then file the new workflow as a case
+# (case_submit) — procedures are derived from cases — in that order.
 suite.register(
     id='procedural_search_miss_then_create',
     group='procedural_lh',
     description=(
         'No matching procedure is seeded. The user asks how to set up the '
         'staging database, then dictates the steps. The agent should '
-        '`memex_procedural_search` first (miss) and then '
-        '`memex_procedural_create` the new workflow — search before write.'
+        '`memex_procedural_search` first (miss) and then `memex_case_submit` '
+        'the new workflow — search before write; NOT a `memex_add_note`.'
     ),
     query=(
         'How do we set up the staging database from scratch? If we have not '
@@ -1689,14 +1704,21 @@ suite.register(
             ),
             ToolCallContains(
                 type='tool_call_contains',
-                expected_tools=['memex_procedural_create'],
+                expected_tools=['memex_case_submit'],
                 min_count=1,
                 match_mode='all',
             ),
             ToolCallOrder(
                 type='tool_call_order',
                 before='memex_procedural_search',
-                after='memex_procedural_create',
+                after='memex_case_submit',
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_add_note',
+                arg_name='title',
+                regex=r'.*',
+                expect_absent=True,
             ),
         ],
     ),

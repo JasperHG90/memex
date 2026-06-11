@@ -326,8 +326,10 @@ def test_agentic_profile_includes_procedural_doctrine(profile: str) -> None:
     assert 'memex_case_submit' in out
     # Identity-anchor rule (UNIQUE on (kind, scope, verb, context)).
     assert '(kind, scope, verb, context)' in out
-    # At least one tool name from the procedural surface.
-    assert 'memex_procedural_create' in out
+    # At least one tool name from the procedural surface (read + the
+    # case_submit write path; there is no procedural-write tool).
+    assert 'memex_procedural_search' in out
+    assert 'memex_procedural_create' not in out
     # The agent-facing briefing tool is gone — cards arrive in the
     # session briefing (JG decision 2026-06-10).
     assert 'memex_procedural_briefing_cards' not in out

@@ -1,9 +1,15 @@
 """Synchronous wrappers for the procedural-plane client.
 
 Hermes's memory provider runs on a synchronous thread (the Hermes CLI
-is sync). The 8 functions in :mod:`memex_hermes_plugin.memex.procedural`
+is sync). The 4 functions in :mod:`memex_hermes_plugin.memex.procedural`
 marshal the async :class:`RemoteMemexAPI` calls onto the shared event
 loop in :mod:`memex_hermes_plugin.memex.async_bridge`.
+
+Only the READ wrappers (get / get_by_identity / search) plus
+``case_submit`` are exposed: procedures/strategies are DERIVED from
+cases, so the agent's only procedural write is ``case_submit``. The
+write wrappers (create / upsert / update / deprecate) are intentionally
+gone.
 
 These tests cover the marshalling surface — the sync wrapper must
 forward arguments to the right async method, return the coroutine's
@@ -20,8 +26,6 @@ import pytest
 
 from memex_common.procedural_schemas import (
     CaseSubmit,
-    ProceduralEntryCreate,
-    ProceduralEntryUpdate,
     ProceduralSearchRequest,
 )
 from memex_hermes_plugin.memex import procedural
@@ -34,34 +38,14 @@ def _api() -> MagicMock:
     api = MagicMock()
     sentinel = object()
     for name in (
-        'procedural_create',
-        'procedural_upsert',
         'procedural_get',
         'procedural_get_by_identity',
-        'procedural_update',
-        'procedural_deprecate',
         'procedural_search',
         'case_submit',
     ):
         method = AsyncMock(return_value=sentinel)
         setattr(api, name, method)
     return api
-
-
-def test_create_forwards_payload_and_returns_dto():
-    api = _api()
-    payload = ProceduralEntryCreate.model_construct()  # type: ignore[call-arg]
-    result = procedural.create(api, payload)
-    assert result is api.procedural_create.return_value
-    api.procedural_create.assert_awaited_once_with(payload)
-
-
-def test_upsert_forwards_payload_and_returns_dto():
-    api = _api()
-    payload = ProceduralEntryCreate.model_construct()  # type: ignore[call-arg]
-    result = procedural.upsert(api, payload)
-    assert result is api.procedural_upsert.return_value
-    api.procedural_upsert.assert_awaited_once_with(payload)
 
 
 def test_get_forwards_id_and_optional_vault():
@@ -112,26 +96,6 @@ def test_get_by_identity_omits_none_optionals():
     )
 
 
-def test_update_forwards_id_payload_and_optional_vault():
-    api = _api()
-    from uuid import uuid4
-
-    eid = uuid4()
-    payload = ProceduralEntryUpdate.model_construct()  # type: ignore[call-arg]
-    procedural.update(api, eid, payload, vault_id='v2')
-    api.procedural_update.assert_awaited_once_with(eid, payload, vault_id='v2')
-
-
-def test_deprecate_forwards_optional_successor():
-    api = _api()
-    from uuid import uuid4
-
-    eid = uuid4()
-    succ = uuid4()
-    procedural.deprecate(api, eid, superseded_by_id=succ, vault_id='v1')
-    api.procedural_deprecate.assert_awaited_once_with(eid, superseded_by_id=succ, vault_id='v1')
-
-
 def test_search_forwards_request():
     api = _api()
     request = ProceduralSearchRequest.model_construct()  # type: ignore[call-arg]
@@ -165,9 +129,9 @@ def test_custom_timeout_is_honored(monkeypatch):
     monkeypatch.setattr(proc_mod, 'run_sync', spy_run_sync)
 
     api = _api()
-    proc_mod.create(
+    proc_mod.search(
         api,
-        ProceduralEntryCreate.model_construct(),
+        ProceduralSearchRequest.model_construct(),
         timeout=0.5,  # type: ignore[call-arg]
     )
     assert seen['timeout'] == 0.5
@@ -185,34 +149,34 @@ def test_default_timeout_is_30s():
 @pytest.mark.parametrize(
     'fn_name',
     [
-        'create',
-        'upsert',
         'get',
         'get_by_identity',
-        'update',
-        'deprecate',
         'search',
         'case_submit',
     ],
 )
-def test_all_eight_procedural_methods_exposed(fn_name):
-    """The 8 sync wrappers mirror the 8 HTTP routes 1:1. Any drift
-    (extra or missing method) trips this test."""
+def test_all_procedural_read_methods_exposed(fn_name):
+    """The 4 sync wrappers mirror the read + case_submit routes 1:1. Any
+    drift (extra or missing method) trips this test."""
     assert hasattr(procedural, fn_name)
     assert callable(getattr(procedural, fn_name))
 
 
-def test_eight_methods_in_dunder_all():
-    """`__all__` is the public surface — it must list exactly the 8
-    sync wrappers, no more no less."""
+@pytest.mark.parametrize('fn_name', ['create', 'upsert', 'update', 'deprecate'])
+def test_procedural_write_wrappers_absent(fn_name):
+    """The procedural WRITE wrappers must NOT exist — agents write
+    procedural knowledge only via case_submit; derivation/governance own
+    create / upsert / update / deprecate."""
+    assert not hasattr(procedural, fn_name)
+
+
+def test_four_methods_in_dunder_all():
+    """`__all__` is the public surface — it must list exactly the 3 read
+    wrappers plus case_submit, no more no less."""
     assert sorted(procedural.__all__) == sorted(
         [
-            'create',
-            'upsert',
             'get',
             'get_by_identity',
-            'update',
-            'deprecate',
             'search',
             'case_submit',
         ]

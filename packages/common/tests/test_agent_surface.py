@@ -133,7 +133,7 @@ _REQUIRED_KEYWORDS: tuple[str, ...] = (
     'global:',
     'app:<app-id>:',
     # KV holds preferences/settings/conventions; how-to WORKFLOWS go to
-    # the procedural plane (memex_procedural_create), NOT KV `procedure:`
+    # the procedural plane (via memex_case_submit), NOT KV `procedure:`
     # keys (the deprecated path). The kv_vs_procedural constraint pins
     # that boundary.
     'kv_vs_procedural',
@@ -299,8 +299,9 @@ def test_compose_with_procedural_is_superset_of_universal() -> None:
 def test_compose_with_procedural_includes_procedural_doctrine() -> None:
     """Pin the load-bearing procedural routing rules. These are the strings
     that drive an agent to route ``"this is how to do X"`` write intents
-    to ``memex_procedural_create`` instead of ``memex_add_note`` or
-    ``memex_kv_put``. Their absence is a silent routing failure.
+    to ``memex_case_submit`` (procedures are DERIVED from cases) instead of
+    ``memex_add_note`` or ``memex_kv_put``. Their absence is a silent
+    routing failure.
     """
     out = ags.compose_with_procedural()
     # The doctrine block's identity marker.
@@ -317,23 +318,26 @@ def test_compose_with_procedural_includes_procedural_doctrine() -> None:
     # search the plane BEFORE re-deriving the workflow.
     assert 'procedural_retrieve_first' in out
     assert 'memex_procedural_search' in out
-    # The identity-anchor rule (UNIQUE on (kind, scope, verb, context)).
+    # The identity-anchor rule on (kind, scope, verb, context).
     assert '(kind, scope, verb, context)' in out
     # The scope/pin grammar.
     assert 'global' in out and 'project' in out and 'app' in out
-    # Cases enter via case_submit, with explicit case_of preferred.
+    # Cases enter via case_submit, with explicit case_of preferred — the
+    # ONLY agent-facing procedural write.
     assert 'memex_case_submit' in out
     assert 'case_of' in out
+    # The sharp add_note vs case_submit boundary must be present.
+    assert 'add_note_vs_case_submit' in out
     # There is NO agent-facing briefing tool — cards arrive in the
     # session briefing (JG decision 2026-06-10).
     assert 'memex_procedural_briefing_cards' not in out
     assert 'session briefing' in out
-    # Idempotent re-writes via upsert.
-    assert 'memex_procedural_upsert' in out
-    # Pre-flight probe to avoid 409.
-    assert 'memex_procedural_get_by_identity' in out
-    # Lifecycle — soft-deprecate.
-    assert 'memex_procedural_deprecate' in out
+    # There is NO agent-facing procedural WRITE tool — procedures are
+    # derived from cases. None of these may appear in the doctrine.
+    assert 'memex_procedural_create' not in out
+    assert 'memex_procedural_upsert' not in out
+    assert 'memex_procedural_update' not in out
+    assert 'memex_procedural_deprecate' not in out
 
 
 def test_compose_universal_does_not_include_procedural_doctrine() -> None:
@@ -354,9 +358,11 @@ def test_procedural_plane_constant_exists_and_non_empty() -> None:
     assert isinstance(ags.PROCEDURAL_PLANE, str)
     assert ags.PROCEDURAL_PLANE.strip()
     # The block must contain the doctrine markers; if any of these
-    # disappear, the procedural plane is no longer routable.
-    assert 'memex_procedural_create' in ags.PROCEDURAL_PLANE
-    assert 'memex_procedural_upsert' in ags.PROCEDURAL_PLANE
+    # disappear, the procedural plane is no longer routable. The agent
+    # write is case_submit — there is no direct create/upsert tool.
+    assert 'memex_procedural_search' in ags.PROCEDURAL_PLANE
+    assert 'memex_case_submit' in ags.PROCEDURAL_PLANE
+    assert 'memex_procedural_create' not in ags.PROCEDURAL_PLANE
 
 
 def test_compose_with_procedural_exports_in_dunder_all() -> None:

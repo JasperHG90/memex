@@ -246,9 +246,12 @@ def test_format_block_carries_v7_procedural_doctrine():
     assert '`strategy`' in block
     # Identity-anchor rule (UNIQUE on (kind, scope, verb, context)).
     assert '(kind, scope, verb, context)' in block
-    # Tool-name markers — at least one of the 7 memex_procedural_* tools
+    # Tool-name markers — at least one of the memex_procedural_* tools
     # must be visible so the agent knows the routing surface exists.
-    assert 'memex_procedural_create' in block
+    # Anchor on a READ tool: the procedural WRITE tools were removed from
+    # the agent surface (procedures are derived from cases), so this marker
+    # stays valid as the SSOT prose evolves.
+    assert 'memex_procedural_search' in block
     # Case routing — worked episodes go through memex_case_submit, and
     # the removed briefing tool must NOT be advertised: pinned cards
     # arrive inside the session briefing automatically.

@@ -77,8 +77,8 @@ def test_kv_put_specifies_namespace_regex() -> None:
     spell out the four valid prefixes so the agent constructs valid keys.
 
     Procedures are NOT a KV namespace — they live in the procedural plane
-    (memex_procedural_create), so the KV description must route how-tos away
-    from KV rather than documenting a `procedure:` key shape.
+    (written via memex_case_submit), so the KV description must route
+    how-tos away from KV rather than documenting a `procedure:` key shape.
     """
     desc = td.MEMEX_KV_PUT_DESC
     for prefix in (
@@ -90,7 +90,7 @@ def test_kv_put_specifies_namespace_regex() -> None:
         assert prefix in desc
     assert '400' in desc  # rejection on invalid prefix
     # How-tos route to the plane, not KV.
-    assert 'memex_procedural_create' in desc
+    assert 'memex_case_submit' in desc
 
 
 def test_kv_put_rejects_content_facts() -> None:

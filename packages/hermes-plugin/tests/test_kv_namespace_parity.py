@@ -61,10 +61,10 @@ def test_universal_block_surfaces_kv_namespace() -> None:
 
 
 def test_kv_does_not_carry_procedure_write_routing() -> None:
-    """How-to procedures are written to the procedural plane
-    (``memex_procedural_create``), NOT to KV ``<scope>:procedure:*``
-    keys (the deprecated path). The KV namespace block must NOT route
-    procedure WRITES, and must pin the kv_vs_procedural boundary.
+    """How-to procedures live on the procedural plane (derived from cases
+    via ``memex_case_submit``), NOT in KV ``<scope>:procedure:*`` keys (the
+    deprecated path). The KV namespace block must NOT route procedure
+    WRITES, and must pin the kv_vs_procedural boundary.
     """
     # The deprecated KV-procedure write pattern must be gone from the
     # namespace routing table.

@@ -162,7 +162,7 @@ MEMEX_KV_PUT_DESC = (
     'Put a namespaced operational pointer into KV — preference, project '
     'binding, or convention. NOT for content facts (those become memory '
     'units via memex_add_note) and NOT for how-to procedures (those go to '
-    'the procedural plane via memex_procedural_create).\n'
+    'the procedural plane via memex_case_submit).\n'
     '\n'
     'Required: value (str), key (str). Top-level prefixes: `global:`, '
     '`user:`, `project:<id>:`, `app:<app-id>:`. Invalid → HTTP 400.\n'
@@ -224,21 +224,13 @@ MEMEX_KV_LIST_DESC = (
 # ---------------------------------------------------------------------------
 
 
-MEMEX_PROCEDURAL_CREATE_DESC = (
-    'Write a new procedural entry (procedure or strategy — NOT cases; '
-    'cases are notes, use memex_case_submit).\n'
-    '\n'
-    'Required: vault_id, kind ("procedure"|"strategy"), scope ("global" | '
-    '"project:<id>" | "app:<id>" — NO user scope), title, summary, trigger '
-    '(the when_to_use phrase retrieval anchors on). Procedure REQUIRES '
-    'verb+context; strategy REQUIRES verb and FORBIDS context (a strategy '
-    'groups all procedures sharing scope+verb). Optional: body, tags, '
-    'extra_metadata, origin.\n'
-    '\n'
-    'Identity-anchor conflict (same kind/scope/verb/context already '
-    'exists) → 409. Use memex_procedural_upsert for idempotent writes, or '
-    'memex_procedural_get_by_identity to probe first.'
-)
+# NOTE: There are deliberately NO agent-facing procedural WRITE
+# descriptions (create/update/upsert/deprecate). Procedures and
+# strategies are DERIVED from cases (design §5/§8/§9); the agent's only
+# procedural write is memex_case_submit. Direct authoring/editing lives
+# on the operator surfaces (CLI `memex procedural …`, the curation TUI)
+# and the HTTP/client CRUD the derivation worker uses — none of which
+# carry an agent-facing tool description.
 
 
 MEMEX_PROCEDURAL_GET_DESC = (
@@ -249,33 +241,9 @@ MEMEX_PROCEDURAL_GET_DESC = (
 
 MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESC = (
     'Fetch a single entry by its (kind, scope, verb, context) identity '
-    'anchor. Returns the entry or null. Hot path for "did we already learn '
-    'this?" probes before memex_procedural_create. 400 on shape mismatch '
-    '(e.g. context supplied for a strategy — strategies anchor on '
-    'scope+verb only).'
-)
-
-
-MEMEX_PROCEDURAL_UPDATE_DESC = (
-    'Mutate an entry in place (appends a version row). Required: entry_id. '
-    'At least one of: title, summary, body, trigger, tags, extra_metadata, '
-    'status. Identity anchor is immutable — for identity changes, '
-    'create+deprecate(superseded_by_id=...) instead.'
-)
-
-
-MEMEX_PROCEDURAL_DEPRECATE_DESC = (
-    'Soft-deprecate an entry (status → "deprecated"). Optional '
-    'superseded_by_id. Depreciated entries drop from default search; '
-    'remain reachable via memex_procedural_get. Reversible out-of-band.'
-)
-
-
-MEMEX_PROCEDURAL_UPSERT_DESC = (
-    'Idempotent write on the identity anchor. Same anchor → UPDATE (new '
-    'version row); new anchor → INSERT. Same param shape as '
-    'memex_procedural_create. Status preserved (deprecated stays '
-    'deprecated). For partial in-place edits use memex_procedural_update.'
+    'anchor. Returns the entry or null — the "did we already learn this?" '
+    'existence probe. 400 on shape mismatch (e.g. context supplied for a '
+    'strategy — strategies anchor on scope+verb only).'
 )
 
 
@@ -351,13 +319,9 @@ MEMEX_SUBMIT_LINT_PROPOSAL_DESC = (
 
 __all__ = [
     'MEMEX_CASE_SUBMIT_DESC',
-    'MEMEX_PROCEDURAL_CREATE_DESC',
-    'MEMEX_PROCEDURAL_DEPRECATE_DESC',
     'MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESC',
     'MEMEX_PROCEDURAL_GET_DESC',
     'MEMEX_PROCEDURAL_SEARCH_DESC',
-    'MEMEX_PROCEDURAL_UPDATE_DESC',
-    'MEMEX_PROCEDURAL_UPSERT_DESC',
     'MEMEX_KV_GET_DESC',
     'MEMEX_KV_LIST_DESC',
     'MEMEX_KV_SEARCH_DESC',

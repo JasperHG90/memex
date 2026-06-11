@@ -193,12 +193,11 @@ def test_all_schemas_have_required_fields():
         'memex_get_unit_history',
     }
     v7_procedural_plane = {
-        'memex_procedural_create',
-        'memex_procedural_upsert',
+        # Reads + case submission only. The 4 procedural WRITE tools are not
+        # exposed: procedures are derived from cases; the agent writes via
+        # case_submit.
         'memex_procedural_get',
         'memex_procedural_get_by_identity',
-        'memex_procedural_update',
-        'memex_procedural_deprecate',
         'memex_procedural_search',
         'memex_case_submit',
     }

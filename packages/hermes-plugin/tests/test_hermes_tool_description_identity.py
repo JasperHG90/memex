@@ -37,13 +37,9 @@ _PAIRINGS: list[tuple[str, str]] = [
     ('MEMEX_MEMORY_CONSOLIDATE_DESC', 'MEMORY_CONSOLIDATE_SCHEMA'),
     ('MEMEX_LIST_LINT_ACTIONS_DESC', 'LIST_LINT_ACTIONS_SCHEMA'),
     ('MEMEX_SUBMIT_LINT_PROPOSAL_DESC', 'SUBMIT_LINT_PROPOSAL_SCHEMA'),
-    # Procedural plane (procedure / strategy) + case submission
-    ('MEMEX_PROCEDURAL_CREATE_DESC', 'PROC_CREATE_SCHEMA'),
-    ('MEMEX_PROCEDURAL_UPSERT_DESC', 'PROC_UPSERT_SCHEMA'),
+    # Procedural plane (procedure / strategy) reads + case submission
     ('MEMEX_PROCEDURAL_GET_DESC', 'PROC_GET_SCHEMA'),
     ('MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESC', 'PROC_GET_BY_IDENTITY_SCHEMA'),
-    ('MEMEX_PROCEDURAL_UPDATE_DESC', 'PROC_UPDATE_SCHEMA'),
-    ('MEMEX_PROCEDURAL_DEPRECATE_DESC', 'PROC_DEPRECATE_SCHEMA'),
     ('MEMEX_PROCEDURAL_SEARCH_DESC', 'PROC_SEARCH_SCHEMA'),
     ('MEMEX_CASE_SUBMIT_DESC', 'CASE_SUBMIT_SCHEMA'),
 ]
@@ -68,9 +64,10 @@ def test_hermes_schema_description_is_ssot_object(constant_name: str, schema_nam
 def test_every_tool_descriptions_export_has_a_hermes_pairing() -> None:
     """If ``memex_common.tool_descriptions`` exports a new ``MEMEX_*_DESC``
     constant, the corresponding Hermes schema MUST be added to ``_PAIRINGS``
-    above. Today every export is mirrored — no legitimate exclusions exist.
-    If a real exclusion arises later, re-introduce an exclusion set with a
-    paired test that exercises the path (YAGNI until then)."""
+    above. The procedural plane is read-only + case submission on the agent
+    surface — there are no create/update/upsert/deprecate descriptions to
+    pair (procedures are derived from cases; the agent writes via
+    ``case_submit``)."""
     paired = {p[0] for p in _PAIRINGS}
     exported = {n for n in common_descs.__all__ if n.startswith('MEMEX_')}
     unaccounted = exported - paired

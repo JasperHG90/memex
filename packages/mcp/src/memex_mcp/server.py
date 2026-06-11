@@ -33,13 +33,9 @@ from memex_common.agent_surface import MCP_TRANSPORT_INSTRUCTIONS
 from memex_common.vault_utils import ALL_VAULTS_WILDCARD, expand_vault_scope
 from memex_common.tool_descriptions import (
     MEMEX_CASE_SUBMIT_DESC as _MEMEX_CASE_SUBMIT_DESCRIPTION,
-    MEMEX_PROCEDURAL_CREATE_DESC as _MEMEX_PROCEDURAL_CREATE_DESCRIPTION,
-    MEMEX_PROCEDURAL_DEPRECATE_DESC as _MEMEX_PROCEDURAL_DEPRECATE_DESCRIPTION,
     MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESC as _MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESCRIPTION,
     MEMEX_PROCEDURAL_GET_DESC as _MEMEX_PROCEDURAL_GET_DESCRIPTION,
     MEMEX_PROCEDURAL_SEARCH_DESC as _MEMEX_PROCEDURAL_SEARCH_DESCRIPTION,
-    MEMEX_PROCEDURAL_UPDATE_DESC as _MEMEX_PROCEDURAL_UPDATE_DESCRIPTION,
-    MEMEX_PROCEDURAL_UPSERT_DESC as _MEMEX_PROCEDURAL_UPSERT_DESCRIPTION,
     MEMEX_KV_PUT_DESC as _MEMEX_KV_PUT_DESCRIPTION,
 )
 from memex_mcp.models import (
@@ -87,7 +83,6 @@ from memex_mcp.models import (
 from memex_common.procedural_schemas import (
     CaseSubmit,
     ProceduralEntryCreate,
-    ProceduralEntryUpdate,
     ProceduralSearchRequest,
 )
 from memex_common.templates import TemplateRegistry, BUILTIN_PROMPTS_DIR
@@ -4507,27 +4502,15 @@ def _dto_to_mcp_entry(dto: ProceduralEntryCreate) -> McpProceduralEntry:
     )
 
 
-@mcp.tool(
-    name='memex_procedural_create',
-    description=_MEMEX_PROCEDURAL_CREATE_DESCRIPTION,
-    tags={'storage', 'procedural'},
-    annotations={'readOnlyHint': False, 'idempotentHint': False},
-    timeout=30.0,
-)
-async def memex_procedural_create(
-    ctx: Context,
-    payload: ProceduralEntryCreate,
-) -> McpProceduralEntry:
-    """Write a new procedural entry via the MemexAPI facade."""
-    try:
-        api = get_api(ctx)
-        dto = await api.procedural.create(payload)
-        return _dto_to_mcp_entry(dto)
-    except ToolError:
-        raise
-    except Exception as e:
-        logger.error(f'Procedural create failed: {e}', exc_info=True)
-        raise ToolError(f'Procedural create failed: {e}')
+# NOTE: There is deliberately NO agent-facing procedural WRITE tool
+# (create/update/upsert/deprecate). Procedures and strategies are
+# DERIVED from cases (design §5/§8/§9) — the agent's only procedural
+# write is `memex_case_submit` (file the worked episode); the derivation
+# pipeline + §18.6 governance produce and update entries. Direct
+# authoring/editing stays on the operator surfaces (CLI `memex
+# procedural create/update`, the curation TUI) and the HTTP/client CRUD
+# the derivation worker uses. Agents only READ the plane (search / get /
+# get_by_identity) and SUBMIT cases.
 
 
 @mcp.tool(
@@ -4640,112 +4623,6 @@ async def memex_procedural_get_by_identity(
     except Exception as e:
         logger.error(f'Procedural get_by_identity failed: {e}', exc_info=True)
         raise ToolError(f'Procedural get_by_identity failed: {e}')
-
-
-@mcp.tool(
-    name='memex_procedural_update',
-    description=_MEMEX_PROCEDURAL_UPDATE_DESCRIPTION,
-    tags={'storage', 'procedural'},
-    annotations={'readOnlyHint': False, 'idempotentHint': True},
-    timeout=30.0,
-)
-async def memex_procedural_update(
-    ctx: Context,
-    entry_id: Annotated[str, Field(description='Procedural entry UUID.')],
-    payload: ProceduralEntryUpdate,
-    vault_id: Annotated[
-        str | None,
-        Field(description='Optional vault UUID or name.'),
-    ] = None,
-) -> McpProceduralEntry:
-    """Mutate an entry in place. Appends a version row."""
-    try:
-        api = get_api(ctx)
-        try:
-            entry_uuid = UUID(entry_id)
-        except ValueError:
-            raise ToolError(f'Invalid entry UUID: {entry_id}')
-        resolved_vault: UUID | None = None
-        if vault_id is not None:
-            resolved_vault = await _resolve_vault_id(api, vault_id)
-        dto = await api.procedural.update(entry_uuid, payload, vault_id=resolved_vault)
-        return _dto_to_mcp_entry(dto)
-    except ToolError:
-        raise
-    except Exception as e:
-        logger.error(f'Procedural update failed: {e}', exc_info=True)
-        raise ToolError(f'Procedural update failed: {e}')
-
-
-@mcp.tool(
-    name='memex_procedural_deprecate',
-    description=_MEMEX_PROCEDURAL_DEPRECATE_DESCRIPTION,
-    tags={'storage', 'procedural'},
-    annotations={'readOnlyHint': False, 'idempotentHint': True},
-    timeout=15.0,
-)
-async def memex_procedural_deprecate(
-    ctx: Context,
-    entry_id: Annotated[str, Field(description='Procedural entry UUID.')],
-    superseded_by_id: Annotated[
-        str | None,
-        Field(description='Optional UUID of the entry that supersedes this one.'),
-    ] = None,
-    vault_id: Annotated[
-        str | None,
-        Field(description='Optional vault UUID or name.'),
-    ] = None,
-) -> McpProceduralEntry:
-    """Soft-deprecate an entry. Reversible out-of-band."""
-    try:
-        api = get_api(ctx)
-        try:
-            entry_uuid = UUID(entry_id)
-        except ValueError:
-            raise ToolError(f'Invalid entry UUID: {entry_id}')
-        successor_uuid: UUID | None = None
-        if superseded_by_id is not None:
-            try:
-                successor_uuid = UUID(superseded_by_id)
-            except ValueError:
-                raise ToolError(f'Invalid superseded_by UUID: {superseded_by_id}')
-        resolved_vault: UUID | None = None
-        if vault_id is not None:
-            resolved_vault = await _resolve_vault_id(api, vault_id)
-        dto = await api.procedural.deprecate(
-            entry_uuid,
-            superseded_by_id=successor_uuid,
-            vault_id=resolved_vault,
-        )
-        return _dto_to_mcp_entry(dto)
-    except ToolError:
-        raise
-    except Exception as e:
-        logger.error(f'Procedural deprecate failed: {e}', exc_info=True)
-        raise ToolError(f'Procedural deprecate failed: {e}')
-
-
-@mcp.tool(
-    name='memex_procedural_upsert',
-    description=_MEMEX_PROCEDURAL_UPSERT_DESCRIPTION,
-    tags={'storage', 'procedural'},
-    annotations={'readOnlyHint': False, 'idempotentHint': True},
-    timeout=30.0,
-)
-async def memex_procedural_upsert(
-    ctx: Context,
-    payload: ProceduralEntryCreate,
-) -> McpProceduralEntry:
-    """Idempotent write on the (kind, scope, verb, context) identity anchor."""
-    try:
-        api = get_api(ctx)
-        dto = await api.procedural.upsert(payload)
-        return _dto_to_mcp_entry(dto)
-    except ToolError:
-        raise
-    except Exception as e:
-        logger.error(f'Procedural upsert failed: {e}', exc_info=True)
-        raise ToolError(f'Procedural upsert failed: {e}')
 
 
 @mcp.tool(

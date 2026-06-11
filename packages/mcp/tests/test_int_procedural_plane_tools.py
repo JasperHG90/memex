@@ -1,13 +1,17 @@
 """MCP procedural-plane end-to-end tests (mock API substrate).
 
-The procedural plane ships 8 MCP tools (create / upsert / get /
-get_by_identity / update / deprecate / search / briefing_cards).
+The agent-facing procedural surface is READ-ONLY plus case submission:
+get / get_by_identity / search + case_submit. There is NO agent-facing
+procedural WRITE tool (create / update / upsert / deprecate) —
+procedures are DERIVED from cases (design §21.7); those verbs live on
+the operator (CLI / TUI) and HTTP surfaces only. There is also no
+briefing_cards tool (pinned cards arrive in the session briefing).
 Three regressions hid in the read-side tools (get_by_identity,
-search, briefing_cards) and were caught by an adversarial review
-of the agent-facing surface — not by the existing test suite,
-which only covered tool description char caps. This file pins
-each fix so a regression that re-introduces any of them surfaces
-here, before the agent sees a broken tool.
+search) and were caught by an adversarial review of the agent-facing
+surface — not by the existing test suite, which only covered tool
+description char caps. This file pins each fix so a regression that
+re-introduces any of them surfaces here, before the agent sees a
+broken tool.
 
 The tests drive the actual FastMCP server through its in-process
 client and assert on the DTO shape the tool returns. The
@@ -310,7 +314,9 @@ async def test_mcp_case_submit_projects_result(mock_api, mock_config, mcp_client
     )
 
     cases.submit.assert_awaited_once()
-    submitted = cases.submit.await_args.args[0]
+    await_args = cases.submit.await_args
+    assert await_args is not None
+    submitted = await_args.args[0]
     assert submitted.title == 'Rotated the API creds'
     assert submitted.outcome == 'success'
 

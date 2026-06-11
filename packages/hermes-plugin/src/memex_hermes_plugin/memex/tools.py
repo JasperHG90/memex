@@ -61,13 +61,9 @@ from memex_common.tool_descriptions import (
     MEMEX_MEMORY_RECONSOLIDATE_DESC,
     MEMEX_MEMORY_RESTORE_DESC,
     MEMEX_MEMORY_SUMMARIZE_NODE_DESC,
-    MEMEX_PROCEDURAL_CREATE_DESC,
-    MEMEX_PROCEDURAL_DEPRECATE_DESC,
     MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESC,
     MEMEX_PROCEDURAL_GET_DESC,
     MEMEX_PROCEDURAL_SEARCH_DESC,
-    MEMEX_PROCEDURAL_UPDATE_DESC,
-    MEMEX_PROCEDURAL_UPSERT_DESC,
     MEMEX_RECORD_OUTCOME_DESC,
     MEMEX_SUBMIT_LINT_PROPOSAL_DESC,
 )
@@ -174,12 +170,8 @@ class MemexAPIProtocol(Protocol):
     async def consolidate_vault(self, *args: Any, **kwargs: Any) -> Any: ...
 
     # Procedural plane (procedure / strategy) + case submission
-    async def procedural_create(self, *args: Any, **kwargs: Any) -> Any: ...
-    async def procedural_upsert(self, *args: Any, **kwargs: Any) -> Any: ...
     async def procedural_get(self, *args: Any, **kwargs: Any) -> Any: ...
     async def procedural_get_by_identity(self, *args: Any, **kwargs: Any) -> Any: ...
-    async def procedural_update(self, *args: Any, **kwargs: Any) -> Any: ...
-    async def procedural_deprecate(self, *args: Any, **kwargs: Any) -> Any: ...
     async def procedural_search(self, *args: Any, **kwargs: Any) -> Any: ...
     async def case_submit(self, *args: Any, **kwargs: Any) -> Any: ...
 
@@ -3486,13 +3478,9 @@ __all__ = [
     'GET_UNIT_HISTORY_SCHEMA',
     # --- Procedural plane (procedure / strategy) + case submission ---
     'CASE_SUBMIT_SCHEMA',
-    'PROC_CREATE_SCHEMA',
-    'PROC_DEPRECATE_SCHEMA',
     'PROC_GET_BY_IDENTITY_SCHEMA',
     'PROC_GET_SCHEMA',
     'PROC_SEARCH_SCHEMA',
-    'PROC_UPDATE_SCHEMA',
-    'PROC_UPSERT_SCHEMA',
 ]
 
 
@@ -4540,180 +4528,6 @@ def _validate_kind(raw: Any) -> str | None:
     return None
 
 
-PROC_CREATE_SCHEMA: dict[str, Any] = {
-    'name': 'memex_procedural_create',
-    'description': MEMEX_PROCEDURAL_CREATE_DESC,
-    'parameters': {
-        'type': 'object',
-        'properties': {
-            'kind': {
-                'type': 'string',
-                'enum': list(_VALID_PROCEDURAL_KINDS),
-                'description': 'Entry kind discriminator.',
-            },
-            'scope': {
-                'type': 'string',
-                'description': (
-                    'One of: "global", "project:<id>", "app:<id>". '
-                    'Use "global" for cross-vault conventions; "project:<id>" '
-                    'for project-scoped procedures.'
-                ),
-            },
-            'title': {'type': 'string', 'description': 'Short title (max 256 chars).'},
-            'summary': {'type': 'string', 'description': 'One-paragraph summary.'},
-            'body': {'type': 'string', 'description': 'Full procedural body (markdown ok).'},
-            'verb': {
-                'type': 'string',
-                'description': (
-                    'REQUIRED for both kinds. The action verb (e.g. "rotate", "deploy", "audit").'
-                ),
-            },
-            'context': {
-                'type': 'string',
-                'description': (
-                    'REQUIRED for procedure; MUST be omitted for strategy '
-                    '(a strategy groups all procedures sharing scope+verb). '
-                    'The context identifier (e.g. "creds", "iam", "ci").'
-                ),
-            },
-            'trigger': {
-                'type': 'string',
-                'description': (
-                    'when_to_use / when_to_apply — the phrase retrieval anchors on. REQUIRED.'
-                ),
-            },
-            'tags': {
-                'type': 'array',
-                'items': {'type': 'string'},
-                'description': 'Optional tags for searchability.',
-            },
-            'extra_metadata': {
-                'type': 'object',
-                'description': 'Optional arbitrary metadata dict.',
-            },
-            'status': {
-                'type': 'string',
-                'enum': ['draft', 'published', 'deprecated'],
-                'description': 'Default "published" — only set "draft" if you want it hidden from search.',
-            },
-        },
-        'required': ['kind', 'scope', 'title', 'summary', 'trigger'],
-    },
-}
-
-
-def handle_procedural_create(
-    api: MemexAPIProtocol,
-    config: HermesMemexConfig,
-    vault_id: UUID | None,
-    args: dict[str, Any],
-) -> str:
-    try:
-        kind = _require(args, 'kind')
-        scope = _require(args, 'scope')
-        title = _require(args, 'title')
-        summary = _require(args, 'summary')
-    except ValueError as e:
-        return tool_error(str(e))
-    if (msg := _validate_kind(kind)) is not None:
-        return tool_error(msg)
-    if vault_id is None:
-        return tool_error('No vault bound to this Hermes session; cannot create procedural entry.')
-
-    from memex_common.procedural_schemas import ProceduralEntryCreate
-
-    # Anchor-shape rules (procedure: verb+context; strategy: verb only;
-    # trigger required for both) are enforced by the DTO validator —
-    # mirror of the server-side 422.
-    raw_verb = args.get('verb')
-    raw_context = args.get('context')
-    try:
-        payload = ProceduralEntryCreate(
-            vault_id=vault_id,
-            kind=kind,  # type: ignore[arg-type]
-            scope=str(scope),
-            title=str(title),
-            summary=str(summary),
-            body=args.get('body') or '',
-            verb=str(raw_verb) if raw_verb else None,
-            context=str(raw_context) if raw_context else None,
-            trigger=args.get('trigger'),
-            tags=args.get('tags') or [],
-            extra_metadata=args.get('extra_metadata') or {},
-            status=args.get('status', 'published'),  # type: ignore[arg-type]
-            origin='manual',
-        )
-    except Exception as e:
-        return tool_error(f'Invalid procedural entry: {e}')
-    try:
-        result = run_sync(api.procedural_create(payload), timeout=30.0)
-    except Exception as e:
-        logger.warning('memex_procedural_create failed: %s', e)
-        return tool_error(f'Procedural create failed: {e}')
-    return _dump_dto(result)
-
-
-PROC_UPSERT_SCHEMA: dict[str, Any] = {
-    'name': 'memex_procedural_upsert',
-    'description': MEMEX_PROCEDURAL_UPSERT_DESC,
-    'parameters': PROC_CREATE_SCHEMA['parameters'],
-}
-
-
-def handle_procedural_upsert(
-    api: MemexAPIProtocol,
-    config: HermesMemexConfig,
-    vault_id: UUID | None,
-    args: dict[str, Any],
-) -> str:
-    """Idempotent write on the identity anchor — same schema as create.
-
-    Same anchor → UPDATE in place (new version row). New anchor →
-    INSERT. Status is preserved (a deprecated entry stays deprecated).
-    For partial in-place edits prefer memex_procedural_update.
-    """
-    try:
-        kind = _require(args, 'kind')
-        scope = _require(args, 'scope')
-        title = _require(args, 'title')
-        summary = _require(args, 'summary')
-    except ValueError as e:
-        return tool_error(str(e))
-    if (msg := _validate_kind(kind)) is not None:
-        return tool_error(msg)
-    if vault_id is None:
-        return tool_error('No vault bound to this Hermes session; cannot upsert procedural entry.')
-
-    from memex_common.procedural_schemas import ProceduralEntryCreate
-
-    raw_verb = args.get('verb')
-    raw_context = args.get('context')
-    try:
-        payload = ProceduralEntryCreate(
-            vault_id=vault_id,
-            kind=kind,  # type: ignore[arg-type]
-            scope=str(scope),
-            title=str(title),
-            summary=str(summary),
-            body=args.get('body') or '',
-            verb=str(raw_verb) if raw_verb else None,
-            context=str(raw_context) if raw_context else None,
-            trigger=args.get('trigger'),
-            tags=args.get('tags') or [],
-            extra_metadata=args.get('extra_metadata') or {},
-            status=args.get('status', 'published'),  # type: ignore[arg-type]
-            origin='manual',
-        )
-    except Exception as e:
-        return tool_error(f'Invalid procedural entry: {e}')
-    try:
-        result = run_sync(api.procedural_upsert(payload), timeout=30.0)
-    except Exception as e:
-        logger.warning('memex_procedural_upsert failed: %s', e)
-        return tool_error(f'Procedural upsert failed: {e}')
-    return _dump_dto(result)
-
-
 PROC_GET_SCHEMA: dict[str, Any] = {
     'name': 'memex_procedural_get',
     'description': MEMEX_PROCEDURAL_GET_DESC,
@@ -4825,120 +4639,6 @@ def handle_procedural_get_by_identity(
         return tool_error(f'Procedural get_by_identity failed: {e}')
     if result is None:
         return json.dumps(None)
-    return _dump_dto(result)
-
-
-PROC_UPDATE_SCHEMA: dict[str, Any] = {
-    'name': 'memex_procedural_update',
-    'description': MEMEX_PROCEDURAL_UPDATE_DESC,
-    'parameters': {
-        'type': 'object',
-        'properties': {
-            'entry_id': {'type': 'string', 'description': 'Entry UUID.'},
-            'title': {'type': 'string'},
-            'summary': {'type': 'string'},
-            'body': {'type': 'string'},
-            'trigger': {'type': 'string'},
-            'tags': {'type': 'array', 'items': {'type': 'string'}},
-            'extra_metadata': {'type': 'object'},
-            'status': {'type': 'string', 'enum': ['draft', 'published', 'deprecated']},
-        },
-        'required': ['entry_id'],
-    },
-}
-
-
-def handle_procedural_update(
-    api: MemexAPIProtocol,
-    config: HermesMemexConfig,
-    vault_id: UUID | None,
-    args: dict[str, Any],
-) -> str:
-    try:
-        raw_id = _require(args, 'entry_id')
-    except ValueError as e:
-        return tool_error(str(e))
-    try:
-        entry_uuid = UUID(str(raw_id))
-    except (ValueError, TypeError):
-        return tool_error(f'Invalid entry UUID: {raw_id}')
-
-    from memex_common.procedural_schemas import ProceduralEntryUpdate
-
-    update_kwargs: dict[str, Any] = {}
-    for field in ('title', 'summary', 'body', 'trigger', 'tags', 'extra_metadata', 'status'):
-        if field in args and args[field] is not None:
-            update_kwargs[field] = args[field]
-    if not update_kwargs:
-        return tool_error(
-            'memex_procedural_update requires at least one of: '
-            'title, summary, body, trigger, tags, extra_metadata, status.'
-        )
-    payload = ProceduralEntryUpdate(**update_kwargs)
-
-    try:
-        result = run_sync(
-            api.procedural_update(entry_uuid, payload, vault_id=vault_id),
-            timeout=30.0,
-        )
-    except Exception as e:
-        logger.warning('memex_procedural_update failed: %s', e)
-        return tool_error(f'Procedural update failed: {e}')
-    return _dump_dto(result)
-
-
-PROC_DEPRECATE_SCHEMA: dict[str, Any] = {
-    'name': 'memex_procedural_deprecate',
-    'description': MEMEX_PROCEDURAL_DEPRECATE_DESC,
-    'parameters': {
-        'type': 'object',
-        'properties': {
-            'entry_id': {'type': 'string', 'description': 'Entry UUID to deprecate.'},
-            'superseded_by_id': {
-                'type': 'string',
-                'description': 'Optional UUID of the entry that supersedes this one.',
-            },
-        },
-        'required': ['entry_id'],
-    },
-}
-
-
-def handle_procedural_deprecate(
-    api: MemexAPIProtocol,
-    config: HermesMemexConfig,
-    vault_id: UUID | None,
-    args: dict[str, Any],
-) -> str:
-    try:
-        raw_id = _require(args, 'entry_id')
-    except ValueError as e:
-        return tool_error(str(e))
-    try:
-        entry_uuid = UUID(str(raw_id))
-    except (ValueError, TypeError):
-        return tool_error(f'Invalid entry UUID: {raw_id}')
-
-    superseded_by: UUID | None = None
-    raw_superseded = args.get('superseded_by_id')
-    if raw_superseded:
-        try:
-            superseded_by = UUID(str(raw_superseded))
-        except (ValueError, TypeError):
-            return tool_error(f'Invalid superseded_by_id UUID: {raw_superseded}')
-
-    try:
-        result = run_sync(
-            api.procedural_deprecate(
-                entry_uuid,
-                superseded_by_id=superseded_by,
-                vault_id=vault_id,
-            ),
-            timeout=30.0,
-        )
-    except Exception as e:
-        logger.warning('memex_procedural_deprecate failed: %s', e)
-        return tool_error(f'Procedural deprecate failed: {e}')
     return _dump_dto(result)
 
 
@@ -5164,19 +4864,11 @@ def _dump_dto(result: Any) -> str:
     return json.dumps(result, default=str)
 
 
-HANDLERS['memex_procedural_create'] = handle_procedural_create
-HANDLERS['memex_procedural_upsert'] = handle_procedural_upsert
 HANDLERS['memex_procedural_get'] = handle_procedural_get
 HANDLERS['memex_procedural_get_by_identity'] = handle_procedural_get_by_identity
-HANDLERS['memex_procedural_update'] = handle_procedural_update
-HANDLERS['memex_procedural_deprecate'] = handle_procedural_deprecate
 HANDLERS['memex_procedural_search'] = handle_procedural_search
 HANDLERS['memex_case_submit'] = handle_case_submit
-ALL_SCHEMAS.append(PROC_CREATE_SCHEMA)
-ALL_SCHEMAS.append(PROC_UPSERT_SCHEMA)
 ALL_SCHEMAS.append(PROC_GET_SCHEMA)
 ALL_SCHEMAS.append(PROC_GET_BY_IDENTITY_SCHEMA)
-ALL_SCHEMAS.append(PROC_UPDATE_SCHEMA)
-ALL_SCHEMAS.append(PROC_DEPRECATE_SCHEMA)
 ALL_SCHEMAS.append(PROC_SEARCH_SCHEMA)
 ALL_SCHEMAS.append(CASE_SUBMIT_SCHEMA)

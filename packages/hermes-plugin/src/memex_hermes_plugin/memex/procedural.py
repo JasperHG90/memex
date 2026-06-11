@@ -7,18 +7,14 @@ in :mod:`memex_hermes_plugin.memex.provider` — a thin layer of
 sync-shaped functions that marshal each call onto the shared event loop
 in :mod:`memex_hermes_plugin.memex.async_bridge`.
 
-The eight methods here mirror the HTTP routes 1:1 (see the design §6):
+The four methods here mirror the HTTP routes 1:1 (see the design §6):
 
-* ``create``       → POST   /procedural
-* ``upsert``       → POST   /procedural/upsert
 * ``get``          → GET    /procedural/{id}
 * ``get_by_identity`` → GET  /procedural/by-identity
-* ``update``       → PATCH  /procedural/{id}
-* ``deprecate``    → POST   /procedural/{id}/deprecate
 * ``search``       → POST   /procedural/search
 * ``case_submit``  → POST   /cases
 
-All eight accept and return the same DTOs the async client does — the
+All four accept and return the same DTOs the async client does — the
 sync wrapper is purely a coroutine-marshalling shim, not a re-shape.
 Callers in Hermes can import this module and call straight through.
 """
@@ -31,9 +27,7 @@ from uuid import UUID
 from memex_common.procedural_schemas import (
     CaseSubmit,
     CaseSubmitResult,
-    ProceduralEntryCreate,
     ProceduralEntryDTO,
-    ProceduralEntryUpdate,
     ProceduralSearchRequest,
     ProceduralSearchResponse,
     ShortLabel,
@@ -45,26 +39,6 @@ from .async_bridge import run_sync
 #: are O(1) (a single INSERT) but the search path can do BM25+vector+RRF
 #: fusion over many rows; 30s is the same budget the briefing fetch uses.
 _DEFAULT_TIMEOUT: float = 30.0
-
-
-def create(
-    api: Any,
-    payload: ProceduralEntryCreate,
-    *,
-    timeout: float = _DEFAULT_TIMEOUT,
-) -> ProceduralEntryDTO:
-    """Create a new procedural-plane entry. 409 on identity collision."""
-    return run_sync(api.procedural_create(payload), timeout=timeout)
-
-
-def upsert(
-    api: Any,
-    payload: ProceduralEntryCreate,
-    *,
-    timeout: float = _DEFAULT_TIMEOUT,
-) -> ProceduralEntryDTO:
-    """Idempotent write on the (kind, scope, verb, context) anchor."""
-    return run_sync(api.procedural_upsert(payload), timeout=timeout)
 
 
 def get(
@@ -99,36 +73,6 @@ def get_by_identity(
     )
 
 
-def update(
-    api: Any,
-    entry_id: UUID,
-    payload: ProceduralEntryUpdate,
-    *,
-    vault_id: str | None = None,
-    timeout: float = _DEFAULT_TIMEOUT,
-) -> ProceduralEntryDTO:
-    """Mutate an entry in place (appends a version row)."""
-    return run_sync(
-        api.procedural_update(entry_id, payload, vault_id=vault_id),
-        timeout=timeout,
-    )
-
-
-def deprecate(
-    api: Any,
-    entry_id: UUID,
-    *,
-    superseded_by_id: UUID | None = None,
-    vault_id: str | None = None,
-    timeout: float = _DEFAULT_TIMEOUT,
-) -> ProceduralEntryDTO:
-    """Soft-deprecate an entry (status → 'deprecated')."""
-    return run_sync(
-        api.procedural_deprecate(entry_id, superseded_by_id=superseded_by_id, vault_id=vault_id),
-        timeout=timeout,
-    )
-
-
 def search(
     api: Any,
     request: ProceduralSearchRequest,
@@ -155,12 +99,8 @@ def case_submit(
 
 
 __all__ = [
-    'create',
-    'upsert',
     'get',
     'get_by_identity',
-    'update',
-    'deprecate',
     'search',
     'case_submit',
 ]

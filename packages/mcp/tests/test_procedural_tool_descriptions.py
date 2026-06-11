@@ -1,11 +1,14 @@
 """Procedural tool description wiring test.
 
-The 7 ``memex_procedural_*`` tools + ``memex_case_submit``  are
-Tier 1a MCP surfaces. Their per-tool description text is the SSOT
-constant from ``memex_common.tool_descriptions`` (mirrors the
-deprioritize pattern in ``test_deprioritize_tool_descriptions.py``).
-There is NO briefing tool — pinned cards arrive inside the session
-briefing (JG decision 2026-06-10).
+The agent-facing procedural surface is READ-ONLY plus case submission:
+``memex_procedural_get`` / ``memex_procedural_get_by_identity`` /
+``memex_procedural_search`` + ``memex_case_submit``. There is NO
+agent-facing procedural WRITE tool (create/update/upsert/deprecate) —
+procedures/strategies are DERIVED from cases (design §5/§8/§9); the
+agent's only procedural write is ``memex_case_submit``. Direct authoring
+stays on the operator surfaces (CLI / TUI / HTTP). There is also NO
+briefing tool — pinned cards arrive inside the session briefing (JG
+decision 2026-06-10).
 
 This file pins the wiring — the MCP tool description = the common SSOT
 constant. Content is pinned in
@@ -18,25 +21,27 @@ import pytest
 
 from memex_common.tool_descriptions import (
     MEMEX_CASE_SUBMIT_DESC,
-    MEMEX_PROCEDURAL_CREATE_DESC,
-    MEMEX_PROCEDURAL_DEPRECATE_DESC,
     MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESC,
     MEMEX_PROCEDURAL_GET_DESC,
     MEMEX_PROCEDURAL_SEARCH_DESC,
-    MEMEX_PROCEDURAL_UPDATE_DESC,
-    MEMEX_PROCEDURAL_UPSERT_DESC,
 )
 
 
 _ALL_TOOL_WIRING = (
     ('memex_case_submit', MEMEX_CASE_SUBMIT_DESC),
-    ('memex_procedural_create', MEMEX_PROCEDURAL_CREATE_DESC),
-    ('memex_procedural_deprecate', MEMEX_PROCEDURAL_DEPRECATE_DESC),
     ('memex_procedural_get', MEMEX_PROCEDURAL_GET_DESC),
     ('memex_procedural_get_by_identity', MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESC),
     ('memex_procedural_search', MEMEX_PROCEDURAL_SEARCH_DESC),
-    ('memex_procedural_update', MEMEX_PROCEDURAL_UPDATE_DESC),
-    ('memex_procedural_upsert', MEMEX_PROCEDURAL_UPSERT_DESC),
+)
+
+#: The procedural WRITE tools that MUST NOT be registered on the agent
+#: surface. Probed explicitly so a future refactor can't quietly re-add
+#: agent-facing authoring (procedures are derived from cases).
+_FORBIDDEN_WRITE_TOOLS = (
+    'memex_procedural_create',
+    'memex_procedural_update',
+    'memex_procedural_upsert',
+    'memex_procedural_deprecate',
 )
 
 
@@ -71,7 +76,7 @@ async def test_procedural_surface_tool_set() -> None:
         tool = await mcp.get_tool(name)
         assert tool is not None, f'{name} not registered'
         found.append(name)
-    assert len(found) == 8, f'Expected 8 procedural tools, got {len(found)}: {found}'
+    assert len(found) == 4, f'Expected 4 procedural tools, got {len(found)}: {found}'
     assert found == expected, (
         f'Procedural tool surface drift.\n  Expected: {expected}\n  Got:      {found}'
     )
@@ -83,3 +88,13 @@ async def test_procedural_surface_tool_set() -> None:
         'memex_procedural_briefing_cards must NOT be registered — pinned '
         'cards arrive inside the session briefing (JG decision 2026-06-10).'
     )
+    # The agent surface is read-only + case_submit: no procedural writes.
+    for write_tool in _FORBIDDEN_WRITE_TOOLS:
+        try:
+            present = await mcp.get_tool(write_tool)
+        except Exception:
+            present = None
+        assert present is None, (
+            f'{write_tool} must NOT be registered — procedures are derived '
+            'from cases; the agent writes via memex_case_submit only.'
+        )

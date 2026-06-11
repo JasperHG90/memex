@@ -142,7 +142,7 @@ def test_get_tool_schemas_in_tools_mode_returns_primary_seven(
 
 
 def test_get_tool_schemas_in_hybrid_mode(provider_with_stubbed_api):
-    """Hybrid mode exposes exactly the 44 Memex tools (AC-086 + AC-008 + Tier A F4/F5/F29 + F32 diagnostics + F8 + F20)."""
+    """Hybrid mode exposes exactly the 40 Memex tools (AC-086 + AC-008 + Tier A F4/F5/F29 + F32 diagnostics + F8 + F20)."""
     provider, *_ = provider_with_stubbed_api
     schemas = provider.get_tool_schemas()
     names = {s['name'] for s in schemas}
@@ -207,13 +207,11 @@ def test_get_tool_schemas_in_hybrid_mode(provider_with_stubbed_api):
         'memex_memory_consolidate',
         # Tier A WS-history (F49 — contradiction-graph timeline)
         'memex_get_unit_history',
-        # Procedural plane (procedure / strategy) + case submission
-        'memex_procedural_create',
-        'memex_procedural_upsert',
+        # Procedural plane reads (procedure / strategy) + case submission.
+        # Writes (create/upsert/update/deprecate) are NOT exposed — procedures
+        # are derived from cases; the agent's only procedural write is case_submit.
         'memex_procedural_get',
         'memex_procedural_get_by_identity',
-        'memex_procedural_update',
-        'memex_procedural_deprecate',
         'memex_procedural_search',
         'memex_case_submit',
     }
@@ -231,7 +229,7 @@ class TestGetToolSchemasBeforeInitialize:
     def test_returns_all_schemas_pre_init(self):
         """The v0.1.13 bug was returning []; we now return the full set
         pre-init. The Tier A roster (quick-wins + diagnostics + lint +
-        locks + history) plus Stream 1-5 baselines totals 45 tools, and
+        locks + history) plus Stream 1-5 baselines totals 41 tools, and
         the assertion is strict equality.
         """
         p = MemexMemoryProvider()
@@ -299,13 +297,11 @@ class TestGetToolSchemasBeforeInitialize:
             'memex_memory_consolidate',
             # Tier A WS-history (F49 — contradiction-graph timeline)
             'memex_get_unit_history',
-            # Procedural plane (procedure / strategy) + case submission
-            'memex_procedural_create',
-            'memex_procedural_upsert',
+            # Procedural plane reads (procedure / strategy) + case submission.
+            # Writes are NOT exposed — procedures are derived from cases; the
+            # agent's only procedural write is case_submit.
             'memex_procedural_get',
             'memex_procedural_get_by_identity',
-            'memex_procedural_update',
-            'memex_procedural_deprecate',
             'memex_procedural_search',
             'memex_case_submit',
         }
@@ -322,11 +318,12 @@ class TestGetToolSchemasBeforeInitialize:
         """A fresh provider with no config always exposes tools. Only an
         initialized provider whose config explicitly says ``context`` hides them.
         """
-        # Pre-init: full 57-tool set (Stream 1-5 baseline + Tier A
+        # Pre-init: full 53-tool set (Stream 1-5 baseline + Tier A
         # quick-wins + diagnostics + lint (5) + locks + history +
-        # procedural plane (8)).
+        # procedural plane reads (3) + case_submit). The 4 procedural
+        # WRITE tools are not exposed (procedures are derived from cases).
         p = MemexMemoryProvider()
-        assert len(p.get_tool_schemas()) == 57
+        assert len(p.get_tool_schemas()) == 53
 
         # After init in context mode: empty.
         monkeypatch.setenv('HERMES_HOME', str(tmp_path))

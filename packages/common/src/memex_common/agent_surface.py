@@ -201,33 +201,29 @@ Ambiguous? ASK before writing.
 PROCEDURAL_PLANE = """## Procedural plane — how-to memory
 
 <critical_constraint name="procedural_vs_semantic_commit">
-Procedural memory (HOW to do things — workflows, procedures, strategies, worked episodes) is a SEPARATE plane from semantic memory (WHAT is true — facts, notes via `memex_memory_search`/`memex_add_note`). They are not interchangeable. CLASSIFY the task first, then COMMIT to ONE plane — never hedge across both:
-- A how-to / recurring task / "how we do X" / a worked episode → procedural plane ONLY: `memex_procedural_search` to recall, `memex_procedural_create` / `memex_case_submit` to write. Do NOT also `memex_memory_search` it, and NEVER also `memex_add_note` the same workflow.
-- A fact / "what is X" / content question → semantic memory ONLY. Do NOT route it to the procedural plane.
-Searching semantic memory for a procedure, or double-writing a workflow as a note, is the hedge that throws away the learned-workflow value. Pick one and commit.
+Procedural memory (HOW to do things — workflows, procedures, strategies, worked episodes) is a SEPARATE plane from semantic memory (WHAT is true — facts/notes via `memex_memory_search`/`memex_add_note`). CLASSIFY the task, then COMMIT to ONE plane — never hedge:
+- a how-to / recurring task / worked episode → `memex_procedural_search` to recall, `memex_case_submit` to write. Do NOT also `memex_memory_search` or `memex_add_note` it.
+- a fact / "what is X" → semantic memory ONLY.
+Double-writing a workflow as a note throws away the learned-workflow value. Pick one.
 </critical_constraint>
 
 <critical_constraint name="procedural_retrieve_first">
-Before doing a non-trivial task you might have done before (deploy, release, rotate creds, run a migration, set up an env, cut a build): FIRST `memex_procedural_search(query="<the task>")` — and do NOT also semantic-search it. A hit is a learned procedure — follow it instead of re-deriving. Don't reinvent a workflow the plane already holds.
+Before a non-trivial task you may have done before (deploy, release, rotate creds, migrate, set up an env): FIRST `memex_procedural_search(query="<the task>")` — do NOT also semantic-search it. A hit is a learned procedure — follow it instead of re-deriving.
 </critical_constraint>
 
-<critical_constraint name="procedural_write_routing">
-- HOW to do X (a workflow worth reusing) → `memex_procedural_create`.
-- A worked EPISODE just happened (finished a multi-step task, diagnosed a bug, fixed an incident) → `memex_case_submit` — pass `case_of=<id>` when you followed a known procedure.
-- A single preference / setting / convention → `memex_kv_put`.
-- A plain fact → `memex_add_note`.
+<critical_constraint name="add_note_vs_case_submit">
+`memex_add_note` and `memex_case_submit` are NOT interchangeable:
+- `memex_add_note` → a FACT / DECISION / DOCUMENT ("what is true").
+- `memex_case_submit` → a WORKED EPISODE ("I performed task X, here is how it went"; Trigger/Situation/Actions/Outcome). Pass `case_of=<id>` when you followed a known procedure.
+You do NOT write or edit procedures/strategies directly — there is NO procedure create/update tool. They are DERIVED from the cases you submit. To teach a NEW workflow OR fix an existing one, `memex_case_submit` the episode — never `memex_add_note` a how-to.
 </critical_constraint>
 
-Two kinds, identity anchor `(kind, scope, verb, context)`:
-- `procedure` — a workflow. `verb`+`context` REQUIRED (e.g. verb=`deploy`, context=`nomad`).
-- `strategy` — a heuristic spanning the procedures that share its `(scope, verb)`. `verb` REQUIRED, `context` FORBIDDEN.
-`trigger` (when-to-use) REQUIRED — it is what search matches. Scope: `global` | `project:<id>` | `app:<id>` (no user scope).
+Two kinds live on the plane (you READ them; the system DERIVES them), identity anchor `(kind, scope, verb, context)`:
+- `procedure` — a workflow; `verb`+`context` (e.g. verb=`deploy`, context=`nomad`).
+- `strategy` — a heuristic over the procedures sharing its `(scope, verb)`; `context` FORBIDDEN.
+`trigger` (when-to-use) is what search matches. Scope: `global` | `project:<id>` | `app:<id>` (no user scope).
 
-<critical_constraint name="procedural_write_before_read">
-Anchors are UNIQUE (create → 409 on collision). Probe `memex_procedural_get_by_identity` BEFORE `create`; or `memex_procedural_upsert` to write idempotently.
-</critical_constraint>
-
-Cases are NOTES, not plane entries. Pinned procedures arrive in your session briefing automatically — there is no briefing tool to call. `memex_procedural_search` defaults to `status="published"`; `memex_procedural_deprecate(superseded_by_id=…)` soft-deletes; `memex_procedural_update` edits in place (the anchor is immutable)."""
+Cases are NOTES (role=`case`), not plane entries — `memex_case_submit` files them in the hidden case vault; they feed derivation. Pinned procedures arrive in your session briefing automatically. `memex_procedural_search` defaults to `status="published"`."""
 
 
 CITATIONS = """## Citations

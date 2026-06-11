@@ -303,19 +303,24 @@ def test_search_results_briefing_pin_position_fails_when_wrong():
 
 
 def test_suite_loads_with_ten_scenarios():
-    """The suite package is discoverable via ``load_suite`` and has 10 scenarios.
+    """The suite package is discoverable via ``load_suite`` and has 11 scenarios.
 
-    The number 10 is the procedural contract; a regression that drops a
-    scenario (e.g. round-3 review cut) surfaces here."""
+    The count is the procedural contract; a regression that drops a
+    scenario (e.g. round-3 review cut) surfaces here. The 11th is the §9
+    derivation gate (`derivation_distills_procedure_from_cases`), added
+    with the cases→procedures pipeline. These scenarios drive the
+    HTTP/API layer directly (DirectApiBackend), which retains full
+    procedural CRUD — distinct from the agent (MCP/Hermes) surface, which
+    is read-only + case_submit."""
     suite = load_suite('procedural_plane')
-    assert len(suite.scenarios) == 10, (
-        f'procedural_plane should have 10 scenarios, got {len(suite.scenarios)}: '
+    assert len(suite.scenarios) == 11, (
+        f'procedural_plane should have 11 scenarios, got {len(suite.scenarios)}: '
         f'{[s.id for s in suite.scenarios]}'
     )
 
 
 def test_suite_scenario_ids_are_stable():
-    """Pin the 10 scenario IDs — a typo or rename breaks the integration gate."""
+    """Pin the 11 scenario IDs — a typo or rename breaks the integration gate."""
     expected = {
         'identity_anchor_collision_returns_409',
         'upsert_on_existing_anchor_updates_in_place',
@@ -327,6 +332,7 @@ def test_suite_scenario_ids_are_stable():
         'deprecate_drops_from_published_search',
         'status_published_hides_drafts',
         'case_submit_files_note_with_explicit_assignment',
+        'derivation_distills_procedure_from_cases',
     }
     suite = load_suite('procedural_plane')
     actual = {s.id for s in suite.scenarios}

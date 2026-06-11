@@ -1,9 +1,11 @@
 """Tests for the procedural-plane Hermes handlers.
 
-The procedural plane ships 7 tools (create / upsert / get /
-get_by_identity / update / deprecate / search) plus memex_case_submit
-(cases are NOTES, not plane entries). These tests pin the Hermes-side
-handler wiring:
+The procedural plane exposes 3 READ tools on the agent surface (get /
+get_by_identity / search) plus memex_case_submit (cases are NOTES, not
+plane entries). The WRITE tools (create / upsert / update / deprecate)
+are deliberately NOT on the agent surface: procedures/strategies are
+DERIVED from cases, so the agent's only procedural write is
+``case_submit``. These tests pin the Hermes-side handler wiring:
 
 - Each handler dispatches to the right ``api.procedural_*`` /
   ``api.case_submit`` method with the right kwargs.
@@ -39,13 +41,9 @@ from memex_hermes_plugin.memex.tools import (
     ALL_SCHEMAS,
     HANDLERS,
     CASE_SUBMIT_SCHEMA,
-    PROC_CREATE_SCHEMA,
-    PROC_DEPRECATE_SCHEMA,
     PROC_GET_BY_IDENTITY_SCHEMA,
     PROC_GET_SCHEMA,
     PROC_SEARCH_SCHEMA,
-    PROC_UPDATE_SCHEMA,
-    PROC_UPSERT_SCHEMA,
     dispatch,
 )
 
@@ -106,18 +104,28 @@ def _fake_entry_dto(
 # ---------------------------------------------------------------------------
 
 
-def test_all_seven_procedural_schemas_in_all_schemas():
-    """The 7 procedural schemas are in ALL_SCHEMAS so the agent sees them."""
+def test_procedural_read_schemas_in_all_schemas():
+    """Only the 3 procedural READ schemas are in ALL_SCHEMAS — the agent
+    sees get / get_by_identity / search but NO write tools (procedures are
+    derived from cases; the agent writes via case_submit)."""
     proc_schemas = [s['name'] for s in ALL_SCHEMAS if s['name'].startswith('memex_procedural_')]
     assert proc_schemas == [
-        'memex_procedural_create',
-        'memex_procedural_upsert',
         'memex_procedural_get',
         'memex_procedural_get_by_identity',
-        'memex_procedural_update',
-        'memex_procedural_deprecate',
         'memex_procedural_search',
     ]
+
+
+def test_procedural_write_schemas_absent_from_all_schemas():
+    """The write tools must NOT be exposed to the agent."""
+    names = {s['name'] for s in ALL_SCHEMAS}
+    for forbidden in (
+        'memex_procedural_create',
+        'memex_procedural_upsert',
+        'memex_procedural_update',
+        'memex_procedural_deprecate',
+    ):
+        assert forbidden not in names, f'{forbidden} must not be on the Hermes agent surface'
 
 
 def test_case_submit_schema_registered():
@@ -143,30 +151,29 @@ def test_case_submit_schema_registered():
 
 
 def test_all_procedural_handlers_registered():
-    """The 7 plane handlers + case_submit are wired in HANDLERS."""
+    """The 3 plane READ handlers + case_submit are wired in HANDLERS."""
     for name in (
-        'memex_procedural_create',
-        'memex_procedural_upsert',
         'memex_procedural_get',
         'memex_procedural_get_by_identity',
-        'memex_procedural_update',
-        'memex_procedural_deprecate',
         'memex_procedural_search',
         'memex_case_submit',
     ):
         assert name in HANDLERS, f'{name} missing from HANDLERS'
     assert 'memex_procedural_briefing_cards' not in HANDLERS
+    for forbidden in (
+        'memex_procedural_create',
+        'memex_procedural_upsert',
+        'memex_procedural_update',
+        'memex_procedural_deprecate',
+    ):
+        assert forbidden not in HANDLERS, f'{forbidden} must not be wired'
 
 
 def test_schemas_have_required_fields():
     """Each schema is a valid OpenAI-style tool dict (name, description, parameters)."""
     for schema in (
-        PROC_CREATE_SCHEMA,
-        PROC_UPSERT_SCHEMA,
         PROC_GET_SCHEMA,
         PROC_GET_BY_IDENTITY_SCHEMA,
-        PROC_UPDATE_SCHEMA,
-        PROC_DEPRECATE_SCHEMA,
         PROC_SEARCH_SCHEMA,
         CASE_SUBMIT_SCHEMA,
     ):
@@ -177,244 +184,6 @@ def test_schemas_have_required_fields():
         assert params['type'] == 'object'
         assert 'required' in params
         assert isinstance(params.get('properties'), dict)
-
-
-# ---------------------------------------------------------------------------
-# create — full payload, kind matrix
-# ---------------------------------------------------------------------------
-
-
-def test_create_calls_procedural_create_with_payload(config, vault_id):
-    """A procedure-kind create hits api.procedural_create with an ProceduralEntryCreate."""
-    api = Mock()
-    expected = _fake_entry_dto(kind='procedure', scope='global', verb='rotate', context='creds')
-    api.procedural_create = AsyncMock(return_value=expected)
-
-    out = dispatch(
-        'memex_procedural_create',
-        {
-            'kind': 'procedure',
-            'scope': 'global',
-            'verb': 'rotate',
-            'context': 'creds',
-            'title': 'rotate API credentials',
-            'summary': 'How to rotate creds.',
-            'body': 'Step 1: ...',
-            'trigger': 'an API credential is about to expire',
-        },
-        api=api,
-        config=config,
-        vault_id=vault_id,
-    )
-
-    api.procedural_create.assert_awaited_once()
-    call = api.procedural_create.await_args
-    assert call is not None
-    payload = call.args[0]
-    assert payload.kind == 'procedure'
-    assert payload.scope == 'global'
-    assert payload.verb == 'rotate'
-    assert payload.context == 'creds'
-    assert payload.vault_id == vault_id  # session-bound, not from agent args
-    # The returned DTO surfaces as JSON.
-    data = json.loads(out)
-    assert data['title'] == 'rotate API credentials'
-    assert data['kind'] == 'procedure'
-
-
-def test_create_case_kind_rejected(config, vault_id):
-    """kind="case" no longer exists on the plane — cases go via memex_case_submit."""
-    api = Mock()
-    api.procedural_create = AsyncMock()
-
-    out = dispatch(
-        'memex_procedural_create',
-        {
-            'kind': 'case',
-            'scope': 'global',
-            'title': 'rotation failure',
-            'summary': 'When API rotation fails',
-            'trigger': 'rotation step 3 returns 500',
-        },
-        api=api,
-        config=config,
-        vault_id=vault_id,
-    )
-    data = json.loads(out)
-    assert 'error' in data
-    assert 'Invalid kind' in data['error']
-    api.procedural_create.assert_not_awaited()
-
-
-def test_create_procedure_kind_requires_verb_and_context(config, vault_id):
-    """kind="procedure" without verb OR context → tool_error, no API call."""
-    api = Mock()
-    api.procedural_create = AsyncMock()
-
-    out = dispatch(
-        'memex_procedural_create',
-        {
-            'kind': 'procedure',
-            'scope': 'global',
-            'verb': 'rotate',  # missing context
-            'title': 't',
-            'summary': 's',
-            'trigger': 'creds about to expire',
-        },
-        api=api,
-        config=config,
-        vault_id=vault_id,
-    )
-    data = json.loads(out)
-    assert 'error' in data
-    assert 'verb and context' in data['error']
-    api.procedural_create.assert_not_awaited()
-
-
-def test_create_strategy_kind_forbids_context(config, vault_id):
-    """kind="strategy" with a context → tool_error, no API call."""
-    api = Mock()
-    api.procedural_create = AsyncMock()
-
-    out = dispatch(
-        'memex_procedural_create',
-        {
-            'kind': 'strategy',
-            'scope': 'global',
-            'verb': 'rotate',
-            'context': 'creds',  # WRONG — strategies anchor on scope+verb only
-            'title': 't',
-            'summary': 's',
-            'trigger': 'when deciding how to rotate anything',
-        },
-        api=api,
-        config=config,
-        vault_id=vault_id,
-    )
-    data = json.loads(out)
-    assert 'error' in data
-    assert 'context' in data['error']
-    api.procedural_create.assert_not_awaited()
-
-
-def test_create_requires_trigger(config, vault_id):
-    """trigger is the retrieval key — missing trigger → tool_error, no API call."""
-    api = Mock()
-    api.procedural_create = AsyncMock()
-
-    out = dispatch(
-        'memex_procedural_create',
-        {
-            'kind': 'procedure',
-            'scope': 'global',
-            'verb': 'rotate',
-            'context': 'creds',
-            'title': 't',
-            'summary': 's',
-        },
-        api=api,
-        config=config,
-        vault_id=vault_id,
-    )
-    data = json.loads(out)
-    assert 'error' in data
-    assert 'trigger' in data['error']
-    api.procedural_create.assert_not_awaited()
-
-
-def test_create_rejects_unknown_kind(config, vault_id):
-    api = Mock()
-    api.procedural_create = AsyncMock()
-
-    out = dispatch(
-        'memex_procedural_create',
-        {'kind': 'oops', 'scope': 'global', 'title': 't', 'summary': 's'},
-        api=api,
-        config=config,
-        vault_id=vault_id,
-    )
-    data = json.loads(out)
-    assert 'error' in data
-    assert 'Invalid kind' in data['error']
-    api.procedural_create.assert_not_awaited()
-
-
-def test_create_missing_required_fields(config, vault_id):
-    api = Mock()
-    api.procedural_create = AsyncMock()
-
-    out = dispatch(
-        'memex_procedural_create',
-        {'kind': 'procedure', 'scope': 'global'},  # missing title, summary, verb, context
-        api=api,
-        config=config,
-        vault_id=vault_id,
-    )
-    data = json.loads(out)
-    assert 'error' in data
-    api.procedural_create.assert_not_awaited()
-
-
-def test_create_requires_vault_binding(config):
-    """No vault bound to session → tool_error, no API call."""
-    api = Mock()
-    api.procedural_create = AsyncMock()
-
-    out = dispatch(
-        'memex_procedural_create',
-        {
-            'kind': 'procedure',
-            'scope': 'global',
-            'verb': 'rotate',
-            'context': 'creds',
-            'title': 't',
-            'summary': 's',
-        },
-        api=api,
-        config=config,
-        vault_id=None,
-    )
-    data = json.loads(out)
-    assert 'error' in data
-    assert 'vault' in data['error'].lower()
-    api.procedural_create.assert_not_awaited()
-
-
-# ---------------------------------------------------------------------------
-# upsert — same shape as create, idempotent
-# ---------------------------------------------------------------------------
-
-
-def test_upsert_calls_procedural_upsert(config, vault_id):
-    """upsert mirrors create's payload shape but routes to api.procedural_upsert."""
-    api = Mock()
-    expected = _fake_entry_dto()
-    api.procedural_upsert = AsyncMock(return_value=expected)
-
-    out = dispatch(
-        'memex_procedural_upsert',
-        {
-            'kind': 'procedure',
-            'scope': 'global',
-            'verb': 'rotate',
-            'context': 'creds',
-            'title': 'rotate API credentials',
-            'summary': 'How to rotate creds.',
-            'trigger': 'an API credential is about to expire',
-        },
-        api=api,
-        config=config,
-        vault_id=vault_id,
-    )
-
-    api.procedural_upsert.assert_awaited_once()
-    call = api.procedural_upsert.await_args
-    assert call is not None
-    payload = call.args[0]
-    assert payload.kind == 'procedure'
-    assert payload.verb == 'rotate'
-    data = json.loads(out)
-    assert data['title'] == 'rotate API credentials'
 
 
 # ---------------------------------------------------------------------------
@@ -555,97 +324,6 @@ def test_get_by_identity_strategy_forbids_context(config, vault_id):
     assert 'error' in data
     assert 'omit context' in data['error']
     api.procedural_get_by_identity.assert_not_awaited()
-
-
-# ---------------------------------------------------------------------------
-# update — at least one field, by UUID
-# ---------------------------------------------------------------------------
-
-
-def test_update_requires_at_least_one_field(config, vault_id):
-    api = Mock()
-    api.procedural_update = AsyncMock()
-
-    out = dispatch(
-        'memex_procedural_update',
-        {'entry_id': str(uuid4())},
-        api=api,
-        config=config,
-        vault_id=vault_id,
-    )
-    data = json.loads(out)
-    assert 'error' in data
-    api.procedural_update.assert_not_awaited()
-
-
-def test_update_calls_procedural_update_with_partial_payload(config, vault_id):
-    api = Mock()
-    expected = _fake_entry_dto(title='updated title')
-    api.procedural_update = AsyncMock(return_value=expected)
-
-    entry_id = str(uuid4())
-    out = dispatch(
-        'memex_procedural_update',
-        {'entry_id': entry_id, 'title': 'updated title', 'summary': 'updated body'},
-        api=api,
-        config=config,
-        vault_id=vault_id,
-    )
-    api.procedural_update.assert_awaited_once()
-    call = api.procedural_update.await_args
-    assert call is not None
-    assert str(call.args[0]) == entry_id
-    payload = call.args[1]
-    assert payload.title == 'updated title'
-    assert payload.summary == 'updated body'
-    assert call.kwargs.get('vault_id') == vault_id
-    data = json.loads(out)
-    assert data['title'] == 'updated title'
-
-
-# ---------------------------------------------------------------------------
-# deprecate — supersession edge
-# ---------------------------------------------------------------------------
-
-
-def test_deprecate_calls_procedural_deprecate(config, vault_id):
-    api = Mock()
-    expected = _fake_entry_dto()
-    expected_dto = expected.model_copy(update={'status': 'deprecated'})
-    api.procedural_deprecate = AsyncMock(return_value=expected_dto)
-
-    entry_id = str(uuid4())
-    superseded = str(uuid4())
-    out = dispatch(
-        'memex_procedural_deprecate',
-        {'entry_id': entry_id, 'superseded_by_id': superseded},
-        api=api,
-        config=config,
-        vault_id=vault_id,
-    )
-    call = api.procedural_deprecate.await_args
-    assert call is not None
-    assert str(call.args[0]) == entry_id
-    assert str(call.kwargs['superseded_by_id']) == superseded
-    assert call.kwargs['vault_id'] == vault_id
-    data = json.loads(out)
-    assert data['status'] == 'deprecated'
-
-
-def test_deprecate_rejects_invalid_superseded_uuid(config, vault_id):
-    api = Mock()
-    api.procedural_deprecate = AsyncMock()
-
-    out = dispatch(
-        'memex_procedural_deprecate',
-        {'entry_id': str(uuid4()), 'superseded_by_id': 'not-a-uuid'},
-        api=api,
-        config=config,
-        vault_id=vault_id,
-    )
-    data = json.loads(out)
-    assert 'error' in data
-    api.procedural_deprecate.assert_not_awaited()
 
 
 # ---------------------------------------------------------------------------
