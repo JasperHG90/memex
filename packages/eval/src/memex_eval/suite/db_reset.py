@@ -14,7 +14,6 @@ the call on ``preserve_vaults`` before invoking us.
 
 from __future__ import annotations
 
-import asyncio
 import logging
 import os
 
@@ -50,10 +49,10 @@ async def drop_and_recreate_schema(dsn: str | None = None) -> None:
       3. Drop ``alembic_version`` (not in SQLModel metadata).
       4. Re-create extensions (``vector``, ``pg_trgm``, ``uuid-ossp``).
       5. ``SQLModel.metadata.create_all`` — rebuild the schema.
-      6. ``alembic stamp head`` — mark migrations as applied without
-         replaying them (the chain trips on already-created columns when
-         applied to a baseline-built schema, same as ``memex database
-         stamp head``).
+      6. Re-stamp ``alembic_version`` by DIRECT SQL (create table + insert
+         the head revision(s)) — NOT ``alembic command.stamp``, which trips
+         on this project's 128-char ``version_num`` by ALTERing the table
+         before it exists. See the inline note at the INSERT.
     """
     # Import for side-effect: registers every model on SQLModel.metadata.
     import memex_core.memory.sql_models  # noqa: F401
@@ -63,6 +62,17 @@ async def drop_and_recreate_schema(dsn: str | None = None) -> None:
 
     resolved = dsn or _resolve_db_dsn()
     logger.info('Resetting suite DB schema via SQLModel.metadata (drop_all + create_all)')
+
+    # Resolve the head revision(s) from the migration script directory up
+    # front, so we can stamp via direct SQL below (see the long note before
+    # the INSERT for why we don't use ``alembic command.stamp``).
+    from alembic.script import ScriptDirectory
+
+    from memex_core.migration import _alembic_cfg
+
+    cfg = _alembic_cfg()
+    cfg.set_main_option('sqlalchemy.url', resolved)
+    heads = list(ScriptDirectory.from_config(cfg).get_heads())
 
     engine = create_async_engine(resolved, future=True)
     try:
@@ -79,25 +89,29 @@ async def drop_and_recreate_schema(dsn: str | None = None) -> None:
             await conn.execute(text('CREATE EXTENSION IF NOT EXISTS pg_trgm'))
             await conn.execute(text('CREATE EXTENSION IF NOT EXISTS "uuid-ossp"'))
             await conn.run_sync(SQLModel.metadata.create_all)
+
+            # Re-stamp the version table by DIRECT SQL — NOT ``alembic
+            # command.stamp``. This project's alembic env configures a
+            # 128-char ``version_num``; alembic's stamp path emits an
+            # ``ALTER TABLE alembic_version ALTER COLUMN version_num TYPE
+            # varchar(128)`` BEFORE the table exists, which raises
+            # UndefinedTable against the freshly-wiped schema and leaves the
+            # DB un-stamped — crashing the NEXT suite that reads
+            # ``alembic_version`` (e.g. ``SELECT version_num``). Creating the
+            # table and inserting the head revision(s) is exactly the state a
+            # successful stamp produces, without the ordering bug.
+            await conn.execute(
+                text(
+                    'CREATE TABLE IF NOT EXISTS alembic_version ('
+                    'version_num VARCHAR(128) NOT NULL, '
+                    'CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num))'
+                )
+            )
+            await conn.execute(text('DELETE FROM alembic_version'))
+            for rev in heads:
+                await conn.execute(
+                    text('INSERT INTO alembic_version (version_num) VALUES (:rev)'),
+                    {'rev': rev},
+                )
     finally:
         await engine.dispose()
-
-    from alembic import command
-
-    from memex_core.migration import _alembic_cfg
-
-    cfg = _alembic_cfg()
-    # Alembic's env.py reads MEMEX_DATABASE_URL or builds from
-    # MEMEX_SERVER__META_STORE__INSTANCE__*. If we resolved from YAML,
-    # neither is set — pass the DSN via the ini fallback so env.py's
-    # _resolve_url() picks it up when get_database_url() raises.
-    cfg.set_main_option('sqlalchemy.url', resolved)
-    prior_env = os.environ.get('MEMEX_DATABASE_URL')
-    os.environ['MEMEX_DATABASE_URL'] = resolved
-    try:
-        await asyncio.to_thread(command.stamp, cfg, 'head')
-    finally:
-        if prior_env is None:
-            os.environ.pop('MEMEX_DATABASE_URL', None)
-        else:
-            os.environ['MEMEX_DATABASE_URL'] = prior_env
