@@ -565,21 +565,23 @@ suite.register(
 
 
 # ---------------------------------------------------------------------------
-# 9. Derivation: cases → procedure (design §9). Submit N≥3 worked episodes,
-#    run distillation, and assert the derived procedure (a) exists and is
-#    retrievable once confirmed, and (b) preserved the quantitative anchors
-#    from the cases (§9 rule 6 / §19.5 — gated inside the required setup
-#    action). This is the end-to-end gate on the derivation pipeline.
+# 9. Derivation: case → procedure (design §9, amended JG 2026-06-11). Submit
+#    a SINGLE worked episode, run distillation, and assert the derived
+#    procedure (a) exists and is retrievable once confirmed, and (b) preserved
+#    the quantitative anchors from the case (§9 rule 6 / §19.5 — gated inside
+#    the required setup action). One case is enough. This is the end-to-end
+#    gate on the derivation pipeline.
 # ---------------------------------------------------------------------------
 
 suite.register(
     id='derivation_distills_procedure_from_cases',
     description=(
-        'Cases → procedure: submitting 3 worked episodes under one anchor and '
-        'running derivation distils a grounded procedure that PRESERVES the '
-        'quantitative anchors from the cases (§9 rule 6) and becomes retrievable '
-        'once confirmed (draft → published). A regression that erases anchors or '
-        'fails to distil errors the required setup action.'
+        'Case → procedure: submitting a SINGLE worked episode under one anchor '
+        'and running derivation distils a grounded procedure that PRESERVES the '
+        'quantitative anchors from the case (§9 rule 6) and becomes retrievable '
+        'once confirmed (draft → published). One case is enough (§9 amended, '
+        'JG 2026-06-11). A regression that erases anchors or fails to distil '
+        'errors the required setup action.'
     ),
     query='',
     top_k=5,
@@ -591,7 +593,7 @@ suite.register(
             kind_verb='deploy',
             kind_context='canary',
             kind_trigger='about to deploy a service via canary rollout',
-            kind_n_cases=3,
+            kind_n_cases=1,
             kind_anchors=['10%', '15 minutes'],
         ),
     ],

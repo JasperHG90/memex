@@ -120,9 +120,10 @@ class ProceduralDerivationService:
         cases = await self._gather_cases(entry_id)
         anchor = f'{claim.target_scope} / {claim.target_verb} / {claim.target_context}'
 
-        # §9: distil from a cluster (N≥3), never one case. Below threshold
-        # the draft anchor stays an empty stub — the next case enqueues a
-        # fresh task, and the cluster eventually crosses the line.
+        # §9 amended (JG 2026-06-11): a single case is enough to derive a
+        # procedure (MIN_CASES_FOR_DISTILLATION == 1). This guard only
+        # trips when an anchor somehow has zero provenance cases — then the
+        # draft stays a stub until a case is assigned and re-enqueues it.
         if len(cases) < MIN_CASES_FOR_DISTILLATION:
             logger.info(
                 'procedure %s has %d case(s) (< %d) — leaving draft stub',

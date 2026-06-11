@@ -5,8 +5,9 @@ derive_pending``) end-to-end against real Postgres, with the two LLM
 distillation passes patched to canned outputs so the test asserts the
 *worker contract* deterministically:
 
-* a procedure draft with N≥3 provenance cases gets its body/trigger/summary
-  filled by distillation (a version bump); below N≥3 it stays a stub (§9).
+* a procedure draft with >=1 provenance case gets its body/trigger/summary
+  filled by distillation (a version bump) — a SINGLE case is enough
+  (§9 amended, JG 2026-06-11); the guard only leaves a stub at 0 cases.
 * once ``(scope, verb)`` has ≥2 procedures, the worker enqueues + derives
   the strategy *above* them (§9: the heuristic emerges over multiple
   procedures).
@@ -132,21 +133,23 @@ def _patch_distillers(monkeypatch):
     )
 
 
-async def test_below_threshold_leaves_draft_stub(api, monkeypatch):
-    """A procedure with < 3 cases is not distilled (§9 N≥3)."""
+async def test_single_case_distills_procedure(api, monkeypatch):
+    """A SINGLE case is enough to derive a procedure (§9 amended, JG
+    2026-06-11) — the draft body is distilled, not left a stub."""
     _patch_distillers(monkeypatch)
     vault = await _mk_vault(api)
-    entry = await _make_procedure_with_cases(api, vault, verb='deploy', context='nomad', n_cases=2)
+    entry = await _make_procedure_with_cases(api, vault, verb='deploy', context='nomad', n_cases=1)
 
     completed = await api.procedural.derive_pending(limit=10)
 
-    assert len(completed) == 1  # task completes (as a no-op)
+    assert len(completed) == 1
     reloaded = await api.procedural.get(entry.id)
-    assert reloaded.body == ''  # body untouched — still a stub
+    assert '10%' in reloaded.body  # distilled body written, not a stub
+    assert reloaded.title.startswith('Distilled')
 
 
 async def test_derive_procedure_fills_draft_then_rolls_up_strategy(api, monkeypatch):
-    """N≥3 cases → procedure body distilled; ≥2 procedures → strategy derived."""
+    """Cases → procedure body distilled; ≥2 procedures → strategy derived."""
     _patch_distillers(monkeypatch)
     vault = await _mk_vault(api)
 

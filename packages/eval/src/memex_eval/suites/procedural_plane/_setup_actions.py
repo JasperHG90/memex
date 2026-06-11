@@ -278,7 +278,8 @@ class _DeriveFromCases(SetupActionHandler):
     Params (``kind_``-prefixed, per the suite convention):
     - ``kind_scope`` / ``kind_verb`` / ``kind_context`` — the procedure anchor.
     - ``kind_trigger`` — the stub's when_to_use.
-    - ``kind_n_cases`` (int, default 3 — the §9 N≥3 floor).
+    - ``kind_n_cases`` (int, default 1 — one case is enough to derive a
+      procedure; §9 amended, JG 2026-06-11).
     - ``kind_anchors`` (list[str]) — quantitative tokens that MUST survive
       distillation; embedded in the case actions and asserted in the body.
 
@@ -300,7 +301,7 @@ class _DeriveFromCases(SetupActionHandler):
         verb = (params.get('kind_verb') or '').strip()
         context = (params.get('kind_context') or '').strip()
         trigger = params.get('kind_trigger') or f'about to {verb} on {context}'
-        n_cases = int(params.get('kind_n_cases') or 3)
+        n_cases = int(params.get('kind_n_cases') or 1)
         anchors: list[str] = list(params.get('kind_anchors') or ['10%', '15 minutes'])
         if not verb or not context:
             raise ValueError('derive_from_cases requires kind_verb and kind_context')
@@ -352,7 +353,7 @@ class _DeriveFromCases(SetupActionHandler):
         if not body.strip():
             raise ValueError(
                 f'derive_from_cases: distillation produced an empty body for '
-                f'{scope}/{verb}/{context} after {n_cases} cases (§9 N≥3 path).'
+                f'{scope}/{verb}/{context} after {n_cases} case(s) (§9 single-case path).'
             )
         missing = [a for a in anchors if a not in body]
         if missing:

@@ -33,10 +33,13 @@ from memex_core.llm import run_dspy_operation
 logger = logging.getLogger('memex.core.memory.procedural_distillation')
 
 
-# §9: "Distill from a cluster (N≥3), never one case." Below this, the
-# anchor stays a draft stub — there isn't enough shared signal to
-# generalize a happy path without inventing it.
-MIN_CASES_FOR_DISTILLATION = 3
+# §9 AMENDED (2026-06-11, JG): a SINGLE case is enough to derive a
+# procedure. One worked episode becomes a provisional procedure
+# immediately — its steps ARE the happy path — and later cases refine it
+# (shared-across-cases generalization kicks in once ≥2 exist; see the
+# discipline rules below). Eager formation makes a learned workflow
+# available after the first run instead of waiting for a cluster.
+MIN_CASES_FOR_DISTILLATION = 1
 
 
 # The §9 discipline, verbatim from spike #5's validated prompt (§19.5).
@@ -48,13 +51,17 @@ DISTILLATION_DISCIPLINE = """\
    support with specific case text MUST NOT appear. Do not add
    best-practice steps from general knowledge (no "notify the team",
    "update docs", "write tests" unless a case did it).
-2. GENERALIZE ONLY WHAT IS SHARED. Steps appearing in >=2 cases form the
-   happy path, phrased service-agnostically (no service names in step text).
+2. GENERALIZE ONLY WHAT IS SHARED. When MULTIPLE cases are given, steps
+   appearing in >=2 cases form the happy path, phrased service-agnostically
+   (no service names in step text). When a SINGLE case is given, that
+   case's steps ARE the happy path (still phrased service-agnostically).
 3. FAILURE BRANCHES BECOME CONDITIONS. A step learned from a failure or a
    conditional branch carries a condition describing when it applies; cite
    the case where that branch fired.
-4. SINGLE-CASE STEPS are allowed ONLY as conditioned guards, never as
-   unconditional happy-path steps.
+4. SINGLE-CASE STEPS, when OTHER cases are present, are allowed ONLY as
+   conditioned guards, never as unconditional happy-path steps. This does
+   NOT apply when only one case is given — then the case defines the
+   happy path.
 5. when_to_use must generalize the case triggers — the task class, not any
    one episode.
 6. PRESERVE QUANTITATIVE ANCHORS VERBATIM. Percentages, durations, retry
