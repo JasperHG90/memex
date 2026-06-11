@@ -505,6 +505,40 @@ class ProceduralRepository:
         )
         return self._to_dto(entry)
 
+    async def record_outcome(
+        self,
+        entry_id: UUID,
+        outcome: str,
+        *,
+        vault_id: UUID | None = None,
+    ) -> ProceduralEntryDTO:
+        """Increment the §18.5 outcome counters for an enacted entry.
+
+        ``outcome`` ∈ {success, failure, mixed}; bumps the matching counter
+        plus ``uses`` and ``last_used_at``. Does NOT append a version row —
+        counters are governance signals, not content edits.
+        """
+        o = (outcome or '').strip().lower()
+        if o not in ('success', 'failure', 'mixed'):
+            raise ProceduralRepositoryError(
+                f'outcome must be success|failure|mixed, got {outcome!r}'
+            )
+        async with self._metastore.session() as session:
+            entry = await self._get_entry(session, entry_id, vault_id=vault_id)
+            if o == 'success':
+                entry.success_count = int(entry.success_count or 0) + 1
+            elif o == 'failure':
+                entry.failure_count = int(entry.failure_count or 0) + 1
+            else:
+                entry.mixed_count = int(entry.mixed_count or 0) + 1
+            entry.uses = int(entry.uses or 0) + 1
+            entry.last_used_at = datetime.now(timezone.utc)
+            entry.updated_at = datetime.now(timezone.utc)
+            session.add(entry)
+            await session.commit()
+            await session.refresh(entry)
+        return self._to_dto(entry)
+
     async def upsert_by_identity(
         self,
         payload: ProceduralEntryCreate,
@@ -1251,6 +1285,11 @@ class ProceduralRepository:
             extra_metadata=dict(entry.extra_metadata or {}),
             status=_str(entry.status),  # type: ignore[arg-type]
             origin=_str(entry.origin),  # type: ignore[arg-type]
+            success_count=int(entry.success_count or 0),
+            failure_count=int(entry.failure_count or 0),
+            mixed_count=int(entry.mixed_count or 0),
+            uses=int(entry.uses or 0),
+            last_used_at=entry.last_used_at,
             supersedes_id=entry.supersedes_id,
             superseded_by_id=entry.superseded_by_id,
             published_at=entry.published_at,

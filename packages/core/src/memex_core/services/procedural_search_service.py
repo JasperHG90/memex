@@ -73,6 +73,19 @@ logger = logging.getLogger('memex.core.services.procedural_search')
 # either side is retuned.
 K_RRF = 60
 
+
+def _mw_boost(entry: object) -> float:
+    """§18.5 Memory-Worth boost from an entry's outcome counters — the same
+    Beta-Bernoulli posterior the unit ranker uses (``compute_mw_boost`` by
+    identity, not a fork). Cold-start (0/0) → 1.0 (neutral)."""
+    from memex_core.services.outcomes import compute_mw_boost
+
+    return compute_mw_boost(
+        int(getattr(entry, 'success_count', 0) or 0),
+        int(getattr(entry, 'failure_count', 0) or 0),
+    )
+
+
 # Status filter default — matches the briefing semantics where only
 # published entries are surfaced to agents.
 DEFAULT_STATUS = 'published'
@@ -207,7 +220,7 @@ class ProceduralSearchService:
             hits.append(
                 ProceduralSearchHit(
                     entry=entry,
-                    score=scores[eid],
+                    score=scores[eid] * _mw_boost(entry),
                     bm25_rank=bm25_rank.get(eid),
                     vector_rank=vector_rank.get(eid),
                     matched_via=matched_via,  # type: ignore[arg-type]
@@ -224,7 +237,7 @@ class ProceduralSearchService:
                 hits.append(
                     ProceduralSearchHit(
                         entry=entry,
-                        score=scores[entry.id],
+                        score=scores[entry.id] * _mw_boost(entry),
                         bm25_rank=bm25_rank.get(entry.id),
                         vector_rank=vector_rank.get(entry.id),
                         matched_via=(
@@ -237,6 +250,13 @@ class ProceduralSearchService:
                         pin_position=pin_hits.get(entry.id),
                     )
                 )
+
+        # §18.5: re-rank by the Memory-Worth-boosted score. The boost is the
+        # Beta-Bernoulli posterior over success/failure (compute_mw_boost),
+        # applied post-RRF. Re-sort within the fetched set — a boundary
+        # entry just outside the overshoot can't be pulled in, but within
+        # the candidate set a well-worn procedure outranks an unproven peer.
+        hits.sort(key=lambda h: h.score, reverse=True)
 
         return ProceduralSearchResponse(
             hits=hits[: request.limit],

@@ -209,6 +209,13 @@ class ProceduralEntryDTO(BaseModel):
     )
     status: StatusLiteral = 'draft'
     origin: OriginLiteral = 'manual'
+    # Phase 2 outcome counters (§18.5). Cards render raw counts (e.g. 9/11 ✓),
+    # never a bare rate; ranking uses the Beta-Bernoulli posterior.
+    success_count: int = 0
+    failure_count: int = 0
+    mixed_count: int = 0
+    uses: int = 0
+    last_used_at: dt.datetime | None = None
     supersedes_id: UUID | None = None
     superseded_by_id: UUID | None = None
     published_at: dt.datetime | None = None

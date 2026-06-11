@@ -2084,6 +2084,38 @@ class ProceduralEntry(SQLModel, table=True):  # type: ignore
         description='How this entry came to exist; used by the audit/replay surface.',
     )
 
+    # Phase 2 outcome counters (§18.5) — live ON the entry (not a side table
+    # keyed on KV strings, 028's fragility). Written by case submission
+    # (case_of + outcome) or an explicit procedure_report; consumed by
+    # ranking via the Beta-Bernoulli posterior (compute_mw_score over
+    # success/failure). ``mixed`` is informational; ``uses``/``last_used_at``
+    # are governance signals for briefing curation.
+    success_count: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default='0'),
+        description='Cases/reports with outcome=success enacting this entry.',
+    )
+    failure_count: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default='0'),
+        description='Cases/reports with outcome=failure.',
+    )
+    mixed_count: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default='0'),
+        description='Cases/reports with outcome=mixed (informational; not in the MW posterior).',
+    )
+    uses: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default='0'),
+        description='Total times enacted (any outcome) — a governance signal.',
+    )
+    last_used_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
+        description='When this entry was last enacted (case/report).',
+    )
+
     supersedes_id: UUID | None = Field(
         default=None,
         sa_column=Column(SA_UUID(), nullable=True),

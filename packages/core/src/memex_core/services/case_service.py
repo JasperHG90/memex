@@ -158,13 +158,26 @@ class CaseService:
         entry_id: UUID,
     ) -> None:
         """Attach a case note to a procedural entry (provenance edge +
-        derivation enqueue). Shared by the auto path and the
-        ``assign_case`` catalogue action."""
+        outcome counter + derivation enqueue). Shared by the auto path and
+        the ``assign_case`` catalogue action."""
         entry = await self._api._procedural_repo.get(entry_id)
         await self._api._procedural_repo.add_source(
             entry_id,
             ProceduralSourceCreate(source_note_id=note_id, role='provenance'),
         )
+
+        # §18.5: the case IS the outcome report — assigning a case with an
+        # outcome bumps the target's success/failure/mixed counters. The
+        # outcome rides the case note's metadata (stamped at submission), so
+        # every assignment path (explicit case_of, clean auto-assign, the
+        # assign_case resolution) records it without threading the payload.
+        outcome = await self._note_outcome(note_id)
+        if outcome in ('success', 'failure', 'mixed'):
+            try:
+                await self._api._procedural_repo.record_outcome(entry_id, outcome)
+            except Exception:
+                logger.exception('outcome record failed for entry %s', entry_id)
+
         # §18.4 dirty event (a): case assigned → enqueue the procedure.
         # The consumer is Phase 3; pending-row dedup gives debounce.
         try:
@@ -180,6 +193,18 @@ class CaseService:
             # The edge is the load-bearing artefact; a queue hiccup is
             # log-worthy, not submission-fatal.
             logger.exception('derivation enqueue failed for entry %s', entry_id)
+
+    async def _note_outcome(self, note_id: UUID) -> str | None:
+        """The ``outcome`` stamped onto the case note's metadata at
+        submission (``success|failure|mixed``), or None."""
+        from memex_core.memory.sql_models import Note
+
+        async with self._api.metastore.session() as session:
+            note = await session.get(Note, note_id)
+            if note is None:
+                return None
+            val = (note.doc_metadata or {}).get('outcome')
+        return str(val).strip().lower() if val else None
 
     # ------------------------------------------------------------------
     # Internals

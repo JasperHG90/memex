@@ -2458,6 +2458,19 @@ class MemexAPIProceduralFacade:
             trigger_embedding=await self._embed_trigger(payload.trigger),
         )
 
+    async def report_outcome(
+        self,
+        entry_id: UUID,
+        outcome: str,
+        *,
+        vault_id: UUID | None = None,
+    ) -> ProceduralEntryDTO:
+        """Record an enactment outcome (§18.5): bump success/failure/mixed +
+        uses + last_used_at. The 'enacted, not case-worthy' write path —
+        case submission is the primary one. No version row (a governance
+        signal, not a content edit)."""
+        return await self._api._procedural_repo.record_outcome(entry_id, outcome, vault_id=vault_id)
+
     async def search(
         self,
         request: ProceduralSearchRequest,

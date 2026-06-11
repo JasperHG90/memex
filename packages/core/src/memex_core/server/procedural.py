@@ -374,6 +374,35 @@ async def procedural_deprecate(
 
 
 @router.post(
+    '/procedural/{entry_id}/report',
+    response_model=ProceduralEntryDTO,
+    dependencies=[Depends(require_write)],
+)
+async def procedural_report(
+    entry_id: UUID,
+    api: Annotated[MemexAPI, Depends(get_api)],
+    outcome: Annotated[
+        str,
+        Query(description='success | failure | mixed — the enactment outcome (§18.5).'),
+    ],
+    vault_id: Annotated[
+        ShortLabel | None,
+        Query(description='Optional vault UUID; mismatch returns 404.'),
+    ] = None,
+):
+    """Report an enactment outcome for a procedure/strategy (§18.5).
+
+    Bumps the success/failure/mixed counters + uses + last_used_at without a
+    version bump. Use this for 'enacted, not case-worthy'; a full
+    ``case_submit`` with ``case_of`` is the richer path."""
+    try:
+        result = await api.procedural.report_outcome(entry_id, outcome, vault_id=vault_id)
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Failed to report procedural outcome')
+    return result
+
+
+@router.post(
     '/procedural/derive',
     dependencies=[Depends(require_write)],
 )

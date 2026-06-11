@@ -59,17 +59,18 @@ def test_procedural_router_mounts_under_procedural_prefix():
 
 
 def test_procedural_router_route_surface():
-    """13 (method, path) routes across 10 distinct paths — the
+    """15 (method, path) routes across 12 distinct paths — the
     {entry_id} path carries GET+PATCH and {entry_id}/pin carries
     POST+DELETE. Covers CRUD, search, briefing-cards (the operator/
     CLI read — the agent gets cards in the session briefing, not via
-    a tool), and the §18.8/§19.8 curation surface (pin/unpin/pins,
-    versions, rollback).
+    a tool), the §18.8/§19.8 curation surface (pin/unpin/pins, versions,
+    rollback), the §9 derivation drain (/derive), and the §18.5 outcome
+    report (/{entry_id}/report).
     """
     routes = list(router.routes)
     method_paths = [(tuple(sorted(route.methods or set())), route.path) for route in routes]
-    assert len(method_paths) == 13, (
-        f'Expected 13 procedural (method,path) routes, got {len(method_paths)}: {method_paths}'
+    assert len(method_paths) == 15, (
+        f'Expected 15 procedural (method,path) routes, got {len(method_paths)}: {method_paths}'
     )
     assert {p for _, p in method_paths} == {
         '/api/v1/procedural',
@@ -77,12 +78,14 @@ def test_procedural_router_route_surface():
         '/api/v1/procedural/pins',
         '/api/v1/procedural/{entry_id}',
         '/api/v1/procedural/{entry_id}/deprecate',
+        '/api/v1/procedural/{entry_id}/report',
         '/api/v1/procedural/{entry_id}/pin',
         '/api/v1/procedural/{entry_id}/versions',
         '/api/v1/procedural/{entry_id}/rollback',
         '/api/v1/procedural/upsert',
         '/api/v1/procedural/search',
         '/api/v1/procedural/briefing-cards',
+        '/api/v1/procedural/derive',
     }
 
 
