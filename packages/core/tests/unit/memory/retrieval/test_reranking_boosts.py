@@ -588,3 +588,46 @@ def test_temporal_proximity_populated_from_query_window() -> None:
     again = _make_unit(event_date=datetime(2026, 1, 16, tzinfo=timezone.utc))
     engine._apply_temporal_proximity([again], None, None)
     assert getattr(again, 'temporal_proximity', None) is None
+
+
+@pytest.mark.asyncio
+async def test_recency_falls_back_to_real_mentioned_at() -> None:
+    """When ``occurred_start`` is absent, recency uses a REAL ``mentioned_at``
+    (one that differs from ``created_at``) so a present-state fact dated only
+    in ``mentioned_at`` keeps its recency edge — while a truly-undated unit
+    (``mentioned_at == created_at``, the ingest default) stays neutral."""
+    now = datetime.now(timezone.utc)
+
+    def _mk(occ, men, created):
+        u = MemoryUnit(
+            id=uuid4(),
+            text='fact',
+            fact_type='fact',
+            event_date=men or created,
+            occurred_start=occ,
+            mentioned_at=men,
+            vault_id=uuid4(),
+            note_id=uuid4(),
+            embedding=[],
+        )
+        object.__setattr__(u, 'created_at', created)
+        return u
+
+    recent_real = _mk(None, now - timedelta(days=10), now)  # real recent date in mentioned_at
+    old_real = _mk(None, now - timedelta(days=300), now)  # real old date in mentioned_at
+    undated = _mk(None, now, now)  # mentioned_at == created_at -> ingest default -> neutral
+    # Ongoing fact: OLD occurred_start but RECENT mentioned_at -> max() keeps it
+    # recent (anchored to the latest real date, not the old start).
+    ongoing = _mk(now - timedelta(days=300), now - timedelta(days=5), now)
+
+    engine = _make_engine([0.0, 0.0, 0.0, 0.0], recency_alpha=2.0)
+    out = await engine._rerank_results('q', [old_real, undated, recent_real, ongoing])
+
+    # Recent real-mentioned date outranks the old real-mentioned date...
+    assert out.index(recent_real) < out.index(old_real)
+    # ...the undated unit (neutral 0.5) sits between them, not max-fresh...
+    assert out.index(recent_real) < out.index(undated) < out.index(old_real)
+    # ...and the ongoing fact (old start, recent mention) ranks with the
+    # recent units, NOT down with its old occurred_start.
+    assert out.index(ongoing) < out.index(undated)
+    assert out.index(ongoing) < out.index(old_real)

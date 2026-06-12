@@ -81,6 +81,12 @@ logger = logging.getLogger('memex.core.memory.retrieval.engine')
 
 LOG_FLOOR_COMPOSITE_BOOST = 1e-9
 
+# ``mentioned_at`` is auto-filled to ~``created_at`` (ingest time) for undated
+# content, so a genuine authored date parked in ``mentioned_at`` differs from
+# ``created_at`` by far more than this tolerance. Used by the rerank recency
+# boost to separate "real date in mentioned_at" from "ingest-time default".
+_INGEST_DATE_TOLERANCE_S = 60.0
+
 
 def _compose_boosts_logspace(
     ce_score: float,
@@ -1674,19 +1680,45 @@ class RetrievalEngine:
 
             boosted_scores: list[float] = []
             for unit, ce_score in zip(results, normalized_scores):
-                # Recency boost — keyed on ``occurred_start`` (the real
-                # authored date), NOT ``event_date``. ``event_date`` defaults
-                # to ingest time for undated content, so date-less units read
-                # as maximally fresh and outrank correctly-dated facts.
-                # ``occurred_start`` is genuinely NULL when the source carried
-                # no date, so those units fall to the neutral branch and are
-                # neither boosted nor penalised (matches Hindsight
-                # ``reranking.py``).
+                # Recency boost — keyed on the unit's real authored date, NOT
+                # ``event_date`` (which defaults to ingest time for undated
+                # content, making date-less units read as maximally fresh).
+                # Prefer ``occurred_start`` (a dated event); else fall back to
+                # ``mentioned_at`` *only when it is a genuine date* — a
+                # present-state fact ("currently runs Python 3.13 [Nov 2025]")
+                # parks its real date in ``mentioned_at``, not
+                # ``occurred_start``. ``mentioned_at`` is auto-filled to
+                # ~``created_at`` for truly-undated content, so a real date is
+                # one that differs from ``created_at`` by more than the ingest
+                # tolerance; truly-undated units fall through to neutral (so
+                # they neither flood nor get penalised).
+                # Use the LATEST real authored date the unit carries:
+                # ``occurred_start`` (a dated event) and/or ``mentioned_at``
+                # when it is genuine rather than the ingest-time default
+                # (mentioned_at is auto-filled to ~``created_at`` for undated
+                # content; a real date differs from ``created_at``). Taking the
+                # max keeps ongoing / current-state facts recent — "head since
+                # 2024, published 2026" scores as 2026, not 2024 — so they are
+                # not anchored to an old start date. A truly-undated unit (no
+                # occurred_start, mentioned_at == created_at) falls through to
+                # neutral, so it neither floods nor is penalised.
+                date_candidates: list[datetime] = []
                 if unit.occurred_start is not None:
-                    days_ago = (now - unit.occurred_start).days
+                    date_candidates.append(unit.occurred_start)
+                if unit.mentioned_at is not None:
+                    created = unit.created_at
+                    if (
+                        created is None
+                        or abs((unit.mentioned_at - created).total_seconds())
+                        > _INGEST_DATE_TOLERANCE_S
+                    ):
+                        date_candidates.append(unit.mentioned_at)
+                recency_date = max(date_candidates) if date_candidates else None
+                if recency_date is not None:
+                    days_ago = (now - recency_date).days
                     recency = max(0.1, min(1.0, 1.0 - (days_ago / 365)))
                 else:
-                    recency = 0.5  # neutral when no authored date
+                    recency = 0.5  # neutral — no real authored date
 
                 recency_boost = 1.0 + recency_alpha * (recency - 0.5)
 
