@@ -12,16 +12,16 @@ argument-hint: "[search query]"
    - If neither is available, ask the user.
 
 2. **Search strategy**:
-   - `memex_memory_search` AND `memex_note_search` in parallel. If insufficient, retry with `expand_query=true`.
+   - **How-to queries first** ("how do I X?", "how do we deploy?", "what's the checklist for Y?"): call **`memex_procedural_search` ONLY** (see "Procedure recall" below). Do NOT also run `memex_memory_search` / `memex_note_search` for a how-to — the procedural plane is the only home for how-tos.
+   - **Otherwise** (facts, decisions, context): `memex_memory_search` AND `memex_note_search` in parallel. If insufficient, retry with `expand_query=true`.
    - If still nothing, try `memex_list_entities`. If all fail, say so — do not guess.
    - **Historical queries** ("how has X evolved?", "show me everything/hidden"): use `memex_get_unit_history(unit_id)` or `memex_memory_search(apply_pre_filter=False)`.
 
 3. **Present results**: summarize clearly, include source Note IDs.
 
-4. **Procedure recall**: for "how do I X?" queries, check the procedural plane first, then fall back to KV:
-   - **Procedural plane (preferred)**: `memex_procedural_search(query="...", kind="procedure")` for hybrid BM25+vector search; `memex_procedural_get_by_identity(kind="procedure", scope="global", verb="...", context="...")` for an exact anchor lookup. The plane carries `procedure` / `strategy` kinds under the identity anchor `(kind, scope, verb, context)`; strategies anchor on `(scope, verb)` with no context.
+4. **Procedure recall**: for "how do I X?" queries, the procedural plane is the ONLY source — there is no KV fallback for how-tos.
    - **Pinned cards**: the highest-value procedures are already in your SessionStart briefing (pin chain `global → project:<id> → app:claude-code`) — answer from there before searching.
-   - **KV fallback** (legacy): `memex_kv_list(namespaces=["global:procedure"])` for global procedures; `memex_kv_list(namespaces=["project:<id>:procedure"])` for project-scoped (the trailing `:` is appended server-side) → `memex_kv_get(key)` for active value.
+   - **Procedural search**: `memex_procedural_search(query="...", kind="procedure")` for hybrid BM25+vector search; `memex_procedural_get_by_identity(kind="procedure", scope="global", verb="...", context="...")` for an exact anchor lookup. The plane carries `procedure` / `strategy` kinds under the identity anchor `(kind, scope, verb, context)`; strategies anchor on `(scope, verb)` with no context.
 
 5. **Memory hygiene**: when asked about stale facts, call `memex_get_lint_flags(vault_id=...)`. Act autonomously on low-risk findings. When a finding has `rule_name='propose_contradiction_winner'`, call `memex_lint_apply_winner` after surfacing the proposal to the user.
 

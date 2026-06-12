@@ -167,9 +167,9 @@ MEMEX_KV_SEARCH_DESC = (
     'lookup use memex_kv_get.\n'
     '\n'
     'Required: query (str).\n'
-    'Optional: top_k (default 10), prefix (e.g. "global:procedure:" to scope to '
-    'procedural-observations — context adaptations, NOT how-to procedures; '
-    'those live in the plane via memex_procedural_search).'
+    'Optional: top_k (default 10), prefix to scope to a namespace (e.g. "user:", '
+    '"project:<id>:"). KV holds preferences/settings/conventions — NOT how-tos; '
+    'recall a how-to with memex_procedural_search.'
 )
 
 
@@ -217,7 +217,8 @@ MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESC = (
     '400 on shape mismatch (e.g. context supplied for a strategy — strategies '
     'anchor on scope+verb only).\n'
     '\n'
-    'Required: kind, scope, verb. Optional: context (procedures only).'
+    'Required: kind, scope, verb — plus context for a procedure '
+    '(REQUIRED for procedures, FORBIDDEN for strategies).'
 )
 
 
@@ -227,9 +228,7 @@ MEMEX_PROCEDURAL_SEARCH_DESC = (
     'done before (deploy, release, cut/ship a build, bump a version, rotate '
     'creds, migrate): hybrid '
     'BM25 + vector search (RRF-merged) across the procedural plane. Use '
-    'memex_procedural_get when you already have the UUID; use memex_kv_search '
-    'for context adaptations (procedural-observations), not the procedures '
-    'themselves.\n'
+    'memex_procedural_get when you already have the UUID.\n'
     '\n'
     'Required: query. Optional: kind, scope, status (default "published"), '
     'top_k (default 10), include_pin_chain + pin_contexts, bm25_weight.\n'

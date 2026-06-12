@@ -26,7 +26,7 @@ Outcome-signal lexicon for paired writes:
 - Success → "that worked", "that fixed it", "record it", "save this" → verb=`helpful`
 - Failure → "stop suggesting X", "didn't work", "we removed it", "that was wrong" → verb=`not_helpful`
 
-Capture cadence — ask: would I want these steps back next time? YES (you worked out HOW to do or fix something non-obvious) → `memex_case_submit` (trigger, actions, outcome, lesson) — a reusable procedure, NOT a note. A durable FACT / DECISION → `memex_add_note` (≤300 tokens); `memex_append_note(note_key, delta)` to extend. Preferences / conventions → `memex_kv_put` per the KV rules above. When unsure, prefer a note."""
+Capture cadence — ask: would I want these steps back next time? YES (you worked out HOW to do or fix something non-obvious) → `memex_case_submit` (trigger, actions, outcome, lesson) — a reusable procedure, NOT a note. A durable FACT / DECISION → `memex_add_note` (≤300 tokens); `memex_append_note(note_key, delta)` to extend. Preferences / conventions → `memex_kv_put` per the KV rules above. Tie-break: unsure it's worth saving → note/nothing; unsure case-vs-note → case."""
 
 
 CLAUDE_CODE_HARNESS = """## Claude Code-specific framing
@@ -35,20 +35,16 @@ CLAUDE_CODE_HARNESS = """## Claude Code-specific framing
 Before saving, ask: "next time I hit this, would I want these steps back?"
 - YES — you worked out HOW to do or fix something non-obvious (a debugging path, a workaround, a sequence that worked) → `memex_case_submit` (trigger, actions, outcome, lesson). Becomes a reusable procedure — not `memex_add_note`.
 - NO, but it's a durable FACT / DECISION someone would look up ("we chose X", a config value, an API shape) → `memex_add_note(background=true, author="claude-code")` (≤300 tokens, no per-file changelogs).
-- NO to both (it just worked, a typo, a one-off) → save NOTHING. When unsure, prefer a note; never case a one-off.
+- NO to both (it just worked, a typo, a one-off) → save NOTHING. Tie-break: unsure it's worth saving at all → note or nothing; unsure case-vs-note for something how-to-shaped → case.
 <example>vitest failed on a stale snapshot cache; clearing `.vitest-cache` fixed it → `memex_case_submit(trigger="vitest fails on stale snapshots", actions=["cleared .vitest-cache"], outcome="success", lesson="clear vitest's cache when tests fail for no code reason")`. "We chose Tailwind v4" → `memex_add_note`; "login UI worked first try" → nothing.</example>
 </critical_constraint>
 
 <critical_constraint name="write_routing">
-Route each write intent to the right tool; a miss is silent (no tool call) or wrong-namespace.
-- `"Remember about me: I prefer X"` → `memex_kv_put(key="user:<field>", value=X)`.
-- `"Remember in this repo / project: ..."` → `memex_kv_put(key="project:<id>:<field>", ...)`.
-- `"Remember whenever I use <app> ..."` → `memex_kv_put(key="app:<app-id>:<field>", ...)`. The `<app>` cue beats "I"/"my": Claude Code prefs go under `app:claude-code:*`, NOT `user:claude-code:*`.
-- `"Remember across projects / company-wide"` → `memex_kv_put(key="global:<field>", ...)`.
-- A reusable workflow or worked episode → `memex_case_submit` (see capture_on_surprise; NOT a KV `procedure:` key, NOT `memex_add_note`). A one-line CONVENTION ("always lint before commit") → `memex_kv_put(key="<scope>:<field>")`.
+Route each write intent; a miss is silent (no tool call) or wrong-namespace.
+- A preference / setting / convention ("I prefer X", "for this repo …", "always lint first") → `memex_kv_put` per the KV namespace rules above (scope by cue; the `<app>` cue beats "I"/"my" — `app:claude-code:*`, not `user:`).
+- A reusable workflow or worked episode → `memex_case_submit` (see capture_routing; never `memex_add_note`).
 - `"That worked / it's holding / that fixed it"` about an existing memory → `memex_record_outcome(units=[{unit_id, verb:"helpful", reason}])` on the search-returned units; do NOT add a "confirmed" note.
-- `"Save this insight / decision / lesson"` (durable knowledge, no surprise) → `memex_add_note(...)`.
-Local `Write`/`Edit` is for project code, never preferences. KV is for durable settings.
+Local `Write`/`Edit` is for project code, never preferences.
 </critical_constraint>
 
 <critical_constraint name="clarify_under_ambiguity">
@@ -82,8 +78,9 @@ Relationship questions (`"who does X work with?"`, `"what cooccurs with Y?"`, `"
 </critical_constraint>
 
 Slash commands:
-- `/remember [text]` — save to memory (uses `memex_add_note`).
-- `/recall [query]` — search memories (uses `memex_memory_search` + `memex_note_search`).
+- `/remember [text]` — save to memory (routes to `memex_kv_put` / `memex_case_submit` / `memex_add_note` by shape).
+- `/recall [query]` — search memory (how-to query → `memex_procedural_search`; else `memex_memory_search` + `memex_note_search`).
+- `/retro` — session postmortem; files reusable how-tos as cases.
 
 Prohibitions:
 - NEVER use `memex_recent_notes` for discovery.
@@ -93,7 +90,7 @@ Prohibitions:
 - NEVER present Memex data without inline numbered citations.
 
 <critical_constraint name="answer_from_briefing">
-The SessionStart briefing above already holds (per vault state): vault summary, themes, top entities, KV facts, pinned procedural cards, legacy KV procedures, and available vaults. Answer overview-shape queries ("what's in this vault", "which KV or procedures are loaded", "what's the vault about") FROM those sections. NEVER call `memex_get_vault_summary`, `memex_kv_list`, `memex_list_vaults`, or `memex_survey` to refresh data already rendered above. EXCEPT re-call when the asked-about section is absent (dropped under budget, no heading) or the user wants fresh data.
+The session briefing injected at SessionStart (the `# Session Briefing` block in context) already holds (per vault state): vault summary, themes, top entities, KV facts, pinned procedural cards, and available vaults. Answer overview-shape queries ("what's in this vault", "what's it about") FROM those sections. NEVER call `memex_get_vault_summary`, `memex_kv_list`, `memex_list_vaults`, or `memex_survey` to refresh data already rendered there. EXCEPT re-call when the asked-about section is absent (dropped under budget) or the user wants fresh data.
 </critical_constraint>"""
 
 

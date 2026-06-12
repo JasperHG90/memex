@@ -60,17 +60,17 @@ basename_part=$(basename "$file_path")
 
 # Gentle nudge at exactly 3 edits
 if [ "$file_edit_count" -eq 3 ]; then
-    spiral_nudge="You've edited \`${basename_part}\` 3 times this session. If you're chasing a bug or iterating on a tricky problem, consider capturing what you've learned via \`memex_add_note\` (background: true)."
+    spiral_nudge="You've edited \`${basename_part}\` 3 times this session. If you worked out HOW to fix something non-obvious here, file it as a case: \`memex_case_submit\` (trigger/actions/outcome/lesson) — a reusable procedure, not a note."
 fi
 
 # Structured prompt at 5+ edits (every 2nd edit)
 if [ "$file_edit_count" -ge 5 ] && [ $((file_edit_count % 2)) -eq 1 ]; then
-    spiral_nudge="You've edited \`${basename_part}\` ${file_edit_count} times this session — this suggests a complex problem worth documenting. Consider \`memex_add_note\` to capture: (1) what you were trying to achieve, (2) what approaches didn't work, (3) the solution that worked."
+    spiral_nudge="You've edited \`${basename_part}\` ${file_edit_count} times this session — a tricky problem worth capturing. If you worked out a fix worth having back next time, file a case: \`memex_case_submit\` with trigger (the symptom), actions (what you tried and what worked), outcome, and lesson. If it's only a durable fact/decision, \`memex_add_note\`."
     # Reference session note key if available
     SESSION_NOTE_KEY=""
     [ -f "$STATE_DIR/session_note_key" ] && SESSION_NOTE_KEY=$(cat "$STATE_DIR/session_note_key" 2>/dev/null || true)
     if [ -n "$SESSION_NOTE_KEY" ]; then
-        spiral_nudge="${spiral_nudge} Update the running session note via \`memex_add_note(note_key='${SESSION_NOTE_KEY}')\`."
+        spiral_nudge="${spiral_nudge} Append to the running session note via \`memex_append_note(note_key='${SESSION_NOTE_KEY}', delta='...')\`."
     fi
 fi
 

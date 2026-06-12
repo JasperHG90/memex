@@ -43,7 +43,10 @@ You have been invoked via the `/retro` slash command.
    server-side extraction runs asynchronously regardless. If you need to know
    the note exists before continuing (rare), pass `background: false` explicitly.
 
-4. **Extract durable learnings for CLAUDE.md.**
+4. **File reusable how-tos as cases.**
+   The retro payload — **What Worked**, **What Failed**, and **Errors Encountered (and how they were resolved)** — is case-shaped: a worked episode worth getting back next time. For each genuinely reusable how-to (a resolution procedure, a working approach), file it with ONE **`memex_case_submit`** (trigger / situation / actions / outcome / lesson). The system derives the procedure from the case — you do not author one. Pass `case_of=<procedure-id>` if `memex_procedural_get_by_identity` finds an existing procedure for it. Do NOT also duplicate the how-to into a note body — the reflection note from Step 3 already records the narrative; the case is the procedural write.
+
+5. **Extract durable learnings for CLAUDE.md.**
    Review the filled-in retro — specifically **What Worked**, **What Failed**,
    **Key Decisions**, and **Improvement Suggestions** — and extract learnings that are:
 
@@ -59,8 +62,8 @@ You have been invoked via the `/retro` slash command.
 
    Read the project CLAUDE.md (`CLAUDE.md` in the repo root) to check for overlap.
 
-5. **Propose CLAUDE.md additions to the user.**
-   If you identified durable learnings in Step 4, present them to the user as a
+6. **Propose CLAUDE.md additions to the user.**
+   If you identified durable learnings in Step 5, present them to the user as a
    numbered list. For each, show:
    - The proposed instruction text (concise, imperative style).
    - A one-line rationale from the session (why this matters).
@@ -72,7 +75,8 @@ You have been invoked via the `/retro` slash command.
 
    If no durable learnings were identified, skip this step and tell the user.
 
-6. **Append approved learnings to CLAUDE.md.**
+7. **Append approved learnings to CLAUDE.md.**
+   This is a user-sanctioned harness edit — the user explicitly approved each item in Step 6, which is what distinguishes it from the standing rule against writing preferences into local files unprompted. Only append items the user accepted.
    For approved items:
    - Read the current CLAUDE.md.
    - If a `## Learnings` section exists, append to it.
@@ -80,7 +84,7 @@ You have been invoked via the `/retro` slash command.
    - Format each learning as a bullet point: `- <instruction> — <rationale>`.
    - Do NOT modify any other part of CLAUDE.md.
 
-7. **Confirm to the user.**
+8. **Confirm to the user.**
    Briefly summarize:
    - The reflection note title (saved to Memex).
    - How many learnings were added to CLAUDE.md (if any), or that none were added.

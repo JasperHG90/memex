@@ -41,13 +41,12 @@ Memex stores four memory layers. Pick the right tool for the layer you need:
 | **Episodic** ("what happened, when") | Timestamped, source-attributed Notes — sessions, reflections, decisions | `memex_note_search` / `memex_recent_notes` / `memex_find_note` | "Find yesterday's reflection about the deploy regression" |
 | **Semantic** ("decontextualised facts") | MemoryUnits — short fact/observation/event statements extracted from notes | `memex_memory_search` / `memex_get_memory_units` / `memex_get_entity_mentions` | "What does v2 use for auth?" |
 | **Conceptual** ("synthesised mental models") | MentalModels — reflection output bundling per-entity observations with trend tracking (new/strengthening/stable/weakening/stale) | `memex_survey` / `memex_get_entities` (with `mental_models=True`) | "What do you know about Project X overall?" |
-| **Procedural-observations** ("adaptations to context") | KV entries under `<scope>:procedure:<verb>:<context-tag>` (scope = `global` / `user` / `project:<id>` / `app:<id>`) — observations about how to adapt your existing skills to a context, NOT the procedures themselves | `memex_kv_search` / `memex_kv_get` with `prefix='global:procedure:'` (or scoped equivalent) | "For this user, `deploy` means staging — never prod after 6pm" |
+| **Procedural** ("how to do X") | Procedures + strategies on the procedural plane — DERIVED from the cases you submit (there is no procedure-write tool) | `memex_procedural_search` (read); the only write is `memex_case_submit` (a worked episode) | "How do we cut a release?" |
 
-**Rule of thumb.** If unsure, default to `memex_memory_search` for content-shaped
-questions ("what about X?") and `memex_note_search` for source-shaped questions
-("show me the notes about X"). Agents own the verb (the executable how-to);
-Memex owns the adverb (observations about how to adapt it). Core / Cross-Context
-layers are informational only — not first-class in Memex today."""
+**Rule of thumb.** Content-shaped question ("what about X?") → `memex_memory_search`;
+source-shaped ("show me the notes about X") → `memex_note_search`; how-to ("how do
+we X?") → `memex_procedural_search`. Never look up a how-to in KV — there is no KV
+`procedure:` namespace; the procedural plane is its only home."""
 
 
 LAYER_ROUTING_PRIMER_FRAGMENT = (
@@ -59,12 +58,11 @@ LAYER_ROUTING_PRIMER_FRAGMENT = (
     '    memex_get_memory_units / memex_get_entity_mentions. Source: MemoryUnits.\n'
     '  - Conceptual ("synthesised mental models") → memex_survey /\n'
     '    memex_get_entities(mental_models=True). Source: MentalModels.\n'
-    '  - Procedural-observations ("adaptations to context") → memex_kv_search /\n'
-    "    memex_kv_get(prefix='global:procedure:'). Source: KV "
-    '`<scope>:procedure:<verb>:<tag>`.\n'
+    '  - Procedural ("how to do X") → memex_procedural_search (read); the only\n'
+    '    write is memex_case_submit. Source: procedural plane (derived from cases).\n'
     '\n'
-    'Default: memex_memory_search for content-shaped questions; memex_note_search\n'
-    'for source-shaped questions. The agent owns the verb; Memex owns the adverb.'
+    'Default: memex_memory_search for content, memex_note_search for source,\n'
+    'memex_procedural_search for how-to. There is no KV `procedure:` namespace.'
 )
 
 
@@ -187,7 +185,7 @@ Pick the namespace by scope cue (NOT grammatical person). `app:`/`project:`/`glo
 | "when I use <app>", "in Claude Code/Hermes" | `app:<app-id>:` |
 
 <critical_constraint name="kv_vs_procedural">
-KV holds ONE static binding — a PREFERENCE / SETTING / CONVENTION ("Python 3.12", "dark theme", "lint before commit"). A multi-step WORKFLOW you'd reuse and search ("how we deploy", "release steps") is NOT KV → procedural plane. NEVER write a how-to as a KV `procedure:` key (deprecated).
+KV holds ONE static binding — a PREFERENCE / SETTING / CONVENTION ("Python 3.12", "dark theme", "lint before commit"). A multi-step WORKFLOW you'd reuse and search ("how we deploy", "release steps") is NOT KV → procedural plane (`memex_procedural_search` to recall, `memex_case_submit` to write). No KV `procedure:` namespace — the plane is its only home.
 </critical_constraint>
 
 Ambiguous? ASK before writing.
@@ -220,7 +218,7 @@ There is NO procedure create/update tool — procedures and strategies are DERIV
 </critical_constraint>
 
 <critical_constraint name="close_the_loop">
-After you ENACT a procedure or finish a multi-step task — and ALWAYS when the user says "record", "log how it went", "make a record", "note the run" — you MUST end by calling `memex_case_submit` (set `outcome`; `case_of=<id>` if you followed a known procedure). Searching or doing the work is only HALF the loop; the case is what improves the next run. Never end the turn having searched/acted but not filed the case when a record was asked for.
+After you ENACT a known procedure (pass `case_of=<id>`), or whenever the user asks to "record" / "log how it went" / "make a record" of a run, you MUST end by calling `memex_case_submit` (set `outcome`) — searching/doing is only HALF the loop. For any OTHER task, apply the capture test: file a case only if you'd want these steps back next time; routine work gets nothing.
 </critical_constraint>
 
 Two derived kinds, identity anchor `(kind, scope, verb, context)`:
@@ -285,9 +283,10 @@ NEVER fabricate IDs — use only IDs returned by a tool.
 This surface is the tool protocol ONLY. Retrieval routing, storage model,
 resolution flow, KV namespace rules, virtual-unit warning, and citation
 discipline live in the system prompt: compose them from
-`memex_common.agent_surface.compose_universal()` (Python) or
-`memex agent-surface universal` (shell) when building a Memex-aware agent
-beyond raw MCP."""
+`memex_common.agent_surface.compose_universal()` — or `compose_with_procedural()`
+if you mount the procedural tools (`memex_procedural_*` / `memex_case_submit`) —
+(Python), or `memex agent-surface universal` / `... claude-code` (shell), when
+building a Memex-aware agent beyond raw MCP."""
 
 
 # ---------------------------------------------------------------------------
@@ -332,8 +331,10 @@ def compose_universal() -> str:
 def compose_with_procedural() -> str:
     """Tier 1b universal block + the procedural-plane doctrine.
 
-    Opt-in (not in ``compose_universal``) because the 8 ``memex_procedural_*``
-    tools are only mounted by clients that ship the procedural plane — including
+    Opt-in (not in ``compose_universal``) because the procedural tools
+    (``memex_procedural_search`` / ``_get`` / ``_get_by_identity`` +
+    ``memex_case_submit``) are only mounted by clients that ship the
+    procedural plane — including
     PROCEDURAL_PLANE in the default universal would burn ~1,750 chars on
     agents that have no procedural tools. Hermes briefing and the Claude
     Code SessionStart hook append PROCEDURAL_PLANE on top of

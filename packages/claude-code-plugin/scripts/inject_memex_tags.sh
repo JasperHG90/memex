@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Memex Claude Code Plugin — PreToolUse on mcp__memex__memex_add_note.
+# Memex Claude Code Plugin — PreToolUse on mcp__memex__memex_add_note and
+# mcp__memex__memex_case_submit.
 #
 # Augments every memex_add_note call with ambient capture metadata:
 #   - surface:claude-code           (always)
@@ -43,11 +44,12 @@ if ! command -v jq >/dev/null 2>&1; then
     exit 0
 fi
 
-# Only act on memex_add_note. CC matchers are usually exact, but defend
-# against config drift.
+# Act on memex_add_note and memex_case_submit (both carry a `tags` field that
+# should get the same ambient provenance). CC matchers are usually exact, but
+# defend against config drift.
 _tool_name=$(printf '%s' "$_payload" | jq -r '.tool_name // empty' 2>/dev/null || true)
 case "$_tool_name" in
-    mcp__memex__memex_add_note) ;;
+    mcp__memex__memex_add_note | mcp__memex__memex_case_submit) ;;
     *)
         echo "{}"
         exit 0
@@ -177,19 +179,27 @@ fi
 _updated_input=$(printf '%s' "$_payload" | jq \
     --argjson auto_tags "$_auto_tags_json" \
     --arg active_vault "$_active_vault" \
+    --arg tool "$_tool_name" \
     '
-    .tool_input as $ti
-    | ($ti.tags // []) as $existing_tags
-    | ($existing_tags + $auto_tags | unique) as $merged_tags
-    | (if ($ti.background == null) then true else $ti.background end) as $bg
-    | (if (($ti.vault_id // "") == "") and ($active_vault != "")
-        then $active_vault
-        else $ti.vault_id
-       end) as $vault
-    | $ti
-        | .tags = $merged_tags
-        | .background = $bg
-        | (if $vault != null and $vault != "" then .vault_id = $vault else . end)
+    if $tool == "mcp__memex__memex_case_submit" then
+        # CaseSubmit forbids extra fields and nests under `payload`: inject
+        # tags ONLY (no background/vault_id — the case vault is implicit).
+        .tool_input
+        | .payload.tags = (((.payload.tags // []) + $auto_tags) | unique)
+    else
+        .tool_input as $ti
+        | ($ti.tags // []) as $existing_tags
+        | ($existing_tags + $auto_tags | unique) as $merged_tags
+        | (if ($ti.background == null) then true else $ti.background end) as $bg
+        | (if (($ti.vault_id // "") == "") and ($active_vault != "")
+            then $active_vault
+            else $ti.vault_id
+           end) as $vault
+        | $ti
+            | .tags = $merged_tags
+            | .background = $bg
+            | (if $vault != null and $vault != "" then .vault_id = $vault else . end)
+    end
     ')
 
 if [ -z "$_updated_input" ] || [ "$_updated_input" = "null" ]; then

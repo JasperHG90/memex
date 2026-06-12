@@ -175,7 +175,7 @@ fi
 session_note_instruction="
 ### Session note
 
-This session's note key is \`${SESSION_NOTE_KEY}\`. The plugin auto-captures the full session transcript to this note on exit, and appends pre-compaction context here. When you complete a meaningful unit of work, you can also update it explicitly via \`memex_add_note(note_key=\"${SESSION_NOTE_KEY}\", background=true)\` with a concise summary of what was done and why."
+This session's note key is \`${SESSION_NOTE_KEY}\`. The plugin auto-captures the full session transcript to this note on exit, and appends pre-compaction context here. When you complete a meaningful unit of work, you can also extend it explicitly via \`memex_append_note(note_key=\"${SESSION_NOTE_KEY}\", delta=\"...\", background=true)\` — append a concise summary of what was done and why (don't re-send the whole body)."
 
 auto_tag_instruction="
 ### Auto-injected metadata
