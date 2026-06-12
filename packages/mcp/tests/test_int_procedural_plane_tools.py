@@ -142,9 +142,7 @@ async def test_mcp_get_by_identity_uses_facade_lookup(mock_api, mock_config, mcp
     # Set up the facade mock. AsyncMock's auto-attr returns another
     # AsyncMock by default; we override get_by_identity.
 
-    facade = AsyncMock()
-    facade.get_by_identity = AsyncMock(return_value=expected_entry)
-    mock_api.procedural = facade
+    mock_api.procedural_get_by_identity = AsyncMock(return_value=expected_entry)
 
     result = await mcp_client.call_tool(
         'memex_procedural_get_by_identity',
@@ -156,8 +154,8 @@ async def test_mcp_get_by_identity_uses_facade_lookup(mock_api, mock_config, mcp
         },
     )
 
-    facade.get_by_identity.assert_awaited_once()
-    call = facade.get_by_identity.await_args
+    mock_api.procedural_get_by_identity.assert_awaited_once()
+    call = mock_api.procedural_get_by_identity.await_args
     assert call is not None
     kwargs = call.kwargs
     assert kwargs['kind'] == 'procedure'
@@ -165,7 +163,7 @@ async def test_mcp_get_by_identity_uses_facade_lookup(mock_api, mock_config, mcp
     assert kwargs['verb'] == 'rotate'
     assert kwargs['context'] == 'creds'
     # search MUST NOT be called — that was the bug.
-    facade.search.assert_not_called()
+    mock_api.procedural_search.assert_not_called()
 
     # The returned MCP shape carries the entry's id, title, etc.
     parsed = result.structured_content or {}
@@ -182,9 +180,7 @@ async def test_mcp_get_by_identity_returns_null_on_miss(mock_api, mock_config, m
     "did we already learn this?" probe. The MCP tool must surface
     ``null`` to the agent (not an empty hit, not a 404 string)."""
 
-    facade = AsyncMock()
-    facade.get_by_identity = AsyncMock(return_value=None)
-    mock_api.procedural = facade
+    mock_api.procedural_get_by_identity = AsyncMock(return_value=None)
 
     await mcp_client.call_tool(
         'memex_procedural_get_by_identity',
@@ -196,12 +192,12 @@ async def test_mcp_get_by_identity_returns_null_on_miss(mock_api, mock_config, m
         },
     )
 
-    facade.get_by_identity.assert_awaited_once()
-    facade.search.assert_not_called()
+    mock_api.procedural_get_by_identity.assert_awaited_once()
+    mock_api.procedural_search.assert_not_called()
     # The tool's return is `McpProceduralEntry | None`. A null
     # result surfaces as empty content. Assert the tool didn't crash
     # and didn't fall through to a search call.
-    assert not facade.search.await_count
+    assert not mock_api.procedural_search.await_count
 
 
 # ---------------------------------------------------------------------------
@@ -241,9 +237,7 @@ async def test_mcp_search_projects_entry_attributes(mock_api, mock_config, mcp_c
     ]
     response = _make_search_response(entries=entries)
 
-    facade = AsyncMock()
-    facade.search = AsyncMock(return_value=response)
-    mock_api.procedural = facade
+    mock_api.procedural_search = AsyncMock(return_value=response)
 
     result = await mcp_client.call_tool(
         'memex_procedural_search',
@@ -252,7 +246,7 @@ async def test_mcp_search_projects_entry_attributes(mock_api, mock_config, mcp_c
         },
     )
 
-    facade.search.assert_awaited_once()
+    mock_api.procedural_search.assert_awaited_once()
     # The tool returned 2 hits. The DTO projection must NOT have
     # crashed on AttributeError (the previous bug raised on the
     # first hit). A clean result means the projection went through
@@ -286,8 +280,7 @@ async def test_mcp_case_submit_projects_result(mock_api, mock_config, mcp_client
     from memex_common.procedural_schemas import CaseAssignment, CaseSubmitResult
 
     note_id, vault_id, entry_id = uuid4(), uuid4(), uuid4()
-    cases = AsyncMock()
-    cases.submit = AsyncMock(
+    mock_api.case_submit = AsyncMock(
         return_value=CaseSubmitResult(
             note_id=note_id,
             vault_id=vault_id,
@@ -299,7 +292,6 @@ async def test_mcp_case_submit_projects_result(mock_api, mock_config, mcp_client
             ),
         )
     )
-    mock_api.cases = cases
 
     result = await mcp_client.call_tool(
         'memex_case_submit',
@@ -313,8 +305,8 @@ async def test_mcp_case_submit_projects_result(mock_api, mock_config, mcp_client
         },
     )
 
-    cases.submit.assert_awaited_once()
-    await_args = cases.submit.await_args
+    mock_api.case_submit.assert_awaited_once()
+    await_args = mock_api.case_submit.await_args
     assert await_args is not None
     submitted = await_args.args[0]
     assert submitted.title == 'Rotated the API creds'
@@ -336,8 +328,7 @@ async def test_mcp_case_submit_surfaces_escalation(mock_api, mock_config, mcp_cl
     from memex_common.procedural_schemas import CaseAssignment, CaseSubmitResult
 
     finding_id = uuid4()
-    cases = AsyncMock()
-    cases.submit = AsyncMock(
+    mock_api.case_submit = AsyncMock(
         return_value=CaseSubmitResult(
             note_id=uuid4(),
             vault_id=uuid4(),
@@ -348,7 +339,6 @@ async def test_mcp_case_submit_surfaces_escalation(mock_api, mock_config, mcp_cl
             ),
         )
     )
-    mock_api.cases = cases
 
     result = await mcp_client.call_tool(
         'memex_case_submit',

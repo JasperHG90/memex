@@ -4571,7 +4571,7 @@ async def memex_procedural_get(
         resolved_vault: UUID | None = None
         if vault_id is not None:
             resolved_vault = await _resolve_vault_id(api, vault_id)
-        dto = await api.procedural.get(entry_uuid, vault_id=resolved_vault)
+        dto = await api.procedural_get(entry_uuid, vault_id=resolved_vault)
         return _dto_to_mcp_entry(dto)
     except ToolError:
         raise
@@ -4638,7 +4638,7 @@ async def memex_procedural_get_by_identity(
         # ``MemexAPIProceduralFacade.get_by_identity``) so the LLM hot
         # path is a single partial-index lookup, not a search +
         # post-filter round-trip.
-        dto = await api.procedural.get_by_identity(
+        dto = await api.procedural_get_by_identity(
             kind=kind,
             scope=scope,
             verb=verb,
@@ -4669,7 +4669,7 @@ async def memex_procedural_search(
     """Hybrid BM25 + vector search with RRF aggregation."""
     try:
         api = get_api(ctx)
-        response = await api.procedural.search(request)
+        response = await api.procedural_search(request)
         return McpProceduralSearchResult(
             hits=[
                 McpProceduralSearchHit(
@@ -4725,7 +4725,7 @@ async def memex_case_submit(
     """
     try:
         api = get_api(ctx)
-        result = await api.cases.submit(payload)
+        result = await api.case_submit(payload)
         return McpCaseSubmitResult(
             note_id=result.note_id,
             vault_id=result.vault_id,
