@@ -3,8 +3,8 @@
   "archived_at": null,
   "assets": [],
   "content_hash": "510d5b34217851be11ad2696c322e111",
-  "created_at": "2026-05-18T07:32:36.200523+00:00",
-  "description": "TechCo Global Engineering Department Operations",
+  "created_at": "2026-06-12T19:47:40.724823+00:00",
+  "description": "TechCo Global Engineering Department Structure and Initiatives",
   "doc_metadata": {
     "retain_params": {
       "assets": [],
@@ -26,14 +26,21 @@
     "tags": [
       "department",
       "engineering",
-      "techco"
+      "techco",
+      "engineering management",
+      "devops",
+      "ci/cd",
+      "kubernetes",
+      "argocd",
+      "tekton",
+      "software development"
     ]
   },
   "filestore_path": null,
   "id": "0e0462e7-9894-c58a-e177-94ea4e7c72d5",
   "page_index": {
     "metadata": {
-      "description": "TechCo Global Engineering Department Operations",
+      "description": "TechCo Global Engineering Department Structure and Initiatives",
       "publish_date": "2026-05-09 00:00:00+00:00",
       "source_uri": null,
       "tags": [
@@ -41,20 +48,23 @@
         "engineering",
         "techco",
         "engineering management",
+        "devops",
         "ci/cd",
         "kubernetes",
-        "devops",
-        "software development",
-        "cloud native"
+        "argocd",
+        "tekton",
+        "software development"
       ],
       "title": "Engineering Department Overview",
       "total_tokens": 92
     },
     "toc": [
       {
+        "assets": [],
         "block_id": "89c5e352e4bde946dc608d80ec6e8139",
         "children": [
           {
+            "assets": [],
             "block_id": "89c5e352e4bde946dc608d80ec6e8139",
             "children": [],
             "end_index": 268,
@@ -65,15 +75,16 @@
             "subtree_tokens": 20,
             "summary": {
               "how": "By integrating ArgoCD and Tekton pipelines",
-              "what": "Building a new CI/CD platform",
-              "when": "Current initiative",
-              "where": "Internal software development environment",
-              "who": "Engineering/DevOps team"
+              "what": "Development of a new CI/CD platform",
+              "when": "Currently",
+              "where": "Internal development environment",
+              "who": "The engineering/DevOps team"
             },
             "title": "Current Initiative",
             "token_estimate": 20
           },
           {
+            "assets": [],
             "block_id": "89c5e352e4bde946dc608d80ec6e8139",
             "children": [],
             "end_index": 471,
@@ -83,11 +94,11 @@
             "start_index": 268,
             "subtree_tokens": 39,
             "summary": {
-              "how": "By reporting to Ruby Martinez, the department head",
-              "what": "Management and execution of all engineering-related activities",
-              "when": "Current",
-              "where": "TechCo Global",
-              "who": "Engineering department (45 team members) and Ruby Martinez"
+              "how": "By conducting all engineering-related activities under the leadership of the department head",
+              "what": "Departmental responsibilities and reporting structure",
+              "when": "Currently",
+              "where": "TechCo Global Engineering department",
+              "who": "Ruby Martinez and a team of 45 engineers"
             },
             "title": "Responsibilities",
             "token_estimate": 39
@@ -100,10 +111,10 @@
         "start_index": 34,
         "subtree_tokens": 92,
         "summary": {
-          "how": "By utilizing a tech stack consisting of Python, Go, and Kubernetes.",
-          "what": "Overview of the Engineering Department's leadership, staffing, and tools.",
+          "how": "Utilizing core technologies including Python, Go, and Kubernetes.",
+          "what": "Overview of department structure, staffing, and primary technology stack.",
           "when": null,
-          "where": "TechCo Global",
+          "where": "Engineering Department at TechCo Global.",
           "who": "Ruby Martinez (Department Head) and 45 employees."
         },
         "title": "Engineering Department — TechCo Global",
@@ -112,11 +123,11 @@
     ]
   },
   "publish_date": "2026-05-09T00:00:00+00:00",
-  "session_id": "51e6f086-c633-40bb-9ade-de38e3d0b4c0",
+  "session_id": "a9b634b7-361d-4d47-8868-a6a96f3c2ff3",
   "status": "active",
   "summary_version_incorporated": null,
   "superseded_by": null,
   "title": "Engineering Department Overview",
-  "updated_at": "2026-05-18T07:32:36.200523+00:00",
-  "vault_id": "22c11c49-1ccc-43a4-830c-dca2472f519c"
+  "updated_at": "2026-06-12T19:47:40.724823+00:00",
+  "vault_id": "34893ad7-9844-4786-bb90-912fac9b0d11"
 }

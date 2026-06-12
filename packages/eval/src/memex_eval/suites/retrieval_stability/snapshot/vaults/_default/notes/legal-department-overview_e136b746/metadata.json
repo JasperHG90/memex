@@ -3,8 +3,8 @@
   "archived_at": null,
   "assets": [],
   "content_hash": "2b3123856233f98a867c8f59b6408cd9",
-  "created_at": "2026-05-18T07:32:39.448967+00:00",
-  "description": "TechCo Global Legal Operations and Compliance Strategy",
+  "created_at": "2026-06-12T19:47:46.381752+00:00",
+  "description": "Legal Department Operations and Compliance Initiatives at TechCo Global",
   "doc_metadata": {
     "retain_params": {
       "assets": [],
@@ -26,36 +26,43 @@
     "tags": [
       "department",
       "legal",
-      "techco"
+      "techco",
+      "legal operations",
+      "data privacy",
+      "compliance",
+      "gdpr",
+      "ccpa",
+      "corporate governance"
     ]
   },
   "filestore_path": null,
   "id": "e136b746-3137-050a-7e23-e6774dbe0070",
   "page_index": {
     "metadata": {
-      "description": "TechCo Global Legal Operations and Compliance Strategy",
-      "publish_date": "2026-05-18 07:32:39.448419+00:00",
+      "description": "Legal Department Operations and Compliance Initiatives at TechCo Global",
+      "publish_date": "2026-06-12 19:47:46.380692+00:00",
       "source_uri": null,
       "tags": [
         "department",
         "legal",
         "techco",
-        "legal department",
+        "legal operations",
+        "data privacy",
         "compliance",
         "gdpr",
         "ccpa",
-        "regulatory strategy",
-        "legal tech",
-        "corporate structure"
+        "corporate governance"
       ],
       "title": "Legal Department Overview",
       "total_tokens": 95
     },
     "toc": [
       {
+        "assets": [],
         "block_id": "feccf36ca17934e0cd51ecd1df1cc58d",
         "children": [
           {
+            "assets": [],
             "block_id": "feccf36ca17934e0cd51ecd1df1cc58d",
             "children": [],
             "end_index": 245,
@@ -66,15 +73,16 @@
             "subtree_tokens": 18,
             "summary": {
               "how": "By drafting compliance frameworks for GDPR and CCPA.",
-              "what": "Preparation for regulatory compliance and regional expansion.",
-              "when": "Currently / during the initiative phase.",
-              "where": "European Union and California.",
-              "who": "The organization's legal/compliance team."
+              "what": "Development of data privacy compliance frameworks.",
+              "when": "Current initiative",
+              "where": "European Union and California",
+              "who": "The organization's legal or compliance team"
             },
             "title": "Current Initiative",
             "token_estimate": 18
           },
           {
+            "assets": [],
             "block_id": "feccf36ca17934e0cd51ecd1df1cc58d",
             "children": [],
             "end_index": 434,
@@ -84,11 +92,11 @@
             "start_index": 245,
             "subtree_tokens": 39,
             "summary": {
-              "how": "By conducting all legal-related activities and reporting to the department head.",
-              "what": "Legal department responsibilities and reporting structure.",
-              "when": "Currently.",
-              "where": "TechCo Global.",
-              "who": "Legal department team of 6 and Catherine Wu."
+              "how": "By reporting directly to the head of the department,",
+              "what": "management of all legal-related activities,",
+              "when": "currently,",
+              "where": "at TechCo Global,",
+              "who": "Catherine Wu and her team of 6 in the Legal department."
             },
             "title": "Responsibilities",
             "token_estimate": 39
@@ -102,22 +110,22 @@
         "subtree_tokens": 95,
         "summary": {
           "how": "By utilizing core tools including DocuSign, Ironclad, and OneTrust.",
-          "what": "Overview of the department's structure, headcount, and software tools.",
+          "what": "Overview of the Legal Department's structure and resources.",
           "when": null,
-          "where": "TechCo Global Legal Department.",
-          "who": "Department Head Catherine Wu and 6 employees."
+          "where": "TechCo Global",
+          "who": "Department Head Catherine Wu and a team of 6 employees."
         },
         "title": "Legal Department — TechCo Global",
         "token_estimate": 38
       }
     ]
   },
-  "publish_date": "2026-05-18T07:32:39.448419+00:00",
-  "session_id": "9441c51e-a42d-4aea-999f-e9b4b17d5213",
+  "publish_date": "2026-06-12T19:47:46.380692+00:00",
+  "session_id": "ec5aa37e-0617-4a16-94f0-736069e55bdc",
   "status": "active",
   "summary_version_incorporated": null,
   "superseded_by": null,
   "title": "Legal Department Overview",
-  "updated_at": "2026-05-18T07:32:39.448967+00:00",
-  "vault_id": "22c11c49-1ccc-43a4-830c-dca2472f519c"
+  "updated_at": "2026-06-12T19:47:46.381752+00:00",
+  "vault_id": "34893ad7-9844-4786-bb90-912fac9b0d11"
 }

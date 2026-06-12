@@ -3,8 +3,8 @@
   "archived_at": null,
   "assets": [],
   "content_hash": "539170beb10d69f66b11ef5c0c0c328c",
-  "created_at": "2026-05-18T07:32:37.373036+00:00",
-  "description": "TechCo Global Finance Department Operations and Billing Migration",
+  "created_at": "2026-06-12T19:47:41.800249+00:00",
+  "description": "Finance Department Operations and Billing Migration",
   "doc_metadata": {
     "retain_params": {
       "assets": [],
@@ -26,34 +26,43 @@
     "tags": [
       "department",
       "finance",
-      "techco"
+      "techco",
+      "corporate finance",
+      "billing migration",
+      "usage-based pricing",
+      "fintech stack",
+      "organizational structure",
+      "saas operations"
     ]
   },
   "filestore_path": null,
   "id": "b1c7227f-77af-913a-591b-9e04b16847a9",
   "page_index": {
     "metadata": {
-      "description": "TechCo Global Finance Department Operations and Billing Migration",
-      "publish_date": "2026-05-18 07:32:37.372425+00:00",
+      "description": "Finance Department Operations and Billing Migration",
+      "publish_date": "2026-06-12 19:47:41.799486+00:00",
       "source_uri": null,
       "tags": [
         "department",
         "finance",
         "techco",
-        "finance department",
+        "corporate finance",
         "billing migration",
-        "tech stack",
-        "financial management",
-        "corporate leadership"
+        "usage-based pricing",
+        "fintech stack",
+        "organizational structure",
+        "saas operations"
       ],
       "title": "Finance Department Overview",
       "total_tokens": 94
     },
     "toc": [
       {
+        "assets": [],
         "block_id": "bea33514d4b4a277aa38f13827523615",
         "children": [
           {
+            "assets": [],
             "block_id": "bea33514d4b4a277aa38f13827523615",
             "children": [],
             "end_index": 243,
@@ -63,16 +72,17 @@
             "start_index": 145,
             "subtree_tokens": 18,
             "summary": {
-              "how": "Transitioning from annual to monthly cycles and implementing usage-based pricing",
-              "what": "Billing system migration",
-              "when": null,
-              "where": null,
-              "who": "The organization"
+              "how": "By implementing usage-based pricing models.",
+              "what": "Migration of billing cycles from annual to monthly payments.",
+              "when": "Currently",
+              "where": "Organization-wide billing systems",
+              "who": "The organization's billing department"
             },
             "title": "Current Initiative",
             "token_estimate": 18
           },
           {
+            "assets": [],
             "block_id": "bea33514d4b4a277aa38f13827523615",
             "children": [],
             "end_index": 440,
@@ -82,11 +92,11 @@
             "start_index": 243,
             "subtree_tokens": 40,
             "summary": {
-              "how": "By reporting to Roberto Escobar with a team of 10 members.",
-              "what": "Management of all finance-related activities.",
+              "how": "By having a team of 10 report to the department head.",
+              "what": "Responsibility for all finance-related activities.",
               "when": "Currently.",
               "where": "TechCo Global Finance department.",
-              "who": "The Finance department and Roberto Escobar."
+              "who": "The Finance department team and Roberto Escobar."
             },
             "title": "Responsibilities",
             "token_estimate": 40
@@ -99,8 +109,8 @@
         "start_index": 0,
         "subtree_tokens": 94,
         "summary": {
-          "how": "By utilizing a core tech stack including NetSuite, Stripe, and Looker.",
-          "what": "Overview of the Finance Department's leadership, staffing, and tools.",
+          "how": "By utilizing core tools including NetSuite, Stripe, and Looker.",
+          "what": "Overview of the Finance Department, including its size and operational tools.",
           "when": null,
           "where": "TechCo Global",
           "who": "Roberto Escobar (Department Head) and a team of 10 employees."
@@ -110,12 +120,12 @@
       }
     ]
   },
-  "publish_date": "2026-05-18T07:32:37.372425+00:00",
-  "session_id": "e331c357-fcbe-429b-90b4-416042a4862b",
+  "publish_date": "2026-06-12T19:47:41.799486+00:00",
+  "session_id": "011f4c64-6e06-48e7-a9d7-db5b04125350",
   "status": "active",
   "summary_version_incorporated": null,
   "superseded_by": null,
   "title": "Finance Department Overview",
-  "updated_at": "2026-05-18T07:32:37.373036+00:00",
-  "vault_id": "22c11c49-1ccc-43a4-830c-dca2472f519c"
+  "updated_at": "2026-06-12T19:47:41.800249+00:00",
+  "vault_id": "34893ad7-9844-4786-bb90-912fac9b0d11"
 }

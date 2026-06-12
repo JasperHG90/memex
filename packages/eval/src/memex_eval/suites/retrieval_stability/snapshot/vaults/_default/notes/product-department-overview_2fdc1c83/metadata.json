@@ -3,8 +3,8 @@
   "archived_at": null,
   "assets": [],
   "content_hash": "4700840668e58eb5d9ee4db204efe830",
-  "created_at": "2026-05-18T07:32:44.031142+00:00",
-  "description": "Product Department Operations and Onboarding Initiative",
+  "created_at": "2026-06-12T19:47:48.610054+00:00",
+  "description": "TechCo Global Product Department Operations and Onboarding Initiative",
   "doc_metadata": {
     "retain_params": {
       "assets": [],
@@ -26,15 +26,21 @@
     "tags": [
       "department",
       "product",
-      "techco"
+      "techco",
+      "product management",
+      "user onboarding",
+      "churn reduction",
+      "retention strategy",
+      "techco global",
+      "team structure"
     ]
   },
   "filestore_path": null,
   "id": "2fdc1c83-9933-87e9-fce0-19ce8fa79910",
   "page_index": {
     "metadata": {
-      "description": "Product Department Operations and Onboarding Initiative",
-      "publish_date": "2026-05-18 07:32:44.030387+00:00",
+      "description": "TechCo Global Product Department Operations and Onboarding Initiative",
+      "publish_date": "2026-06-12 19:47:48.609230+00:00",
       "source_uri": null,
       "tags": [
         "department",
@@ -43,8 +49,8 @@
         "product management",
         "user onboarding",
         "churn reduction",
+        "retention strategy",
         "techco global",
-        "ux design",
         "team structure"
       ],
       "title": "Product Department Overview",
@@ -52,9 +58,11 @@
     },
     "toc": [
       {
+        "assets": [],
         "block_id": "c3fa39474c3d6b80e0dbca7febdd9f11",
         "children": [
           {
+            "assets": [],
             "block_id": "c3fa39474c3d6b80e0dbca7febdd9f11",
             "children": [],
             "end_index": 231,
@@ -64,16 +72,17 @@
             "start_index": 140,
             "subtree_tokens": 20,
             "summary": {
-              "how": "By improving the initial user experience to encourage retention",
-              "what": "Redesigning the onboarding flow to reduce churn",
-              "when": "During the first week of user signup",
-              "where": "The application's onboarding stage",
-              "who": "The product/development team and new users"
+              "how": "By redesigning the onboarding flow to improve user retention.",
+              "what": "Initiative to reduce first-week churn by 20%.",
+              "when": "Current period",
+              "where": "User onboarding process",
+              "who": "Product/Development team"
             },
             "title": "Current Initiative",
             "token_estimate": 20
           },
           {
+            "assets": [],
             "block_id": "c3fa39474c3d6b80e0dbca7febdd9f11",
             "children": [],
             "end_index": 426,
@@ -83,11 +92,11 @@
             "start_index": 231,
             "subtree_tokens": 40,
             "summary": {
-              "how": "Reporting to the head of the department",
-              "what": "Responsibility for all product-related activities",
-              "when": "Current",
-              "where": "TechCo Global",
-              "who": "The Product department (15 members) and Kevin O'Brien"
+              "how": "By reporting to the current head of the department,",
+              "what": "management of all product-related activities,",
+              "when": "currently,",
+              "where": "within the Product department at TechCo Global,",
+              "who": "Kevin O'Brien and a team of 15 employees."
             },
             "title": "Responsibilities",
             "token_estimate": 40
@@ -101,7 +110,7 @@
         "subtree_tokens": 97,
         "summary": {
           "how": "Utilizing core tools including Jira, Amplitude, and Miro.",
-          "what": "Overview of the Product Department's structure and resources.",
+          "what": "Overview of the Product Department's structure and tooling.",
           "when": null,
           "where": "TechCo Global",
           "who": "Kevin O'Brien (Department Head) and a team of 15 employees."
@@ -111,12 +120,12 @@
       }
     ]
   },
-  "publish_date": "2026-05-18T07:32:44.030387+00:00",
-  "session_id": "bb11b5e1-b912-41c3-a3b8-dbd82913ea22",
+  "publish_date": "2026-06-12T19:47:48.609230+00:00",
+  "session_id": "7ce73fe8-4d18-4d76-9bc5-ad1ca61e90aa",
   "status": "active",
   "summary_version_incorporated": null,
   "superseded_by": null,
   "title": "Product Department Overview",
-  "updated_at": "2026-05-18T07:32:44.031142+00:00",
-  "vault_id": "22c11c49-1ccc-43a4-830c-dca2472f519c"
+  "updated_at": "2026-06-12T19:47:48.610054+00:00",
+  "vault_id": "34893ad7-9844-4786-bb90-912fac9b0d11"
 }

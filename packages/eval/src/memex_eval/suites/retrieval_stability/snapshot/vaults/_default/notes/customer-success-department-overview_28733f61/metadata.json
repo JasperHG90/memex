@@ -3,8 +3,8 @@
   "archived_at": null,
   "assets": [],
   "content_hash": "d0e1b97f2cb5c914eea817b381aab5b0",
-  "created_at": "2026-05-18T07:32:30.507503+00:00",
-  "description": "Operational Overview and Strategic Initiatives of TechCo Global's Customer Success Department",
+  "created_at": "2026-06-12T19:47:35.961025+00:00",
+  "description": "TechCo Global Customer Success Operations and Initiatives",
   "doc_metadata": {
     "retain_params": {
       "assets": [],
@@ -26,35 +26,43 @@
     "tags": [
       "department",
       "customer-success",
-      "techco"
+      "techco",
+      "customer success",
+      "techco global",
+      "departmental structure",
+      "churn prevention",
+      "health monitoring",
+      "software stack"
     ]
   },
   "filestore_path": null,
   "id": "28733f61-bb0d-6d6f-c380-02116c114929",
   "page_index": {
     "metadata": {
-      "description": "Operational Overview and Strategic Initiatives of TechCo Global's Customer Success Department",
-      "publish_date": "2026-05-18 07:32:30.506616+00:00",
+      "description": "TechCo Global Customer Success Operations and Initiatives",
+      "publish_date": "2026-06-12 19:47:35.960108+00:00",
       "source_uri": null,
       "tags": [
         "department",
         "customer-success",
         "techco",
         "customer success",
-        "organizational structure",
+        "techco global",
+        "departmental structure",
         "churn prevention",
-        "health scoring",
-        "saas operations",
-        "departmental strategy"
+        "health monitoring",
+        "software stack"
       ],
       "title": "Customer Success Department Overview",
       "total_tokens": 96
     },
     "toc": [
       {
+        "assets": [],
         "block_id": "2c571d5e57f2878402e34279a4391e26",
         "children": [
           {
+            "assets": [],
             "block_id": "2c571d5e57f2878402e34279a4391e26",
             "children": [],
             "end_index": 250,
@@ -64,16 +72,17 @@
             "start_index": 153,
             "subtree_tokens": 16,
             "summary": {
-              "how": "By integrating churn alerts into a proactive monitoring framework.",
-              "what": "Implementation of a customer health score system.",
-              "when": "Current initiative",
-              "where": "Customer management department",
-              "who": "The organization/CS team"
+              "how": "By implementing a health score system with automated churn alerts.",
+              "what": "Development of a proactive customer health monitoring initiative.",
+              "when": "Current / Ongoing",
+              "where": "Internal business operations",
+              "who": "The organization / Customer Success team"
             },
             "title": "Current Initiative",
             "token_estimate": 16
           },
           {
+            "assets": [],
             "block_id": "2c571d5e57f2878402e34279a4391e26",
             "children": [],
             "end_index": 463,
@@ -83,11 +92,11 @@
             "start_index": 250,
             "subtree_tokens": 42,
             "summary": {
-              "how": "By reporting to the department head and executing success-related activities.",
-              "what": "The management and execution of customer success responsibilities.",
-              "when": "Currently.",
-              "where": "TechCo Global's Customer Success department.",
-              "who": "Aisha Johnson and a team of 28 employees."
+              "how": "By managing all customer success-related activities",
+              "what": "Departmental responsibilities and reporting structure",
+              "when": "Current",
+              "where": "TechCo Global",
+              "who": "Aisha Johnson and a team of 28 employees"
             },
             "title": "Responsibilities",
             "token_estimate": 42
@@ -100,9 +109,9 @@
         "start_index": 0,
         "subtree_tokens": 96,
         "summary": {
-          "how": "Utilizing Zendesk, Gainsight, and Slack.",
-          "what": "Departmental overview and organizational structure.",
-          "when": null,
+          "how": "Utilizing core tools including Zendesk, Gainsight, and Slack.",
+          "what": "Departmental overview and administration.",
+          "when": "Current",
           "where": "TechCo Global",
           "who": "Aisha Johnson and 28 employees."
         },
@@ -111,12 +120,12 @@
       }
     ]
   },
-  "publish_date": "2026-05-18T07:32:30.506616+00:00",
-  "session_id": "a8f72470-12b9-4416-ac8d-6c28e563b3d4",
+  "publish_date": "2026-06-12T19:47:35.960108+00:00",
+  "session_id": "e0a1e892-a17d-41a4-959e-d70be2178364",
   "status": "active",
   "summary_version_incorporated": null,
   "superseded_by": null,
   "title": "Customer Success Department Overview",
-  "updated_at": "2026-05-18T07:32:30.507503+00:00",
-  "vault_id": "22c11c49-1ccc-43a4-830c-dca2472f519c"
+  "updated_at": "2026-06-12T19:47:35.961025+00:00",
+  "vault_id": "34893ad7-9844-4786-bb90-912fac9b0d11"
 }

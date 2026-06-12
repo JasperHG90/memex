@@ -3,8 +3,8 @@
   "archived_at": null,
   "assets": [],
   "content_hash": "1dacab471e8829915490f9f68fd45b2c",
-  "created_at": "2026-05-18T07:32:40.416551+00:00",
-  "description": "TechCo Global Marketing Department Operations and Brand Strategy",
+  "created_at": "2026-06-12T19:47:47.660273+00:00",
+  "description": "TechCo Global Marketing Department Overview and Brand Initiative",
   "doc_metadata": {
     "retain_params": {
       "assets": [],
@@ -26,34 +26,39 @@
     "tags": [
       "department",
       "marketing",
-      "techco"
+      "techco",
+      "brand identity",
+      "organizational structure",
+      "international markets",
+      "campaign management"
     ]
   },
   "filestore_path": null,
   "id": "2a740399-8758-e7e8-67ba-fe08ce5a57de",
   "page_index": {
     "metadata": {
-      "description": "TechCo Global Marketing Department Operations and Brand Strategy",
-      "publish_date": "2026-05-18 07:32:40.415499+00:00",
+      "description": "TechCo Global Marketing Department Overview and Brand Initiative",
+      "publish_date": "2026-06-12 19:47:47.659521+00:00",
       "source_uri": null,
       "tags": [
         "department",
         "marketing",
         "techco",
-        "marketing department",
-        "brand refresh",
-        "corporate structure",
-        "tech stack",
-        "global strategy"
+        "brand identity",
+        "organizational structure",
+        "international markets",
+        "campaign management"
       ],
       "title": "Marketing Department Overview",
       "total_tokens": 90
     },
     "toc": [
       {
+        "assets": [],
         "block_id": "1090d062912e2f8a5f589a67041f8531",
         "children": [
           {
+            "assets": [],
             "block_id": "1090d062912e2f8a5f589a67041f8531",
             "children": [],
             "end_index": 246,
@@ -63,16 +68,17 @@
             "start_index": 151,
             "subtree_tokens": 15,
             "summary": {
-              "how": "By launching a brand refresh campaign",
-              "what": "A strategic update and relaunch of the brand identity",
-              "when": null,
-              "where": "12 international markets",
-              "who": "The organization/company"
+              "how": "Launching a brand refresh campaign.",
+              "what": "A strategic initiative to update and promote the brand identity.",
+              "when": "Current / ongoing.",
+              "where": "12 international markets.",
+              "who": "The organization/brand team."
             },
             "title": "Current Initiative",
             "token_estimate": 15
           },
           {
+            "assets": [],
             "block_id": "1090d062912e2f8a5f589a67041f8531",
             "children": [],
             "end_index": 443,
@@ -83,10 +89,10 @@
             "subtree_tokens": 39,
             "summary": {
               "how": "Reporting to the head of the department",
-              "what": "Responsibility for all marketing-related activities",
-              "when": "Current",
+              "what": "Management of all marketing-related activities",
+              "when": "Currently",
               "where": "TechCo Global",
-              "who": "Tom Bradley and a team of 22 in the Marketing department"
+              "who": "Tom Bradley and the 22-member Marketing team"
             },
             "title": "Responsibilities",
             "token_estimate": 39
@@ -99,23 +105,23 @@
         "start_index": 0,
         "subtree_tokens": 90,
         "summary": {
-          "how": "By utilizing core tools including HubSpot, Google Analytics, and Figma.",
-          "what": "Overview of the department's organizational structure and technical resources.",
+          "how": "Utilizing core tools such as HubSpot, Google Analytics, and Figma.",
+          "what": "Overview of the Marketing Department's structure and resources.",
           "when": null,
-          "where": "TechCo Global's Marketing Department.",
-          "who": "Department Head Tom Bradley and 22 employees."
+          "where": "TechCo Global",
+          "who": "Tom Bradley (Department Head) and 22 employees."
         },
         "title": "Marketing Department — TechCo Global",
         "token_estimate": 36
       }
     ]
   },
-  "publish_date": "2026-05-18T07:32:40.415499+00:00",
-  "session_id": "70151882-e7ae-4335-9127-21ecc53c82f7",
+  "publish_date": "2026-06-12T19:47:47.659521+00:00",
+  "session_id": "ac6bebdf-8598-4b3e-aa1d-54a8a42d2166",
   "status": "active",
   "summary_version_incorporated": null,
   "superseded_by": null,
   "title": "Marketing Department Overview",
-  "updated_at": "2026-05-18T07:32:40.416551+00:00",
-  "vault_id": "22c11c49-1ccc-43a4-830c-dca2472f519c"
+  "updated_at": "2026-06-12T19:47:47.660273+00:00",
+  "vault_id": "34893ad7-9844-4786-bb90-912fac9b0d11"
 }

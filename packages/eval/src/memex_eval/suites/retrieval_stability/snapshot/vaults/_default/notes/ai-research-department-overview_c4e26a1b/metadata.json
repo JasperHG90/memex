@@ -3,8 +3,8 @@
   "archived_at": null,
   "assets": [],
   "content_hash": "a3d53259bd33d71713d25d50bcb605b1",
-  "created_at": "2026-05-18T07:32:29.337278+00:00",
-  "description": "AI Research Department Operations and RAG Initiative",
+  "created_at": "2026-06-12T19:47:34.194754+00:00",
+  "description": "AI Research Operations and Knowledge Management Initiative at TechCo Global",
   "doc_metadata": {
     "retain_params": {
       "assets": [],
@@ -26,34 +26,43 @@
     "tags": [
       "department",
       "ai-research",
-      "techco"
+      "techco",
+      "ai research",
+      "knowledge management",
+      "retrieval-augmented generation",
+      "techco global",
+      "infrastructure",
+      "machine learning tools"
     ]
   },
   "filestore_path": null,
   "id": "c4e26a1b-e63b-ab84-f525-afde25aab81e",
   "page_index": {
     "metadata": {
-      "description": "AI Research Department Operations and RAG Initiative",
-      "publish_date": "2026-05-18 07:32:29.336049+00:00",
+      "description": "AI Research Operations and Knowledge Management Initiative at TechCo Global",
+      "publish_date": "2026-06-12 19:47:34.193797+00:00",
       "source_uri": null,
       "tags": [
         "department",
         "ai-research",
         "techco",
         "ai research",
+        "knowledge management",
         "retrieval-augmented generation",
-        "pytorch",
         "techco global",
-        "machine learning infrastructure"
+        "infrastructure",
+        "machine learning tools"
       ],
       "title": "AI Research Department Overview",
       "total_tokens": 106
     },
     "toc": [
       {
+        "assets": [],
         "block_id": "277a0b019b9e1a7fe20db75db8caf09b",
         "children": [
           {
+            "assets": [],
             "block_id": "277a0b019b9e1a7fe20db75db8caf09b",
             "children": [],
             "end_index": 255,
@@ -63,16 +72,17 @@
             "start_index": 156,
             "subtree_tokens": 17,
             "summary": {
-              "how": "By using retrieval-augmented generation (RAG) techniques.",
-              "what": "Development of a retrieval-augmented generation system.",
-              "when": "Currently / ongoing.",
-              "where": "Internal knowledge base environment.",
-              "who": "Internal team/organization."
+              "how": "By using retrieval-augmented generation techniques.",
+              "what": "Development of a knowledge management system.",
+              "when": "Currently ongoing.",
+              "where": "Internal knowledge repositories.",
+              "who": "The organization's development team."
             },
             "title": "Current Initiative",
             "token_estimate": 17
           },
           {
+            "assets": [],
             "block_id": "277a0b019b9e1a7fe20db75db8caf09b",
             "children": [],
             "end_index": 461,
@@ -82,11 +92,11 @@
             "start_index": 255,
             "subtree_tokens": 45,
             "summary": {
-              "how": "By reporting to and being led by Dr. Alexei Volkov",
-              "what": "Management of all AI research-related activities",
-              "when": "Currently",
-              "where": "TechCo Global",
-              "who": "The AI Research department (a team of 5) and Dr. Alexei Volkov"
+              "how": "By reporting to Dr. Alexei Volkov with a team of five members.",
+              "what": "Management and execution of all AI research-related activities.",
+              "when": "Currently.",
+              "where": "TechCo Global.",
+              "who": "The AI Research department and Dr. Alexei Volkov."
             },
             "title": "Responsibilities",
             "token_estimate": 45
@@ -99,23 +109,23 @@
         "start_index": 0,
         "subtree_tokens": 106,
         "summary": {
-          "how": "Utilizing PyTorch, Weights & Biases, and Ray.",
-          "what": "Overview of department leadership, size, and core technology stack.",
+          "how": "Utilizing core tools such as PyTorch, Weights & Biases, and Ray.",
+          "what": "Overview of the AI Research Department, including staffing and infrastructure.",
           "when": null,
           "where": "TechCo Global",
-          "who": "AI Research Department led by Dr. Alexei Volkov and a team of 5 employees."
+          "who": "Dr. Alexei Volkov and a team of 5 employees."
         },
         "title": "AI Research Department — TechCo Global",
         "token_estimate": 44
       }
     ]
   },
-  "publish_date": "2026-05-18T07:32:29.336049+00:00",
-  "session_id": "f15ac4fa-e76a-48a6-94ef-707c7e111946",
+  "publish_date": "2026-06-12T19:47:34.193797+00:00",
+  "session_id": "7f620533-f45b-4b0d-8cdb-ca4ec0979553",
   "status": "active",
   "summary_version_incorporated": null,
   "superseded_by": null,
   "title": "AI Research Department Overview",
-  "updated_at": "2026-05-18T07:32:29.337278+00:00",
-  "vault_id": "22c11c49-1ccc-43a4-830c-dca2472f519c"
+  "updated_at": "2026-06-12T19:47:34.194754+00:00",
+  "vault_id": "34893ad7-9844-4786-bb90-912fac9b0d11"
 }

@@ -3,8 +3,8 @@
   "archived_at": null,
   "assets": [],
   "content_hash": "8ce1f236ae4ad9c9521b26f61655551e",
-  "created_at": "2026-05-18T07:32:59.850625+00:00",
-  "description": "Q1 2025 Quarterly Business Review and Performance Metrics",
+  "created_at": "2026-06-12T19:48:04.967723+00:00",
+  "description": "Q1 2025 Quarterly Business Performance",
   "doc_metadata": {
     "retain_params": {
       "assets": [],
@@ -26,35 +26,43 @@
     "tags": [
       "quarterly-review",
       "business",
-      "q1-2025"
+      "q1-2025",
+      "quarterly business review",
+      "financial performance",
+      "product development",
+      "headcount expansion",
+      "customer satisfaction",
+      "operations"
     ]
   },
   "filestore_path": null,
   "id": "81f6a3af-dc31-425e-eb07-40ff40b2172d",
   "page_index": {
     "metadata": {
-      "description": "Q1 2025 Quarterly Business Review and Performance Metrics",
-      "publish_date": "2025-03-31 00:00:00+00:00",
+      "description": "Q1 2025 Quarterly Business Performance",
+      "publish_date": "2025-03-15 00:00:00+00:00",
       "source_uri": null,
       "tags": [
         "quarterly-review",
         "business",
         "q1-2025",
-        "quarterly review",
+        "quarterly business review",
         "financial performance",
-        "headcount growth",
-        "product milestones",
-        "net promoter score",
-        "business operations"
+        "product development",
+        "headcount expansion",
+        "customer satisfaction",
+        "operations"
       ],
       "title": "Quarterly Business Review Q1 2025",
       "total_tokens": 162
     },
     "toc": [
       {
+        "assets": [],
         "block_id": "47dc0f123330e5730fdd037cdc32adbf",
         "children": [
           {
+            "assets": [],
             "block_id": "47dc0f123330e5730fdd037cdc32adbf",
             "children": [],
             "end_index": 294,
@@ -64,16 +72,17 @@
             "start_index": 101,
             "subtree_tokens": 53,
             "summary": {
-              "how": "By increasing revenue and R&D spending while improving operating margins.",
-              "what": "Financial growth and performance metrics.",
+              "how": "By increasing R&D spending and improving operating efficiency.",
+              "what": "Quarterly financial results including 15% revenue growth and margin improvement.",
               "when": "Current quarter relative to Q4 2024.",
-              "where": "Within the company's financial reporting.",
-              "who": "The company."
+              "where": "Corporate financial reports.",
+              "who": "The company's financial department."
             },
             "title": "Financial Highlights",
             "token_estimate": 53
           },
           {
+            "assets": [],
             "block_id": "47dc0f123330e5730fdd037cdc32adbf",
             "children": [],
             "end_index": 410,
@@ -83,16 +92,17 @@
             "start_index": 294,
             "subtree_tokens": 32,
             "summary": {
-              "how": "By hiring 12 new staff members",
-              "what": "Update on organizational headcount and departmental growth",
-              "when": "Current reporting period",
-              "where": "Engineering, Product, and Sales departments",
-              "who": "156 total employees"
+              "how": "By hiring 12 new employees across Engineering, Product, and Sales departments.",
+              "what": "Update on total headcount and recent recruitment.",
+              "when": "Current reporting period.",
+              "where": "Internal company staffing.",
+              "who": "Engineering, Product, and Sales teams."
             },
             "title": "Headcount",
             "token_estimate": 32
           },
           {
+            "assets": [],
             "block_id": "47dc0f123330e5730fdd037cdc32adbf",
             "children": [],
             "end_index": 564,
@@ -102,11 +112,11 @@
             "start_index": 410,
             "subtree_tokens": 48,
             "summary": {
-              "how": "Achieving a 4.7-star app rating and increasing the NPS score from 65 to 72",
-              "what": "Launch of Project Alpha and release of mobile app v2.0",
-              "when": "March 15, 2025",
-              "where": "Mobile app stores and customer feedback systems",
-              "who": "The project and mobile app development teams"
+              "how": "By launching Project Alpha, updating the mobile app to v2.0, and increasing the NPS score from 65 to 72.",
+              "what": "Key product development and customer satisfaction milestones.",
+              "when": "March 15, 2025, and the surrounding period.",
+              "where": "The company's product ecosystem (Project Alpha and mobile app platforms).",
+              "who": "The project development and mobile app teams."
             },
             "title": "Product Milestones",
             "token_estimate": 48
@@ -119,23 +129,23 @@
         "start_index": 0,
         "subtree_tokens": 162,
         "summary": {
-          "how": "Through a review of financial data, staffing levels, and product achievement logs.",
-          "what": "Quarterly business performance review including financial metrics, staffing, and product development.",
-          "when": "Q1 2025",
-          "where": "Internal business operations",
-          "who": "The organization's management and relevant departments"
+          "how": "By reviewing financial data, staffing metrics, and product development progress.",
+          "what": "A comprehensive quarterly business performance review.",
+          "when": "First Quarter (Q1) of 2025.",
+          "where": "Internal business operations.",
+          "who": "The organization's management and relevant departments."
         },
         "title": "Quarterly Business Review — Q1 2025",
         "token_estimate": 29
       }
     ]
   },
-  "publish_date": "2025-03-31T00:00:00+00:00",
-  "session_id": "1a4de46e-e2a9-4a5e-83c9-d295f87e7aad",
+  "publish_date": "2025-03-15T00:00:00+00:00",
+  "session_id": "68d4d707-a2c7-4f5e-8160-2d6bb9ef8265",
   "status": "active",
   "summary_version_incorporated": null,
   "superseded_by": null,
   "title": "Quarterly Business Review Q1 2025",
-  "updated_at": "2026-05-18T07:32:59.850625+00:00",
-  "vault_id": "22c11c49-1ccc-43a4-830c-dca2472f519c"
+  "updated_at": "2026-06-12T19:48:04.967723+00:00",
+  "vault_id": "34893ad7-9844-4786-bb90-912fac9b0d11"
 }

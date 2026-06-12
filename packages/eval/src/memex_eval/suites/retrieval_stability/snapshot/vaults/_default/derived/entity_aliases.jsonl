@@ -1,55 +1,61 @@
-{"canonical_id": "3128958f-685f-4301-8b8a-d3622ec2a222", "id": "508ab0eb-cdda-4b23-ac8e-7c13ef7f2aed", "name": "URL-based versioning", "phonetic_code": "ARLLPSTFRSNNK"}
-{"canonical_id": "cd3497b1-469e-4906-8b45-b5829fbf7eaa", "id": "52ed2ff6-ccfc-46f2-a068-928ac207c815", "name": "microservices architecture", "phonetic_code": "MKRSRFSSRKTKTR"}
-{"canonical_id": "fef9df69-145b-448b-9eb3-e0b65c14ad34", "id": "f9fb2e46-9049-4434-a64b-84ddc211f138", "name": "Apache Kafka", "phonetic_code": "APXKFK"}
-{"canonical_id": "d2c5ee8b-d684-409e-8034-519cfedc4aa1", "id": "f904e15e-7b2a-4f00-9af7-f9dbc2ef0cf3", "name": "OpenTelemetry", "phonetic_code": "APNTLMTR"}
-{"canonical_id": "0297f9e7-64f3-40f5-a37d-e1d7351e9072", "id": "3289ed34-26b2-4575-9191-67a52996938b", "name": "Prometheus", "phonetic_code": "PRM0S"}
-{"canonical_id": "894eba04-e645-48c2-89e9-c3cb6d5fd207", "id": "f10a1b21-3b30-46f9-8dbb-71f5e886b682", "name": "Grafana", "phonetic_code": "KRFN"}
-{"canonical_id": "36bfdd03-2a76-40bc-8328-6bb7c5f770ef", "id": "6f3bb1dc-6016-4832-ae93-7dac298902c9", "name": "TechCo Global", "phonetic_code": "TXKKLPL"}
-{"canonical_id": "2e0e0672-f180-469c-8688-7d1e258bd99d", "id": "6cf2eccb-3c28-412b-8604-66121675982b", "name": "Department Head", "phonetic_code": "TPRTMNTT"}
-{"canonical_id": "c95c5ca8-8fdd-41c4-b81f-5323a8b4944b", "id": "78f51b51-d649-438d-bc69-24fb926c7ee6", "name": "Global", "phonetic_code": "KLPL"}
-{"canonical_id": "4b27cb9c-bfdd-4787-adbf-150349eadfd0", "id": "fe05be25-0843-4496-84a3-94d8c83d9c17", "name": "Kubernetes", "phonetic_code": "KPRNTS"}
-{"canonical_id": "4996a393-4e6a-46be-a78f-728f5a463331", "id": "34727909-1467-4274-8bfb-89a6105ee1e6", "name": "Head", "phonetic_code": "HT"}
-{"canonical_id": "52eb22e1-4dee-4e72-90c4-af2d12ae8777", "id": "dd6e316a-5441-4231-9881-34a6a9ef5449", "name": "Dr", "phonetic_code": "TR"}
-{"canonical_id": "7dae93e5-2b03-4ccf-b612-31088578a1bf", "id": "73bd89ce-b7a7-4b95-aba1-f322059d65cb", "name": "Organization", "phonetic_code": "ARKNSXN"}
-{"canonical_id": "f0e20187-6ea1-4e2a-933d-8b274362740f", "id": "a950f30b-b658-4e0d-bd54-7b5322937d30", "name": "PostgreSQL 16", "phonetic_code": "PSTKRSKLLL"}
-{"canonical_id": "18c8d2e8-52d8-492c-bca5-a7ced13972fe", "id": "ac7127f9-6950-4acb-a8a5-f8693ee86d8a", "name": "Phase 1", "phonetic_code": "FS"}
-{"canonical_id": "2ebffeda-3140-4167-9c57-7723afcf526b", "id": "fb6b0b4d-4c92-43e1-953c-98193e8198cd", "name": "Lead", "phonetic_code": "LT"}
-{"canonical_id": "b67893a7-8070-4fdb-8d99-1cf1f82d189d", "id": "a7693ee6-c7a5-4415-ac33-c357f1672d2a", "name": "Apache Flink", "phonetic_code": "APXFLNK"}
-{"canonical_id": "90bb1c03-1b23-42e8-83fd-a2e85d8c6c2b", "id": "1d4e2180-18f0-4468-8013-ea47079cdc9e", "name": "Jordan Park", "phonetic_code": "JRTNPRK"}
-{"canonical_id": "501e7419-6c35-4b60-a116-6d2d986cb116", "id": "9e37fbe5-0281-4e32-b4f6-758ae1d6c0de", "name": "Department", "phonetic_code": "TPRTMNT"}
-{"canonical_id": "8fe76788-0009-43d8-b704-e6989aa532ef", "id": "b52777ab-4d32-4684-8260-325335e3f878", "name": "Product", "phonetic_code": "PRTKT"}
-{"canonical_id": "c414c790-781d-4319-9fa1-d9a4bcbc8603", "id": "26b2ac79-0d59-4d2b-ab54-3a3b9729b0a5", "name": "Sales", "phonetic_code": "SLS"}
-{"canonical_id": "4927ae63-60b4-4459-b3c7-8a23b548aed8", "id": "635630d2-8130-4699-9807-f53c9c244815", "name": "Project Alpha", "phonetic_code": "PRJKTLF"}
-{"canonical_id": "e5ffd15f-beb5-4ed6-9e08-2b27b88a99f5", "id": "bcd4eb46-b4f6-43e3-942d-99fd8b871056", "name": "Project Beta", "phonetic_code": "PRJKTPT"}
-{"canonical_id": "e184c4d9-e0fa-48de-82fd-9258bf144c60", "id": "083c30c2-f70a-43da-b497-89d9ffe569e3", "name": "Data pipeline", "phonetic_code": "TTPPLN"}
-{"canonical_id": "1f293cfd-d943-40f8-ac6b-5b672016e1c1", "id": "dbec01b4-f47c-4d0d-8fdf-5f8e46ca09e1", "name": "events/second", "phonetic_code": "AFNTSKNT"}
-{"canonical_id": "4834c390-5c1f-4b89-b416-4a3e46d2fa9c", "id": "6e3896e6-b403-4fc5-af46-34d4af13ca10", "name": "Juan Rodriguez", "phonetic_code": "JNRTRKS"}
-{"canonical_id": "5295e481-04e1-464a-9c7f-0b3710a4f375", "id": "8ff180b2-5d8e-4b90-9472-d9a7ff9a4f5a", "name": "QuantumTech Labs", "phonetic_code": "KNTMTXLPS"}
-{"canonical_id": "673adbeb-0617-4e5b-be65-d29e2a4c1de9", "id": "42845739-169c-4e70-b98a-c67cf8a270a3", "name": "MIT", "phonetic_code": "MT"}
-{"canonical_id": "ca0a1481-ad03-4939-ac2f-2cf119579c56", "id": "38ef8400-159b-4017-9de1-c6922a439227", "name": "Labs", "phonetic_code": "LPS"}
-{"canonical_id": "c3d79009-fbf0-4f77-aef1-200094afb765", "id": "9b483b1f-8cc9-4926-8706-5cbc7da5ecc2", "name": "topological quantum error correction", "phonetic_code": "TPLJKLKNTMRRKRKXN"}
-{"canonical_id": "a8c28d4e-a00e-4332-ae7c-aee3a2fc86b0", "id": "aa5e9a2f-38fe-4479-9539-9b1f62c033ec", "name": "Dr. Amara Osei", "phonetic_code": "TRMRS"}
-{"canonical_id": "52b2a552-7bcb-4600-a1da-b2394ad8f8b3", "id": "93fa718d-4ddd-401b-833f-28ba4f727bf2", "name": "quantum control systems", "phonetic_code": "KNTMKNTRLSSTMS"}
-{"canonical_id": "a1c3057a-0f98-4b1f-a89e-9ef8c13a8880", "id": "191453b8-246d-459a-bca4-0a066f47b3d0", "name": "Amara Osei", "phonetic_code": "AMRS"}
-{"canonical_id": "ccfc36cb-3611-44d9-8e19-c3a8770e8d2a", "id": "34aa197e-071e-4dd6-8c95-36ac8786c6fd", "name": "Sarah Chen", "phonetic_code": "SRXN"}
-{"canonical_id": "e8037618-904e-4f43-bc90-8e7cf593dccc", "id": "abf2a313-b1a6-48df-a0a0-5238d8bf764e", "name": "Acme Corp", "phonetic_code": "AKM"}
-{"canonical_id": "d9f65133-e4ac-46ed-b2be-0be4b4f849f0", "id": "bf5e0744-6962-47f8-a103-1b4436588795", "name": "API layer", "phonetic_code": "APLR"}
-{"canonical_id": "e184c4d9-e0fa-48de-82fd-9258bf144c60", "id": "cedafeea-fc58-4df2-b3b5-a30f85a1e819", "name": "data pipeline", "phonetic_code": "TTPPLN"}
-{"canonical_id": "9dc9d963-ca81-47a4-b3f4-4ce42c076854", "id": "34d45ef4-a8e3-4c4d-a9aa-22ee3b5e31a8", "name": "CTO", "phonetic_code": "KT"}
-{"canonical_id": "df9aca76-ba83-42fe-91bc-109b645ce4a8", "id": "ffd502e9-1a47-4e3b-a25a-158934bdf2b8", "name": "code coverage", "phonetic_code": "KTKFRJ"}
-{"canonical_id": "2477adba-abb9-4af3-8d62-239b956e39ac", "id": "8fbaf166-bf54-415a-a09a-3da054c8a6c5", "name": "integration tests", "phonetic_code": "ANTKRXNTSTS"}
-{"canonical_id": "71c4f333-f2bd-41a3-8ad1-b3c23aa843cf", "id": "afbfe3c0-90dc-4469-8672-04516a2ee0fe", "name": "pgvector", "phonetic_code": "PKFKTR"}
-{"canonical_id": "9e8c148a-93eb-4bc9-95cd-d1e9cb0eb814", "id": "a0da7c0d-66b4-40b7-8f34-14bcea68392a", "name": "Python 3.12", "phonetic_code": "P0NNNN"}
-{"canonical_id": "2c6f39a2-1631-442f-9d50-1a2b1cf30dce", "id": "30fcf359-1cf8-4bb9-9348-a1544293eae6", "name": "React", "phonetic_code": "RKT"}
-{"canonical_id": "db6bdfee-d60c-4ca5-87e5-b56afa70b17d", "id": "1ddf9858-78c1-434e-905d-8cb6910d61e4", "name": "TypeScript", "phonetic_code": "TPSKPT"}
-{"canonical_id": "634f7198-f3e3-4137-b18b-cea5badbe152", "id": "21bdd7bf-5e49-446b-a193-6d4441de7cd8", "name": "FastAPI", "phonetic_code": "FSTP"}
-{"canonical_id": "1bf53775-3d23-46e5-b5a2-6a033945f20f", "id": "0e820b28-c599-47ac-9a01-b0274c1c4cf1", "name": "David Park", "phonetic_code": "TFTPRK"}
-{"canonical_id": "03ecb13b-35df-4ce7-a46d-49787bc0fd77", "id": "910e24d0-fcc0-4ec5-ab8b-98aab4f12bdf", "name": "Maria Santos", "phonetic_code": "MRSNTS"}
-{"canonical_id": "6a1bf888-c958-42a8-bd68-da574ace3268", "id": "1cfdaa17-61e5-4613-b07e-bc1a02542a0e", "name": "James Liu", "phonetic_code": "JMSL"}
-{"canonical_id": "85b37325-d3d9-45c9-b928-ce368e3798ba", "id": "f34c3ca0-3985-426c-b548-8cd7441ec245", "name": "cross-pod syncs", "phonetic_code": "KRSSTSNKS"}
-{"canonical_id": "1bbb9ab4-aa5c-4f84-a32c-44f673e92c78", "id": "abd17929-332b-4123-98e2-0cbb299be00e", "name": "MySQL 8.0", "phonetic_code": "MSKLLL"}
-{"canonical_id": "0b884d61-f507-42f2-8759-2b77bd24ece6", "id": "492af426-3452-48ea-9dd6-2c83a8784187", "name": "CI/CD", "phonetic_code": "SKT"}
-{"canonical_id": "bf3d6179-8d57-488a-a4d3-9c73955b7d4c", "id": "ccd0bf92-6398-4203-a85f-ef0c2ba91946", "name": "Docker", "phonetic_code": "TKR"}
-{"canonical_id": "51a7dee9-4753-4a49-bcb6-0d6336c37dfc", "id": "45d24b9d-42e4-4618-8882-f79c5ff8d2f0", "name": "Widget Pro", "phonetic_code": "AJTPR"}
-{"canonical_id": "2cb81f2b-7388-41a4-8074-62c7bfb3bb06", "id": "4af1867a-4417-46af-85a2-78c253af3321", "name": "Widget Series", "phonetic_code": "AJTSRS"}
-{"canonical_id": "66f0ef5b-b589-4637-ae63-1b273374da3f", "id": "f1992abe-38fb-4aaa-8e37-3204ffbc6ddd", "name": "Real-time analytics", "phonetic_code": "RLLTMNLTKS"}
+{"canonical_id": "e18332a2-86bb-45b7-9e10-d1e53383eb52", "id": "81e60fe6-cd9e-4d30-bddc-8ea8aea8f16d", "name": "microservices architecture", "phonetic_code": "MKRSRFSSRKTKTR"}
+{"canonical_id": "83f79efb-183e-4b08-9e69-4b63f78b2cbe", "id": "8efb3c0d-dc51-4057-aa7d-d4be45fc917e", "name": "Apache Kafka", "phonetic_code": "APXKFK"}
+{"canonical_id": "8236b1b4-6689-40a8-a8df-94247802b3cd", "id": "cf87e4b0-193b-4ec7-a605-542ba1971dc6", "name": "OpenTelemetry", "phonetic_code": "APNTLMTR"}
+{"canonical_id": "c8feb0e0-881b-4845-81aa-2d98d5634cbf", "id": "48e182bc-f860-4715-b36e-0cd504eb191b", "name": "Prometheus", "phonetic_code": "PRM0S"}
+{"canonical_id": "e79a3b09-fa83-4794-bdb4-bca291c51586", "id": "b2402e97-0e62-4ae3-b0a3-a26face4b8ae", "name": "Grafana", "phonetic_code": "KRFN"}
+{"canonical_id": "c67f23c4-1daa-49a2-a19d-3dcc58e6e8ef", "id": "024c453a-c6a6-469f-b8db-99a443340bf2", "name": "TechCo Global", "phonetic_code": "TXKKLPL"}
+{"canonical_id": "55141c8d-0452-447e-b261-2c48d8997033", "id": "0b7d7ae0-7227-4a2f-96ca-c46c437c9cbb", "name": "Head", "phonetic_code": "HT"}
+{"canonical_id": "a7180dc2-ea4b-4cfa-922d-02ee448333ec", "id": "4dc908a0-33e0-426b-9259-5400231b0ef5", "name": "Global", "phonetic_code": "KLPL"}
+{"canonical_id": "7b597787-5db8-4322-8208-6c63a5794e2f", "id": "bdf730ad-2a98-4024-8797-5737064bb54f", "name": "Kubernetes", "phonetic_code": "KPRNTS"}
+{"canonical_id": "7e26caa4-17ff-48b1-97b0-223e69f69829", "id": "5718862f-3168-43a0-a0b2-821518cc8977", "name": "Department Head", "phonetic_code": "TPRTMNTT"}
+{"canonical_id": "0bc3cdbc-77b7-40dd-8b22-dc342a886a77", "id": "a82556e5-179f-4bf2-9819-30c7cd658d43", "name": "Dr", "phonetic_code": "TR"}
+{"canonical_id": "eb7f4838-45cc-49c7-9300-52d119d72a34", "id": "775981bd-e92c-44e2-beea-572867940735", "name": "Organization", "phonetic_code": "ARKNSXN"}
+{"canonical_id": "007cf282-ab22-4787-91f7-f66aabf51bf7", "id": "74dd4d92-90c3-4bda-a8e9-d5365d82fdca", "name": "PostgreSQL 16", "phonetic_code": "PSTKRSKLLL"}
+{"canonical_id": "31a3847e-458c-418b-9670-3f9f24785bc5", "id": "2a2bdd6b-bb2b-4570-bc68-8afb444b2b66", "name": "Lead", "phonetic_code": "LT"}
+{"canonical_id": "e025fba5-bbcb-41ae-aee3-c14a880790e6", "id": "4d15512f-5f07-47f0-adff-10e5381c1879", "name": "Apache Flink", "phonetic_code": "APXFLNK"}
+{"canonical_id": "73d548e2-c384-4872-bfda-ca5e9de28e20", "id": "e03f543b-9e86-4689-8eec-fff408825dba", "name": "Infrastructure", "phonetic_code": "ANFRSTRKTR"}
+{"canonical_id": "d4a043cc-1f32-4ff3-80c3-2d8c110eb0fa", "id": "272e2417-59e1-4a10-ac0c-8b4cc3f15ff8", "name": "Jordan Park", "phonetic_code": "JRTNPRK"}
+{"canonical_id": "bf3e95ad-13ae-42ec-97f7-de672da223c9", "id": "12802bef-1763-4b02-9015-dafebcdb218c", "name": "Revenue", "phonetic_code": "RFN"}
+{"canonical_id": "6c394d27-4cde-42ac-8a64-515d0783b629", "id": "9f4454e4-d913-41cc-a470-b318b9524ed7", "name": "Engineering", "phonetic_code": "ANJNRNK"}
+{"canonical_id": "e5ccb30c-4682-4a52-b619-fd346d3883d3", "id": "85dd6e73-b51e-482b-816b-0b49562f3a22", "name": "Product", "phonetic_code": "PRTKT"}
+{"canonical_id": "993c20bf-3c11-4b21-9661-beb78706f5b6", "id": "70475b45-5e17-4ba0-b2e0-b277c1080bfe", "name": "Sales", "phonetic_code": "SLS"}
+{"canonical_id": "6577db49-4546-4837-be87-051071c5f169", "id": "87bd8793-7a4f-4b9c-bd2c-c50cb841a620", "name": "Project Alpha", "phonetic_code": "PRJKTLF"}
+{"canonical_id": "6eea2ac3-3ba9-4876-9d0d-cc867e1cc754", "id": "33139c02-9747-4ba6-8f8a-2032388bef54", "name": "Customer satisfaction", "phonetic_code": "KSTMRSTSFKXN"}
+{"canonical_id": "6fa71779-86f6-4f3a-8109-f65cf453e2ed", "id": "b4f97810-0f57-4a6a-bbb8-4932f3bd0ca9", "name": "Office", "phonetic_code": "AFS"}
+{"canonical_id": "95101f38-b64f-4796-ae67-8ceb6631e072", "id": "6060a5ba-c613-41c1-a924-9ba21338d7d1", "name": "Project Beta", "phonetic_code": "PRJKTPT"}
+{"canonical_id": "58a14b2a-5ec5-4b91-a85b-a230d6d1f819", "id": "6b2a1a69-e391-456e-8350-dccb50f4bf68", "name": "Data pipeline", "phonetic_code": "TTPPLN"}
+{"canonical_id": "db88c604-a31e-4acd-b707-7e853b46c5bd", "id": "47db7073-67c5-4c6a-885b-510662ffa9c5", "name": "Juan Rodriguez", "phonetic_code": "JNRTRKS"}
+{"canonical_id": "dd8a8649-befc-414d-b39c-48aa5d9951f4", "id": "c8863519-77ea-46d5-8ad4-9da1bb90914d", "name": "QuantumTech Labs", "phonetic_code": "KNTMTXLPS"}
+{"canonical_id": "4ebf6111-83c6-4b88-8896-14c3cc819aa7", "id": "d9bd2553-daf3-40fe-a383-53bab279ace8", "name": "Quantum Error Correction", "phonetic_code": "KNTMRRKRKXN"}
+{"canonical_id": "cfd8f19c-a2a6-47dd-b0c6-7fa9c48248ef", "id": "8b77e617-55f4-43d5-92a4-7fa8d9abad4a", "name": "Labs", "phonetic_code": "LPS"}
+{"canonical_id": "b0770427-eb50-4303-b3e7-77040b2df58a", "id": "1c9a069d-66b1-437e-a744-7feac94ddd3a", "name": "MIT", "phonetic_code": "MT"}
+{"canonical_id": "42499a1c-bfe6-46ae-b5c8-9b8cd9c8bfb3", "id": "37a458e0-2444-42bb-a88e-22ec1ef5cd46", "name": "topological quantum error correction", "phonetic_code": "TPLJKLKNTMRRKRKXN"}
+{"canonical_id": "b073e31d-0996-4fa0-aad9-763797bbb872", "id": "fb4a3c96-10d5-4a6e-b01c-0ee2e969a025", "name": "99.7% gate fidelity", "phonetic_code": "KTFTLT"}
+{"canonical_id": "ea63cbe4-2797-4635-a37b-1408abbb2fd9", "id": "440c6da9-8658-427a-8b74-283330fe115d", "name": "Dr. Amara Osei", "phonetic_code": "TRMRS"}
+{"canonical_id": "b3104363-0a01-4ed8-acf9-663e8a9532d9", "id": "f528d364-32d1-441b-a60e-b4b8a7c68e9e", "name": "quantum control systems", "phonetic_code": "KNTMKNTRLSSTMS"}
+{"canonical_id": "ce1d7231-2fdf-42ed-b901-f2b1a5973674", "id": "d9c97b62-2ae0-494d-a831-5fff9748092b", "name": "Amara Osei", "phonetic_code": "AMRS"}
+{"canonical_id": "56311d64-be33-4dea-8fd5-22b9e14a3681", "id": "5cf74c55-d8f6-4d3f-8f14-95f9a679cfa8", "name": "Researcher", "phonetic_code": "RSRXR"}
+{"canonical_id": "e39538e5-212c-45cd-973f-223aed3d55f9", "id": "b1a8d301-6e82-4ed7-829d-a4be708c313f", "name": "Sarah Chen", "phonetic_code": "SRXN"}
+{"canonical_id": "522c373f-79e1-4988-adbc-e32085b95c4b", "id": "7d89953e-12a8-49ce-8b2c-50889bd1dc56", "name": "Acme Corp", "phonetic_code": "AKM"}
+{"canonical_id": "1b411ced-fa83-495d-8ea8-3b13d24c8214", "id": "8decda7d-bf39-466a-98ba-487e4b8fcbd9", "name": "CTO", "phonetic_code": "KT"}
+{"canonical_id": "522c373f-79e1-4988-adbc-e32085b95c4b", "id": "be72e264-e343-42fc-9278-eef3921a1c34", "name": "Acme Corp board", "phonetic_code": "AKMKRPPRT"}
+{"canonical_id": "d56d82bc-174b-4a30-8ae2-6b3271454b00", "id": "b91c3bea-af20-42f2-85a4-338f7f29f23e", "name": "API layer", "phonetic_code": "APLR"}
+{"canonical_id": "58a14b2a-5ec5-4b91-a85b-a230d6d1f819", "id": "8edca2a9-6068-433d-944c-cf8f50cfc495", "name": "data pipeline", "phonetic_code": "TTPPLN"}
+{"canonical_id": "1d1fd91e-0df7-489c-899d-a3e38c897bbf", "id": "41192523-268a-445e-b784-0351235ab23f", "name": "integration tests", "phonetic_code": "ANTKRXNTSTS"}
+{"canonical_id": "89fe8e6f-a7a3-4dee-b30f-586f6c6ee0df", "id": "6987bc34-1c10-4e03-847a-585f95f79be6", "name": "Project Lead", "phonetic_code": "PRJKTLT"}
+{"canonical_id": "83fec708-c688-462b-ae88-2ec2bb00d17c", "id": "c4c2e4b8-e4c7-4790-9814-aab517c8c67c", "name": "pgvector", "phonetic_code": "PKFKTR"}
+{"canonical_id": "cbe66528-7882-48ca-8d02-26f979baba29", "id": "d339d3b4-0a2a-4e65-ac8e-0b3ff099b5fa", "name": "Python 3.12", "phonetic_code": "P0NNNN"}
+{"canonical_id": "e8144e77-b077-4880-8067-72a2bf574e32", "id": "d9f0a316-d3f9-4026-8c79-a71c03255c89", "name": "React", "phonetic_code": "RKT"}
+{"canonical_id": "acb074d9-37b6-4f62-b680-d8440c7e06d9", "id": "f9708120-58e7-4854-a195-048b2cb33fb7", "name": "TypeScript", "phonetic_code": "TPSKPT"}
+{"canonical_id": "aa5f4c84-2c67-4951-80c8-8495a42b018e", "id": "ee300cb3-c1b8-4638-ad34-aef8ac085938", "name": "FastAPI", "phonetic_code": "FSTP"}
+{"canonical_id": "14250658-e3e4-48ae-98c5-cb8a10526d75", "id": "7f19ef55-84d2-4fe1-9be4-538fc79a6273", "name": "David Park", "phonetic_code": "TFTPRK"}
+{"canonical_id": "e965d637-b71b-4398-95a0-9273d4966df4", "id": "c75a468e-4d2e-4852-9ab9-8aa8842896b2", "name": "Maria Santos", "phonetic_code": "MRSNTS"}
+{"canonical_id": "2862f5e2-2b04-4aad-b7af-a5dbd557f495", "id": "f741a688-0cd3-42ce-b8be-7042a489695b", "name": "James Liu", "phonetic_code": "JMSL"}
+{"canonical_id": "04d35eaf-daf7-49b4-ad9b-003fe53d1ae4", "id": "a27bfd2a-515e-4e23-8870-9940e437dd61", "name": "Phase 1", "phonetic_code": "FS"}
+{"canonical_id": "d08ecf38-264a-44e8-bf9f-9ba37d8ebae0", "id": "3d4adae0-05e5-44ee-9b53-77457aa27ed4", "name": "MySQL 8.0", "phonetic_code": "MSKLLL"}
+{"canonical_id": "fc24df4b-7007-4935-99b1-255e76a2233f", "id": "b407e8c0-0625-4053-8254-39ba224d8086", "name": "JSON", "phonetic_code": "JSN"}
+{"canonical_id": "5a8cb323-acb6-4401-813e-9673892c7d4c", "id": "92063c44-031f-4de2-b828-5253f4bee939", "name": "CI/CD", "phonetic_code": "SKT"}
+{"canonical_id": "fe24508e-ce02-42ca-b205-0fa1ead890dd", "id": "fbc45967-ea26-4e7f-85c8-708cf862843b", "name": "Docker", "phonetic_code": "TKR"}
+{"canonical_id": "b8f630ce-f552-4856-9111-bb002453c6dd", "id": "f690e4ab-2efe-4fd5-baf9-373edf91bb7e", "name": "Widget Pro", "phonetic_code": "AJTPR"}
+{"canonical_id": "afe0dd5a-5ea9-4957-a356-74fccdb2a993", "id": "20d23b15-a0ab-4551-8cad-63c579f26bbc", "name": "real-time analytics", "phonetic_code": "RLLTMNLTKS"}
+{"canonical_id": "c575aa93-0f9d-4f98-b044-142738df5e73", "id": "3058c856-fefd-4133-bf1c-cbb63d76d72c", "name": "real-time analytics dashboard", "phonetic_code": "RLLTMNLTKSTXPRT"}

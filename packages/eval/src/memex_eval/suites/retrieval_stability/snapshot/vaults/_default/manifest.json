@@ -1,28 +1,28 @@
 {
-  "alembic_head": "064_two_kind_plane",
+  "alembic_head": "065_procedural_outcomes",
   "embedding_model": {
     "dim": 384,
     "hash": "main",
     "name": "JasperHG90/minilm-l12-v2-hindsight-embeddings"
   },
-  "exported_at": "2026-05-18T07:33:31.284710+00:00",
+  "exported_at": "2026-06-12T19:48:29.959466+00:00",
   "observation_schema_version": "1",
   "snapshot_version": "1.2.0",
-  "source_vault_id": "22c11c49-1ccc-43a4-830c-dca2472f519c",
-  "source_vault_name": "eval-suite-retrieval_stability-39063375",
+  "source_vault_id": "34893ad7-9844-4786-bb90-912fac9b0d11",
+  "source_vault_name": "eval-suite-retrieval_stability-7f6782fa",
   "table_counts": {
     "chunks": 39,
-    "entities": 406,
-    "entity_aliases": 55,
-    "entity_cooccurrences": 1422,
+    "entities": 429,
+    "entity_aliases": 61,
+    "entity_cooccurrences": 1661,
     "maintenance_proposals": 0,
-    "memory_links": 396,
-    "memory_units": 170,
+    "memory_links": 385,
+    "memory_units": 174,
     "mental_models": 0,
     "nodes": 132,
     "note_appends": 0,
     "notes": 39,
-    "unit_entities": 817,
+    "unit_entities": 863,
     "vault_summaries": 0,
     "vaults": 1
   }

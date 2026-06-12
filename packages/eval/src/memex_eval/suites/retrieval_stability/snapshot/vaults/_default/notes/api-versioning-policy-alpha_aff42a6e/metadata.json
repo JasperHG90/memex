@@ -3,7 +3,7 @@
   "archived_at": null,
   "assets": [],
   "content_hash": "a22a4f48f415879a0fb465945d13844e",
-  "created_at": "2026-05-18T07:32:06.270103+00:00",
+  "created_at": "2026-06-12T19:47:25.377243+00:00",
   "description": "API Versioning and Deprecation Policy",
   "doc_metadata": {
     "retain_params": {
@@ -26,7 +26,13 @@
     "tags": [
       "api",
       "versioning",
-      "policy"
+      "policy",
+      "api versioning",
+      "deprecation policy",
+      "software development",
+      "public api",
+      "backward compatibility",
+      "alpha stage"
     ]
   },
   "filestore_path": null,
@@ -40,19 +46,23 @@
         "api",
         "versioning",
         "policy",
-        "api design",
+        "api versioning",
         "deprecation policy",
-        "software development lifecycle",
-        "api documentation"
+        "software development",
+        "public api",
+        "backward compatibility",
+        "alpha stage"
       ],
       "title": "API Versioning Policy (Alpha)",
       "total_tokens": 93
     },
     "toc": [
       {
+        "assets": [],
         "block_id": "72fedc964fc67b709b72a6ff3d9057d6",
         "children": [
           {
+            "assets": [],
             "block_id": "72fedc964fc67b709b72a6ff3d9057d6",
             "children": [],
             "end_index": 394,
@@ -62,11 +72,11 @@
             "start_index": 88,
             "subtree_tokens": 71,
             "summary": {
-              "how": "By using /v[n]/ paths and requiring 90-day deprecation notices for major changes",
-              "what": "URL-based API versioning policy (v1 and v2)",
-              "when": "Currently active for v1 and v2",
-              "where": "Public API endpoints",
-              "who": "Public API developers and consumers"
+              "how": "By using URL-based versioning for public APIs and providing 90-day advance notice for deprecations.",
+              "what": "API versioning policy and compatibility requirements.",
+              "when": "90-day deprecation period; currently supporting v1 and v2.",
+              "where": "Public API environments.",
+              "who": "API developers and public interface systems."
             },
             "title": "Policy",
             "token_estimate": 71
@@ -79,10 +89,10 @@
         "start_index": 0,
         "subtree_tokens": 93,
         "summary": {
-          "how": "By establishing a preliminary framework for API updates.",
-          "what": "Introduction to the API Versioning Policy.",
-          "when": "During the Alpha development phase.",
-          "where": "In the API documentation and system architecture.",
+          "how": "By categorizing versioning guidelines within an alpha-stage framework.",
+          "what": "The structure and existence of an API Versioning Policy.",
+          "when": "Currently in Alpha stage.",
+          "where": "API documentation and development environment.",
           "who": "API developers and consumers."
         },
         "title": "API Versioning Policy (Alpha)",
@@ -91,11 +101,11 @@
     ]
   },
   "publish_date": "2025-01-01T00:00:00+00:00",
-  "session_id": "fcfec606-8850-4b6b-8e2e-4a3a5b076a41",
+  "session_id": "af99d5e7-ccfb-41bf-9a31-18042d69be77",
   "status": "active",
   "summary_version_incorporated": null,
   "superseded_by": null,
   "title": "API Versioning Policy (Alpha)",
-  "updated_at": "2026-05-18T07:32:06.270103+00:00",
-  "vault_id": "22c11c49-1ccc-43a4-830c-dca2472f519c"
+  "updated_at": "2026-06-12T19:47:25.377243+00:00",
+  "vault_id": "34893ad7-9844-4786-bb90-912fac9b0d11"
 }
