@@ -590,6 +590,39 @@ def test_temporal_proximity_populated_from_query_window() -> None:
     assert getattr(again, 'temporal_proximity', None) is None
 
 
+def test_recency_anchor_selects_latest_authored_date() -> None:
+    """``_recency_anchor`` = max(occurred_start, authored mentioned_at); an
+    ingest-default mentioned_at (== created_at) is excluded; truly-undated -> None."""
+    from memex_core.memory.retrieval.engine import _recency_anchor
+
+    now = datetime.now(timezone.utc)
+    d2024 = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    d2026 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    def mk(occ, men, created):
+        u = MemoryUnit(
+            id=uuid4(),
+            text='f',
+            fact_type='fact',
+            event_date=men or created or now,
+            occurred_start=occ,
+            mentioned_at=men,
+            vault_id=uuid4(),
+            note_id=uuid4(),
+            embedding=[],
+        )
+        object.__setattr__(u, 'created_at', created)
+        return u
+
+    assert _recency_anchor(mk(d2024, None, now)) == d2024  # occurred_start only
+    assert _recency_anchor(mk(None, d2026, now)) == d2026  # authored mentioned_at only
+    assert _recency_anchor(mk(d2024, d2026, now)) == d2026  # max of both (ongoing fact)
+    assert (
+        _recency_anchor(mk(None, now, now)) is None
+    )  # mentioned_at == created_at -> ingest default
+    assert _recency_anchor(mk(None, None, now)) is None  # truly undated
+
+
 @pytest.mark.asyncio
 async def test_recency_falls_back_to_real_mentioned_at() -> None:
     """When ``occurred_start`` is absent, recency uses a REAL ``mentioned_at``

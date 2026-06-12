@@ -83,9 +83,45 @@ LOG_FLOOR_COMPOSITE_BOOST = 1e-9
 
 # ``mentioned_at`` is auto-filled to ~``created_at`` (ingest time) for undated
 # content, so a genuine authored date parked in ``mentioned_at`` differs from
-# ``created_at`` by far more than this tolerance. Used by the rerank recency
-# boost to separate "real date in mentioned_at" from "ingest-time default".
+# ``created_at`` by far more than this tolerance. Used by ``_recency_anchor``
+# to separate an authored date in ``mentioned_at`` from the ingest-time default.
 _INGEST_DATE_TOLERANCE_S = 60.0
+
+
+def _mentioned_at_is_authored(unit: MemoryUnit) -> bool:
+    """True when ``unit.mentioned_at`` is a genuine authored date (a publish
+    date or an in-text date) rather than the ingest-time auto-fill.
+
+    For undated content the pipeline fills ``mentioned_at`` with ~the ingest
+    timestamp (``created_at``), so the two coincide to well within
+    ``_INGEST_DATE_TOLERANCE_S``; a real authored date sits days-to-years away.
+    """
+    if unit.mentioned_at is None:
+        return False
+    created = unit.created_at
+    return (
+        created is None
+        or abs((unit.mentioned_at - created).total_seconds()) > _INGEST_DATE_TOLERANCE_S
+    )
+
+
+def _recency_anchor(unit: MemoryUnit) -> datetime | None:
+    """The date a unit's recency is scored against: the LATEST authored date
+    it carries.
+
+    Combines ``occurred_start`` (a dated event) with an authored
+    ``mentioned_at`` (see ``_mentioned_at_is_authored`` — excludes the
+    ingest-time default). Taking the ``max`` keeps ongoing / current-state
+    facts recent — "head since 2024, published 2026" anchors on 2026, not its
+    old 2024 start. Returns ``None`` for a truly-undated unit, which the rerank
+    recency boost then treats as neutral (neither boosted nor penalised).
+    """
+    candidates: list[datetime] = []
+    if unit.occurred_start is not None:
+        candidates.append(unit.occurred_start)
+    if _mentioned_at_is_authored(unit):
+        candidates.append(unit.mentioned_at)
+    return max(candidates) if candidates else None
 
 
 def _compose_boosts_logspace(
@@ -1692,33 +1728,15 @@ class RetrievalEngine:
                 # one that differs from ``created_at`` by more than the ingest
                 # tolerance; truly-undated units fall through to neutral (so
                 # they neither flood nor get penalised).
-                # Use the LATEST real authored date the unit carries:
-                # ``occurred_start`` (a dated event) and/or ``mentioned_at``
-                # when it is genuine rather than the ingest-time default
-                # (mentioned_at is auto-filled to ~``created_at`` for undated
-                # content; a real date differs from ``created_at``). Taking the
-                # max keeps ongoing / current-state facts recent — "head since
-                # 2024, published 2026" scores as 2026, not 2024 — so they are
-                # not anchored to an old start date. A truly-undated unit (no
-                # occurred_start, mentioned_at == created_at) falls through to
-                # neutral, so it neither floods nor is penalised.
-                date_candidates: list[datetime] = []
-                if unit.occurred_start is not None:
-                    date_candidates.append(unit.occurred_start)
-                if unit.mentioned_at is not None:
-                    created = unit.created_at
-                    if (
-                        created is None
-                        or abs((unit.mentioned_at - created).total_seconds())
-                        > _INGEST_DATE_TOLERANCE_S
-                    ):
-                        date_candidates.append(unit.mentioned_at)
-                recency_date = max(date_candidates) if date_candidates else None
+                # Recency keys on the latest authored date the unit carries
+                # (occurred_start and/or an authored mentioned_at); truly
+                # undated units anchor to None and stay neutral.
+                recency_date = _recency_anchor(unit)
                 if recency_date is not None:
                     days_ago = (now - recency_date).days
                     recency = max(0.1, min(1.0, 1.0 - (days_ago / 365)))
                 else:
-                    recency = 0.5  # neutral — no real authored date
+                    recency = 0.5  # neutral — no authored date
 
                 recency_boost = 1.0 + recency_alpha * (recency - 0.5)
 
