@@ -168,15 +168,17 @@ suite.register(
     id='agent_calls_memex_search',
     group='smoke',
     description=(
-        'The agent calls at least one memex search tool before answering. '
-        'Either listed tool satisfies the integration check.'
+        'The agent calls at least one memex retrieval tool before answering. '
+        'Any listed tool satisfies the integration check — memory/note search '
+        'or the heavier survey aggregator are all valid ways to ground the '
+        'answer in the vault.'
     ),
     query='Tell me about Project Alpha at Acme Corp.',
     top_k=10,
     max_duration_ms=_DUR_MS,
     expected=ToolCallContains(
         type='tool_call_contains',
-        expected_tools=['memex_memory_search', 'memex_note_search'],
+        expected_tools=['memex_memory_search', 'memex_note_search', 'memex_survey'],
         min_count=1,
         match_mode='any',
     ),
@@ -477,24 +479,23 @@ suite.register(
     group='navigation',
     query="What's the testing convention in the engineering handbook?",
     max_duration_ms=_DUR_MS,
-    expected=CompositeOutcome(
-        type='composite',
-        children=[
-            KeywordsPresent(
-                type='keywords_present',
-                keywords=['pytest'],
-            ),
-            LLMJudge(
-                type='llm_judge',
-                rubric=(
-                    'The answer identifies the testing convention from the '
-                    'engineering handbook (pytest, with a brief explanation of '
-                    'how it is used). The answer does NOT fabricate a '
-                    'convention not in the corpus.'
-                ),
-                threshold=0.5,
-            ),
-        ],
+    # Semantic gate only. A literal ``KeywordsPresent(['pytest'])`` was too
+    # brittle: whole-word substring matching fails a correct answer that
+    # conveys the convention (naming pattern, tiers, coverage gate) without
+    # using the incidental framework token verbatim. The LLMJudge checks the
+    # substance — concrete specifics present, nothing fabricated.
+    expected=LLMJudge(
+        type='llm_judge',
+        rubric=(
+            "The answer reports the engineering handbook's testing convention "
+            'with concrete specifics drawn from the corpus — e.g. the '
+            'test-file naming pattern (test_<module>.py with a test_ prefix), '
+            'the unit/integration/e2e tiers, the coverage gate, and/or the '
+            'pytest markers. A correct answer that describes these conventions '
+            'without using the literal word "pytest" is acceptable. The answer '
+            'does NOT fabricate a convention absent from the corpus.'
+        ),
+        threshold=0.5,
     ),
 )
 
