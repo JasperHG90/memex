@@ -26,12 +26,18 @@ Outcome-signal lexicon for paired writes:
 - Success → "that worked", "that fixed it", "record it", "save this" → verb=`helpful`
 - Failure → "stop suggesting X", "didn't work", "we removed it", "that was wrong" → verb=`not_helpful`
 
-Capture cadence: write a short note (`memex_add_note`, ≤300 tokens, no per-file changelogs) when you finish a multi-step task, diagnose a non-obvious bug, or resolve a tricky env issue. User preferences / conventions are NOT note-shaped — those go to `memex_kv_put` per the KV-namespace rules above. Use `memex_append_note(note_key, delta)` to extend an existing note rather than re-ingesting."""
+Capture cadence — ask: would I want these steps back next time? YES (you worked out HOW to do or fix something non-obvious) → `memex_case_submit` (trigger, actions, outcome, lesson) — a reusable procedure, NOT a note. A durable FACT / DECISION → `memex_add_note` (≤300 tokens); `memex_append_note(note_key, delta)` to extend. Preferences / conventions → `memex_kv_put` per the KV rules above. When unsure, prefer a note."""
 
 
 CLAUDE_CODE_HARNESS = """## Claude Code-specific framing
 
-Capture cadence: call `memex_add_note(background=true, author="claude-code")` when you (1) finish a multi-step task, (2) diagnose a bug root cause, (3) make/discover an architectural decision, or (4) resolve a tricky env issue. Hard max 300 tokens; no per-file changelogs. Preferences / conventions are NOT note-shaped — route to `memex_kv_put` per the KV rules above.
+<critical_constraint name="capture_routing">
+Before saving, ask: "next time I hit this, would I want these steps back?"
+- YES — you worked out HOW to do or fix something non-obvious (a debugging path, a workaround, a sequence that worked) → `memex_case_submit` (trigger, actions, outcome, lesson). Becomes a reusable procedure — not `memex_add_note`.
+- NO, but it's a durable FACT / DECISION someone would look up ("we chose X", a config value, an API shape) → `memex_add_note(background=true, author="claude-code")` (≤300 tokens, no per-file changelogs).
+- NO to both (it just worked, a typo, a one-off) → save NOTHING. When unsure, prefer a note; never case a one-off.
+<example>vitest failed on a stale snapshot cache; clearing `.vitest-cache` fixed it → `memex_case_submit(trigger="vitest fails on stale snapshots", actions=["cleared .vitest-cache"], outcome="success", lesson="clear vitest's cache when tests fail for no code reason")`. "We chose Tailwind v4" → `memex_add_note`; "login UI worked first try" → nothing.</example>
+</critical_constraint>
 
 <critical_constraint name="write_routing">
 Route each write intent to the right tool; a miss is silent (no tool call) or wrong-namespace.
@@ -39,12 +45,9 @@ Route each write intent to the right tool; a miss is silent (no tool call) or wr
 - `"Remember in this repo / project: ..."` → `memex_kv_put(key="project:<id>:<field>", ...)`.
 - `"Remember whenever I use <app> ..."` → `memex_kv_put(key="app:<app-id>:<field>", ...)`. The `<app>` cue beats "I"/"my": Claude Code prefs go under `app:claude-code:*`, NOT `user:claude-code:*`.
 - `"Remember across projects / company-wide"` → `memex_kv_put(key="global:<field>", ...)`.
-- A reusable multi-step WORKFLOW ("how we deploy / release / rotate creds") OR a worked episode of one → `memex_case_submit` (procedures are DERIVED from cases — no procedure-write tool; NOT a KV `procedure:` key, NOT `memex_add_note`). A one-line CONVENTION ("always lint before commit") → `memex_kv_put(key="<scope>:<field>")` — scope by cue, ASK if ambiguous.
-- `"That worked / it's holding / that fixed it"` with a referent in scope → `memex_record_outcome(units=[{unit_id, verb:"helpful", reason}])` on the search-returned units. Do NOT add a "Resolution confirmed" note — paired-write the existing units.
-- `"Save this insight / decision / lesson"` (new durable knowledge) → `memex_add_note(...)`.
-<example>User: "The JWT rotation change we landed last sprint — it's been clean."
-WRONG: search finds the rotation unit → `memex_add_note(title="JWT rotation confirmed")`.
-RIGHT: same search → `memex_record_outcome(units=[{unit_id:<u>, verb:"helpful", reason:"cadence held 30 days, no incidents"}])`.</example>
+- A reusable workflow or worked episode → `memex_case_submit` (see capture_on_surprise; NOT a KV `procedure:` key, NOT `memex_add_note`). A one-line CONVENTION ("always lint before commit") → `memex_kv_put(key="<scope>:<field>")`.
+- `"That worked / it's holding / that fixed it"` about an existing memory → `memex_record_outcome(units=[{unit_id, verb:"helpful", reason}])` on the search-returned units; do NOT add a "confirmed" note.
+- `"Save this insight / decision / lesson"` (durable knowledge, no surprise) → `memex_add_note(...)`.
 Local `Write`/`Edit` is for project code, never preferences. KV is for durable settings.
 </critical_constraint>
 
