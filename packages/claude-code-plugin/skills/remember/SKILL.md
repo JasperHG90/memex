@@ -27,23 +27,7 @@ argument-hint: "[what to remember]"
 
 ## Auto-injected metadata
 
-A `PreToolUse` hook augments every `memex_add_note` call with ambient capture metadata so you don't have to repeat it on each invocation:
-
-| Tag | When |
-| --- | --- |
-| `surface:claude-code` | Always |
-| `session:<note_key>` | Always (groups all notes from one CC session) |
-| `project:<project_id>` | Always (cross-vault discoverability) |
-| `git:branch=<branch>` | When inside a git repo |
-| `git:sha=<short>` | When a commit exists |
-| `git:repo=<owner/name>` | When `origin` remote is set |
-| `git:dirty` | When the working tree has uncommitted changes |
-| `claude:model=<id>` | When SessionStart cached the model identifier |
-| `cc:plugin=<version>` | Plugin version provenance |
-
-The hook also defaults `background=true` and `vault_id=<active_vault>` when those fields are absent. Pre-existing values you supply are preserved — passing `background: false` for synchronous ingestion still works.
-
-To opt out for a specific call, pass an explicit `tags` array containing only what you want. The hook merges (deduplicating); it does not strip values.
+A `PreToolUse` hook adds ambient tags (surface / session / project, git branch+sha+repo+dirty, model, plugin version) to every `memex_add_note` and `memex_case_submit` call, and on notes defaults `background=true` and `vault_id=<active_vault>` when absent — so don't set these yourself. Your explicit `tags` are merged (deduplicated, never stripped) and an explicit `background: false` is preserved.
 
 ## Deprioritize vs archive
 

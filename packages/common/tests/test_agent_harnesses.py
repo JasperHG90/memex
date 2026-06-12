@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from memex_common.agent_harnesses import CLAUDE_CODE_HARNESS, HERMES_HARNESS
 
-_TIER_2_CHAR_CAP = 5_300
+_TIER_2_CHAR_CAP = 5_150
 # Bumped 5,600 → 5,900 when the write_routing constraint gained two
 # procedure entries: global default (`procedure:<verb>:<context>`) and
 # the project-scoped variant gated on an explicit cue
