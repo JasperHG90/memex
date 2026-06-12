@@ -1511,6 +1511,13 @@ class Scenario(BaseModel):
     strategies: list[str] | None = None
     include_superseded: bool | None = None
     include_deprioritized: bool | None = None
+    # Per-scenario retrieval token budget (api answer_mode). The server
+    # defaults to ~1000 tokens of greedy packing (≈12 units), which silently
+    # caps the result *below* a larger ``top_k`` — a recall@k gate then never
+    # fetches k. Raise this for scenarios whose answer can legitimately sit
+    # past the first ~12 units (set 0 to disable the budget and honour
+    # ``top_k`` exactly). None → inherit the server default.
+    token_budget: int | None = None
     setup_actions: list[SetupAction] = Field(default_factory=list)
     inline_notes: list[InlineNote] = Field(default_factory=list)
     vault_name: str | None = None

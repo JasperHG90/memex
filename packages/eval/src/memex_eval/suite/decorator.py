@@ -551,6 +551,7 @@ class Suite:
         depends_on_prior_scenarios: Sequence[str] | None = None,
         replicates_override: int | None = None,
         mutating_scenario: bool = False,
+        token_budget: int | None = None,
     ) -> Scenario:
         """Register a fully-declarative scenario.
 
@@ -566,6 +567,7 @@ class Suite:
             strategies=strategies,
             include_superseded=include_superseded,
             include_deprioritized=include_deprioritized,
+            token_budget=token_budget,
             setup_actions=list(setup_actions or []),
             inline_notes=list(inline_notes or []),
             vault_name=vault_name,

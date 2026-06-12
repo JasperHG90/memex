@@ -315,6 +315,14 @@ suite.register(
     description='Query about former head should surface the predecessor.',
     query=('Who headed the Engineering department at TechCo Global before Ruby Martinez?'),
     top_k=20,
+    # The predecessor's (Alex Chen) dedicated units rank ~12-14 — inside the
+    # requested top_k=20, but the server's default ~1000-token budget greedy-
+    # packs to ~12 units and cuts them. Double the budget (1000 → 2000,
+    # ≈24 units) so this recall@20 gate actually fetches 20 units' worth.
+    # (The query mentions the current head "Ruby Martinez", which
+    # seeds/boosts her units ahead of the former head's — so the answer
+    # legitimately sits past the first dozen.)
+    token_budget=2000,
     group='temporal',
     expected=KeywordsPresent(type='keywords_present', keywords=['Alex Chen']),
 )

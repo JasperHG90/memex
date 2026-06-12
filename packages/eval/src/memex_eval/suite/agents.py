@@ -611,6 +611,8 @@ class DirectApiBackend(AnswerBackend):
                         kwargs['include_superseded'] = scenario.include_superseded
                     if scenario.include_deprioritized is not None:
                         kwargs['include_deprioritized'] = scenario.include_deprioritized
+                    if scenario.token_budget is not None:
+                        kwargs['token_budget'] = scenario.token_budget
                     units = await api.search(**kwargs)
                     out.units = list(units)
                     out.retrieved_unit_ids = [str(getattr(u, 'id', '')) for u in out.units]
