@@ -81,6 +81,7 @@ Slash commands:
 - `/remember [text]` — save to memory (routes to `memex_kv_put` / `memex_case_submit` / `memex_add_note` by shape).
 - `/recall [query]` — search memory (how-to query → `memex_procedural_search`; else `memex_memory_search` + `memex_note_search`).
 - `/retro` — session postmortem; files reusable how-tos as cases.
+- `/extract-case [note|file|url]` — turn content into a case, if it holds a reusable how-to (gated).
 
 Prohibitions:
 - NEVER use `memex_recent_notes` for discovery.
