@@ -157,6 +157,22 @@ class _ProceduralUpsert(SetupActionHandler):
         dto = await api.procedural_upsert(create)
         entry_id = UUID(str(dto.id))
 
+        # Re-assert the requested lifecycle state. The identity anchor
+        # (kind/scope/verb/context) is vault-agnostic — a single DB-global row
+        # per anchor — and ``teardown`` deprecates that row after every
+        # scenario/replicate. ``upsert_by_identity`` deliberately PRESERVES a
+        # deprecated state on rewrite (anti-resurrect guard), so a later
+        # scenario that re-seeds the SAME anchor lands ``status='deprecated'``
+        # and is invisible to the default ``status='published'`` search — the
+        # seed silently no-ops. PATCH (the designed resurrect path) honors an
+        # explicit status, forcing the seed into the state the scenario asked
+        # for regardless of prior anchor history. Order-safe: pin_to /
+        # deprecate_after below still run afterwards.
+        if dto.status != create.status:
+            from memex_common.procedural_schemas import ProceduralEntryUpdate
+
+            dto = await api.procedural_update(entry_id, ProceduralEntryUpdate(status=create.status))
+
         # Optional pin into a briefing context-binding chain. The
         # briefing-cards endpoint only surfaces PINNED entries, so a
         # scenario that gates briefing_cards must pin the seed into the
