@@ -39,7 +39,7 @@ echo "$count" > "$COUNTER_FILE"
 
 global_nudge=""
 if [ $((count % 10)) -eq 0 ]; then
-    global_nudge="10+ files written this session. If you completed a meaningful task (feature, fix, refactor), save a summary via \`memex_add_note\` (background: true, author: 'claude-code')."
+    global_nudge="10+ files written this session. If a completed unit of work is worth keeping: a non-obvious how-to or fix → \`memex_case_submit\` (trigger/actions/outcome/lesson); a durable fact or decision → \`memex_add_note\` (background: true, author: 'claude-code'); routine work → nothing."
 fi
 
 # --- Per-file edit tracking (edit spiral detection) ---
