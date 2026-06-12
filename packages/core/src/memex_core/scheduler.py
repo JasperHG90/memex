@@ -410,22 +410,6 @@ async def periodic_derivation_task(api: 'MemexAPI', batch_size: int):
             logger.error(f'Scheduler: Derivation failed: {e}', exc_info=True)
 
 
-async def periodic_event_case_proposal_task(api: 'MemexAPI'):
-    """§8/§18.6.2 EVENT-cluster case auto-promotion under the leader lock.
-
-    Proposes worked-episode notes as cases on the lint surface (drafts
-    requiring confirmation — never silent). Low cadence: candidate notes
-    accumulate slowly and pending-dedup prevents re-nagging.
-    """
-    async with background_session('bg-sched-event-case'):
-        try:
-            proposed = await api.propose_event_cases(limit=20)
-            if proposed:
-                logger.info('Scheduler: proposed %d worked-episode case(s).', len(proposed))
-        except (OSError, RuntimeError, ValueError) as e:
-            logger.error(f'Scheduler: event-case proposal failed: {e}', exc_info=True)
-
-
 async def periodic_lint_llm_task(api: 'MemexAPI'):
     """Per-vault surprise-gated LLM lint under MEMEX_LEADER_LOCK_ID.
 
@@ -628,12 +612,6 @@ async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI
     @clock.task(trigger=Every(seconds=60))
     async def run_derivation_job():
         await periodic_derivation_task(api, 10)
-
-    # --- EVENT-cluster case auto-promotion (§8/§18.6.2) — daily, proposes
-    # worked-episode notes as cases (confirmation-gated, never silent). ---
-    @clock.task(trigger=Every(seconds=86400))
-    async def run_event_case_proposal_job():
-        await periodic_event_case_proposal_task(api)
 
     # --- Diagnostics ---
     @clock.task(trigger=Every(seconds=7 * 86400))
