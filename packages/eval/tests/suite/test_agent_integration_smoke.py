@@ -77,10 +77,14 @@ class TestSuiteStructure:
         # read-before-write probe, two retrieve-first (deploy / release)
         # scenarios, and how-to-to-plane-not-KV. No briefing scenario —
         # pinned cards arrive inside the session briefing, not a tool.
-        # +5 longer-horizon procedural flows (group='procedural_lh':
-        # retrieve→record, probe→update, search→create, enact→case,
-        # strategy-fallback) — multi-step loops with ToolCallOrder gates.
-        assert len(SUITE.scenarios) == 50
+        # longer-horizon procedural flows (group='procedural_lh') —
+        # multi-step loops with ToolCallOrder gates.
+        # Under the case-only write model the agent-facing procedural writes
+        # collapsed to ``case_submit``: ``probe_then_update``,
+        # ``probes_identity_before_writing`` and ``search_miss_then_create``
+        # were dropped and ``corrects_procedure_via_case`` added — net -2
+        # from the V4 tally above → 48.
+        assert len(SUITE.scenarios) == 48
 
     def test_scenario_ids_unique(self) -> None:
         ids = [s.id for s in SUITE.scenarios]
@@ -189,20 +193,17 @@ class TestMutatingDiscipline:
         # procedural-plane agent scenarios (group='procedural').
         # The legacy ``procedure_*`` KV-routing scenarios were removed
         # (that write path is deprecated — how-tos go to the plane, not
-        # KV). These five write: case_submit files a note;
-        # get_by_identity-then-write; the two retrieve-first scenarios
-        # pre-seed via a mutating setup action and may write; the
-        # how-to scenario calls procedural_create. replicates_override=2
-        # is tracked in _OVERRIDE_TWO_IDS below.
+        # KV). Under the case-only write model the agent's only procedural
+        # write is ``case_submit``; ``corrects_procedure_via_case`` files a
+        # corrective case. replicates_override=2 is tracked in
+        # _OVERRIDE_TWO_IDS below.
         'procedural_files_case_via_case_submit',
-        'procedural_probes_identity_before_writing',
+        'procedural_corrects_procedure_via_case',
         'procedural_searches_before_deploying',
         'procedural_searches_before_release',
         'procedural_routes_howto_to_plane_not_kv',
         # Longer-horizon multi-step flows (group='procedural_lh').
         'procedural_deploy_then_records_outcome',
-        'procedural_probe_then_update',
-        'procedural_search_miss_then_create',
         'procedural_files_case_after_enacting',
         'procedural_strategy_fallback_on_novel_task',
     }
@@ -212,13 +213,11 @@ class TestMutatingDiscipline:
     # load-bearing contract and a single replay can pass by luck.
     _OVERRIDE_TWO_IDS = {
         'procedural_files_case_via_case_submit',
-        'procedural_probes_identity_before_writing',
+        'procedural_corrects_procedure_via_case',
         'procedural_searches_before_deploying',
         'procedural_searches_before_release',
         'procedural_routes_howto_to_plane_not_kv',
         'procedural_deploy_then_records_outcome',
-        'procedural_probe_then_update',
-        'procedural_search_miss_then_create',
         'procedural_files_case_after_enacting',
         'procedural_strategy_fallback_on_novel_task',
     }
