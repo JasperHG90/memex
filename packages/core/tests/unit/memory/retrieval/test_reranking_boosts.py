@@ -25,6 +25,10 @@ def _make_unit(
         text=text,
         fact_type='fact',
         event_date=event_date,
+        # The recency boost keys on ``occurred_start`` (the real authored
+        # date), so mirror the test's date there — these tests use the date
+        # purely to drive the recency factor.
+        occurred_start=event_date,
         vault_id=uuid4(),
         note_id=uuid4(),
         embedding=[],

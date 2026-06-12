@@ -40,7 +40,12 @@ def test_temporal_strategy_order():
     stmt = strategy.get_statement('test', None, limit=5)
 
     sql = str(stmt.compile())
-    assert 'ORDER BY memory_units.event_date DESC' in sql
+    # Ranks by the real authored date (occurred_start), not event_date —
+    # event_date defaults to ingest time for undated content, which would
+    # flood this query-blind recency sort with date-less "today" rows.
+    assert 'ORDER BY memory_units.occurred_start DESC' in sql
+    # Undated units abstain from the temporal signal entirely.
+    assert 'memory_units.occurred_start IS NOT NULL' in sql
     assert 'LIMIT' in sql
 
 

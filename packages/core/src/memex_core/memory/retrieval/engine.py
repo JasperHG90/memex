@@ -1630,12 +1630,19 @@ class RetrievalEngine:
 
             boosted_scores: list[float] = []
             for unit, ce_score in zip(results, normalized_scores):
-                # Recency boost
-                if unit.event_date is not None:
-                    days_ago = (now - unit.event_date).days
+                # Recency boost — keyed on ``occurred_start`` (the real
+                # authored date), NOT ``event_date``. ``event_date`` defaults
+                # to ingest time for undated content, so date-less units read
+                # as maximally fresh and outrank correctly-dated facts.
+                # ``occurred_start`` is genuinely NULL when the source carried
+                # no date, so those units fall to the neutral branch and are
+                # neither boosted nor penalised (matches Hindsight
+                # ``reranking.py``).
+                if unit.occurred_start is not None:
+                    days_ago = (now - unit.occurred_start).days
                     recency = max(0.1, min(1.0, 1.0 - (days_ago / 365)))
                 else:
-                    recency = 0.5  # neutral when no event_date
+                    recency = 0.5  # neutral when no authored date
 
                 recency_boost = 1.0 + recency_alpha * (recency - 0.5)
 
