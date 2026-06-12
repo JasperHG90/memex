@@ -562,3 +562,29 @@ class TestCompositeLogClipIntegration:
         """RetrievalConfig() ships with composite_boost_log_clip = math.inf."""
         config = RetrievalConfig()
         assert config.composite_boost_log_clip == math.inf
+
+
+def test_temporal_proximity_populated_from_query_window() -> None:
+    """``_apply_temporal_proximity`` activates the (formerly inert) rerank
+    temporal boost: fills ``temporal_proximity`` from the query's date window,
+    leaves date-less units neutral, and is a no-op when there is no window."""
+    engine = _make_engine([0.0])
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    end = datetime(2026, 1, 31, tzinfo=timezone.utc)  # midpoint = 2026-01-16
+
+    at_mid = _make_unit(event_date=datetime(2026, 1, 16, tzinfo=timezone.utc))
+    at_edge = _make_unit(event_date=datetime(2026, 1, 31, tzinfo=timezone.utc))
+    beyond = _make_unit(event_date=datetime(2025, 1, 1, tzinfo=timezone.utc))
+    undated = _make_unit(event_date=None)
+
+    engine._apply_temporal_proximity([at_mid, at_edge, beyond, undated], start, end)
+
+    assert at_mid.temporal_proximity > 0.99  # at the window midpoint
+    assert at_edge.temporal_proximity == 0.0  # a full half-width away
+    assert beyond.temporal_proximity == 0.0  # clamped beyond the window
+    assert getattr(undated, 'temporal_proximity', None) is None  # left neutral
+
+    # No window -> no-op (proximity never set).
+    again = _make_unit(event_date=datetime(2026, 1, 16, tzinfo=timezone.utc))
+    engine._apply_temporal_proximity([again], None, None)
+    assert getattr(again, 'temporal_proximity', None) is None

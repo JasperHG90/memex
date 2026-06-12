@@ -716,6 +716,14 @@ class RetrievalEngine:
         # surface superseded-but-ACTIVE units.
         hydrated_candidates = list(final_results)
 
+        # 6c. Populate ``temporal_proximity`` from the query's extracted date
+        # window (only set when the query was temporal) so the rerank temporal
+        # boost (scaled by ``reranking_temporal_alpha``) is active rather than
+        # permanently neutral.
+        self._apply_temporal_proximity(
+            final_results, filters.get('start_date'), filters.get('end_date')
+        )
+
         # 7. Rerank (cap input to avoid O(n) cross-encoder blowup)
         t0 = _t()
         if use_reranker:
@@ -961,6 +969,42 @@ class RetrievalEngine:
         Item = namedtuple('Item', ['id', 'type'])
 
         return [Item(id=k[0], type=k[1]) for k in sorted_keys[:limit]]
+
+    def _apply_temporal_proximity(
+        self,
+        units: list[MemoryUnit],
+        start_date: datetime | None,
+        end_date: datetime | None,
+    ) -> None:
+        """Populate ``unit.temporal_proximity`` in [0, 1] from the query's
+        extracted date window so the rerank temporal boost (scaled by
+        ``RetrievalConfig.reranking_temporal_alpha``) is no longer inert.
+
+        ``1.0`` = the unit's date sits at the window midpoint; it falls
+        linearly to ``0.0`` a full half-width away (or beyond). Units without a
+        date are left unset, so the rerank read defaults them to a neutral
+        ``0.5``. No-op when the query carried no temporal window (the common
+        case) — this only fires for genuinely temporal queries. Mirrors
+        Hindsight's temporal arm: ``1 - min(days_from_mid / (total_days/2), 1)``.
+        """
+        if start_date is None or end_date is None:
+            return
+        mid = start_date + (end_date - start_date) / 2
+        half_window = abs((end_date - start_date).total_seconds()) / 2.0
+        for u in units:
+            unit_date = u.occurred_start or u.event_date
+            if unit_date is None:
+                continue
+            try:
+                offset = abs((unit_date - mid).total_seconds())
+            except TypeError:
+                # Naive/aware datetime mismatch — skip rather than crash.
+                continue
+            if half_window <= 0:
+                proximity = 1.0 if offset == 0 else 0.0
+            else:
+                proximity = 1.0 - min(offset / half_window, 1.0)
+            object.__setattr__(u, 'temporal_proximity', proximity)
 
     def _apply_position_aware_blending(self, results: list[MemoryUnit]) -> list[MemoryUnit]:
         """
