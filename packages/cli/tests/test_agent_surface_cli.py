@@ -84,11 +84,16 @@ def test_claude_code_profile_includes_universal_block_and_harness() -> None:
     assert '/recall' in out
 
 
-def test_mcp_target_is_terse_and_pointer_at_agent_surface() -> None:
-    """``agent-surface mcp`` is the Tier 1a transport surface — minimal,
-    points at `agent_surface` for composition rules. Pin both positive
-    content (progressive disclosure, vault defaults, pointer) and negative
-    (Tier 1b content absent)."""
+def test_mcp_target_is_terse_and_defers_doctrine_to_host_prompt() -> None:
+    """``agent-surface mcp`` is the Tier 1a transport surface — minimal, and
+    defers routing/storage/citation doctrine to the host system prompt. Pin
+    both positive content (progressive disclosure, vault defaults, pointer)
+    and negative (Tier 1b content absent).
+
+    The integrator-facing ``compose_universal()`` composition recipe (which
+    named ``agent_surface``) was removed in the register-rebalance — it was
+    documentation for the prompt builder, not the consuming agent. We pin
+    the calm replacement pointer line instead."""
     out = _run('mcp')
     # Positive: load-bearing transport facts must be present.
     assert 'TOOL DISCOVERY' in out
@@ -96,7 +101,7 @@ def test_mcp_target_is_terse_and_pointer_at_agent_surface() -> None:
     assert 'memex_search' in out
     assert 'memex_get_schema' in out
     assert 'VAULT DEFAULTS' in out
-    assert 'agent_surface' in out
+    assert 'host system prompt' in out
     # Negative: Tier 1b CONTENT must NOT appear here (the pointer naming
     # "5-step resolution flow" is contrastive — that's fine; what we ban is
     # the actual scaffolding like "Option A"/"Option B").
@@ -267,10 +272,17 @@ def test_output_dir_emits_nothing_to_stdout(tmp_path: Path) -> None:
 
 
 def test_critical_constraint_xml_tags_in_universal() -> None:
-    """Load-bearing CRITICAL_HEADER / VIRTUAL_UNIT / CRITICAL_FOOTER content
-    is wrapped in ``<critical_constraint name="…">`` / ``<critical_reminder>``
-    XML blocks per Anthropic best practice. Pin the named tags so a
-    regression that drops the structure trips here."""
+    """Load-bearing CRITICAL_HEADER / VIRTUAL_UNIT content is wrapped in
+    ``<critical_constraint name="…">`` XML blocks per Anthropic best
+    practice. Pin the named tags so a regression that drops the structure
+    trips here.
+
+    The former CRITICAL_FOOTER (a near-verbatim ``<critical_reminder>``
+    restatement of these same four invariants) was removed in the
+    register-rebalance: duplicating the loud block at both ends saturated
+    the ``critical`` channel on Fable-5 / Opus-4.8, which follow calm
+    instructions as faithfully as shouted ones. The four invariants remain
+    in CRITICAL_HEADER (still loud — they ARE 4xx server contracts)."""
     out = _run('universal')
     # CRITICAL_HEADER → 4 named constraints. The observation-read-only
     # constraint was previously named `virtual_unit_404` when the server
@@ -288,16 +300,9 @@ def test_critical_constraint_xml_tags_in_universal() -> None:
         )
     # VIRTUAL_UNIT → 1 named constraint (the long-form one)
     assert '<critical_constraint name="virtual_unit_filter">' in out
-    # CRITICAL_FOOTER → 4 named reminders
-    for name in (
-        'record_outcome_shape',
-        'virtual_unit_filter',
-        'kv_scope_qualifier',
-        'citations_required',
-    ):
-        assert f'<critical_reminder name="{name}">' in out, (
-            f'missing <critical_reminder name="{name}"> tag in universal output'
-        )
+    # The footer's <critical_reminder> restatement is gone — assert it
+    # does NOT reappear (re-saturating the loud channel is the regression).
+    assert '<critical_reminder' not in out
 
 
 # ---------------------------------------------------------------------------
@@ -374,7 +379,7 @@ def test_hermes_profile_composition_order() -> None:
     Pin the order by checking the procedural heading's offset
     relative to the universal block's footer marker."""
     out = _run('hermes')
-    universal_footer = '## Critical reminders'
+    universal_footer = '## Citations'
     procedural_heading = '## Procedural plane'
     assert universal_footer in out
     assert procedural_heading in out
@@ -386,7 +391,7 @@ def test_claude_code_profile_composition_order() -> None:
     agentic surfaces use the same ``compose_with_procedural()`` +
     harness composition shape, so the order is identical."""
     out = _run('claude-code')
-    universal_footer = '## Critical reminders'
+    universal_footer = '## Citations'
     procedural_heading = '## Procedural plane'
     assert universal_footer in out
     assert procedural_heading in out

@@ -155,8 +155,11 @@ _REQUIRED_KEYWORDS: tuple[str, ...] = (
     'memex_memory_deprioritize',
     # Search-query hygiene (promoted from CLAUDE_CODE_HARNESS to Tier 1b so
     # every Memex consumer — Hermes, MCP-hosted agents, Claude Code —
-    # inherits the same query-formulation discipline).
-    '<critical_constraint name="search-queries">',
+    # inherits the same query-formulation discipline). The directive is
+    # calm prose (style guidance, not a 4xx contract), so we pin the
+    # section header + the load-bearing natural-language rule rather than a
+    # `<critical_constraint>` tag.
+    '## Search query formulation',
     'NEVER as keyword lists',
     # V5 slim-mode guidance — pin so agents see the slim=True opt-in for
     # the three list-shape browse tools.
@@ -192,7 +195,6 @@ _SECTION_CONSTANTS = (
     'VIRTUAL_UNIT',
     'KV_NAMESPACE',
     'CITATIONS',
-    'CRITICAL_FOOTER',
 )
 
 
@@ -209,33 +211,6 @@ def test_layer_routing_primer_still_exported() -> None:
     agents that want the 4-layer table can append it explicitly."""
     assert ags.LAYER_ROUTING_PRIMER_TABLE
     assert ags.LAYER_ROUTING_PRIMER_FRAGMENT
-
-
-# ---------------------------------------------------------------------------
-# U-shaped composition — header AND footer carry the same 4 load-bearing
-# constraints (primacy + recency). This makes the model see them at both
-# ends, where attention is strongest.
-# ---------------------------------------------------------------------------
-
-
-def test_header_and_footer_both_mention_record_outcome_shape() -> None:
-    assert 'units=' in ags.CRITICAL_HEADER
-    assert 'units=' in ags.CRITICAL_FOOTER
-
-
-def test_header_and_footer_both_mention_virtual_units() -> None:
-    assert 'virtual' in ags.CRITICAL_HEADER
-    assert 'virtual' in ags.CRITICAL_FOOTER
-
-
-def test_header_and_footer_both_mention_kv_scope_rule() -> None:
-    assert 'scope qualifier' in ags.CRITICAL_HEADER
-    assert 'scope qualifier' in ags.CRITICAL_FOOTER
-
-
-def test_header_and_footer_both_mention_citations() -> None:
-    assert 'Cite' in ags.CRITICAL_HEADER or 'cite' in ags.CRITICAL_HEADER.lower()
-    assert 'Cite' in ags.CRITICAL_FOOTER or 'cite' in ags.CRITICAL_FOOTER.lower()
 
 
 def test_no_bare_metadata_virtual_attribute_path_anywhere() -> None:

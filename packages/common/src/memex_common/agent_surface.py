@@ -109,7 +109,7 @@ Match the query shape; call the listed tool(s):
 - **Specific fact / single question** → `memex_memory_search` AND `memex_note_search` in parallel. Retry `expand_query=true` if insufficient.
 - **Comprehensive view of a topic/entity** ("everything/overview/tell me all about X") → `memex_survey(query)` FIRST, OR ≥3 facet-scoped `memex_memory_search` calls. One search result is NEVER enough. <example>"Tell me everything about Topic-X" → WRONG: one `memex_memory_search("Topic-X")`. RIGHT: `memex_survey("Topic-X")`, or 3 facet-scoped `memex_memory_search` → consolidate.</example>
 - **Broad/panoramic** (vault-wide, no topic) → `memex_get_vault_summary` first; escalate to `memex_survey(query)` if too coarse.
-- **KV** ("what's our X?" / "what convention?" / "what do I prefer?" / "what setting?") → `memex_kv_get(key)` / `memex_kv_search(query)` / `memex_kv_list()` FIRST. NEVER `ls`/`Glob`/`Read`/`Bash`/inspect local files first — preferences/conventions/settings live in KV, not on disk. Wake words route verbatim: `KV: get <key>`, `KV: search <query>`, `Store in KV: <key>=<value>`. (How-to procedures are NOT KV → procedural plane.)
+- **KV** ("what's our X?" / "what convention?" / "what do I prefer?" / "what setting?") → `memex_kv_get(key)` / `memex_kv_search(query)` / `memex_kv_list()`. Preferences/conventions/settings live in KV, not on disk — answer from `memex_kv_get`/`memex_kv_search` before inspecting local files (`ls`/`Glob`/`Read`/`Bash`). Wake words route verbatim: `KV: get <key>`, `KV: search <query>`, `Store in KV: <key>=<value>`. (How-to procedures are NOT KV → procedural plane.)
 
 After `memory_search`: call `memex_get_notes_metadata`. After `note_search`: metadata is inline — do NOT call `memex_get_notes_metadata`. `memex_read_note` only when `total_tokens < 500`.
 
@@ -118,11 +118,9 @@ For list-shape browse tools (`memex_recent_notes`, `memex_list_notes`, `memex_li
 
 SEARCH_QUERIES = """## Search query formulation
 
-<critical_constraint name="search-queries">
-ALWAYS formulate search queries as natural language, NEVER as keyword lists.
-ALWAYS preserve proper nouns, amounts, dates, qualifiers from the original question.
-ALWAYS search for the subject/activity, NOT the answer type.
-</critical_constraint>"""
+Formulate search queries as natural language, not as keyword lists (NEVER as keyword lists). Preserve proper nouns, amounts, dates, and qualifiers from the original question, and search for the subject/activity rather than the answer type.
+
+<example>"When did we last rotate the prod DB credentials?" → WRONG: `memex_memory_search("prod DB credentials rotation date")` (keywords + answer-type). RIGHT: `memex_memory_search("When did we last rotate the prod database credentials?")`.</example>"""
 
 
 RESOLUTION_FLOW = """## 5-step resolution flow
@@ -136,7 +134,7 @@ Triggers: success — "that worked", "that fixed it", "yes, that did it", "perfe
 1. **Disambiguate** — ambiguous scope (multiple candidates, no temporal anchor)? ASK before writing.
 2. **Route** — title → `memex_find_note`; content → `memex_memory_search`. Pick one:
    - A entity-anchored: `memex_list_entities` → `memex_get_entity_mentions`.
-   - B cross-note: `memex_memory_search(top_k=30)`. `top_k` must be ≥30.
+   - B cross-note: `memex_memory_search(top_k=30)`. `top_k` must be ≥30 (top_k=30 — outcome judging needs a wide candidate pool; the default 10 misses the unit you're stamping).
    - C single-note: `memex_get_page_indices` → `memex_get_memory_units(chunk_ids=…)`.
 3. **Judge** — READ unit bodies; pick outcome-relevant subset. NEVER bulk-write.
 4. **+5. Paired writes** on the judged subset:
@@ -207,7 +205,7 @@ Recall HOW to do something ("how we deploy", "the release steps") → `memex_pro
 </critical_constraint>
 
 <critical_constraint name="procedural_retrieve_first">
-The MOMENT a request is an action you might have a procedure for — deploy, release, cut/ship a build, bump a version, rotate creds, run a migration, set up an env — your FIRST tool call is `memex_procedural_search(query="<the task>")`, BEFORE you act, narrate steps, read files, or run a shell/terminal command. Do not improvise from the filesystem or memory until you have checked the plane. A hit is a learned procedure: follow it, don't re-derive; do not also semantic-search it.
+For a task you may have done before (deploy, release, cut/ship a build, bump a version, rotate creds, run a migration, set up an env), check `memex_procedural_search(query="<the task>")` before improvising from the filesystem or memory. A hit is a learned procedure to follow, not re-derive; do not also semantic-search it.
 </critical_constraint>
 
 <critical_constraint name="procedural_vs_semantic_add">
@@ -218,8 +216,12 @@ There is NO procedure create/update tool — procedures and strategies are DERIV
 </critical_constraint>
 
 <critical_constraint name="close_the_loop">
-After you ENACT a known procedure (pass `case_of=<id>`), or whenever the user asks to "record" / "log how it went" / "make a record" of a run, you MUST end by calling `memex_case_submit` (set `outcome`) — searching/doing is only HALF the loop. For any OTHER task, apply the capture test: file a case only if you'd want these steps back next time; routine work gets nothing.
+When you enact a known procedure (pass `case_of=<id>`), or the user asks to "record" / "log how it went" / "make a record" of a run, close the loop with `memex_case_submit` (set `outcome`) — searching or doing is only half of it. For any other task, apply the capture test: file a case only if you'd want these steps back next time; routine work gets nothing.
 </critical_constraint>
+
+<example>"Document how we deploy" → `memex_case_submit`, NOT `memex_add_note` (a how-to note is invisible to the plane).</example>
+<example>"What did we decide about retries?" → `memex_memory_search` (fact recall, not how-to).</example>
+<example>followed procedure abc-123 to rotate creds → `memex_case_submit(case_of="abc-123", outcome="success")`.</example>
 
 Two derived kinds, identity anchor `(kind, scope, verb, context)`:
 - `procedure` — a workflow; keyed by `verb`+`context` (e.g. verb=`deploy`, context=`nomad`).
@@ -234,25 +236,6 @@ CITATIONS = """## Citations
 Cite source notes inline for every claim grounded in Memex content: `…claim [note-title-or-id].`
 
 One reference per load-bearing claim. Never fabricate titles or ids — say "I cannot identify a specific source" instead."""
-
-
-CRITICAL_FOOTER = """## Critical reminders
-
-<critical_reminder name="record_outcome_shape">
-`memex_record_outcome`: `units=[{unit_id, verb, reason}]`. Bare `success=True` → 400.
-</critical_reminder>
-
-<critical_reminder name="virtual_unit_filter">
-Observations (`unit_metadata.virtual: true`) → deprio returns 400 with `source_memory_units`; re-issue against one of the listed MU IDs.
-</critical_reminder>
-
-<critical_reminder name="kv_scope_qualifier">
-KV namespace: scope qualifier picks the namespace. "for this project" → `project:<id>:` even with "I"/"my".
-</critical_reminder>
-
-<critical_reminder name="citations_required">
-Cite inline; never fabricate.
-</critical_reminder>"""
 
 
 # ---------------------------------------------------------------------------
@@ -280,13 +263,7 @@ named vaults). To scope to one system vault, name it and omit the flag.
 
 NEVER fabricate IDs — use only IDs returned by a tool.
 
-This surface is the tool protocol ONLY. Retrieval routing, storage model,
-resolution flow, KV namespace rules, virtual-unit warning, and citation
-discipline live in the system prompt: compose them from
-`memex_common.agent_surface.compose_universal()` — or `compose_with_procedural()`
-if you mount the procedural tools (`memex_procedural_*` / `memex_case_submit`) —
-(Python), or `memex agent-surface universal` / `... claude-code` (shell), when
-building a Memex-aware agent beyond raw MCP."""
+Routing, storage, and citation doctrine live in the host system prompt, not here."""
 
 
 # ---------------------------------------------------------------------------
@@ -304,7 +281,7 @@ def compose_universal() -> str:
     Composition order (primacy → middle → recency):
         CRITICAL_HEADER → STORAGE_MODEL → RETRIEVAL_ROUTING →
         SEARCH_QUERIES → RESOLUTION_FLOW → AXES → HISTORICAL_ROUTING →
-        VIRTUAL_UNIT → KV_NAMESPACE → CITATIONS → CRITICAL_FOOTER
+        VIRTUAL_UNIT → KV_NAMESPACE → CITATIONS
 
     ``LAYER_ROUTING_PRIMER_TABLE`` is NOT included by default — it overlaps
     with ``RETRIEVAL_ROUTING`` (by-query-type vs by-layer decomposition of
@@ -323,7 +300,6 @@ def compose_universal() -> str:
             VIRTUAL_UNIT,
             KV_NAMESPACE,
             CITATIONS,
-            CRITICAL_FOOTER,
         ]
     )
 
@@ -352,7 +328,6 @@ __all__ = [
     # New universal sections.
     'AXES',
     'CITATIONS',
-    'CRITICAL_FOOTER',
     'CRITICAL_HEADER',
     'PROCEDURAL_PLANE',
     'HISTORICAL_ROUTING',

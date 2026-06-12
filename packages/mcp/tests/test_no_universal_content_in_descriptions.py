@@ -137,11 +137,19 @@ def test_mcp_instructions_is_ssot_object() -> None:
     )
 
 
-def test_mcp_instructions_references_agent_surface() -> None:
-    """``instructions=`` must point composing agents at the SSOT."""
+def test_mcp_instructions_defers_doctrine_to_host_prompt() -> None:
+    """``instructions=`` must tell composing agents that routing/storage/
+    citation doctrine lives elsewhere (the host system prompt), not in the
+    transport surface.
+
+    The integrator-facing ``compose_universal()`` / ``compose_with_procedural()``
+    composition recipe was removed in the register-rebalance: it was
+    documentation for whoever builds the prompt, sitting in the field the
+    *consuming* agent reads — the agent can't compose its own prompt, so the
+    recipe was noise. We pin the replacement pointer line instead."""
     text = getattr(mcp, 'instructions', None) or ''
-    assert 'agent_surface' in text or 'memex_common' in text, (
-        'MCP `instructions=` should reference `memex_common.agent_surface` '
-        'so agents composing their own system prompt know where the universal '
-        'content lives.'
+    assert 'host system prompt' in text, (
+        'MCP `instructions=` should tell composing agents that routing, '
+        'storage, and citation doctrine live in the host system prompt, '
+        'not in the transport surface.'
     )

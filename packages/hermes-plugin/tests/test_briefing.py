@@ -300,10 +300,10 @@ def test_format_block_carries_procedural_block_after_universal():
         session_note_key='k',
         kv_instructions_if_no_vault=False,
     )
-    # The universal block ends with the CRITICAL_FOOTER section; the
-    # procedural block lives BELOW it. Find both headings and check
-    # the relative order.
-    universal_footer = '## Critical reminders'
+    # The universal block ends with the CITATIONS section (CRITICAL_FOOTER
+    # was removed in the register-rebalance); the procedural block lives
+    # BELOW it. Find both headings and check the relative order.
+    universal_footer = '## Citations'
     procedural_heading = '## Procedural plane'
     assert universal_footer in block, 'universal block missing — pre-test setup error'
     assert procedural_heading in block
