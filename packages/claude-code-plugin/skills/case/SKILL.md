@@ -1,6 +1,6 @@
 ---
 name: case
-description: "Capture what you just did as a Memex case — an in-the-moment worked episode (trigger / situation / actions / outcome / lesson). The system derives a reusable procedure from it."
+description: "Deliberately capture what you JUST did as a Memex case — a worked episode (trigger / situation / actions / outcome / lesson) the system derives a reusable procedure from. Use right after finishing a multi-step task, diagnosing a bug, or resolving an incident, or when asked to 'record/log/save how I did this'. Distinct from /remember (auto-routes by shape) and /extract-case (converts existing content) — this is the structured, in-the-moment path."
 argument-hint: "[what you just did, e.g. 'fixed the staging deploy timeout']"
 ---
 
@@ -33,10 +33,10 @@ Link the case to a procedure the system already derived, so it lands in the righ
 
 ```text
 # (scope, verb, context) — e.g. verb="deploy", context="staging"
-memex_procedural_get_by_identity(kind="procedure", scope="global", verb="<verb>", context="<context>")
+memex_procedural_get_by_identity(kind="procedure", scope="<scope>", verb="<verb>", context="<context>")
 ```
 
-If that returns `null`, optionally try `memex_procedural_search(query="...", kind="procedure")` to spot a near-anchor before giving up on linking. If you find one, pass its id as `case_of` below; otherwise leave `case_of` unset.
+Pick `scope` by where the how-to belongs: `project:<id>` for a project-specific workflow, `app:<id>` for an app-specific one, `global` for a cross-project convention. If a project/app procedure is plausible, probe that scope before falling back to `global` — `get_by_identity` is an exact-anchor lookup, so the wrong scope misses. If every probe returns `null`, optionally try `memex_procedural_search(query="...", kind="procedure")` to spot a near-anchor before giving up on linking. If you find one, pass its id as `case_of` below; otherwise leave `case_of` unset.
 
 ## 4. File the case
 

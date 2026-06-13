@@ -1,7 +1,7 @@
 ---
 name: correct
-description: "Tell Memex a surfaced memory was wrong or stale. Records a negative outcome on the offending unit(s) and lowers their retrieval rank — the negative-signal loop."
-argument-hint: "[what was wrong/stale, e.g. 'the rotation cadence it suggested is outdated']"
+description: "Tell Memex a surfaced memory was wrong, outdated, or noise. Use whenever you say 'stop suggesting that', 'that's stale / outdated / wrong', 'we removed that', or want a misleading fact to stop surfacing — records a not_helpful outcome on the offending unit(s) and deprioritizes them (the negative-signal loop). NOT for confirming a fix worked (that's a helpful outcome)."
+argument-hint: "[which fact + why it's wrong, e.g. 'the rotation cadence it suggested is outdated']"
 ---
 
 # /correct — Mark a memory wrong or stale
@@ -18,9 +18,10 @@ Search for the unit(s) the correction is about: `memex_memory_search(query="..."
 
 ## 3. Resolve observations BEFORE acting
 
-Some hits are **observations** — read-only projections of memory units, marked `unit_metadata.virtual: true`. You cannot deprioritize a virtual unit: the call is rejected, and the redirect to the underlying units does **not** survive back to you as a usable error. So check each hit **before** acting:
+Some hits are **observations** — read-only projections of memory units. Each hit carries a top-level `virtual` flag; when `virtual: true`, its `id` is a synthesized placeholder, not a deprioritizable row. Check it before acting:
 
-- If a hit has `unit_metadata.virtual: true`, do not target its UUID. Resolve it to the underlying memory unit(s) from the search result's evidence / `source_memory_units` and target those instead.
+- If a hit has `virtual: true`, do NOT target its `id`. Resolve to the underlying memory unit(s) via the hit's **`evidence_ids`** and target those instead.
+- If you do try to deprioritize a virtual unit, the tool now returns an error that lists the source memory unit(s) to retry against — so the reactive path works as a safety net. But checking `virtual` up front (and using `evidence_ids`) is cleaner and avoids the round-trip.
 - Only ever record outcomes and deprioritize **real** memory units.
 
 ## 4. Paired write on the judged subset
@@ -29,15 +30,15 @@ For each real unit you're correcting, do both:
 
 ```text
 memex_record_outcome(units=[{unit_id, verb: "not_helpful", reason}])
-memex_memory_deprioritize(unit_id, reason, vault_id=<the unit's vault>)
+memex_memory_deprioritize(unit_id, reason)
 ```
 
 - `reason` is required and free-text — say *why* it's wrong/stale.
-- **Pass the unit's own `vault_id`** (from its search hit). `memex_memory_deprioritize` defaults to the active write vault and rejects cross-vault calls — a candidate that lives in another vault will fail without it.
 - `memex_record_outcome` takes `units=[{unit_id, verb, reason}]`; a bare `success=true/false` returns an error.
+- `memex_memory_deprioritize` targets the active write vault by default — the same vault `memex_memory_search` drew the hit from — so you don't pass a vault. (Only set `vault_id` if you deliberately searched another vault; a wrong vault is rejected.)
 
 ## 5. Confirm and offer undo
 
-State which units you corrected and the reason. Deprioritize is reversible: if the user says you over-corrected, `memex_memory_restore(unit_id, vault_id)` flips it back into default-scope retrieval. (Recording an outcome is append-only and not reversed — restore only undoes the surface state.)
+State which units you corrected and the reason. Deprioritize is reversible: if the user says you over-corrected, `memex_memory_restore(unit_id)` flips it back into default-scope retrieval. (Recording an outcome is append-only and not reversed — restore only undoes the surface state.)
 
 This is the mirror image of confirming a memory *held* — for "that worked / it's holding", record a `helpful` outcome instead (no deprioritize). Keep this consistent with the system-prompt resolution flow that `/remember` follows.

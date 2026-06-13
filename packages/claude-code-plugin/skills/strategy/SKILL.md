@@ -1,7 +1,7 @@
 ---
 name: strategy
-description: "Recall the cross-procedure strategy for a verb — Memex's top procedural tier, the general approach that spans the individual procedures for a scope + verb."
-argument-hint: "[verb / general approach, e.g. 'how we approach releases']"
+description: "Recall the cross-procedure strategy for a verb — Memex's top procedural tier: the general approach/philosophy that spans the individual procedures for a scope + verb. Use when you ask 'what's our approach to X?', 'how do we think about X?', 'the strategy behind X' and want the overall stance, NOT the step-by-step how-to (that's /procedure)."
+argument-hint: "[verb / general approach, e.g. 'our approach to releases']"
 ---
 
 # /strategy — Recall a strategy

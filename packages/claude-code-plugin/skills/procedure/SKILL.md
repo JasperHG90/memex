@@ -1,6 +1,6 @@
 ---
 name: procedure
-description: "Recall a how-to from Memex's procedural plane — the derived, step-by-step procedure for a task you may have done before (deploy, release, rotate creds, migrate)."
+description: "Recall the step-by-step how-to for a task from Memex's procedural plane. Use whenever you ask 'how do we X?', 'how do I X?', 'what's our process/checklist for X?' (deploy, release, rotate creds, migrate) and want the concrete steps — NOT the general approach (that's /strategy). Reach for this before improvising a multi-step task you may have done before."
 argument-hint: "[how-to query, e.g. 'how do we cut a release']"
 ---
 
