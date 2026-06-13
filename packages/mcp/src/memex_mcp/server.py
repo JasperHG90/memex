@@ -3943,6 +3943,26 @@ async def memex_memory_deprioritize(
                 raise ToolError(f'Memory unit {unit_id} not found.')
             if exc.response.status_code == 403:
                 raise ToolError(f'Access denied to vault for memory unit {unit_id}.')
+            if exc.response.status_code == 400:
+                # The server redirects observation-id targets to their source
+                # MUs via a structured 400 (ObservationReadOnlyError →
+                # {'detail': {'error': ..., 'source_memory_units': [...]}}).
+                # httpx's raise_for_status flattens the body to a bare message
+                # string, so the redirect must be re-surfaced HERE or the agent
+                # loses the retry target the tool contract promises. Other 400s
+                # (ambiguous/validation) carry a plain-string detail and fall
+                # through to the bare raise unchanged.
+                try:
+                    detail = exc.response.json().get('detail')
+                except Exception:
+                    detail = None
+                if isinstance(detail, dict) and detail.get('source_memory_units'):
+                    sources = ', '.join(str(u) for u in detail['source_memory_units'])
+                    raise ToolError(
+                        f'{unit_id} is a read-only observation (a projection of '
+                        f'mental-model evidence), not a deprioritizable memory unit. '
+                        f'Deprioritize its source memory unit(s) instead: {sources}.'
+                    )
             raise
         return {'unit_id': str(unit.id), 'is_deprioritized': True, 'reason': reason}
     except ToolError:
