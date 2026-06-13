@@ -272,7 +272,11 @@ class CaseSubmitRoundtrip(ExpectedOutcomeBase):
     def metric_keys(self) -> list[str]:
         return ['pass', 'assignment_mode_match']
 
-    def score(self, answer, *, scenario, context=None, **_kw) -> dict[str, float]:
+    def score(self, answer, scenario, context=None, **_kw) -> dict[str, float]:
+        # ``scenario`` is positional: the runner calls
+        # ``score(answer, scenario, ...)`` (runner.py:1116). A keyword-only
+        # ``*, scenario`` here raised "takes 2 positional arguments but 3 were
+        # given" — match the sibling outcomes' positional signature.
         if answer.error or not answer.units:
             return {'pass': 0.0, 'assignment_mode_match': 0.0}
         result = answer.units[0]
