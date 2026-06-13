@@ -427,3 +427,102 @@ async def test_procedural_upsert_rejects_payload_validation_error():
                 'kind_title': 'procedural-suite-malformed',
             },
         )
+
+
+# ---------------------------------------------------------------------------
+# Suite-private setup action — lifecycle re-assert (tombstone regression)
+#
+# The procedural identity anchor (kind, scope, verb, context) is a single
+# vault-agnostic DB-global row, and ``_ProceduralUpsert.teardown`` deprecates
+# it after every scenario/replicate. ``upsert_by_identity`` deliberately
+# PRESERVES a deprecated state on rewrite (anti-resurrect guard), so a later
+# scenario re-seeding the SAME anchor lands ``status='deprecated'`` and is
+# invisible to the default ``status='published'`` search — the seed silently
+# no-ops. ``run`` must re-assert the requested state via explicit PATCH.
+# ---------------------------------------------------------------------------
+
+
+_SEED_ENTRY_ID = UUID('00000000-0000-0000-0000-000000000001')
+
+
+class _FakeProceduralApi:
+    """Async stand-in for ``RemoteMemexAPI`` covering the calls
+    ``_ProceduralUpsert.run`` makes in the no-pin / no-deprecate path.
+
+    ``upsert_status`` models the lifecycle state the upsert lands in:
+    ``'deprecated'`` reproduces the tombstone a prior teardown left on the
+    shared anchor (the exact condition that made procedural_search return 0
+    hits in the agent_integration suite)."""
+
+    def __init__(self, upsert_status: str) -> None:
+        self._upsert_status = upsert_status
+        self.update_calls: list[tuple[UUID, str]] = []
+
+    async def procedural_upsert(self, create):  # noqa: ANN001
+        return _dto(status=self._upsert_status)
+
+    async def procedural_update(self, entry_id, payload, *, vault_id=None):  # noqa: ANN001
+        self.update_calls.append((entry_id, payload.status))
+        return _dto(status=payload.status)
+
+
+def _seed_params(**overrides: str) -> dict[str, str]:
+    params = {
+        'kind_kind': 'procedure',
+        'kind_scope': 'global',
+        'kind_verb': 'deploy',
+        'kind_context': 'payments',
+        'kind_title': 'Deploy the payments service',
+        'kind_trigger': 'deploying the payments service to any environment',
+    }
+    params.update(overrides)
+    return params
+
+
+@pytest.mark.asyncio
+async def test_procedural_upsert_reasserts_published_after_tombstone():
+    """Regression: an upsert that lands on a deprecated tombstone is PATCHed
+    back to the requested published state via exactly one re-assert call."""
+    from memex_eval.suites.procedural_plane._setup_actions import _ProceduralUpsert
+
+    handler = _ProceduralUpsert()
+    api = _FakeProceduralApi(upsert_status='deprecated')  # prior teardown's tombstone
+    result = await handler.run(
+        api=api,  # type: ignore[arg-type]
+        vault_id=UUID('00000000-0000-0000-0000-000000000000'),
+        params=_seed_params(),
+    )
+    assert api.update_calls == [(_SEED_ENTRY_ID, 'published')]
+    assert result['identity_anchor'] == 'procedure/global/deploy/payments'
+
+
+@pytest.mark.asyncio
+async def test_procedural_upsert_no_patch_when_already_published():
+    """A fresh anchor that upserts straight to published needs no PATCH —
+    the re-assert is conditional, not an unconditional extra write."""
+    from memex_eval.suites.procedural_plane._setup_actions import _ProceduralUpsert
+
+    handler = _ProceduralUpsert()
+    api = _FakeProceduralApi(upsert_status='published')
+    await handler.run(
+        api=api,  # type: ignore[arg-type]
+        vault_id=UUID('00000000-0000-0000-0000-000000000000'),
+        params=_seed_params(),
+    )
+    assert api.update_calls == []
+
+
+@pytest.mark.asyncio
+async def test_procedural_upsert_reasserts_requested_draft_status():
+    """The re-assert honors the REQUESTED state, not a hardcoded 'published':
+    a draft seed landing on a tombstone is PATCHed back to draft."""
+    from memex_eval.suites.procedural_plane._setup_actions import _ProceduralUpsert
+
+    handler = _ProceduralUpsert()
+    api = _FakeProceduralApi(upsert_status='deprecated')
+    await handler.run(
+        api=api,  # type: ignore[arg-type]
+        vault_id=UUID('00000000-0000-0000-0000-000000000000'),
+        params=_seed_params(kind_status='draft'),
+    )
+    assert api.update_calls == [(_SEED_ENTRY_ID, 'draft')]
