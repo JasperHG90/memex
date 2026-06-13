@@ -74,6 +74,10 @@ Slash commands:
 - `/recall [query]` — search memory (how-to query → `memex_procedural_search`; else `memex_memory_search` + `memex_note_search`).
 - `/retro` — session postmortem; files reusable how-tos as cases.
 - `/extract-case [note|file|url]` — turn content into a case, if it holds a reusable how-to (gated).
+- `/procedure [how-to]` — recall a derived procedure (`memex_procedural_search` / `…_get_by_identity`).
+- `/strategy [verb]` — recall the cross-procedure strategy for a verb (`memex_procedural_search(kind="strategy")`).
+- `/case [what you did]` — file a worked episode now → `memex_case_submit`; the system derives the procedure.
+- `/correct [what's wrong]` — a surfaced memory was wrong/stale → `memex_record_outcome(verb:"not_helpful")` + deprioritize.
 
 Tool hygiene:
 - Discovery uses `memex_note_search` / `memex_memory_search` — not `memex_recent_notes` (recency-ordered, not relevance-ranked, so it misses older matches).

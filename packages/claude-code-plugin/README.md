@@ -53,13 +53,18 @@ claude --plugin-dir ./packages/claude-code-plugin
 
 ## What's included
 
-- **Skills**: `/remember`, `/recall`, and `/retro` slash commands for manual memory capture, retrieval, and structured session postmortems.
+- **Skills**: slash commands for manual memory capture, retrieval, and curation.
+  - `/remember`, `/recall`, `/retro` — capture by shape, search, and structured session postmortems.
+  - `/extract-case` — turn an existing note, file, or URL into a case (gated to genuine how-tos).
+  - `/procedure`, `/strategy` — recall a derived procedure, or the cross-procedure strategy for a verb, straight from the procedural plane.
+  - `/case` — capture what you just did as a worked episode now (the system derives the procedure).
+  - `/correct` — tell Memex a surfaced memory was wrong or stale (records `not_helpful` + deprioritizes).
 - **Hooks**: Full session lifecycle integration:
   - `SessionStart` — installs rules (including `<project>/.claude/rules/memex-agent-surface.md`, the Tier 1b+2 agent surface auto-loaded into the system prompt), fetches a token-budgeted briefing (now including a `## Procedures` block of KV rows under `procedure:*` so learned behavioural rules survive across sessions), resolves the active vault, generates a per-session note key.
   - `SessionEnd` — auto-captures the full session transcript to long-term memory (safety net under `/remember`).
   - `PreCompact` — captures transcript-since-last-compact to the session note before context is discarded.
   - `UserPromptExpansion` — when `/recall` is invoked without arguments, composes a query from the last N transcript turns.
-  - `PreToolUse` (on `memex_add_note`) — auto-injects ambient capture metadata (git, session, project, model, plugin version) and defaults `background: true`.
+  - `PreToolUse` (on `memex_add_note` and `memex_case_submit`) — auto-injects ambient capture metadata (git, session, project, model, plugin version) and, for notes, defaults `background: true`.
   - `PostToolUse` (on `memex_add_note`, `Bash`, `Write`/`Edit`) — capture-counter, commit-nudge, edit-spiral nudge.
 - **MCP Server**: Memex tools available as MCP tools (search, entities, notes, KV store)
 - **Behavioral Instructions**: Delivered as a project rule file (`memex-agent-surface.md`, installed at `SessionStart`) so it loads into the system prompt directly rather than via the hook output channel — covers proactive capture rules, retrieval routing, and citation requirements. The dynamic per-vault briefing still rides on `additionalContext`.

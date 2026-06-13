@@ -15,7 +15,11 @@ from __future__ import annotations
 
 from memex_common.agent_harnesses import CLAUDE_CODE_HARNESS, HERMES_HARNESS
 
-_TIER_2_CHAR_CAP = 5_150
+_TIER_2_CHAR_CAP = 5_600
+# Bumped 5,150 → 5,600 when the slash-command list gained the four V7
+# procedural-plane commands (/procedure, /strategy, /case, /correct) so the
+# installed .claude/rules harness advertises them — without these lines the
+# model is told only four commands exist. +359 chars buys their discovery.
 # Bumped 5,600 → 5,900 when the write_routing constraint gained two
 # procedure entries: global default (`procedure:<verb>:<context>`) and
 # the project-scoped variant gated on an explicit cue
