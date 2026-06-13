@@ -113,6 +113,13 @@ class ProceduralEntryRoundtrip(ExpectedOutcomeBase):
     def metric_keys(self, top_k: int | None = None) -> list[str]:
         return ['pass', 'outcome_status_match', 'field_match']
 
+    def expects_backend_error(self, scenario) -> bool:
+        # When the contract is an expected 4xx (409 collision / 404 miss),
+        # the DirectApiBackend captures it into ``answer.error`` and
+        # ``_classify_outcome`` maps it to a status. The runner must NOT
+        # escalate that to status='error' before score() runs.
+        return self.expect_status in ('conflict', 'not_found')
+
 
 # ---------------------------------------------------------------------------
 # procedural_search_results — read calls that return a list

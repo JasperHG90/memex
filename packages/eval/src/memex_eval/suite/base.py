@@ -244,6 +244,20 @@ class ExpectedOutcomeBase(BaseModel):
         """
         return set()
 
+    def expects_backend_error(self, scenario: 'Scenario') -> bool:
+        """Whether this outcome INTERPRETS a backend ``AgentAnswer.error``
+        rather than treating it as an infrastructure failure.
+
+        Default ``False``: the runner escalates any ``answer.error`` to
+        ``status='error'`` before scoring (the fail-loud invariant). An
+        outcome whose whole contract is asserting an expected HTTP status —
+        e.g. ``ProceduralEntryRoundtrip(expect_status='conflict')`` needs the
+        409 to reach its ``score()`` — overrides this to return ``True`` so
+        the runner lets the error through to ``score()`` instead. Opt-in and
+        scenario-scoped so no other outcome's behavior changes.
+        """
+        return False
+
 
 # ---------------------------------------------------------------------------
 # Outcome registry — open-ended set, lookup by ``type`` discriminator.

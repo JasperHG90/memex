@@ -526,3 +526,39 @@ async def test_procedural_upsert_reasserts_requested_draft_status():
         params=_seed_params(kind_status='draft'),
     )
     assert api.update_calls == [(_SEED_ENTRY_ID, 'draft')]
+
+
+# ---------------------------------------------------------------------------
+# expects_backend_error opt-in — the runner must NOT escalate an expected
+# 4xx (409/404) to status='error' before ProceduralEntryRoundtrip scores it.
+# ---------------------------------------------------------------------------
+
+
+def _roundtrip(expect_status: str):
+    from memex_eval.suites.procedural_plane._outcomes import ProceduralEntryRoundtrip
+
+    return ProceduralEntryRoundtrip(
+        type='procedural_entry_roundtrip',
+        operation='create',
+        kind='procedure',
+        scope='global',
+        verb='rotate',
+        context='api_key',
+        expect_status=expect_status,  # type: ignore[arg-type]
+    )
+
+
+def test_roundtrip_expects_backend_error_only_for_4xx_contracts():
+    """conflict / not_found interpret answer.error; success / any do not."""
+    assert _roundtrip('conflict').expects_backend_error(None) is True  # type: ignore[arg-type]
+    assert _roundtrip('not_found').expects_backend_error(None) is True  # type: ignore[arg-type]
+    assert _roundtrip('success').expects_backend_error(None) is False  # type: ignore[arg-type]
+    assert _roundtrip('any').expects_backend_error(None) is False  # type: ignore[arg-type]
+
+
+def test_base_outcome_does_not_expect_backend_error_by_default():
+    """Every other outcome keeps the fail-loud escalation (default False)."""
+    from memex_eval.suite.base import KeywordsPresent
+
+    kw = KeywordsPresent(type='keywords_present', keywords=['x'])
+    assert kw.expects_backend_error(None) is False  # type: ignore[arg-type]

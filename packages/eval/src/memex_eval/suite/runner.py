@@ -1037,8 +1037,17 @@ async def _execute_scenario(
             scenario, api=api, vault_id=vault_id, server_url=server_url, judge=judge
         )
         # If the backend reported an error, surface it as scenario error
-        # rather than risking a false-pass on an empty answer.
-        if answer.error:
+        # rather than risking a false-pass on an empty answer — UNLESS the
+        # outcome opts into interpreting backend errors (e.g. an expected
+        # 409/404 that ``ProceduralEntryRoundtrip`` scores as a pass). The
+        # opt-in defaults False, so every other outcome keeps the fail-loud
+        # invariant; an opt-in outcome falls through to score() with
+        # answer.error set and classifies it itself.
+        expected_outcome = getattr(scenario, 'expected', None)
+        consumes_backend_error = (
+            expected_outcome is not None and expected_outcome.expects_backend_error(scenario)
+        )
+        if answer.error and not consumes_backend_error:
             return ScenarioOutcome(
                 scenario_id=scenario.id,
                 status='error',
