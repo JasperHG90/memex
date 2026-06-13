@@ -432,6 +432,7 @@ _FORWARD_ONLY = (
 )
 
 _PARAMETERIZED = (
+    'create_case',
     'deprioritize_unit',
     'route_note_to_vault',
     'set_note_status',
@@ -1090,3 +1091,115 @@ class TestRouteNoteToVaultAction:
             actor=_ACTOR,
         )
         assert api.migrate_calls == [(note_id, dst)]
+
+
+class TestCreateCaseAction:
+    """`create_case` synthesizes a NEW case from review (capture-via-lint)."""
+
+    def test_validate_rejects_wrong_target_type(self) -> None:
+        action = get_action('create_case')
+        with pytest.raises(ActionValidationError):
+            action.validate(
+                {'title': 't', 'trigger': 'g', 'outcome': 'success'},
+                target_type='memory_unit',
+                target_id=str(uuid4()),
+            )
+
+    def test_validate_rejects_blank_trigger(self) -> None:
+        action = get_action('create_case')
+        with pytest.raises(ActionValidationError):
+            action.validate(
+                {'title': 't', 'trigger': '   ', 'outcome': 'success'},
+                target_type='note',
+                target_id=str(uuid4()),
+            )
+
+    def test_validate_rejects_bad_case_of(self) -> None:
+        action = get_action('create_case')
+        with pytest.raises(ActionValidationError):
+            action.validate(
+                {'title': 't', 'trigger': 'g', 'outcome': 'success', 'case_of': 'nope'},
+                target_type='note',
+                target_id=str(uuid4()),
+            )
+
+    def test_validate_accepts_minimal(self) -> None:
+        action = get_action('create_case')
+        action.validate(
+            {'title': 't', 'trigger': 'g', 'outcome': 'success'},
+            target_type='note',
+            target_id=str(uuid4()),
+        )
+
+    @pytest.mark.asyncio
+    async def test_execute_submits_case_and_maps_result(self, monkeypatch) -> None:
+        from memex_common.procedural_schemas import CaseAssignment, CaseSubmitResult
+        import memex_core.services.case_service as case_module
+
+        captured: dict[str, Any] = {}
+        note_id, entry_id, vault_id = uuid4(), uuid4(), uuid4()
+
+        class _FakeCaseService:
+            def __init__(self, api: Any) -> None: ...
+
+            async def submit(self, payload: Any) -> CaseSubmitResult:
+                captured['payload'] = payload
+                return CaseSubmitResult(
+                    note_id=note_id,
+                    vault_id=vault_id,
+                    assignment=CaseAssignment(mode='explicit', entry_id=entry_id),
+                )
+
+        # execute() imports CaseService inside the function, so patching the
+        # module attribute is enough.
+        monkeypatch.setattr(case_module, 'CaseService', _FakeCaseService)
+
+        action = get_action('create_case')
+        result = await action.execute(
+            _FakeApi(),
+            {
+                'title': 'Fixed deploy',
+                'trigger': 'deploy timed out',
+                'outcome': 'success',
+                'actions': ['raise the health-check port', 'redeploy'],
+                'case_of': str(entry_id),
+            },
+            target_id=str(uuid4()),
+            vault_id=_VAULT,
+            actor='reviewer',
+        )
+
+        payload = captured['payload']
+        assert payload.title == 'Fixed deploy'
+        assert payload.outcome == 'success'
+        assert payload.actions == ['raise the health-check port', 'redeploy']
+        assert str(payload.case_of) == str(entry_id)
+        assert payload.submitted_by == 'reviewer'
+
+        assert result.applied_state['case_note_id'] == str(note_id)
+        assert result.applied_state['assignment_mode'] == 'explicit'
+        assert result.applied_state['entry_id'] == str(entry_id)
+        assert result.prior_state == {}
+
+    @pytest.mark.asyncio
+    async def test_reverse_skipped_mode_archives_note_only(self) -> None:
+        action = get_action('create_case')
+        api = _FakeApi()
+        note_id = uuid4()
+        result = await action.reverse(
+            api,
+            {},
+            {
+                'case_note_id': str(note_id),
+                'assignment_mode': 'skipped',
+                'entry_id': None,
+                'finding_id': None,
+            },
+            {},
+            target_id=str(uuid4()),
+            vault_id=_VAULT,
+            actor='reviewer',
+        )
+        assert api.note_status_calls == [(note_id, 'archived', None)]
+        assert result.restored_state['archived_case_note'] == str(note_id)
+        assert result.restored_state['detached'] == 0

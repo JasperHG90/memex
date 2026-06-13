@@ -114,3 +114,86 @@ async def test_mw_boost_ranks_proven_procedure_higher(api):
     assert proven.id in ids and unproven.id in ids
     # Proven ranks at or above the unproven peer (MW boost, §18.5).
     assert ids.index(proven.id) <= ids.index(unproven.id)
+
+
+async def test_create_case_reverse_unwinds_draft_assignment(api):
+    """create_case.reverse archives the case note, detaches the provenance
+    edge, and deprecates a draft anchor the assignment minted (the
+    reversible-on-review contract)."""
+    from sqlmodel import col, select
+
+    from memex_common.procedural_schemas import ProceduralSourceCreate
+    from memex_core.memory.sql_models import Note, ProceduralSource
+    from memex_core.services.proposal_actions import get_action
+
+    vault = await _mk_vault(api)
+    # A draft anchor as if a clean `new_procedure` verdict had just minted it.
+    draft = await api.procedural.create(
+        ProceduralEntryCreate(
+            vault_id=vault,
+            kind='procedure',
+            scope='global',
+            verb='deploy',
+            context='edge',
+            title='deploy:edge',
+            summary='s',
+            body='',
+            trigger='when deploy edge',
+            status='draft',
+            origin='derived',
+        )
+    )
+    # The case note + the provenance edge the assignment created.
+    note_id = uuid.uuid4()
+    async with api.metastore.session() as session:
+        session.add(
+            Note(
+                id=note_id,
+                vault_id=vault,
+                session_id='test-create-case',
+                status='active',
+                original_text='deploy edge case body',
+                role='case',
+                doc_metadata={'outcome': 'success'},
+            )
+        )
+        await session.commit()
+    await api._procedural_repo.add_source(
+        draft.id, ProceduralSourceCreate(source_note_id=note_id, role='provenance')
+    )
+
+    action = get_action('create_case')
+    result = await action.reverse(
+        api,
+        {},
+        {
+            'case_note_id': str(note_id),
+            'assignment_mode': 'new_procedure_draft',
+            'entry_id': str(draft.id),
+            'finding_id': None,
+        },
+        {},
+        target_id=str(uuid.uuid4()),
+        vault_id=vault,
+        actor='reviewer',
+    )
+
+    # Provenance edge detached.
+    async with api.metastore.session() as session:
+        edges = (
+            await session.exec(
+                select(ProceduralSource).where(col(ProceduralSource.source_note_id) == note_id)
+            )
+        ).all()
+    assert edges == []
+    assert result.restored_state['detached'] == 1
+
+    # Draft anchor deprecated (not deleted — ledger/audit intact).
+    assert (await api.procedural.get(draft.id)).status == 'deprecated'
+    assert result.restored_state['deprecated_draft'] == str(draft.id)
+
+    # Case note archived (non-destructive: archived_at stamped, row intact).
+    async with api.metastore.session() as session:
+        note = await session.get(Note, note_id)
+    assert note is not None
+    assert note.archived_at is not None

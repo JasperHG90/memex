@@ -25,6 +25,7 @@ from memex_core.services.proposal_actions import (  # noqa: F401  (registration 
     apply_derivation,
     archive_mental_model,
     assign_case,
+    create_case,
     deletions,
     deprioritize_unit,
     kv_delete,
