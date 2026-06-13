@@ -59,18 +59,20 @@ def test_procedural_router_mounts_under_procedural_prefix():
 
 
 def test_procedural_router_route_surface():
-    """15 (method, path) routes across 12 distinct paths — the
+    """16 (method, path) routes across 12 distinct paths — the
+    /procedural path carries GET (list-by-status) + POST (create), the
     {entry_id} path carries GET+PATCH and {entry_id}/pin carries
-    POST+DELETE. Covers CRUD, search, briefing-cards (the operator/
-    CLI read — the agent gets cards in the session briefing, not via
-    a tool), the §18.8/§19.8 curation surface (pin/unpin/pins, versions,
-    rollback), the §9 derivation drain (/derive), and the §18.5 outcome
-    report (/{entry_id}/report).
+    POST+DELETE. Covers CRUD, search, list-by-status (the operator/CLI
+    enumeration surface — drafts awaiting confirmation), briefing-cards
+    (the operator/CLI read — the agent gets cards in the session
+    briefing, not via a tool), the §18.8/§19.8 curation surface
+    (pin/unpin/pins, versions, rollback), the §9 derivation drain
+    (/derive), and the §18.5 outcome report (/{entry_id}/report).
     """
     routes = list(router.routes)
     method_paths = [(tuple(sorted(route.methods or set())), route.path) for route in routes]
-    assert len(method_paths) == 15, (
-        f'Expected 15 procedural (method,path) routes, got {len(method_paths)}: {method_paths}'
+    assert len(method_paths) == 16, (
+        f'Expected 16 procedural (method,path) routes, got {len(method_paths)}: {method_paths}'
     )
     assert {p for _, p in method_paths} == {
         '/api/v1/procedural',
@@ -94,7 +96,11 @@ def test_procedural_routes_cover_crud_and_search():
     stays GET (cheap probe), CRUD+search go through the body-carrying
     POST/PATCH."""
     paths = _route_paths()
-    assert paths['/api/v1/procedural'] == {'POST'}, 'POST /procedural must be the create endpoint'
+    # /procedural carries POST (create) AND GET (list-by-status, the
+    # enumeration surface that search can't serve).
+    assert paths['/api/v1/procedural'] == {'GET', 'POST'}, (
+        'POST /procedural is create; GET /procedural is list-by-status'
+    )
     assert paths['/api/v1/procedural/by-identity'] == {'GET'}
     # The {entry_id} path carries BOTH GET (single fetch) and
     # PATCH (mutate). The dispatch order in the file matters — the

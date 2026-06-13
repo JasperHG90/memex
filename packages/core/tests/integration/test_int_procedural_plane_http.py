@@ -357,3 +357,39 @@ async def test_post_deprecate_missing_entry_returns_404(http_client, metastore):
         params={'vault_id': str(vault_id)},
     )
     assert resp.status_code == 404, resp.text
+
+
+# ---------------------------------------------------------------------------
+# GET /procedural — list-by-status enumeration (the curation queue that
+# /procedural/search can't serve without query text)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_get_procedural_lists_drafts_by_status(http_client, metastore):
+    """``GET /procedural?status=draft`` enumerates the draft queue over
+    the wire — the surface /curate consumes. Pins: the status filter
+    excludes published entries; a bogus status is a 400, not a 500."""
+    async with metastore.session() as session:
+        vault_id = await _create_vault(session, 'proc_http_list')
+
+    draft = _payload(vault_id=vault_id, title='http-draft', verb='deploy', context='staging')
+    draft['status'] = 'draft'
+    published = _payload(vault_id=vault_id, title='http-pub', verb='rotate', context='creds')
+    published['status'] = 'published'
+    for body in (draft, published):
+        resp = await http_client.post('/api/v1/procedural', json=body)
+        assert resp.status_code == 200, resp.text
+
+    listing = await http_client.get(
+        '/api/v1/procedural', params={'status': 'draft', 'vault_id': str(vault_id)}
+    )
+    assert listing.status_code == 200, listing.text
+    rows = listing.json()
+    assert [r['title'] for r in rows] == ['http-draft']
+    assert all(r['status'] == 'draft' for r in rows)
+
+    # A bogus lifecycle value is rejected by FastAPI validation (422),
+    # not a handler 500.
+    bad = await http_client.get('/api/v1/procedural', params={'status': 'bogus'})
+    assert bad.status_code == 422, bad.text

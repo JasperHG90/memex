@@ -28,6 +28,7 @@ from fastapi import APIRouter, Body, Depends, Query
 
 from memex_common.exceptions import MemexError
 from memex_common.procedural_schemas import (
+    KindLiteral,
     ProceduralBriefingCards,
     ProceduralEntryCreate,
     ProceduralEntryDTO,
@@ -38,6 +39,7 @@ from memex_common.procedural_schemas import (
     ProceduralSearchRequest,
     ProceduralSearchResponse,
     ShortLabel,
+    StatusLiteral,
 )
 from memex_core.api import MemexAPI
 from memex_core.metrics import (
@@ -285,6 +287,53 @@ async def procedural_list_pins(
         return await api.procedural.list_pins(context_key, limit=limit)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to list procedural pins')
+
+
+@router.get(
+    '/procedural',
+    response_model=list[ProceduralEntryDTO],
+    dependencies=[Depends(require_read)],
+)
+async def procedural_list(
+    api: Annotated[MemexAPI, Depends(get_api)],
+    status: Annotated[
+        StatusLiteral | None,
+        Query(description='Lifecycle filter: draft | published | deprecated. Omit for all.'),
+    ] = None,
+    scope: Annotated[
+        ShortLabel | None,
+        Query(description='Restrict to a single scope (e.g. global, project:<id>).'),
+    ] = None,
+    kind: Annotated[
+        KindLiteral | None,
+        Query(description='procedure | strategy. Omit for both.'),
+    ] = None,
+    limit: Annotated[int, Query(ge=1, le=200, description='Max entries to return.')] = 50,
+    vault_id: Annotated[
+        ShortLabel | None,
+        Query(description='Optional vault UUID to scope the listing.'),
+    ] = None,
+):
+    """List procedural-plane entries by lifecycle status, newest first.
+
+    The enumeration surface for operator/curation workflows — e.g. the
+    drafts the derivation pipeline produced that await confirmation
+    (``?status=draft``). Distinct from ``/procedural/search``, which
+    ranks by relevance and returns empty for a bare filter (it needs
+    query text or a pin context). A plain filtered SELECT: no query, no
+    embeddings.
+
+    ``status`` / ``kind`` are validated by FastAPI against their
+    lifecycle / plane literals — a bad value is a 422, not a handler
+    500.
+    """
+    try:
+        vid: UUID | None = UUID(vault_id) if vault_id is not None else None
+        return await api.procedural.list_by_status(
+            status=status, scope=scope, kind=kind, vault_id=vid, limit=limit
+        )
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Failed to list procedural-plane entries')
 
 
 @router.get(

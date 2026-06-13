@@ -56,6 +56,7 @@ def test_procedural_help_lists_eight_subcommands(runner, strip_ansi):
         'get',
         'get-by-identity',
         'search',
+        'list',
         'briefing-cards',
         'update',
         'deprecate',

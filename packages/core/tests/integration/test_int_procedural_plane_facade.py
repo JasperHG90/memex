@@ -495,3 +495,86 @@ async def test_briefing_cards_unions_pins_across_context_keys(metastore):
     # Position 0 for both — the briefing default is per-context
     # position, not absolute.
     assert all(c.pin_position == 0 for c in cards.cards)
+
+
+# ---------------------------------------------------------------------------
+# list_by_status — the enumeration surface search can't serve (drafts
+# awaiting confirmation). A plain filtered SELECT, newest-first.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_list_by_status_filters_and_orders_newest_first(metastore):
+    """``list_by_status`` enumerates by lifecycle state (the curation
+    queue) where ``search`` short-circuits to empty without query text.
+
+    Pins: status filter excludes other lifecycle states; kind/scope
+    narrow further; ordering is created_at-descending so the freshest
+    drafts surface first."""
+    async with metastore.session() as session:
+        vault_id = await _create_vault(session, 'proc_list')
+
+    repo = _repo(metastore)
+    # Two draft procedures (distinct anchors), one published procedure,
+    # one draft strategy — created in order so created_at is monotonic.
+    d1 = await repo.create(
+        _entry_payload(
+            vault_id=vault_id,
+            title='draft-1',
+            verb='deploy',
+            context='staging',
+            status='draft',
+            trigger='when deploying to staging',
+        )
+    )
+    d2 = await repo.create(
+        _entry_payload(
+            vault_id=vault_id,
+            title='draft-2',
+            verb='rotate',
+            context='creds',
+            status='draft',
+            trigger='when rotating credentials',
+        )
+    )
+    pub = await repo.create(
+        _entry_payload(
+            vault_id=vault_id,
+            title='published-1',
+            verb='audit',
+            context='deps',
+            status='published',
+            trigger='when auditing dependencies',
+        )
+    )
+    strat = await repo.create(
+        _entry_payload(
+            vault_id=vault_id,
+            title='draft-strategy',
+            kind='strategy',
+            verb='release',
+            context=None,
+            status='draft',
+            trigger='general release approach',
+        )
+    )
+
+    # status='draft' → the three drafts, not the published entry.
+    drafts = await repo.list_by_status(status='draft', vault_id=vault_id)
+    assert {e.id for e in drafts} == {d1.id, d2.id, strat.id}
+    assert pub.id not in {e.id for e in drafts}
+    # Newest-first: created_at is non-increasing down the list.
+    created = [e.created_at for e in drafts]
+    assert created == sorted(created, reverse=True)
+
+    # kind filter narrows to draft procedures only.
+    draft_procs = await repo.list_by_status(status='draft', kind='procedure', vault_id=vault_id)
+    assert {e.id for e in draft_procs} == {d1.id, d2.id}
+
+    # status=None lists every lifecycle state.
+    all_entries = await repo.list_by_status(vault_id=vault_id)
+    assert {e.id for e in all_entries} == {d1.id, d2.id, pub.id, strat.id}
+
+    # published filter isolates the one published entry.
+    published = await repo.list_by_status(status='published', vault_id=vault_id)
+    assert {e.id for e in published} == {pub.id}

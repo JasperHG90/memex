@@ -394,6 +394,66 @@ async def procedural_search(
     console.print(table)
 
 
+@app.command('list')
+@async_command
+async def procedural_list(
+    ctx: typer.Context,
+    status: Annotated[
+        str | None,
+        typer.Option('--status', help='draft | published | deprecated. (omit for all)'),
+    ] = None,
+    scope: Annotated[
+        str | None,
+        typer.Option('--scope', '-s', help='Restrict to a single scope.'),
+    ] = None,
+    kind: Annotated[
+        str | None,
+        typer.Option('--kind', help='procedure | strategy. (omit for both)'),
+    ] = None,
+    limit: Annotated[
+        int,
+        typer.Option('--limit', '-l', help='Maximum number of entries to return.'),
+    ] = 50,
+    json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
+):
+    """List entries by lifecycle status, newest first.
+
+    Unlike `search`, this needs no query — it is the way to enumerate the
+    curation/governance queue, e.g. drafts awaiting confirmation:
+
+        memex procedural list --status draft
+    """
+    config: MemexConfig = ctx.obj
+    async with get_api_context(config) as api:
+        try:
+            entries = await api.procedural_list(status=status, scope=scope, kind=kind, limit=limit)
+        except Exception as e:
+            handle_api_error(e)
+    if json_output:
+        emit_json([e.model_dump(mode='json') for e in entries])
+        return
+    if not entries:
+        console.print('[yellow]No entries.[/yellow]')
+        return
+    table = Table(title=f'Procedural entries (status={status or "all"})')
+    table.add_column('ID', style='dim')
+    table.add_column('Title', style='cyan')
+    table.add_column('Kind', style='bold')
+    table.add_column('Scope', style='dim')
+    table.add_column('Verb', style='dim')
+    table.add_column('Status', style='dim')
+    for entry in entries:
+        table.add_row(
+            str(entry.id),
+            entry.title,
+            entry.kind,
+            entry.scope,
+            entry.verb or '-',
+            entry.status,
+        )
+    console.print(table)
+
+
 @app.command('briefing-cards')
 @async_command
 async def procedural_briefing_cards(

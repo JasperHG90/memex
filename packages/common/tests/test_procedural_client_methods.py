@@ -56,6 +56,7 @@ def test_client_exposes_the_procedural_surface():
         'procedural_unpin',
         'procedural_list_pins',
         'procedural_list_versions',
+        'procedural_list',
         'procedural_rollback',
         # §9 derivation drain (drains cases → procedures/strategies).
         'procedural_derive',
@@ -155,6 +156,20 @@ def test_procedural_briefing_cards_signature():
     origin = typing.get_origin(ann['context_keys'])
     assert origin is list
     assert ann['return'] is ProceduralBriefingCards
+
+
+def test_procedural_list_signature():
+    """The enumeration surface (e.g. drafts awaiting confirmation) that
+    search cannot serve. All filters optional; returns a list of DTOs."""
+    sig = inspect.signature(RemoteMemexAPI.procedural_list)
+    params = sig.parameters
+    assert params['status'].default is None
+    assert params['scope'].default is None
+    assert params['kind'].default is None
+    assert params['vault_id'].default is None
+    assert params['limit'].default == 50
+    ret = sig.return_annotation
+    assert ret in (list[ProceduralEntryDTO], 'list[ProceduralEntryDTO]')
 
 
 def test_procedural_method_uuids_are_uuid_typed():

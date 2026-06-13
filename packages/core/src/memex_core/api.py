@@ -2416,6 +2416,26 @@ class MemexAPIProceduralFacade:
             status=status,
         )
 
+    async def list_by_status(
+        self,
+        *,
+        status: str | None = None,
+        scope: ShortLabel | None = None,
+        kind: str | None = None,
+        vault_id: UUID | None = None,
+        limit: int = 50,
+    ) -> list[ProceduralEntryDTO]:
+        """List entries by lifecycle status, newest first.
+
+        The enumeration surface (e.g. drafts awaiting confirmation) that
+        :meth:`search` cannot serve — search ranks by relevance and
+        returns empty without query text or a pin context. See
+        :meth:`ProceduralRepository.list_by_status`.
+        """
+        return await self._api._procedural_repo.list_by_status(
+            status=status, scope=scope, kind=kind, vault_id=vault_id, limit=limit
+        )
+
     async def update(
         self,
         entry_id: UUID,

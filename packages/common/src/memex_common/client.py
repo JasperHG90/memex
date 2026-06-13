@@ -1902,6 +1902,33 @@ class RemoteMemexAPI:
         result = await self._get(f'procedural/{entry_id}/versions')
         return [ProceduralEntryVersionDTO(**row) for row in result]
 
+    async def procedural_list(
+        self,
+        *,
+        status: str | None = None,
+        scope: ShortLabel | None = None,
+        kind: str | None = None,
+        vault_id: UUID | None = None,
+        limit: int = 50,
+    ) -> list[ProceduralEntryDTO]:
+        """List entries by lifecycle status, newest first (curation surface).
+
+        The enumeration path ``procedural_search`` cannot serve — search
+        needs query text or a pin context and returns empty otherwise.
+        Use this to list drafts awaiting confirmation (``status='draft'``).
+        """
+        params: dict[str, Any] = {'limit': limit}
+        if status is not None:
+            params['status'] = status
+        if scope is not None:
+            params['scope'] = scope
+        if kind is not None:
+            params['kind'] = kind
+        if vault_id is not None:
+            params['vault_id'] = str(vault_id)
+        result = await self._get('procedural', params=params)
+        return [ProceduralEntryDTO(**row) for row in result]
+
     async def case_submit(self, payload: CaseSubmit) -> CaseSubmitResult:
         """Submit a worked episode as a case (design §5.1).
 

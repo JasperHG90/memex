@@ -326,6 +326,42 @@ class ProceduralRepository:
             rows = (await session.exec(stmt)).all()
         return [self._to_dto(r) for r in rows]
 
+    async def list_by_status(
+        self,
+        *,
+        status: str | None = None,
+        scope: ShortLabel | None = None,
+        kind: str | None = None,
+        vault_id: UUID | None = None,
+        limit: int = 50,
+    ) -> list[ProceduralEntryDTO]:
+        """List entries by lifecycle status, newest first.
+
+        The enumeration surface for curation/governance — e.g. the
+        drafts the derivation pipeline produced that await confirmation
+        (``status='draft'``). Distinct from :meth:`search`, which ranks
+        by relevance and short-circuits to empty without query text or a
+        pin context, so it cannot enumerate a queue.
+
+        This is a plain filtered SELECT: no query, no embeddings.
+        ``status=None`` lists every lifecycle state; ``scope`` / ``kind``
+        narrow further. Ordered by ``created_at`` descending (drafts have
+        no ``published_at`` to sort on).
+        """
+        async with self._metastore.session() as session:
+            stmt = select(DBProceduralEntry)
+            if status is not None:
+                stmt = stmt.where(col(DBProceduralEntry.status) == DBProceduralStatus(status))
+            if scope is not None:
+                stmt = stmt.where(col(DBProceduralEntry.scope) == scope)
+            if kind is not None:
+                stmt = stmt.where(col(DBProceduralEntry.kind) == DBProceduralKind(kind))
+            if vault_id is not None:
+                stmt = stmt.where(col(DBProceduralEntry.vault_id) == vault_id)
+            stmt = stmt.order_by(col(DBProceduralEntry.created_at).desc()).limit(limit)
+            rows = (await session.exec(stmt)).all()
+        return [self._to_dto(r) for r in rows]
+
     async def get_by_identity(
         self,
         *,
