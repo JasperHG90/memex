@@ -60,7 +60,7 @@ claude --plugin-dir ./packages/claude-code-plugin
   - `/case` — capture what you just did as a worked episode now (the system derives the procedure).
   - `/correct` — tell Memex a surfaced memory was wrong or stale (records `not_helpful` + deprioritizes).
 - **Hooks**: Full session lifecycle integration:
-  - `SessionStart` — installs rules (including `<project>/.claude/rules/memex-agent-surface.md`, the Tier 1b+2 agent surface auto-loaded into the system prompt), fetches a token-budgeted briefing (now including a `## Procedures` block of KV rows under `procedure:*` so learned behavioural rules survive across sessions), resolves the active vault, generates a per-session note key.
+  - `SessionStart` — installs rules (including `<project>/.claude/rules/memex-agent-surface.md`, the Tier 1b+2 agent surface auto-loaded into the system prompt), fetches a token-budgeted briefing (including a `## Procedures` block derived from the procedural plane so learned how-tos survive across sessions — recall via `memex_procedural_search`, write via `memex_case_submit`; there is no KV `procedure:` namespace), resolves the active vault, generates a per-session note key.
   - `SessionEnd` — auto-captures the full session transcript to long-term memory (safety net under `/remember`).
   - `PreCompact` — captures transcript-since-last-compact to the session note before context is discarded.
   - `UserPromptExpansion` — when `/recall` is invoked without arguments, composes a query from the last N transcript turns.

@@ -32,9 +32,7 @@ async def kv_put(
     key: Annotated[
         str,
         typer.Argument(
-            help=(
-                'Namespaced key. Must start with one of: global:, user:, project:, app:, procedure:'
-            ),
+            help=('Namespaced key. Must start with one of: global:, user:, project:, app:'),
         ),
     ],
     value: Annotated[
