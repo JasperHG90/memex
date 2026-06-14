@@ -24,7 +24,7 @@ import time
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Body, Depends, Query
+from fastapi import APIRouter, Body, Depends, HTTPException, Query
 
 from memex_common.exceptions import MemexError
 from memex_common.procedural_schemas import (
@@ -48,7 +48,14 @@ from memex_core.metrics import (
     PROCEDURAL_OPERATIONS_TOTAL,
     PROCEDURAL_SEARCH_DURATION_SECONDS,
 )
-from memex_core.server.auth import require_read, require_write
+from memex_core.server.auth import (
+    AuthContext,
+    Permission,
+    check_vault_access,
+    get_auth_context,
+    require_read,
+    require_write,
+)
 from memex_core.server.common import _handle_error, get_api
 from memex_core.services.procedural_repository import (
     ProceduralEntryNotFound,
@@ -57,6 +64,61 @@ from memex_core.services.procedural_repository import (
 from memex_core.tracing import trace_span
 
 router = APIRouter(prefix='/api/v1')
+
+
+# ---------------------------------------------------------------------------
+# Multi-tenancy gates
+#
+# The procedural plane is vault-scoped like every other tenant surface. These
+# two helpers mirror the `check_vault_access` pattern the other 11 routers use.
+# Both are no-ops when the key is unrestricted (``auth is None`` or
+# ``auth.vault_ids is None`` — single-tenant / operator), so they do not change
+# self-host behaviour; they only fence restricted (multi-tenant) keys.
+# ---------------------------------------------------------------------------
+
+
+async def _authz_vault(
+    auth: AuthContext | None,
+    api: MemexAPI,
+    vault_id: UUID | str | None,
+    *,
+    permission: Permission,
+) -> None:
+    """Gate a route that carries an explicit (possibly optional) ``vault_id``.
+
+    A restricted key MUST name a vault it may touch — a ``None`` vault_id would
+    otherwise span every vault (the cross-tenant enumeration hole). Unrestricted
+    keys keep the ``None`` = all-vaults behaviour.
+    """
+    if vault_id is not None:
+        await check_vault_access(auth, [vault_id], api, permission=permission)
+        return
+    if auth is not None and auth.vault_ids is not None:
+        raise HTTPException(
+            status_code=400,
+            detail='vault_id is required: this key is restricted to specific vaults.',
+        )
+
+
+async def _authz_entry(
+    auth: AuthContext | None,
+    api: MemexAPI,
+    entry_id: UUID,
+    *,
+    permission: Permission,
+) -> None:
+    """Gate an entry-id route whose underlying op takes no ``vault_id``.
+
+    Resolves the entry's owning vault (404 if missing) and authorizes against
+    it, so a restricted key cannot read/mutate another vault's entry by UUID.
+    The lookup runs ahead of the route's own ``try``, so convert a missing
+    entry into a clean 404 here rather than letting it 500.
+    """
+    try:
+        entry = await api.procedural.get(entry_id, vault_id=None)
+    except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
+        raise _handle_error(e, 'Failed to resolve procedural-plane entry')
+    await check_vault_access(auth, [entry.vault_id], api, permission=permission)
 
 
 # ---------------------------------------------------------------------------
@@ -182,6 +244,7 @@ def _record_briefing_cards(context_keys: list[ShortLabel]) -> None:
 async def procedural_create(
     request: Annotated[ProceduralEntryCreate, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
     """Create a new procedural-plane entry.
 
@@ -190,6 +253,7 @@ async def procedural_create(
     = 'upsert'``, in which case a colliding create transparently updates
     the existing row (the same effect as ``POST /procedural/upsert``).
     """
+    await _authz_vault(auth, api, request.vault_id, permission=Permission.WRITE)
     conflict_mode = api.config.server.memory.procedural.identity_conflict_mode
     try:
         if conflict_mode == 'upsert':
@@ -229,6 +293,7 @@ async def procedural_get_by_identity(
         ShortLabel | None,
         Query(description='Vault UUID to scope the lookup.'),
     ] = None,
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
     """Look up a single entry by its (kind, scope, verb, context) anchor.
 
@@ -244,6 +309,7 @@ async def procedural_get_by_identity(
     the agent's read-before-write flow and is the reason this route
     now calls the repository's exact-anchor method.
     """
+    await _authz_vault(auth, api, vault_id, permission=Permission.READ)
     try:
         if kind not in ('procedure', 'strategy'):
             raise ValueError(
@@ -313,6 +379,7 @@ async def procedural_list(
         ShortLabel | None,
         Query(description='Optional vault UUID to scope the listing.'),
     ] = None,
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
     """List procedural-plane entries by lifecycle status, newest first.
 
@@ -327,6 +394,7 @@ async def procedural_list(
     lifecycle / plane literals — a bad value is a 422, not a handler
     500.
     """
+    await _authz_vault(auth, api, vault_id, permission=Permission.READ)
     try:
         vid: UUID | None = UUID(vault_id) if vault_id is not None else None
         return await api.procedural.list_by_status(
@@ -348,8 +416,10 @@ async def procedural_get(
         ShortLabel | None,
         Query(description='Optional vault UUID; mismatch returns 404.'),
     ] = None,
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
     """Fetch a single entry by UUID."""
+    await _authz_vault(auth, api, vault_id, permission=Permission.READ)
     try:
         vid: UUID | None = UUID(vault_id) if vault_id is not None else None
         return await api.procedural.get(entry_id, vault_id=vid)
@@ -373,8 +443,10 @@ async def procedural_update(
         ShortLabel | None,
         Query(description='Optional vault UUID; mismatch returns 404.'),
     ] = None,
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
     """Mutate an entry in place (appends a version row)."""
+    await _authz_vault(auth, api, vault_id, permission=Permission.WRITE)
     try:
         vid: UUID | None = UUID(vault_id) if vault_id is not None else None
         result = await api.procedural.update(entry_id, request, vault_id=vid)
@@ -409,8 +481,10 @@ async def procedural_deprecate(
         ShortLabel | None,
         Query(description='Optional vault UUID; mismatch returns 404.'),
     ] = None,
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
     """Soft-deprecate an entry (status → 'deprecated')."""
+    await _authz_vault(auth, api, vault_id, permission=Permission.WRITE)
     try:
         result = await api.procedural.deprecate(
             entry_id, superseded_by_id=superseded_by_id, vault_id=vault_id
@@ -438,12 +512,14 @@ async def procedural_report(
         ShortLabel | None,
         Query(description='Optional vault UUID; mismatch returns 404.'),
     ] = None,
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
     """Report an enactment outcome for a procedure/strategy (§18.5).
 
     Bumps the success/failure/mixed counters + uses + last_used_at without a
     version bump. Use this for 'enacted, not case-worthy'; a full
     ``case_submit`` with ``case_of`` is the richer path."""
+    await _authz_vault(auth, api, vault_id, permission=Permission.WRITE)
     try:
         result = await api.procedural.report_outcome(entry_id, outcome, vault_id=vault_id)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
@@ -461,11 +537,19 @@ async def procedural_derive(
         int,
         Query(ge=1, le=100, description='Max pending derivation tasks to drain this call.'),
     ] = 10,
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
     """Drain pending derivation tasks (cases → procedure, procedures →
     strategy). Runs the §9 distillation passes synchronously and writes the
     derived entries. Used by the background scheduler and exposed here for
     ops + deterministic eval triggering. Returns the completed queue ids."""
+    # Operator-only: derivation drains the GLOBAL queue across all vaults, so a
+    # vault-restricted key must not trigger it.
+    if auth is not None and auth.vault_ids is not None:
+        raise HTTPException(
+            status_code=403,
+            detail='procedural derivation drain is an operator-only operation.',
+        )
     try:
         completed = await api.procedural.derive_pending(limit=limit)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
@@ -484,6 +568,7 @@ async def procedural_pin(
     context_key: Annotated[ShortLabel, Body(embed=True)],
     position: Annotated[int | None, Body(embed=True, ge=0)] = None,
     pinned_by: Annotated[str | None, Body(embed=True)] = None,
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
     """Pin an entry into a context-binding chain (§19.8).
 
@@ -498,8 +583,9 @@ async def procedural_pin(
             position=position,
             pinned_by=pinned_by,
         )
-        # Entry must exist — surface a 404 rather than an FK violation.
-        await api.procedural.get(entry_id)
+        # Entry must exist + caller must own its vault — surfaces 404/403
+        # before an FK violation.
+        await _authz_entry(auth, api, entry_id, permission=Permission.WRITE)
         return await api.procedural.pin(payload)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to pin procedural-plane entry')
@@ -514,9 +600,11 @@ async def procedural_unpin(
     entry_id: UUID,
     api: Annotated[MemexAPI, Depends(get_api)],
     context_key: Annotated[ShortLabel, Query(description='Pin-chain context key.')],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
     """Unpin an entry from a context. Idempotent — 200 with removed=0
     when no pin existed."""
+    await _authz_entry(auth, api, entry_id, permission=Permission.WRITE)
     try:
         removed = await api.procedural.unpin(entry_id=entry_id, context_key=context_key)
         return {'entry_id': str(entry_id), 'context_key': context_key, 'removed': removed}
@@ -532,9 +620,11 @@ async def procedural_unpin(
 async def procedural_list_versions(
     entry_id: UUID,
     api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
     """The entry's uncapped version ledger, newest first (diff /
     rollback surface, §18.8)."""
+    await _authz_entry(auth, api, entry_id, permission=Permission.READ)
     try:
         return await api.procedural.list_versions(entry_id)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
@@ -551,10 +641,12 @@ async def procedural_rollback(
     api: Annotated[MemexAPI, Depends(get_api)],
     version: Annotated[int, Body(embed=True, ge=1)],
     rolled_back_by: Annotated[str | None, Body(embed=True)] = None,
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
     """Non-destructive rollback: the requested snapshot is re-applied
     as a NEW version row; nothing is deleted (§18.8). 404 when the
     entry has no such version."""
+    await _authz_entry(auth, api, entry_id, permission=Permission.WRITE)
     try:
         result = await api.procedural.rollback(entry_id, version, rolled_back_by=rolled_back_by)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
@@ -572,6 +664,7 @@ async def procedural_rollback(
 async def procedural_upsert(
     request: Annotated[ProceduralEntryCreate, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
     """Idempotent write on the identity anchor.
 
@@ -579,6 +672,7 @@ async def procedural_upsert(
     Status is preserved (deprecated stays deprecated). For partial
     in-place edits use ``PATCH /procedural/{entry_id}``.
     """
+    await _authz_vault(auth, api, request.vault_id, permission=Permission.WRITE)
     with trace_span(
         'memex_core.procedural',
         'procedural.upsert',
@@ -606,8 +700,10 @@ async def procedural_upsert(
 async def procedural_search(
     request: Annotated[ProceduralSearchRequest, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
     """Hybrid BM25 + vector search (RRF-merged) across the procedural plane."""
+    await _authz_vault(auth, api, request.vault_id, permission=Permission.READ)
     with trace_span(
         'memex_core.procedural',
         'procedural.search',
@@ -652,6 +748,7 @@ async def procedural_briefing_cards(
         UUID | None,
         Query(description='Restrict cards to a single vault (multi-tenancy guard).'),
     ] = None,
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
     """Pin-chain briefing cards for the session-briefing surface.
 
@@ -662,6 +759,7 @@ async def procedural_briefing_cards(
     entries in the caller's vault — the multi-tenancy guardrail.
     Leaving it None returns the global result set (operator-only).
     """
+    await _authz_vault(auth, api, vault_id, permission=Permission.READ)
     with trace_span(
         'memex_core.procedural',
         'procedural.briefing_cards',

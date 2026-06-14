@@ -393,3 +393,55 @@ async def test_get_procedural_lists_drafts_by_status(http_client, metastore):
     # not a handler 500.
     bad = await http_client.get('/api/v1/procedural', params={'status': 'bogus'})
     assert bad.status_code == 422, bad.text
+
+
+# ---------------------------------------------------------------------------
+# Multi-tenancy: a vault-restricted key cannot read/write across vaults
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_procedural_routes_enforce_vault_access(http_client, metastore):
+    """A restricted key is fenced on the procedural plane: disallowed vault →
+    403, omitted vault → 400 (would otherwise span all vaults), allowed vault
+    → 200. Pins the B1 tenancy fix."""
+    from memex_core.server import app
+    from memex_core.server.auth import AuthContext, Permission, get_auth_context
+
+    async with metastore.session() as session:
+        allowed_vault = await _create_vault(session, 'proc_authz_ok')
+        other_vault = await _create_vault(session, 'proc_authz_other')
+
+    restricted = AuthContext(
+        key_prefix='test',
+        key_name='restricted',
+        policy='reader',
+        permissions=frozenset({Permission.READ, Permission.WRITE}),
+        vault_ids=[str(allowed_vault)],
+        read_vault_ids=None,
+    )
+    app.dependency_overrides[get_auth_context] = lambda: restricted
+    try:
+        # READ a disallowed vault → 403.
+        r = await http_client.get('/api/v1/procedural', params={'vault_id': str(other_vault)})
+        assert r.status_code == 403, r.text
+        # READ with NO vault → 400 (restricted keys must name a vault).
+        r = await http_client.get('/api/v1/procedural', params={'status': 'draft'})
+        assert r.status_code == 400, r.text
+        # READ the allowed vault → 200.
+        r = await http_client.get('/api/v1/procedural', params={'vault_id': str(allowed_vault)})
+        assert r.status_code == 200, r.text
+        # WRITE into a disallowed vault → 403.
+        r = await http_client.post(
+            '/api/v1/procedural',
+            json=_payload(vault_id=other_vault, title='authz-denied'),
+        )
+        assert r.status_code == 403, r.text
+        # WRITE into the allowed vault → 200.
+        r = await http_client.post(
+            '/api/v1/procedural',
+            json=_payload(vault_id=allowed_vault, title='authz-ok'),
+        )
+        assert r.status_code == 200, r.text
+    finally:
+        app.dependency_overrides[get_auth_context] = lambda: None
