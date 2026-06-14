@@ -90,11 +90,14 @@ def test_mcp_instructions_does_not_carry_storage_model():
     assert '**Memory units**' not in text
 
 
-def test_mcp_instructions_points_at_agent_surface():
-    """MCP instructions must reference the canonical SSOT so agents
-    composing their own system prompt know where to look."""
+def test_mcp_instructions_defer_doctrine_to_host_prompt():
+    """The terse Tier-1a MCP transport instructions must NOT inline the
+    routing/storage/citation doctrine — that lives in the Tier-1b agent
+    surface injected into the HOST system prompt. (Naming the Python SSOT
+    module path to a runtime LLM would be meaningless; deferring to the host
+    prompt is the contract.)"""
     text = _mcp_instructions()
-    assert 'memex_common.agent_surface' in text or 'agent_surface' in text
+    assert 'host system prompt' in text.lower()
 
 
 # ---------------------------------------------------------------------------

@@ -59,7 +59,9 @@ class CreateCaseAction:
         'Synthesize a worked episode (trigger / situation / actions / outcome / '
         'lesson) into a new case note and run assignment — the same flow as a '
         'direct case submission, gated behind human review. Reversible: undo '
-        'archives the created case and unwinds its assignment.'
+        'archives the created case, detaches its provenance edge, deprecates a '
+        'draft anchor it minted, and dismisses an escalation finding — but the '
+        'append-only outcome counter the assignment bumped is NOT rolled back.'
     )
     applicable_target_types: ClassVar[tuple[str, ...]] = ('note',)
     reversible: ClassVar[bool] = True

@@ -410,6 +410,10 @@ async def procedural_list(
         str | None,
         typer.Option('--kind', help='procedure | strategy. (omit for both)'),
     ] = None,
+    vault: Annotated[
+        str | None,
+        typer.Option('--vault', '-v', help='Restrict to a single vault.'),
+    ] = None,
     limit: Annotated[
         int,
         typer.Option('--limit', '-l', help='Maximum number of entries to return.'),
@@ -424,9 +428,12 @@ async def procedural_list(
         memex procedural list --status draft
     """
     config: MemexConfig = ctx.obj
+    vault_id = await _resolve_vault_id(config, vault) if vault is not None else None
     async with get_api_context(config) as api:
         try:
-            entries = await api.procedural_list(status=status, scope=scope, kind=kind, limit=limit)
+            entries = await api.procedural_list(
+                status=status, scope=scope, kind=kind, vault_id=vault_id, limit=limit
+            )
         except Exception as e:
             handle_api_error(e)
     if json_output:

@@ -33,6 +33,7 @@ Assignment side effects: an ``procedural_sources`` provenance edge
 
 from __future__ import annotations
 
+import contextlib
 import logging
 from typing import TYPE_CHECKING, Any
 from uuid import UUID
@@ -143,11 +144,20 @@ class CaseService:
         ingest_result = await self._api.ingest(note_input, vault_id=vault_id)
         note_id = UUID(str(ingest_result['note_id']))
 
-        # 3. Stamp role + provenance.
-        await self._stamp_case_note(note_id, payload)
-
-        # 4. Assignment.
-        assignment = await self._assign(note_id, vault_id, payload)
+        # 3+4. Stamp role + provenance, then assign. A failure here would
+        # otherwise orphan the freshly-ingested note in the system vault —
+        # filed but with no role='case' and no provenance edge, indistinguishable
+        # from junk. Archive it (non-destructive) before re-raising so it cannot
+        # masquerade as a real case. (`_assign` is itself fail-safe — a judge
+        # failure escalates to the lint queue rather than raising — so this
+        # mainly guards a stamp/DB error or a bad explicit case_of.)
+        try:
+            await self._stamp_case_note(note_id, payload)
+            assignment = await self._assign(note_id, vault_id, payload)
+        except Exception:
+            with contextlib.suppress(Exception):
+                await self._api.set_note_status(note_id, 'archived')
+            raise
 
         return CaseSubmitResult(note_id=note_id, vault_id=vault_id, assignment=assignment)
 

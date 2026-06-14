@@ -172,11 +172,11 @@ class ProceduralRepository:
     wherever multi-tenancy is at risk.
     """
 
-    # The partial unique index that backs the identity anchor — the
-    # only UNIQUE constraint that should re-raise as
-    # :class:`ProceduralIdentityConflict` (409). Every other UNIQUE
-    # constraint is a real conflict and uses the same 409 mapping;
-    # the distinction is informative for the log line.
+    # The partial unique index that backs the identity anchor — the only
+    # constraint that re-raises as :class:`ProceduralIdentityConflict` (409,
+    # "retry as upsert"). Every OTHER constraint (a CHECK, an FK, a non-anchor
+    # UNIQUE like a pin) maps to :class:`ProceduralConstraintViolation` (422),
+    # not 409 — see ``_translate_integrity_error``.
     _ANCHOR_CONSTRAINTS = frozenset({'uq_procedural_identity'})
 
     def __init__(self, metastore: AsyncBaseMetaStoreEngine) -> None:
