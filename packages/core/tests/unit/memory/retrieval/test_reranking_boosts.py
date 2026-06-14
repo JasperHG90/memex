@@ -25,6 +25,10 @@ def _make_unit(
         text=text,
         fact_type='fact',
         event_date=event_date,
+        # The recency boost keys on ``occurred_start`` (the real authored
+        # date), so mirror the test's date there — these tests use the date
+        # purely to drive the recency factor.
+        occurred_start=event_date,
         vault_id=uuid4(),
         note_id=uuid4(),
         embedding=[],
@@ -558,3 +562,105 @@ class TestCompositeLogClipIntegration:
         """RetrievalConfig() ships with composite_boost_log_clip = math.inf."""
         config = RetrievalConfig()
         assert config.composite_boost_log_clip == math.inf
+
+
+def test_temporal_proximity_populated_from_query_window() -> None:
+    """``_apply_temporal_proximity`` activates the (formerly inert) rerank
+    temporal boost: fills ``temporal_proximity`` from the query's date window,
+    leaves date-less units neutral, and is a no-op when there is no window."""
+    engine = _make_engine([0.0])
+    start = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    end = datetime(2026, 1, 31, tzinfo=timezone.utc)  # midpoint = 2026-01-16
+
+    at_mid = _make_unit(event_date=datetime(2026, 1, 16, tzinfo=timezone.utc))
+    at_edge = _make_unit(event_date=datetime(2026, 1, 31, tzinfo=timezone.utc))
+    beyond = _make_unit(event_date=datetime(2025, 1, 1, tzinfo=timezone.utc))
+    undated = _make_unit(event_date=None)
+
+    engine._apply_temporal_proximity([at_mid, at_edge, beyond, undated], start, end)
+
+    assert at_mid.temporal_proximity > 0.99  # at the window midpoint
+    assert at_edge.temporal_proximity == 0.0  # a full half-width away
+    assert beyond.temporal_proximity == 0.0  # clamped beyond the window
+    assert getattr(undated, 'temporal_proximity', None) is None  # left neutral
+
+    # No window -> no-op (proximity never set).
+    again = _make_unit(event_date=datetime(2026, 1, 16, tzinfo=timezone.utc))
+    engine._apply_temporal_proximity([again], None, None)
+    assert getattr(again, 'temporal_proximity', None) is None
+
+
+def test_recency_anchor_selects_latest_authored_date() -> None:
+    """``_recency_anchor`` = max(occurred_start, authored mentioned_at); an
+    ingest-default mentioned_at (== created_at) is excluded; truly-undated -> None."""
+    from memex_core.memory.retrieval.engine import _recency_anchor
+
+    now = datetime.now(timezone.utc)
+    d2024 = datetime(2024, 1, 1, tzinfo=timezone.utc)
+    d2026 = datetime(2026, 1, 1, tzinfo=timezone.utc)
+
+    def mk(occ, men, created):
+        u = MemoryUnit(
+            id=uuid4(),
+            text='f',
+            fact_type='fact',
+            event_date=men or created or now,
+            occurred_start=occ,
+            mentioned_at=men,
+            vault_id=uuid4(),
+            note_id=uuid4(),
+            embedding=[],
+        )
+        object.__setattr__(u, 'created_at', created)
+        return u
+
+    assert _recency_anchor(mk(d2024, None, now)) == d2024  # occurred_start only
+    assert _recency_anchor(mk(None, d2026, now)) == d2026  # authored mentioned_at only
+    assert _recency_anchor(mk(d2024, d2026, now)) == d2026  # max of both (ongoing fact)
+    assert (
+        _recency_anchor(mk(None, now, now)) is None
+    )  # mentioned_at == created_at -> ingest default
+    assert _recency_anchor(mk(None, None, now)) is None  # truly undated
+
+
+@pytest.mark.asyncio
+async def test_recency_falls_back_to_real_mentioned_at() -> None:
+    """When ``occurred_start`` is absent, recency uses a REAL ``mentioned_at``
+    (one that differs from ``created_at``) so a present-state fact dated only
+    in ``mentioned_at`` keeps its recency edge — while a truly-undated unit
+    (``mentioned_at == created_at``, the ingest default) stays neutral."""
+    now = datetime.now(timezone.utc)
+
+    def _mk(occ, men, created):
+        u = MemoryUnit(
+            id=uuid4(),
+            text='fact',
+            fact_type='fact',
+            event_date=men or created,
+            occurred_start=occ,
+            mentioned_at=men,
+            vault_id=uuid4(),
+            note_id=uuid4(),
+            embedding=[],
+        )
+        object.__setattr__(u, 'created_at', created)
+        return u
+
+    recent_real = _mk(None, now - timedelta(days=10), now)  # real recent date in mentioned_at
+    old_real = _mk(None, now - timedelta(days=300), now)  # real old date in mentioned_at
+    undated = _mk(None, now, now)  # mentioned_at == created_at -> ingest default -> neutral
+    # Ongoing fact: OLD occurred_start but RECENT mentioned_at -> max() keeps it
+    # recent (anchored to the latest real date, not the old start).
+    ongoing = _mk(now - timedelta(days=300), now - timedelta(days=5), now)
+
+    engine = _make_engine([0.0, 0.0, 0.0, 0.0], recency_alpha=2.0)
+    out = await engine._rerank_results('q', [old_real, undated, recent_real, ongoing])
+
+    # Recent real-mentioned date outranks the old real-mentioned date...
+    assert out.index(recent_real) < out.index(old_real)
+    # ...the undated unit (neutral 0.5) sits between them, not max-fresh...
+    assert out.index(recent_real) < out.index(undated) < out.index(old_real)
+    # ...and the ongoing fact (old start, recent mention) ranks with the
+    # recent units, NOT down with its old occurred_start.
+    assert out.index(ongoing) < out.index(undated)
+    assert out.index(ongoing) < out.index(old_real)

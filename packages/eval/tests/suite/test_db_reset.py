@@ -70,20 +70,20 @@ class TestDropAndRecreateSchemaOrchestration:
             captured_dsn.append(dsn)
             return engine_mock
 
-        stamp_mock = MagicMock()
         monkeypatch.setattr(
             'sqlalchemy.ext.asyncio.create_async_engine',
             fake_create_engine,
         )
-        with patch('alembic.command.stamp', stamp_mock):
-            await db_reset.drop_and_recreate_schema()
+        await db_reset.drop_and_recreate_schema()
 
         assert captured_dsn == [target_dsn]
-        # stamp called with (cfg, 'head'); cfg has our DSN injected.
-        assert stamp_mock.call_count == 1
-        cfg_arg, rev_arg = stamp_mock.call_args.args
-        assert rev_arg == 'head'
-        assert cfg_arg.get_main_option('sqlalchemy.url') == target_dsn
+        # The version table is re-stamped by DIRECT SQL (not alembic
+        # command.stamp — see db_reset for the ALTER-before-create bug it
+        # avoids). Assert the alembic_version CREATE + INSERT ran on the
+        # connection, stamping the real head revision(s).
+        executed_sql = [str(call.args[0]) for call in conn_mock.execute.call_args_list if call.args]
+        assert any('CREATE TABLE IF NOT EXISTS alembic_version' in s for s in executed_sql)
+        assert any('INSERT INTO alembic_version' in s for s in executed_sql)
 
     @pytest.mark.asyncio
     async def test_restores_prior_env_var(self, monkeypatch: pytest.MonkeyPatch) -> None:

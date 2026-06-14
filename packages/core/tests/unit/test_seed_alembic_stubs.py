@@ -55,28 +55,31 @@ def test_seed_chain_is_linear_and_correct() -> None:
     sd = ScriptDirectory.from_config(cfg)
 
     heads = sd.get_heads()
-    assert heads == ['060_vault_kind_policy'], (
-        f'Expected single head 060_vault_kind_policy, got {heads}'
+    assert heads == ['066_derivation_queue_vault_fk'], (
+        f'Expected single head 066_derivation_queue_vault_fk, got {heads}'
     )
 
     walk = list(sd.walk_revisions())
     top10 = [(r.revision, r.down_revision) for r in walk[:10]]
-    # 053 is a merge node (down_revision is a tuple) — the cockpit/lint chain
-    # (…→052) and the procedure-to-global chain (046_procedure_to_global) were
-    # merged, then 054 (nodes index), 055 (inbox router), 056 (node assets),
-    # 057 (external lint source), 058 (vault summary embedding), 059 (drop
-    # inbox router), and 060 (vault kind+policy) extend linearly from there.
+    # NOTE: revision IDENTIFIERS keep the original 06x_experiential_* names
+    # — they are applied migration history (061-063) and were NOT renamed
+    # when the plane was renamed to *procedural* (064 carries the physical
+    # table/index/constraint renames; the revision slugs stay frozen so
+    # already-stamped DBs still resolve). 064 (two-kind conformance +
+    # rename) is the new head; 061 (experiential_entries), 062 (notes.role),
+    # 063 (experiential vault seed + KV backfill) precede it linearly from
+    # the 053 merge node.
     expected_top10 = [
+        ('066_derivation_queue_vault_fk', '065_procedural_outcomes'),
+        ('065_procedural_outcomes', '064_two_kind_plane'),
+        ('064_two_kind_plane', '063_experiential_seed'),
+        ('063_experiential_seed', '062_notes_role'),
+        ('062_notes_role', '061_experiential_entries'),
+        ('061_experiential_entries', '060_vault_kind_policy'),
         ('060_vault_kind_policy', '059_drop_inbox_router'),
         ('059_drop_inbox_router', '058_vault_summary_embedding'),
         ('058_vault_summary_embedding', '057_lint_source_external'),
         ('057_lint_source_external', '056_node_assets'),
-        ('056_node_assets', '055_inbox_router'),
-        ('055_inbox_router', '054_nodes_vault_active'),
-        ('054_nodes_vault_active', '053_merge_heads'),
-        ('053_merge_heads', ('046_procedure_to_global', '052_entity_cooccurrence_vault_pk')),
-        ('046_procedure_to_global', '045_drop_procedure_outcomes'),
-        ('052_entity_cooccurrence_vault_pk', '051_fix_telemetry_pk'),
     ]
     assert top10 == expected_top10, f'Tier A chain mismatch: got {top10}'
 

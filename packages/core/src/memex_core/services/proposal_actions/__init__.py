@@ -21,7 +21,11 @@ from memex_core.services.proposal_actions.base import (
 
 # Side-effect imports — each module calls `register_action(...)` on import.
 from memex_core.services.proposal_actions import (  # noqa: F401  (registration side effects)
+    activate_procedural_entry,
+    apply_derivation,
     archive_mental_model,
+    assign_case,
+    create_case,
     deletions,
     deprioritize_unit,
     kv_delete,

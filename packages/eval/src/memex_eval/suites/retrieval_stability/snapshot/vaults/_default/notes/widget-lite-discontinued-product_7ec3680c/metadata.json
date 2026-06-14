@@ -3,8 +3,8 @@
   "archived_at": null,
   "assets": [],
   "content_hash": "8802d09df2e35f5600c4cbf4f570d448",
-  "created_at": "2026-05-18T07:33:20.305006+00:00",
-  "description": "Discontinuation and Migration of Widget Lite",
+  "created_at": "2026-06-12T19:48:19.373656+00:00",
+  "description": "Widget Lite Discontinuation and Pro Migration",
   "doc_metadata": {
     "retain_params": {
       "assets": [],
@@ -26,14 +26,20 @@
     "tags": [
       "product",
       "widget-lite",
-      "discontinued"
+      "discontinued",
+      "widget lite",
+      "widget series",
+      "product discontinuation",
+      "end-of-life",
+      "data migration",
+      "widget pro"
     ]
   },
   "filestore_path": null,
   "id": "7ec3680c-0258-aa17-b1be-49e0160f3006",
   "page_index": {
     "metadata": {
-      "description": "Discontinuation and Migration of Widget Lite",
+      "description": "Widget Lite Discontinuation and Pro Migration",
       "publish_date": "2025-03-01 00:00:00+00:00",
       "source_uri": null,
       "tags": [
@@ -41,20 +47,22 @@
         "widget-lite",
         "discontinued",
         "widget lite",
+        "widget series",
         "product discontinuation",
+        "end-of-life",
         "data migration",
-        "service consolidation",
-        "widget pro",
-        "end of life"
+        "widget pro"
       ],
       "title": "Widget Lite Discontinued Product",
       "total_tokens": 120
     },
     "toc": [
       {
+        "assets": [],
         "block_id": "9e275c850e62f39acfeb094cd6e3b2e5",
         "children": [
           {
+            "assets": [],
             "block_id": "9e275c850e62f39acfeb094cd6e3b2e5",
             "children": [],
             "end_index": 360,
@@ -64,16 +72,17 @@
             "start_index": 144,
             "subtree_tokens": 47,
             "summary": {
-              "how": "Consolidating services into the Widget Pro platform",
-              "what": "Discontinuation of the Widget Lite entry-level product",
+              "how": "By retiring the product due to low adoption",
+              "what": "Discontinuation of the entry-level product and consolidation onto Widget Pro",
               "when": "March 2025",
               "where": "Widget Series product lineup",
-              "who": "Small teams"
+              "who": "Widget Lite (Widget Series)"
             },
             "title": "Overview",
             "token_estimate": 47
           },
           {
+            "assets": [],
             "block_id": "9e275c850e62f39acfeb094cd6e3b2e5",
             "children": [],
             "end_index": 541,
@@ -83,11 +92,11 @@
             "start_index": 360,
             "subtree_tokens": 36,
             "summary": {
-              "how": "By using the migration tool in the admin console and exporting data in CSV format.",
-              "what": "Migration process from Widget Lite to Widget Pro.",
+              "how": "By using a migration tool in the admin console and exporting data in CSV format",
+              "what": "Migration from Widget Lite to Widget Pro",
               "when": null,
-              "where": "Inside the admin console.",
-              "who": "Customers using Widget Lite."
+              "where": "Admin console",
+              "who": "Customers"
             },
             "title": "Migration Path",
             "token_estimate": 36
@@ -100,10 +109,10 @@
         "start_index": 0,
         "subtree_tokens": 120,
         "summary": {
-          "how": "By reaching its End of Life (EOL) status",
-          "what": "Discontinuation of the Widget Lite product",
-          "when": "Launched June 2023; Discontinued March 2025",
-          "where": "Widget Series product line",
+          "how": "By marking the product as End-of-Life (EOL) and providing migration paths.",
+          "what": "The discontinuation of the Widget Lite product.",
+          "when": "Launched in June 2023; scheduled for discontinuation in March 2025.",
+          "where": "Part of the Widget Series product line.",
           "who": "Widget Lite"
         },
         "title": "Widget Lite — Discontinued Product",
@@ -112,11 +121,11 @@
     ]
   },
   "publish_date": "2025-03-01T00:00:00+00:00",
-  "session_id": "723b24a6-cd81-4fda-8a43-6041f0459cb1",
+  "session_id": "f584a355-9091-4af8-b1cd-e56664fb8c16",
   "status": "active",
   "summary_version_incorporated": null,
   "superseded_by": null,
   "title": "Widget Lite Discontinued Product",
-  "updated_at": "2026-05-18T07:33:20.305006+00:00",
-  "vault_id": "22c11c49-1ccc-43a4-830c-dca2472f519c"
+  "updated_at": "2026-06-12T19:48:19.373656+00:00",
+  "vault_id": "34893ad7-9844-4786-bb90-912fac9b0d11"
 }

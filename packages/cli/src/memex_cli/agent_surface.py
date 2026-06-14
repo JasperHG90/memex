@@ -44,7 +44,11 @@ from typing import Optional
 import typer
 
 from memex_common.agent_harnesses import CLAUDE_CODE_HARNESS, HERMES_HARNESS
-from memex_common.agent_surface import MCP_TRANSPORT_INSTRUCTIONS, compose_universal
+from memex_common.agent_surface import (
+    MCP_TRANSPORT_INSTRUCTIONS,
+    compose_universal,
+    compose_with_procedural,
+)
 
 # Stable filename for `--output-dir` writes. Owned by the CLI so callers
 # (the Claude Code plugin hook in particular) cannot pick a name that
@@ -76,9 +80,17 @@ def _compose_for_target(target: Target) -> str:
     if target in (Target.universal, Target.generic):
         return compose_universal()
     if target == Target.hermes:
-        return compose_universal() + '\n\n' + HERMES_HARNESS
+        # Tier 1b universal + procedural-plane doctrine + Hermes harness.
+        # The procedural block ships the routing rules for the 8
+        # ``memex_procedural_*`` MCP tools. Non-Python agent harnesses
+        # embedding Hermes go through this CLI bridge; in-process Hermes
+        # consumers use the same SSOT in ``memex_hermes_plugin.briefing``.
+        return compose_with_procedural() + '\n\n' + HERMES_HARNESS
     if target == Target.claude_code:
-        return compose_universal() + '\n\n' + CLAUDE_CODE_HARNESS
+        # Same surface the SessionStart hook reads — the procedural
+        # block is appended to every Memex-aware Claude Code session,
+        # matching what the in-process plugin path ships to Hermes.
+        return compose_with_procedural() + '\n\n' + CLAUDE_CODE_HARNESS
     if target == Target.mcp:
         # Same SSOT object as ``memex_mcp.server.mcp.instructions`` — the CLI
         # ``mcp`` target is a debug-time inspection of exactly that string.

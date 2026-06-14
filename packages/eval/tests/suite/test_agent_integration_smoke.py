@@ -64,7 +64,27 @@ class TestSuiteStructure:
         # triggers for KV namespace routing: store_{user,project,global,
         # app,with_ttl} + kv_get + kv_search). They pin the explicit
         # imperative path through agent_surface.RETRIEVAL_ROUTING.
-        assert len(SUITE.scenarios) == 39
+        # 46 = 39 + 7 `procedure_*` scenarios (V4 procedure-routing
+        # wakewords: explicit_project_cue, in_this_codebase_cue,
+        # defaults_global_no_project_cue, ambiguous_no_explicit_scope,
+        # ambiguous_asks_first, standard_practice_ambiguous_asks_first,
+        # wakeword_store_{global,project}). They pin the
+        # "this is how to do X" → memex_kv_put write-routing path.
+        # 45 = 39 (smoke+triage+…+kv-wakewords) + 6 procedural-plane
+        # agent scenarios (group='procedural'). The 7 legacy procedure_*
+        # KV-routing scenarios were removed (deprecated write path). The
+        # 6 procedural scenarios: case_submit routing, plane search,
+        # read-before-write probe, two retrieve-first (deploy / release)
+        # scenarios, and how-to-to-plane-not-KV. No briefing scenario —
+        # pinned cards arrive inside the session briefing, not a tool.
+        # longer-horizon procedural flows (group='procedural_lh') —
+        # multi-step loops with ToolCallOrder gates.
+        # Under the case-only write model the agent-facing procedural writes
+        # collapsed to ``case_submit``: ``probe_then_update``,
+        # ``probes_identity_before_writing`` and ``search_miss_then_create``
+        # were dropped and ``corrects_procedure_via_case`` added — net -2
+        # from the V4 tally above → 48.
+        assert len(SUITE.scenarios) == 48
 
     def test_scenario_ids_unique(self) -> None:
         ids = [s.id for s in SUITE.scenarios]
@@ -170,9 +190,49 @@ class TestMutatingDiscipline:
         'lifecycle_archive_legacy_warehouse_note',
         'lifecycle_append_parent_remains_retrievable',
         'asset_lifecycle_detach',
+        # procedural-plane agent scenarios (group='procedural').
+        # The legacy ``procedure_*`` KV-routing scenarios were removed
+        # (that write path is deprecated — how-tos go to the plane, not
+        # KV). Under the case-only write model the agent's only procedural
+        # write is ``case_submit``; ``corrects_procedure_via_case`` files a
+        # corrective case. replicates_override=2 is tracked in
+        # _OVERRIDE_TWO_IDS below.
+        'procedural_files_case_via_case_submit',
+        'procedural_corrects_procedure_via_case',
+        'procedural_searches_before_deploying',
+        'procedural_searches_before_release',
+        'procedural_routes_howto_to_plane_not_kv',
+        # Longer-horizon multi-step flows (group='procedural_lh').
+        'procedural_deploy_then_records_outcome',
+        'procedural_files_case_after_enacting',
+        'procedural_strategy_fallback_on_novel_task',
     }
 
-    _OVERRIDE_ONE_IDS = _MUTATING_IDS | {
+    # procedural scenarios use replicates_override=2: the routing
+    # decision (search-first / case_submit / plane-write vs KV) is the
+    # load-bearing contract and a single replay can pass by luck.
+    _OVERRIDE_TWO_IDS = {
+        'procedural_files_case_via_case_submit',
+        'procedural_corrects_procedure_via_case',
+        'procedural_searches_before_deploying',
+        'procedural_searches_before_release',
+        'procedural_routes_howto_to_plane_not_kv',
+        'procedural_deploy_then_records_outcome',
+        'procedural_files_case_after_enacting',
+        'procedural_strategy_fallback_on_novel_task',
+    }
+
+    # The legacy ``procedure_*`` KV-routing scenarios (replicates=3)
+    # were removed with the deprecated KV-procedure write path. No
+    # scenario currently uses replicates_override=3.
+    _OVERRIDE_THREE_IDS: set[str] = set()
+
+    # Override-1 means "use replicates_override=1 instead of the suite
+    # default" — applied to scenarios that are LLM-classifier-only
+    # (so a single-shot is stable) and don't need statistical
+    # robustness. The procedure_* wakeword scenarios need replicates=3
+    # for noise dampening, so they're NOT in this set.
+    _OVERRIDE_ONE_IDS = (_MUTATING_IDS - _OVERRIDE_THREE_IDS - _OVERRIDE_TWO_IDS) | {
         'kv_retrieves_convention',
         'kv_wakeword_kv_get',
         'kv_wakeword_kv_search',
@@ -189,8 +249,27 @@ class TestMutatingDiscipline:
                 bad.append((s.id, s.replicates_override))
         assert not bad, f'expected replicates_override=1, got: {bad}'
 
+    def test_override_three_scenarios_have_replicates_three(self) -> None:
+        """The V4 procedure_* scenarios use ``replicates_override=3``
+        to dampen LLM-judge noise on the project/global/ambiguous
+        routing choices. A regression that drops the override would
+        make the scenarios pass-on-noise."""
+        bad = []
+        for s in SUITE.scenarios:
+            if s.id in self._OVERRIDE_THREE_IDS and s.replicates_override != 3:
+                bad.append((s.id, s.replicates_override))
+        assert not bad, f'expected replicates_override=3, got: {bad}'
+
+    def test_override_two_scenarios_have_replicates_two(self) -> None:
+        bad = []
+        for s in SUITE.scenarios:
+            if s.id in self._OVERRIDE_TWO_IDS and s.replicates_override != 2:
+                bad.append((s.id, s.replicates_override))
+        assert not bad, f'expected replicates_override=2, got: {bad}'
+
     def test_non_override_scenarios_have_no_override(self) -> None:
-        non_override = [s for s in SUITE.scenarios if s.id not in self._OVERRIDE_ONE_IDS]
+        allowed = self._OVERRIDE_ONE_IDS | self._OVERRIDE_THREE_IDS | self._OVERRIDE_TWO_IDS
+        non_override = [s for s in SUITE.scenarios if s.id not in allowed]
         bad = [
             (s.id, s.replicates_override) for s in non_override if s.replicates_override is not None
         ]

@@ -7,16 +7,14 @@ structured markdown briefing that fits within a specified token budget.
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-from datetime import datetime, timezone
-from typing import Any, Final
+from typing import Any
 from uuid import UUID
 
 from sqlmodel import col, select
 
 from memex_core.memory.sql_models import MentalModel
-from memex_core.services.kv import KVService, format_procedure_display_name, is_procedure_key
+from memex_core.services.kv import KVService
 from memex_core.services.vault_summary import VaultSummaryService
 from memex_core.services.vaults import VaultService
 from memex_core.storage.metastore import AsyncBaseMetaStoreEngine
@@ -55,11 +53,6 @@ _THEME_TREND_ARROWS: dict[str, str] = {
 }
 
 
-# Sized to fit the motivating procedure:answer:session-briefing row (~900 chars).
-# At 5 rows-of-cap ~ 1250 tokens, <= 63% of the 2000-token briefing budget.
-_PROCEDURE_VALUE_MAX_CHARS: Final = 1000
-
-
 def _estimate_tokens(text: str) -> int:
     """Rough chars-to-tokens estimate (÷4)."""
     return len(text) // 4
@@ -73,18 +66,32 @@ def _compute_importance(mm: MentalModel) -> float:
 def _build_kv_namespaces(project_id: str | None) -> list[str]:
     """Build the list of KV namespaces to include in the briefing.
 
-    Procedures are NOT a top-level namespace — they live UNDER ``global:``,
-    ``user:``, ``project:<id>:``, or ``app:<id>:`` as
-    ``<scope>:procedure:<verb>:<context>`` keys. Rows whose key matches
-    that shape are split out of ``kv_entries`` in ``_build_sections`` and
-    render in their own ``## Procedures`` section. Step 4 of
-    ``_apply_overflow`` drops only non-procedure KV under
-    ``app:/user:/project:`` — procedure rows degrade separately in Step 5.
+    Procedures are NOT in KV — they live in the procedural plane and
+    render as procedural cards. KV here is only the ``global:``/``user:``/
+    ``project:<id>:``/``app:<id>:`` namespaced facts.
     """
     ns = ['global', 'user', 'app:claude-code']
     if project_id:
         ns.append(f'project:{project_id}')
     return ns
+
+
+def _build_pin_contexts(project_id: str | None, app: str | None) -> list[str]:
+    """Build the procedural pin-context chain (design §19.8).
+
+    The layered chain is ``global → project:<id> → app:<consumer>``,
+    most-specific last. Distinct from the KV namespaces above: pins
+    have NO ``user`` context (per-user curation rides app/project
+    contexts — JG decision 2026-06-10), and the app segment is the
+    *caller's* identity (``claude-code``, ``hermes:<agent_identity>``)
+    rather than a hardcoded consumer.
+    """
+    contexts = ['global']
+    if project_id:
+        contexts.append(f'project:{project_id}')
+    if app:
+        contexts.append(f'app:{app}')
+    return contexts
 
 
 def _is_operational_kv(key: str) -> bool:
@@ -112,32 +119,58 @@ class SessionBriefingService:
         metastore: AsyncBaseMetaStoreEngine,
         kv_service: KVService,
         vault_service: VaultService | None = None,
+        procedural_search: Any | None = None,
     ) -> None:
+        """Configure the briefing service.
+
+        ``procedural_search`` is the optional plane handle
+        (:class:`memex_core.services.procedural_search_service.ProceduralSearchService`).
+        When provided, the briefing includes a "Procedural Cards" section
+        surfacing pin-chain entries for the active contexts. When None
+        (the default for tests and installations without the plane),
+        the section is silently omitted — the briefing still works.
+        """
         self._vault_summary = vault_summary_service
         self._metastore = metastore
         self._kv = kv_service
         self._vaults = vault_service
+        self._procedural_search = procedural_search
 
     async def generate(
         self,
         vault_id: UUID,
         budget: int = 2000,
         project_id: str | None = None,
+        app: str | None = None,
     ) -> str:
         """Generate a session briefing within the given token budget.
 
         Args:
             vault_id: The vault to generate a briefing for.
             budget: Token budget (1000 for compact, 2000 for standard).
-            project_id: Optional project ID for scoping KV entries.
+            project_id: Optional project ID for scoping KV entries and
+                the procedural pin chain.
+            app: Optional consumer identity for the pin chain's app
+                context (``claude-code``, ``hermes:<agent_identity>`` —
+                design §19.8). When None, the chain is global+project
+                only.
 
         Returns:
             A markdown-formatted briefing string.
         """
-        summary, mental_models, kv_entries, vaults = await self._fetch_all(vault_id, project_id)
+        summary, mental_models, kv_entries, vaults, procedural_cards = await self._fetch_all(
+            vault_id, project_id, app
+        )
 
         sections = self._build_sections(
-            summary, mental_models, kv_entries, vaults, vault_id, project_id, budget
+            summary,
+            mental_models,
+            kv_entries,
+            vaults,
+            vault_id,
+            project_id,
+            budget,
+            procedural_cards=procedural_cards,
         )
 
         assembled = self._assemble(sections)
@@ -150,6 +183,7 @@ class SessionBriefingService:
                 summary,
                 mental_models,
                 kv_entries,
+                procedural_cards=procedural_cards,
             )
 
         return assembled
@@ -158,8 +192,16 @@ class SessionBriefingService:
         self,
         vault_id: UUID,
         project_id: str | None,
-    ) -> tuple[Any, list[MentalModel], list[Any], list[Any]]:
-        """Fetch all data sources in parallel."""
+        app: str | None = None,
+    ) -> tuple[Any, list[MentalModel], list[Any], list[Any], Any]:
+        """Fetch all data sources in parallel.
+
+        The 5th element of the returned tuple is the procedural-cards
+        response (``memex_common.procedural_schemas.ProceduralBriefingCards``)
+        or ``None`` when the plane is not wired into this briefing
+        service. A None is treated as an empty-cards state in the
+        downstream section builder — the briefing still renders.
+        """
         summary_coro = self._vault_summary.get_summary(vault_id)
         models_coro = self._fetch_mental_models(vault_id)
         kv_coro = self._kv.list_entries(namespaces=_build_kv_namespaces(project_id))
@@ -176,10 +218,31 @@ class SessionBriefingService:
 
             vaults_coro = _empty()
 
-        summary, mental_models, kv_entries, vaults = await asyncio.gather(
-            summary_coro, models_coro, kv_coro, vaults_coro
+        if self._procedural_search is not None:
+            # Pin-context chain per §19.8: global → project:<id> →
+            # app:<consumer>. NOT the KV namespace list — pins have no
+            # `user` context and the app segment is the caller's
+            # identity, not a hardcoded consumer.
+            card_contexts = _build_pin_contexts(project_id, app)
+            cards_coro = self._procedural_search.briefing_cards(
+                card_contexts, scope=None, limit_per_context=3
+            )
+        else:
+
+            async def _empty_cards() -> Any:
+                return None
+
+            cards_coro = _empty_cards()
+
+        summary, mental_models, kv_entries, vaults, procedural_cards = await asyncio.gather(
+            summary_coro, models_coro, kv_coro, vaults_coro, cards_coro
         )
-        return summary, mental_models, kv_entries, vaults
+        # Defensive: if the procedural call failed, drop to None so
+        # downstream treats the briefing as having no cards rather than
+        # propagating a half-populated object.
+        if self._procedural_search is not None and procedural_cards is None:
+            procedural_cards = None
+        return summary, mental_models, kv_entries, vaults, procedural_cards
 
     async def _fetch_mental_models(self, vault_id: UUID) -> list[MentalModel]:
         """Fetch active mental models for the vault, sorted by importance score.
@@ -208,6 +271,7 @@ class SessionBriefingService:
         vault_id: UUID,
         project_id: str | None,
         budget: int,
+        procedural_cards: Any = None,
     ) -> list[tuple[str, str]]:
         """Build all sections in priority order."""
         sections: list[tuple[str, str]] = []
@@ -215,18 +279,22 @@ class SessionBriefingService:
         # 1. Header (always included)
         sections.append(('header', self._build_header(summary, len(mental_models))))
 
-        # 2. KV facts (priority 1) — procedure rows (global + project-scoped)
-        # render in their own section below. Operational routing config (the
-        # plugin's per-project default-vault mappings, ``app:<app>:project:*``)
-        # is excluded — it is plumbing the agent doesn't act on, not a fact.
-        non_proc = [
-            e for e in kv_entries if not is_procedure_key(e.key) and not _is_operational_kv(e.key)
-        ]
-        proc = [e for e in kv_entries if is_procedure_key(e.key)]
+        # 2. KV facts (priority 1). Operational routing config (the plugin's
+        # per-project default-vault mappings, ``app:<app>:project:*``) is
+        # excluded — it is plumbing the agent doesn't act on, not a fact.
+        # NB: procedures are NOT in KV — they live in the procedural plane
+        # and render as procedural cards (2b) below.
+        non_proc = [e for e in kv_entries if not _is_operational_kv(e.key)]
         sections.append(('kv', self._build_kv_section(non_proc)))
 
-        # 2b. Procedures (priority 1b — behavioural rules; high signal)
-        sections.append(('procedures', self._build_procedures_section(proc)))
+        # 2b. Procedural cards (priority 1b plane pin-chain entries).
+        # Sits between KV facts and vault overview so the agent sees the
+        # most actionable rules first. When the plane is not wired
+        # (procedural_cards is None) the section is empty and contributes
+        # nothing to the briefing.
+        sections.append(
+            ('procedural_cards', self._build_procedural_cards_section(procedural_cards))
+        )
 
         # 3. Vault overview (priority 2 — narrative + compact themes in one section)
         sections.append(
@@ -279,8 +347,9 @@ class SessionBriefingService:
     def _build_kv_section(self, kv_entries: list[Any]) -> str:
         """Build the KV facts section.
 
-        Caller (``_build_sections`` / ``_apply_overflow``) is responsible for
-        excluding ``procedure:*`` rows — those render in their own section.
+        Operational routing config is excluded by the caller. Procedures
+        are NOT in KV — they live in the plane and render as procedural
+        cards.
         """
         if not kv_entries:
             return ''
@@ -289,79 +358,42 @@ class SessionBriefingService:
             lines.append(f'- `{entry.key}`: {entry.value}')
         return '\n'.join(lines) + '\n'
 
-    def _sanitize_procedure_value(self, raw: str | None) -> str:
-        """Extract the human-readable value from a procedure KV row, defanged for markdown.
+    def _build_procedural_cards_section(self, cards: Any) -> str:
+        """Build the procedural-cards section from the plane.
 
-        ``raw`` is the value column of a ``KVEntry`` row — always ``str | None``
-        per the schema; ``Any`` would mask accidental misuse.
+        Render shape: one bullet per card with the entry's kind + title,
+        a 1-line summary, and the pin's context_key. The card list is
+        already in (context_key, position) order from the search service,
+        so the section naturally follows the pin chain priority.
+
+        Returns ``''`` (no section) when the plane is not wired or has
+        no cards — callers treat empty sections as "no content", not as
+        "section omitted".
         """
-        if raw is None:
+        if cards is None or not getattr(cards, 'cards', None):
             return ''
-        parsed_ok = True
-        try:
-            payload = json.loads(raw)
-        except (json.JSONDecodeError, TypeError):
-            parsed_ok = False
-            payload = None
-
-        if isinstance(payload, dict) and 'value' in payload:
-            inner = payload['value']
-            # Envelope present but `value` is non-string — render just the inner
-            # value (don't leak `v`/`tags`/`history` from the full envelope).
-            text = inner if isinstance(inner, str) else str(inner)
-        elif parsed_ok and payload is None:
-            # `json.loads("null")` returns None — treat the same as `raw is None`
-            # rather than rendering the literal string `"null"`.
-            text = ''
-        else:
-            # Parse failed OR JSON was not a dict — render the raw stored string.
-            text = str(raw)
-        # Indent embedded newlines so a stored "\n## X" can't create a fake heading.
-        # Normalise CRLF and bare CR first so all three line terminators are defanged
-        # uniformly (markdown processors and screen readers each handle CR differently).
-        text = text.replace('\r\n', '\n').replace('\r', '\n').replace('\n', '\n  ')
-        if len(text) > _PROCEDURE_VALUE_MAX_CHARS:
-            # Reserve one char for the ellipsis so total length is exactly the cap.
-            # rstrip() drops trailing whitespace at the truncation boundary so the
-            # ellipsis abuts the last visible glyph; acceptable for behavioural
-            # procedure rules (where trailing whitespace carries no semantics).
-            text = text[: _PROCEDURE_VALUE_MAX_CHARS - 1].rstrip() + '…'
-        return text
-
-    @staticmethod
-    def _defang_procedure_name(name: str) -> str:
-        """Escape markdown metacharacters in a procedure key.
-
-        Keys are validated at write time (`validate_procedure_key`) — the scoped
-        threat model here is rendering-correctness against any key shape that
-        passed validation (mostly `[A-Za-z0-9:_-]`, but defending against the
-        broader set keeps this robust if the validator is ever loosened). The
-        renderer wraps the name in `**…**` so unescaped `*`/backtick would
-        corrupt the bold span or open a code span; `[` would open a link.
-        """
-        return (
-            name.replace('\\', '\\\\')
-            .replace('*', '\\*')
-            .replace('`', '\\`')
-            .replace('[', '\\[')
-            .replace(']', '\\]')
-        )
-
-    def _build_procedures_section(self, entries: list[Any]) -> str:
-        """Build the procedures section from KV rows under `procedure:*`."""
-        if not entries:
-            return ''
-        lines = ['\n## Procedures\n']
-        for entry in entries:
-            # Defensive: callers normally filter via is_procedure_key. Skip
-            # anything that isn't a `<scope>:procedure:*` row.
-            if not is_procedure_key(entry.key):
+        lines = ['\n## Procedural Cards\n']
+        for card in cards.cards:
+            entry = getattr(card, 'entry', None)
+            if entry is None:
                 continue
-            text = self._sanitize_procedure_value(entry.value)
-            name = format_procedure_display_name(entry.key)
-            if not name or not text:
-                continue
-            lines.append(f'- **{self._defang_procedure_name(name)}** — {text}')
+            kind = getattr(entry, 'kind', '')
+            title = getattr(entry, 'title', '') or ''
+            summary = getattr(entry, 'summary', '') or ''
+            ctx = getattr(card, 'context_key', '') or ''
+            # Cap the summary at 240 chars to keep one card ≈ one
+            # briefing line (the briefing's per-card budget is roughly
+            # 50 tokens; 240 chars ≈ 60 tokens).
+            if len(summary) > 240:
+                summary = summary[:239].rstrip() + '…'
+            label = f'**{kind}/{title}**' if title else f'**{kind}**'
+            if summary:
+                line = f'- {label} — {summary}'
+            else:
+                line = f'- {label}'
+            if ctx:
+                line += f' _(pinned: {ctx})_'
+            lines.append(line)
         if len(lines) == 1:
             return ''
         return '\n'.join(lines) + '\n'
@@ -482,20 +514,9 @@ class SessionBriefingService:
         summary: Any,
         mental_models: list[MentalModel],
         kv_entries: list[Any],
+        procedural_cards: Any = None,
     ) -> str:
         """Apply overflow degradation to fit within budget."""
-        # Snapshot procedure rows BEFORE Step 4 mutates kv_entries — keeps Step 5
-        # decoupled from any future change to the Step-4 drop-prefix list.
-        # `_ts_floor` is tz-aware to match `updated_at` from `KVEntry` (the ORM
-        # column is `TIMESTAMP WITH TIME ZONE`, so sorted() never mixes tz-aware
-        # and naive datetimes). Rows with `updated_at is None` fall back to
-        # `_ts_floor`, sorting them oldest — they'll be the first dropped by
-        # Step 5's oldest-first trim. This is the intended degradation order.
-        _ts_floor = datetime.min.replace(tzinfo=timezone.utc)
-        procs_initial = sorted(
-            [e for e in kv_entries if is_procedure_key(e.key)],
-            key=lambda e: getattr(e, 'updated_at', None) or _ts_floor,
-        )
         # Steps 1/1b only apply at budget>=2000 where initial build used 10 models + trends.
         # At budget<2000, _build_sections already used 5 models without trends.
         if budget >= 2000:
@@ -533,11 +554,6 @@ class SessionBriefingService:
             return self._assemble(sections)
 
         # Step 4: Drop KV namespaces (app -> user -> project).
-        # procedure: rows are tracked separately via `procs_initial` (snapshotted
-        # at the top of this method). Strip them from `kv_entries` once up-front
-        # so any subsequent consumer sees a procedure-free list; Step 5 below
-        # trims procedures from the snapshot, not from `kv_entries`.
-        kv_entries = [e for e in kv_entries if not is_procedure_key(e.key)]
         for drop_prefix in ('app:', 'user:', 'project:'):
             kv_entries = [e for e in kv_entries if not e.key.startswith(drop_prefix)]
             sections = self._replace_section(
@@ -548,21 +564,12 @@ class SessionBriefingService:
             if _estimate_tokens(self._assemble(sections)) <= budget:
                 return self._assemble(sections)
 
-        # Step 5: Trim procedures (high-signal but droppable when budget is exhausted).
-        # Oldest-first: `procs` is sorted ascending by `updated_at`, so
-        # `procs[n_dropped:]` retains the most-recently-touched rules and drops
-        # the oldest `n_dropped` entries first.
-        # If all procedures are exhausted without fitting the budget, fall through
-        # to Step 7 (drop vaults).
-        procs = list(procs_initial)
-        n_dropped = 0
-        while n_dropped < len(procs):
-            n_dropped += 1
-            sections = self._replace_section(
-                sections,
-                'procedures',
-                self._build_procedures_section(procs[n_dropped:]),
-            )
+        # Step 5: Drop the procedural-cards section entirely. The
+        # cards are a discovery surface — the agent can re-fetch them
+        # via the briefing-cards HTTP route when it needs more — so they
+        # are the first thing to go under a tight budget.
+        if procedural_cards is not None:
+            sections = self._replace_section(sections, 'procedural_cards', '')
             if _estimate_tokens(self._assemble(sections)) <= budget:
                 return self._assemble(sections)
 

@@ -6,7 +6,7 @@ import asyncio
 import base64
 import time
 from dataclasses import dataclass, field
-from typing import Annotated, Any, cast
+from typing import Annotated, Any, Literal, cast
 from uuid import UUID
 from datetime import datetime
 import mimetypes
@@ -32,6 +32,10 @@ from memex_mcp._layer_primer_descriptions import (
 from memex_common.agent_surface import MCP_TRANSPORT_INSTRUCTIONS
 from memex_common.vault_utils import ALL_VAULTS_WILDCARD, expand_vault_scope
 from memex_common.tool_descriptions import (
+    MEMEX_CASE_SUBMIT_DESC as _MEMEX_CASE_SUBMIT_DESCRIPTION,
+    MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESC as _MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESCRIPTION,
+    MEMEX_PROCEDURAL_GET_DESC as _MEMEX_PROCEDURAL_GET_DESCRIPTION,
+    MEMEX_PROCEDURAL_SEARCH_DESC as _MEMEX_PROCEDURAL_SEARCH_DESCRIPTION,
     MEMEX_KV_PUT_DESC as _MEMEX_KV_PUT_DESCRIPTION,
 )
 from memex_mcp.models import (
@@ -68,7 +72,18 @@ from memex_mcp.models import (
     McpSurveyResult,
     McpSurveyTopic,
     McpVault,
+    McpCaseSubmitResult,
+    McpProceduralEntry,
+    McpProceduralPin,
+    McpProceduralSearchHit,
+    McpProceduralSearchResult,
+    McpProceduralSource,
     Staleness,
+)
+from memex_common.procedural_schemas import (
+    CaseSubmit,
+    ProceduralEntryCreate,
+    ProceduralSearchRequest,
 )
 from memex_common.templates import TemplateRegistry, BUILTIN_PROMPTS_DIR
 from memex_common.schemas import (
@@ -301,8 +316,9 @@ if os.environ.get('MEMEX_MCP_PROGRESSIVE_DISCLOSURE', '').lower() in ('1', 'true
 @mcp.tool(
     name='memex_list_assets',
     description=(
-        'List file attachments (assets) for a note — images, audio, PDFs, documents. '
-        'REQUIRED when has_assets is true. Feed paths to memex_get_resources to retrieve files.'
+        "List a note's file attachments (images, audio, PDFs, docs). Call when "
+        'has_assets is true to get asset paths, then pass them to '
+        'memex_get_resources to fetch the bytes. Requires note_id.'
     ),
     tags={'assets'},
     annotations={'readOnlyHint': True},
@@ -357,7 +373,12 @@ async def memex_list_assets(
 
 @mcp.tool(
     name='memex_read_note',
-    description='Read full note. ONLY when total_tokens < 500 (use force=True to override). Otherwise: memex_get_page_indices + memex_get_nodes.',
+    description=(
+        'Read a whole note in one shot. Use ONLY when total_tokens < 500. For '
+        'larger notes do NOT set force — page through instead: '
+        'memex_get_page_indices (TOC) then memex_get_nodes (sections). '
+        'Errors if total_tokens >= 500 unless force=True. Requires note_id.'
+    ),
     tags={'read'},
     annotations={'readOnlyHint': True},
     timeout=30.0,
@@ -421,19 +442,17 @@ async def memex_read_note(
 @mcp.tool(
     name='memex_set_note_status',
     description=(
-        'Set note lifecycle status: active, superseded, archived. '
-        '**Cascades:** `superseded` flags every memory unit extracted from '
-        'the note as stale. `archived` records an `archived_at` timestamp '
-        'and flips the note units to `is_deprioritized=true` (FSFM '
-        'suppression) — the units stay active and can be surfaced via '
-        '`include_deprioritized=True` retrieval, then restored individually '
-        'with `memex_memory_restore`. To append content to an existing '
-        'note, use `memex_append_note`; that is the only path that sets '
-        'the `appended_to` relation. Prefer letting contradiction detection '
-        'auto-supersede facts via a new ingested note; reach for this tool '
-        'only for explicit archival or when an immediate state change is '
-        'required. Optionally link to the replacing/parent note via '
-        'linked_note_id.'
+        'Set a note lifecycle status: active, superseded, or archived. '
+        'Use ONLY for explicit archival or an immediate forced state change; '
+        'prefer ingesting a new note and letting contradiction detection '
+        'auto-supersede facts. NOT for adding content (use memex_append_note, '
+        'the only path that sets the appended_to relation). Cascades: '
+        '`superseded` flags every extracted unit as stale; `archived` stamps '
+        '`archived_at` and sets the units `is_deprioritized=true` (FSFM '
+        'suppression) — they stay active, resurface via '
+        '`include_deprioritized=True`, restore one-by-one with '
+        'memex_memory_restore. Optionally pass linked_note_id to point at the '
+        'replacing/parent note.'
     ),
     tags={'write'},
     annotations={'readOnlyHint': False, 'idempotentHint': True},
@@ -481,12 +500,11 @@ async def memex_set_note_status(
 @mcp.tool(
     name='memex_update_user_notes',
     description=(
-        'Update the `user_notes` field on an existing note and reprocess it '
-        'into the memory graph. Pass null to clear the field. Note: this is '
-        "one of the few surfaces where a note's extracted memory units are "
-        'deleted rather than superseded — old `user_notes` memory units are '
-        'removed and new ones are extracted from the new text. Use sparingly; '
-        'for content that should remain auditable, ingest a new note instead.'
+        'Replace the `user_notes` field on an existing note and re-extract it '
+        'into the memory graph. Pass null to clear it. DESTRUCTIVE: old '
+        'user_notes units are DELETED (not superseded) and new ones extracted '
+        'from the new text — so history is lost. Use sparingly; for anything '
+        'that must stay auditable, ingest a new note instead.'
     ),
     tags={'write'},
     annotations={'readOnlyHint': False},
@@ -519,7 +537,11 @@ async def memex_update_user_notes(
 
 @mcp.tool(
     name='memex_rename_note',
-    description='Rename a note. Updates title in metadata, page index, and doc_metadata.',
+    description=(
+        'Rename a note (title only). Updates the title across metadata, page '
+        'index, and doc_metadata; leaves body content and extracted units '
+        'untouched. To change content use memex_append_note. Requires note_id, new_title.'
+    ),
     tags={'write'},
     annotations={'readOnlyHint': False, 'idempotentHint': True},
 )
@@ -647,7 +669,12 @@ async def memex_resize_image(
 
 @mcp.tool(
     name='memex_add_assets',
-    description='Add one or more file assets to an existing note. Provide local file paths.',
+    description=(
+        'Attach 1+ file assets (images, audio, PDFs, docs) to an existing note. '
+        'For text content use memex_append_note instead. Requires note_id and '
+        'absolute local file_paths. Errors if the note is not found or no path '
+        'resolves to a file.'
+    ),
     tags={'assets'},
     annotations={'readOnlyHint': False},
     timeout=60.0,
@@ -720,7 +747,11 @@ async def memex_add_assets(
 
 @mcp.tool(
     name='memex_delete_assets',
-    description='Delete one or more asset files from an existing note. Get paths from memex_list_assets.',
+    description=(
+        'Detach 1+ asset files from a note. Get exact asset_paths from '
+        'memex_list_assets first. Requires note_id. Returns deleted and '
+        'not_found lists; errors if the note is not found.'
+    ),
     tags={'assets'},
     annotations={'readOnlyHint': False},
     timeout=30.0,
@@ -923,7 +954,11 @@ async def memex_active_vault(ctx: Context) -> str:
 @mcp.tool(
     name='memex_add_note',
     description=(
-        'Add a new note or document to Memex. Ingest content into a vault. Confirm '
+        'Add a new note or document to Memex — a FACT / DECISION / DOCUMENT '
+        '("what is true"). NOT for how-to workflows, procedures, or worked '
+        'episodes ("how we deploy", "how the run went") — those go to '
+        'memex_case_submit, NEVER here (and never both). Ingest content into a '
+        'vault. Confirm '
         'vault with user first, or pass vault_id. For structured captures (ADRs, '
         'retros, technical briefs, RFCs), call memex_list_templates first and pass '
         'the chosen slug as `template` for provenance and downstream filtering. '
@@ -1144,12 +1179,12 @@ async def memex_add_note(
 @mcp.tool(
     name='memex_append_note',
     description=(
-        'Atomically append new content to an existing note. Send only the delta '
-        '— the server reads the existing body and concatenates server-side. Use '
-        'this in preference to memex_add_note when adding to a '
-        'known existing note (e.g. a session log, an ongoing reflection). '
-        'Identify the note by the note_key you set when creating it (preferred); '
-        'note_id is also accepted if you already have one from a search.'
+        'Atomically append a delta to an existing note. Prefer over '
+        'memex_add_note whenever extending a note you already created (session '
+        'log, ongoing reflection) — send ONLY the new snippet; the server reads '
+        'and concatenates the existing body for you. Identify by note_key + '
+        'vault_id (preferred) or note_id from a search. Reusing an append_id '
+        'with a different delta/parent returns a 409.'
     ),
     tags={'write'},
     annotations={'readOnlyHint': False},
@@ -2398,10 +2433,10 @@ async def memex_list_vaults(ctx: Context, include_system_vaults: bool = False) -
 @mcp.tool(
     name='memex_list_notes',
     description=(
-        'List notes with optional date, tag, and status filters. '
-        "Use after/before for temporal queries like 'documents from 2026'. "
-        'Use tags for topic filtering (AND semantics). '
-        'Use status to filter by lifecycle (active, archived, etc.).'
+        'List notes in one vault with optional date/tag/status/template filters. '
+        'Use for "documents from 2026" (after/before), topic filtering (tags, AND '
+        'semantics), or lifecycle (status: active, archived). For a cross-vault '
+        'newest-first feed use memex_recent_notes.'
     ),
     tags={'browse'},
     annotations={'readOnlyHint': True},
@@ -2526,8 +2561,12 @@ async def memex_list_notes(
 
 @mcp.tool(
     name='memex_recent_notes',
-    description='Browse recent notes. Defaults to all vaults. '
-    'Filter by vault names/UUIDs and optional date range.',
+    description=(
+        'Browse the most recently added notes (newest first), all vaults by '
+        'default. Use for "what did I capture lately". For tag/status/template '
+        'filtering within one vault use memex_list_notes. Optional vault_ids and '
+        'after/before date range.'
+    ),
     tags={'browse'},
     annotations={'readOnlyHint': True},
     timeout=30.0,
@@ -3421,10 +3460,9 @@ async def memex_kv_put(
 @mcp.tool(
     name='memex_kv_get',
     description=(
-        'Get a KV entry by exact key. For procedure: keys, the '
-        'default response value is the unwrapped active procedure text. Pass '
-        'include_history=true to receive the structured envelope '
-        '({value, version, history}) so you can review prior versions.'
+        'Fetch one KV entry by its exact full key (e.g. "global:preferences:editor"). '
+        'Returns null if absent. When you do not know the exact key, use '
+        'memex_kv_search (fuzzy) or memex_kv_list (browse by namespace).'
     ),
     tags={'storage'},
     annotations={'readOnlyHint': True},
@@ -3433,30 +3471,15 @@ async def memex_kv_put(
 async def memex_kv_get(
     ctx: Context,
     key: Annotated[str, Field(description='Exact key to look up.')],
-    include_history: Annotated[
-        bool,
-        BeforeValidator(_coerce_bool),
-        Field(
-            default=False,
-            description=(
-                'For procedure: keys, return the full envelope '
-                '(value, version, capped history of 5 prior versions) instead '
-                'of just the active value. Ignored for non-procedure keys.'
-            ),
-        ),
-    ] = False,
 ) -> McpKVEntry | None:
     """Exact key lookup in the KV store."""
     try:
         api = get_api(ctx)
-        entry = await api.kv_get(key=key, include_history=include_history)
+        entry = await api.kv_get(key=key)
 
         if entry is None:
             return None
 
-        # When include_history=True for procedure keys, entry.value is a dict;
-        # for everything else it is the unwrapped string. McpKVEntry.value is
-        # typed loosely so both shapes flow through.
         return McpKVEntry(
             key=entry.key,
             value=entry.value,
@@ -3522,8 +3545,10 @@ async def memex_kv_search(
 @mcp.tool(
     name='memex_kv_list',
     description=(
-        'List KV entries (preferences, project bindings, conventions). '
-        'Optionally filter by namespace prefixes (global, user, project).'
+        'Browse KV entries (preferences, project bindings, conventions) by '
+        'namespace. Filter via namespaces (global, user, project) or a trailing-'
+        'wildcard pattern. For exact-key fetch use memex_kv_get; for fuzzy lookup '
+        'use memex_kv_search.'
     ),
     tags={'storage'},
     annotations={'readOnlyHint': True},
@@ -3918,6 +3943,26 @@ async def memex_memory_deprioritize(
                 raise ToolError(f'Memory unit {unit_id} not found.')
             if exc.response.status_code == 403:
                 raise ToolError(f'Access denied to vault for memory unit {unit_id}.')
+            if exc.response.status_code == 400:
+                # The server redirects observation-id targets to their source
+                # MUs via a structured 400 (ObservationReadOnlyError →
+                # {'detail': {'error': ..., 'source_memory_units': [...]}}).
+                # httpx's raise_for_status flattens the body to a bare message
+                # string, so the redirect must be re-surfaced HERE or the agent
+                # loses the retry target the tool contract promises. Other 400s
+                # (ambiguous/validation) carry a plain-string detail and fall
+                # through to the bare raise unchanged.
+                try:
+                    detail = exc.response.json().get('detail')
+                except Exception:
+                    detail = None
+                if isinstance(detail, dict) and detail.get('source_memory_units'):
+                    sources = ', '.join(str(u) for u in detail['source_memory_units'])
+                    raise ToolError(
+                        f'{unit_id} is a read-only observation (a projection of '
+                        f'mental-model evidence), not a deprioritizable memory unit. '
+                        f'Deprioritize its source memory unit(s) instead: {sources}.'
+                    )
             raise
         return {'unit_id': str(unit.id), 'is_deprioritized': True, 'reason': reason}
     except ToolError:
@@ -4460,3 +4505,258 @@ async def memex_get_diagnostics_summary(
     except Exception as e:
         logger.error(f'Diagnostics summary failed: {e}', exc_info=True)
         raise ToolError(f'Diagnostics summary failed: {e}')
+
+
+# --- Procedural plane  ---
+
+
+def _dto_to_mcp_entry(dto: ProceduralEntryCreate) -> McpProceduralEntry:
+    """Convert a MemexAPI ProceduralEntryDTO to the MCP-facing shape.
+
+    The DTO is the cross-package envelope; the MCP model is the
+    tool-boundary shape. They share the same column set, so this is a
+    field-by-field copy. The McpProceduralEntry model uses ``extra='forbid'``
+    so any new DTO field added without a corresponding MCP field surfaces
+    here rather than silently shipping to clients.
+    """
+    return McpProceduralEntry(
+        id=dto.id,
+        vault_id=dto.vault_id,
+        kind=dto.kind,
+        scope=dto.scope,
+        verb=dto.verb,
+        context=dto.context,
+        title=dto.title,
+        summary=dto.summary,
+        body=dto.body,
+        trigger=dto.trigger,
+        tags=list(dto.tags),
+        extra_metadata=dict(dto.extra_metadata),
+        status=dto.status,
+        origin=dto.origin,
+        supersedes_id=dto.supersedes_id,
+        superseded_by_id=dto.superseded_by_id,
+        published_at=dto.published_at,
+        created_at=dto.created_at,
+        updated_at=dto.updated_at,
+        sources=[
+            McpProceduralSource(
+                note_id=s.note_id,
+                memory_unit_id=s.memory_unit_id,
+                role=str(s.role),
+                excerpt=s.excerpt,
+            )
+            for s in dto.sources
+        ],
+        pins=[McpProceduralPin(context_key=p.context_key, position=p.position) for p in dto.pins],
+    )
+
+
+# NOTE: There is deliberately NO agent-facing procedural WRITE tool
+# (create/update/upsert/deprecate). Procedures and strategies are
+# DERIVED from cases (design §5/§8/§9) — the agent's only procedural
+# write is `memex_case_submit` (file the worked episode); the derivation
+# pipeline + §18.6 governance produce and update entries. Direct
+# authoring/editing stays on the operator surfaces (CLI `memex
+# procedural create/update`, the curation TUI) and the HTTP/client CRUD
+# the derivation worker uses. Agents only READ the plane (search / get /
+# get_by_identity) and SUBMIT cases.
+
+
+@mcp.tool(
+    name='memex_procedural_get',
+    description=_MEMEX_PROCEDURAL_GET_DESCRIPTION,
+    tags={'storage', 'procedural'},
+    annotations={'readOnlyHint': True},
+    timeout=15.0,
+)
+async def memex_procedural_get(
+    ctx: Context,
+    entry_id: Annotated[str, Field(description='Procedural entry UUID.')],
+    vault_id: Annotated[
+        str | None,
+        Field(
+            description="Optional vault UUID or name. Mismatch with the entry's "
+            'vault → 404. Omit to skip vault-scope enforcement.'
+        ),
+    ] = None,
+) -> McpProceduralEntry | None:
+    """Fetch a single entry by UUID. Returns null if not found."""
+    try:
+        api = get_api(ctx)
+        try:
+            entry_uuid = UUID(entry_id)
+        except ValueError:
+            raise ToolError(f'Invalid entry UUID: {entry_id}')
+        resolved_vault: UUID | None = None
+        if vault_id is not None:
+            resolved_vault = await _resolve_vault_id(api, vault_id)
+        dto = await api.procedural_get(entry_uuid, vault_id=resolved_vault)
+        return _dto_to_mcp_entry(dto)
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Procedural get failed: {e}', exc_info=True)
+        raise ToolError(f'Procedural get failed: {e}')
+
+
+@mcp.tool(
+    name='memex_procedural_get_by_identity',
+    description=_MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESCRIPTION,
+    tags={'storage', 'procedural'},
+    annotations={'readOnlyHint': True},
+    timeout=15.0,
+)
+async def memex_procedural_get_by_identity(
+    ctx: Context,
+    kind: Annotated[
+        Literal['procedure', 'strategy'],
+        Field(description='Entity kind. Cases are notes — not on this plane.'),
+    ],
+    scope: Annotated[
+        str,
+        Field(description='Scope label: "global" | "project:<id>" | "app:<id>" (no user scope).'),
+    ],
+    verb: Annotated[
+        str | None,
+        Field(description='Anchor verb — required for both kinds.'),
+    ] = None,
+    context: Annotated[
+        str | None,
+        Field(
+            description='Anchor context — required for procedures; MUST be null for '
+            'strategies (a strategy groups all procedures sharing scope+verb).'
+        ),
+    ] = None,
+    vault_id: Annotated[
+        str | None,
+        Field(description='Optional vault UUID or name for vault-scope enforcement.'),
+    ] = None,
+) -> McpProceduralEntry | None:
+    """Fetch a single entry by its (kind, scope, verb, context) identity anchor."""
+    try:
+        api = get_api(ctx)
+        if not verb:
+            raise ToolError(f'kind="{kind}" requires a non-empty verb.')
+        if kind == 'procedure' and not context:
+            raise ToolError('kind="procedure" requires a non-empty context.')
+        if kind == 'strategy' and context is not None:
+            raise ToolError(
+                'kind="strategy" requires context=null — strategies anchor on scope+verb.'
+            )
+
+        resolved_vault: UUID | None = None
+        if vault_id is not None:
+            resolved_vault = await _resolve_vault_id(api, vault_id)
+        # Direct identity-anchor SELECT against the partial unique index
+        # ``uq_procedural_identity`` (not a fuzzy search). A previous
+        # implementation routed through ``api.procedural.search`` with
+        # an empty query, which short-circuited to an empty response and
+        # silently returned ``None`` for every anchor — the same
+        # regression the HTTP route had before its fix. The facade
+        # exposes a dedicated ``get_by_identity`` method (see
+        # ``MemexAPIProceduralFacade.get_by_identity``) so the LLM hot
+        # path is a single partial-index lookup, not a search +
+        # post-filter round-trip.
+        dto = await api.procedural_get_by_identity(
+            kind=kind,
+            scope=scope,
+            verb=verb,
+            context=context,
+            vault_id=resolved_vault,
+        )
+        if dto is None:
+            return None
+        return _dto_to_mcp_entry(dto)
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Procedural get_by_identity failed: {e}', exc_info=True)
+        raise ToolError(f'Procedural get_by_identity failed: {e}')
+
+
+@mcp.tool(
+    name='memex_procedural_search',
+    description=_MEMEX_PROCEDURAL_SEARCH_DESCRIPTION,
+    tags={'storage', 'procedural'},
+    annotations={'readOnlyHint': True},
+    timeout=30.0,
+)
+async def memex_procedural_search(
+    ctx: Context,
+    request: ProceduralSearchRequest,
+) -> McpProceduralSearchResult:
+    """Hybrid BM25 + vector search with RRF aggregation."""
+    try:
+        api = get_api(ctx)
+        response = await api.procedural_search(request)
+        return McpProceduralSearchResult(
+            hits=[
+                McpProceduralSearchHit(
+                    # The ProceduralSearchHit DTO nests the entry
+                    # under .entry (so the agent can see both the
+                    # RRF score and the full DTO). The MCP tool
+                    # boundary wants a flat shape, so project
+                    # entry.* into the hit fields. Reading these
+                    # off the hit itself raised AttributeError on
+                    # every search call before the fix.
+                    entry_id=h.entry.id,
+                    kind=h.entry.kind,
+                    score=h.score,
+                    matched_via=h.matched_via,
+                    title=h.entry.title,
+                    summary=h.entry.summary,
+                    scope=h.entry.scope,
+                    verb=h.entry.verb,
+                    context=h.entry.context,
+                    trigger=h.entry.trigger,
+                    pin_position=h.pin_position,
+                )
+                for h in response.hits
+            ],
+            total=response.total,
+            truncated=response.truncated,
+            took_ms=response.took_ms,
+        )
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Procedural search failed: {e}', exc_info=True)
+        raise ToolError(f'Procedural search failed: {e}')
+
+
+@mcp.tool(
+    name='memex_case_submit',
+    description=_MEMEX_CASE_SUBMIT_DESCRIPTION,
+    tags={'storage', 'procedural'},
+    annotations={'readOnlyHint': False, 'idempotentHint': False},
+    timeout=120.0,
+)
+async def memex_case_submit(
+    ctx: Context,
+    payload: CaseSubmit,
+) -> McpCaseSubmitResult:
+    """File a worked episode as a case note + run assignment.
+
+    The note lands in the hidden `procedural` system vault with
+    role='case'; the caller never names the vault. Assignment runs
+    synchronously (explicit case_of / judge auto-assign / lint
+    escalation) — see the result's assignment block.
+    """
+    try:
+        api = get_api(ctx)
+        result = await api.case_submit(payload)
+        return McpCaseSubmitResult(
+            note_id=result.note_id,
+            vault_id=result.vault_id,
+            assignment_mode=result.assignment.mode,
+            entry_id=result.assignment.entry_id,
+            finding_id=result.assignment.finding_id,
+            separation=result.assignment.separation,
+            reasoning=result.assignment.reasoning,
+        )
+    except ToolError:
+        raise
+    except Exception as e:
+        logger.error(f'Case submit failed: {e}', exc_info=True)
+        raise ToolError(f'Case submit failed: {e}')

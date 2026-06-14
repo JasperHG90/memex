@@ -28,6 +28,44 @@ def _outcome(**overrides):
     return ToolCallArgMatches(**base)
 
 
+class TestNestedEnvelopeArg:
+    """MCP tools that wrap params in a request object (e.g.
+    memex_procedural_search → {'request': {'query': …}}) must still be
+    matched on the inner arg — a flat lookup would false-fail."""
+
+    def test_resolves_arg_inside_request_envelope(self) -> None:
+        outcome = _outcome(
+            tool='memex_procedural_search', arg_name='query', regex=r'deploy|payment'
+        )
+        ans = AgentAnswer(
+            tool_calls=[
+                {
+                    'tool': 'memex_procedural_search',
+                    'input': {'request': {'query': 'deploy payments service', 'limit': 10}},
+                }
+            ]
+        )
+        assert outcome.score(ans, _scenario()) == {'pass': 1.0}
+
+    def test_dotted_path_resolves_explicit_nesting(self) -> None:
+        outcome = _outcome(
+            tool='memex_procedural_search', arg_name='request.query', regex=r'deploy'
+        )
+        ans = AgentAnswer(
+            tool_calls=[
+                {'tool': 'memex_procedural_search', 'input': {'request': {'query': 'deploy x'}}}
+            ]
+        )
+        assert outcome.score(ans, _scenario()) == {'pass': 1.0}
+
+    def test_missing_nested_arg_does_not_match(self) -> None:
+        outcome = _outcome(tool='memex_procedural_search', arg_name='query', regex=r'.*')
+        ans = AgentAnswer(
+            tool_calls=[{'tool': 'memex_procedural_search', 'input': {'request': {'limit': 10}}}]
+        )
+        assert outcome.score(ans, _scenario()) == {'pass': 0.0}
+
+
 class TestStringValue:
     def test_positive_match(self) -> None:
         outcome = _outcome()

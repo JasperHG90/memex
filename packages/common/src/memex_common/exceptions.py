@@ -100,6 +100,18 @@ class DeltaValidationError(MemexError, ValueError):
     pass
 
 
+class KVKeyValidationError(MemexError, ValueError):
+    """Raised when a KV key fails namespace/shape validation.
+
+    A malformed key is caller-correctable bad input, so this maps to a 400
+    (via ``_handle_error``'s generic ``MemexError`` branch) instead of an
+    Internal Server Error. Inherits ``ValueError`` so existing call sites
+    and tests that assert ``ValueError`` on invalid keys stay green.
+    """
+
+    pass
+
+
 class ObservationReadOnlyError(MemexError):
     """Raised when ``memory_deprioritize`` is called with an ``Observation.id``.
 

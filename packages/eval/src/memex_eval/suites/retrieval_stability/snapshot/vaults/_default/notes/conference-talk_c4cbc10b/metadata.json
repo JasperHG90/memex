@@ -3,8 +3,8 @@
   "archived_at": null,
   "assets": [],
   "content_hash": "dae2482f8a8292f85733fee3dc58259c",
-  "created_at": "2026-05-18T07:32:21.466363+00:00",
-  "description": "NeurIPS 2025 Keynote on Production NLP Scaling",
+  "created_at": "2026-06-12T19:47:31.827152+00:00",
+  "description": "Scaling Transformer Architectures for Real-World NLP",
   "doc_metadata": {
     "retain_params": {
       "assets": [],
@@ -28,14 +28,19 @@
       "conference",
       "neurips",
       "ai-research",
-      "nlp"
+      "nlp",
+      "transformer scaling",
+      "sparse attention",
+      "neurips 2025",
+      "gpu infrastructure",
+      "computational efficiency"
     ]
   },
   "filestore_path": null,
   "id": "c4cbc10b-0239-1c05-c889-7fc9c78b5638",
   "page_index": {
     "metadata": {
-      "description": "NeurIPS 2025 Keynote on Production NLP Scaling",
+      "description": "Scaling Transformer Architectures for Real-World NLP",
       "publish_date": "2025-01-01 00:00:00+00:00",
       "source_uri": null,
       "tags": [
@@ -43,21 +48,22 @@
         "neurips",
         "ai-research",
         "nlp",
-        "neurips 2025",
         "transformer scaling",
-        "production nlp",
-        "sparse-attention",
+        "sparse attention",
+        "neurips 2025",
         "gpu infrastructure",
-        "ai research"
+        "computational efficiency"
       ],
       "title": "conference-talk",
       "total_tokens": 156
     },
     "toc": [
       {
+        "assets": [],
         "block_id": "1d78757346cc8957004abbe2fe4ab977",
         "children": [
           {
+            "assets": [],
             "block_id": "1d78757346cc8957004abbe2fe4ab977",
             "children": [],
             "end_index": 575,
@@ -67,16 +73,17 @@
             "start_index": 146,
             "subtree_tokens": 89,
             "summary": {
-              "how": "Via sparse-attention mechanisms, continuous fine-tuning pipelines, and embedding model improvements.",
-              "what": "A keynote talk on transformer scaling techniques for production NLP systems.",
+              "how": "Reducing FLOPs by 60% through novel attention mechanisms and collaborative embedding improvements.",
+              "what": "Keynote on transformer scaling, featuring a sparse-attention mechanism and continuous fine-tuning pipelines.",
               "when": "A 45-minute presentation session.",
-              "where": "Production NLP systems and AI Research Lab environments.",
-              "who": "Elena Vasquez and Raj Mehta."
+              "where": "AI Research Lab production NLP systems context.",
+              "who": "Elena Vasquez and Raj Mehta"
             },
             "title": "Talk Summary",
             "token_estimate": 89
           },
           {
+            "assets": [],
             "block_id": "1d78757346cc8957004abbe2fe4ab977",
             "children": [],
             "end_index": 715,
@@ -87,10 +94,10 @@
             "subtree_tokens": 29,
             "summary": {
               "how": "By referencing a recent GPU expansion project.",
-              "what": "Discussion regarding hardware requirements and A100 GPU availability.",
+              "what": "Discussion of hardware requirements and GPU infrastructure.",
               "when": "During a Q&A session following a presentation.",
-              "where": "At the lab.",
-              "who": "Elena Vasquez, Lisa Chang, and session attendees."
+              "where": "At a lab or professional seminar.",
+              "who": "Attendees, Elena Vasquez, and Lisa Chang."
             },
             "title": "Q&A",
             "token_estimate": 29
@@ -104,7 +111,7 @@
         "subtree_tokens": 156,
         "summary": {
           "how": "Scaling transformer architectures",
-          "what": "Keynote presentation on real-world NLP applications",
+          "what": "Keynote presentation on real-world NLP",
           "when": "NeurIPS 2025",
           "where": "NeurIPS Conference",
           "who": "Elena Vasquez (AI Research Lab)"
@@ -115,11 +122,11 @@
     ]
   },
   "publish_date": "2025-01-01T00:00:00+00:00",
-  "session_id": "d34c7f7b-f482-4f9b-a84d-384b193f0e79",
+  "session_id": "239c5ec4-06f2-423f-918b-af7ab8a37093",
   "status": "active",
   "summary_version_incorporated": null,
   "superseded_by": null,
   "title": "conference-talk",
-  "updated_at": "2026-05-18T07:32:21.466363+00:00",
-  "vault_id": "22c11c49-1ccc-43a4-830c-dca2472f519c"
+  "updated_at": "2026-06-12T19:47:31.827152+00:00",
+  "vault_id": "34893ad7-9844-4786-bb90-912fac9b0d11"
 }

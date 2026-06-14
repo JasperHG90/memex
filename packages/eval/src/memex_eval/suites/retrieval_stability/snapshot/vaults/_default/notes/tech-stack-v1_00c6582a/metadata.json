@@ -3,8 +3,8 @@
   "archived_at": null,
   "assets": [],
   "content_hash": "9557cf49bee773758e9648a8121e7c3a",
-  "created_at": "2026-05-18T07:33:14.519569+00:00",
-  "description": "Project Nexus technical infrastructure and stack documentation",
+  "created_at": "2026-06-12T19:48:14.543100+00:00",
+  "description": "Project Nexus Technical Infrastructure and DevOps Stack",
   "doc_metadata": {
     "retain_params": {
       "assets": [],
@@ -26,14 +26,21 @@
     "tags": [
       "tech-stack",
       "project-nexus",
-      "infrastructure"
+      "infrastructure",
+      "tech stack",
+      "django",
+      "aws eks",
+      "kubernetes",
+      "mysql",
+      "devops",
+      "python"
     ]
   },
   "filestore_path": null,
   "id": "00c6582a-50d0-dcea-66f0-9e6285e26f81",
   "page_index": {
     "metadata": {
-      "description": "Project Nexus technical infrastructure and stack documentation",
+      "description": "Project Nexus Technical Infrastructure and DevOps Stack",
       "publish_date": "2025-01-01 00:00:00+00:00",
       "source_uri": null,
       "tags": [
@@ -42,19 +49,22 @@
         "infrastructure",
         "tech stack",
         "django",
+        "aws eks",
         "kubernetes",
-        "devops",
         "mysql",
-        "cloud computing"
+        "devops",
+        "python"
       ],
       "title": "tech-stack-v1",
       "total_tokens": 127
     },
     "toc": [
       {
+        "assets": [],
         "block_id": "02c3facdb3e9f0b1a1a577b50459c146",
         "children": [
           {
+            "assets": [],
             "block_id": "02c3facdb3e9f0b1a1a577b50459c146",
             "children": [],
             "end_index": 308,
@@ -64,16 +74,17 @@
             "start_index": 45,
             "subtree_tokens": 74,
             "summary": {
-              "how": "By utilizing Python, Django, MySQL, Jenkins, Docker, Kubernetes, and Datadog.",
-              "what": "A list of technologies and tools forming the project's infrastructure.",
+              "how": "By utilizing a stack including Python, Django, MySQL, Jenkins, and Kubernetes.",
+              "what": "The technical specifications and infrastructure stack.",
               "when": "Current",
-              "where": "AWS EKS and self-hosted environments.",
+              "where": "Project Nexus codebase and AWS EKS deployment environment.",
               "who": "Project Nexus"
             },
             "title": "Current Stack",
             "token_estimate": 74
           },
           {
+            "assets": [],
             "block_id": "02c3facdb3e9f0b1a1a577b50459c146",
             "children": [],
             "end_index": 501,
@@ -83,11 +94,11 @@
             "start_index": 308,
             "subtree_tokens": 41,
             "summary": {
-              "how": "By selecting Django for its ORM/admin and MySQL for JSON/replication features.",
-              "what": "Technical stack selection and maintenance responsibilities.",
+              "how": "By selecting Django for its ORM/admin and MySQL 8.0 for JSON/replication features.",
+              "what": "Technical stack selection and pipeline maintenance responsibilities.",
               "when": null,
-              "where": "Project development and operations environment.",
-              "who": "DevOps team, Django, and MySQL 8.0."
+              "where": "Development and operational environment.",
+              "who": "Development team and DevOps team"
             },
             "title": "Notes",
             "token_estimate": 41
@@ -100,11 +111,11 @@
         "start_index": 0,
         "subtree_tokens": 127,
         "summary": {
-          "how": "By documenting the current stack and associated notes.",
-          "what": "Overview of Project Nexus technology stack and technical documentation.",
+          "how": "By categorizing information into current infrastructure and supplementary notes.",
+          "what": "The technical stack specifications for Project Nexus.",
           "when": "January 2025",
-          "where": "Project Nexus technical environment",
-          "who": "Project Nexus development team"
+          "where": "Within the Project Nexus technical documentation.",
+          "who": "Project Nexus development team."
         },
         "title": "Project Nexus — Tech Stack (January 2025)",
         "token_estimate": 12
@@ -112,11 +123,11 @@
     ]
   },
   "publish_date": "2025-01-01T00:00:00+00:00",
-  "session_id": "d3805ca5-64cf-4852-bf83-bb2252c8f939",
+  "session_id": "f00be3e0-cf12-4a12-a334-8cd9f24d9c50",
   "status": "active",
   "summary_version_incorporated": null,
   "superseded_by": null,
   "title": "tech-stack-v1",
-  "updated_at": "2026-05-18T07:33:14.519569+00:00",
-  "vault_id": "22c11c49-1ccc-43a4-830c-dca2472f519c"
+  "updated_at": "2026-06-12T19:48:14.543100+00:00",
+  "vault_id": "34893ad7-9844-4786-bb90-912fac9b0d11"
 }

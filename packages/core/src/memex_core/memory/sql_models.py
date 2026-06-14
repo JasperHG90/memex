@@ -22,6 +22,7 @@ from sqlalchemy import (
     UniqueConstraint,
 )
 from sqlalchemy.dialects.postgresql import JSONB, TIMESTAMP, ARRAY, TSVECTOR
+from sqlalchemy import event
 from sqlalchemy.types import Uuid as SA_UUID
 from sqlmodel import SQLModel, Field, Relationship
 
@@ -357,6 +358,17 @@ class Note(SQLModel, table=True):  # type: ignore
         'NULL or < current version means pending.',
     )
 
+    role: str | None = Field(
+        default=None,
+        sa_column=Column(Text, nullable=True),
+        description='classification of note provenance within the procedural plane. '
+        'NULL for ordinary declarative-plane notes. One of '
+        "'case' (raw or derived experience record — parent of a procedure), "
+        "'procedure' (a how-to recipe synthesised from one or more cases), "
+        "'strategy' (an opinionated play-book that picks a procedure for a context). "
+        'Backed by a CHECK constraint and a partial index; see migration 062.',
+    )
+
     created_at: datetime = created_at_field()
     updated_at: datetime = updated_at_field()
 
@@ -374,12 +386,22 @@ class Note(SQLModel, table=True):  # type: ignore
             "status IN ('active', 'superseded')",
             name='ck_notes_status',
         ),
+        CheckConstraint(
+            "role IS NULL OR role IN ('case', 'procedure', 'strategy')",
+            name='ck_notes_role',
+        ),
         Index(
             'idx_notes_title_trgm',
             sql_text('lower(title) gin_trgm_ops'),
             postgresql_using='gin',
         ),
         Index('idx_notes_summary_version', 'vault_id', 'summary_version_incorporated'),
+        Index(
+            'idx_notes_role',
+            'vault_id',
+            'role',
+            postgresql_where=sql_text('role IS NOT NULL'),
+        ),
     )
 
 
@@ -1887,6 +1909,641 @@ class NoteAppend(SQLModel, table=True):  # type: ignore
 
 
 # ---------------------------------------------------------------------------
+# Procedural plane (procedural memory)
+# ---------------------------------------------------------------------------
+#
+# The procedural plane sits alongside the declarative plane (notes + memory_units).
+# It holds exactly two kinds of entity:
+#
+#   * procedure  — a how-to recipe synthesised from one or more cases
+#   * strategy   — an opinionated play-book generalising over procedures
+#
+# CASES ARE NOT ON THIS PLANE. A case is a note (``notes.role = 'case'``)
+# filed into the hidden ``procedural`` system vault via case_submit
+# (the design §5.1, §18.3, §18.9.0). Cases feed procedures/strategies as
+# lineage via ``procedural_sources``.
+#
+# Identity is the (kind, scope, verb, context) tuple (UNIQUE NULLS NOT
+# DISTINCT): procedure ≡ (scope, verb, context); strategy ≡ (scope, verb,
+# NULL) — a strategy is the projection over all procedures sharing
+# (scope, verb) (§18.1). Retrieval anchors on the *trigger*
+# (when_to_use / when_to_apply): trigger_embedding is the single vector
+# leg of the hybrid search; the embedding is recomputed on every trigger
+# change to avoid stale-vector drift.
+#
+# Context-binding pins form a chain global → project:<id> → app:<agent_identity>
+# (see spike 7) — the same entry can be pinned at multiple positions of
+# different contexts; the (context_key, entry_id) pair is the row key.
+# NO ``user`` scope/context: per-user curation rides the pin chain's app
+# contexts, not the entries (JG decision 2026-06-10).
+# ---------------------------------------------------------------------------
+
+
+class ProceduralKind(str, Enum):
+    """Taxonomy of the procedural plane's two entity kinds.
+
+    Cases are NOT a kind on this plane — a case is a note
+    (``notes.role = 'case'``) filed into the hidden ``procedural``
+    system vault (the design §18.3 / §18.9.0). Procedures and strategies
+    are projections distilled over case clusters.
+    """
+
+    PROCEDURE = 'procedure'
+    STRATEGY = 'strategy'
+
+
+class ProceduralStatus(str, Enum):
+    """Lifecycle state for an procedural entry.
+
+    * draft        — created but not yet promoted; editable in place.
+    * published    — visible to agents via search/briefing.
+    * deprecated   — superseded by another entry; kept for lineage.
+    """
+
+    DRAFT = 'draft'
+    PUBLISHED = 'published'
+    DEPRECATED = 'deprecated'
+
+
+class ProceduralOrigin(str, Enum):
+    """How an procedural entry came to exist."""
+
+    SEED = 'seed'  # boot-time system seed
+    DERIVED = 'derived'  # LLM-derived from cases (derivation queue)
+    AUTHORED = 'authored'  # hand-edited by a human/agent — sticky (§18.6.4)
+    MANUAL = 'manual'  # agent-written
+    IMPORT = 'import'  # bulk import
+
+
+class ProceduralSourceRole(str, Enum):
+    """Role an procedural_source row plays in a case → procedure relationship."""
+
+    PROVENANCE = 'provenance'  # case that gave rise to a procedure
+    EVIDENCE = 'evidence'  # supporting fact for a procedure/strategy
+    CONTRADICTION = 'contradiction'  # case that argues against a procedure
+
+
+class DerivationQueueStatus(str, Enum):
+    """State of an entry in the async derivation queue."""
+
+    PENDING = 'pending'
+    IN_PROGRESS = 'in_progress'
+    COMPLETED = 'completed'
+    FAILED = 'failed'
+
+
+class ProceduralEntry(SQLModel, table=True):  # type: ignore
+    """The unit of recall in the procedural plane.
+
+    A procedure or strategy with a stable (kind, scope, verb, context)
+    identity anchor (§18.1): procedure ≡ (scope, verb, context);
+    strategy ≡ (scope, verb, NULL) — a strategy is the projection over
+    all procedures sharing (scope, verb). Retrieval is anchored on the
+    *trigger* (when_to_use / when_to_apply): the trigger embedding is the
+    vector leg of the hybrid search; the tsvector covers the full text.
+    """
+
+    __tablename__ = 'procedural_entries'
+
+    id: UUID = Field(
+        sa_column=Column(SA_UUID(), primary_key=True, server_default=sql_text('gen_random_uuid()')),
+        description='Unique identifier for the procedural entry.',
+    )
+    vault_id: UUID = vault_id_field()
+
+    kind: ProceduralKind = Field(
+        sa_column=Column(String, nullable=False),
+        description='procedure | strategy. Cases are notes (role="case"), not rows here.',
+    )
+    scope: str = Field(
+        sa_column=Column(Text, nullable=False),
+        description='Origin scope label: "global", "project:<id>", or '
+        '"app:<agent_identity>". NO "user" scope — procedures/strategies are '
+        'shared knowledge; per-user briefing customisation lives on the pin '
+        'chain, not the entry (JG decision 2026-06-10).',
+    )
+    verb: str | None = Field(
+        default=None,
+        sa_column=Column(Text, nullable=True),
+        description='Anchor verb (e.g. "deploy", "migrate"). Required for both kinds.',
+    )
+    context: str | None = Field(
+        default=None,
+        sa_column=Column(Text, nullable=True),
+        description='Anchor context (e.g. "nomad", "alembic"). Required for '
+        'procedures; MUST be NULL for strategies — a strategy groups all '
+        'procedures sharing (scope, verb) (§18.1; see ck_strategy_anchor).',
+    )
+
+    title: str = Field(
+        sa_column=Column(Text, nullable=False),
+        description='Short, imperative title (e.g. "create_alembic_migration").',
+    )
+    summary: str = Field(
+        sa_column=Column(Text, nullable=False),
+        description='One-paragraph explanation of when and how to apply this entry.',
+    )
+    body: str = Field(
+        sa_column=Column(Text, nullable=False, server_default=''),
+        description='Full procedural body — steps, code, references. '
+        'Markdown allowed; rendered as-is by the agent surface.',
+    )
+    trigger: str | None = Field(
+        default=None,
+        sa_column=Column(Text, nullable=True),
+        description='when_to_use (procedure) / when_to_apply (strategy) — '
+        'THE retrieval key (spike §19.1: trigger-only embedding beats '
+        'full-body 18/20 vs 15/20 top-1). Required at the DTO boundary; '
+        'the embedding is recomputed on every trigger change.',
+    )
+    trigger_embedding: list[float] | None = Field(
+        default=None,
+        sa_column=Column(Vector(EMBEDDING_DIMENSION), nullable=True),
+        description='Vector(384) embedding of `trigger` — the single '
+        'vector leg of the hybrid search. Recomputed on every trigger change.',
+    )
+
+    tags: list[str] = Field(
+        default_factory=list,
+        sa_column=Column(ARRAY(Text), nullable=False, server_default=sql_text('ARRAY[]::text[]')),
+        description='Free-form tags — domain, sub-system, framework.',
+    )
+    extra_metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column('metadata', JSONB, nullable=False, server_default=sql_text("'{}'::jsonb")),
+        description='Arbitrary metadata — confidence, run_count, last_verified_at, etc.',
+    )
+
+    status: ProceduralStatus = Field(
+        default=ProceduralStatus.DRAFT,
+        sa_column=Column(String, nullable=False, server_default=ProceduralStatus.DRAFT.value),
+        description='Lifecycle state. Draft entries are not visible to search/briefing.',
+    )
+    origin: ProceduralOrigin = Field(
+        default=ProceduralOrigin.MANUAL,
+        sa_column=Column(String, nullable=False, server_default=ProceduralOrigin.MANUAL.value),
+        description='How this entry came to exist; used by the audit/replay surface.',
+    )
+
+    # Phase 2 outcome counters (§18.5) — live ON the entry (not a side table
+    # keyed on KV strings, 028's fragility). Written by case submission
+    # (case_of + outcome) or an explicit procedure_report; consumed by
+    # ranking via the Beta-Bernoulli posterior (compute_mw_score over
+    # success/failure). ``mixed`` is informational; ``uses``/``last_used_at``
+    # are governance signals for briefing curation.
+    success_count: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default='0'),
+        description='Cases/reports with outcome=success enacting this entry.',
+    )
+    failure_count: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default='0'),
+        description='Cases/reports with outcome=failure.',
+    )
+    mixed_count: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default='0'),
+        description='Cases/reports with outcome=mixed (informational; not in the MW posterior).',
+    )
+    uses: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default='0'),
+        description='Total times enacted (any outcome) — a governance signal.',
+    )
+    last_used_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
+        description='When this entry was last enacted (case/report).',
+    )
+
+    supersedes_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(SA_UUID(), nullable=True),
+        description='Entry this one supersedes (lineage).',
+    )
+    superseded_by_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(SA_UUID(), nullable=True),
+        description='Entry that supersedes this one (lineage).',
+    )
+
+    search_tsvector: Any = Field(
+        default=None,
+        sa_column=Column(
+            TSVECTOR,
+            Computed(
+                "to_tsvector('english'::regconfig, "
+                "coalesce(title, '') || ' ' || "
+                "coalesce(summary, '') || ' ' || "
+                "coalesce(trigger, '') || ' ' || "
+                "coalesce(body, '') || ' ' || "
+                "coalesce(memex_procedural_tags_to_text(tags), ''))",
+                persisted=True,
+            ),
+        ),
+        description='Generated tsvector over title + summary + trigger + body + tags.',
+    )
+
+    created_at: datetime = created_at_field()
+    updated_at: datetime = updated_at_field()
+    published_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
+        description='Set when status transitions draft → published.',
+    )
+
+    __table_args__ = (
+        # Identity anchor for procedures and strategies.
+        # NULLS NOT DISTINCT means (kind, 'proc', 'migrate', 'postgres') is unique
+        # even though verb/context are NULLable for cases.
+        UniqueConstraint(
+            'kind',
+            'scope',
+            'verb',
+            'context',
+            name='uq_procedural_identity',
+            postgresql_nulls_not_distinct=True,
+        ),
+        CheckConstraint(
+            "kind IN ('procedure', 'strategy')",
+            name='ck_procedural_kind',
+        ),
+        CheckConstraint(
+            "status IN ('draft', 'published', 'deprecated')",
+            name='ck_procedural_status',
+        ),
+        CheckConstraint(
+            "origin IN ('seed', 'derived', 'authored', 'manual', 'import')",
+            name='ck_procedural_origin',
+        ),
+        # Anchor shapes (§18.1): procedure ≡ (scope, verb, context);
+        # strategy ≡ (scope, verb, NULL) — a strategy groups all
+        # procedures sharing (scope, verb), so its context MUST be NULL.
+        CheckConstraint(
+            "kind <> 'strategy' OR (verb IS NOT NULL AND context IS NULL)",
+            name='ck_strategy_anchor',
+        ),
+        CheckConstraint(
+            "kind <> 'procedure' OR (verb IS NOT NULL AND context IS NOT NULL)",
+            name='ck_procedure_anchor',
+        ),
+        # NOTE: there is intentionally NO `(trigger IS NULL) = (trigger_embedding IS NULL)`
+        # CHECK. The embedding is computed by the caller at write time
+        # (§18.7 — the facade embeds the trigger and threads the vector
+        # into the repository), but an embedder outage degrades to a
+        # NULL vector (BM25 still covers the row) rather than failing
+        # the write — a pairing CHECK would turn that graceful
+        # degradation into a constraint violation.
+        ForeignKeyConstraint(
+            ['supersedes_id'],
+            ['procedural_entries.id'],
+            name='procedural_entries_supersedes_fkey',
+            ondelete='SET NULL',
+        ),
+        ForeignKeyConstraint(
+            ['superseded_by_id'],
+            ['procedural_entries.id'],
+            name='procedural_entries_superseded_by_fkey',
+            ondelete='SET NULL',
+        ),
+        Index('idx_procedural_entries_vault_kind', 'vault_id', 'kind'),
+        Index(
+            'idx_procedural_entries_vault_status',
+            'vault_id',
+            'status',
+        ),
+        Index(
+            'idx_procedural_entries_scope_verb',
+            'scope',
+            'verb',
+            postgresql_where=sql_text("kind IN ('procedure', 'strategy')"),
+        ),
+        Index(
+            'idx_procedural_entries_status_published_at',
+            'status',
+            'published_at',
+            postgresql_ops={'published_at': 'DESC'},
+            postgresql_where=sql_text("status = 'published'"),
+        ),
+        Index(
+            'idx_procedural_entries_trigger_embedding',
+            'trigger_embedding',
+            postgresql_using='hnsw',
+            postgresql_ops={'trigger_embedding': 'vector_cosine_ops'},
+            postgresql_where=sql_text("status = 'published'"),
+        ),
+        Index(
+            'idx_procedural_entries_search_tsvector',
+            'search_tsvector',
+            postgresql_using='gin',
+        ),
+    )
+
+
+class ProceduralEntryVersion(SQLModel, table=True):  # type: ignore
+    """Append-only version ledger for an procedural entry.
+
+    A row per `edit` call; the latest body is always on ``procedural_entries``
+    (mutable in place — see the design §3.2). ``version`` is monotonically
+    increasing per entry_id.
+    """
+
+    __tablename__ = 'procedural_entry_versions'
+
+    id: UUID = Field(
+        sa_column=Column(SA_UUID(), primary_key=True, server_default=sql_text('gen_random_uuid()')),
+        description='Unique identifier for this version row.',
+    )
+    entry_id: UUID = Field(
+        sa_column=Column(SA_UUID(), nullable=False),
+        description='The entry this version belongs to.',
+    )
+    version: int = Field(
+        sa_column=Column(Integer, nullable=False),
+        description='Monotonic version per entry_id (1, 2, 3, …).',
+    )
+    title: str = Field(sa_column=Column(Text, nullable=False))
+    summary: str = Field(sa_column=Column(Text, nullable=False))
+    body: str = Field(sa_column=Column(Text, nullable=False, server_default=''))
+    trigger: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    tags: list[str] = Field(
+        default_factory=list,
+        sa_column=Column(ARRAY(Text), nullable=False, server_default=sql_text('ARRAY[]::text[]')),
+    )
+    extra_metadata: dict[str, Any] = Field(
+        default_factory=dict,
+        sa_column=Column('metadata', JSONB, nullable=False, server_default=sql_text("'{}'::jsonb")),
+    )
+    edited_by: str | None = Field(
+        default=None,
+        sa_column=Column(Text, nullable=True),
+        description='Agent identity or "system" that produced this version.',
+    )
+    edit_reason: str | None = Field(
+        default=None,
+        sa_column=Column(Text, nullable=True),
+        description='Free-form explanation of why the edit was made.',
+    )
+    created_at: datetime = created_at_field()
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ['entry_id'],
+            ['procedural_entries.id'],
+            name='procedural_entry_versions_entry_fkey',
+            ondelete='CASCADE',
+        ),
+        UniqueConstraint('entry_id', 'version', name='uq_procedural_entry_versions_entry_version'),
+        Index('idx_procedural_entry_versions_entry_id_created_at', 'entry_id', 'created_at'),
+    )
+
+
+class ProceduralSource(SQLModel, table=True):  # type: ignore
+    """Provenance + evidence + contradiction edges between procedural entries.
+
+    For a case → procedure edge the role is ``provenance``. For a procedure →
+    evidence-fact edge the role is ``evidence``. For a case that argues
+    against a procedure the role is ``contradiction``.
+    """
+
+    __tablename__ = 'procedural_sources'
+
+    id: UUID = Field(
+        sa_column=Column(SA_UUID(), primary_key=True, server_default=sql_text('gen_random_uuid()')),
+        description='Unique identifier for this source edge.',
+    )
+    entry_id: UUID = Field(
+        sa_column=Column(SA_UUID(), nullable=False),
+        description='The procedure/strategy that draws on the source.',
+    )
+    source_entry_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(SA_UUID(), nullable=True),
+        description='The case (or other entry) that is being cited.',
+    )
+    source_note_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(SA_UUID(), nullable=True),
+        description='Optional declarative-plane note backing this edge.',
+    )
+    source_memory_unit_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(SA_UUID(), nullable=True),
+        description='Optional memory unit backing this edge.',
+    )
+    role: ProceduralSourceRole = Field(
+        sa_column=Column(String, nullable=False),
+        description='provenance | evidence | contradiction.',
+    )
+    weight: float = Field(
+        default=1.0,
+        sa_column=Column(Float, nullable=False, server_default='1.0'),
+        description='Edge weight used in RRF aggregation; default 1.0.',
+    )
+    created_at: datetime = created_at_field()
+
+    __table_args__ = (
+        CheckConstraint(
+            "role IN ('provenance', 'evidence', 'contradiction')",
+            name='ck_procedural_sources_role',
+        ),
+        CheckConstraint(
+            'weight >= 0.0 AND weight <= 10.0',
+            name='ck_procedural_sources_weight',
+        ),
+        ForeignKeyConstraint(
+            ['entry_id'],
+            ['procedural_entries.id'],
+            name='procedural_sources_entry_fkey',
+            ondelete='CASCADE',
+        ),
+        ForeignKeyConstraint(
+            ['source_entry_id'],
+            ['procedural_entries.id'],
+            name='procedural_sources_source_entry_fkey',
+            ondelete='CASCADE',
+        ),
+        ForeignKeyConstraint(
+            ['source_note_id'],
+            ['notes.id'],
+            name='procedural_sources_source_note_fkey',
+            ondelete='SET NULL',
+        ),
+        ForeignKeyConstraint(
+            ['source_memory_unit_id'],
+            ['memory_units.id'],
+            name='procedural_sources_source_memory_unit_fkey',
+            ondelete='SET NULL',
+        ),
+        # At least one source pointer must be set.
+        CheckConstraint(
+            'source_entry_id IS NOT NULL OR source_note_id IS NOT NULL OR '
+            'source_memory_unit_id IS NOT NULL',
+            name='ck_procedural_sources_pointer_set',
+        ),
+        Index('idx_procedural_sources_entry_id', 'entry_id'),
+        Index('idx_procedural_sources_source_entry_id', 'source_entry_id'),
+    )
+
+
+class ProceduralPin(SQLModel, table=True):  # type: ignore
+    """Context-binding pin: a (context_key, entry_id, position) triple.
+
+    Pins form a chain ``global → project:<id> → app:<agent_identity>`` (see
+    spike 7). The same entry can be pinned at multiple positions of
+    different contexts; the (context_key, entry_id, position) triple is the
+    row key. Lower position = higher priority; agents read pins in ascending
+    position order.
+    """
+
+    __tablename__ = 'procedural_pins'
+
+    id: UUID = Field(
+        sa_column=Column(SA_UUID(), primary_key=True, server_default=sql_text('gen_random_uuid()')),
+        description='Unique identifier for this pin row.',
+    )
+    context_key: str = Field(
+        sa_column=Column(Text, nullable=False),
+        description='Binding key — "global", "project:<uuid>", or '
+        '"app:<agent_identity>". Chain is implicit: agents read all three.',
+    )
+    entry_id: UUID = Field(
+        sa_column=Column(SA_UUID(), nullable=False),
+        description='The entry being pinned.',
+    )
+    position: int = Field(
+        sa_column=Column(Integer, nullable=False),
+        description='Position within the pin list for this context_key. '
+        'Lower = higher priority. 0-based.',
+    )
+    pinned_by: str | None = Field(
+        default=None,
+        sa_column=Column(Text, nullable=True),
+        description='Agent identity or "system" that created the pin.',
+    )
+    created_at: datetime = created_at_field()
+
+    __table_args__ = (
+        ForeignKeyConstraint(
+            ['entry_id'],
+            ['procedural_entries.id'],
+            name='procedural_pins_entry_fkey',
+            ondelete='CASCADE',
+        ),
+        # One pin per (context, entry) — prevents double-pinning the
+        # same entry into a context (which would render duplicate
+        # briefing cards and burn the per-context budget). Position is
+        # append-computed (max+1), so it's naturally unique without a
+        # constraint of its own.
+        UniqueConstraint(
+            'context_key',
+            'entry_id',
+            name='uq_procedural_pins_context_entry',
+        ),
+        CheckConstraint('position >= 0', name='ck_procedural_pins_position_nonneg'),
+        Index(
+            'idx_procedural_pins_context_position',
+            'context_key',
+            'position',
+        ),
+    )
+
+
+class ProceduralDerivationQueue(SQLModel, table=True):  # type: ignore
+    """Async derivation queue: cases in, procedures/strategies out.
+
+    Workers claim rows via ``SELECT ... FOR UPDATE SKIP LOCKED`` — same
+    leader-election-free pattern the reflection queue uses (see
+    the design §4.4).
+    """
+
+    __tablename__ = 'procedural_derivation_queue'
+
+    id: UUID = Field(
+        sa_column=Column(SA_UUID(), primary_key=True, server_default=sql_text('gen_random_uuid()')),
+        description='Unique identifier for this queue row.',
+    )
+    vault_id: UUID = vault_id_field()
+    source_entry_ids: list[UUID] = Field(
+        sa_column=Column(
+            ARRAY(SA_UUID()),
+            nullable=False,
+            server_default=sql_text('ARRAY[]::uuid[]'),
+        ),
+        description='Cases that should be distilled into a procedure/strategy.',
+    )
+    target_kind: ProceduralKind = Field(
+        sa_column=Column(String, nullable=False),
+        description='What to derive — procedure or strategy.',
+    )
+    target_scope: str = Field(
+        sa_column=Column(Text, nullable=False),
+        description='Scope label for the derived entry (e.g. "global", "project:<uuid>").',
+    )
+    target_verb: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    target_context: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    status: DerivationQueueStatus = Field(
+        default=DerivationQueueStatus.PENDING,
+        sa_column=Column(
+            String,
+            nullable=False,
+            server_default=DerivationQueueStatus.PENDING.value,
+        ),
+        description='Queue state — pending → in_progress → completed | failed.',
+    )
+    attempt_count: int = Field(
+        default=0,
+        sa_column=Column(Integer, nullable=False, server_default='0'),
+        description='Worker attempts so far. Bounded by config.derivation_max_attempts.',
+    )
+    last_error: str | None = Field(default=None, sa_column=Column(Text, nullable=True))
+    result_entry_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(SA_UUID(), nullable=True),
+        description='Set when status=completed; the derived entry.',
+    )
+    claimed_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
+        description='Last worker-claim timestamp.',
+    )
+    completed_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(TIMESTAMP(timezone=True), nullable=True),
+    )
+    created_at: datetime = created_at_field()
+
+    __table_args__ = (
+        CheckConstraint(
+            "target_kind IN ('procedure', 'strategy')",
+            name='ck_derivation_queue_target_kind',
+        ),
+        CheckConstraint(
+            "status IN ('pending', 'in_progress', 'completed', 'failed')",
+            name='ck_derivation_queue_status',
+        ),
+        CheckConstraint('attempt_count >= 0', name='ck_derivation_queue_attempt_nonneg'),
+        # Strategy derivations anchor on (scope, verb) — verb required,
+        # context FORBIDDEN (mirrors ck_strategy_anchor on the entries
+        # table). The old "context required" rule was backwards: it made
+        # every strategy enqueue impossible (entry.context is NULL for
+        # strategies), so the dirty-event enqueue silently never fired.
+        CheckConstraint(
+            "target_kind <> 'strategy' OR (target_verb IS NOT NULL AND target_context IS NULL)",
+            name='ck_derivation_queue_strategy_anchor',
+        ),
+        Index(
+            'idx_derivation_queue_status_created_at',
+            'status',
+            'created_at',
+            postgresql_where=sql_text("status = 'pending'"),
+        ),
+        Index('idx_derivation_queue_vault_id', 'vault_id'),
+    )
+
+
+# ---------------------------------------------------------------------------
 # Maintenance ledger (rule-based linter)
 # ---------------------------------------------------------------------------
 
@@ -2455,3 +3112,51 @@ class LintLLMSignature(SQLModel, table=True):  # type: ignore
             name='ck_lint_llm_signature_superseded_valid',
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# DDL event hooks
+# ---------------------------------------------------------------------------
+#
+# The procedural_entries.search_tsvector generated column references
+# memex_procedural_tags_to_text() — an IMMUTABLE wrapper around the
+# STABLE array_to_string(text[], text). Migration 061 creates the function
+# in upgrade(); that path is fine for alembic-driven schema setup.
+#
+# Tests that drive schema setup via ``SQLModel.metadata.create_all``
+# (notably the integration ``engine`` fixture in
+# packages/core/tests/integration/conftest.py) never run alembic, so the
+# function would not exist when ``create_all`` reaches the
+# ``procedural_entries`` table. To keep both paths consistent we
+# register a ``before_create`` listener that emits the function DDL
+# before any table DDL, mirroring the migration body.
+# ---------------------------------------------------------------------------
+
+
+_PROCEDURAL_TAGS_TO_TEXT_DDL = """
+CREATE OR REPLACE FUNCTION memex_procedural_tags_to_text(
+    tags text[]
+) RETURNS text
+LANGUAGE sql
+IMMUTABLE
+PARALLEL SAFE
+AS $$
+    SELECT coalesce(
+        array_to_string(tags, ' '),
+        ''
+    )
+$$
+"""
+
+
+@event.listens_for(SQLModel.metadata, 'before_create', propagate=True)
+def _emit_procedural_tags_to_text(target, connection, **kwargs):  # type: ignore[no-untyped-def]
+    """Emit the procedural tsvector helper before any table that uses it.
+
+    Mirrors the upgrade body of migration 061 — keeps ``create_all`` and
+    ``alembic upgrade`` consistent. Idempotent (``CREATE OR REPLACE``)
+    so re-running setup is safe.
+    """
+    if not connection.dialect.name.startswith('postgresql'):
+        return
+    connection.exec_driver_sql(_PROCEDURAL_TAGS_TO_TEXT_DDL)

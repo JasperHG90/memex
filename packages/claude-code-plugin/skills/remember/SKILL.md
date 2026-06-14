@@ -1,6 +1,6 @@
 ---
 name: remember
-description: "Save information to Memex long-term memory. Routes to KV for preferences/conventions/settings/procedures, or to a note for facts/decisions/context."
+description: "Save information to Memex long-term memory. Routes how-tos/worked-episodes to a case, preferences/conventions to KV, or facts/decisions to a note."
 argument-hint: "[what to remember]"
 ---
 
@@ -9,9 +9,10 @@ argument-hint: "[what to remember]"
 1. **Content**: use `$ARGUMENTS` if provided; otherwise infer the most important persistable context.
 
 2. **Route by shape, NOT by trigger word** — this is the most important step. Pick the storage layer first:
-   - **Preferences / conventions / settings** ("I prefer X", "we use Y in this repo", "for Claude Code: dark theme", "company-wide: Python 3.12") → `memex_kv_put` with the scope-qualifier-derived namespace (`user:`, `project:<id>:`, `app:<app-id>:`, `global:`). See KV-namespace rules in the system prompt. **Do NOT save these as notes.**
-   - **Learned how-tos / procedures** → `memex_kv_put` with `<scope>:procedure:<verb>:<context-tag>` key (scope = `global` default, or `project:<id>` on explicit project cue). Each write appends a new version; prior versions remain queryable via `memex_kv_get(key, include_history=true)`.
+   - **Preferences / conventions / settings** ("I prefer X", "we use Y in this repo", "for Claude Code: dark theme", "company-wide: Python 3.12") → `memex_kv_put` with the scope-qualifier-derived namespace (`user:`, `project:<id>:`, `app:<app-id>:`, `global:`) and an ordinary `<scope>:<field>` key. See KV-namespace rules in the system prompt. **Do NOT save these as notes.**
+   - **Learned how-tos / worked episodes** (you just finished a multi-step task, diagnosed a bug, resolved an incident, or worked out how to do something — "next time I hit this I'd want these steps back") → **`memex_case_submit`** — composes the episode template (trigger / situation / actions / outcome / lesson) and files it as a case NOTE in a hidden system vault. **The system DERIVES the procedure (and any higher-order strategy) from the cases you submit — you never author a procedure or strategy directly.** Pass `case_of=<procedure-id>` when you already have a procedure for this how-to (probe with `memex_procedural_get_by_identity` — see "Procedural memory" below).
    - **Facts / decisions / context / observations** that belong as a paragraph → `memex_add_note` (or `memex_append_note` to extend an existing note). Use the note-format guidance below.
+   - **Routine / one-off** with no future value → save nothing.
 
 3. **Note format** (only when step 2 picked `memex_add_note`):
    - **title**: concise, ≤10 words
@@ -26,23 +27,7 @@ argument-hint: "[what to remember]"
 
 ## Auto-injected metadata
 
-A `PreToolUse` hook augments every `memex_add_note` call with ambient capture metadata so you don't have to repeat it on each invocation:
-
-| Tag | When |
-| --- | --- |
-| `surface:claude-code` | Always |
-| `session:<note_key>` | Always (groups all notes from one CC session) |
-| `project:<project_id>` | Always (cross-vault discoverability) |
-| `git:branch=<branch>` | When inside a git repo |
-| `git:sha=<short>` | When a commit exists |
-| `git:repo=<owner/name>` | When `origin` remote is set |
-| `git:dirty` | When the working tree has uncommitted changes |
-| `claude:model=<id>` | When SessionStart cached the model identifier |
-| `cc:plugin=<version>` | Plugin version provenance |
-
-The hook also defaults `background=true` and `vault_id=<active_vault>` when those fields are absent. Pre-existing values you supply are preserved — passing `background: false` for synchronous ingestion still works.
-
-To opt out for a specific call, pass an explicit `tags` array containing only what you want. The hook merges (deduplicating); it does not strip values.
+A `PreToolUse` hook adds ambient tags (surface / session / project, git branch+sha+repo+dirty, model, plugin version) to every `memex_add_note` and `memex_case_submit` call, and on notes defaults `background=true` and `vault_id=<active_vault>` when absent — so don't set these yourself. Your explicit `tags` are merged (deduplicated, never stripped) and an explicit `background: false` is preserved.
 
 ## Deprioritize vs archive
 
@@ -57,11 +42,45 @@ Follow the 5-step resolution flow in the system prompt (§"5-step resolution flo
 
 Bare `success=true`/`success=false` without `units` returns HTTP 400.
 
-## Procedure KV
+## Procedural memory
 
-For how-tos, write to `<scope>:procedure:<verb>:<context-tag>` (scope = `global` default, `project:<id>` on explicit project cue):
-- Save: `memex_kv_put(value=..., key="global:procedure:<verb>:<context-tag>")` or `memex_kv_put(value=..., key="project:<id>:procedure:<verb>:<context-tag>")` — each write appends a new version; prior versions remain in the history envelope.
-- Read: `memex_kv_get(key)` for the active value; `memex_kv_get(key, include_history=true)` for the full envelope.
+"How to do X" knowledge lives on the **procedural plane** — distinct from notes (long-form prose) and KV (preferences / bindings). **The agent never authors a procedure or strategy directly: you file worked episodes via `memex_case_submit`, and the system DERIVES the procedure (and any higher-order strategy) from those cases.** Procedures carry an identity anchor `(kind, scope, verb, context)`, and arrive as pinned cards in your SessionStart briefing.
+
+**Tools** (exposed automatically by the plugin's `.mcp.json`):
+
+| Tool | When |
+| --- | --- |
+| `memex_case_submit` | File a worked episode as a case NOTE (hidden system vault). Required: `title`, `trigger`, `outcome`. Pass `case_of=<procedure-id>` when known; contested assignments land in the lint queue (`assignment.mode="escalated"`). **This is the agent's ONLY procedural write.** |
+| `memex_procedural_get_by_identity` | Probe by `(kind, scope, verb, context)`. Returns `null` on miss — the cheap "do we already have a procedure for this?" check. If it returns an entry, pass its id as `case_of` when you submit the case. |
+| `memex_procedural_get` | Fetch a single derived procedure by UUID. |
+| `memex_procedural_search` | Hybrid BM25 + vector search (RRF-merged) over derived procedures. Required: `query`. |
+
+**Scope grammar** (anchors + pin-chain context):
+
+- `global` — cross-project convention.
+- `project:<id>` — one project.
+- `app:<id>` — one application (e.g. `app:claude-code`).
+- There is NO `user` scope — per-user briefing curation is done by pinning (an operator surface), not by scoping entries.
+
+**The probe-then-file pattern** (the load-bearing operational pattern):
+
+```
+# 1. probe for an existing derived procedure on the anchor
+existing = memex_procedural_get_by_identity(kind="procedure", scope="global", verb="rotate", context="creds")
+# 2. file the worked episode; link it to the procedure if one already exists
+case_of = existing["id"] if existing is not None else None
+memex_case_submit(title="Rotated project API creds", trigger="rotating the project API credentials",
+                  outcome="...", case_of=case_of)
+# the system derives/updates the procedure from this case — you do not write one.
+```
+
+**Briefing**: pinned procedure cards arrive automatically inside the SessionStart briefing (the plugin passes `--app claude-code` so the `app:claude-code` pin context is included). There is no briefing tool to call.
+
+**When to choose case vs. KV vs. note**:
+
+- **Case** (`memex_case_submit`) — "what just happened, and next time I'd want these steps back": a how-to / worked episode. The system derives the procedure.
+- **KV** (`<scope>:<field>`) — a preference / convention / binding.
+- **Note** — long-form prose, context, decisions, history. NOT a procedure.
 
 ## Consolidation
 

@@ -1,4 +1,4 @@
-from typing import cast, Self, Any, AsyncGenerator, TYPE_CHECKING
+from typing import cast, Literal, Self, Any, AsyncGenerator, TYPE_CHECKING
 
 if TYPE_CHECKING:
     from memex_core.services.lint_llm import LintLLMService
@@ -20,6 +20,24 @@ import dspy
 from memex_common.exceptions import (
     MemoryUnitNotFoundError,
     VaultNotFoundError,
+)
+from typing import TYPE_CHECKING as _TYPE_CHECKING
+
+if _TYPE_CHECKING:
+    from memex_core.services.case_service import CaseService as CaseServiceT
+
+from memex_common.procedural_schemas import (
+    ProceduralBriefingCards,
+    ProceduralDerivationQueueDTO,
+    ProceduralEntryCreate,
+    ProceduralEntryDTO,
+    ProceduralEntryUpdate,
+    ProceduralEntryVersionDTO,
+    ProceduralPinCreate,
+    ProceduralPinDTO,
+    ProceduralSearchRequest,
+    ProceduralSearchResponse,
+    ShortLabel,
 )
 from memex_common.schemas import (
     IntentClass,
@@ -613,6 +631,30 @@ class MemexAPI:
             vault_service=self._vaults,
         )
 
+        # Procedural Plane (procedural + case memory). The
+        # repository owns CRUD; the search service runs the hybrid
+        # BM25+vector+RRF query and the briefing-card read path.
+        from memex_core.services.procedural_repository import (
+            ProceduralRepository,
+        )
+        from memex_core.services.procedural_search_service import (
+            ProceduralSearchService,
+        )
+
+        self._procedural_repo = ProceduralRepository(metastore=self.metastore)
+        self._procedural_search = ProceduralSearchService(
+            metastore=self.metastore,
+            repository=self._procedural_repo,
+            embedding_model=self.embedding_model,
+        )
+
+        # Wire the procedural-search service into the briefing so the
+        # briefing can include pin-chain cards alongside KV procedures.
+        # This is a post-construction patch because the briefing service
+        # is built before the procedural search service (the briefing
+        # has historically been independent of the plane).
+        self.session_briefing._procedural_search = self._procedural_search  # type: ignore[attr-defined]
+
         self._ingestion = IngestionService(
             metastore=self.metastore,
             filestore=self.filestore,
@@ -640,6 +682,9 @@ class MemexAPI:
             self._units,
         ):
             svc._audit_service = self._audit_svc  # type: ignore[attr-defined]
+
+        # procedural repository gets the same audit service.
+        self._procedural_repo._audit_service = self._audit_svc  # type: ignore[attr-defined]
 
     @property
     def notes(self) -> NoteService:
@@ -2209,19 +2254,14 @@ class MemexAPI:
         self,
         key: str,
         *,
-        include_history: bool = False,
         include_vectors: bool = False,
     ) -> Any | None:
         """Get a KV entry by key. Delegates to KVService.
 
-        For ``procedure:`` keys, ``include_history=True`` swaps the
-        returned entry's ``value`` field from the unwrapped active string to
-        a dict ``{value, version, history}``. Default behavior is unchanged.
-
         ``include_vectors`` exists for signature parity with
         ``RemoteMemexAPI``; in-process rows expose ``.embedding`` regardless.
         """
-        return await self._kv.get(key=key, include_history=include_history)
+        return await self._kv.get(key=key)
 
     async def kv_search(
         self,
@@ -2291,3 +2331,287 @@ class MemexAPI:
     async def kv_cleanup_expired(self) -> int:
         """Delete expired KV entries. Returns count of deleted rows."""
         return await self._kv.cleanup_expired()
+
+    # --- Procedural Plane -----------------------------------------
+
+    @property
+    def procedural(self) -> 'MemexAPIProceduralFacade':
+        """The procedural-plane facade. See :class:`MemexAPIProceduralFacade`."""
+        return MemexAPIProceduralFacade(self)
+
+    @property
+    def cases(self) -> 'CaseServiceT':
+        """Case submission (§5.1 episode notes into the hidden system
+        vault + assignment). See :class:`memex_core.services.case_service.CaseService`."""
+        from memex_core.services.case_service import CaseService
+
+        return CaseService(self)
+
+
+class MemexAPIProceduralFacade:
+    """procedural-plane facade.
+
+    Lives on ``MemexAPI.procedural``. The 8 methods below map the
+    repository + search service into a single property group so callers
+    can do ``api.procedural.create(payload)`` etc.
+    """
+
+    def __init__(self, api: 'MemexAPI') -> None:
+        self._api = api
+
+    async def _embed_trigger(self, trigger: str | None) -> list[float] | None:
+        """Caller-side trigger embedding (design §18.7).
+
+        Returns ``None`` when there is no trigger or the embedder
+        fails — the write proceeds and the row stays reachable via the
+        BM25 leg until the next trigger edit re-embeds it.
+        """
+        if not trigger or not trigger.strip():
+            return None
+        vec = await self._api._procedural_search.embed_trigger(trigger)
+        return vec or None
+
+    async def create(
+        self,
+        payload: ProceduralEntryCreate,
+    ) -> ProceduralEntryDTO:
+        """Insert a new procedural entry. Embeds the trigger at write
+        time (§18.7). See :meth:`ProceduralRepository.create`."""
+        return await self._api._procedural_repo.create(
+            payload,
+            trigger_embedding=await self._embed_trigger(payload.trigger),
+        )
+
+    async def get(
+        self,
+        entry_id: UUID,
+        *,
+        vault_id: UUID | None = None,
+    ) -> ProceduralEntryDTO:
+        """Look up a single entry. Raises if missing or vault-mismatched."""
+        return await self._api._procedural_repo.get(entry_id, vault_id=vault_id)
+
+    async def get_by_identity(
+        self,
+        *,
+        kind: str,
+        scope: ShortLabel,
+        verb: str | None,
+        context: str | None,
+        vault_id: UUID | None = None,
+        status: str | None = 'published',
+    ) -> ProceduralEntryDTO | None:
+        """Look up a single entry by its identity anchor.
+
+        Returns ``None`` on a miss — the route uses this as the
+        "have we learned this?" probe. Distinct from
+        :meth:`get`, which 404s on a missing id.
+        """
+        return await self._api._procedural_repo.get_by_identity(
+            kind=kind,
+            scope=scope,
+            verb=verb,
+            context=context,
+            vault_id=vault_id,
+            status=status,
+        )
+
+    async def list_by_status(
+        self,
+        *,
+        status: str | None = None,
+        scope: ShortLabel | None = None,
+        kind: str | None = None,
+        vault_id: UUID | None = None,
+        limit: int = 50,
+    ) -> list[ProceduralEntryDTO]:
+        """List entries by lifecycle status, newest first.
+
+        The enumeration surface (e.g. drafts awaiting confirmation) that
+        :meth:`search` cannot serve — search ranks by relevance and
+        returns empty without query text or a pin context. See
+        :meth:`ProceduralRepository.list_by_status`.
+        """
+        return await self._api._procedural_repo.list_by_status(
+            status=status, scope=scope, kind=kind, vault_id=vault_id, limit=limit
+        )
+
+    async def update(
+        self,
+        entry_id: UUID,
+        payload: ProceduralEntryUpdate,
+        *,
+        vault_id: UUID | None = None,
+    ) -> ProceduralEntryDTO:
+        """Mutate an existing entry in place. Appends a version row.
+        Re-embeds the trigger when it changes (§19.4 bug class)."""
+        return await self._api._procedural_repo.update(
+            entry_id,
+            payload,
+            vault_id=vault_id,
+            trigger_embedding=await self._embed_trigger(payload.trigger),
+        )
+
+    async def deprecate(
+        self,
+        entry_id: UUID,
+        *,
+        superseded_by_id: UUID | None = None,
+        vault_id: UUID | None = None,
+    ) -> ProceduralEntryDTO:
+        """Soft-deprecate: status→deprecated, optional successor pointer."""
+        return await self._api._procedural_repo.deprecate(
+            entry_id, superseded_by_id=superseded_by_id, vault_id=vault_id
+        )
+
+    async def upsert(
+        self,
+        payload: ProceduralEntryCreate,
+    ) -> ProceduralEntryDTO:
+        """Idempotent write on the (kind, scope, verb, context) anchor.
+
+        Re-write of the same procedure/strategy is one UPDATE. Embeds
+        the trigger at write time (§18.7).
+        """
+        return await self._api._procedural_repo.upsert_by_identity(
+            payload,
+            trigger_embedding=await self._embed_trigger(payload.trigger),
+        )
+
+    async def report_outcome(
+        self,
+        entry_id: UUID,
+        outcome: str,
+        *,
+        vault_id: UUID | None = None,
+    ) -> ProceduralEntryDTO:
+        """Record an enactment outcome (§18.5): bump success/failure/mixed +
+        uses + last_used_at. The 'enacted, not case-worthy' write path —
+        case submission is the primary one. No version row (a governance
+        signal, not a content edit)."""
+        return await self._api._procedural_repo.record_outcome(entry_id, outcome, vault_id=vault_id)
+
+    async def search(
+        self,
+        request: ProceduralSearchRequest,
+    ) -> ProceduralSearchResponse:
+        """Hybrid BM25 + vector search with RRF aggregation.
+
+        Optional pin-chain union when ``request.include_pin_chain`` and
+        ``request.pin_contexts`` are set.
+        """
+        return await self._api._procedural_search.search(request)
+
+    async def briefing_cards(
+        self,
+        context_keys: list[ShortLabel],
+        *,
+        scope: ShortLabel | None = None,
+        limit_per_context: int = 5,
+        vault_id: UUID | None = None,
+    ) -> ProceduralBriefingCards:
+        """Pin-chain briefing cards for the session-briefing surface."""
+        return await self._api._procedural_search.briefing_cards(
+            context_keys,
+            scope=scope,
+            limit_per_context=limit_per_context,
+            vault_id=vault_id,
+        )
+
+    async def pin(
+        self,
+        payload: ProceduralPinCreate,
+    ) -> ProceduralPinDTO:
+        """Pin an entry into a context-binding chain (§19.8).
+
+        ``position=None`` appends; the per-context cap (10) is enforced
+        by the repository.
+        """
+        return await self._api._procedural_repo.add_pin(payload)
+
+    async def unpin(
+        self,
+        *,
+        entry_id: UUID,
+        context_key: ShortLabel,
+    ) -> int:
+        """Unpin an entry from a context. Returns pins removed."""
+        return await self._api._procedural_repo.remove_pin(
+            entry_id=entry_id, context_key=context_key
+        )
+
+    async def list_pins(
+        self,
+        context_key: ShortLabel,
+        *,
+        limit: int | None = None,
+    ) -> list[ProceduralPinDTO]:
+        """Pins for one context, position ascending."""
+        return await self._api._procedural_repo.list_pins(context_key, limit=limit)
+
+    async def list_versions(
+        self,
+        entry_id: UUID,
+    ) -> list[ProceduralEntryVersionDTO]:
+        """The entry's uncapped version ledger, newest first (§18.8)."""
+        return await self._api._procedural_repo.list_versions(entry_id)
+
+    async def rollback(
+        self,
+        entry_id: UUID,
+        version: int,
+        *,
+        vault_id: UUID | None = None,
+        rolled_back_by: str | None = None,
+    ) -> ProceduralEntryDTO:
+        """Non-destructive rollback: old snapshot re-applied as a NEW
+        version. Re-embeds the snapshot's trigger (§19.4 bug class)."""
+        versions = await self._api._procedural_repo.list_versions(entry_id)
+        snapshot = next((v for v in versions if v.version == version), None)
+        trigger_embedding = (
+            await self._embed_trigger(snapshot.trigger) if snapshot is not None else None
+        )
+        return await self._api._procedural_repo.rollback(
+            entry_id,
+            version,
+            vault_id=vault_id,
+            trigger_embedding=trigger_embedding,
+            rolled_back_by=rolled_back_by,
+        )
+
+    async def enqueue_derivation(
+        self,
+        *,
+        vault_id: UUID,
+        source_entry_ids: list[UUID],
+        target_kind: Literal['procedure', 'strategy'],
+        target_scope: ShortLabel,
+        target_verb: str | None = None,
+        target_context: str | None = None,
+    ) -> ProceduralDerivationQueueDTO:
+        """Enqueue a case → procedure/strategy derivation task.
+
+        Workers claim via :meth:`ProceduralRepository.claim_derivation_tasks`.
+        """
+        return await self._api._procedural_repo.enqueue_derivation(
+            vault_id=vault_id,
+            source_entry_ids=source_entry_ids,
+            target_kind=target_kind,
+            target_scope=target_scope,
+            target_verb=target_verb,
+            target_context=target_context,
+        )
+
+    async def derive_pending(self, *, limit: int = 1) -> list[UUID]:
+        """Drain up to ``limit`` pending derivation tasks (cases → procedure,
+        procedures → strategy). Runs the distillation passes synchronously and
+        writes the derived entries. Returns the completed queue ids.
+
+        The background scheduler calls this on its loop; the HTTP route
+        exposes it for ops + deterministic eval triggering.
+        """
+        from memex_core.services.procedural_derivation_service import (
+            ProceduralDerivationService,
+        )
+
+        return await ProceduralDerivationService(self._api).process_pending(limit=limit)

@@ -132,15 +132,11 @@ _REQUIRED_KEYWORDS: tuple[str, ...] = (
     'project:<id>:',
     'global:',
     'app:<app-id>:',
-    # Procedures live UNDER a scope namespace, never bare. The table cell
-    # uses `<scope>:procedure:*` as the general form; per-scope examples
-    # ground each of the four valid scopes (global / project / user / app).
-    '<scope>:procedure:<verb>:<context-tag>',
-    'global:procedure:',
-    'project:<id>:procedure:',
-    'user:procedure:',
-    'app:claude-code:procedure:',
-    'procedure_scope_default',
+    # KV holds preferences/settings/conventions; how-to WORKFLOWS go to
+    # the procedural plane (via memex_case_submit), NOT KV `procedure:`
+    # keys (the deprecated path). The kv_vs_procedural constraint pins
+    # that boundary.
+    'kv_vs_procedural',
     # KV scope-qualifier rule.
     'scope qualifier',
     # 5-step flow anchors.
@@ -159,8 +155,11 @@ _REQUIRED_KEYWORDS: tuple[str, ...] = (
     'memex_memory_deprioritize',
     # Search-query hygiene (promoted from CLAUDE_CODE_HARNESS to Tier 1b so
     # every Memex consumer — Hermes, MCP-hosted agents, Claude Code —
-    # inherits the same query-formulation discipline).
-    '<critical_constraint name="search-queries">',
+    # inherits the same query-formulation discipline). The directive is
+    # calm prose (style guidance, not a 4xx contract), so we pin the
+    # section header + the load-bearing natural-language rule rather than a
+    # `<critical_constraint>` tag.
+    '## Search query formulation',
     'NEVER as keyword lists',
     # V5 slim-mode guidance — pin so agents see the slim=True opt-in for
     # the three list-shape browse tools.
@@ -196,7 +195,6 @@ _SECTION_CONSTANTS = (
     'VIRTUAL_UNIT',
     'KV_NAMESPACE',
     'CITATIONS',
-    'CRITICAL_FOOTER',
 )
 
 
@@ -213,33 +211,6 @@ def test_layer_routing_primer_still_exported() -> None:
     agents that want the 4-layer table can append it explicitly."""
     assert ags.LAYER_ROUTING_PRIMER_TABLE
     assert ags.LAYER_ROUTING_PRIMER_FRAGMENT
-
-
-# ---------------------------------------------------------------------------
-# U-shaped composition — header AND footer carry the same 4 load-bearing
-# constraints (primacy + recency). This makes the model see them at both
-# ends, where attention is strongest.
-# ---------------------------------------------------------------------------
-
-
-def test_header_and_footer_both_mention_record_outcome_shape() -> None:
-    assert 'units=' in ags.CRITICAL_HEADER
-    assert 'units=' in ags.CRITICAL_FOOTER
-
-
-def test_header_and_footer_both_mention_virtual_units() -> None:
-    assert 'virtual' in ags.CRITICAL_HEADER
-    assert 'virtual' in ags.CRITICAL_FOOTER
-
-
-def test_header_and_footer_both_mention_kv_scope_rule() -> None:
-    assert 'scope qualifier' in ags.CRITICAL_HEADER
-    assert 'scope qualifier' in ags.CRITICAL_FOOTER
-
-
-def test_header_and_footer_both_mention_citations() -> None:
-    assert 'Cite' in ags.CRITICAL_HEADER or 'cite' in ags.CRITICAL_HEADER.lower()
-    assert 'Cite' in ags.CRITICAL_FOOTER or 'cite' in ags.CRITICAL_FOOTER.lower()
 
 
 def test_no_bare_metadata_virtual_attribute_path_anywhere() -> None:
@@ -260,3 +231,121 @@ def test_no_bare_metadata_virtual_attribute_path_anywhere() -> None:
         'Bare `metadata.virtual` (wrong attribute path) leaked into '
         '`compose_universal()` output. Use `unit_metadata.virtual`.'
     )
+
+
+# ---------------------------------------------------------------------------
+# Procedural-plane composition — opt-in addition to the universal block.
+# Pin determinism, content presence, and the "additive not subtractive"
+# contract: ``compose_with_procedural`` MUST contain everything
+# ``compose_universal`` does (the universal block is the SSOT), plus the
+# procedural-plane doctrine on top.
+# ---------------------------------------------------------------------------
+
+
+def test_compose_with_procedural_is_deterministic() -> None:
+    """The procedural composition must be byte-equal across calls — the
+    cacheable-prompt-prefix invariant still holds for the procedural
+    variant. A regression that introduces a UUID/timestamp/env probe
+    into PROCEDURAL_PLANE would surface here.
+    """
+    a = ags.compose_with_procedural()
+    b = ags.compose_with_procedural()
+    assert a == b
+
+
+def test_compose_with_procedural_is_superset_of_universal() -> None:
+    """Every byte in ``compose_universal()`` MUST appear in
+    ``compose_with_procedural()`` (additive only — the universal block
+    is the SSOT and the procedural variant appends on top, never
+    replaces).
+
+    A regression that "compacts" the procedural variant by reordering or
+    shortening the universal block would break MCP tool routing for
+    agents that consume the procedural surface.
+    """
+    universal = ags.compose_universal()
+    with_procedural = ags.compose_with_procedural()
+    assert universal in with_procedural, (
+        '`compose_with_procedural()` is missing bytes from '
+        '`compose_universal()`. The procedural variant must be purely additive.'
+    )
+
+
+def test_compose_with_procedural_includes_procedural_doctrine() -> None:
+    """Pin the load-bearing procedural routing rules. These are the strings
+    that drive an agent to route ``"this is how to do X"`` write intents
+    to ``memex_case_submit`` (procedures are DERIVED from cases) instead of
+    ``memex_add_note`` or ``memex_kv_put``. Their absence is a silent
+    routing failure.
+    """
+    out = ags.compose_with_procedural()
+    # The doctrine block's identity marker.
+    assert '## Procedural plane' in out
+    # The two procedural kinds — cases are NOTES, not plane entries.
+    assert '`procedure`' in out
+    assert '`strategy`' in out
+    assert 'Cases are NOTES' in out
+    # Strategy anchor: (scope, verb) only — context forbidden (§18.1).
+    assert 'FORBIDDEN' in out
+    # No user scope on the plane.
+    assert 'no user scope' in out
+    # The load-bearing retrieve-first behavior: face a known task →
+    # search the plane BEFORE re-deriving the workflow.
+    assert 'procedural_retrieve_first' in out
+    assert 'memex_procedural_search' in out
+    # The identity-anchor rule on (kind, scope, verb, context).
+    assert '(kind, scope, verb, context)' in out
+    # The scope/pin grammar.
+    assert 'global' in out and 'project' in out and 'app' in out
+    # Cases enter via case_submit, with explicit case_of preferred — the
+    # ONLY agent-facing procedural write.
+    assert 'memex_case_submit' in out
+    assert 'case_of' in out
+    # The commit boundary is split into two sharp constraints — one for
+    # the search side, one for the add/write side.
+    assert 'procedural_vs_semantic_search' in out
+    assert 'procedural_vs_semantic_add' in out
+    # There is NO agent-facing briefing tool — cards arrive in the
+    # session briefing (JG decision 2026-06-10).
+    assert 'memex_procedural_briefing_cards' not in out
+    assert 'session briefing' in out
+    # There is NO agent-facing procedural WRITE tool — procedures are
+    # derived from cases. None of these may appear in the doctrine.
+    assert 'memex_procedural_create' not in out
+    assert 'memex_procedural_upsert' not in out
+    assert 'memex_procedural_update' not in out
+    assert 'memex_procedural_deprecate' not in out
+
+
+def test_compose_universal_does_not_include_procedural_doctrine() -> None:
+    """The procedural block is opt-in — it MUST NOT bleed into
+    ``compose_universal()``. Agents with no procedural tools
+    consuming the universal block would burn ~1,750 chars on routing
+    rules they cannot act on. This is the "do not leak" trip-wire."""
+    out = ags.compose_universal()
+    assert '## Procedural plane' not in out
+    assert 'memex_procedural_create' not in out
+    assert 'memex_procedural_briefing_cards' not in out
+
+
+def test_procedural_plane_constant_exists_and_non_empty() -> None:
+    """``PROCEDURAL_PLANE`` is the SSOT block — directly importable for
+    callers that want to compose it themselves (e.g., a custom surface
+    builder that doesn't go through ``compose_with_procedural``)."""
+    assert isinstance(ags.PROCEDURAL_PLANE, str)
+    assert ags.PROCEDURAL_PLANE.strip()
+    # The block must contain the doctrine markers; if any of these
+    # disappear, the procedural plane is no longer routable. The agent
+    # write is case_submit — there is no direct create/upsert tool.
+    assert 'memex_procedural_search' in ags.PROCEDURAL_PLANE
+    assert 'memex_case_submit' in ags.PROCEDURAL_PLANE
+    assert 'memex_procedural_create' not in ags.PROCEDURAL_PLANE
+
+
+def test_compose_with_procedural_exports_in_dunder_all() -> None:
+    """``compose_with_procedural`` and ``PROCEDURAL_PLANE`` are public
+    surface — they MUST appear in ``__all__`` so static importers see
+    them. A regression that renames either function without updating
+    the export list would silently break callers."""
+    assert 'compose_with_procedural' in ags.__all__
+    assert 'PROCEDURAL_PLANE' in ags.__all__

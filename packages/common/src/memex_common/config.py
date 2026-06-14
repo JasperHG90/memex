@@ -1999,6 +1999,126 @@ class DeprioritizeScoreConfig(BaseModel):
     )
 
 
+class ProceduralConfig(BaseModel):
+    """Configuration for the procedural (procedure / strategy) plane.
+
+    These knobs are operator-level defaults; per-request overrides on
+    ``ProceduralSearchRequest`` and ``procedural_briefing_cards`` still
+    win. Keep the surface narrow — every entry here is a real toggle the
+    brief described, not a speculation. The 8 fields below correspond to
+    the 8 tunables pinned by the design review.
+    """
+
+    enabled: bool = Field(
+        default=True,
+        description=(
+            'Kill switch for the procedural plane. When False, the HTTP router, '
+            'MCP tools, and CLI group are still mounted (so `/procedural` is '
+            'discoverable) but every entrypoint returns 503 / a typed error. '
+            'Useful for staged rollouts and incident rollback.'
+        ),
+    )
+
+    # Hybrid search defaults — overridden per-request by `bm25_weight` /
+    # `vector_weight` on `ProceduralSearchRequest`. Operators tune the
+    # baseline; the agent can dial it up/down for the immediate query.
+    search_default_bm25_weight: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description=(
+            'Default RRF weight for the BM25 stream on a procedural-plane search. '
+            'Per-request `bm25_weight` overrides this.'
+        ),
+    )
+    search_default_vector_weight: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description=(
+            'Default RRF weight for the vector stream on a procedural-plane search. '
+            'Per-request `vector_weight` overrides this.'
+        ),
+    )
+
+    # Briefing cards — the per-context cap. The route clamps to this
+    # upper bound even if a caller requests more, so a runaway agent
+    # cannot pull a thousand cards into a briefing slot.
+    briefing_default_limit_per_context: int = Field(
+        default=5,
+        ge=1,
+        le=20,
+        description=(
+            'Default per-context cap on `procedural_briefing_cards` results. '
+            'The route clamps any caller-supplied `limit_per_context` to this '
+            'value (the agent cannot exceed it).'
+        ),
+    )
+
+    # Status default — what new entries are created as if the caller did
+    # not pick. Matches the briefing's "only published" filter so a
+    # forgetful caller doesn't end up with a graveyard of drafts.
+    default_status: Literal['draft', 'published'] = Field(
+        default='published',
+        description=(
+            'Default status for entries created via `procedural create` and '
+            '`procedural upsert` when the caller did not specify one. '
+            '`published` makes the entry visible to search + briefing; '
+            '`draft` keeps it private until the caller explicitly promotes.'
+        ),
+    )
+
+    # Identity conflict — the operator's choice between two failure
+    # modes when `(kind, scope, verb, context)` already exists:
+    #   * `reject`  — return 409 (default; matches HTTP semantics; agent
+    #                 is forced to acknowledge the collision).
+    #   * `upsert`  — silently update the existing row (matches the
+    #                 upsert surface; saves a round-trip but hides the
+    #                 collision from the caller).
+    identity_conflict_mode: Literal['reject', 'upsert'] = Field(
+        default='reject',
+        description=(
+            'How the procedural plane handles identity-anchor collisions '
+            'on `procedural create`. `reject` returns 409 (caller decides '
+            'whether to retry as `procedural upsert`); `upsert` transparently '
+            'overwrites the existing row. `procedural upsert` is unaffected.'
+        ),
+    )
+
+    # Derivation worker — the background loop that materialises derived
+    # rows (e.g. tag normalisation, vector re-embed after model swap).
+    # Off by default: the synchronous write path already runs derivation
+    # eagerly; the worker is only needed for batch catch-up.
+    derivation_worker_enabled: bool = Field(
+        default=False,
+        description=(
+            'Enable the background derivation worker. When False, derivation '
+            'runs synchronously inside the create/update/upsert path. When '
+            'True, a Postgres-advisory-lock-leader-electing worker polls the '
+            'queue. Operators opt in only for high-volume installations.'
+        ),
+    )
+    derivation_worker_batch_size: int = Field(
+        default=16,
+        ge=1,
+        le=256,
+        description=(
+            'How many pending derivation rows the worker claims per poll '
+            '(`SELECT ... FOR UPDATE SKIP LOCKED`). Larger batches trade '
+            'latency-per-row for fewer transactions.'
+        ),
+    )
+    derivation_worker_poll_interval_seconds: float = Field(
+        default=5.0,
+        gt=0.0,
+        le=3600.0,
+        description=(
+            'Idle sleep between worker polls when the queue is empty. '
+            'When the queue has work, the worker drains without sleeping.'
+        ),
+    )
+
+
 class MemoryConfig(BaseModel):
     """Configuration for memory subsystems."""
 
@@ -2088,6 +2208,15 @@ class MemoryConfig(BaseModel):
         description=(
             'FSFM-inspired graph-aware deprioritization scorer configuration '
             '(composite score driving lint proposals and auto-deprioritization).'
+        ),
+    )
+
+    procedural: ProceduralConfig = Field(
+        default_factory=ProceduralConfig,
+        description=(
+            'Configuration for the procedural (procedure / strategy) '
+            'plane — search weight defaults, briefing caps, identity-collision '
+            'mode, and the optional background derivation worker.'
         ),
     )
 

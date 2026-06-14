@@ -3,8 +3,8 @@
   "archived_at": null,
   "assets": [],
   "content_hash": "1f275229816bac143dfbdd1586390c09",
-  "created_at": "2026-05-18T07:32:46.471985+00:00",
-  "description": "TechCo Global Security Department Structure and Strategic Initiatives",
+  "created_at": "2026-06-12T19:47:51.306669+00:00",
+  "description": "TechCo Global Security Department Operations and Initiatives",
   "doc_metadata": {
     "retain_params": {
       "assets": [],
@@ -26,25 +26,31 @@
     "tags": [
       "department",
       "security",
-      "techco"
+      "techco",
+      "cybersecurity",
+      "soc 2",
+      "zero-trust",
+      "organizational structure",
+      "compliance",
+      "security tooling"
     ]
   },
   "filestore_path": null,
   "id": "36d99df3-1a33-71bc-36a2-c8ea3ada4527",
   "page_index": {
     "metadata": {
-      "description": "TechCo Global Security Department Structure and Strategic Initiatives",
-      "publish_date": "2026-05-18 07:32:46.471119+00:00",
+      "description": "TechCo Global Security Department Operations and Initiatives",
+      "publish_date": "2026-06-12 19:47:51.305784+00:00",
       "source_uri": null,
       "tags": [
         "department",
         "security",
         "techco",
-        "security operations",
-        "soc 2 compliance",
+        "cybersecurity",
+        "soc 2",
         "zero-trust",
-        "departmental structure",
-        "it infrastructure",
+        "organizational structure",
+        "compliance",
         "security tooling"
       ],
       "title": "Security Department Overview",
@@ -52,9 +58,11 @@
     },
     "toc": [
       {
+        "assets": [],
         "block_id": "ad5e273b3eb9956d405b8d67ff403ed1",
         "children": [
           {
+            "assets": [],
             "block_id": "ad5e273b3eb9956d405b8d67ff403ed1",
             "children": [],
             "end_index": 249,
@@ -64,16 +72,17 @@
             "start_index": 151,
             "subtree_tokens": 19,
             "summary": {
-              "how": "By achieving compliance standards and implementing security architecture",
-              "what": "SOC 2 Type II certification and zero-trust access",
-              "when": "Current initiative",
-              "where": "Internal IT infrastructure",
-              "who": "The organization/security team"
+              "how": "By completing the audit process for SOC 2 Type II and deploying zero-trust network architecture.",
+              "what": "Achieving security certification and implementing advanced access controls.",
+              "when": "Currently",
+              "where": "Internal organizational infrastructure.",
+              "who": "The organization"
             },
             "title": "Current Initiative",
             "token_estimate": 19
           },
           {
+            "assets": [],
             "block_id": "ad5e273b3eb9956d405b8d67ff403ed1",
             "children": [],
             "end_index": 443,
@@ -83,11 +92,11 @@
             "start_index": 249,
             "subtree_tokens": 41,
             "summary": {
-              "how": "By conducting all security-related activities and reporting to the head of the department.",
-              "what": "Management of security responsibilities and departmental reporting structure.",
+              "how": "By reporting to Yuki Tanaka and managing department operations",
+              "what": "Responsibility for all security-related activities",
               "when": "Currently",
               "where": "TechCo Global",
-              "who": "The Security department (team of 8) and Yuki Tanaka (Head of Department)."
+              "who": "The Security department (8 members) and Yuki Tanaka (Head of Department)"
             },
             "title": "Responsibilities",
             "token_estimate": 41
@@ -100,23 +109,23 @@
         "start_index": 0,
         "subtree_tokens": 101,
         "summary": {
-          "how": "By utilizing core tools including CrowdStrike, Snyk, and HashiCorp Vault.",
-          "what": "Overview of department staffing, leadership, and technical stack.",
+          "how": "Utilizing core tools such as CrowdStrike, Snyk, and HashiCorp Vault.",
+          "what": "Overview of the Security Department's structure and tooling.",
           "when": null,
-          "where": "TechCo Global Security Department.",
-          "who": "Yuki Tanaka and a team of 8 employees."
+          "where": "TechCo Global.",
+          "who": "Yuki Tanaka (Department Head) and a team of 8 employees."
         },
         "title": "Security Department — TechCo Global",
         "token_estimate": 41
       }
     ]
   },
-  "publish_date": "2026-05-18T07:32:46.471119+00:00",
-  "session_id": "832d3505-6e7f-45cb-9ba1-67e20749efc6",
+  "publish_date": "2026-06-12T19:47:51.305784+00:00",
+  "session_id": "ac3f8184-4790-4c38-9b8a-c1c7d724526f",
   "status": "active",
   "summary_version_incorporated": null,
   "superseded_by": null,
   "title": "Security Department Overview",
-  "updated_at": "2026-05-18T07:32:46.471985+00:00",
-  "vault_id": "22c11c49-1ccc-43a4-830c-dca2472f519c"
+  "updated_at": "2026-06-12T19:47:51.306669+00:00",
+  "vault_id": "34893ad7-9844-4786-bb90-912fac9b0d11"
 }

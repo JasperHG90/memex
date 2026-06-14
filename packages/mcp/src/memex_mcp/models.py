@@ -357,9 +357,7 @@ class McpDeleteAssetsResult(BaseModel):
 
 class McpKVEntry(BaseModel):
     key: str
-    # value is normally a string; for procedure: keys read with
-    # include_history=True it is a structured dict {value, version, history}.
-    value: str | dict[str, Any]
+    value: str
     scope: str
     updated_at: datetime
     expires_at: datetime | None = None
@@ -462,3 +460,108 @@ class McpSurveyResult(BaseModel):
     total_notes: int = 0
     total_facts: int = 0
     truncated: bool = False
+
+
+# ── Procedural plane  ──
+
+
+class McpProceduralSource(BaseModel):
+    """Source pointer on an procedural entry."""
+
+    model_config = {'extra': 'forbid'}
+
+    note_id: UUID | None = None
+    memory_unit_id: UUID | None = None
+    role: str
+    excerpt: str | None = None
+
+
+class McpProceduralPin(BaseModel):
+    """Pin linking an entry to a context key in the briefing pin chain."""
+
+    model_config = {'extra': 'forbid'}
+
+    context_key: str
+    position: int
+
+
+class McpProceduralEntry(BaseModel):
+    """Public-facing procedural entry. Embedding vectors are omitted — they
+    are not meaningful at the LLM-tool boundary; they live in the search path.
+    """
+
+    model_config = {'extra': 'forbid'}
+
+    id: UUID
+    vault_id: UUID
+    kind: Literal['procedure', 'strategy']
+    scope: str
+    verb: str | None = None
+    context: str | None = None
+    title: str
+    summary: str
+    body: str = ''
+    trigger: str | None = None
+    tags: list[str] = Field(default_factory=list)
+    extra_metadata: dict[str, Any] = Field(default_factory=dict)
+    status: Literal['draft', 'published', 'deprecated'] = 'draft'
+    # Must mirror memex_common.procedural_schemas.OriginLiteral exactly — the
+    # DTO can emit any of these five and _dto_to_mcp_entry copies origin through.
+    origin: Literal['seed', 'derived', 'authored', 'manual', 'import'] = 'manual'
+    supersedes_id: UUID | None = None
+    superseded_by_id: UUID | None = None
+    published_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+    sources: list[McpProceduralSource] = Field(default_factory=list)
+    pins: list[McpProceduralPin] = Field(default_factory=list)
+
+
+class McpProceduralSearchHit(BaseModel):
+    """One hit from the procedural hybrid search."""
+
+    model_config = {'extra': 'forbid'}
+
+    entry_id: UUID
+    kind: Literal['procedure', 'strategy']
+    score: float
+    matched_via: Literal['bm25', 'vector', 'pin', 'rrf']
+    title: str
+    summary: str
+    scope: str
+    verb: str | None = None
+    context: str | None = None
+    trigger: str | None = None
+    pin_position: int | None = None
+
+
+class McpProceduralSearchResult(BaseModel):
+    """Enveloped hits from memex_procedural_search."""
+
+    model_config = {'extra': 'forbid'}
+
+    hits: list[McpProceduralSearchHit] = Field(default_factory=list)
+    total: int = 0
+    truncated: bool = False
+    took_ms: float = 0.0
+
+
+class McpCaseSubmitResult(BaseModel):
+    """Result envelope for memex_case_submit.
+
+    ``assignment_mode='escalated'`` means a contested assignment landed
+    in the lint queue (``finding_id``) — resolve via the lint tools or
+    leave it for human review (file-then-lint).
+    """
+
+    model_config = {'extra': 'forbid'}
+
+    note_id: UUID
+    vault_id: UUID
+    assignment_mode: Literal[
+        'explicit', 'auto_assigned', 'new_procedure_draft', 'escalated', 'skipped'
+    ]
+    entry_id: UUID | None = None
+    finding_id: UUID | None = None
+    separation: str | None = None
+    reasoning: str | None = None

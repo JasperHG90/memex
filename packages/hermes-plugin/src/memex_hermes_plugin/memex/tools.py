@@ -50,6 +50,7 @@ from memex_common.schemas import (
     RiskClass,
 )
 from memex_common.tool_descriptions import (
+    MEMEX_CASE_SUBMIT_DESC,
     MEMEX_KV_GET_DESC,
     MEMEX_KV_LIST_DESC,
     MEMEX_KV_SEARCH_DESC,
@@ -60,6 +61,9 @@ from memex_common.tool_descriptions import (
     MEMEX_MEMORY_RECONSOLIDATE_DESC,
     MEMEX_MEMORY_RESTORE_DESC,
     MEMEX_MEMORY_SUMMARIZE_NODE_DESC,
+    MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESC,
+    MEMEX_PROCEDURAL_GET_DESC,
+    MEMEX_PROCEDURAL_SEARCH_DESC,
     MEMEX_RECORD_OUTCOME_DESC,
     MEMEX_SUBMIT_LINT_PROPOSAL_DESC,
 )
@@ -164,6 +168,12 @@ class MemexAPIProtocol(Protocol):
     # F9 — Per-entity advisory lock + vault-wide consolidate
     async def reconsolidate_entity(self, *args: Any, **kwargs: Any) -> Any: ...
     async def consolidate_vault(self, *args: Any, **kwargs: Any) -> Any: ...
+
+    # Procedural plane (procedure / strategy) + case submission
+    async def procedural_get(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def procedural_get_by_identity(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def procedural_search(self, *args: Any, **kwargs: Any) -> Any: ...
+    async def case_submit(self, *args: Any, **kwargs: Any) -> Any: ...
 
 
 # ---------------------------------------------------------------------------
@@ -380,7 +390,10 @@ SURVEY_SCHEMA: dict[str, Any] = {
 RETAIN_SCHEMA: dict[str, Any] = {
     'name': 'memex_add_note',
     'description': (
-        'Ingest a NEW note into Memex, or fully replace the body of an existing one. '
+        'Ingest a NEW note into Memex (a FACT / DECISION / DOCUMENT — "what is true"), '
+        'or fully replace the body of an existing one. NOT for how-to workflows, '
+        'procedures, or worked episodes ("how we deploy", "how the run went") — those '
+        'go to memex_case_submit, NEVER here (and never both). '
         'If note_key matches an existing note the content is upserted. For appending '
         'NEW content to a session note (or any existing note) prefer memex_append_note — '
         'it sends only the delta and is atomic, avoiding the full-body re-send. '
@@ -1339,15 +1352,6 @@ KV_GET_SCHEMA: dict[str, Any] = {
             'key': {
                 'type': 'string',
                 'description': 'Exact key to look up.',
-            },
-            'include_history': {
-                'type': 'boolean',
-                'description': (
-                    'For procedure keys (`<scope>:procedure:<verb>:<context>`), '
-                    'return the full envelope (value, version, capped history '
-                    'of 5 prior versions) instead of just the active value. '
-                    'Ignored for non-procedure keys.'
-                ),
             },
         },
         'required': ['key'],
@@ -3475,6 +3479,11 @@ __all__ = [
     'RECORD_OUTCOME_SCHEMA',
     # --- F49 contradiction-graph timeline ---
     'GET_UNIT_HISTORY_SCHEMA',
+    # --- Procedural plane (procedure / strategy) + case submission ---
+    'CASE_SUBMIT_SCHEMA',
+    'PROC_GET_BY_IDENTITY_SCHEMA',
+    'PROC_GET_SCHEMA',
+    'PROC_SEARCH_SCHEMA',
 ]
 
 
@@ -4494,3 +4503,375 @@ def handle_get_unit_history(
 
 HANDLERS['memex_get_unit_history'] = handle_get_unit_history
 ALL_SCHEMAS.append(GET_UNIT_HISTORY_SCHEMA)
+
+
+# ============================================================
+# Procedural plane (procedure / strategy)
+#
+# The procedural plane is the agent's "how to do X" surface — distinct
+# from notes (long-form prose) and KV (preferences / bindings). It has
+# an identity anchor (kind, scope, verb, context) UNIQUE NULLS NOT
+# DISTINCT, two kinds (procedure, strategy), and scopes global /
+# project:<id> / app:<id> (NO user scope). Cases are NOTES
+# (memex_case_submit), not plane entries.
+#
+# The eight tools (7 procedural + memex_case_submit) mirror the MCP server. Vault_id is sourced from the
+# Hermes session binding (handler injects from `vault_id` arg); not
+# exposed in the schema since the agent never names a vault directly.
+# ============================================================
+
+_VALID_PROCEDURAL_KINDS: tuple[str, ...] = ('procedure', 'strategy')
+
+
+def _validate_kind(raw: Any) -> str | None:
+    if not isinstance(raw, str):
+        return f'kind must be a string, got {type(raw).__name__}'
+    if raw not in _VALID_PROCEDURAL_KINDS:
+        return f'Invalid kind {raw!r}. Valid values: {" | ".join(_VALID_PROCEDURAL_KINDS)}'
+    return None
+
+
+PROC_GET_SCHEMA: dict[str, Any] = {
+    'name': 'memex_procedural_get',
+    'description': MEMEX_PROCEDURAL_GET_DESC,
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'entry_id': {
+                'type': 'string',
+                'description': 'Entry UUID.',
+            },
+        },
+        'required': ['entry_id'],
+    },
+}
+
+
+def handle_procedural_get(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    try:
+        raw_id = _require(args, 'entry_id')
+    except ValueError as e:
+        return tool_error(str(e))
+    try:
+        entry_uuid = UUID(str(raw_id))
+    except (ValueError, TypeError):
+        return tool_error(f'Invalid entry UUID: {raw_id}')
+    try:
+        result = run_sync(
+            api.procedural_get(entry_uuid, vault_id=vault_id),
+            timeout=30.0,
+        )
+    except Exception as e:
+        logger.warning('memex_procedural_get failed: %s', e)
+        return tool_error(f'Procedural get failed: {e}')
+    return _dump_dto(result)
+
+
+PROC_GET_BY_IDENTITY_SCHEMA: dict[str, Any] = {
+    'name': 'memex_procedural_get_by_identity',
+    'description': MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESC,
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'kind': {
+                'type': 'string',
+                'enum': list(_VALID_PROCEDURAL_KINDS),
+                'description': 'Entry kind.',
+            },
+            'scope': {
+                'type': 'string',
+                'description': 'One of: "global", "project:<id>", "app:<id>".',
+            },
+            'verb': {'type': 'string', 'description': 'Verb — required for both kinds.'},
+            'context': {
+                'type': 'string',
+                'description': 'Required for procedure; MUST be omitted for strategy.',
+            },
+        },
+        'required': ['kind', 'scope', 'verb'],
+    },
+}
+
+
+def handle_procedural_get_by_identity(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    try:
+        kind = _require(args, 'kind')
+        scope = _require(args, 'scope')
+    except ValueError as e:
+        return tool_error(str(e))
+    if (msg := _validate_kind(kind)) is not None:
+        return tool_error(msg)
+    if vault_id is None:
+        return tool_error('No vault bound to this Hermes session; cannot probe identity anchor.')
+
+    verb = args.get('verb')
+    context = args.get('context')
+    if not verb:
+        return tool_error('verb is required (both procedure and strategy anchor on it).')
+    if kind == 'procedure' and not context:
+        return tool_error('kind="procedure" anchors require context.')
+    if kind == 'strategy' and context:
+        return tool_error(
+            'kind="strategy" anchors MUST omit context — a strategy groups all '
+            'procedures sharing (scope, verb).'
+        )
+
+    try:
+        result = run_sync(
+            api.procedural_get_by_identity(
+                kind=str(kind),
+                scope=str(scope),
+                verb=args.get('verb'),
+                context=args.get('context'),
+                vault_id=vault_id,
+            ),
+            timeout=30.0,
+        )
+    except Exception as e:
+        logger.warning('memex_procedural_get_by_identity failed: %s', e)
+        return tool_error(f'Procedural get_by_identity failed: {e}')
+    if result is None:
+        return json.dumps(None)
+    return _dump_dto(result)
+
+
+PROC_SEARCH_SCHEMA: dict[str, Any] = {
+    'name': 'memex_procedural_search',
+    'description': MEMEX_PROCEDURAL_SEARCH_DESC,
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'query': {'type': 'string', 'description': 'Search query text.'},
+            'kind': {
+                'type': 'string',
+                'enum': list(_VALID_PROCEDURAL_KINDS),
+                'description': 'Optional kind filter.',
+            },
+            'scope': {
+                'type': 'string',
+                'description': 'Optional scope filter (global / project:<id> / app:<id>).',
+            },
+            'status': {
+                'type': 'string',
+                'enum': ['draft', 'published', 'deprecated', 'all'],
+                'description': 'Default "published" (drafts hidden). Pass "all" to include everything.',
+            },
+            'top_k': {'type': 'integer', 'description': 'Max hits (default 10, max 100).'},
+            'include_pin_chain': {
+                'type': 'boolean',
+                'description': 'Union in pinned entries from related contexts.',
+            },
+            'pin_contexts': {
+                'type': 'array',
+                'items': {'type': 'string'},
+                'description': 'Contexts whose pinned entries to include (when include_pin_chain=true).',
+            },
+            'bm25_weight': {
+                'type': 'number',
+                'description': 'BM25 fusion weight (0-1); vector weight is 1 - this.',
+            },
+        },
+        'required': ['query'],
+    },
+}
+
+
+def handle_procedural_search(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    try:
+        query = _require(args, 'query')
+    except ValueError as e:
+        return tool_error(str(e))
+    kind = args.get('kind')
+    if kind is not None and (msg := _validate_kind(kind)) is not None:
+        return tool_error(msg)
+
+    from memex_common.procedural_schemas import ProceduralSearchRequest
+
+    # Pydantic 2 + ``extra='forbid'`` rejects ``None`` for fields with
+    # non-None defaults (``bool``, ``float``, ``list``). Build the
+    # request conditionally — only set fields the agent actually
+    # supplied, and use the DTO's defaults for the rest.
+    req_kwargs: dict[str, Any] = {
+        'query': str(query),
+        'status': args.get('status', 'published'),  # type: ignore[arg-type]
+    }
+    if kind is not None:
+        req_kwargs['kind'] = kind  # type: ignore[assignment]
+    if args.get('scope') is not None:
+        req_kwargs['scope'] = args['scope']
+    if args.get('top_k') is not None:
+        req_kwargs['limit'] = int(args['top_k'])
+    if args.get('include_pin_chain') is not None:
+        req_kwargs['include_pin_chain'] = bool(args['include_pin_chain'])
+    if args.get('pin_contexts') is not None:
+        req_kwargs['pin_contexts'] = list(args['pin_contexts'])
+    if args.get('bm25_weight') is not None:
+        req_kwargs['bm25_weight'] = float(args['bm25_weight'])
+    if vault_id is not None:
+        req_kwargs['vault_id'] = vault_id
+
+    try:
+        request = ProceduralSearchRequest(**req_kwargs)
+    except Exception as e:
+        return tool_error(f'Invalid search request: {e}')
+
+    try:
+        result = run_sync(api.procedural_search(request), timeout=30.0)
+    except Exception as e:
+        logger.warning('memex_procedural_search failed: %s', e)
+        return tool_error(f'Procedural search failed: {e}')
+    return _dump_dto(result)
+
+
+CASE_SUBMIT_SCHEMA: dict[str, Any] = {
+    'name': 'memex_case_submit',
+    'description': MEMEX_CASE_SUBMIT_DESC,
+    'parameters': {
+        'type': 'object',
+        'properties': {
+            'title': {'type': 'string', 'description': 'Short title (max 256 chars).'},
+            'trigger': {
+                'type': 'string',
+                'description': (
+                    'What kicked the episode off — embedded for case↔procedure matching. REQUIRED.'
+                ),
+            },
+            'situation': {
+                'type': 'string',
+                'description': 'Context going in (prior state, constraints).',
+            },
+            'actions': {
+                'type': 'array',
+                'items': {'type': 'string'},
+                'description': 'Ordered actions taken, one step per item.',
+            },
+            'outcome': {
+                'type': 'string',
+                'enum': ['success', 'failure', 'mixed'],
+                'description': 'How the episode ended.',
+            },
+            'lesson': {
+                'type': 'string',
+                'description': 'What to do differently / confirm next time.',
+            },
+            'project_id': {
+                'type': 'string',
+                'description': 'Provenance — recorded in doc_metadata, NOT a vault binding.',
+            },
+            'case_of': {
+                'type': 'string',
+                'description': (
+                    'UUID of the procedural entry this case instantiates '
+                    '(explicit assignment — supply it whenever you know it; '
+                    'skips the assignment judge).'
+                ),
+            },
+            'submitted_by': {
+                'type': 'string',
+                'description': 'Submitting app/agent identity (provenance).',
+            },
+            'tags': {
+                'type': 'array',
+                'items': {'type': 'string'},
+                'description': 'Optional tags for searchability.',
+            },
+        },
+        'required': ['title', 'trigger', 'outcome'],
+    },
+}
+
+
+def handle_case_submit(
+    api: MemexAPIProtocol,
+    config: HermesMemexConfig,
+    vault_id: UUID | None,
+    args: dict[str, Any],
+) -> str:
+    try:
+        title = _require(args, 'title')
+        trigger = _require(args, 'trigger')
+        outcome = _require(args, 'outcome')
+    except ValueError as e:
+        return tool_error(str(e))
+
+    from memex_common.procedural_schemas import CaseSubmit
+
+    raw_case_of = args.get('case_of')
+    case_of_uuid: UUID | None = None
+    if raw_case_of:
+        try:
+            case_of_uuid = UUID(str(raw_case_of))
+        except (ValueError, TypeError):
+            return tool_error(f'Invalid case_of UUID: {raw_case_of}')
+
+    # CaseSubmit uses ``extra='forbid'`` and non-None defaults — build the
+    # kwargs conditionally (same pattern as handle_procedural_search).
+    submit_kwargs: dict[str, Any] = {
+        'title': str(title),
+        'trigger': str(trigger),
+        'outcome': outcome,
+    }
+    if args.get('situation') is not None:
+        submit_kwargs['situation'] = str(args['situation'])
+    if args.get('actions') is not None:
+        submit_kwargs['actions'] = [str(a) for a in args['actions']]
+    if args.get('lesson') is not None:
+        submit_kwargs['lesson'] = str(args['lesson'])
+    if args.get('project_id') is not None:
+        submit_kwargs['project_id'] = str(args['project_id'])
+    if case_of_uuid is not None:
+        submit_kwargs['case_of'] = case_of_uuid
+    if args.get('submitted_by') is not None:
+        submit_kwargs['submitted_by'] = str(args['submitted_by'])
+    if args.get('tags') is not None:
+        submit_kwargs['tags'] = [str(t) for t in args['tags']]
+
+    try:
+        payload = CaseSubmit(**submit_kwargs)
+    except Exception as e:
+        return tool_error(f'Invalid case submission: {e}')
+
+    try:
+        result = run_sync(api.case_submit(payload), timeout=30.0)
+    except Exception as e:
+        logger.warning('memex_case_submit failed: %s', e)
+        return tool_error(f'Case submit failed: {e}')
+    return _dump_dto(result)
+
+
+def _dump_dto(result: Any) -> str:
+    """Serialize a Pydantic DTO (or dict / None) to JSON. Mirrors the
+    pattern used by other handlers — ``model_dump(mode='json')`` when
+    available, otherwise fall back to ``str()`` so handlers don't crash
+    on schema-drifted test mocks."""
+    dump = getattr(result, 'model_dump', None)
+    if callable(dump):
+        return json.dumps(dump(mode='json'))
+    if isinstance(result, (list, dict)):
+        return json.dumps(result, default=str)
+    return json.dumps(result, default=str)
+
+
+HANDLERS['memex_procedural_get'] = handle_procedural_get
+HANDLERS['memex_procedural_get_by_identity'] = handle_procedural_get_by_identity
+HANDLERS['memex_procedural_search'] = handle_procedural_search
+HANDLERS['memex_case_submit'] = handle_case_submit
+ALL_SCHEMAS.append(PROC_GET_SCHEMA)
+ALL_SCHEMAS.append(PROC_GET_BY_IDENTITY_SCHEMA)
+ALL_SCHEMAS.append(PROC_SEARCH_SCHEMA)
+ALL_SCHEMAS.append(CASE_SUBMIT_SCHEMA)

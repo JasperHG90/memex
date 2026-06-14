@@ -55,6 +55,16 @@
             "command": "${CLAUDE_PLUGIN_ROOT}/scripts/inject_memex_tags.sh"
           }
         ]
+      },
+      {
+        "matcher": "mcp__memex__memex_case_submit",
+        "hooks": [
+          {
+            "type": "command",
+            "description": "Memex: inject ambient capture metadata (git/session/project/model/plugin) tags into every memex_case_submit call.",
+            "command": "${CLAUDE_PLUGIN_ROOT}/scripts/inject_memex_tags.sh"
+          }
+        ]
       }
     ],
     "PostToolUse": [

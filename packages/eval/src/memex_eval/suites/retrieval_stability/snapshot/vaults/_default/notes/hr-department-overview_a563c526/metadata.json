@@ -3,8 +3,8 @@
   "archived_at": null,
   "assets": [],
   "content_hash": "5cac3879aed6321b6cc7503a72e8c44b",
-  "created_at": "2026-05-18T07:32:38.348151+00:00",
-  "description": "HR Department Operations and Performance Review Initiative",
+  "created_at": "2026-06-12T19:47:42.950295+00:00",
+  "description": "Human Resources Departmental Structure and Performance Initiatives",
   "doc_metadata": {
     "retain_params": {
       "assets": [],
@@ -26,15 +26,20 @@
     "tags": [
       "department",
       "hr",
-      "techco"
+      "techco",
+      "human resources",
+      "organizational structure",
+      "performance management",
+      "hr technology",
+      "change management"
     ]
   },
   "filestore_path": null,
   "id": "a563c526-0572-007d-9f11-50903431bfe9",
   "page_index": {
     "metadata": {
-      "description": "HR Department Operations and Performance Review Initiative",
-      "publish_date": "2026-05-18 07:32:38.347275+00:00",
+      "description": "Human Resources Departmental Structure and Performance Initiatives",
+      "publish_date": "2026-06-12 19:47:42.949543+00:00",
       "source_uri": null,
       "tags": [
         "department",
@@ -43,17 +48,19 @@
         "human resources",
         "organizational structure",
         "performance management",
-        "hr tech stack",
-        "workforce management"
+        "hr technology",
+        "change management"
       ],
       "title": "HR Department Overview",
       "total_tokens": 97
     },
     "toc": [
       {
+        "assets": [],
         "block_id": "f863e08e177b20e8e60e7068388ad9bf",
         "children": [
           {
+            "assets": [],
             "block_id": "f863e08e177b20e8e60e7068388ad9bf",
             "children": [],
             "end_index": 241,
@@ -63,16 +70,17 @@
             "start_index": 145,
             "subtree_tokens": 18,
             "summary": {
-              "how": "By rolling out the framework company-wide.",
-              "what": "A new 360-degree performance review framework.",
+              "how": "By rolling out a new performance review framework",
+              "what": "Implementing a 360-degree performance review system",
               "when": "Currently",
               "where": "Company-wide",
-              "who": "The organization/company"
+              "who": "The organization"
             },
             "title": "Current Initiative",
             "token_estimate": 18
           },
           {
+            "assets": [],
             "block_id": "f863e08e177b20e8e60e7068388ad9bf",
             "children": [],
             "end_index": 425,
@@ -82,11 +90,11 @@
             "start_index": 241,
             "subtree_tokens": 41,
             "summary": {
-              "how": "Reporting to the department head",
-              "what": "Management of all HR-related activities",
+              "how": "By managing all HR-related activities through a team of 14 personnel reporting to the department head.",
+              "what": "Human Resources management and departmental responsibilities.",
               "when": "Currently",
               "where": "TechCo Global",
-              "who": "TechCo Global HR department (14 members) and David Okafor"
+              "who": "David Okafor and the HR department team."
             },
             "title": "Responsibilities",
             "token_estimate": 41
@@ -100,7 +108,7 @@
         "subtree_tokens": 97,
         "summary": {
           "how": "By utilizing core tools including Workday, Greenhouse, and Culture Amp.",
-          "what": "Overview of the HR Department's structure, leadership, and technological stack.",
+          "what": "Overview of departmental leadership, staffing, and software infrastructure.",
           "when": null,
           "where": "TechCo Global",
           "who": "David Okafor (Department Head) and 14 employees."
@@ -110,12 +118,12 @@
       }
     ]
   },
-  "publish_date": "2026-05-18T07:32:38.347275+00:00",
-  "session_id": "16258887-0e86-4d70-bce7-cf77fd92c798",
+  "publish_date": "2026-06-12T19:47:42.949543+00:00",
+  "session_id": "b4b06b5c-bb9d-4bc5-af0e-67000fcb6746",
   "status": "active",
   "summary_version_incorporated": null,
   "superseded_by": null,
   "title": "HR Department Overview",
-  "updated_at": "2026-05-18T07:32:38.348151+00:00",
-  "vault_id": "22c11c49-1ccc-43a4-830c-dca2472f519c"
+  "updated_at": "2026-06-12T19:47:42.950295+00:00",
+  "vault_id": "34893ad7-9844-4786-bb90-912fac9b0d11"
 }

@@ -44,7 +44,21 @@ _HERMES_HARNESS_TOKEN_CAP = 400
 # constraint + the matching write_routing entries in CLAUDE_CODE_HARNESS.
 # Net delta ~250 chars; the routing rule prevents silent miscategorization
 # (agent auto-scoping procedures by cwd / git remote / active vault).
-_TOTAL_STATIC_PREFIX_CHAR_CAP = 10_800
+# Bumped 10,800 → 12,600 when the procedural-plane doctrine block
+# (PROCEDURAL_PLANE, ~1,750 chars) was added to the Hermes static prefix
+# via compose_with_procedural(). The block carries the routing rules for
+# the 8 ``memex_procedural_*`` MCP tools — the doctrine any Memex-aware
+# agent needs in order to route ``"this is how to do X"`` write intents
+# to the procedural plane instead of the note or KV plane. This is a
+# a wiring change, not a refactor; the docstring on
+# ``compose_with_procedural`` documents the opt-in rationale (callers
+# without the procedural tools would otherwise burn the budget for no
+# behavioural gain).
+# Bumped 12,600 → 12,800 when the design dropped kind='case' from the
+# plane and PROCEDURAL_PLANE grew the case-submission doctrine (cases are
+# notes via ``memex_case_submit``; no briefing tool — pinned cards arrive
+# inside the session briefing automatically). Net delta ~80 chars.
+_TOTAL_STATIC_PREFIX_CHAR_CAP = 12_800
 
 
 def _approx_tokens(text: str) -> int:

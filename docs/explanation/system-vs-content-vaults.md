@@ -59,7 +59,7 @@ The practical effect: a user who types `memex memory search` gets the universe t
 
 ## The `inbox` case-vault precedent (and beyond)
 
-The next consumers are already sketched. The procedural-experiential memory work calls for a hidden case-vault — notes that capture a single agent session's outcome for the procedural-mem pipeline. That vault is exactly the same shape: addressable, fully extracted, but silent on the agent-facing synthesis surfaces. The same goes for a future Hermes session vault that captures mid-session scratch state. They all instantiate the same `kind='system'` row; they all rely on the same `policy` override if their use case diverges from the default.
+The next consumers are already sketched. The procedural-procedural memory work calls for a hidden case-vault — notes that capture a single agent session's outcome for the procedural-mem pipeline. That vault is exactly the same shape: addressable, fully extracted, but silent on the agent-facing synthesis surfaces. The same goes for a future Hermes session vault that captures mid-session scratch state. They all instantiate the same `kind='system'` row; they all rely on the same `policy` override if their use case diverges from the default.
 
 A new "system" vault is a one-line creation:
 

@@ -3,8 +3,8 @@
   "archived_at": null,
   "assets": [],
   "content_hash": "b391b8fdd7d1b6fac4122a0e6976e223",
-  "created_at": "2026-05-18T07:33:01.309627+00:00",
-  "description": "Q2 2025 Quarterly Business Review and Performance",
+  "created_at": "2026-06-12T19:48:06.113499+00:00",
+  "description": "Q2 2025 Quarterly Business Review",
   "doc_metadata": {
     "retain_params": {
       "assets": [],
@@ -26,35 +26,43 @@
     "tags": [
       "quarterly-review",
       "business",
-      "q2-2025"
+      "q2-2025",
+      "quarterly business review",
+      "financial growth",
+      "headcount",
+      "product development",
+      "machine learning",
+      "performance metrics"
     ]
   },
   "filestore_path": null,
   "id": "03f7c13e-2335-aaa4-7ff0-3f587600c75f",
   "page_index": {
     "metadata": {
-      "description": "Q2 2025 Quarterly Business Review and Performance",
-      "publish_date": "2025-06-30 00:00:00+00:00",
+      "description": "Q2 2025 Quarterly Business Review",
+      "publish_date": "2025-06-20 00:00:00+00:00",
       "source_uri": null,
       "tags": [
         "quarterly-review",
         "business",
         "q2-2025",
         "quarterly business review",
-        "financial performance",
+        "financial growth",
+        "headcount",
         "product development",
-        "headcount growth",
-        "operational efficiency",
-        "machine learning"
+        "machine learning",
+        "performance metrics"
       ],
       "title": "Quarterly Business Review Q2 2025",
       "total_tokens": 160
     },
     "toc": [
       {
+        "assets": [],
         "block_id": "31e521e61da55e3e8bea668d592ee19c",
         "children": [
           {
+            "assets": [],
             "block_id": "31e521e61da55e3e8bea668d592ee19c",
             "children": [],
             "end_index": 283,
@@ -64,16 +72,17 @@
             "start_index": 98,
             "subtree_tokens": 44,
             "summary": {
-              "how": "Through product-led growth and operational efficiency.",
-              "what": "A 22% revenue increase to $15.3M and a 10% reduction in customer acquisition costs.",
-              "when": "Current quarter-over-quarter period.",
-              "where": "Corporate financial performance.",
-              "who": "The reporting company."
+              "how": "Via product-led growth initiatives and consistent cost management.",
+              "what": "Financial growth including 22% revenue increase and 10% CAC reduction.",
+              "when": "The most recent quarter-over-quarter period.",
+              "where": "Within the company's financial operations.",
+              "who": "The company's finance and sales departments."
             },
             "title": "Financial Highlights",
             "token_estimate": 44
           },
           {
+            "assets": [],
             "block_id": "31e521e61da55e3e8bea668d592ee19c",
             "children": [],
             "end_index": 394,
@@ -83,16 +92,17 @@
             "start_index": 283,
             "subtree_tokens": 32,
             "summary": {
-              "how": "By hiring 8 new employees across Engineering, ML, and Design departments.",
-              "what": "Headcount update and growth.",
-              "when": "Current reporting period.",
-              "where": "Across the organization.",
-              "who": "Engineering, ML, and Design teams."
+              "how": "By onboarding 8 new hires in Engineering, ML, and Design",
+              "what": "Total headcount update showing 164 employees",
+              "when": "Current reporting period",
+              "where": "Company-wide",
+              "who": "Engineering, ML, and Design teams"
             },
             "title": "Headcount",
             "token_estimate": 32
           },
           {
+            "assets": [],
             "block_id": "31e521e61da55e3e8bea668d592ee19c",
             "children": [],
             "end_index": 592,
@@ -102,11 +112,11 @@
             "start_index": 394,
             "subtree_tokens": 55,
             "summary": {
-              "how": "By completing Phase 1 of Alpha and launching Beta (ML), while exceeding data pipeline performance targets.",
-              "what": "Product development milestones and operational metrics.",
-              "when": "May and June 2025.",
-              "where": "Internal engineering and data systems.",
-              "who": "Project Alpha and Beta teams."
+              "how": "By processing 12,000 events per second",
+              "what": "Completion of Phase 1, kickoff of an ML initiative, and exceeding data pipeline performance targets",
+              "when": "May and June 2025",
+              "where": "Internal development environment",
+              "who": "Project teams (Alpha and Beta)"
             },
             "title": "Product Milestones",
             "token_estimate": 55
@@ -119,23 +129,23 @@
         "start_index": 0,
         "subtree_tokens": 160,
         "summary": {
-          "how": "By reviewing financial data, staffing metrics, and product development status.",
-          "what": "A comprehensive quarterly business review of company performance.",
-          "when": "The second quarter (Q2) of 2025.",
-          "where": "Internal corporate reporting.",
-          "who": "The organization's management and stakeholders."
+          "how": "By reviewing Financial Highlights, Headcount, and Product Milestones",
+          "what": "Quarterly Business Review covering financial results, staffing, and product development",
+          "when": "Q2 2025",
+          "where": "Internal corporate reporting",
+          "who": "The organization/company"
         },
         "title": "Quarterly Business Review — Q2 2025",
         "token_estimate": 29
       }
     ]
   },
-  "publish_date": "2025-06-30T00:00:00+00:00",
-  "session_id": "3631d6e9-048d-4f45-93c0-b8f30c5110ac",
+  "publish_date": "2025-06-20T00:00:00+00:00",
+  "session_id": "3b668c3f-eb4f-4de8-b5e1-84400f69b914",
   "status": "active",
   "summary_version_incorporated": null,
   "superseded_by": null,
   "title": "Quarterly Business Review Q2 2025",
-  "updated_at": "2026-05-18T07:33:01.309627+00:00",
-  "vault_id": "22c11c49-1ccc-43a4-830c-dca2472f519c"
+  "updated_at": "2026-06-12T19:48:06.113499+00:00",
+  "vault_id": "34893ad7-9844-4786-bb90-912fac9b0d11"
 }

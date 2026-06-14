@@ -119,6 +119,7 @@ async def test_f38_does_not_add_mcp_tag() -> None:
         'storage',
         'templates',
         'diagnostics',
+        'procedural',
     }
 
     tools = await mcp._list_tools()

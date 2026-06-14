@@ -81,6 +81,48 @@ logger = logging.getLogger('memex.core.memory.retrieval.engine')
 
 LOG_FLOOR_COMPOSITE_BOOST = 1e-9
 
+# ``mentioned_at`` is auto-filled to ~``created_at`` (ingest time) for undated
+# content, so a genuine authored date parked in ``mentioned_at`` differs from
+# ``created_at`` by far more than this tolerance. Used by ``_recency_anchor``
+# to separate an authored date in ``mentioned_at`` from the ingest-time default.
+_INGEST_DATE_TOLERANCE_S = 60.0
+
+
+def _mentioned_at_is_authored(unit: MemoryUnit) -> bool:
+    """True when ``unit.mentioned_at`` is a genuine authored date (a publish
+    date or an in-text date) rather than the ingest-time auto-fill.
+
+    For undated content the pipeline fills ``mentioned_at`` with ~the ingest
+    timestamp (``created_at``), so the two coincide to well within
+    ``_INGEST_DATE_TOLERANCE_S``; a real authored date sits days-to-years away.
+    """
+    if unit.mentioned_at is None:
+        return False
+    created = unit.created_at
+    return (
+        created is None
+        or abs((unit.mentioned_at - created).total_seconds()) > _INGEST_DATE_TOLERANCE_S
+    )
+
+
+def _recency_anchor(unit: MemoryUnit) -> datetime | None:
+    """The date a unit's recency is scored against: the LATEST authored date
+    it carries.
+
+    Combines ``occurred_start`` (a dated event) with an authored
+    ``mentioned_at`` (see ``_mentioned_at_is_authored`` — excludes the
+    ingest-time default). Taking the ``max`` keeps ongoing / current-state
+    facts recent — "head since 2024, published 2026" anchors on 2026, not its
+    old 2024 start. Returns ``None`` for a truly-undated unit, which the rerank
+    recency boost then treats as neutral (neither boosted nor penalised).
+    """
+    candidates: list[datetime] = []
+    if unit.occurred_start is not None:
+        candidates.append(unit.occurred_start)
+    if _mentioned_at_is_authored(unit):
+        candidates.append(unit.mentioned_at)
+    return max(candidates) if candidates else None
+
 
 def _compose_boosts_logspace(
     ce_score: float,
@@ -172,6 +214,13 @@ from memex_core.memory.retrieval.constants import (  # noqa: E402
     STABILITY_SECONDS_PER_DAY,
     STABILITY_THRESHOLD,
 )
+
+# Minimum candidate depth the exploration bypass re-fetches at. The main path's
+# candidate_depth collapses to the final limit when there is no reranker or
+# token budget; exploration (F33) must look *beyond* the top-N to resurface the
+# low-Memory-Worth / low-confidence units the main path prunes (F48), so the
+# bypass pool is fetched at least this deep regardless of the final limit.
+_EXPLORATION_BYPASS_MIN_DEPTH = 50
 
 
 def _build_pre_filter_clause(
@@ -692,8 +741,9 @@ class RetrievalEngine:
                 all_ranked_items.append((items, q_weight))
             fused_items = self._fuse_multi_query_results(all_ranked_items, candidate_depth)
 
-        # Free embedding lists — no longer needed after RRF + fallback
-        del all_embeddings_list
+        # NOTE: ``all_embeddings_list`` is intentionally kept alive past here —
+        # the exploration bypass below re-runs the RRF at a deeper depth and
+        # needs the per-query embeddings. It is GC'd at method return.
 
         if not fused_items:
             return ([], None)
@@ -715,6 +765,14 @@ class RetrievalEngine:
         # Snapshot AFTER superseded filter so exploration injection cannot
         # surface superseded-but-ACTIVE units.
         hydrated_candidates = list(final_results)
+
+        # 6c. Populate ``temporal_proximity`` from the query's extracted date
+        # window (only set when the query was temporal) so the rerank temporal
+        # boost (scaled by ``reranking_temporal_alpha``) is active rather than
+        # permanently neutral.
+        self._apply_temporal_proximity(
+            final_results, filters.get('start_date'), filters.get('end_date')
+        )
 
         # 7. Rerank (cap input to avoid O(n) cross-encoder blowup)
         t0 = _t()
@@ -819,17 +877,55 @@ class RetrievalEngine:
             if should_inject:
                 exploration_pool = hydrated_candidates
                 if request.apply_pre_filter:
-                    # Re-hydrate ALL fused items without the pre-filter
-                    # predicate so exploration sees units the main path filtered out.
+                    # The main path pruned low-confidence/low-MW units at the
+                    # pre-filter, AND candidate_depth (≈ the final limit when
+                    # there is no reranker or token budget) truncated fused_items
+                    # too shallow to even contain them — so re-hydrating
+                    # fused_items alone can never surface them. Re-run the RRF at
+                    # an exploration-floor depth and hydrate WITHOUT the
+                    # pre-filter, so F33 can resurface units the main path can
+                    # never see (the F48 ∩ F33 self-correction contract). The RRF
+                    # itself does not apply the confidence pre-filter; only
+                    # hydration does, so the deeper fetch recovers them.
+                    #
+                    # NOTE (follow-up): the MAIN candidate pool is also capped at
+                    # candidate_depth; when that equals the limit it defeats MMR
+                    # diversity too. Flooring candidate_depth for the main path is
+                    # the broader fix, left to the retrieval owner so this change
+                    # does not alter main-path ranking under the merge.
+                    bypass_depth = max(candidate_depth, _EXPLORATION_BYPASS_MIN_DEPTH)
+                    bypass_ranked = []
+                    for q, q_emb, q_weight in zip(queries, all_embeddings_list, query_weights):
+                        if use_partitioned:
+                            items = await self._perform_partitioned_rrf(
+                                session,
+                                q,
+                                q_emb,
+                                bypass_depth,
+                                filters,
+                                strategies=request.strategies,
+                                strategy_weights=request.strategy_weights,
+                            )
+                        else:
+                            items = await self._perform_rrf_retrieval(
+                                session,
+                                q,
+                                q_emb,
+                                bypass_depth,
+                                filters,
+                                strategies=request.strategies,
+                                strategy_weights=request.strategy_weights,
+                            )
+                        bypass_ranked.append((items, q_weight))
+                    bypass_fused = self._fuse_multi_query_results(bypass_ranked, bypass_depth)
                     bypass_pool = await self._hydrate_results(
-                        session, fused_items, apply_pre_filter=False
+                        session, bypass_fused, apply_pre_filter=False
                     )
                     if not request.include_superseded:
                         threshold = self.retrieval_config.superseded_threshold
                         # Use the SSOT helper for the confidence read so the
                         # falsy-zero handling and ``None`` fallback are
-                        # consistent with the rest of
-                        # the rerank path (engine.py:1507) and lint
+                        # consistent with the rerank path and lint
                         # (services/lint_confidence.py).
                         bypass_pool = [
                             u
@@ -961,6 +1057,42 @@ class RetrievalEngine:
         Item = namedtuple('Item', ['id', 'type'])
 
         return [Item(id=k[0], type=k[1]) for k in sorted_keys[:limit]]
+
+    def _apply_temporal_proximity(
+        self,
+        units: list[MemoryUnit],
+        start_date: datetime | None,
+        end_date: datetime | None,
+    ) -> None:
+        """Populate ``unit.temporal_proximity`` in [0, 1] from the query's
+        extracted date window so the rerank temporal boost (scaled by
+        ``RetrievalConfig.reranking_temporal_alpha``) is no longer inert.
+
+        ``1.0`` = the unit's date sits at the window midpoint; it falls
+        linearly to ``0.0`` a full half-width away (or beyond). Units without a
+        date are left unset, so the rerank read defaults them to a neutral
+        ``0.5``. No-op when the query carried no temporal window (the common
+        case) — this only fires for genuinely temporal queries. Mirrors
+        Hindsight's temporal arm: ``1 - min(days_from_mid / (total_days/2), 1)``.
+        """
+        if start_date is None or end_date is None:
+            return
+        mid = start_date + (end_date - start_date) / 2
+        half_window = abs((end_date - start_date).total_seconds()) / 2.0
+        for u in units:
+            unit_date = u.occurred_start or u.event_date
+            if unit_date is None:
+                continue
+            try:
+                offset = abs((unit_date - mid).total_seconds())
+            except TypeError:
+                # Naive/aware datetime mismatch — skip rather than crash.
+                continue
+            if half_window <= 0:
+                proximity = 1.0 if offset == 0 else 0.0
+            else:
+                proximity = 1.0 - min(offset / half_window, 1.0)
+            object.__setattr__(u, 'temporal_proximity', proximity)
 
     def _apply_position_aware_blending(self, results: list[MemoryUnit]) -> list[MemoryUnit]:
         """
@@ -1630,12 +1762,27 @@ class RetrievalEngine:
 
             boosted_scores: list[float] = []
             for unit, ce_score in zip(results, normalized_scores):
-                # Recency boost
-                if unit.event_date is not None:
-                    days_ago = (now - unit.event_date).days
+                # Recency boost — keyed on the unit's real authored date, NOT
+                # ``event_date`` (which defaults to ingest time for undated
+                # content, making date-less units read as maximally fresh).
+                # Prefer ``occurred_start`` (a dated event); else fall back to
+                # ``mentioned_at`` *only when it is a genuine date* — a
+                # present-state fact ("currently runs Python 3.13 [Nov 2025]")
+                # parks its real date in ``mentioned_at``, not
+                # ``occurred_start``. ``mentioned_at`` is auto-filled to
+                # ~``created_at`` for truly-undated content, so a real date is
+                # one that differs from ``created_at`` by more than the ingest
+                # tolerance; truly-undated units fall through to neutral (so
+                # they neither flood nor get penalised).
+                # Recency keys on the latest authored date the unit carries
+                # (occurred_start and/or an authored mentioned_at); truly
+                # undated units anchor to None and stay neutral.
+                recency_date = _recency_anchor(unit)
+                if recency_date is not None:
+                    days_ago = (now - recency_date).days
                     recency = max(0.1, min(1.0, 1.0 - (days_ago / 365)))
                 else:
-                    recency = 0.5  # neutral when no event_date
+                    recency = 0.5  # neutral — no authored date
 
                 recency_boost = 1.0 + recency_alpha * (recency - 0.5)
 

@@ -99,3 +99,44 @@ class DeprioRecoversFrom400(ExpectedOutcomeBase):
 
     def metric_keys(self, top_k: int | None = None) -> list[str]:
         return ['pass', 'observation_call_count', 'mu_call_count']
+
+
+@register_outcome('tool_call_order')
+class ToolCallOrder(ExpectedOutcomeBase):
+    """Pass iff ``before`` is first called strictly before ``after``.
+
+    The load-bearing ordering gate for longer-horizon procedural flows:
+    the agent must SEARCH/PROBE the plane *before* it WRITES (so it
+    reuses or updates rather than blindly re-creating). We compare the
+    index of the first ``before`` call against the first ``after`` call
+    in ``answer.tool_calls`` (which the hermes/claude-code backends emit
+    in invocation order).
+
+    Pass requires BOTH tools to have been called AND the first ``before``
+    to precede the first ``after``. If either is absent, the scenario
+    fails (the multi-step flow didn't happen). Reports ``pass`` plus
+    informational first-index metrics.
+    """
+
+    type: Literal['tool_call_order']
+    before: str
+    after: str
+
+    def score(self, answer: AgentAnswer, scenario: Any = None, **_kw: Any) -> dict[str, float]:
+        before_idx: int | None = None
+        after_idx: int | None = None
+        for i, call in enumerate(answer.tool_calls):
+            tool = call.get('tool')
+            if tool == self.before and before_idx is None:
+                before_idx = i
+            if tool == self.after and after_idx is None:
+                after_idx = i
+        ordered = before_idx is not None and after_idx is not None and before_idx < after_idx
+        return {
+            'pass': 1.0 if ordered else 0.0,
+            'before_first_index': float(before_idx if before_idx is not None else -1),
+            'after_first_index': float(after_idx if after_idx is not None else -1),
+        }
+
+    def metric_keys(self, top_k: int | None = None) -> list[str]:
+        return ['pass', 'before_first_index', 'after_first_index']

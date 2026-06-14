@@ -60,34 +60,37 @@ def test_universal_block_surfaces_kv_namespace() -> None:
     )
 
 
-def test_project_procedure_pattern_documented() -> None:
-    """The project-scoped procedure pattern must appear in the SSOT and
-    the universal block — otherwise agents won't know it exists.
-
-    Without explicit documentation, agents fall back to either:
-    - inventing keys under `project:<id>:<field>` (loses procedure envelope
-      versioning), or
-    - writing global procedures when the user clearly scoped to a project.
+def test_kv_does_not_carry_procedure_write_routing() -> None:
+    """How-to procedures live on the procedural plane (derived from cases
+    via ``memex_case_submit``), NOT in KV ``<scope>:procedure:*`` keys (the
+    deprecated path). The KV namespace block must NOT route procedure
+    WRITES, and must pin the kv_vs_procedural boundary.
     """
-    pattern = 'project:<id>:procedure:<verb>:<context-tag>'
-    assert pattern in KV_NAMESPACE, (
-        f'`agent_surface.KV_NAMESPACE` missing the project-scoped procedure '
-        f'pattern: {pattern!r}. Add a row to the namespace table.'
+    # The deprecated KV-procedure write pattern must be gone from the
+    # namespace routing table.
+    assert 'project:<id>:procedure:<verb>:<context-tag>' not in KV_NAMESPACE, (
+        'KV_NAMESPACE still routes procedure WRITES to a `procedure:` key — '
+        'that path is deprecated; how-tos go to the procedural plane.'
     )
-    text = compose_universal()
-    assert pattern in text, (
-        '`compose_universal()` does not surface the project-procedure pattern. '
-        'Check that KV_NAMESPACE is included in the composition order.'
+    # And the boundary constraint must be present.
+    assert 'kv_vs_procedural' in KV_NAMESPACE, (
+        'KV_NAMESPACE missing the kv_vs_procedural constraint that draws the '
+        'KV-convention vs procedural-plane line.'
     )
 
 
-def test_procedure_scope_default_directive_present() -> None:
-    """The default-to-global directive must be present as a critical
-    constraint, not buried in prose. Agents must default to global
-    procedures and ASK before project-scoping on ambiguous input."""
+def test_how_to_routing_goes_to_the_plane_not_kv() -> None:
+    """The old ``procedure_scope_default`` KV directive is gone —
+    procedures are no longer a KV write path. compose_universal() must
+    instead carry the kv_vs_procedural boundary so agents send how-to
+    workflows to the procedural plane, not a KV ``procedure:`` key.
+    """
     text = compose_universal()
-    assert 'procedure_scope_default' in text, (
-        '`procedure_scope_default` critical_constraint missing from compose_universal(). '
-        'Without it, agents silently project-scope procedures by cwd / git remote / '
-        'active vault.'
+    assert 'procedure_scope_default' not in text, (
+        'the deprecated `procedure_scope_default` KV directive is still present; '
+        'procedures route to the plane now, not KV.'
+    )
+    assert 'kv_vs_procedural' in text, (
+        '`kv_vs_procedural` constraint missing from compose_universal(); without '
+        'it agents may still write how-tos to KV procedure keys.'
     )

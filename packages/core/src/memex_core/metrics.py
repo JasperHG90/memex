@@ -622,3 +622,54 @@ FSFM_AUTO_BAND_SKIPPED_TOTAL = Counter(
     'Total candidates the FSFM auto-band skipped, by reason.',
     ['reason'],  # below_threshold | escalation_pending | cooldown_active | unit_missing | lock_held
 )
+
+
+# ---------------------------------------------------------------------------
+# Procedural  plane
+# ---------------------------------------------------------------------------
+# Five metrics for the procedure / strategy plane. The plane is
+# small but it has a distinct identity-anchor doctrine (kind, scope,
+# verb, context) and a hybrid BM25+vector search with RRF fusion — so
+# its observability needs are not the same as the notes / reflection
+# plane. Labels are deliberately bounded (kind is a 2-value Literal (procedure | strategy),
+# operation is a 4-value verb) so cardinality stays O(dozens), not O(rows).
+
+PROCEDURAL_OPERATIONS_TOTAL = Counter(
+    'memex_procedural_operations_total',
+    'Total procedural-plane write operations, by verb, kind, and outcome.',
+    ['operation', 'kind', 'outcome'],  # operation: create|update|upsert|deprecate
+    # outcome: success | identity_conflict | not_found | error
+)
+
+PROCEDURAL_SEARCH_DURATION_SECONDS = Histogram(
+    'memex_procedural_search_duration_seconds',
+    'Time spent on a procedural-plane search (BM25 + vector + RRF fusion).',
+    ['kind', 'streams'],  # streams: bm25_only | vector_only | rrf | pin_only
+    buckets=(0.005, 0.01, 0.025, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0),
+)
+
+PROCEDURAL_BRIEFING_CARDS_TOTAL = Counter(
+    'memex_procedural_briefing_cards_total',
+    'Total briefing cards emitted by `procedural_briefing_cards`, by '
+    'context-key-count bucket. The bucket is the number of distinct '
+    'context_keys in the request, capped at 10 — a 10+ bucket catches '
+    'abuse without unbounded label cardinality.',
+    ['context_count_bucket'],  # 1 | 2 | 3 | 4 | 5 | 6_to_10 | 10+
+)
+
+PROCEDURAL_IDENTITY_CONFLICT_TOTAL = Counter(
+    'memex_procedural_identity_conflict_total',
+    'Total identity-anchor collisions on the procedural plane, by kind '
+    'and the configured conflict mode (reject | upsert). A spike in '
+    '`reject` followed by a quiet `upsert` series is the agent learning '
+    'to use the upsert route — that is the desired behaviour, not an '
+    'alert.',
+    ['kind', 'mode'],
+)
+
+PROCEDURAL_DERIVATION_QUEUE_SIZE = Gauge(
+    'memex_procedural_derivation_queue_size',
+    'Pending rows in the procedural-plane derivation queue. The metric '
+    'is only emitted when the derivation worker is enabled — operators '
+    'leaving it off see no series, which is the correct null state.',
+)

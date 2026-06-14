@@ -3,8 +3,8 @@
   "archived_at": null,
   "assets": [],
   "content_hash": "36af99a173a2e1017dd9552f4c986709",
-  "created_at": "2026-05-18T07:32:28.004443+00:00",
-  "description": "DataForge Distributed Data Platform Architecture",
+  "created_at": "2026-06-12T19:47:33.006966+00:00",
+  "description": "DataForge Platform Architecture and Infrastructure",
   "doc_metadata": {
     "retain_params": {
       "assets": [],
@@ -26,36 +26,45 @@
     "tags": [
       "architecture",
       "dataforge",
-      "deep-dive"
+      "deep-dive",
+      "data platform",
+      "microservices",
+      "apache kafka",
+      "apache flink",
+      "postgresql",
+      "pgvector",
+      "observability"
     ]
   },
   "filestore_path": null,
   "id": "c53136d9-48df-4970-0a18-d1f87127d988",
   "page_index": {
     "metadata": {
-      "description": "DataForge Distributed Data Platform Architecture",
-      "publish_date": "2026-05-18 07:32:28.003797+00:00",
+      "description": "DataForge Platform Architecture and Infrastructure",
+      "publish_date": "2026-06-12 19:47:33.006231+00:00",
       "source_uri": null,
       "tags": [
         "architecture",
         "dataforge",
         "deep-dive",
-        "data architecture",
-        "apache flink",
+        "data platform",
+        "microservices",
         "apache kafka",
+        "apache flink",
         "postgresql",
         "pgvector",
-        "observability",
-        "distributed systems"
+        "observability"
       ],
       "title": "Data Platform Architecture Deep Dive",
       "total_tokens": 239
     },
     "toc": [
       {
+        "assets": [],
         "block_id": "b17078080ba78f1c6f4b25fd24e06b8f",
         "children": [
           {
+            "assets": [],
             "block_id": "b17078080ba78f1c6f4b25fd24e06b8f",
             "children": [],
             "end_index": 377,
@@ -65,16 +74,17 @@
             "start_index": 125,
             "subtree_tokens": 49,
             "summary": {
-              "how": "By ingesting via Kafka, processing with Flink, and storing in PostgreSQL with pgvector.",
-              "what": "Distributed data platform architecture.",
+              "how": "By using microservices to ingest data via Apache Kafka, process it with Apache Flink, and store it in PostgreSQL with pgvector.",
+              "what": "A distributed data platform architecture designed for AI workloads.",
               "when": null,
-              "where": "Microservices-based environment.",
+              "where": "Inside a microservices-based distributed system environment.",
               "who": "DataForge"
             },
             "title": "Architecture Overview",
             "token_estimate": 49
           },
           {
+            "assets": [],
             "block_id": "b17078080ba78f1c6f4b25fd24e06b8f",
             "children": [],
             "end_index": 595,
@@ -84,16 +94,17 @@
             "start_index": 377,
             "subtree_tokens": 46,
             "summary": {
-              "how": "Via a Kafka cluster with 12 partitions using validation, enrichment, and routing.",
-              "what": "Processing 50,000 events per second.",
-              "when": null,
-              "where": "At the ingestion layer of the system architecture.",
-              "who": "Ingestion layer and Kafka cluster."
+              "how": "By utilizing 12 partitions to validate, enrich, and route incoming data",
+              "what": "Processes and routes 50,000 events per second",
+              "when": "Continuously during real-time data flow",
+              "where": "Entry point of the data processing architecture",
+              "who": "Ingestion Layer using a Kafka cluster"
             },
             "title": "Ingestion Layer",
             "token_estimate": 46
           },
           {
+            "assets": [],
             "block_id": "b17078080ba78f1c6f4b25fd24e06b8f",
             "children": [],
             "end_index": 802,
@@ -104,15 +115,16 @@
             "subtree_tokens": 38,
             "summary": {
               "how": "By performing data enrichment, deduplication, and transformation with exactly-once semantics.",
-              "what": "Streaming data processing and transformation.",
-              "when": "Before writing data to the storage layer.",
-              "where": "Within the processing layer of a data pipeline.",
+              "what": "Processing of streaming data and preparation for storage.",
+              "when": null,
+              "where": "Within the processing layer of a data architecture.",
               "who": "Apache Flink"
             },
             "title": "Processing Layer",
             "token_estimate": 38
           },
           {
+            "assets": [],
             "block_id": "b17078080ba78f1c6f4b25fd24e06b8f",
             "children": [],
             "end_index": 1014,
@@ -123,15 +135,16 @@
             "subtree_tokens": 40,
             "summary": {
               "how": "By using partitioned tables for time-series data and specialized indexes for vector similarity search.",
-              "what": "Transactional and vector storage capabilities.",
+              "what": "Transactional and vector data storage architecture.",
               "when": null,
-              "where": "The storage layer of the database system.",
-              "who": "PostgreSQL 16 with pgvector."
+              "where": "Within the system's storage layer.",
+              "who": "PostgreSQL 16 with pgvector extension."
             },
             "title": "Storage Layer",
             "token_estimate": 40
           },
           {
+            "assets": [],
             "block_id": "b17078080ba78f1c6f4b25fd24e06b8f",
             "children": [],
             "end_index": 1223,
@@ -144,7 +157,7 @@
               "how": "By implementing OpenTelemetry for tracing, Prometheus for metrics, and Grafana for dashboards.",
               "what": "Establishment of the observability stack.",
               "when": "During the initial platform build.",
-              "where": "Within the platform infrastructure.",
+              "where": "Within the platform's infrastructure.",
               "who": "Jordan Park"
             },
             "title": "Observability",
@@ -158,10 +171,10 @@
         "start_index": 0,
         "subtree_tokens": 239,
         "summary": {
-          "how": "By organizing components into ingestion, processing, storage, and observability layers.",
-          "what": "A deep dive into the architectural design of a data platform.",
+          "how": "By detailing layers including Ingestion, Processing, Storage, and Observability.",
+          "what": "A comprehensive deep dive into Data Platform Architecture.",
           "when": null,
-          "where": "Within the context of a data platform infrastructure.",
+          "where": "Within a technical architectural framework.",
           "who": "Data platform architects and engineers."
         },
         "title": "Data Platform Architecture — Deep Dive",
@@ -169,12 +182,12 @@
       }
     ]
   },
-  "publish_date": "2026-05-18T07:32:28.003797+00:00",
-  "session_id": "5daa7234-dfdd-48ed-9e17-c922072202ef",
+  "publish_date": "2026-06-12T19:47:33.006231+00:00",
+  "session_id": "e3559f62-b90e-415d-81c8-988beb8025dd",
   "status": "active",
   "summary_version_incorporated": null,
   "superseded_by": null,
   "title": "Data Platform Architecture Deep Dive",
-  "updated_at": "2026-05-18T07:32:28.004443+00:00",
-  "vault_id": "22c11c49-1ccc-43a4-830c-dca2472f519c"
+  "updated_at": "2026-06-12T19:47:33.006966+00:00",
+  "vault_id": "34893ad7-9844-4786-bb90-912fac9b0d11"
 }

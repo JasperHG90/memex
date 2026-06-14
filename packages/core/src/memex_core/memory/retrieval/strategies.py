@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from functools import lru_cache
 from typing import Protocol, Any, runtime_checkable
 from uuid import UUID
@@ -14,6 +15,7 @@ from sqlalchemy import (
     text,
     cast,
     String,
+    union,
     union_all,
     distinct,
 )
@@ -432,7 +434,38 @@ def _build_ner_seeds(
             )
         )
 
-    return seed_from_canonical.union(seed_from_alias)
+    # Query-term entity seeding (NER-independent). The NER model only tags
+    # proper-noun spans — for "…the Engineering department at TechCo
+    # Global" it extracts ONLY "TechCo Global", never the common-noun
+    # entity "Engineering department" that actually discriminates the
+    # answer. Generate 1–3 word lowercased windows of the query and match
+    # them by equality against entity / alias names. This seeds the
+    # discriminating entity so the downstream IDF weighting (see
+    # ``build_seed_entity_cte``) can elevate it and suppress the ubiquitous
+    # org name. Equality on ``lower(name)`` (small candidate list of
+    # windows) keeps this scalable — no per-row substring scan of the query.
+    _toks = [t for t in re.split(r'[^0-9a-z]+', query.lower()) if t]
+    _windows = {
+        ' '.join(_toks[_i : _i + _n])
+        for _n in (1, 2, 3)
+        for _i in range(len(_toks) - _n + 1)
+        if len(' '.join(_toks[_i : _i + _n])) >= 4
+    }
+
+    seed_selects: list[Select] = [seed_from_canonical, seed_from_alias]
+    if _windows:
+        window_list = list(_windows)
+        seed_selects.append(
+            select(col(Entity.id).label('id')).where(
+                func.lower(col(Entity.canonical_name)).in_(window_list)
+            )
+        )
+        seed_selects.append(
+            select(col(EntityAlias.canonical_id).label('id')).where(
+                func.lower(col(EntityAlias.name)).in_(window_list)
+            )
+        )
+    return union(*seed_selects)
 
 
 def build_seed_entity_cte(
@@ -479,10 +512,49 @@ def build_seed_entity_cte(
     )
     ner_subq = ner_seeds_query.subquery(f'{cte_name}_ner_t')
 
-    ner_weighted = select(
-        ner_subq.c.id.label('id'),
-        literal(1.0).label('weight'),
-    ).select_from(ner_subq)
+    # Lever 1 — IDF-weight NER seeds by vault-scoped document frequency.
+    # A query entity present in (nearly) every unit — e.g. the org name
+    # carried by all of a vault's notes — has zero discriminating power,
+    # yet a flat seed weight lets it flood the graph strategy and bury the
+    # genuinely specific entity. Weighting each seed by inverse document
+    # frequency ``idf = ln((N + 1) / (df + 1))`` drives the ubiquitous seed
+    # toward 0 (df→N ⇒ idf→0) and lets the rare, discriminating entity
+    # dominate ``score = seed_weight + temporal``.
+    #
+    # Computed ON DEMAND in SQL — no materialized idf column/table — and
+    # restricted to the seed entities (``WHERE entity_id IN (seeds)`` keeps
+    # the aggregation O(#seeds), not O(#entities)), so it stays fresh,
+    # vault-correct, and cheap. Falls back to a flat 1.0 when the search is
+    # not vault-scoped (df has no grain without a vault).
+    if vault_id is not None:
+        n_units_sq = (
+            select(func.count(col(MemoryUnit.id)))
+            .where(col(MemoryUnit.vault_id) == vault_id)
+            .scalar_subquery()
+        )
+        df_sq = (
+            select(
+                col(UnitEntity.entity_id).label('eid'),
+                func.count(func.distinct(col(UnitEntity.unit_id))).label('df'),
+            )
+            .where(col(UnitEntity.vault_id) == vault_id)
+            .where(col(UnitEntity.entity_id).in_(select(ner_subq.c.id)))
+            .group_by(col(UnitEntity.entity_id))
+            .subquery(f'{cte_name}_df')
+        )
+        idf_weight = func.ln((n_units_sq + 1.0) / (func.coalesce(df_sq.c.df, 0) + 1.0)).label(
+            'weight'
+        )
+        ner_weighted = (
+            select(ner_subq.c.id.label('id'), idf_weight)
+            .select_from(ner_subq)
+            .outerjoin(df_sq, df_sq.c.eid == ner_subq.c.id)
+        )
+    else:
+        ner_weighted = select(
+            ner_subq.c.id.label('id'),
+            literal(1.0).label('weight'),
+        ).select_from(ner_subq)
 
     use_semantic = enable_semantic_seeding and query_embedding is not None and vault_id is not None
 
@@ -510,12 +582,7 @@ def build_seed_entity_cte(
             ).group_by(combined.c.id)
         ).cte(cte_name)
     else:
-        return (
-            select(
-                ner_subq.c.id.label('id'),
-                literal(1.0).label('weight'),
-            ).select_from(ner_subq)
-        ).cte(cte_name)
+        return ner_weighted.cte(cte_name)
 
 
 # ---------------------------------------------------------------------------
@@ -745,19 +812,29 @@ class TemporalStrategy:
     def get_statement(
         self, query: str, query_embedding: list[float] | None, limit: int = 60, **kwargs: Any
     ) -> Select:
-        score_col = func.extract('epoch', col(MemoryUnit.event_date))
+        # Rank by ``occurred_start`` (the real authored date), NOT
+        # ``event_date``. ``event_date`` defaults to ingest time for undated
+        # content, so a query-blind recency sort on it surfaces the whole
+        # pile of date-less units as "today" and floods the RRF vote with
+        # topically-irrelevant rows. Keying on ``occurred_start`` and
+        # excluding rows where it is NULL makes undated units *abstain* from
+        # the temporal signal rather than dominate it — only facts with a
+        # genuine authored date contribute recency evidence (matches
+        # Hindsight, which keys temporal on ``occurred_start``).
+        score_col = func.extract('epoch', col(MemoryUnit.occurred_start))
 
         statement = (
             select(MemoryUnit.id).select_from(MemoryUnit).add_columns(score_col.label('score'))
         )
 
+        statement = statement.where(col(MemoryUnit.occurred_start).isnot(None))
         statement = apply_date_filters(statement, MemoryUnit.event_date, **kwargs)
         statement = apply_vault_filters(statement, MemoryUnit.vault_id, **kwargs)
         statement = apply_generic_filters(statement, **kwargs)
         statement = apply_context_filter(statement, **kwargs)
         statement = apply_intent_risk_filter(statement, **kwargs)
 
-        return statement.order_by(desc(col(MemoryUnit.event_date))).limit(limit)
+        return statement.order_by(desc(col(MemoryUnit.occurred_start))).limit(limit)
 
 
 # ---------------------------------------------------------------------------

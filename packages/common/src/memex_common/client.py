@@ -15,7 +15,6 @@ from pydantic import BaseModel
 if TYPE_CHECKING:
     from memex_common.lint import LintProposal
 
-from memex_common.kv_utils import is_procedure_key
 from memex_common.vault_utils import resolve_vault_list
 from memex_common.vault_policy import VaultKind, VaultPolicy
 from memex_common.schemas import (
@@ -43,7 +42,6 @@ from memex_common.schemas import (
     IngestResponse,
     EntityDTO,
     KVEntryDTO,
-    KVProcedureEntryDTO,
     KVPutRequest,
     KVSearchRequest,
     LineageResponse,
@@ -59,6 +57,19 @@ from memex_common.schemas import (
     SurveyRequest,
     UnitHistoryNodeDTO,
     SurveyResponse,
+)
+from memex_common.procedural_schemas import (
+    CaseSubmitResult,
+    CaseSubmit,
+    ProceduralBriefingCards,
+    ProceduralEntryCreate,
+    ProceduralEntryDTO,
+    ProceduralEntryUpdate,
+    ProceduralSearchRequest,
+    ProceduralSearchResponse,
+    ShortLabel,
+    ProceduralEntryVersionDTO,
+    ProceduralPinDTO,
 )
 
 logger = logging.getLogger('memex.common.client')
@@ -120,10 +131,13 @@ class RemoteMemexAPI:
     async def _post(
         self,
         path: str,
-        data: BaseModel | dict[str, Any],
+        data: BaseModel | dict[str, Any] | list[Any],
         params: dict[str, Any] | None = None,
     ) -> Any:
-        payload = data.model_dump(mode='json') if isinstance(data, BaseModel) else data
+        if isinstance(data, BaseModel):
+            payload: BaseModel | dict[str, Any] | list[Any] = data.model_dump(mode='json')
+        else:
+            payload = data
         response = await self.client.post(path, json=payload, params=params)
         return await self._handle_response(response)
 
@@ -140,9 +154,14 @@ class RemoteMemexAPI:
         response = await self.client.put(path, json=payload)
         return await self._handle_response(response)
 
-    async def _patch(self, path: str, data: BaseModel | dict[str, Any]) -> Any:
+    async def _patch(
+        self,
+        path: str,
+        data: BaseModel | dict[str, Any],
+        params: dict[str, Any] | None = None,
+    ) -> Any:
         payload = data.model_dump(mode='json') if isinstance(data, BaseModel) else data
-        response = await self.client.patch(path, json=payload)
+        response = await self.client.patch(path, json=payload, params=params)
         return await self._handle_response(response)
 
     async def _head(self, path: str) -> httpx.Response:
@@ -290,11 +309,19 @@ class RemoteMemexAPI:
         vault_id: UUID,
         budget: int = 2000,
         project_id: str | None = None,
+        app: str | None = None,
     ) -> str:
-        """Generate a session briefing for a vault. Returns the briefing markdown."""
+        """Generate a session briefing for a vault. Returns the briefing markdown.
+
+        ``app`` is the consumer identity for the procedural pin chain
+        ("claude-code", "hermes:<agent_identity>") — selects the
+        app:<id> pin context layered on global + project (design §19.8).
+        """
         params: dict[str, Any] = {'budget': budget}
         if project_id is not None:
             params['project_id'] = project_id
+        if app is not None:
+            params['app'] = app
         result = await self._get(f'vaults/{vault_id}/session-briefing', params=params)
         return result['briefing']
 
@@ -1600,34 +1627,19 @@ class RemoteMemexAPI:
         self,
         key: str,
         *,
-        include_history: bool = False,
         include_vectors: bool = False,
-    ) -> KVEntryDTO | KVProcedureEntryDTO | None:
+    ) -> KVEntryDTO | None:
         """Get a KV entry by exact key. Returns None if not found.
 
-        For procedure keys (``<scope>:procedure:<verb>:<context>`` where
-        scope is one of `global`, `user`, `project:<id>`, `app:<id>`),
-        ``include_history=True`` returns a :class:`KVProcedureEntryDTO`
-        whose ``value`` field is the structured envelope
-        ({value, version, history}).
-
         ``include_vectors=True`` populates ``embedding`` with the entry's
-        stored value vector (plain entries only — procedure envelopes don't
-        carry vectors).
+        stored value vector.
         """
         params: dict[str, Any] = {
             'key': key,
-            'include_history': include_history,
             'include_vectors': include_vectors,
         }
         try:
             result = await self._get('kv/get', params=params)
-            # Procedure DTO routing: a `<scope>:procedure:<verb>:<context>`
-            # key carries an envelope dict ({value, version, history}) when
-            # `include_history=True`. Route those to KVProcedureEntryDTO.
-            if include_history and isinstance(result.get('value'), dict):
-                if is_procedure_key(key):
-                    return KVProcedureEntryDTO(**result)
             return KVEntryDTO(**result)
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
@@ -1717,6 +1729,254 @@ class RemoteMemexAPI:
             params['pattern'] = pattern
         result = await self._get('kv', params=params)
         return [KVEntryDTO(**r) for r in result]
+
+    # ------------------------------------------------------------------
+    # Procedural plane
+    #
+    # The public surface is `/procedural/*`; the engine internals
+    # (SQLModel, DTOs) still ship under the `procedural_*` prefix.
+    # ------------------------------------------------------------------
+
+    async def procedural_create(self, payload: ProceduralEntryCreate) -> ProceduralEntryDTO:
+        """Create a procedural-plane entry.
+
+        Mirrors :py:meth:`memex_core.api.MemexAPI.procedural.create` —
+        409 on identity-anchor collision.
+        """
+        result = await self._post('procedural', payload)
+        return ProceduralEntryDTO(**result)
+
+    async def procedural_get(
+        self,
+        entry_id: UUID,
+        *,
+        vault_id: UUID | None = None,
+    ) -> ProceduralEntryDTO:
+        """Fetch a single procedural-plane entry by UUID.
+
+        404 when missing or vault-mismatched. The client surfaces 404
+        as a raised ``httpx.HTTPStatusError`` (no graceful None return)
+        so callers can distinguish the miss from a valid empty body.
+        """
+        params: dict[str, Any] = {}
+        if vault_id is not None:
+            params['vault_id'] = str(vault_id)
+        result = await self._get(f'procedural/{entry_id}', params=params)
+        return ProceduralEntryDTO(**result)
+
+    async def procedural_get_by_identity(
+        self,
+        *,
+        kind: str,
+        scope: ShortLabel,
+        verb: ShortLabel | None = None,
+        context: ShortLabel | None = None,
+        vault_id: UUID | None = None,
+    ) -> ProceduralEntryDTO | None:
+        """Look up an entry by its (kind, scope, verb, context) anchor.
+
+        Returns ``None`` when the anchor is unbound — the cheap
+        "did we already learn this?" answer. The route never 404s.
+        """
+        params: dict[str, Any] = {'kind': kind, 'scope': scope}
+        if verb is not None:
+            params['verb'] = verb
+        if context is not None:
+            params['context'] = context
+        if vault_id is not None:
+            params['vault_id'] = str(vault_id)
+        result = await self._get('procedural/by-identity', params=params)
+        if result is None:
+            return None
+        return ProceduralEntryDTO(**result)
+
+    async def procedural_update(
+        self,
+        entry_id: UUID,
+        payload: ProceduralEntryUpdate,
+        *,
+        vault_id: UUID | None = None,
+    ) -> ProceduralEntryDTO:
+        """Mutate an entry in place (appends a version row)."""
+        params: dict[str, Any] = {}
+        if vault_id is not None:
+            params['vault_id'] = str(vault_id)
+        result = await self._patch(f'procedural/{entry_id}', payload, params=params)
+        return ProceduralEntryDTO(**result)
+
+    async def procedural_deprecate(
+        self,
+        entry_id: UUID,
+        *,
+        superseded_by_id: UUID | None = None,
+        vault_id: UUID | None = None,
+    ) -> ProceduralEntryDTO:
+        """Soft-deprecate an entry (status → 'deprecated')."""
+        params: dict[str, Any] = {}
+        if superseded_by_id is not None:
+            params['superseded_by_id'] = str(superseded_by_id)
+        if vault_id is not None:
+            params['vault_id'] = str(vault_id)
+        result = await self._post(f'procedural/{entry_id}/deprecate', data={}, params=params)
+        return ProceduralEntryDTO(**result)
+
+    async def procedural_upsert(self, payload: ProceduralEntryCreate) -> ProceduralEntryDTO:
+        """Idempotent write on the (kind, scope, verb, context) anchor."""
+        result = await self._post('procedural/upsert', payload)
+        return ProceduralEntryDTO(**result)
+
+    async def procedural_search(self, request: ProceduralSearchRequest) -> ProceduralSearchResponse:
+        """Hybrid BM25 + vector search (RRF-merged) on the procedural plane."""
+        result = await self._post('procedural/search', request)
+        return ProceduralSearchResponse(**result)
+
+    async def procedural_briefing_cards(
+        self,
+        context_keys: list[ShortLabel],
+        *,
+        scope: ShortLabel | None = None,
+        limit_per_context: int = 5,
+        vault_id: UUID | None = None,
+    ) -> ProceduralBriefingCards:
+        """Pin-chain briefing cards for the session-briefing surface.
+
+        The body is a JSON array of context_keys; ``scope``,
+        ``limit_per_context`` and ``vault_id`` (the multi-tenancy guard)
+        ride as query parameters.
+        """
+        params: dict[str, Any] = {'limit_per_context': limit_per_context}
+        if scope is not None:
+            params['scope'] = scope
+        if vault_id is not None:
+            params['vault_id'] = str(vault_id)
+        result = await self._post('procedural/briefing-cards', list(context_keys), params=params)
+        return ProceduralBriefingCards(**result)
+
+    async def procedural_pin(
+        self,
+        entry_id: UUID,
+        *,
+        context_key: ShortLabel,
+        position: int | None = None,
+        pinned_by: str | None = None,
+    ) -> ProceduralPinDTO:
+        """Pin an entry into a context-binding chain (§19.8).
+
+        ``position=None`` appends; the server enforces the per-context
+        cap (10) and the context-key grammar.
+        """
+        body: dict[str, Any] = {'context_key': context_key}
+        if position is not None:
+            body['position'] = position
+        if pinned_by is not None:
+            body['pinned_by'] = pinned_by
+        result = await self._post(f'procedural/{entry_id}/pin', body)
+        return ProceduralPinDTO(**result)
+
+    async def procedural_unpin(
+        self,
+        entry_id: UUID,
+        *,
+        context_key: ShortLabel,
+    ) -> int:
+        """Unpin an entry from a context. Returns pins removed (0 = no-op)."""
+        result = await self._delete(
+            f'procedural/{entry_id}/pin', params={'context_key': context_key}
+        )
+        return int(result.get('removed', 0))
+
+    async def procedural_list_pins(
+        self,
+        context_key: ShortLabel,
+        *,
+        limit: int | None = None,
+    ) -> list[ProceduralPinDTO]:
+        """Pins for one context, position ascending."""
+        params: dict[str, Any] = {'context_key': context_key}
+        if limit is not None:
+            params['limit'] = limit
+        result = await self._get('procedural/pins', params=params)
+        return [ProceduralPinDTO(**row) for row in result]
+
+    async def procedural_list_versions(
+        self,
+        entry_id: UUID,
+    ) -> list[ProceduralEntryVersionDTO]:
+        """The entry's uncapped version ledger, newest first (§18.8)."""
+        result = await self._get(f'procedural/{entry_id}/versions')
+        return [ProceduralEntryVersionDTO(**row) for row in result]
+
+    async def procedural_list(
+        self,
+        *,
+        status: str | None = None,
+        scope: ShortLabel | None = None,
+        kind: str | None = None,
+        vault_id: UUID | None = None,
+        limit: int = 50,
+    ) -> list[ProceduralEntryDTO]:
+        """List entries by lifecycle status, newest first (curation surface).
+
+        The enumeration path ``procedural_search`` cannot serve — search
+        needs query text or a pin context and returns empty otherwise.
+        Use this to list drafts awaiting confirmation (``status='draft'``).
+        """
+        params: dict[str, Any] = {'limit': limit}
+        if status is not None:
+            params['status'] = status
+        if scope is not None:
+            params['scope'] = scope
+        if kind is not None:
+            params['kind'] = kind
+        if vault_id is not None:
+            params['vault_id'] = str(vault_id)
+        result = await self._get('procedural', params=params)
+        return [ProceduralEntryDTO(**row) for row in result]
+
+    async def case_submit(self, payload: CaseSubmit) -> CaseSubmitResult:
+        """Submit a worked episode as a case (design §5.1).
+
+        The note lands in the hidden `procedural` system vault with
+        role='case'; assignment runs synchronously (explicit case_of /
+        judge auto-assign / lint escalation — see the result envelope).
+        """
+        result = await self._post('cases', payload)
+        return CaseSubmitResult(**result)
+
+    async def procedural_derive(self, *, limit: int = 10) -> dict[str, Any]:
+        """Drain pending derivation tasks (cases → procedure, procedures →
+        strategy). Returns ``{'completed': int, 'queue_ids': [...]}``."""
+        return await self._post('procedural/derive', {}, params={'limit': limit})
+
+    async def procedural_rollback(
+        self,
+        entry_id: UUID,
+        version: int,
+        *,
+        rolled_back_by: str | None = None,
+    ) -> ProceduralEntryDTO:
+        """Non-destructive rollback: snapshot re-applied as a NEW version."""
+        body: dict[str, Any] = {'version': version}
+        if rolled_back_by is not None:
+            body['rolled_back_by'] = rolled_back_by
+        result = await self._post(f'procedural/{entry_id}/rollback', body)
+        return ProceduralEntryDTO(**result)
+
+    async def procedural_report_outcome(
+        self,
+        entry_id: UUID,
+        outcome: str,
+        *,
+        vault_id: UUID | None = None,
+    ) -> ProceduralEntryDTO:
+        """Report an enactment outcome (§18.5): bump success/failure/mixed +
+        uses + last_used_at. No version row — the 'enacted, not case-worthy'
+        write path. ``outcome`` and ``vault_id`` ride as query params."""
+        params: dict[str, Any] = {'outcome': outcome}
+        if vault_id is not None:
+            params['vault_id'] = str(vault_id)
+        result = await self._post(f'procedural/{entry_id}/report', data={}, params=params)
+        return ProceduralEntryDTO(**result)
 
     # ------------------------------------------------------------------
     # ------------------------------------------------------------------

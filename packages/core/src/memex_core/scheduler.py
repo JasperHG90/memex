@@ -392,6 +392,24 @@ async def periodic_consolidation_task(api: 'MemexAPI', units_per_tick: int):
             logger.error(f'Scheduler: Consolidation failed: {e}', exc_info=True)
 
 
+async def periodic_derivation_task(api: 'MemexAPI', batch_size: int):
+    """Drain the procedural derivation queue under the leader lock (§9).
+
+    Distils cases → procedures and procedures → strategies. Each task's
+    claim/complete/fail is transactional in the repository; a poisoned row
+    is retried then failed without blocking the batch. Runs under the
+    single leader lock alongside the reflection scheduler (§9: re-derivation
+    rides the existing reflection scheduler).
+    """
+    async with background_session('bg-sched-derivation'):
+        try:
+            completed = await api.procedural.derive_pending(limit=batch_size)
+            if completed:
+                logger.info('Scheduler: derived %d procedural entry(ies).', len(completed))
+        except (OSError, RuntimeError, ValueError) as e:
+            logger.error(f'Scheduler: Derivation failed: {e}', exc_info=True)
+
+
 async def periodic_lint_llm_task(api: 'MemexAPI'):
     """Per-vault surprise-gated LLM lint under MEMEX_LEADER_LOCK_ID.
 
@@ -586,6 +604,14 @@ async def run_scheduler_with_leader_election(config: MemexConfig, api: 'MemexAPI
             await periodic_lint_llm_task(api)
     else:
         logger.info('Scheduler: Lint_llm DISABLED (enabled=False or cost_cap_per_24h=0).')
+
+    # --- Procedural derivation (cases → procedure → strategy, §9) ---
+    # Shares the leader lock with reflection (§9: re-derivation rides the
+    # existing scheduler). Fixed cadence — the queue is the source of work,
+    # so an idle queue is a cheap no-op claim.
+    @clock.task(trigger=Every(seconds=60))
+    async def run_derivation_job():
+        await periodic_derivation_task(api, 10)
 
     # --- Diagnostics ---
     @clock.task(trigger=Every(seconds=7 * 86400))

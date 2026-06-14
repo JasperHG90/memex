@@ -11,6 +11,18 @@ import pytest
 from memex_eval.recorders.mlflow_recorder import MLflowRecorder, NullRecorder, get_recorder
 
 
+@pytest.fixture(autouse=True)
+def _clear_mlflow_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    """These are hermetic unit tests; ``from_cli_options`` falls back to
+    MLFLOW_TRACKING_URI. A dev shell exporting it (the eval-against-mlflow
+    workflow) would otherwise leak a real recorder into no-URI assertions.
+    Clear the MLflow env so the tests assert intended behaviour, not shell
+    state. CI passes regardless because its env is clean."""
+    for var in ('MLFLOW_TRACKING_URI', 'MLFLOW_TRACKING_USERNAME', 'MLFLOW_TRACKING_PASSWORD'):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.delenv('MEMEX_EVAL_MLFLOW_EXPERIMENT', raising=False)
+
+
 class TestNullRecorder:
     """NullRecorder should silently absorb all calls."""
 

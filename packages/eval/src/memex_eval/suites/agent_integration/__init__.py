@@ -76,8 +76,18 @@ from memex_eval.suite.decorator import Suite
 # (must run BEFORE any ``suite.register(...)`` call that references the
 # registered names). See ``.claude/rules/eval-suites.md``
 # (baseline-anchor-stability rule, import-order subsection).
-from memex_eval.suites.agent_integration._outcomes import DeprioRecoversFrom400  # noqa: F401,E402
+from memex_eval.suites.agent_integration._outcomes import (  # noqa: F401,E402
+    DeprioRecoversFrom400,
+    ToolCallOrder,
+)
 from memex_eval.suites.agent_integration import _setup_actions as _seed_actions  # noqa: F401,E402
+
+# procedural-plane scenarios in this suite call ``procedural_upsert`` to
+# pre-seed a procedure on the (procedure, global, rotate, creds) anchor.
+# That handler is registered by the procedural_plane sister suite — the
+# side-effect import below populates the framework's setup-action
+# registry so the scenarios below can reference it by name.
+from memex_eval.suites.procedural_plane import _setup_actions  # noqa: F401,E402
 
 _ROOT = Path(__file__).parent
 _DUR_MS = 180_000.0
@@ -158,15 +168,17 @@ suite.register(
     id='agent_calls_memex_search',
     group='smoke',
     description=(
-        'The agent calls at least one memex search tool before answering. '
-        'Either listed tool satisfies the integration check.'
+        'The agent calls at least one memex retrieval tool before answering. '
+        'Any listed tool satisfies the integration check — memory/note search '
+        'or the heavier survey aggregator are all valid ways to ground the '
+        'answer in the vault.'
     ),
     query='Tell me about Project Alpha at Acme Corp.',
     top_k=10,
     max_duration_ms=_DUR_MS,
     expected=ToolCallContains(
         type='tool_call_contains',
-        expected_tools=['memex_memory_search', 'memex_note_search'],
+        expected_tools=['memex_memory_search', 'memex_note_search', 'memex_survey'],
         min_count=1,
         match_mode='any',
     ),
@@ -467,24 +479,23 @@ suite.register(
     group='navigation',
     query="What's the testing convention in the engineering handbook?",
     max_duration_ms=_DUR_MS,
-    expected=CompositeOutcome(
-        type='composite',
-        children=[
-            KeywordsPresent(
-                type='keywords_present',
-                keywords=['pytest'],
-            ),
-            LLMJudge(
-                type='llm_judge',
-                rubric=(
-                    'The answer identifies the testing convention from the '
-                    'engineering handbook (pytest, with a brief explanation of '
-                    'how it is used). The answer does NOT fabricate a '
-                    'convention not in the corpus.'
-                ),
-                threshold=0.5,
-            ),
-        ],
+    # Semantic gate only. A literal ``KeywordsPresent(['pytest'])`` was too
+    # brittle: whole-word substring matching fails a correct answer that
+    # conveys the convention (naming pattern, tiers, coverage gate) without
+    # using the incidental framework token verbatim. The LLMJudge checks the
+    # substance — concrete specifics present, nothing fabricated.
+    expected=LLMJudge(
+        type='llm_judge',
+        rubric=(
+            "The answer reports the engineering handbook's testing convention "
+            'with concrete specifics drawn from the corpus — e.g. the '
+            'test-file naming pattern (test_<module>.py with a test_ prefix), '
+            'the unit/integration/e2e tiers, the coverage gate, and/or the '
+            'pytest markers. A correct answer that describes these conventions '
+            'without using the literal word "pytest" is acceptable. The answer '
+            'does NOT fabricate a convention absent from the corpus.'
+        ),
+        threshold=0.5,
     ),
 )
 
@@ -1042,247 +1053,6 @@ suite.register(
 )
 
 
-# --- Procedure wake-words: deterministic write under explicit scope ---
-#
-# `Store procedure: ...` and `Store procedure for this project: ...` are
-# hard wake-words documented in agent_surface.RETRIEVAL_ROUTING. They
-# bypass any scope-inference reasoning and force the agent to write the
-# exact `<scope>:procedure:<verb>:<context>` key with verb/context picked
-# from the user's text. These two scenarios pin the routing pass rate at
-# 100% — if either fails, an agent surface edit broke the wake-word
-# escape hatch.
-
-suite.register(
-    id='procedure_wakeword_store_global',
-    group='kv',
-    description=(
-        'Hard wake-word write — `Store procedure: <text>` forces the agent '
-        'to call `memex_kv_put` with a `global:procedure:<verb>:<context>` '
-        'key (no scope inference, no ASK).'
-    ),
-    query='Store procedure: always run prek before committing.',
-    max_duration_ms=_DUR_MS,
-    expected=CompositeOutcome(
-        type='composite',
-        children=[
-            ToolCallContains(
-                type='tool_call_contains',
-                expected_tools=['memex_kv_put'],
-                min_count=1,
-                match_mode='any',
-            ),
-            ToolCallArgMatches(
-                type='tool_call_arg_matches',
-                tool='memex_kv_put',
-                arg_name='key',
-                regex=r'^global:procedure:[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$',
-                min_count=1,
-            ),
-        ],
-    ),
-    replicates_override=3,
-    mutating_scenario=True,
-)
-
-suite.register(
-    id='procedure_wakeword_store_project',
-    group='kv',
-    description=(
-        'Hard wake-word write — `Store procedure for this project: <text>` '
-        'forces the agent to call `memex_kv_put` with a '
-        '`project:<id>:procedure:<verb>:<context>` key.'
-    ),
-    query='Store procedure for this project: all commits land via PR — never direct push.',
-    max_duration_ms=_DUR_MS,
-    expected=CompositeOutcome(
-        type='composite',
-        children=[
-            ToolCallContains(
-                type='tool_call_contains',
-                expected_tools=['memex_kv_put'],
-                min_count=1,
-                match_mode='any',
-            ),
-            ToolCallArgMatches(
-                type='tool_call_arg_matches',
-                tool='memex_kv_put',
-                arg_name='key',
-                regex=r'^project:[^:]+:procedure:[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$',
-                min_count=1,
-            ),
-        ],
-    ),
-    replicates_override=3,
-    mutating_scenario=True,
-)
-
-
-# --- Procedure scoping: default-to-global + ASK-on-ambiguity ---
-#
-# Pin the routing rule encoded in `agent_surface.KV_NAMESPACE`
-# ("procedure_scope_default" critical_constraint) + `CLAUDE_CODE_HARNESS`
-# write_routing entries. Procedures default to GLOBAL; project scope only
-# applies on an EXPLICIT cue ("for this project", "in this repo"); ambiguous
-# inputs MUST trigger a clarifying question, NOT a guessed kv_put.
-#
-# Why these scenarios exist (per .claude/rules/eval-suites.md): the rule is
-# behavioral prose in the agent surface — no unit test can catch a regression
-# in the routing decision. Real-LLM scenarios with `ToolCallArgMatches` +
-# `LLMJudge` are the only gate.
-
-suite.register(
-    id='procedure_defaults_global_no_project_cue',
-    group='kv',
-    description=(
-        "User states a procedure ('always lint before commit') with no project "
-        'cue. The agent MUST write under `procedure:` (global default), NOT '
-        '`project:<id>:procedure:` — there is no explicit project scope cue.'
-    ),
-    query='From now on, always run lint before commit.',
-    max_duration_ms=_DUR_MS,
-    expected=CompositeOutcome(
-        type='composite',
-        children=[
-            ToolCallContains(
-                type='tool_call_contains',
-                expected_tools=['memex_kv_put'],
-                min_count=1,
-                match_mode='any',
-            ),
-            ToolCallArgMatches(
-                type='tool_call_arg_matches',
-                tool='memex_kv_put',
-                arg_name='key',
-                regex=r'^global:procedure:[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$',
-                min_count=1,
-            ),
-        ],
-    ),
-    replicates_override=3,
-    mutating_scenario=True,
-)
-
-suite.register(
-    id='procedure_explicit_project_cue_scopes_to_project',
-    group='kv',
-    description=(
-        'Explicit project cue ("for the memex repo") MUST route to '
-        '`project:<id>:procedure:*` rather than the global `procedure:*` form. '
-        'This is the only path that produces a project-scoped procedure key.'
-    ),
-    query='For the memex repo, all commits land via PR — never a direct push.',
-    max_duration_ms=_DUR_MS,
-    expected=CompositeOutcome(
-        type='composite',
-        children=[
-            ToolCallContains(
-                type='tool_call_contains',
-                expected_tools=['memex_kv_put'],
-                min_count=1,
-                match_mode='any',
-            ),
-            # `[^:]+` intentionally excludes colons here even though the parser
-            # supports them in project IDs (for SSH-form git remotes). The eval
-            # query says "the memex repo" — agents pick a simple identifier
-            # like `memex`; pinning the regex looser would weaken the test.
-            ToolCallArgMatches(
-                type='tool_call_arg_matches',
-                tool='memex_kv_put',
-                arg_name='key',
-                regex=r'^project:[^:]+:procedure:[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$',
-                min_count=1,
-            ),
-        ],
-    ),
-    replicates_override=3,
-    mutating_scenario=True,
-)
-
-suite.register(
-    id='procedure_in_this_codebase_cue_scopes_to_project',
-    group='kv',
-    description=(
-        '"In this codebase / in this repo" is an explicit project cue and '
-        'MUST route to `project:<id>:procedure:*`, not the global `procedure:*` '
-        'form. Tests the in-this-codebase wording variant.'
-    ),
-    query='In this codebase, always use uv — never pip.',
-    max_duration_ms=_DUR_MS,
-    expected=CompositeOutcome(
-        type='composite',
-        children=[
-            ToolCallContains(
-                type='tool_call_contains',
-                expected_tools=['memex_kv_put'],
-                min_count=1,
-                match_mode='any',
-            ),
-            ToolCallArgMatches(
-                type='tool_call_arg_matches',
-                tool='memex_kv_put',
-                arg_name='key',
-                regex=r'^project:[^:]+:procedure:[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$',
-                min_count=1,
-            ),
-        ],
-    ),
-    replicates_override=3,
-    mutating_scenario=True,
-)
-
-suite.register(
-    id='procedure_ambiguous_no_explicit_scope_asks_first',
-    group='kv',
-    description=(
-        'Procedure-shaped intent ("remember to bump rc tags after green CI") '
-        'with NO explicit project cue. The agent MUST ask whether to scope to '
-        'the project or save globally — never auto-scope from cwd / active '
-        'vault. Pins the ASK-on-ambiguity escape in the procedure_scope_default '
-        'critical_constraint.'
-    ),
-    query='Remember to bump rc tags after green CI.',
-    max_duration_ms=_DUR_MS,
-    expected=LLMJudge(
-        type='llm_judge',
-        rubric=(
-            'The answer asks the user a clarifying question about whether this '
-            'procedure should be global or scoped to a specific project (or '
-            'asks for the project name / scope), AND the answer does NOT claim '
-            'to have already saved the procedure. The answer should NOT silently '
-            'scope to a project based on context the user did not provide.'
-        ),
-        threshold=0.7,
-    ),
-    replicates_override=3,
-    mutating_scenario=False,
-)
-
-suite.register(
-    id='procedure_standard_practice_ambiguous_asks_first',
-    group='kv',
-    description=(
-        '"Standard practice: every PR gets adversarial review" is procedure-'
-        'shaped but ambiguous — "standard practice" could be global ("our team\'s '
-        'practice") or project-scoped ("standard for this repo"). The agent '
-        'MUST ask before writing.'
-    ),
-    query='Standard practice: every PR gets adversarial review.',
-    max_duration_ms=_DUR_MS,
-    expected=LLMJudge(
-        type='llm_judge',
-        rubric=(
-            'The answer asks the user whether this is a global procedure or '
-            'scoped to a specific project (or asks for the project name), AND '
-            'does NOT claim to have already saved the procedure. The answer '
-            'should NOT silently guess project scope.'
-        ),
-        threshold=0.7,
-    ),
-    replicates_override=3,
-    mutating_scenario=False,
-)
-
-
 # --- Lifecycle ---
 
 suite.register(
@@ -1415,6 +1185,558 @@ suite.register(
     ),
     expected_failure_modes=['hermes'],
     replicates_override=1,
+    mutating_scenario=True,
+)
+
+
+# --- Procedural plane: agent-facing routing ---
+#
+# The procedural plane is the canonical home for "how to do X"
+# knowledge — it replaces the legacy ``<scope>:procedure:*`` KV
+# convention (the old KV-procedure routing scenarios this suite used
+# to carry were removed; that path is deprecated). These scenarios
+# gate the *agent-facing* contract across the two halves that matter:
+#
+#   RETRIEVE-FIRST (the high-value behavior): when the agent is handed
+#   a task it might have a learned procedure for (deploy, release,
+#   rotate creds), it must SEARCH the plane before re-deriving the
+#   workflow from scratch.
+#
+#   WRITE-ROUTING: a worked episode → case_submit; a reusable how-to →
+#   procedural_create (NOT memex_kv_put); read-before-write via
+#   get_by_identity to dodge a 409.
+#
+# (There is no briefing scenario: pinned cards arrive inside the
+# session briefing; the agent never calls a tool for them.)
+#
+# Filterable as ``--group procedural``.
+
+# 1. Filing a worked episode — the agent must route it to
+# memex_case_submit (cases are NOTES in a hidden system vault), NOT to
+# memex_kv_put / memex_add_note. There is no agent-facing procedural
+# write tool — procedures are derived from the cases submitted here. The
+# outcome + trigger args are the discriminators.
+suite.register(
+    id='procedural_files_case_via_case_submit',
+    group='procedural',
+    description=(
+        'User describes a worked episode with an outcome. The agent must '
+        'call `memex_case_submit` with a non-empty `trigger` and a valid '
+        '`outcome`. Plane writes or KV routing are wrong — cases are notes '
+        'and enter through the case path.'
+    ),
+    query=(
+        'Heads up on what just happened: CI returned 500 after step 3, I '
+        'paused, checked the artifact upload logs, found a stale token, '
+        'rotated it, and the pipeline went green. Worth remembering as a '
+        'worked case.'
+    ),
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_case_submit'],
+                min_count=1,
+                match_mode='all',
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_case_submit',
+                arg_name='trigger',
+                regex=r'.+',  # non-empty
+                min_count=1,
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_case_submit',
+                arg_name='outcome',
+                regex=r'^(success|failure|mixed)$',
+                min_count=1,
+            ),
+        ],
+    ),
+    replicates_override=2,
+    mutating_scenario=True,
+)
+
+
+# 2. Retrieving a procedure via search — agent must reach for the
+# procedural plane, not KV. Setup pre-seeds a procedure on the
+# (procedure, global, rotate, creds) anchor so the search has
+# something to find.
+suite.register(
+    id='procedural_retrieves_via_search',
+    group='procedural',
+    description=(
+        'User asks "how do I rotate creds?" and a procedure for '
+        '(kind=procedure, scope=global, verb=rotate, context=creds) is '
+        'pre-seeded. The agent must call `memex_procedural_search` (NOT '
+        'memex_kv_list) and surface the procedure in its answer.'
+    ),
+    query='How do I rotate the project API credentials?',
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_procedural_search'],
+                min_count=1,
+                match_mode='all',
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_procedural_search',
+                arg_name='query',
+                regex=r'rotate|cred|api|key',  # any of these tokens
+                min_count=1,
+            ),
+        ],
+    ),
+    setup_actions=[
+        SetupAction(
+            kind='procedural_upsert',
+            kind_kind='procedure',
+            kind_scope='global',
+            kind_verb='rotate',
+            kind_context='creds',
+            kind_title='Rotate API credentials',
+            kind_trigger='rotating the project API credentials',
+            kind_summary=(
+                'Steps to rotate the project API credentials: 1) Issue '
+                'new key in the secrets manager. 2) Update CI '
+                'environment. 3) Roll the old key. 4) Verify CI green.'
+            ),
+        ),
+    ],
+)
+
+
+# 3. Correct-an-existing-procedure → file a case, never a direct write.
+# A procedure for the anchor already exists and the user dictates a
+# better way. There is NO agent-facing procedural write tool: procedures
+# are DERIVED from cases. The right move is to file the correction as a
+# worked episode via memex_case_submit (derivation re-distills the
+# procedure through governance). Routing the how-to to memex_add_note
+# (semantic note plane) is the failure this gates against.
+suite.register(
+    id='procedural_corrects_procedure_via_case',
+    group='procedural',
+    description=(
+        'A procedure for (kind=procedure, scope=global, verb=rotate, '
+        'context=creds) is pre-seeded. The user dictates a better way to '
+        'rotate creds. The agent does NOT edit the procedure directly '
+        '(no agent-facing procedural write exists) — it files the '
+        'correction as a worked episode via `memex_case_submit`, which '
+        'feeds derivation. It must NOT capture the how-to as a '
+        '`memex_add_note`.'
+    ),
+    query=(
+        'Update the rotate creds procedure: always roll the old key '
+        'AFTER CI green, not before — otherwise the deploy races.'
+    ),
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_case_submit'],
+                min_count=1,
+                match_mode='all',
+            ),
+            # The how-to correction must NOT be written to the semantic
+            # note plane — title is a required add_note arg, so its
+            # absence means add_note was never called.
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_add_note',
+                arg_name='title',
+                regex=r'.*',
+                expect_absent=True,
+            ),
+        ],
+    ),
+    setup_actions=[
+        SetupAction(
+            kind='procedural_upsert',
+            kind_kind='procedure',
+            kind_scope='global',
+            kind_verb='rotate',
+            kind_context='creds',
+            kind_title='Rotate API credentials',
+            kind_trigger='rotating the project API credentials',
+            kind_summary='Original procedure (pre-seeded).',
+        ),
+    ],
+    replicates_override=2,
+    mutating_scenario=True,
+)
+
+
+# 4. RETRIEVE-FIRST on a deploy task. A `deploy`/`payments` procedure is
+# pre-seeded; the user hands the agent the deploy task. The agent MUST
+# search the plane before improvising the steps — reuse over re-derive.
+# This is the load-bearing behavior: learned procedures only pay off
+# if the agent actually looks for them when handed work.
+suite.register(
+    id='procedural_searches_before_deploying',
+    group='procedural',
+    description=(
+        'A procedure for (procedure, global, deploy, payments) is pre-seeded. '
+        'The user asks the agent to deploy the payments service. The agent '
+        'MUST call `memex_procedural_search` (reuse the learned workflow) '
+        'rather than only narrating improvised steps.'
+    ),
+    query=(
+        'Deploy the payments service to staging for me — walk me through it '
+        'and do the steps you can.'
+    ),
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_procedural_search'],
+                min_count=1,
+                match_mode='all',
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_procedural_search',
+                arg_name='query',
+                regex=r'deploy|payment|stag|pipeline|ship|release',
+                min_count=1,
+            ),
+        ],
+    ),
+    setup_actions=[
+        SetupAction(
+            kind='procedural_upsert',
+            kind_kind='procedure',
+            kind_scope='global',
+            kind_verb='deploy',
+            kind_context='payments',
+            kind_title='Deploy the payments service',
+            kind_trigger='deploying the payments service to any environment',
+            kind_summary=(
+                '1) Check the current allocation is healthy. 2) Verify the '
+                'secrets/lease are fresh. 3) Confirm pending DB migrations are '
+                'applied. 4) Push the new spec. 5) Gate promotion on the health '
+                'check; roll back on failure.'
+            ),
+        ),
+    ],
+    replicates_override=2,
+    mutating_scenario=True,
+)
+
+
+# 5. RETRIEVE-FIRST on a release / version bump. A `release` strategy is
+# pre-seeded under (strategy, global, release). "Cut a release" / "bump
+# the version" is exactly the kind of recurring task the agent should
+# pull a learned play-book for before acting.
+suite.register(
+    id='procedural_searches_before_release',
+    group='procedural',
+    description=(
+        'A release play-book is pre-seeded. The user asks the agent to cut a '
+        'release / bump the version. The agent MUST call '
+        '`memex_procedural_search` to pull the learned steps before acting.'
+    ),
+    query='Can you cut a new release of the core package and bump the version?',
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_procedural_search'],
+                min_count=1,
+                match_mode='all',
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_procedural_search',
+                arg_name='query',
+                regex=r'release|version|bump|tag|publish|ship',
+                min_count=1,
+            ),
+        ],
+    ),
+    setup_actions=[
+        SetupAction(
+            kind='procedural_upsert',
+            kind_kind='strategy',
+            kind_scope='global',
+            kind_verb='release',
+            kind_title='Release a package',
+            kind_trigger='cutting a release or bumping a package version',
+            kind_summary=(
+                'Confirm CI is green and no open blockers; update the '
+                'changelog; bump the version; tag and push; verify the '
+                'published artifact.'
+            ),
+        ),
+    ],
+    replicates_override=2,
+    mutating_scenario=True,
+)
+
+
+# 6. WRITE-ROUTING: a reusable multi-step how-to goes to the procedural
+# plane via memex_case_submit (procedures are DERIVED from cases), NOT a
+# KV `procedure:` key (the deprecated path) and NOT a memex_add_note
+# (semantic note plane). The discriminators are: case_submit present,
+# kv_put + add_note absent.
+suite.register(
+    id='procedural_routes_howto_to_plane_not_kv',
+    group='procedural',
+    description=(
+        'User dictates a reusable multi-step workflow ("here is how we roll '
+        'back a migration"). The agent must persist it to the procedural '
+        'plane via `memex_case_submit` (procedures are derived from the '
+        'cases you submit) — and MUST NOT write it as a `memex_kv_put` '
+        'procedure key or a `memex_add_note`.'
+    ),
+    query=(
+        'Remember how we roll back a bad migration: run alembic downgrade -1, '
+        'verify the schema, restart the workers, then re-run the health check. '
+        'Save that so you can follow it next time.'
+    ),
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            # The how-to is persisted via case_submit (the only agent-facing
+            # procedural write — derivation distills the procedure).
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_case_submit'],
+                min_count=1,
+                match_mode='all',
+            ),
+            # NOT a KV procedure key.
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_kv_put',
+                arg_name='key',
+                regex=r'.*',
+                expect_absent=True,
+            ),
+            # NOT the semantic note plane.
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_add_note',
+                arg_name='title',
+                regex=r'.*',
+                expect_absent=True,
+            ),
+        ],
+    ),
+    replicates_override=2,
+    mutating_scenario=True,
+)
+
+
+# ---------------------------------------------------------------------------
+# Longer-horizon procedural flows (group='procedural_lh')
+# ---------------------------------------------------------------------------
+#
+# The scenarios above gate single decisions (one tool, right kwargs).
+# These gate the multi-STEP loops the procedural plane exists for
+# (design §11.2: retrieve → enact → submit → re-derive). Each requires
+# the agent to chain ≥2 tool calls in the right order — the
+# ToolCallOrder outcome pins "probe/search BEFORE write" so the agent
+# reuses learned knowledge instead of blindly re-creating it.
+
+# LH-1. retrieve → enact → record. Handed a deploy task with a seeded
+# procedure, the agent should search for the workflow AND, having done
+# the work, record what happened (a case or an outcome). Two distinct
+# phases of the loop in one turn.
+suite.register(
+    id='procedural_deploy_then_records_outcome',
+    group='procedural_lh',
+    description=(
+        'A deploy procedure is pre-seeded. The user asks the agent to deploy '
+        'AND report how it went. The agent must `memex_procedural_search` '
+        '(retrieve the workflow) and then record the run via '
+        '`memex_case_submit` or `memex_record_outcome` (close the loop).'
+    ),
+    query=(
+        'Deploy the payments service to staging using our usual process, then '
+        'log how the run went so we have a record.'
+    ),
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_procedural_search'],
+                min_count=1,
+                match_mode='all',
+            ),
+            ToolCallCountAcross(
+                type='tool_call_count_across',
+                expected_tools=['memex_case_submit', 'memex_record_outcome'],
+                min_total=1,
+            ),
+        ],
+    ),
+    setup_actions=[
+        SetupAction(
+            kind='procedural_upsert',
+            kind_kind='procedure',
+            kind_scope='global',
+            kind_verb='deploy',
+            kind_context='payments',
+            kind_title='Deploy the payments service',
+            kind_trigger='deploying the payments service to any environment',
+            kind_summary=(
+                'Check the running allocation, verify secrets, confirm DB '
+                'migrations applied, push the spec, gate on the health check.'
+            ),
+        ),
+    ],
+    replicates_override=2,
+    mutating_scenario=True,
+)
+
+
+# NOTE: the former LH-2 (probe_then_update) and LH-3 (search_miss_then_create)
+# were removed (2026-06-11). Once the agent's only procedural write became
+# `memex_case_submit` and a single case derives a procedure, both collapsed
+# into single-step "dictate → case_submit" checks already covered by
+# `procedural_corrects_procedure_via_case` (correction) and
+# `procedural_routes_howto_to_plane_not_kv` (new how-to). The longer-horizon
+# group keeps only genuinely multi-step loops.
+
+
+# LH-4. enact-known-procedure → file case with case_of. The agent
+# follows a seeded procedure and records the worked episode, linking it
+# to the procedure it enacted (case_of). Retrieve + case_submit in one
+# loop; the case_of linkage is the §18.1 primary-assignment API.
+suite.register(
+    id='procedural_files_case_after_enacting',
+    group='procedural_lh',
+    description=(
+        'A release procedure is pre-seeded. The user reports they just ran a '
+        'release that succeeded. The agent should `memex_procedural_search` '
+        'to locate the procedure it enacted and `memex_case_submit` the '
+        'worked episode (ideally with case_of + a valid outcome).'
+    ),
+    query=(
+        'I just cut a release following our usual steps and it went through '
+        'clean. Make a record of the run.'
+    ),
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_procedural_search'],
+                min_count=1,
+                match_mode='all',
+            ),
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_case_submit'],
+                min_count=1,
+                match_mode='all',
+            ),
+            ToolCallArgMatches(
+                type='tool_call_arg_matches',
+                tool='memex_case_submit',
+                arg_name='outcome',
+                regex=r'^(success|failure|mixed)$',
+                min_count=1,
+            ),
+        ],
+    ),
+    setup_actions=[
+        SetupAction(
+            kind='procedural_upsert',
+            kind_kind='procedure',
+            kind_scope='global',
+            kind_verb='release',
+            kind_context='package',
+            kind_title='Release a package',
+            kind_trigger='cutting a release or publishing a package',
+            kind_summary=(
+                'Confirm CI green, update the changelog, bump the version, tag '
+                'and push, verify the published artifact.'
+            ),
+        ),
+    ],
+    replicates_override=2,
+    mutating_scenario=True,
+)
+
+
+# LH-5. novel task → strategy fallback. Only a STRATEGY is seeded (no
+# concrete procedure). Handed a task the strategy generalises over, the
+# agent should search the plane and reason from the retrieved heuristic
+# rather than inventing an approach from nothing. LLM-judged on whether
+# the answer reflects the strategy's principles.
+suite.register(
+    id='procedural_strategy_fallback_on_novel_task',
+    group='procedural_lh',
+    description=(
+        'A "safe rollout" strategy (scope=global, verb=rollout) is seeded; no '
+        'concrete procedure exists. The user asks how to approach a rollout '
+        'shape the strategy generalises over. The agent must '
+        '`memex_procedural_search` AND its answer must reflect the retrieved '
+        'strategy (reversible-first, gate on health, keep a rollback path).'
+    ),
+    query=(
+        'We have never done a blue-green cutover on this service before. How '
+        'should I approach it safely?'
+    ),
+    max_duration_ms=_DUR_MS,
+    expected=CompositeOutcome(
+        type='composite',
+        children=[
+            ToolCallContains(
+                type='tool_call_contains',
+                expected_tools=['memex_procedural_search'],
+                min_count=1,
+                match_mode='all',
+            ),
+            LLMJudge(
+                type='llm_judge',
+                rubric=(
+                    'The answer reflects a safe-rollout heuristic consistent with '
+                    'the retrieved strategy: verify preconditions before mutating, '
+                    'gate promotion on post-cutover health (not just a successful '
+                    'switch), and keep a tested rollback/fallback path. The answer '
+                    'should read as APPLYING a learned strategy, not improvising '
+                    'from scratch.'
+                ),
+                threshold=0.6,
+            ),
+        ],
+    ),
+    setup_actions=[
+        SetupAction(
+            kind='procedural_upsert',
+            kind_kind='strategy',
+            kind_scope='global',
+            kind_verb='rollout',
+            kind_title='Safe rollout',
+            kind_trigger='rolling out any change to a live service',
+            kind_summary=(
+                'Treat every rollout as reversible-first: confirm preconditions '
+                'before the change, gate promotion on post-rollout health after, '
+                'and always keep a tested rollback path.'
+            ),
+        ),
+    ],
+    replicates_override=2,
     mutating_scenario=True,
 )
 

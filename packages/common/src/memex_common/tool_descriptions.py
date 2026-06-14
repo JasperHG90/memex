@@ -32,58 +32,48 @@ from __future__ import annotations
 # ---------------------------------------------------------------------------
 
 MEMEX_RECORD_OUTCOME_DESC = (
-    'Record how previously retrieved memory units contributed to the outcome.\n'
+    'Call when the user confirms an EXISTING memory held or failed — "that '
+    'worked", "it\'s holding", "stop suggesting that". Search for the unit(s), '
+    'then stamp them. NOT for new insights: a fresh durable claim is a '
+    'memex_add_note, not an outcome on a known one.\n'
     '\n'
-    'Shape: units=[{unit_id: UUID, verb: "helpful"|"not_helpful"|"not_used", '
-    'reason: str|null}].\n'
-    'Required: `reason` for helpful and not_helpful; optional for not_used.\n'
-    'Invalid: bare `success=True` (or any bare flag) without `units`. Server '
-    'returns HTTP 400.\n'
+    'Required: units=[{unit_id: UUID, verb: "helpful"|"not_helpful"|"not_used", '
+    'reason: str|null}]; reason is required for helpful/not_helpful, optional '
+    'for not_used.\n'
+    'HTTP 400: bare `success=True` (or any bare flag) without `units`.\n'
     '\n'
-    "When to call: the user signals an existing-memory fix held or didn't — "
-    '"that worked", "it\'s holding", "record that as a successful resolution", '
-    '"stop suggesting that". Search for the relevant unit(s), then stamp them. '
-    'Do NOT capture confirmations as new notes — paired-write on existing '
-    'units. Add a fresh memex_add_note only when the user is recording a new '
-    'durable insight, not confirming a known one.\n'
-    '\n'
-    '<example>User: "The JWT rotation change we landed last sprint — it\'s '
-    'been clean." WRONG: search returns the rotation-decision unit u1 → call '
-    'memex_add_note(title="JWT rotation confirmed working"). RIGHT: same '
-    'search → memex_record_outcome(units=[{unit_id:u1, verb:"helpful", '
-    'reason:"new cadence held 30 days"}]).</example>'
+    '<example>User: "The JWT rotation we landed last sprint has been clean." '
+    'WRONG: memex_add_note(title="JWT rotation confirmed working"). RIGHT: '
+    'memex_record_outcome(units=[{unit_id:u1, verb:"helpful", reason:"new '
+    'cadence held 30 days"}]).</example>'
 )
 
 
 MEMEX_MEMORY_DEPRIORITIZE_DESC = (
-    "Lower a memory unit's retrieval rank without deleting it (NON-DESTRUCTIVE).\n"
+    "Call to lower a memory unit's retrieval rank when it is misleading, "
+    'outdated, or noise contaminating results — without deleting it '
+    '(NON-DESTRUCTIVE). Prefer this over archive (CLI-only, destructive) '
+    'unless the unit must leave the entity graph entirely.\n'
     '\n'
-    'Use when a memory is misleading, outdated, or noise contaminating retrieval.\n'
     'Required: unit_id (UUID), reason (free text, logged to maintenance ledger).\n'
+    'Reversible via memex_memory_restore.\n'
     '\n'
     'Pair with memex_record_outcome(units=[{verb:"not_helpful", reason}]) when '
-    'the user signals the memory was wrong — different axes (record_outcome = '
-    'append-only MW counter; deprioritize = binary surface state). Reversible '
-    'via memex_memory_restore.\n'
+    'the user says the memory was wrong — different axes (record_outcome = '
+    'append-only MW counter; deprioritize = binary surface state).\n'
     '\n'
-    'Observations are read-only projections of memory units. Passing an '
-    'observation UUID (`unit_metadata.virtual: true`) returns HTTP 400 with '
-    'body `{source_memory_units: [...]}` — re-issue against one of the listed '
-    'MU IDs to deprioritize the underlying fact. Observations are refreshed '
-    'asynchronously on the surviving evidence (typically within seconds; rely '
-    'on the next search to see the update).\n'
-    '\n'
-    'Contrast with archive (CLI-only, destructive) — prefer deprioritize unless '
-    'the unit must leave the entity graph entirely.'
+    'Observation UUIDs (`unit_metadata.virtual: true`) → HTTP 400 with body '
+    '`{source_memory_units: [...]}`; re-issue against a listed MU ID to '
+    'deprioritize the underlying fact. Observations refresh asynchronously on '
+    'the surviving evidence — rely on the next search to see the update.'
 )
 
 
 MEMEX_MEMORY_RESTORE_DESC = (
-    'Restore a previously-deprioritized memory unit (flip `is_deprioritized` to '
-    'false). The unit re-enters default-scope retrieval. Writes an audit_logs row.\n'
+    'Call to undo memex_memory_deprioritize: flip `is_deprioritized` to false '
+    'so the unit re-enters default-scope retrieval. Writes an audit_logs row.\n'
     '\n'
-    'Required: unit_id (UUID).\n'
-    'Companion to memex_memory_deprioritize.'
+    'Required: unit_id (UUID).'
 )
 
 
@@ -92,64 +82,49 @@ MEMEX_MEMORY_RESTORE_DESC = (
 # ---------------------------------------------------------------------------
 
 MEMEX_MEMORY_SUMMARIZE_NODE_DESC = (
-    'Trigger reflection SYNCHRONOUSLY on a specific entity or note set — the '
-    'synchronous counterpart to the background reflect loop.\n'
+    'Call to trigger reflection SYNCHRONOUSLY when retrieved facts about a '
+    'topic conflict, are incomplete, or are scattered and you need a coherent '
+    'mental model before continuing — the synchronous counterpart to the '
+    'background reflect loop. Use sparingly (LLM-intensive); default to '
+    'background reflection unless you have an in-session reason to run now.\n'
     '\n'
-    'Use when retrieved facts about a topic conflict, are incomplete, or are '
-    'scattered, and you want Memex to consolidate them into a coherent mental '
-    'model before continuing.\n'
-    '\n'
-    'Params: entity_id (focus on one entity — preferred) OR note_ids (focus on a '
-    'specific set). scope="incremental" (default — only new evidence) or "full" '
-    '(re-evaluate all, capped at 1000 units).\n'
-    '\n'
+    'Params: entity_id (one entity — preferred) OR note_ids (a specific set). '
+    'scope="incremental" (default — only new evidence) or "full" (re-evaluate '
+    'all, capped at 1000 units).\n'
     'Returns: ReflectionResult with updated/new MentalModel(s).\n'
     '\n'
-    'Rate-limited per (entity, vault). On rejection the response carries '
-    '`retry_after_seconds` — honor it rather than retry-looping.\n'
-    '\n'
-    "Error envelopes: rate-limit returns {error:'rate_limit_exceeded', "
-    'retry_after_seconds}. Concurrent-refresh returns {error:'
-    "'reflection_abandoned', retry_after_seconds, hint} — the fresh "
-    'model is already persisted by another worker; prefer re-reading '
-    'via memex_get_entity or memex_memory_search rather than retrying.\n'
-    '\n'
-    'Use sparingly: reflection is LLM-intensive. Default to background reflection '
-    'unless you have a specific in-session reason to trigger now.'
+    'Rate-limited per (entity, vault). Error envelopes carry retry_after_seconds '
+    "— honor it, do not retry-loop. {error:'rate_limit_exceeded', "
+    "retry_after_seconds}; {error:'reflection_abandoned', retry_after_seconds, "
+    'hint} means another worker already persisted the fresh model — re-read via '
+    'memex_get_entity or memex_memory_search instead of retrying.'
 )
 
 
 MEMEX_MEMORY_RECONSOLIDATE_DESC = (
-    'Reconsolidate a single entity: re-run contradiction detection across its '
-    'memory units and refresh its mental model. Entity-scoped operation.\n'
+    'Call on CONCRETE contradiction signals for ONE entity (e.g. two memory '
+    'units about Project X with opposite claims), or after ingesting a note '
+    'that supersedes earlier claims: re-runs contradiction detection across its '
+    'units and refreshes its mental model. Entity-scoped.\n'
     '\n'
-    'Use when you observe concrete contradiction signals on the entity '
-    '(e.g. two memory units about Project X with opposite claims), or after '
-    'ingesting a note that supersedes earlier claims.\n'
+    'NOT for periodic maintenance — use memex_memory_consolidate (vault-scoped: '
+    'batch-deprioritizes low-MW + stale units, writes the maintenance ledger).\n'
     '\n'
     'Required: entity_id, vault_id.\n'
     '\n'
-    'Contrast with memex_memory_consolidate which is vault-scoped (batch '
-    'deprioritizes low-MW + stale units, writes maintenance ledger). Use '
-    '`reconsolidate` on concrete contradiction signals; use `consolidate` for '
-    'periodic vault-wide maintenance.\n'
-    '\n'
-    'Returns ``abandoned: true`` when a concurrent worker refreshed the mental '
-    'model between read and write; the fresh state is already persisted — '
-    'prefer re-reading via memex_get_entity / memex_memory_search rather '
-    'than retrying reconsolidate.'
+    'Returns ``abandoned: true`` when a concurrent worker refreshed the model '
+    'between read and write — the fresh state is already persisted; re-read via '
+    'memex_get_entity / memex_memory_search instead of retrying.'
 )
 
 
 MEMEX_MEMORY_CONSOLIDATE_DESC = (
-    'Run vault-wide memory consolidation: batch-deprioritize low-MW + stale '
-    'units, write a maintenance ledger entry.\n'
-    '\n'
-    'Use for periodic vault maintenance, not for in-session conflict resolution '
-    '(see memex_memory_reconsolidate for entity-scoped contradiction handling).\n'
+    'Call for periodic vault-wide maintenance: batch-deprioritize low-MW + '
+    'stale units, write a maintenance ledger entry. NOT for in-session conflict '
+    'resolution — use memex_memory_reconsolidate (entity-scoped contradiction '
+    'handling).\n'
     '\n'
     'Required: vault_id. Optional: dry_run=true to preview without applying.\n'
-    '\n'
     'Rate-limited; honor `retry_after_seconds` on the response if rejected.'
 )
 
@@ -159,70 +134,127 @@ MEMEX_MEMORY_CONSOLIDATE_DESC = (
 # ---------------------------------------------------------------------------
 
 MEMEX_KV_PUT_DESC = (
-    'Put a namespaced operational pointer into KV — preference, project '
-    'binding, convention, or learned procedure. NOT for content facts; those '
-    'become memory units via memex_add_note.\n'
+    'Call proactively on "remember…" / "I prefer…" / "we use…" to store a '
+    'namespaced operational pointer — preference, project binding, or '
+    'convention. NOT for content facts (those become memory units via '
+    'memex_add_note); NOT for how-to procedures (those go to the procedural '
+    'plane via memex_case_submit).\n'
     '\n'
-    'Required: value (str), key (str). Top-level prefixes: `global:`, '
-    '`user:`, `project:<id>:`, `app:<app-id>:`. Procedures live UNDER a '
-    'scope as `<scope>:procedure:<verb>:<context-tag>` — never bare '
-    '`procedure:*`. Invalid → HTTP 400.\n'
-    '\n'
-    'When to call: proactively on "remember…" / "I prefer…" / "we use…". '
-    'Namespace by scope cue:\n'
+    'Required: value (str), key (str). Key MUST start with a top-level prefix '
+    'or → HTTP 400. Pick the prefix by scope cue:\n'
     '- identity ("I prefer X", no qualifier) → `user:<field>`\n'
     '- "in this repo / project" → `project:<id>:<field>`\n'
     '- "whenever I use <app>" → `app:<app-id>:<field>` (NOT `user:<app>:…`)\n'
     '- "company-wide" → `global:<field>`\n'
     'Full rules in agent system prompt (§KV_NAMESPACE).\n'
     '\n'
-    'PROCEDURES default to GLOBAL (`global:procedure:*`). Use '
-    '`project:<id>:procedure:*` ONLY on explicit cue ("for this project"). '
-    'Ambiguous? ASK — never infer scope.\n'
-    '\n'
-    'Optional: ttl_seconds. Generates a semantic embedding for memex_kv_search.\n'
-    '\n'
-    'Procedure keys (global + project) maintain a versioned history envelope; '
-    'memex_kv_get(include_history=true) returns prior versions.\n'
-    '\n'
+    'Optional: ttl_seconds. Generates a semantic embedding for memex_kv_search. '
     'Deletion is CLI-only (`memex kv delete`).'
 )
 
 
 MEMEX_KV_GET_DESC = (
-    'Get a KV entry by exact key.\n'
+    'Call when you know the EXACT key. Returns the entry, or 404 if absent — '
+    'use memex_kv_search for fuzzy/semantic lookup.\n'
     '\n'
-    'Required: key (str — must include namespace prefix).\n'
-    'For procedure keys (`<scope>:procedure:*`): the default response value is '
-    'the unwrapped active procedure text. Pass `include_history=true` to '
-    'receive the structured envelope ({value, version, history}) for reviewing '
-    'prior versions.\n'
-    '\n'
-    'Returns 404 if the key does not exist. Use memex_kv_search for fuzzy lookup.'
+    'Required: key (str — must include namespace prefix).'
 )
 
 
 MEMEX_KV_SEARCH_DESC = (
-    'Semantic-search the KV store. Returns entries ranked by semantic similarity '
-    'to the query against the embedded value strings.\n'
+    'Call when you do NOT know the exact key: semantic search ranks entries by '
+    'similarity to the query against the embedded value strings. For exact-key '
+    'lookup use memex_kv_get.\n'
     '\n'
     'Required: query (str).\n'
-    'Optional: top_k (default 10), prefix (e.g. "global:procedure:" to scope '
-    'to learned how-tos).\n'
-    '\n'
-    'Use when you do not know the exact key. For exact-key lookup, use '
-    'memex_kv_get.'
+    'Optional: top_k (default 10), prefix to scope to a namespace (e.g. "user:", '
+    '"project:<id>:"). KV holds preferences/settings/conventions — NOT how-tos; '
+    'recall a how-to with memex_procedural_search.'
 )
 
 
 MEMEX_KV_LIST_DESC = (
-    'Enumerate KV entries.\n'
+    'Call to enumerate KV entries by namespace (no ranking). For semantic '
+    'relevance use memex_kv_search instead.\n'
     '\n'
-    'Optional: prefix (filter to a namespace, e.g. "user:", "project:<id>:"), '
-    'limit (default 100), offset (pagination).\n'
+    'Optional: prefix (e.g. "user:", "project:<id>:"), limit (default 100), '
+    'offset (pagination).\n'
+    'Returns key+value+scope per entry; values are NOT semantically reranked.'
+)
+
+
+# ---------------------------------------------------------------------------
+# Procedural plane. Identity-anchor doctrine (procedure/strategy + pin
+# chain + status lifecycle + the cases-are-notes rule) lives in
+# agent_surface.PROCEDURAL_PLANE; these descriptions are Tier 1a
+# contract only. Cases are NOT plane entries — memex_case_submit files
+# them as notes. There is NO briefing tool: pinned cards arrive inside
+# the session briefing automatically.
+# ---------------------------------------------------------------------------
+
+
+# NOTE: There are deliberately NO agent-facing procedural WRITE
+# descriptions (create/update/upsert/deprecate). Procedures and
+# strategies are DERIVED from cases (design §5/§8/§9); the agent's only
+# procedural write is memex_case_submit. Direct authoring/editing lives
+# on the operator surfaces (CLI `memex procedural …`, the curation TUI)
+# and the HTTP/client CRUD the derivation worker uses — none of which
+# carry an agent-facing tool description.
+
+
+MEMEX_PROCEDURAL_GET_DESC = (
+    'Call when you have the entry UUID. Returns the full procedure/strategy, '
+    'or 404 (also on vault_id mismatch). To find one by query use '
+    'memex_procedural_search.\n'
     '\n'
-    'Returns key+value+scope per entry; values are NOT semantically reranked '
-    '(use memex_kv_search for that).'
+    'Required: id (UUID). Optional: vault_id.'
+)
+
+
+MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESC = (
+    'Call as the "did we already learn this?" existence probe: fetch by '
+    '(kind, scope, verb, context) identity anchor. Returns the entry or null. '
+    '400 on shape mismatch (e.g. context supplied for a strategy — strategies '
+    'anchor on scope+verb only).\n'
+    '\n'
+    'Required: kind, scope, verb — plus context for a procedure '
+    '(REQUIRED for procedures, FORBIDDEN for strategies).'
+)
+
+
+MEMEX_PROCEDURAL_SEARCH_DESC = (
+    'Call FIRST — before you act, narrate steps, read files, or run a shell '
+    'command — to find a how-to / workflow / strategy for a task you may have '
+    'done before (deploy, release, cut/ship a build, bump a version, rotate '
+    'creds, migrate): hybrid '
+    'BM25 + vector search (RRF-merged) across the procedural plane. Use '
+    'memex_procedural_get when you already have the UUID.\n'
+    '\n'
+    'Required: query. Optional: kind, scope, status (default "published"), '
+    'limit (default 10), include_pin_chain + pin_contexts, bm25_weight.\n'
+    'Returns hits with match provenance (bm25/vector/pin/rrf).'
+)
+
+
+MEMEX_CASE_SUBMIT_DESC = (
+    'Call after a multi-step task, diagnosed bug, or resolved incident to '
+    'capture "what happened" as a case. This is the ONLY way to record a '
+    'how-to / workflow / worked episode. NEVER also memex_add_note the same '
+    'content — a how-to saved as a note is invisible to the procedural plane. '
+    'Cases are NOTES in a hidden system vault, never procedural entries; '
+    'procedures are DERIVED from the cases you submit (there is no '
+    'procedure-write tool). CLOSE THE LOOP: call this after you enact a '
+    'procedure or whenever asked to record / log / note a run — do not end '
+    'the turn without it.\n'
+    '\n'
+    'Required: title, trigger (what kicked it off), outcome '
+    '("success"|"failure"|"mixed"). Recommended: situation, actions (ordered '
+    'steps), lesson, project_id, case_of (UUID of the procedure you enacted — '
+    'supply when known; it skips the assignment judge).\n'
+    '\n'
+    'Without case_of the server judges which procedure the case instances; '
+    'contested judgments land in the lint queue (result.assignment.mode='
+    '"escalated" + finding_id) — resolve via lint tools or leave for review.'
 )
 
 
@@ -231,46 +263,44 @@ MEMEX_KV_LIST_DESC = (
 # ---------------------------------------------------------------------------
 
 MEMEX_LIST_LINT_ACTIONS_DESC = (
-    'List the closed catalogue of lint resolution actions (read-only).\n'
+    'Call before memex_submit_lint_proposal with a proposed_action: lists the '
+    'closed, read-only catalogue of lint resolution actions. Pick one whose '
+    'applicable_target_types contains your target_type and shape params against '
+    'its params_schema.\n'
     '\n'
     'Each entry: id, name, description, applicable_target_types, reversible, '
-    'params_schema (JSON schema for the action params; null when '
-    'parameterless).\n'
-    '\n'
-    'When to use: before memex_submit_lint_proposal with a proposed_action — '
-    'pick an action whose applicable_target_types contains your target_type '
-    'and shape params against its params_schema. The catalogue is closed: '
-    'actions cannot be registered at runtime; it only grows with releases.'
+    'params_schema (JSON schema for the params; null when parameterless).\n'
+    'The catalogue is closed — actions cannot be registered at runtime; it only '
+    'grows with releases.'
 )
 
 
 MEMEX_SUBMIT_LINT_PROPOSAL_DESC = (
-    'Submit an externally-detected lint proposal for human review in the '
-    'maintenance cockpit.\n'
+    'Call when your detection logic flags a construct (misrouted note, stale KV '
+    'entry, duplicate entities) to file it for human review. Submission only '
+    'creates a PENDING finding — nothing mutates until a human resolves it.\n'
     '\n'
     'Required: vault_id (UUID or name); rule_name (lowercase slug you own — '
     'internal rule names and the llm_ prefix are reserved → rejected); '
     'lint_type structural|quality|governance|schema|routing; target_type '
     "(e.g. 'note', 'memory_unit', 'entity', 'kv'); target_id; description "
-    '(why it fired, ≤500 chars); suggested_action (free-text remediation '
-    'summary).\n'
-    'Optional: evidence dict (keys resolution / rule_metadata / '
-    'proposed_action are server-owned → rejected); proposed_action='
-    '{action_name, params} from the closed catalogue — must apply to '
-    'target_type and pass its params schema or the item is rejected.\n'
+    '(why it fired, ≤500 chars); suggested_action (free-text remediation).\n'
+    'Optional: evidence dict (keys resolution / rule_metadata / proposed_action '
+    'are server-owned → rejected); proposed_action={action_name, params} from '
+    'the closed catalogue — must apply to target_type and pass its params '
+    'schema or → rejected.\n'
     '\n'
-    'Result status: created | deduplicated (an existing finding already '
-    'covers it; its finding_id is returned — resubmitting is idempotent) | '
-    'cooldown_suppressed (a human resolved this same finding recently; do '
-    'NOT retry) | rejected (detail explains why).\n'
-    '\n'
-    'When to use: your detection logic flagged a construct (misrouted note, '
-    'stale KV entry, duplicate entities). Submission only files a pending '
-    'finding — nothing mutates until a human resolves it.'
+    'Result status: created | deduplicated (existing finding covers it; '
+    'finding_id returned; resubmitting is idempotent) | cooldown_suppressed (a '
+    'human resolved this recently — do NOT retry) | rejected (detail says why).'
 )
 
 
 __all__ = [
+    'MEMEX_CASE_SUBMIT_DESC',
+    'MEMEX_PROCEDURAL_GET_BY_IDENTITY_DESC',
+    'MEMEX_PROCEDURAL_GET_DESC',
+    'MEMEX_PROCEDURAL_SEARCH_DESC',
     'MEMEX_KV_GET_DESC',
     'MEMEX_KV_LIST_DESC',
     'MEMEX_KV_SEARCH_DESC',

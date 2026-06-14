@@ -3,8 +3,8 @@
   "archived_at": null,
   "assets": [],
   "content_hash": "6ff23ec34ca51bc528fb314a5de23012",
-  "created_at": "2026-05-18T07:32:07.311625+00:00",
-  "description": "New API Versioning Policy and v3 Release",
+  "created_at": "2026-06-12T19:47:26.497727+00:00",
+  "description": "API Versioning Policy and v3 Rollout",
   "doc_metadata": {
     "retain_params": {
       "assets": [],
@@ -26,14 +26,20 @@
     "tags": [
       "api",
       "versioning",
-      "policy"
+      "policy",
+      "api versioning",
+      "beta policy",
+      "version v3",
+      "header-based versioning",
+      "breaking changes",
+      "api documentation"
     ]
   },
   "filestore_path": null,
   "id": "0e8179f6-c264-4be0-5b72-b84b9b13b37c",
   "page_index": {
     "metadata": {
-      "description": "New API Versioning Policy and v3 Release",
+      "description": "API Versioning Policy and v3 Rollout",
       "publish_date": "2025-03-01 00:00:00+00:00",
       "source_uri": null,
       "tags": [
@@ -41,20 +47,22 @@
         "versioning",
         "policy",
         "api versioning",
-        "v3 release",
-        "accept-version header",
-        "deprecation",
-        "developer policy",
-        "breaking changes"
+        "beta policy",
+        "version v3",
+        "header-based versioning",
+        "breaking changes",
+        "api documentation"
       ],
       "title": "API Versioning Policy (Beta)",
       "total_tokens": 78
     },
     "toc": [
       {
+        "assets": [],
         "block_id": "d8e95ebdbc4b472644a0254029168735",
         "children": [
           {
+            "assets": [],
             "block_id": "d8e95ebdbc4b472644a0254029168735",
             "children": [],
             "end_index": 352,
@@ -64,11 +72,11 @@
             "start_index": 85,
             "subtree_tokens": 56,
             "summary": {
-              "how": "By implementing header-based versioning via the 'Accept-Version' header and deprecating URL-based versioning.",
-              "what": "A new API versioning policy and the release of version v3.",
-              "when": "Effective immediately, with a 30-day notice required for breaking changes.",
-              "where": "Across all public APIs.",
-              "who": "Public API developers and early adopters."
+              "how": "By using the Accept-Version header instead of URL-based versioning.",
+              "what": "New API versioning policy and availability of version v3.",
+              "when": "Now available (v3); 30-day notice required for breaking changes.",
+              "where": "All public APIs.",
+              "who": "Early adopters and public API users."
             },
             "title": "Policy",
             "token_estimate": 56
@@ -81,10 +89,10 @@
         "start_index": 0,
         "subtree_tokens": 78,
         "summary": {
-          "how": "By establishing a structured versioning framework.",
-          "what": "Introduction to the API versioning policy.",
-          "when": "Currently in Beta status.",
-          "where": "Within the API documentation and development environment.",
+          "how": "Through a structured versioning framework.",
+          "what": "The implementation of an API Versioning Policy currently in Beta.",
+          "when": "During the Beta phase of the API policy rollout.",
+          "where": "Within the API development and integration environment.",
           "who": "API developers and users."
         },
         "title": "API Versioning Policy (Beta)",
@@ -93,11 +101,11 @@
     ]
   },
   "publish_date": "2025-03-01T00:00:00+00:00",
-  "session_id": "cbcbd86c-4188-4c25-8664-56150db2a7c8",
+  "session_id": "f7fc385b-00d8-4e20-a8a0-1b21a8d192e4",
   "status": "active",
   "summary_version_incorporated": null,
   "superseded_by": null,
   "title": "API Versioning Policy (Beta)",
-  "updated_at": "2026-05-18T07:32:07.311625+00:00",
-  "vault_id": "22c11c49-1ccc-43a4-830c-dca2472f519c"
+  "updated_at": "2026-06-12T19:47:26.497727+00:00",
+  "vault_id": "34893ad7-9844-4786-bb90-912fac9b0d11"
 }

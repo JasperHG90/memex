@@ -244,6 +244,20 @@ class ExpectedOutcomeBase(BaseModel):
         """
         return set()
 
+    def expects_backend_error(self, scenario: 'Scenario') -> bool:
+        """Whether this outcome INTERPRETS a backend ``AgentAnswer.error``
+        rather than treating it as an infrastructure failure.
+
+        Default ``False``: the runner escalates any ``answer.error`` to
+        ``status='error'`` before scoring (the fail-loud invariant). An
+        outcome whose whole contract is asserting an expected HTTP status —
+        e.g. ``ProceduralEntryRoundtrip(expect_status='conflict')`` needs the
+        409 to reach its ``score()`` — overrides this to return ``True`` so
+        the runner lets the error through to ``score()`` instead. Opt-in and
+        scenario-scoped so no other outcome's behavior changes.
+        """
+        return False
+
 
 # ---------------------------------------------------------------------------
 # Outcome registry — open-ended set, lookup by ``type`` discriminator.
@@ -1342,6 +1356,41 @@ AnyOfOutcomes.model_rebuild()
 _TOOL_ARG_MISSING: Any = object()
 
 
+def _resolve_tool_arg(raw: Any, arg_name: str) -> Any:
+    """Resolve ``arg_name`` from a tool-call input, tolerating envelopes.
+
+    Many MCP tools wrap their parameters in a request object — e.g.
+    ``memex_procedural_search`` is called with ``{"request": {"query": …}}``
+    rather than a flat ``{"query": …}``. A flat ``raw.get(arg_name)`` would
+    miss the nested value and report a false failure even though the agent
+    passed the right argument. Resolution order:
+
+    1. Dotted path (``arg_name='request.query'``) — walk it explicitly.
+    2. Top-level key.
+    3. Recursive search through nested dict values for the FIRST match.
+
+    Returns ``_TOOL_ARG_MISSING`` when the key is nowhere to be found.
+    """
+    if not isinstance(raw, dict):
+        return _TOOL_ARG_MISSING
+    if '.' in arg_name:
+        cur: Any = raw
+        for part in arg_name.split('.'):
+            if isinstance(cur, dict) and part in cur:
+                cur = cur[part]
+            else:
+                return _TOOL_ARG_MISSING
+        return cur
+    if arg_name in raw:
+        return raw[arg_name]
+    for value in raw.values():
+        if isinstance(value, dict):
+            found = _resolve_tool_arg(value, arg_name)
+            if found is not _TOOL_ARG_MISSING:
+                return found
+    return _TOOL_ARG_MISSING
+
+
 def _coerce_tool_arg_value(value: Any) -> str | None:
     """Coerce a tool-call argument value to a string for regex matching.
 
@@ -1412,7 +1461,7 @@ class ToolCallArgMatches(ExpectedOutcomeBase):
             if call.get('tool') != self.tool:
                 continue
             raw = call.get('input', {}) or {}
-            value = raw.get(self.arg_name, _TOOL_ARG_MISSING)
+            value = _resolve_tool_arg(raw, self.arg_name)
             coerced = _coerce_tool_arg_value(value)
             if coerced is None:
                 continue
@@ -1476,6 +1525,13 @@ class Scenario(BaseModel):
     strategies: list[str] | None = None
     include_superseded: bool | None = None
     include_deprioritized: bool | None = None
+    # Per-scenario retrieval token budget (api answer_mode). The server
+    # defaults to ~1000 tokens of greedy packing (≈12 units), which silently
+    # caps the result *below* a larger ``top_k`` — a recall@k gate then never
+    # fetches k. Raise this for scenarios whose answer can legitimately sit
+    # past the first ~12 units (set 0 to disable the budget and honour
+    # ``top_k`` exactly). None → inherit the server default.
+    token_budget: int | None = None
     setup_actions: list[SetupAction] = Field(default_factory=list)
     inline_notes: list[InlineNote] = Field(default_factory=list)
     vault_name: str | None = None

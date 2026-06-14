@@ -315,6 +315,14 @@ suite.register(
     description='Query about former head should surface the predecessor.',
     query=('Who headed the Engineering department at TechCo Global before Ruby Martinez?'),
     top_k=20,
+    # The predecessor's (Alex Chen) dedicated units rank ~12-14 — inside the
+    # requested top_k=20, but the server's default ~1000-token budget greedy-
+    # packs to ~12 units and cuts them. Double the budget (1000 → 2000,
+    # ≈24 units) so this recall@20 gate actually fetches 20 units' worth.
+    # (The query mentions the current head "Ruby Martinez", which
+    # seeds/boosts her units ahead of the former head's — so the answer
+    # legitimately sits past the first dozen.)
+    token_budget=2000,
     group='temporal',
     expected=KeywordsPresent(type='keywords_present', keywords=['Alex Chen']),
 )
@@ -542,24 +550,27 @@ suite.register(
 )
 
 # ------------------------------------------------------------------
-# GROUP_PROCEDURAL_KV — KV write (setup) + read (outcome)
+# GROUP_KV — generic KV write (setup) + read (outcome).
+# (The legacy KV-procedure roundtrip scenario was removed: procedures
+# no longer live in KV — they live in the procedural plane. KV keeps
+# only the global/user/project/app namespaces.)
 # ------------------------------------------------------------------
 suite.register(
-    id='kv_roundtrip_procedure',
+    id='kv_roundtrip_preference',
     description='KV write followed by read returns the same value.',
-    query='procedure:deploy:staging',
+    query='global:preferences:deploy_staging',
     top_k=10,
     group='kv',
     setup_actions=[
         SetupAction(
             kind='kv_write',
-            kv_key='procedure:deploy:staging',
+            kv_key='global:preferences:deploy_staging',
             kv_value='For staging deploys, use --no-migrate flag after 6pm',
         ),
     ],
     expected=KvRoundtrip(
         type='kv_roundtrip',
-        kv_key='procedure:deploy:staging',
+        kv_key='global:preferences:deploy_staging',
         expected_value='For staging deploys, use --no-migrate flag after 6pm',
     ),
     expected_failure_modes=_AGENT_XFAIL,

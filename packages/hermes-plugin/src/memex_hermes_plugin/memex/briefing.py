@@ -15,7 +15,10 @@ from uuid import UUID
 # this re-export-by-alias keeps the in-process `_HERMES_HARNESS` reference
 # stable while making the SSOT identity testable.
 from memex_common.agent_harnesses import HERMES_HARNESS as _HERMES_HARNESS
-from memex_common.agent_surface import LAYER_ROUTING_PRIMER_TABLE, compose_universal
+from memex_common.agent_surface import (
+    LAYER_ROUTING_PRIMER_TABLE,
+    compose_with_procedural,
+)
 
 from .async_bridge import run_sync
 
@@ -38,6 +41,7 @@ class BriefingCache:
         vault_id: UUID,
         budget: int,
         project_id: str | None,
+        app: str | None = None,
     ) -> None:
         """Fire the background briefing fetch. Safe to call multiple times."""
         with self._lock:
@@ -54,6 +58,7 @@ class BriefingCache:
                             vault_id=vault_id,
                             budget=budget,
                             project_id=project_id,
+                            app=app,
                         ),
                         timeout=30.0,
                     )
@@ -113,8 +118,14 @@ def format_briefing_block(
     else:
         lines.append(f'Project: `{project_id}` · **No vault bound to this project.**')
 
-    # Tier 1b (universal SSOT) — same bytes every call; cacheable prefix.
-    lines.append('\n## Memex — system instructions\n\n' + compose_universal())
+    # Tier 1b (universal SSOT) + procedural-plane doctrine — same bytes
+    # every call; cacheable prefix. ``compose_with_procedural`` is the SSOT
+    # that ships the ``memex_procedural_*`` tool routing rules to any
+    # Memex-aware agent. The procedural block is opt-in (not in
+    # ``compose_universal``) because pre-agents with no procedural
+    # tools would otherwise burn ~1,750 chars on routing rules they
+    # cannot act on.
+    lines.append('\n## Memex — system instructions\n\n' + compose_with_procedural())
     # Tier 2 — Hermes-specific framing layered on top.
     lines.append('\n' + _HERMES_HARNESS)
 

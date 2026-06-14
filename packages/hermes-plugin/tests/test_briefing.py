@@ -1,10 +1,11 @@
 """Tests for briefing cache + block formatting.
 
 After 2026-05-14 (three-tier agent-surface architecture): the briefing
-composes ``memex_common.agent_surface.compose_universal()`` (Tier 1b)
-plus a hermes-specific harness block (Tier 2). Universal content lives
-in ``memex_common.agent_surface``; this file pins how Hermes assembles
-it on top of agent-specific framing.
+composes ``memex_common.agent_surface.compose_with_procedural()`` (Tier 1b
+universal + procedural-plane doctrine) plus a hermes-specific harness
+block (Tier 2). Universal content lives in
+``memex_common.agent_surface``; this file pins how Hermes assembles it
+on top of agent-specific framing.
 
 Regression fences for the universal content live in
 ``packages/common/tests/test_agent_surface.py``. Regression fences for
@@ -209,4 +210,104 @@ def test_hermes_harness_within_budget():
     assert len(_HERMES_HARNESS) <= 1_600, (
         f'_HERMES_HARNESS is {len(_HERMES_HARNESS)} chars; cap is 1,600. '
         'Move agent-specific content here; universal content belongs in agent_surface.'
+    )
+
+
+# ---------------------------------------------------------------------------
+# procedural-plane doctrine in the briefing block.
+# The briefing composes `compose_with_procedural()` (universal + procedural
+# block) on top of the Hermes-specific harness. These tests pin that the
+# procedural routing rules are visible to the agent — a regression that
+# silently fell back to `compose_universal()` would break procedural write routing
+# for every Hermes session.
+# ---------------------------------------------------------------------------
+
+
+def test_format_block_carries_v7_procedural_doctrine():
+    """The procedural-plane doctrine MUST appear in the briefing
+    block. Without it, a Hermes agent has no doctrine for routing
+    ``"this is how to do X"`` write intents to the procedural plane —
+    the eval-driven failure mode is that the agent falls back to
+    ``memex_add_note`` (note plane) or ``memex_kv_put`` (KV plane),
+    both of which silently route the wrong way.
+    """
+    block = format_briefing_block(
+        '',
+        vault_id='v',
+        project_id='p',
+        session_note_key='k',
+        kv_instructions_if_no_vault=False,
+    )
+    # The doctrine block identity marker.
+    assert '## Procedural plane' in block
+    # The two plane kinds — both route through the procedural plane,
+    # not the note/KV plane. Cases are NOTES (memex_case_submit).
+    assert '`procedure`' in block
+    assert '`strategy`' in block
+    # Identity-anchor rule (UNIQUE on (kind, scope, verb, context)).
+    assert '(kind, scope, verb, context)' in block
+    # Tool-name markers — at least one of the memex_procedural_* tools
+    # must be visible so the agent knows the routing surface exists.
+    # Anchor on a READ tool: the procedural WRITE tools were removed from
+    # the agent surface (procedures are derived from cases), so this marker
+    # stays valid as the SSOT prose evolves.
+    assert 'memex_procedural_search' in block
+    # Case routing — worked episodes go through memex_case_submit, and
+    # the removed briefing tool must NOT be advertised: pinned cards
+    # arrive inside the session briefing automatically.
+    assert 'memex_case_submit' in block
+    assert 'memex_procedural_briefing_cards' not in block
+
+
+def test_format_block_uses_compose_with_procedural_not_universal():
+    """Defence-in-depth trip-wire: a regression that swaps
+    ``compose_with_procedural()`` back to ``compose_universal()``
+    in ``briefing.py`` would still pass the universal-block presence
+    tests but silently drop the doctrine. This test pins the
+    procedural block ITSELF (which is not in the universal block) as
+    a positive marker — if the procedural heading is absent, the
+    swap has happened.
+    """
+    block = format_briefing_block(
+        '',
+        vault_id='v',
+        project_id='p',
+        session_note_key='k',
+        kv_instructions_if_no_vault=False,
+    )
+    # The block lives BELOW the universal block in
+    # ``compose_with_procedural()``. It is NOT in ``compose_universal()``.
+    # If the briefing falls back to the universal-only composition,
+    # this heading vanishes.
+    assert '## Procedural plane' in block
+
+
+def test_format_block_carries_procedural_block_after_universal():
+    """The composition order is universal → procedural → harness.
+    A regression that puts the procedural block AFTER the Hermes
+    harness would still pass the presence test above but break the
+    cacheable-prompt-prefix invariant — the harness is dynamic-ish
+    (per-vault state in a real flow) and the universal + procedural
+    blocks are the cacheable prefix.
+
+    We pin the order by checking the procedural heading's offset
+    relative to the universal block's footer marker.
+    """
+    block = format_briefing_block(
+        '',
+        vault_id='v',
+        project_id='p',
+        session_note_key='k',
+        kv_instructions_if_no_vault=False,
+    )
+    # The universal block ends with the CITATIONS section (CRITICAL_FOOTER
+    # was removed in the register-rebalance); the procedural block lives
+    # BELOW it. Find both headings and check the relative order.
+    universal_footer = '## Citations'
+    procedural_heading = '## Procedural plane'
+    assert universal_footer in block, 'universal block missing — pre-test setup error'
+    assert procedural_heading in block
+    assert block.index(universal_footer) < block.index(procedural_heading), (
+        'Procedural block must come AFTER the universal block; the '
+        'composition order in briefing.py is reversed.'
     )

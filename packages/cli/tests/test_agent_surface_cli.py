@@ -6,6 +6,13 @@ Pins:
   content (mcp is intentionally minimal transport-only).
 - ``agent-surface hermes`` and ``agent-surface claude-code`` include the
   universal block.
+- ``agent-surface hermes`` and ``agent-surface claude-code`` include the
+  procedural-plane doctrine block (the routing rules for the 8
+  ``memex_procedural_*`` tools) — the CLI bridge must match what the
+  in-process Hermes plugin path ships.
+- ``agent-surface universal`` and ``agent-surface mcp`` MUST NOT include
+  the procedural doctrine (opt-in: callers without procedural tools would burn
+  the budget for no behavioural gain).
 - ``--output-format=json`` wraps the content in the Claude Code SessionStart
   envelope ``{"systemPromptAdditions": "..."}`` so the hook can pipe it
   directly through.
@@ -77,11 +84,16 @@ def test_claude_code_profile_includes_universal_block_and_harness() -> None:
     assert '/recall' in out
 
 
-def test_mcp_target_is_terse_and_pointer_at_agent_surface() -> None:
-    """``agent-surface mcp`` is the Tier 1a transport surface — minimal,
-    points at `agent_surface` for composition rules. Pin both positive
-    content (progressive disclosure, vault defaults, pointer) and negative
-    (Tier 1b content absent)."""
+def test_mcp_target_is_terse_and_defers_doctrine_to_host_prompt() -> None:
+    """``agent-surface mcp`` is the Tier 1a transport surface — minimal, and
+    defers routing/storage/citation doctrine to the host system prompt. Pin
+    both positive content (progressive disclosure, vault defaults, pointer)
+    and negative (Tier 1b content absent).
+
+    The integrator-facing ``compose_universal()`` composition recipe (which
+    named ``agent_surface``) was removed in the register-rebalance — it was
+    documentation for the prompt builder, not the consuming agent. We pin
+    the calm replacement pointer line instead."""
     out = _run('mcp')
     # Positive: load-bearing transport facts must be present.
     assert 'TOOL DISCOVERY' in out
@@ -89,7 +101,7 @@ def test_mcp_target_is_terse_and_pointer_at_agent_surface() -> None:
     assert 'memex_search' in out
     assert 'memex_get_schema' in out
     assert 'VAULT DEFAULTS' in out
-    assert 'agent_surface' in out
+    assert 'host system prompt' in out
     # Negative: Tier 1b CONTENT must NOT appear here (the pointer naming
     # "5-step resolution flow" is contrastive — that's fine; what we ban is
     # the actual scaffolding like "Option A"/"Option B").
@@ -260,10 +272,17 @@ def test_output_dir_emits_nothing_to_stdout(tmp_path: Path) -> None:
 
 
 def test_critical_constraint_xml_tags_in_universal() -> None:
-    """Load-bearing CRITICAL_HEADER / VIRTUAL_UNIT / CRITICAL_FOOTER content
-    is wrapped in ``<critical_constraint name="…">`` / ``<critical_reminder>``
-    XML blocks per Anthropic best practice. Pin the named tags so a
-    regression that drops the structure trips here."""
+    """Load-bearing CRITICAL_HEADER / VIRTUAL_UNIT content is wrapped in
+    ``<critical_constraint name="…">`` XML blocks per Anthropic best
+    practice. Pin the named tags so a regression that drops the structure
+    trips here.
+
+    The former CRITICAL_FOOTER (a near-verbatim ``<critical_reminder>``
+    restatement of these same four invariants) was removed in the
+    register-rebalance: duplicating the loud block at both ends saturated
+    the ``critical`` channel on Fable-5 / Opus-4.8, which follow calm
+    instructions as faithfully as shouted ones. The four invariants remain
+    in CRITICAL_HEADER (still loud — they ARE 4xx server contracts)."""
     out = _run('universal')
     # CRITICAL_HEADER → 4 named constraints. The observation-read-only
     # constraint was previously named `virtual_unit_404` when the server
@@ -281,13 +300,99 @@ def test_critical_constraint_xml_tags_in_universal() -> None:
         )
     # VIRTUAL_UNIT → 1 named constraint (the long-form one)
     assert '<critical_constraint name="virtual_unit_filter">' in out
-    # CRITICAL_FOOTER → 4 named reminders
-    for name in (
-        'record_outcome_shape',
-        'virtual_unit_filter',
-        'kv_scope_qualifier',
-        'citations_required',
-    ):
-        assert f'<critical_reminder name="{name}">' in out, (
-            f'missing <critical_reminder name="{name}"> tag in universal output'
-        )
+    # The footer's <critical_reminder> restatement is gone — assert it
+    # does NOT reappear (re-saturating the loud channel is the regression).
+    assert '<critical_reminder' not in out
+
+
+# ---------------------------------------------------------------------------
+# Procedural-plane doctrine — opt-in for the agentic profiles.
+# Pin presence in `hermes` and `claude-code` (the agentic surfaces) and
+# absence in `universal` and `mcp` (the terse / transport surfaces).
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize('profile', ['hermes', 'claude-code'])
+def test_agentic_profile_includes_procedural_doctrine(profile: str) -> None:
+    """The two agentic surfaces (Hermes plugin path and Claude Code
+    SessionStart hook) MUST ship the procedural-plane doctrine. The
+    doctrine is the routing rule that drives write intents
+    ``"this is how to do X"`` to the procedural plane — without it,
+    agents silently fall back to ``memex_add_note`` (note plane) or
+    ``memex_kv_put`` (KV plane), both of which are wrong for the
+    procedural use case.
+    """
+    out = _run(profile)
+    # Identity marker of the procedural block.
+    assert '## Procedural plane' in out
+    # The two procedural kinds — cases are NOTES via memex_case_submit.
+    assert '`procedure`' in out
+    assert '`strategy`' in out
+    assert 'memex_case_submit' in out
+    # Identity-anchor rule (UNIQUE on (kind, scope, verb, context)).
+    assert '(kind, scope, verb, context)' in out
+    # At least one tool name from the procedural surface (read + the
+    # case_submit write path; there is no procedural-write tool).
+    assert 'memex_procedural_search' in out
+    assert 'memex_procedural_create' not in out
+    # The agent-facing briefing tool is gone — cards arrive in the
+    # session briefing (JG decision 2026-06-10).
+    assert 'memex_procedural_briefing_cards' not in out
+
+
+@pytest.mark.parametrize('profile', ['universal', 'mcp'])
+def test_terse_profile_does_not_include_procedural_doctrine(profile: str) -> None:
+    """The terse / transport profiles MUST NOT ship the procedural doctrine.
+    ``universal`` is for agents with no procedural tools; ``mcp``
+    is transport-only (Tier 1a). Both would burn ~1,750 chars on
+    routing rules the consumer cannot act on.
+    """
+    out = _run(profile)
+    assert '## Procedural plane' not in out
+    assert 'memex_procedural_create' not in out
+    assert 'memex_procedural_briefing_cards' not in out
+
+
+def test_hermes_profile_uses_compose_with_procedural_not_universal() -> None:
+    """Defence-in-depth trip-wire: a regression that swaps
+    ``compose_with_procedural()`` back to ``compose_universal()`` in
+    ``_compose_for_target`` would still pass the universal-block
+    presence tests but silently drop the procedural doctrine. This test pins
+    the procedural heading directly — the swap would surface here.
+    """
+    out = _run('hermes')
+    assert '## Procedural plane' in out
+
+
+def test_claude_code_profile_uses_compose_with_procedural_not_universal() -> None:
+    """Same as the hermes trip-wire, for the claude-code target. The
+    SessionStart hook reads this string verbatim — if the procedural
+    block is missing, every Claude Code session silently misroutes
+    write intents to the wrong plane.
+    """
+    out = _run('claude-code')
+    assert '## Procedural plane' in out
+
+
+def test_hermes_profile_composition_order() -> None:
+    """The composition order is universal → procedural → harness.
+    Pin the order by checking the procedural heading's offset
+    relative to the universal block's footer marker."""
+    out = _run('hermes')
+    universal_footer = '## Citations'
+    procedural_heading = '## Procedural plane'
+    assert universal_footer in out
+    assert procedural_heading in out
+    assert out.index(universal_footer) < out.index(procedural_heading)
+
+
+def test_claude_code_profile_composition_order() -> None:
+    """Same composition order trip-wire as the hermes profile — both
+    agentic surfaces use the same ``compose_with_procedural()`` +
+    harness composition shape, so the order is identical."""
+    out = _run('claude-code')
+    universal_footer = '## Citations'
+    procedural_heading = '## Procedural plane'
+    assert universal_footer in out
+    assert procedural_heading in out
+    assert out.index(universal_footer) < out.index(procedural_heading)
