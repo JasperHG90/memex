@@ -91,15 +91,29 @@ def test_case_help_routes_to_procedural_plane(runner, strip_ansi):
     assert 'experiential' not in text.lower()
 
 
-def test_case_submit_help_requires_trigger(runner, strip_ansi):
-    """Cases are findable by trigger — the help must surface that."""
+def test_case_submit_is_a_real_subcommand(runner, strip_ansi):
+    """`memex case submit` must RUN the submit subcommand — not fail with
+    'unexpected extra argument (submit)'. Typer flattens a single-command group
+    unless it has a callback; this pins that the callback keeps `case` a group."""
+    result = runner.invoke(case_app, ['submit'])  # no required args supplied
+    combined = (strip_ansi(result.stdout) + ' ' + str(result.exception or '')).lower()
+    assert 'unexpected extra argument' not in combined
+    # It reaches our own runtime validation (title/trigger/outcome required).
+    assert result.exit_code != 0
+
+
+def test_case_submit_help_surfaces_trigger_and_file(runner, strip_ansi):
+    """Cases are findable by trigger — the help must surface it. title/trigger/
+    outcome are required, but can come from the --file §5.1 template instead of
+    flags (validated at runtime), so they are no longer typer-`required`
+    options."""
     result = runner.invoke(case_app, ['submit', '--help'])
     assert result.exit_code == 0
     text = _normalize(strip_ansi(result.stdout))
     assert '--trigger' in text
-    # The trigger flag must be marked required, not optional.
-    assert 'trigger' in text.lower()
-    assert 'required' in text.lower()
+    assert '--outcome' in text
+    # The deterministic file path (the §5.1 template inverse).
+    assert '--file' in text
 
 
 def test_procedural_create_help_explains_identity_anchor(runner, strip_ansi):

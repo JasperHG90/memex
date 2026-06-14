@@ -16,7 +16,9 @@ Engine internals (DTOs, error classes) still ship as
 surface is ``procedural``.
 """
 
-from typing import Annotated
+import re
+from pathlib import Path
+from typing import Annotated, Any
 
 import typer
 from rich.console import Console
@@ -57,6 +59,17 @@ case_app = typer.Typer(
     ),
     no_args_is_help=True,
 )
+
+
+@case_app.callback()
+def _case_callback() -> None:
+    """Manage worked-episode cases — run ``memex case submit`` to file one.
+
+    Without this callback Typer collapses a single-command group into the
+    command itself, so ``memex case submit`` would fail with "unexpected extra
+    argument (submit)" and only the bare ``memex case`` would run. The callback
+    keeps ``case`` a real group so the documented ``memex case submit`` works.
+    """
 
 
 def _print_entry(entry, json_output: bool) -> None:
@@ -592,20 +605,138 @@ async def procedural_deprecate(
 # memex case submit — short-form top-level group
 # ---------------------------------------------------------------------------
 
+_VALID_OUTCOMES = ('success', 'failure', 'mixed')
+_FRONTMATTER_RE = re.compile(r'^---\s*\n(.*?)\n---\s*\n', re.DOTALL)
+_H1_RE = re.compile(r'^#\s+(.+?)\s*$', re.MULTILINE)
+_SECTION_RE = re.compile(
+    r'^##\s+(?P<head>.+?)\s*\n(?P<body>.*?)(?=^##\s+|\Z)', re.DOTALL | re.MULTILINE
+)
+_LIST_ITEM_RE = re.compile(r'^\s*(?:\d+[.)]|[-*])\s+(.*)$')
+
+
+def _parse_frontmatter(text: str) -> dict[str, Any]:
+    """Best-effort YAML frontmatter parse (yaml if available, else key: value)."""
+    try:
+        import yaml
+
+        data = yaml.safe_load(text)
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        out: dict[str, Any] = {}
+        for line in text.splitlines():
+            if ':' in line and not line.lstrip().startswith('#'):
+                k, _, v = line.partition(':')
+                out[k.strip()] = v.strip().strip('"\'')
+        return out
+
+
+def _parse_action_list(text: str) -> list[str]:
+    """Pull ordered/bulleted list items out of the Actions section."""
+    items: list[str] = []
+    for line in text.splitlines():
+        m = _LIST_ITEM_RE.match(line)
+        if m and m.group(1).strip():
+            items.append(m.group(1).strip())
+    return items
+
+
+def _split_outcome_lesson(text: str) -> tuple[str | None, str]:
+    """`<outcome>. **Lesson:** …` or `Success — …\\n**Lessons:** …` → (outcome, lesson)."""
+    stripped = text.strip()
+    outcome: str | None = None
+    low = stripped.lower()
+    for oc in _VALID_OUTCOMES:
+        if low.startswith(oc):
+            outcome = oc
+            break
+    # Lesson is everything after a `**Lesson(s):**` marker, else the whole body.
+    marker = re.search(r'\*\*Lessons?:?\*\*', stripped)
+    lesson = stripped[marker.end() :].strip() if marker else stripped
+    return outcome, lesson
+
+
+def parse_case_markdown(content: str) -> dict[str, Any]:
+    """Parse a case markdown file — the §5.1 episode template (## Trigger /
+    ## Situation / ## Actions / ## Outcome / Lesson), optionally with YAML
+    frontmatter — back into CaseSubmit fields. The deterministic inverse of the
+    server's ``compose_case_markdown`` (no LLM). Returns only the fields it
+    finds; the caller merges CLI flags over the top and validates the required
+    ones (title / trigger / outcome)."""
+    out: dict[str, Any] = {}
+
+    body = content
+    fm_match = _FRONTMATTER_RE.match(content)
+    if fm_match:
+        body = content[fm_match.end() :]
+        fm = _parse_frontmatter(fm_match.group(1))
+        for src, dst in (
+            ('title', 'title'),
+            ('note_key', 'title'),
+            ('outcome', 'outcome'),
+            ('project_id', 'project_id'),
+            ('project', 'project_id'),
+            ('case_of', 'case_of'),
+        ):
+            if fm.get(src) and dst not in out:
+                out[dst] = str(fm[src])
+        if fm.get('tags'):
+            out['tags'] = fm['tags'] if isinstance(fm['tags'], list) else [str(fm['tags'])]
+
+    if 'title' not in out:
+        h1 = _H1_RE.search(body)
+        if h1:
+            out['title'] = h1.group(1).strip()
+
+    sections = {
+        m.group('head').strip().lower(): m.group('body').strip() for m in _SECTION_RE.finditer(body)
+    }
+    if sections.get('trigger'):
+        out['trigger'] = sections['trigger']
+    if 'situation' in sections:
+        s = sections['situation']
+        out['situation'] = '' if s in ('', '_not recorded_') else s
+    if 'actions' in sections:
+        out['actions'] = _parse_action_list(sections['actions'])
+    ol = (
+        sections.get('outcome / lesson')
+        or sections.get('outcome/lesson')
+        or sections.get('outcome')
+    )
+    if ol is not None:
+        oc, lesson = _split_outcome_lesson(ol)
+        if oc and 'outcome' not in out:
+            out['outcome'] = oc
+        if lesson:
+            out.setdefault('lesson', lesson)
+    return out
+
 
 @case_app.command('submit')
 @async_command
 async def case_submit(
     ctx: typer.Context,
-    title: Annotated[str, typer.Option('--title', '-t', help='Case title.')],
+    file: Annotated[
+        Path | None,
+        typer.Option(
+            '--file',
+            help='Read the case from a markdown file: the §5.1 template '
+            '(## Trigger / ## Situation / ## Actions / ## Outcome / Lesson) '
+            'plus optional YAML frontmatter (outcome, title/note_key, tags). '
+            'Any flag below overrides the parsed value.',
+            exists=True,
+            dir_okay=False,
+            readable=True,
+        ),
+    ] = None,
+    title: Annotated[str | None, typer.Option('--title', '-t', help='Case title.')] = None,
     trigger: Annotated[
-        str,
-        typer.Option('--trigger', help='What kicked the episode off — required.'),
-    ],
+        str | None,
+        typer.Option('--trigger', help='What kicked the episode off.'),
+    ] = None,
     outcome: Annotated[
-        str,
+        str | None,
         typer.Option('--outcome', '-o', help='success | failure | mixed.'),
-    ],
+    ] = None,
     situation: Annotated[
         str,
         typer.Option('--situation', help='Context going in (prior state, constraints).'),
@@ -645,7 +776,32 @@ async def case_submit(
     from memex_common.procedural_schemas import CaseSubmit
 
     config: MemexConfig = ctx.obj
-    if outcome not in ('success', 'failure', 'mixed'):
+
+    # --file seeds every field from the §5.1 template; explicit flags win.
+    if file is not None:
+        parsed = parse_case_markdown(file.read_text(encoding='utf-8'))
+        title = title or parsed.get('title')
+        trigger = trigger or parsed.get('trigger')
+        outcome = outcome or parsed.get('outcome')
+        situation = situation or parsed.get('situation', '')
+        action = action if action else parsed.get('actions')
+        lesson = lesson or parsed.get('lesson', '')
+        project_id = project_id or parsed.get('project_id')
+        case_of = case_of or parsed.get('case_of')
+        tags = tags if tags else parsed.get('tags')
+
+    missing = [
+        name
+        for name, val in (('--title', title), ('--trigger', trigger), ('--outcome', outcome))
+        if not val
+    ]
+    if missing:
+        console.print(
+            f'[red]Missing required: {", ".join(missing)} — provide as flags or in the '
+            '--file template/frontmatter.[/red]'
+        )
+        raise typer.Exit(2)
+    if outcome not in _VALID_OUTCOMES:
         console.print(f'[red]--outcome must be success|failure|mixed, got {outcome!r}.[/red]')
         raise typer.Exit(2)
     case_of_uuid = None
