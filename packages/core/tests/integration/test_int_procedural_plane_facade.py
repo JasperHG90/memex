@@ -104,7 +104,10 @@ def _entry_payload(
         title=title,
         summary=f'Integration-seeded entry for {title!r}.',
         body=body,
-        trigger=trigger,
+        # ProceduralEntryCreate now requires a non-empty trigger (the
+        # when-to-use phrase retrieval anchors on, §6/§19.1). Default it so
+        # the existing helper callers stay valid; explicit triggers win.
+        trigger=trigger if trigger is not None else f'when this {kind} scenario applies',
         status=status,  # type: ignore[arg-type]
     )
 
@@ -134,41 +137,10 @@ async def test_create_then_create_same_anchor_raises_identity_conflict(metastore
         await repo.create(_entry_payload(vault_id=vault_id, title=f'second-{uuid.uuid4()}'))
 
 
-@pytest.mark.asyncio
-async def test_create_case_with_trigger_succeeds(metastore):
-    """A case create with a non-null ``trigger`` succeeds. A previous
-    migration added a CHECK ``(trigger IS NULL) = (trigger_embedding IS NULL)``
-    on the assumption that the repository would set
-    ``trigger_embedding`` on create — but the lazy-embedding design
-    leaves it NULL. The CHECK fired on every case create, and the
-    repository's blanket IntegrityError → IdentityConflict translation
-    surfaced the constraint failure as a misleading 409. The CHECK
-    was dropped (see migration 061 inline note); this test pins the
-    happy path against a regression that re-introduces it.
-    """
-    async with metastore.session() as session:
-        vault_id = await _create_vault(session, 'proc_case_trigger')
-
-    repo = _repo(metastore)
-    entry = await repo.create(
-        _entry_payload(
-            vault_id=vault_id,
-            kind='case',
-            scope=f'case-{uuid.uuid4().hex[:8]}',
-            verb=None,
-            context=None,
-            title='case-with-trigger',
-            trigger='user reported slow API on 2026-05-01',
-        )
-    )
-    assert entry.trigger == 'user reported slow API on 2026-05-01'
-    # DTO does not surface embeddings — confirm the row round-tripped by
-    # re-reading it via the repository. The lazy-embedding design leaves
-    # trigger_embedding NULL on the row, and the dropped CHECK no longer
-    # forces a paired-NULL invariant.
-    fetched = await repo.get(entry.id, vault_id=vault_id)
-    assert fetched is not None
-    assert fetched.trigger == 'user reported slow API on 2026-05-01'
+# test_create_case_with_trigger_succeeds removed: `kind='case'` is no longer a
+# procedural-entry kind — cases are NOTES (role='case') filed via case_submit,
+# not rows on the procedural plane. Case creation is covered by the
+# case_service path and the create_case proposal-action tests.
 
 
 @pytest.mark.asyncio
@@ -442,7 +414,7 @@ async def test_search_respects_kind_filter(metastore):
             title=f'deploy-{strat_token}',
             kind='strategy',
             verb='deploy',
-            context='staging',
+            context=None,  # strategies anchor on (scope, verb) only — no context (§18.1)
         )
     )
 
