@@ -505,7 +505,9 @@ class McpProceduralEntry(BaseModel):
     tags: list[str] = Field(default_factory=list)
     extra_metadata: dict[str, Any] = Field(default_factory=dict)
     status: Literal['draft', 'published', 'deprecated'] = 'draft'
-    origin: Literal['manual', 'derived', 'imported'] = 'manual'
+    # Must mirror memex_common.procedural_schemas.OriginLiteral exactly — the
+    # DTO can emit any of these five and _dto_to_mcp_entry copies origin through.
+    origin: Literal['seed', 'derived', 'authored', 'manual', 'import'] = 'manual'
     supersedes_id: UUID | None = None
     superseded_by_id: UUID | None = None
     published_at: datetime | None = None

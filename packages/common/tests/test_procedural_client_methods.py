@@ -58,6 +58,8 @@ def test_client_exposes_the_procedural_surface():
         'procedural_list_versions',
         'procedural_list',
         'procedural_rollback',
+        # §18.5 enactment-outcome report (bump counters, no version row).
+        'procedural_report_outcome',
         # §9 derivation drain (drains cases → procedures/strategies).
         'procedural_derive',
     }
@@ -170,6 +172,17 @@ def test_procedural_list_signature():
     assert params['limit'].default == 50
     ret = sig.return_annotation
     assert ret in (list[ProceduralEntryDTO], 'list[ProceduralEntryDTO]')
+
+
+def test_procedural_report_outcome_signature():
+    """POST /procedural/{entry_id}/report — bump enactment counters.
+    ``outcome`` is required; ``vault_id`` is an optional scoping guard."""
+    sig = inspect.signature(RemoteMemexAPI.procedural_report_outcome)
+    params = sig.parameters
+    assert params['entry_id'].annotation is UUID
+    assert params['outcome'].annotation is str
+    assert params['vault_id'].default is None
+    assert sig.return_annotation is ProceduralEntryDTO
 
 
 def test_procedural_method_uuids_are_uuid_typed():

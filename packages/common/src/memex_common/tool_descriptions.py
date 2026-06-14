@@ -231,7 +231,7 @@ MEMEX_PROCEDURAL_SEARCH_DESC = (
     'memex_procedural_get when you already have the UUID.\n'
     '\n'
     'Required: query. Optional: kind, scope, status (default "published"), '
-    'top_k (default 10), include_pin_chain + pin_contexts, bm25_weight.\n'
+    'limit (default 10), include_pin_chain + pin_contexts, bm25_weight.\n'
     'Returns hits with match provenance (bm25/vector/pin/rrf).'
 )
 

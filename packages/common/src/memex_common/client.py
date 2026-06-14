@@ -1836,15 +1836,19 @@ class RemoteMemexAPI:
         *,
         scope: ShortLabel | None = None,
         limit_per_context: int = 5,
+        vault_id: UUID | None = None,
     ) -> ProceduralBriefingCards:
         """Pin-chain briefing cards for the session-briefing surface.
 
-        The body is a JSON array of context_keys; ``scope`` and
-        ``limit_per_context`` ride as query parameters.
+        The body is a JSON array of context_keys; ``scope``,
+        ``limit_per_context`` and ``vault_id`` (the multi-tenancy guard)
+        ride as query parameters.
         """
         params: dict[str, Any] = {'limit_per_context': limit_per_context}
         if scope is not None:
             params['scope'] = scope
+        if vault_id is not None:
+            params['vault_id'] = str(vault_id)
         result = await self._post('procedural/briefing-cards', list(context_keys), params=params)
         return ProceduralBriefingCards(**result)
 
@@ -1956,6 +1960,22 @@ class RemoteMemexAPI:
         if rolled_back_by is not None:
             body['rolled_back_by'] = rolled_back_by
         result = await self._post(f'procedural/{entry_id}/rollback', body)
+        return ProceduralEntryDTO(**result)
+
+    async def procedural_report_outcome(
+        self,
+        entry_id: UUID,
+        outcome: str,
+        *,
+        vault_id: UUID | None = None,
+    ) -> ProceduralEntryDTO:
+        """Report an enactment outcome (§18.5): bump success/failure/mixed +
+        uses + last_used_at. No version row — the 'enacted, not case-worthy'
+        write path. ``outcome`` and ``vault_id`` ride as query params."""
+        params: dict[str, Any] = {'outcome': outcome}
+        if vault_id is not None:
+            params['vault_id'] = str(vault_id)
+        result = await self._post(f'procedural/{entry_id}/report', data={}, params=params)
         return ProceduralEntryDTO(**result)
 
     # ------------------------------------------------------------------
