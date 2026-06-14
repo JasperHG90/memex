@@ -445,3 +445,51 @@ async def test_procedural_routes_enforce_vault_access(http_client, metastore):
         assert r.status_code == 200, r.text
     finally:
         app.dependency_overrides[get_auth_context] = lambda: None
+
+
+@pytest.mark.asyncio
+async def test_entry_pins_and_cases_enforce_vault_access(http_client, metastore, api):
+    """The _authz_entry routes (versions/rollback/pin/unpin), the operator-only
+    /procedural/pins, and /cases with a cross-vault case_of all fence a
+    restricted key. Covers the gaps the _authz_vault test does not."""
+    from memex_core.server import app
+    from memex_core.server.auth import AuthContext, Permission, get_auth_context
+
+    async with metastore.session() as session:
+        allowed_vault = await _create_vault(session, 'authz2_ok')
+        other_vault = await _create_vault(session, 'authz2_other')
+
+    # Seed a procedure in the DISALLOWED vault via the repository (bypasses auth).
+    other_entry = await api.procedural.create(
+        _entry_dto(vault_id=other_vault, title='other-vault-entry', verb='rotate', context='creds')
+    )
+
+    restricted = AuthContext(
+        key_prefix='test',
+        key_name='restricted',
+        policy='reader',
+        permissions=frozenset({Permission.READ, Permission.WRITE}),
+        vault_ids=[str(allowed_vault)],
+        read_vault_ids=None,
+    )
+    app.dependency_overrides[get_auth_context] = lambda: restricted
+    try:
+        # entry-id route (_authz_entry) on an entry in a disallowed vault → 403.
+        r = await http_client.get(f'/api/v1/procedural/{other_entry.id}/versions')
+        assert r.status_code == 403, r.text
+        # /procedural/pins is operator-only → 403 for any restricted key.
+        r = await http_client.get('/api/v1/procedural/pins', params={'context_key': 'global'})
+        assert r.status_code == 403, r.text
+        # /cases with a case_of pointing at a disallowed vault's procedure → 403.
+        r = await http_client.post(
+            '/api/v1/cases',
+            json={
+                'title': 'cross-vault case',
+                'trigger': 'tried to nudge another vault',
+                'outcome': 'success',
+                'case_of': str(other_entry.id),
+            },
+        )
+        assert r.status_code == 403, r.text
+    finally:
+        app.dependency_overrides[get_auth_context] = lambda: None

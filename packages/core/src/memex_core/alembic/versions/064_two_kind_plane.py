@@ -236,6 +236,12 @@ def upgrade() -> None:
     # NULL the context on at most ONE strategy row per (scope, verb) so two
     # rows with different contexts cannot both collapse to (scope, verb, NULL)
     # and collide. Losers stay context-bearing and are deleted below.
+    #
+    # The old ck_strategy_context (061) REQUIRES a non-NULL context, so it must
+    # be dropped BEFORE we NULL contexts here — otherwise the UPDATE violates
+    # the still-active CHECK and aborts on any strategy row. The replacement
+    # ck_strategy_anchor (context FORBIDDEN) is added in Part B.2.
+    op.drop_constraint('ck_strategy_context', 'procedural_entries', type_='check')
     conn.execute(
         sa.text(
             """
@@ -286,7 +292,8 @@ def upgrade() -> None:
         "kind IN ('procedure', 'strategy')",
     )
 
-    op.drop_constraint('ck_strategy_context', 'procedural_entries', type_='check')
+    # ck_strategy_context was already dropped in Part B.1 (before the context
+    # NULLing). Add its replacement now.
     op.create_check_constraint(
         'ck_strategy_anchor',
         'procedural_entries',

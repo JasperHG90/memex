@@ -347,8 +347,17 @@ async def procedural_list_pins(
     api: Annotated[MemexAPI, Depends(get_api)],
     context_key: Annotated[ShortLabel, Query(description='Pin-chain context key.')],
     limit: Annotated[int | None, Query(ge=1, le=100)] = None,
+    auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
     """Pins for one context, position ascending (curation surface)."""
+    # Pins carry no vault dimension (keyed on context_key), so a restricted
+    # key cannot be scoped to "its own" pins — listing across a shared context
+    # would enumerate other vaults' entry ids. Operator-only, like /derive.
+    if auth is not None and auth.vault_ids is not None:
+        raise HTTPException(
+            status_code=403,
+            detail='listing procedural pins is an operator-only operation.',
+        )
     try:
         return await api.procedural.list_pins(context_key, limit=limit)
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
@@ -602,8 +611,9 @@ async def procedural_unpin(
     context_key: Annotated[ShortLabel, Query(description='Pin-chain context key.')],
     auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
-    """Unpin an entry from a context. Idempotent — 200 with removed=0
-    when no pin existed."""
+    """Unpin an entry from a context. The entry must exist (404 otherwise,
+    so the caller's vault can be authorized); idempotent on the pin itself —
+    200 with removed=0 when the entry exists but held no such pin."""
     await _authz_entry(auth, api, entry_id, permission=Permission.WRITE)
     try:
         removed = await api.procedural.unpin(entry_id=entry_id, context_key=context_key)

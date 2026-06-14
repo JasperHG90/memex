@@ -49,10 +49,6 @@ async def _seed_collisions(url: str) -> None:
             )
             # Two user-scoped procedures that collide on (procedure, global,
             # deploy, nomad) the instant 064 flips both scopes to 'global'.
-            # (The analogous strategy-context collision is unreachable: the
-            # ck_strategy_context CHECK from 061 forbids a non-NULL-context
-            # strategy ever existing, so 064's strategy UPDATE has no rows to
-            # flip — its window-dedup is harmless defense, not testable here.)
             for scope in ('user:alice', 'user:bob'):
                 await conn.execute(
                     text(
@@ -61,6 +57,20 @@ async def _seed_collisions(url: str) -> None:
                         "VALUES (:v, 'procedure', :s, 'deploy', 'nomad', 't', 's', 'when deploy')"
                     ),
                     {'v': str(vid), 's': scope},
+                )
+            # Two strategies sharing (global, release) with distinct contexts —
+            # at rev 063 ck_strategy_context REQUIRES a non-NULL context, so both
+            # are legal here; 064 collapses both to context=NULL and they would
+            # collide on (strategy, global, release, NULL). The window-dedup keeps
+            # one.
+            for ctx in ('blue', 'green'):
+                await conn.execute(
+                    text(
+                        'INSERT INTO experiential_entries '
+                        '(vault_id, kind, scope, verb, context, title, summary, trigger) '
+                        "VALUES (:v, 'strategy', 'global', 'release', :c, 't', 's', 'when release')"
+                    ),
+                    {'v': str(vid), 'c': ctx},
                 )
     finally:
         await engine.dispose()
@@ -86,8 +96,17 @@ async def test_064_survives_colliding_anchors(fresh_db_url: str) -> None:
                     )
                 )
             ).scalar()
+            strats = (
+                await conn.execute(
+                    text(
+                        "SELECT count(*) FROM procedural_entries WHERE kind='strategy' "
+                        "AND scope='global' AND verb='release' AND context IS NULL"
+                    )
+                )
+            ).scalar()
     finally:
         await engine.dispose()
 
-    # Exactly one representative survived the anchor; the dup was deleted.
+    # Exactly one representative survived each anchor; the dup was deleted.
     assert procs == 1
+    assert strats == 1
