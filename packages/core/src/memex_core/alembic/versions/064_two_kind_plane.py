@@ -190,19 +190,35 @@ def upgrade() -> None:
     conn.execute(sa.text("DELETE FROM procedural_entries WHERE kind = 'case'"))
 
     # user-scoped rows → global where the anchor stays unique; delete the rest.
+    # Promote at most ONE user row per (kind, verb, context) anchor: a window
+    # rank picks a single representative, so two user rows sharing an anchor
+    # (e.g. user:alice + user:bob, same verb/context) cannot both flip to the
+    # same global anchor and collide on uq_procedural_identity mid-statement.
+    # The losers (rank > 1) and any rows with an existing global twin stay
+    # user-scoped and are removed by the DELETE below.
     conn.execute(
         sa.text(
             """
+            WITH ranked AS (
+                SELECT e.id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY e.kind, e.verb, e.context
+                           ORDER BY e.created_at, e.id
+                       ) AS rn
+                FROM procedural_entries e
+                WHERE (e.scope = 'user' OR e.scope LIKE 'user:%')
+                  AND NOT EXISTS (
+                    SELECT 1 FROM procedural_entries g
+                    WHERE g.kind = e.kind
+                      AND g.scope = 'global'
+                      AND g.verb IS NOT DISTINCT FROM e.verb
+                      AND g.context IS NOT DISTINCT FROM e.context
+                  )
+            )
             UPDATE procedural_entries e
             SET scope = 'global'
-            WHERE (e.scope = 'user' OR e.scope LIKE 'user:%')
-              AND NOT EXISTS (
-                SELECT 1 FROM procedural_entries g
-                WHERE g.kind = e.kind
-                  AND g.scope = 'global'
-                  AND g.verb IS NOT DISTINCT FROM e.verb
-                  AND g.context IS NOT DISTINCT FROM e.context
-              )
+            FROM ranked
+            WHERE e.id = ranked.id AND ranked.rn = 1
             """
         )
     )
@@ -216,22 +232,35 @@ def upgrade() -> None:
     )
 
     # Strategy anchor: (scope, verb, NULL). NULL the context where unique;
-    # delete collisions.
+    # delete collisions. Same window-dedup guard as the scope flip above —
+    # NULL the context on at most ONE strategy row per (scope, verb) so two
+    # rows with different contexts cannot both collapse to (scope, verb, NULL)
+    # and collide. Losers stay context-bearing and are deleted below.
     conn.execute(
         sa.text(
             """
+            WITH ranked AS (
+                SELECT e.id,
+                       ROW_NUMBER() OVER (
+                           PARTITION BY e.scope, e.verb
+                           ORDER BY e.created_at, e.id
+                       ) AS rn
+                FROM procedural_entries e
+                WHERE e.kind = 'strategy'
+                  AND e.context IS NOT NULL
+                  AND NOT EXISTS (
+                    SELECT 1 FROM procedural_entries s
+                    WHERE s.kind = 'strategy'
+                      AND s.scope = e.scope
+                      AND s.verb IS NOT DISTINCT FROM e.verb
+                      AND s.context IS NULL
+                      AND s.id <> e.id
+                  )
+            )
             UPDATE procedural_entries e
             SET context = NULL
-            WHERE e.kind = 'strategy'
-              AND e.context IS NOT NULL
-              AND NOT EXISTS (
-                SELECT 1 FROM procedural_entries s
-                WHERE s.kind = 'strategy'
-                  AND s.scope = e.scope
-                  AND s.verb IS NOT DISTINCT FROM e.verb
-                  AND s.context IS NULL
-                  AND s.id <> e.id
-              )
+            FROM ranked
+            WHERE e.id = ranked.id AND ranked.rn = 1
             """
         )
     )
