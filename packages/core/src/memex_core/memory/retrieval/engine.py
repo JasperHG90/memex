@@ -215,6 +215,13 @@ from memex_core.memory.retrieval.constants import (  # noqa: E402
     STABILITY_THRESHOLD,
 )
 
+# Minimum candidate depth the exploration bypass re-fetches at. The main path's
+# candidate_depth collapses to the final limit when there is no reranker or
+# token budget; exploration (F33) must look *beyond* the top-N to resurface the
+# low-Memory-Worth / low-confidence units the main path prunes (F48), so the
+# bypass pool is fetched at least this deep regardless of the final limit.
+_EXPLORATION_BYPASS_MIN_DEPTH = 50
+
 
 def _build_pre_filter_clause(
     *,
@@ -734,8 +741,9 @@ class RetrievalEngine:
                 all_ranked_items.append((items, q_weight))
             fused_items = self._fuse_multi_query_results(all_ranked_items, candidate_depth)
 
-        # Free embedding lists — no longer needed after RRF + fallback
-        del all_embeddings_list
+        # NOTE: ``all_embeddings_list`` is intentionally kept alive past here —
+        # the exploration bypass below re-runs the RRF at a deeper depth and
+        # needs the per-query embeddings. It is GC'd at method return.
 
         if not fused_items:
             return ([], None)
@@ -869,17 +877,55 @@ class RetrievalEngine:
             if should_inject:
                 exploration_pool = hydrated_candidates
                 if request.apply_pre_filter:
-                    # Re-hydrate ALL fused items without the pre-filter
-                    # predicate so exploration sees units the main path filtered out.
+                    # The main path pruned low-confidence/low-MW units at the
+                    # pre-filter, AND candidate_depth (≈ the final limit when
+                    # there is no reranker or token budget) truncated fused_items
+                    # too shallow to even contain them — so re-hydrating
+                    # fused_items alone can never surface them. Re-run the RRF at
+                    # an exploration-floor depth and hydrate WITHOUT the
+                    # pre-filter, so F33 can resurface units the main path can
+                    # never see (the F48 ∩ F33 self-correction contract). The RRF
+                    # itself does not apply the confidence pre-filter; only
+                    # hydration does, so the deeper fetch recovers them.
+                    #
+                    # NOTE (follow-up): the MAIN candidate pool is also capped at
+                    # candidate_depth; when that equals the limit it defeats MMR
+                    # diversity too. Flooring candidate_depth for the main path is
+                    # the broader fix, left to the retrieval owner so this change
+                    # does not alter main-path ranking under the merge.
+                    bypass_depth = max(candidate_depth, _EXPLORATION_BYPASS_MIN_DEPTH)
+                    bypass_ranked = []
+                    for q, q_emb, q_weight in zip(queries, all_embeddings_list, query_weights):
+                        if use_partitioned:
+                            items = await self._perform_partitioned_rrf(
+                                session,
+                                q,
+                                q_emb,
+                                bypass_depth,
+                                filters,
+                                strategies=request.strategies,
+                                strategy_weights=request.strategy_weights,
+                            )
+                        else:
+                            items = await self._perform_rrf_retrieval(
+                                session,
+                                q,
+                                q_emb,
+                                bypass_depth,
+                                filters,
+                                strategies=request.strategies,
+                                strategy_weights=request.strategy_weights,
+                            )
+                        bypass_ranked.append((items, q_weight))
+                    bypass_fused = self._fuse_multi_query_results(bypass_ranked, bypass_depth)
                     bypass_pool = await self._hydrate_results(
-                        session, fused_items, apply_pre_filter=False
+                        session, bypass_fused, apply_pre_filter=False
                     )
                     if not request.include_superseded:
                         threshold = self.retrieval_config.superseded_threshold
                         # Use the SSOT helper for the confidence read so the
                         # falsy-zero handling and ``None`` fallback are
-                        # consistent with the rest of
-                        # the rerank path (engine.py:1507) and lint
+                        # consistent with the rerank path and lint
                         # (services/lint_confidence.py).
                         bypass_pool = [
                             u
