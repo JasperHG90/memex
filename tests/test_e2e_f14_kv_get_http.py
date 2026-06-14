@@ -1,16 +1,11 @@
-"""End-to-end tests for F14 ``GET /api/v1/kv/get?include_history=...``.
+"""Removal guards for ``GET /api/v1/kv/get`` after the legacy KV-procedure
+subsystem was removed entirely (V7 — see "remove the legacy KV-procedure
+subsystem entirely").
 
-Two contracts to lock:
-
-1. **Default (back-compat)**: GET without ``include_history`` returns the
-   existing :class:`KVEntryDTO` shape — for procedure: keys, the ``value``
-   field is the unwrapped active string, identical to non-procedure keys.
-2. **include_history=true**: GET returns
-   :class:`KVProcedureEntryDTO` — same outer envelope, but ``value`` is now
-   ``{value, version, history}``. Non-procedure keys ignore the flag.
-
-These are HTTP-level tests so the wire shape is what we lock down — the
-service layer is exercised separately by the unit + integration tests.
+``procedure:``-prefixed keys are now ordinary KV keys: there is no
+version-history envelope and ``include_history`` is a no-op. These
+HTTP-level tests pin that removal — GET returns the bare active string,
+and ``include_history=true`` is ignored for every key.
 """
 
 from __future__ import annotations
@@ -49,8 +44,12 @@ def test_kv_get_default_shape_unchanged_for_procedure_key(
     assert body['value'] == 'second-value'
 
 
-def test_kv_get_include_history_true_returns_envelope(client: TestClient, proc_key: str) -> None:
-    """``?include_history=true`` returns KVProcedureEntryDTO with structured value."""
+def test_kv_get_include_history_ignored_for_procedure_key(
+    client: TestClient, proc_key: str
+) -> None:
+    """``?include_history=true`` on a procedure: key is now a no-op — the
+    legacy history envelope was removed, so the latest value comes back as a
+    bare string just like any other key (no {value, version, history})."""
     for v in ('a', 'b', 'c'):
         _put_proc_key(client, proc_key, v)
 
@@ -61,15 +60,11 @@ def test_kv_get_include_history_true_returns_envelope(client: TestClient, proc_k
     assert response.status_code == 200, response.text
     body = response.json()
     assert body['key'] == proc_key
-    value = body['value']
-    assert isinstance(value, dict), (
-        f'expected include_history=true to return value: dict; got {type(value).__name__}'
+    assert isinstance(body['value'], str), (
+        f'KV-procedure subsystem removed: include_history must NOT return an '
+        f'envelope; got {type(body["value"]).__name__}: {body["value"]!r}'
     )
-    assert value['value'] == 'c'
-    assert value['version'] == 3
-    history = value['history']
-    assert [h['v'] for h in history] == [1, 2]
-    assert [h['value'] for h in history] == ['a', 'b']
+    assert body['value'] == 'c'
 
 
 def test_kv_get_include_history_ignored_for_non_procedure_key(
