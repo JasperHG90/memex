@@ -944,6 +944,18 @@ class TestVaultsSection:
         assert '**(active)**' in result
 
     @pytest.mark.asyncio
+    async def test_vaults_heading_has_blank_line_separator(self):
+        """The heading is preceded by a blank line so it doesn't glue onto the
+        previous section's last list item. Regression: this section lacked the
+        leading newline that every other section carries, so e.g. the last
+        Procedural Card ran straight into `## Available Vaults`."""
+        vaults = [_mock_vault('global', 'Default', 10, vault_id=VAULT_ID)]
+        svc = _make_service(summary=_make_vault_summary(), vaults=vaults)
+        result = await svc.generate(vault_id=VAULT_ID, budget=2000)
+        assert '\n\n## Available Vaults' in result
+        assert '\n## Available Vaults' in result and '_\n## Available Vaults' not in result
+
+    @pytest.mark.asyncio
     async def test_empty_vaults_no_section(self):
         svc = _make_service(summary=_make_vault_summary(), vaults=[])
         result = await svc.generate(vault_id=VAULT_ID, budget=2000)

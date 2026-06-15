@@ -479,7 +479,10 @@ class SessionBriefingService:
         """Build the available vaults section."""
         if not vaults:
             return ''
-        lines = ['## Available Vaults\n']
+        # Leading blank line so the heading separates from the preceding
+        # section (every other section starts with '\n' too); without it the
+        # heading glues onto the prior section's last list item.
+        lines = ['\n## Available Vaults\n']
         for v in vaults:
             vault = v.get('vault', v) if isinstance(v, dict) else v
             name = getattr(vault, 'name', str(vault))
