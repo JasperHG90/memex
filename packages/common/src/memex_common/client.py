@@ -1956,6 +1956,48 @@ class RemoteMemexAPI:
             return BatchJobStatus(**response.json())
         return CaseSubmitResult(**response.json())
 
+    async def case_list(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        outcome: str | None = None,
+        tags: list[str] | None = None,
+        project_id: str | None = None,
+        case_of: UUID | None = None,
+        submitted_by: str | None = None,
+        slim: bool = False,
+    ) -> list[NoteListItemDTO]:
+        """List case notes (``role='case'``) in the hidden procedural vault.
+
+        Mirrors ``GET /api/v1/cases``. Filters match the provenance stamped
+        onto the case note at submission time.
+        """
+        params: dict[str, Any] = {'limit': limit, 'offset': offset}
+        if outcome is not None:
+            params['outcome'] = outcome
+        if tags is not None:
+            params['tags'] = tags
+        if project_id is not None:
+            params['project_id'] = project_id
+        if case_of is not None:
+            params['case_of'] = str(case_of)
+        if submitted_by is not None:
+            params['submitted_by'] = submitted_by
+        if slim:
+            params['slim'] = 'true'
+        result = await self._get('cases', params=params)
+        return [NoteListItemDTO(**row) for row in result]
+
+    async def case_get(self, note_id: UUID) -> NoteDTO:
+        """Get a single case note by ID.
+
+        Mirrors ``GET /api/v1/cases/{note_id}``. Returns 404 if the note is
+        not a case or not in the procedural system vault.
+        """
+        result = await self._get(f'cases/{note_id}')
+        return NoteDTO(**result)
+
     async def procedural_derive(self, *, limit: int = 10) -> dict[str, Any]:
         """Drain pending derivation tasks (cases → procedure, procedures →
         strategy). Returns ``{'completed': int, 'queue_ids': [...]}``."""

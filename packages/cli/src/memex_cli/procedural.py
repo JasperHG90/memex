@@ -921,6 +921,148 @@ async def case_submit(
         )
 
 
+@case_app.command('list')
+@async_command
+async def case_list(
+    ctx: typer.Context,
+    limit: Annotated[
+        int, typer.Option('--limit', '-l', help='Maximum number of cases to return.')
+    ] = 50,
+    offset: Annotated[int, typer.Option('--offset', help='Number of cases to skip.')] = 0,
+    outcome: Annotated[
+        str | None,
+        typer.Option('--outcome', '-o', help='Filter by outcome: success | failure | mixed.'),
+    ] = None,
+    project_id: Annotated[
+        str | None,
+        typer.Option('--project-id', '-p', help='Filter by recorded project_id.'),
+    ] = None,
+    submitted_by: Annotated[
+        str | None,
+        typer.Option('--submitted-by', help='Filter by submitting agent identity.'),
+    ] = None,
+    tag: Annotated[
+        list[str] | None,
+        typer.Option('--tag', '-t', help='Repeatable. Filter by tags (AND semantics).'),
+    ] = None,
+    slim: Annotated[
+        bool,
+        typer.Option(
+            '--slim', '-s', help='Drop per-note summaries — smaller response, faster query.'
+        ),
+    ] = False,
+    json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
+    compact: Annotated[
+        bool, typer.Option('--compact', help='One line per case: id, outcome, title.')
+    ] = False,
+):
+    """List case notes in the hidden procedural system vault.
+
+    Cases are notes (role='case') — this view exposes them by the
+    provenance stamped at submission time: outcome, project_id,
+    submitted_by, and tags.
+    """
+    config: MemexConfig = ctx.obj
+
+    if outcome is not None and outcome not in _VALID_OUTCOMES:
+        console.print(
+            f'[red]--outcome must be one of success|failure|mixed, got {outcome!r}.[/red]'
+        )
+        raise typer.Exit(2)
+
+    async with get_api_context(config) as api:
+        try:
+            cases = await api.case_list(
+                limit=limit,
+                offset=offset,
+                outcome=outcome,
+                tags=tag,
+                project_id=project_id,
+                submitted_by=submitted_by,
+                slim=slim,
+            )
+        except Exception as e:
+            handle_api_error(e)
+
+    if json_output:
+        emit_json([c.model_dump(mode='json') for c in cases])
+        return
+
+    if compact:
+        for c in cases:
+            meta = c.doc_metadata or {}
+            oc = meta.get('outcome', '-')
+            console.print(f'{c.id}  [{oc}]  {c.name or c.title or "Untitled"}')
+        return
+
+    table = Table(title='Cases')
+    table.add_column('Title', style='cyan')
+    table.add_column('Outcome', style='green')
+    table.add_column('Project', style='yellow')
+    table.add_column('Submitted By', style='blue')
+    table.add_column('Created At', style='dim')
+    table.add_column('ID', style='dim')
+
+    for c in cases:
+        meta = c.doc_metadata or {}
+        table.add_row(
+            c.name or c.title or 'Untitled',
+            meta.get('outcome', '-'),
+            meta.get('project', '') or '-',
+            meta.get('submitted_by', '') or '-',
+            str(c.created_at),
+            str(c.id),
+        )
+    console.print(table)
+
+
+@case_app.command('view')
+@async_command
+async def case_view(
+    ctx: typer.Context,
+    note_id: Annotated[str, typer.Argument(help='Case note UUID.')],
+    json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
+):
+    """View a single case note by ID."""
+    from uuid import UUID as _UUID
+
+    config: MemexConfig = ctx.obj
+
+    try:
+        note_uuid = _UUID(note_id)
+    except ValueError:
+        console.print(f'[red]note_id is not a valid UUID: {note_id!r}[/red]')
+        raise typer.Exit(2)
+
+    async with get_api_context(config) as api:
+        try:
+            note = await api.case_get(note_uuid)
+        except Exception as e:
+            handle_api_error(e)
+
+    if json_output:
+        emit_json(note.model_dump(mode='json'))
+        return
+
+    meta = note.doc_metadata or {}
+    console.print(f'[bold cyan]{note.name or note.title or "Untitled"}[/bold cyan]')
+    console.print(f'  [dim]id:[/dim] {note.id}')
+    console.print(f'  [dim]outcome:[/dim] {meta.get("outcome", "-")}')
+    if meta.get('project'):
+        console.print(f'  [dim]project:[/dim] {meta["project"]}')
+    if meta.get('submitted_by'):
+        console.print(f'  [dim]submitted by:[/dim] {meta["submitted_by"]}')
+    if meta.get('case_of'):
+        console.print(f'  [dim]case_of:[/dim] {meta["case_of"]}')
+    if meta.get('tags'):
+        console.print(f'  [dim]tags:[/dim] {", ".join(meta["tags"])}')
+    console.print(f'  [dim]created:[/dim] {note.created_at.isoformat()}')
+    if note.description:
+        console.print(f'\n[dim]{note.description}[/dim]')
+    if note.original_text:
+        console.print(f'\n{note.original_text}')
+
+
 # ---------------------------------------------------------------------------
 # pin / unpin / pins — briefing-chain curation (§18.8 / §19.8)
 # ---------------------------------------------------------------------------

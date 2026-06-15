@@ -18,6 +18,7 @@ import inspect
 from uuid import UUID
 
 from memex_common.client import RemoteMemexAPI
+from memex_common.schemas import NoteDTO, NoteListItemDTO
 from memex_common.procedural_schemas import (
     ProceduralBriefingCards,
     ProceduralEntryCreate,
@@ -73,6 +74,13 @@ def test_client_exposes_case_submit():
     """Cases are notes — the submission path is its own method, not a
     procedural_* plane write (§18.3 / §18.9.0)."""
     assert 'case_submit' in _public_methods(RemoteMemexAPI)
+
+
+def test_client_exposes_case_list_and_view():
+    """The read side of the case surface mirrors GET /cases and
+    GET /cases/{note_id}."""
+    assert 'case_list' in _public_methods(RemoteMemexAPI)
+    assert 'case_get' in _public_methods(RemoteMemexAPI)
 
 
 def test_client_does_not_expose_legacy_experiential_methods():
@@ -183,6 +191,28 @@ def test_procedural_report_outcome_signature():
     assert params['outcome'].annotation is str
     assert params['vault_id'].default is None
     assert sig.return_annotation is ProceduralEntryDTO
+
+
+def test_case_list_signature():
+    """GET /cases — filters all optional; returns a list of note items."""
+    sig = inspect.signature(RemoteMemexAPI.case_list)
+    params = sig.parameters
+    assert params['limit'].default == 100
+    assert params['offset'].default == 0
+    assert params['outcome'].default is None
+    assert params['tags'].default is None
+    assert params['project_id'].default is None
+    assert params['case_of'].default is None
+    assert params['submitted_by'].default is None
+    assert params['slim'].default is False
+    assert sig.return_annotation in (list[NoteListItemDTO], 'list[NoteListItemDTO]')
+
+
+def test_case_get_signature():
+    """GET /cases/{note_id} — UUID-typed id; returns a full NoteDTO."""
+    sig = inspect.signature(RemoteMemexAPI.case_get)
+    assert sig.parameters['note_id'].annotation is UUID
+    assert sig.return_annotation is NoteDTO
 
 
 def test_procedural_method_uuids_are_uuid_typed():

@@ -193,6 +193,111 @@ class CaseService:
             'assignment_mode': result.assignment.mode,
         }
 
+    async def list_cases(
+        self,
+        *,
+        limit: int = 100,
+        offset: int = 0,
+        outcome: str | None = None,
+        tags: list[str] | None = None,
+        project_id: str | None = None,
+        case_of: UUID | str | None = None,
+        submitted_by: str | None = None,
+        slim: bool = False,
+    ) -> list[Any]:
+        """List case notes (``role='case'``) in the hidden procedural system vault.
+
+        Filters match the provenance stamped onto the case note's
+        ``doc_metadata`` at submission time. Returns ORM ``Note`` objects with
+        ``vault_name`` and (unless ``slim``) ``summaries`` attached so the
+        HTTP layer can reuse ``build_note_list_item_dto``.
+        """
+        import json
+
+        from sqlalchemy import func, literal
+        from sqlalchemy.dialects.postgresql import JSONB
+        from sqlmodel import select
+
+        from memex_common.schemas import BlockSummaryDTO
+        from memex_core.memory.sql_models import Chunk, Note, Vault
+
+        vault_id = await self._resolve_case_vault()
+
+        async with self._api.metastore.session() as session:
+            stmt = (
+                select(Note).where(col(Note.vault_id) == vault_id).where(col(Note.role) == 'case')
+            )
+            if outcome is not None:
+                stmt = stmt.where(col(Note.doc_metadata)['outcome'].astext == outcome)
+            if project_id is not None:
+                stmt = stmt.where(col(Note.doc_metadata)['project'].astext == project_id)
+            if case_of is not None:
+                stmt = stmt.where(col(Note.doc_metadata)['case_of'].astext == str(case_of))
+            if submitted_by is not None:
+                stmt = stmt.where(col(Note.doc_metadata)['submitted_by'].astext == submitted_by)
+            if tags:
+                stmt = stmt.where(
+                    col(Note.doc_metadata)['tags']
+                    .astext.cast(JSONB)
+                    .contains(literal(json.dumps(tags)).cast(JSONB))
+                )
+            stmt = (
+                stmt.order_by(func.coalesce(Note.publish_date, Note.created_at).desc())
+                .offset(offset)
+                .limit(limit)
+            )
+            notes = list((await session.exec(stmt)).all())
+
+            # Attach vault name (single vault, but keep the same shape as notes).
+            vault = (await session.exec(select(Vault).where(col(Vault.id) == vault_id))).first()
+            vault_name = vault.name if vault else None
+            for note in notes:
+                object.__setattr__(note, 'vault_name', vault_name)
+
+            if slim:
+                for note in notes:
+                    object.__setattr__(note, 'summaries', [])
+                return notes
+
+            note_ids = [n.id for n in notes]
+            summaries_map: dict[UUID, list[BlockSummaryDTO]] = {}
+            if note_ids:
+                chunk_stmt = (
+                    select(Chunk.note_id, Chunk.summary)
+                    .where(col(Chunk.note_id).in_(note_ids), col(Chunk.status) == 'active')
+                    .order_by(col(Chunk.note_id), col(Chunk.chunk_index))
+                )
+                for note_id, summary_blob in (await session.exec(chunk_stmt)).all():
+                    if summary_blob and isinstance(summary_blob, dict):
+                        summaries_map.setdefault(note_id, []).append(
+                            BlockSummaryDTO(**summary_blob)
+                        )
+            for note in notes:
+                object.__setattr__(note, 'summaries', summaries_map.get(note.id, []))
+            return notes
+
+    async def get_case(self, note_id: UUID) -> Any:
+        """Get a single case note by ID.
+
+        Raises :class:`ResourceNotFoundError` if the note does not exist,
+        is not in the case vault, or does not have ``role='case'``.
+        """
+        from memex_common.exceptions import ResourceNotFoundError
+        from sqlmodel import select
+
+        from memex_core.memory.sql_models import Note, Vault
+
+        vault_id = await self._resolve_case_vault()
+
+        async with self._api.metastore.session() as session:
+            note = await session.get(Note, note_id)
+            if note is None or note.vault_id != vault_id or note.role != 'case':
+                raise ResourceNotFoundError(f'Case note {note_id} not found.')
+
+            vault = (await session.exec(select(Vault).where(col(Vault.id) == vault_id))).first()
+            object.__setattr__(note, 'vault_name', vault.name if vault else None)
+            return note
+
     def _build_note_input(self, payload: CaseSubmit) -> NoteInput:
         """Compose the §5.1 case markdown into the NoteInput that gets
         ingested. Pure function of the payload — no I/O — so the note id is

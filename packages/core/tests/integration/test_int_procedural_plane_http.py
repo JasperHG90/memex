@@ -658,3 +658,101 @@ async def test_case_submit_background_returns_pollable_job(
 
     assert job is not None and job['status'] == 'completed', job
     assert job['result'] and job['result']['note_ids'], job
+
+
+@pytest.mark.asyncio
+async def test_case_list_returns_case_notes(api, http_client, metastore, fake_retain_factory):
+    """GET /api/v1/cases returns only role='case' notes in the procedural
+    system vault, and the outcome filter narrows the list."""
+    api.memory.retain.side_effect = fake_retain_factory
+
+    async with metastore.session() as session:
+        vault_id = await _create_vault(session, 'case_list')
+    entry = await api.procedural.create(
+        _entry_dto(vault_id=vault_id, title='case-list-target', verb='deploy', context='prod')
+    )
+
+    body = {
+        'title': 'Listable case',
+        'trigger': 'trigger text for list',
+        'outcome': 'success',
+        'case_of': str(entry.id),
+    }
+    resp = await http_client.post('/api/v1/cases', json=body)
+    assert resp.status_code == 200, resp.text
+    note_id = resp.json()['note_id']
+
+    # List all cases.
+    list_resp = await http_client.get('/api/v1/cases')
+    assert list_resp.status_code == 200, list_resp.text
+    cases = list_resp.json()
+    ids = [c['id'] for c in cases]
+    assert str(note_id) in ids
+
+    # Outcome filter matches.
+    filtered = await http_client.get('/api/v1/cases', params={'outcome': 'success'})
+    assert filtered.status_code == 200, filtered.text
+    assert str(note_id) in [c['id'] for c in filtered.json()]
+
+    # Outcome filter excludes.
+    excluded = await http_client.get('/api/v1/cases', params={'outcome': 'failure'})
+    assert excluded.status_code == 200, excluded.text
+    assert str(note_id) not in [c['id'] for c in excluded.json()]
+
+
+@pytest.mark.asyncio
+async def test_case_get_returns_case_note_and_404s_non_cases(
+    api, http_client, metastore, fake_retain_factory
+):
+    """GET /api/v1/cases/{note_id} returns the full case note; regular
+    notes or random UUIDs return 404 so the case surface does not leak."""
+    import uuid
+
+    api.memory.retain.side_effect = fake_retain_factory
+
+    async with metastore.session() as session:
+        vault_id = await _create_vault(session, 'case_get')
+        # A plain note in the same vault must NOT be reachable as a case.
+        plain_note_id = uuid.uuid4()
+        await session.execute(
+            text(
+                'INSERT INTO notes (id, content_hash, vault_id, original_text, title) '
+                'VALUES (:id, :hash, :vault_id, :text, :title)'
+            ),
+            {
+                'id': str(plain_note_id),
+                'hash': 'plainhash',
+                'vault_id': str(vault_id),
+                'text': 'plain note',
+                'title': 'Plain',
+            },
+        )
+        await session.commit()
+
+    entry = await api.procedural.create(
+        _entry_dto(vault_id=vault_id, title='case-get-target', verb='deploy', context='prod')
+    )
+
+    body = {
+        'title': 'Gettable case',
+        'trigger': 'trigger text for get',
+        'outcome': 'mixed',
+        'case_of': str(entry.id),
+    }
+    resp = await http_client.post('/api/v1/cases', json=body)
+    assert resp.status_code == 200, resp.text
+    note_id = resp.json()['note_id']
+
+    get_resp = await http_client.get(f'/api/v1/cases/{note_id}')
+    assert get_resp.status_code == 200, get_resp.text
+    got = get_resp.json()
+    assert got['id'] == str(note_id)
+    assert got['doc_metadata']['outcome'] == 'mixed'
+
+    # Random UUID → 404.
+    missing = await http_client.get(f'/api/v1/cases/{uuid.uuid4()}')
+    assert missing.status_code == 404, missing.text
+
+    # Plain note in a content vault → 404 (not role='case' in procedural vault).
+    plain = await http_client.get(f'/api/v1/cases/{plain_note_id}')
+    assert plain.status_code == 404, plain.text

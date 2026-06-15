@@ -92,6 +92,15 @@ def test_case_help_routes_to_procedural_plane(runner, strip_ansi):
     assert 'experiential' not in text.lower()
 
 
+def test_case_group_lists_all_subcommands(runner, strip_ansi):
+    """`memex case --help` must surface submit, list, and view."""
+    result = runner.invoke(case_app, ['--help'])
+    assert result.exit_code == 0
+    text = _normalize(strip_ansi(result.stdout))
+    for cmd in ('submit', 'list', 'view'):
+        assert cmd in text, f'memex case help is missing subcommand: {cmd}'
+
+
 def test_case_submit_is_a_real_subcommand(runner, strip_ansi):
     """`memex case submit` must RUN the submit subcommand — not fail with
     'unexpected extra argument (submit)'. Typer flattens a single-command group
@@ -101,6 +110,25 @@ def test_case_submit_is_a_real_subcommand(runner, strip_ansi):
     assert 'unexpected extra argument' not in combined
     # It reaches our own runtime validation (title/trigger/outcome required).
     assert result.exit_code != 0
+
+
+def test_case_list_and_view_help_surface_filters(runner, strip_ansi):
+    """list/view help must expose the case-specific filters (outcome,
+    project-id, tag) and the note-id argument."""
+    list_result = runner.invoke(case_app, ['list', '--help'])
+    assert list_result.exit_code == 0
+    list_text = _normalize(strip_ansi(list_result.stdout))
+    assert '--outcome' in list_text
+    assert '--project-id' in list_text
+    assert '--tag' in list_text
+    assert '--submitted-by' in list_text
+    assert '--slim' in list_text
+
+    view_result = runner.invoke(case_app, ['view', '--help'])
+    assert view_result.exit_code == 0
+    view_text = _normalize(strip_ansi(view_result.stdout))
+    assert 'note-id' in view_text or 'NOTE_ID' in view_text
+    assert '--json' in view_text
 
 
 def test_case_submit_help_surfaces_trigger_and_file(runner, strip_ansi):
