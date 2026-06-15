@@ -895,11 +895,17 @@ async def lint_resolve(
             'resolution': resolution,
         }
 
-    # Canned-action path — destructive; gate as such. no_op is exempt: it
-    # mutates nothing beyond the status flip the action-less path already
-    # performs ungated, and the followup it records is pure audit.
+    # Canned-action path — destructive; gate as such. Two actions are exempt:
+    #   - no_op mutates nothing beyond the status flip the action-less path
+    #     already performs ungated (its followup is pure audit);
+    #   - activate_procedural_entry only promotes a procedure/strategy draft →
+    #     published. It is the core human curation action and is reversible
+    #     (undo re-drafts), so gating it behind attended-mode would make the
+    #     procedural curation loop unusable on a local/self-host server with
+    #     auth disabled, with no safety upside the reversibility doesn't cover.
+    _ATTENDED_EXEMPT = ('no_op', 'activate_procedural_entry')
     action_id = str(action_id_raw)
-    if action_id != 'no_op':
+    if action_id not in _ATTENDED_EXEMPT:
         _require_attended_mode(api)
     try:
         action = get_action(action_id)

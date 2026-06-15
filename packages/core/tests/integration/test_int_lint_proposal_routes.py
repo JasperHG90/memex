@@ -286,6 +286,73 @@ async def test_entity_collapse_carveout_requires_attended_mode(http: AsyncClient
     assert status == 'pending'
 
 
+async def _insert_procedural_activation_finding(api):
+    """A draft procedure + a pending procedural_distillation finding targeting
+    it (the activation path agents/derivation file)."""
+    import json
+
+    from memex_common.config import GLOBAL_VAULT_ID
+    from memex_common.procedural_schemas import ProceduralEntryCreate
+
+    entry = await api.procedural.create(
+        ProceduralEntryCreate(
+            vault_id=GLOBAL_VAULT_ID,
+            kind='procedure',
+            scope='global',
+            verb='exempt',
+            context='attended',
+            title='Exempt-activation test procedure',
+            summary='a draft to activate without the attended opt-in',
+            trigger='when testing the attended-mode activation exemption',
+            status='draft',
+            origin='derived',
+        )
+    )
+    finding_id = str(uuid4())
+    async with api.metastore.session() as s:
+        await s.execute(
+            text(
+                'INSERT INTO maintenance_proposals '
+                '(id, vault_id, lint_type, target_type, target_id, rule_name, evidence, '
+                ' suggested_action, status, source) VALUES '
+                "(:id, :vault_id, 'governance', 'procedural_entry', :target_id, "
+                " 'procedural_distillation', CAST(:evidence AS jsonb), 'activate', "
+                " 'pending', 'external')"
+            ),
+            {
+                'id': finding_id,
+                'vault_id': str(GLOBAL_VAULT_ID),
+                'target_id': str(entry.id),
+                'evidence': json.dumps({}),
+            },
+        )
+        await s.commit()
+    return finding_id, entry.id
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_activate_procedural_entry_exempt_from_attended_gate(
+    http: AsyncClient, api, monkeypatch
+):
+    """activate_procedural_entry is the core, REVERSIBLE curation action
+    (draft → published). Unlike other destructive canned actions it is exempt
+    from the attended-mode fence, so it resolves even with auth disabled and no
+    ``MEMEX_LINT_ALLOW_UNATTENDED_APPLY`` opt-in — otherwise the local/self-host
+    curation loop is unusable."""
+    monkeypatch.delenv('MEMEX_LINT_ALLOW_UNATTENDED_APPLY', raising=False)
+    finding_id, entry_id = await _insert_procedural_activation_finding(api)
+
+    resolve = await http.post(
+        f'/api/v1/lint/findings/{finding_id}/resolve',
+        json={'action': 'activate_procedural_entry'},
+    )
+    assert resolve.status_code == 200, resolve.text  # NOT 403 — exempt from the gate
+    # The draft was promoted, and the finding resolved.
+    entry = await api.procedural.get(entry_id)
+    assert entry.status == 'published'
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_destructive_action_executes_through_resolve(http: AsyncClient, api, monkeypatch):
