@@ -702,6 +702,8 @@ class ProposalCockpitApp(App):
             body_lines.extend(self._build_contradiction_body(proposal))
         elif proposal.rule_name == 'entity_collapse_cluster':
             body_lines.extend(self._build_entity_collapse_body(proposal))
+        elif proposal.target_type == 'procedural_entry':
+            body_lines.extend(await self._build_procedural_entry_body(proposal))
         else:
             label_suffix = (
                 f'  [white]{proposal.target_label}[/white]' if proposal.target_label else ''
@@ -814,6 +816,58 @@ class ProposalCockpitApp(App):
                 lines.append(f'[dim]Pairwise similarity {float(pmin):.2f}–{float(pmax):.2f}.[/dim]')
         except (TypeError, ValueError):
             pass
+        return lines
+
+    async def _build_procedural_entry_body(self, proposal: CockpitProposal) -> list[str]:
+        """Detail body for a procedural-plane finding (distillation / activation).
+
+        The target is a procedure/strategy entry, not a memory unit — fetch it
+        and render the real content (status, anchor, trigger, summary, body, and
+        source-case count) so a reviewer can judge the draft, instead of the
+        generic unit-metadata + evidence line that produced an unreadable blob.
+        """
+        entry = await self._controller.fetch_procedural_entry(proposal.target_id)
+        if entry is None:
+            return [
+                f'[bold]TARGET[/bold]  [dim cyan]{proposal.target_id[:8]}[/dim cyan]  '
+                '[red](could not load entry)[/red]'
+            ]
+
+        def _f(name: str, default: str = '') -> str:
+            val = entry.get(name) if isinstance(entry, dict) else getattr(entry, name, None)
+            return str(val) if val is not None else default
+
+        kind = _f('kind', 'entry')
+        status = _f('status')
+        anchor = ' / '.join(p for p in (_f('scope'), _f('verb'), _f('context')) if p)
+        status_color = {'draft': 'yellow', 'published': 'green', 'deprecated': 'red'}.get(
+            status, 'white'
+        )
+
+        lines = [
+            f'[bold]{kind.upper()}[/bold]  [white]{_esc(_f("title"))}[/white]  '
+            f'[{status_color}]{status}[/{status_color}]'
+        ]
+        if anchor:
+            lines.append(f'[dim]anchor:[/dim] {_esc(anchor)}')
+        if trigger := _f('trigger'):
+            lines += ['', f'[bold]Trigger[/bold]  {_esc(trigger)}']
+        if summary := _f('summary'):
+            lines += ['', f'[bold]Summary[/bold]  {_esc(summary)}']
+        body = _f('body').strip()
+        lines.append('')
+        if body:
+            lines += ['[bold]Body[/bold]', _esc(body)]
+        else:
+            lines.append(
+                '[dim italic]Body is empty — it distils when the derivation pass runs.[/dim italic]'
+            )
+        sources = (
+            entry.get('sources') if isinstance(entry, dict) else getattr(entry, 'sources', None)
+        )
+        if sources:
+            n = len(sources)
+            lines += ['', f'[dim]{n} source case{"s" if n != 1 else ""} cited.[/dim]']
         return lines
 
     def _build_contradiction_body(self, proposal: CockpitProposal) -> list[str]:
@@ -1791,7 +1845,14 @@ class ProposalCockpitApp(App):
 
         result, error = await self._resolve_one(proposal, option, note)
         if error is not None:
-            self._show_status(f'Action failed: {error}', error=True)
+            hint = ''
+            low = error.lower()
+            if 'attended' in low or 'unattended_apply' in low or 'auth enabled' in low:
+                hint = (
+                    '  → restart the server with MEMEX_LINT_ALLOW_UNATTENDED_APPLY=1 '
+                    '(or enable auth) to run canned actions.'
+                )
+            self._show_status(f'Action failed: {error}{hint}', error=True)
             self.mode = 'list'
             return
         assert result is not None

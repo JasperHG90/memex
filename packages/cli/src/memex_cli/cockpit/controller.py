@@ -849,6 +849,8 @@ class CockpitClient(Protocol):
 
     async def get_note_page_index(self, note_id: Any) -> Any: ...
 
+    async def procedural_get(self, entry_id: Any) -> Any: ...
+
     async def get_lineage(
         self,
         entity_type: str,
@@ -1213,6 +1215,21 @@ class CockpitController:
         if isinstance(note, dict):
             return note.get('title'), note.get('original_text')
         return getattr(note, 'title', None), getattr(note, 'original_text', None)
+
+    async def fetch_procedural_entry(self, entry_id: str) -> Any | None:
+        """Fetch a procedural-plane entry (procedure/strategy) by ID.
+
+        Used by the DETAIL view of a ``procedural_entry`` finding (distillation /
+        activation), where ``target_id`` is an entry id — so the cockpit can
+        render the actual procedure body + anchor + provenance instead of a
+        generic evidence line. Returns the DTO (or ``None`` on any error).
+        """
+        from uuid import UUID
+
+        try:
+            return await self._client.procedural_get(UUID(entry_id))
+        except Exception:  # noqa: BLE001
+            return None
 
 
 def _count_toc_nodes(toc: list[dict[str, Any]]) -> int:
