@@ -3,9 +3,9 @@ Procedural-plane commands.
 
 The CLI mirrors the HTTP /procedural/* surface. Two groups:
 
-* ``memex procedural`` — CRUD on procedure / strategy entries (the
+* ``memex procedure`` — CRUD on procedure / strategy entries (the
   third plane alongside notes and KV) + pin/version curation and the
-  ``tui`` curation app.
+  ``review`` curation cockpit (``memex procedure review``).
 * ``memex case`` — short-form submit for cases. Cases are NOTES
   (role=case) in a hidden system vault — the durable record of a
   worked episode; ``memex case submit`` is the common entry point.
@@ -40,7 +40,7 @@ from memex_cli.utils import (
 console = Console()
 
 app = typer.Typer(
-    name='procedural',
+    name='procedure',
     help=(
         'Manage procedural-plane entries — procedures (worked how-tos) and '
         'strategies (play-books generalising procedures). Identity-anchored '
@@ -163,7 +163,7 @@ async def procedural_create(
     procedure REQUIRES --verb AND --context; strategy REQUIRES --verb
     and FORBIDS --context. --trigger is always required (the retrieval
     key). Identity-anchor collision on (kind, scope, verb, context) is
-    rejected; use ``memex procedural upsert`` for idempotent re-writes.
+    rejected; use ``memex procedure upsert`` for idempotent re-writes.
     Cases are notes — use ``memex case submit``.
     """
     config: MemexConfig = ctx.obj
@@ -438,7 +438,7 @@ async def procedural_list(
     Unlike `search`, this needs no query — it is the way to enumerate the
     curation/governance queue, e.g. drafts awaiting confirmation:
 
-        memex procedural list --status draft
+        memex procedure list --status draft
     """
     config: MemexConfig = ctx.obj
     vault_id = await _resolve_vault_id(config, vault) if vault is not None else None
@@ -601,6 +601,44 @@ async def procedural_deprecate(
     console.print(f'[green]Deprecated:[/green] {entry.id}')
 
 
+@app.command('derive')
+@async_command
+async def procedural_derive(
+    ctx: typer.Context,
+    limit: Annotated[
+        int,
+        typer.Option(
+            '--limit',
+            '-l',
+            help='Maximum number of pending derivation tasks to drain in this pass.',
+        ),
+    ] = 10,
+    json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
+):
+    """Drain the derivation queue once: distil cases → procedures and
+    procedures → strategies.
+
+    The background scheduler normally does this; run it by hand to materialise
+    drafts now — e.g. right after submitting cases, so a new procedure's body
+    is distilled (and a strategy forms once a (scope, verb) has >=2 procedures)
+    without waiting for the periodic worker.
+    """
+    config: MemexConfig = ctx.obj
+    async with get_api_context(config) as api:
+        try:
+            result = await api.procedural_derive(limit=limit)
+        except Exception as e:
+            handle_api_error(e)
+    if json_output:
+        emit_json(result)
+        return
+    completed = int(result.get('completed', 0))
+    noun = 'entry' if completed == 1 else 'entries'
+    console.print(f'[green]Derivation pass complete:[/green] {completed} {noun} derived.')
+    for qid in result.get('queue_ids') or []:
+        console.print(f'  [dim]{qid}[/dim]')
+
+
 # ---------------------------------------------------------------------------
 # memex case submit — short-form top-level group
 # ---------------------------------------------------------------------------
@@ -645,10 +683,13 @@ def _split_outcome_lesson(text: str) -> tuple[str | None, str]:
     stripped = text.strip()
     outcome: str | None = None
     low = stripped.lower()
-    for oc in _VALID_OUTCOMES:
-        if low.startswith(oc):
-            outcome = oc
-            break
+    # Outcome is the leading word (`success`/`failure`/`mixed`), delimited by
+    # the first non-letter (`.`/`—`/whitespace). Exact-match the token so a
+    # lesson like "Successfully avoided …" is NOT misread as the `success`
+    # outcome (a bare startswith would).
+    head = re.match(r'[a-z]+', low)
+    if head and head.group() in _VALID_OUTCOMES:
+        outcome = head.group()
     # Lesson is everything after a `**Lesson(s):**` marker, else the whole body.
     marker = re.search(r'\*\*Lessons?:?\*\*', stripped)
     lesson = stripped[marker.end() :].strip() if marker else stripped
@@ -719,6 +760,7 @@ async def case_submit(
         Path | None,
         typer.Option(
             '--file',
+            '-f',
             help='Read the case from a markdown file: the §5.1 template '
             '(## Trigger / ## Situation / ## Actions / ## Outcome / Lesson) '
             'plus optional YAML frontmatter (outcome, title/note_key, tags). '
@@ -747,7 +789,7 @@ async def case_submit(
     ] = None,
     lesson: Annotated[
         str,
-        typer.Option('--lesson', '-l', help='What to do differently / confirm next time.'),
+        typer.Option('--lesson', help='What to do differently / confirm next time.'),
     ] = '',
     project_id: Annotated[
         str | None,
@@ -761,6 +803,15 @@ async def case_submit(
         ),
     ] = None,
     tags: Annotated[list[str] | None, typer.Option('--tag')] = None,
+    background: Annotated[
+        bool,
+        typer.Option(
+            '--background',
+            '-b',
+            help='Queue the submission as a tracked job and return a job id (202) '
+            'instead of waiting. Poll it at GET /api/v1/ingestions/{job_id}.',
+        ),
+    ] = False,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
 ):
     """
@@ -770,6 +821,9 @@ async def case_submit(
     vault — no --vault flag; the server owns the placement. Without
     --case-of the server judges which procedure the case instances;
     contested judgments land in the lint queue.
+
+    With --background the submission runs as a tracked job; the case note
+    id appears in the job's note_ids on completion.
     """
     from uuid import UUID as _UUID
 
@@ -826,15 +880,34 @@ async def case_submit(
     )
     async with get_api_context(config) as api:
         try:
-            result = await api.case_submit(payload)
+            result = await api.case_submit(payload, background=background)
         except Exception as e:
             handle_api_error(e)
 
     if json_output:
         emit_json(result.model_dump(mode='json'))
         return
-    console.print(f'[green]Case filed:[/green] note {result.note_id}')
+
+    # Background submit returns a BatchJobStatus (202): a tracked job id you
+    # poll; the case note id lands in the job's note_ids on completion.
+    from memex_common.schemas import BatchJobStatus
+
+    if isinstance(result, BatchJobStatus):
+        console.print(
+            f'[green]Case queued:[/green] job {result.job_id} '
+            f'[dim](poll: GET /api/v1/ingestions/{result.job_id})[/dim]'
+        )
+        return
+
     a = result.assignment
+    if a.mode == 'skipped':
+        # Content-idempotent re-submit: the identical case was already filed.
+        console.print(
+            f'[yellow]Already filed:[/yellow] identical case content '
+            f'(note {result.note_id}) — nothing to do.'
+        )
+        return
+    console.print(f'[green]Case filed:[/green] note {result.note_id}')
     if a.mode == 'explicit':
         console.print(f'  assigned to entry {a.entry_id} (explicit --case-of)')
     elif a.mode == 'auto_assigned':
@@ -1063,11 +1136,11 @@ async def _resolve_vault_id(config: MemexConfig, identifier: str):
 
 
 # ---------------------------------------------------------------------------
-# procedural tui — curation app (pins / briefing preview / versions)
+# procedure review — curation app (pins / briefing preview / versions)
 # ---------------------------------------------------------------------------
 
 
-@app.command('tui')
+@app.command('review')
 @async_command
 async def procedural_tui(
     ctx: typer.Context,
@@ -1080,7 +1153,7 @@ async def procedural_tui(
         typer.Option('--app', '-a', help='app:<id> context for the briefing chain.'),
     ] = None,
 ):
-    """Launch the procedural-plane curation TUI.
+    """Launch the procedural-plane curation cockpit (parallels `memex lint review`).
 
     Browse + search entries, pin/unpin them into the briefing chain
     (global → project:<id> → app:<consumer>), preview the assembled

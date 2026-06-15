@@ -197,7 +197,7 @@ MEMEX_KV_LIST_DESC = (
 # descriptions (create/update/upsert/deprecate). Procedures and
 # strategies are DERIVED from cases (design §5/§8/§9); the agent's only
 # procedural write is memex_case_submit. Direct authoring/editing lives
-# on the operator surfaces (CLI `memex procedural …`, the curation TUI)
+# on the operator surfaces (CLI `memex procedure …`, the curation TUI)
 # and the HTTP/client CRUD the derivation worker uses — none of which
 # carry an agent-facing tool description.
 

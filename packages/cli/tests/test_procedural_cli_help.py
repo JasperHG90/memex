@@ -1,6 +1,6 @@
 """Procedural-plane CLI help text regression fences.
 
-Guards against procedural-plane CLI drift. The two top-level groups — ``memex procedural``
+Guards against procedural-plane CLI drift. The two top-level groups — ``memex procedure``
 and ``memex case`` — are the discoverable entry points for the
 procedural plane; their help text must:
 
@@ -27,8 +27,9 @@ def _normalize(text: str) -> str:
 
 
 def test_procedural_group_registered_with_correct_name():
-    """The top-level group must be named 'procedural' (not 'procedural')."""
-    assert app.info.name == 'procedural'
+    """The CLI group is named 'procedure' — a singular noun matching the other
+    command groups (note/memory/vault/kv). The PLANE concept stays 'procedural'."""
+    assert app.info.name == 'procedure'
 
 
 def test_procedural_help_identifies_plane_as_procedural(runner, strip_ansi):
@@ -61,7 +62,7 @@ def test_procedural_help_lists_eight_subcommands(runner, strip_ansi):
         'update',
         'deprecate',
     ):
-        assert cmd in text, f'memex procedural help is missing subcommand: {cmd}'
+        assert cmd in text, f'memex procedure help is missing subcommand: {cmd}'
 
 
 def test_procedural_help_has_no_ticket_marker(runner, strip_ansi):
@@ -117,7 +118,7 @@ def test_case_submit_help_surfaces_trigger_and_file(runner, strip_ansi):
 
 
 def test_procedural_create_help_explains_identity_anchor(runner, strip_ansi):
-    """`memex procedural create --help` must call out the
+    """`memex procedure create --help` must call out the
     (kind, scope, verb, context) identity anchor rule so the user
     knows where 409s come from."""
     result = runner.invoke(app, ['create', '--help'])
@@ -127,7 +128,7 @@ def test_procedural_create_help_explains_identity_anchor(runner, strip_ansi):
     assert 'context' in text.lower()
     assert '409' not in text, (
         "Don't expose the raw HTTP status in the CLI help — route the "
-        'user to `memex procedural upsert` for idempotent re-writes.'
+        'user to `memex procedure upsert` for idempotent re-writes.'
     )
     assert 'upsert' in text.lower(), (
         'The CLI help should cross-link upsert so the user knows how to recover from a 409.'

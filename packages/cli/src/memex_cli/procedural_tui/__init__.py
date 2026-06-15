@@ -1,4 +1,4 @@
-"""Procedural-plane curation TUI (`memex procedural tui`).
+"""Procedural-plane curation TUI (`memex procedure review`).
 
 Operator surface for the §18.8 / §19.8 curation contract: browse and
 search entries, pin/unpin them into the briefing chain (global →
