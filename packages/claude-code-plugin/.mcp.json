@@ -5,7 +5,7 @@
       "command": "bash",
       "args": [
         "-c",
-        "uvx --from \"memex-cli[mcp] @ git+https://github.com/JasperHG90/memex.git@${MEMEX_PLUGIN_VERSION:-latest}#subdirectory=packages/cli\" memex mcp run"
+        "if [ -n \"${MEMEX_LOCAL_PATH:-}\" ]; then exec uv run --project \"$MEMEX_LOCAL_PATH\" --package memex-cli memex mcp run; else exec uvx --from \"memex-cli[mcp] @ git+https://github.com/JasperHG90/memex.git@${MEMEX_PLUGIN_VERSION:-latest}#subdirectory=packages/cli\" memex mcp run; fi"
       ]
     }
   }
