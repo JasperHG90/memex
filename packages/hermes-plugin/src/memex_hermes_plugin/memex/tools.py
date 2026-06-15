@@ -1339,7 +1339,7 @@ _MAX_ADD_ASSETS_ITEMS = 20
 
 # Canonical KV key namespaces per RFC-012. Hermes is the ``key`` holder here;
 # ``_scope_from_key`` above derives these from stored entries.
-_VALID_KV_NAMESPACES = ('global:', 'user:', 'project:', 'app:')
+_VALID_KV_NAMESPACES = ('global:', 'user:', 'project:', 'app:', 'procedure:')
 
 
 def _serialize_memory_unit(unit: Any) -> dict[str, Any]:

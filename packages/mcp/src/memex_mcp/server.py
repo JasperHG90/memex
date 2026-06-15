@@ -3013,10 +3013,12 @@ async def memex_find_note(
         '`memex_add_note`. '
         'Key MUST start with a namespace prefix: '
         '"global:" (always loaded), "user:" (personal prefs), '
-        '"project:<project-id>:" (project-scoped), or '
-        '"app:<app-id>:" (application-scoped). '
+        '"project:<project-id>:" (project-scoped), '
+        '"app:<app-id>:" (application-scoped), or '
+        '"procedure:<verb>:<context-tag>:" (procedural memory). '
         'Examples: "global:tool:python:pkg_mgr", "user:work:employer", '
-        '"project:github.com/user/repo:vault", "app:claude-code:theme".'
+        '"project:github.com/user/repo:vault", "app:claude-code:theme", '
+        '"procedure:store:mutable_user_facts".'
     ),
     tags={'storage'},
     annotations={'readOnlyHint': False, 'idempotentHint': True},
@@ -3032,9 +3034,10 @@ async def memex_kv_write(
         str,
         Field(
             description=(
-                'Namespaced key. Must start with global:, user:, project:, or app:. '
+                'Namespaced key. Must start with global:, user:, project:, app:, or procedure:. '
                 'Examples: "global:lang:python:version", '
-                '"project:github.com/user/repo:vault", "app:claude-code:theme".'
+                '"project:github.com/user/repo:vault", "app:claude-code:theme", '
+                '"procedure:store:mutable_user_facts".'
             ),
         ),
     ],

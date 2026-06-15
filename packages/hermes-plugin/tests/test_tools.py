@@ -3045,7 +3045,7 @@ def test_kv_write_missing_required_params(config, vault_id):
     ['noscope', 'unknown:foo', 'Global:foo', 'usre:work:x', ':leading', '  user:foo'],
 )
 def test_kv_write_rejects_bad_namespace(config, vault_id, bad_key):
-    """Keys outside the four RFC-012 namespaces (global:/user:/project:/app:) → tool_error."""
+    """Keys outside the five RFC-012 namespaces (global:/user:/project:/app:/procedure:) → tool_error."""
     api = Mock()
     api.embed_text = AsyncMock()
     api.kv_put = AsyncMock()
