@@ -11,6 +11,7 @@ from memex_cli.utils import (
     VaultOption,
     async_command,
     get_api_context,
+    normalize_project_id,
     resolve_active_vault,
 )
 
@@ -64,6 +65,8 @@ async def briefing(
 
     # This command is consumed by hooks/scripts: errors go to stderr as plain text,
     # never through the interactive (stdout, rich) handler used elsewhere.
+    project_id = normalize_project_id(project_id)
+
     try:
         async with get_api_context(config) as api:
             vault_uuid = await resolve_active_vault(api, config, vault)

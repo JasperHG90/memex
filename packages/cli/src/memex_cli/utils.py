@@ -139,6 +139,20 @@ async def resolve_active_vault(api: RemoteMemexAPI, config: MemexConfig, vault: 
     return await api.resolve_vault_identifier(effective_vault)
 
 
+def normalize_project_id(value: str | None) -> str | None:
+    """Normalize a project-id argument for scoping surfaces.
+
+    The canonical project id is the raw id (e.g. `github.com/owner/repo`).
+    Callers sometimes pass the full scope form (`project:github.com/owner/repo`)
+    because that is how it appears in pin contexts and KV namespaces. Strip
+    a leading `project:` prefix so both forms resolve to the same value and
+    avoid a doubled prefix like `project:project:...`.
+    """
+    if value is None:
+        return None
+    return value.removeprefix('project:') or None
+
+
 def emit_json(data: Any) -> None:
     """Print data as formatted JSON, serializing non-JSON types via str()."""
     console.print_json(json.dumps(data, default=str))

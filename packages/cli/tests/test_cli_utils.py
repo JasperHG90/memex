@@ -11,8 +11,25 @@ from memex_cli.utils import (
     emit_json,
     handle_api_error,
     merge_overrides,
+    normalize_project_id,
     resolve_active_vault,
 )
+
+
+def test_normalize_project_id_strips_scope_prefix():
+    assert normalize_project_id('project:github.com/owner/repo') == 'github.com/owner/repo'
+
+
+def test_normalize_project_id_keeps_raw_id():
+    assert normalize_project_id('github.com/owner/repo') == 'github.com/owner/repo'
+
+
+def test_normalize_project_id_none_returns_none():
+    assert normalize_project_id(None) is None
+
+
+def test_normalize_project_id_empty_after_prefix_returns_none():
+    assert normalize_project_id('project:') is None
 
 
 def test_merge_overrides_simple():

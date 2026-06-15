@@ -35,6 +35,7 @@ from memex_cli.utils import (
     emit_json,
     get_api_context,
     handle_api_error,
+    normalize_project_id,
 )
 
 console = Console()
@@ -1312,6 +1313,7 @@ async def procedural_tui(
     # and `c` actually cycles. Pass --project-id to override.
     if project_id is None:
         project_id = resolve_project_id()
+    project_id = normalize_project_id(project_id)
 
     config: MemexConfig = ctx.obj
     async with get_api_context(config) as api:
