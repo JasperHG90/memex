@@ -177,6 +177,27 @@ class _FakeClient:
     async def procedural_get(self, entry_id, *, vault_id=None):
         return SimpleNamespace(id=entry_id)
 
+    async def procedural_list(self, *, status=None, scope=None, kind=None, vault_id=None, limit=50):
+        return [
+            SimpleNamespace(
+                id=uuid4(),
+                kind='procedure',
+                scope='global',
+                verb='deploy',
+                context='nomad',
+                title='Deploy to nomad',
+                trigger='deploying a service',
+                status='published',
+                body='1. drain\n2. resubmit',
+                success_count=3,
+                failure_count=0,
+                uses=3,
+            )
+        ]
+
+    async def procedural_update(self, entry_id, payload):
+        return SimpleNamespace(id=entry_id, version=2)
+
 
 @pytest.mark.asyncio
 async def test_controller_search_unwraps_entries() -> None:
@@ -243,6 +264,7 @@ def test_app_constructs_and_registers_bindings() -> None:
         app_identity='claude-code',
     )
     keys = {b.key for b in app.BINDINGS}
-    # The load-bearing curation verbs are all bound.
-    for k in ('p', 'u', 'b', 'v', 'd', 'r'):
+    # The browse-cockpit verbs are all bound (filter / cycle-context / pin /
+    # versions / edit / quit). Rollback ('r') lives on the version sub-screen.
+    for k in ('slash', 'c', 'p', 'v', 'e', 'q'):
         assert k in keys, f'binding {k!r} missing'

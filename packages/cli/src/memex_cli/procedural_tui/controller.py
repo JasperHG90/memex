@@ -140,6 +140,18 @@ class ProceduralCurationClient(Protocol):
 
     async def procedural_get(self, entry_id: UUID, *, vault_id: UUID | None = None) -> Any: ...
 
+    async def procedural_list(
+        self,
+        *,
+        status: str | None = None,
+        scope: str | None = None,
+        kind: str | None = None,
+        vault_id: UUID | None = None,
+        limit: int = 50,
+    ) -> list[Any]: ...
+
+    async def procedural_update(self, entry_id: UUID, payload: Any) -> Any: ...
+
 
 class ProceduralCurationController:
     """Async data + mutation surface for the curation TUI.
@@ -196,6 +208,39 @@ class ProceduralCurationController:
     async def rollback(self, entry_id: UUID, version: int) -> Any:
         return await self._client.procedural_rollback(
             entry_id, version, rolled_back_by=self.PINNED_BY
+        )
+
+    async def list_entries(self, *, limit: int = 200) -> list[Any]:
+        """Every procedure / strategy entry (the browse surface), newest first.
+
+        Unlike :meth:`search`, this needs no query — it is what the cockpit's
+        left pane lists on open, across all lifecycle states so drafts awaiting
+        confirmation are visible alongside published entries.
+        """
+        return await self._client.procedural_list(limit=limit)
+
+    async def get(self, entry_id: UUID) -> Any:
+        """Fetch one entry by id (full body) — used to seed the edit screen."""
+        return await self._client.procedural_get(entry_id)
+
+    async def save_edit(self, entry_id: UUID, *, trigger: str, body: str) -> Any:
+        """Edit trigger + body as a NEW VERSION (never in-place; §18.8).
+
+        Changing the trigger re-embeds on the server. Identity
+        (kind/scope/verb/context) is immutable here — renaming is a separate
+        op. The write stamps the editor so a later re-derivation proposes
+        rather than silently overwriting a human edit (§18.6).
+        """
+        from memex_common.procedural_schemas import ProceduralEntryUpdate
+
+        return await self._client.procedural_update(
+            entry_id,
+            ProceduralEntryUpdate(
+                trigger=trigger,
+                body=body,
+                edited_by=self.PINNED_BY,
+                edit_reason='edited in the curation cockpit',
+            ),
         )
 
 
