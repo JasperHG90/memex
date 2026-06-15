@@ -17,6 +17,7 @@ from memex_cli.procedural_tui.controller import (
     PIN_CAP_PER_CONTEXT,
     ChainContext,
     ProceduralCurationController,
+    _CONTEXT_KEY_PATTERN,
     build_chain,
     unified_version_diff,
     validate_context_key,
@@ -30,7 +31,15 @@ from memex_cli.procedural_tui.controller import (
 
 @pytest.mark.parametrize(
     'key',
-    ['global', 'project:memex', 'project:proc-eval', 'app:claude-code', 'app:hermes:trader'],
+    [
+        'global',
+        'project:memex',
+        'project:proc-eval',
+        'project:github.com/JasperHG90/memex',
+        'project:github.com/acme/widgets',
+        'app:claude-code',
+        'app:hermes:trader',
+    ],
 )
 def test_context_key_accepts_grammar(key: str) -> None:
     assert validate_context_key(key) == key
@@ -52,6 +61,16 @@ def test_context_key_user_error_is_actionable() -> None:
 
 def test_context_key_strips_whitespace() -> None:
     assert validate_context_key('  global  ') == 'global'
+
+
+def test_context_key_pattern_matches_server_scope_pattern() -> None:
+    """The TUI duplicates the scope grammar for fast local validation. When
+    the server-side grammar changes (e.g. to admit git-remote-style ids),
+    the TUI regex must keep parity or the curation cockpit will reject valid
+    project contexts that the server already accepts."""
+    from memex_common.procedural_schemas import SCOPE_PATTERN
+
+    assert _CONTEXT_KEY_PATTERN.pattern == SCOPE_PATTERN.pattern
 
 
 # ---------------------------------------------------------------------------

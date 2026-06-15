@@ -23,8 +23,12 @@ from uuid import UUID
 # Mirrors memex_common.procedural_schemas.SCOPE_PATTERN; duplicated here
 # so the TUI gives a fast local error before a round-trip (and so the
 # helper is unit-testable without importing the server schemas).
+#
+# The <id> charset includes '/' so a git-remote-style project id like
+# `github.com/owner/repo` is valid, matching the canonical project id used
+# by KV namespaces and the briefing pin-context chain.
 _CONTEXT_KEY_PATTERN = re.compile(
-    r'^(global|project:[A-Za-z0-9._-]+|app:[A-Za-z0-9._-]+(:[A-Za-z0-9._-]+)?)$'
+    r'^(global|project:[A-Za-z0-9._/-]+|app:[A-Za-z0-9._/-]+(:[A-Za-z0-9._/-]+)?)$'
 )
 
 PIN_CAP_PER_CONTEXT = 10
