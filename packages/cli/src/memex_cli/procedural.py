@@ -1160,7 +1160,16 @@ async def procedural_tui(
     briefing, and diff/rollback the version ledger.
     """
     from memex_cli.procedural_tui.app import ProceduralCurationApp
-    from memex_cli.procedural_tui.controller import ProceduralCurationController
+    from memex_cli.procedural_tui.controller import (
+        ProceduralCurationController,
+        resolve_project_id,
+    )
+
+    # Default the project pin-context to this repo (matching the Claude Code
+    # plugin's derivation) so the chain is global → project:<id> out of the box
+    # and `c` actually cycles. Pass --project-id to override.
+    if project_id is None:
+        project_id = resolve_project_id()
 
     config: MemexConfig = ctx.obj
     async with get_api_context(config) as api:

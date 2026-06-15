@@ -75,6 +75,25 @@ def test_build_chain_app_only() -> None:
     assert build_chain(None, 'hermes:trader') == ['global', 'app:hermes:trader']
 
 
+@pytest.mark.parametrize(
+    ('remote', 'expected'),
+    [
+        ('https://github.com/acme/myapp.git', 'github.com/acme/myapp'),
+        ('https://oauth2:t0k@github.com/acme/myapp', 'github.com/acme/myapp'),
+        ('git@github.com:acme/myapp.git', 'github.com/acme/myapp'),
+        ('ssh://git@github.com/acme/myapp.git', 'github.com/acme/myapp'),
+        ('https://gitlab.com/org/subgroup/repo.git', 'gitlab.com/org/subgroup/repo'),
+    ],
+)
+def test_normalize_git_remote_matches_plugin(remote: str, expected: str) -> None:
+    """Project id derived in the TUI must match the Claude Code plugin's
+    normalization, else pins land under a different project key than the
+    briefing reads."""
+    from memex_cli.procedural_tui.controller import _normalize_git_remote
+
+    assert _normalize_git_remote(remote) == expected
+
+
 # ---------------------------------------------------------------------------
 # unified_version_diff — non-destructive ledger diff
 # ---------------------------------------------------------------------------

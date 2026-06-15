@@ -49,6 +49,7 @@ from memex_cli.cockpit.controller import (
     options_for_proposal,
     recommended_resolve_option,
 )
+from memex_cli.tui_theme import BRASS, PROC, READOUT, STATUS, STRAT, install
 
 logger = logging.getLogger('memex.cli.cockpit')
 
@@ -540,6 +541,7 @@ class ProposalCockpitApp(App):
         yield Footer()
 
     async def on_mount(self) -> None:
+        install(self)
         self.title = 'Memex Maintenance Cockpit'
         await self._refresh_queue()
 
@@ -840,24 +842,23 @@ class ProposalCockpitApp(App):
         kind = _f('kind', 'entry')
         status = _f('status')
         anchor = ' / '.join(p for p in (_f('scope'), _f('verb'), _f('context')) if p)
-        status_color = {'draft': 'yellow', 'published': 'green', 'deprecated': 'red'}.get(
-            status, 'white'
-        )
+        status_color = STATUS.get(status, READOUT)
+        kind_color = PROC if kind == 'procedure' else STRAT
 
         lines = [
-            f'[bold]{kind.upper()}[/bold]  [white]{_esc(_f("title"))}[/white]  '
-            f'[{status_color}]{status}[/{status_color}]'
+            f'[{kind_color} b]{kind.upper()}[/]  [{READOUT}]{_esc(_f("title"))}[/]  '
+            f'[{status_color}]({status})[/]'
         ]
         if anchor:
             lines.append(f'[dim]anchor:[/dim] {_esc(anchor)}')
         if trigger := _f('trigger'):
-            lines += ['', f'[bold]Trigger[/bold]  {_esc(trigger)}']
+            lines += ['', f'[{BRASS} b]Trigger[/]  {_esc(trigger)}']
         if summary := _f('summary'):
-            lines += ['', f'[bold]Summary[/bold]  {_esc(summary)}']
+            lines += ['', f'[{BRASS} b]Summary[/]  {_esc(summary)}']
         body = _f('body').strip()
         lines.append('')
         if body:
-            lines += ['[bold]Body[/bold]', _esc(body)]
+            lines += [f'[{BRASS} b]Body[/]', _esc(body)]
         else:
             lines.append(
                 '[dim italic]Body is empty — it distils when the derivation pass runs.[/dim italic]'

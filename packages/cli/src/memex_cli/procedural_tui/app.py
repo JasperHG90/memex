@@ -37,14 +37,20 @@ from memex_cli.procedural_tui.controller import (
     ProceduralCurationController,
     build_chain,
 )
+from memex_cli.tui_theme import (
+    AMBER,
+    BRASS,
+    PROC,
+    READOUT,
+    RUST,
+    SAGE,
+    STRAT,
+    context_color,
+    install,
+    status_chip,
+)
 
 logger = logging.getLogger('memex.cli.procedural_tui')
-
-
-def _ctx_color(ctx: str) -> str:
-    if ctx == 'global':
-        return 'green'
-    return 'cyan' if ctx.startswith('project') else 'magenta'
 
 
 def _anchor(entry: Any) -> str:
@@ -317,7 +323,9 @@ class ProceduralCurationApp(App[None]):
         # Default the pin target to the most-specific context in the chain.
         self._active_context = self._chain[-1]
         self._filter = ''
-        self._entries: list[Any] = []
+        self._mode = 'browse'  # 'browse' (live substring) | 'search' (semantic+drafts)
+        self._entries: list[Any] = []  # the full browse set (all statuses), loaded once
+        self._displayed: list[Any] = []  # what's currently in the list (browse or search)
         self._pins: dict[str, list[str]] = {}  # context_key -> [entry_id (str)]
 
     # ------------------------------------------------------------------ layout
@@ -326,26 +334,44 @@ class ProceduralCurationApp(App[None]):
         with Horizontal():
             with Vertical(id='left'):
                 yield Static(self._context_bar(), id='context-bar', markup=True)
-                yield Input(placeholder='/ filter by name or trigger…', id='filter')
+                yield Input(
+                    placeholder='/ filter live · Enter = semantic search (published) + drafts…',
+                    id='filter',
+                )
                 yield ListView(id='entries')
             with VerticalScroll(id='right'):
                 yield Static('', id='preview', markup=True)
         yield Footer()
 
     async def on_mount(self) -> None:
+        install(self)
         self.title = 'procedure review — briefing pins'
         self.sub_title = 'pins are CONTEXT BINDINGS: global / project:<id> / app:<agent>'
-        await self._reload()
+        await self._reload_all()
 
     # -------------------------------------------------------------------- data
-    async def _reload(self) -> None:
+    async def _reload_all(self) -> None:
+        """Load the full browse set (all statuses) + per-context pins."""
         try:
             self._entries = await self._controller.list_entries()
-            self._pins = {}
-            for ctx in self._chain:
-                pins = await self._controller.list_pins(ctx)
-                self._pins[ctx] = [str(p.entry_id) for p in pins]
+            await self._fetch_pins()
         except Exception as exc:  # noqa: BLE001 — surface as a toast, keep the TUI alive
+            self.notify(str(exc), severity='error')
+            return
+        await self._apply_browse()
+
+    async def _fetch_pins(self) -> None:
+        self._pins = {}
+        for ctx in self._chain:
+            pins = await self._controller.list_pins(ctx)
+            self._pins[ctx] = [str(p.entry_id) for p in pins]
+
+    async def _refresh_pins_only(self) -> None:
+        """Re-fetch pins and re-render the CURRENT view (browse or search) — used
+        after a pin toggle so a live search result set isn't thrown away."""
+        try:
+            await self._fetch_pins()
+        except Exception as exc:  # noqa: BLE001
             self.notify(str(exc), severity='error')
             return
         await self._refresh_list()
@@ -365,42 +391,43 @@ class ProceduralCurationApp(App[None]):
         for ctx in self._chain:
             n = len(self._pins.get(ctx, []))
             cell = f'{ctx} ({n})'
-            parts.append(
-                f'[reverse] {cell} [/reverse]' if ctx == self._active_context else f' {cell} '
-            )
+            if ctx == self._active_context:
+                parts.append(f'[{BRASS} b]▸ {cell}[/]')
+            else:
+                parts.append(f'[dim]  {cell}[/dim]')
         cycle = '   [dim](c to cycle)[/dim]' if len(self._chain) > 1 else ''
-        return '[b]pin context:[/b] ' + ' '.join(parts) + cycle
+        return f'[{READOUT} b]pin context[/]  ' + ' '.join(parts) + cycle
 
     def _row(self, e: Any) -> str:
         eid = str(e.id)
         pinned_in = [c for c in self._chain if eid in self._pins.get(c, [])]
         glyph = '📌' if pinned_in else '  '
-        badges = ''.join(f'[{_ctx_color(c)}]●[/]' for c in pinned_in)
-        kbadge = '[yellow]P[/yellow]' if e.kind == 'procedure' else '[blue]S[/blue]'
+        badges = ''.join(f'[{context_color(c)}]●[/]' for c in pinned_in)
+        kbadge = f'[{PROC} b]P[/]' if e.kind == 'procedure' else f'[{STRAT} b]S[/]'
         trig = (getattr(e, 'trigger', '') or '')[:60]
-        status = '' if e.status == 'published' else f' [dim]({e.status})[/dim]'
+        status = '' if e.status == 'published' else f' {status_chip(e.status)}'
         return (
             f'{glyph} {kbadge} [b]{e.title}[/b] [dim]({e.scope})[/dim]{status} '
             f'— {trig}  [dim]{_mw(e)}[/dim] {badges}'
         )
 
     async def _refresh_list(self) -> None:
+        """Render whatever is in ``self._displayed`` (browse or search results)."""
         self.query_one('#context-bar', Static).update(self._context_bar())
         lv = self.query_one('#entries', ListView)
         await lv.clear()
-        flt = self._filter.lower()
-        for e in self._entries:
-            hay = (e.title + ' ' + (getattr(e, 'trigger', '') or '')).lower()
-            if flt and flt not in hay:
-                continue
+        for e in self._displayed:
             await lv.append(ListItem(Label(self._row(e), markup=True), id=f'row-{e.id}'))
         self._refresh_preview()
 
     def _refresh_preview(self) -> None:
+        # Resolve pinned ids against both the browse set and the current view, so
+        # an entry pinned but not in the loaded window still renders its title.
         by_id = {str(e.id): e for e in self._entries}
+        by_id.update({str(e.id): e for e in self._displayed})
         assembled = self._assembled()
         lines = [
-            '[b]Assembled briefing preview[/b]',
+            f'[{BRASS} b]ASSEMBLED BRIEFING[/]',
             f'[dim]consumer chain: {" → ".join(self._chain)}[/dim]',
             '',
         ]
@@ -410,22 +437,27 @@ class ProceduralCurationApp(App[None]):
                 continue
             src = next(c for c in self._chain if eid in self._pins.get(c, []))
             trig = (getattr(e, 'trigger', '') or '')[:42]
-            color = _ctx_color(src)
+            color = context_color(src)
             lines.append(
-                f'{i:>2}. [b]{e.title}[/b] [dim]— {trig}…[/dim] [{color}]({src})[/{color}]'
+                f'[dim]{i:>2}.[/dim] [b]{e.title}[/b] [dim]— {trig}…[/dim] [{color}]({src})[/]'
             )
         if not assembled:
             lines.append(
                 '[dim]No pins yet — highlight an entry on the left and press '
-                '[b]p[/b] to pin it into the active context.[/dim]'
+                f'[{BRASS} b]p[/] [dim]to pin it into the active context.[/dim]'
             )
         n = len(assembled)
         bar = '█' * n + '░' * (PIN_CAP_PER_CONTEXT - n)
         total = sum(len(v) for v in self._pins.values())
-        cap_color = 'red' if n >= PIN_CAP_PER_CONTEXT else 'green'
+        if n >= PIN_CAP_PER_CONTEXT:
+            cap_color = RUST
+        elif n >= int(PIN_CAP_PER_CONTEXT * 0.8):
+            cap_color = AMBER
+        else:
+            cap_color = SAGE
         lines += [
             '',
-            f'pins {n}/{PIN_CAP_PER_CONTEXT}  [{cap_color}]{bar}[/]',
+            f'[{READOUT}]pins {n}/{PIN_CAP_PER_CONTEXT}[/]  [{cap_color}]{bar}[/]',
             f'[dim]{total} bindings across contexts; remaining briefing slots fill '
             'MW-ranked.[/dim]',
         ]
@@ -438,18 +470,76 @@ class ProceduralCurationApp(App[None]):
         if item is None or item.id is None:
             return None
         eid = item.id.removeprefix('row-')
-        return next((e for e in self._entries if str(e.id) == eid), None)
+        return next((e for e in self._displayed if str(e.id) == eid), None)
+
+    @staticmethod
+    def _matches(e: Any, q: str) -> bool:
+        """Substring match over title + trigger + summary (q already lowercased)."""
+        hay = ' '.join(
+            (
+                e.title or '',
+                getattr(e, 'trigger', '') or '',
+                getattr(e, 'summary', '') or '',
+            )
+        ).lower()
+        return q in hay
+
+    async def _apply_browse(self) -> None:
+        """Live, draft-aware narrowing: substring over the loaded entries (all
+        statuses). Empty query shows everything."""
+        q = self._filter.strip().lower()
+        self._displayed = [e for e in self._entries if not q or self._matches(e, q)]
+        self._mode = 'browse'
+        await self._refresh_list()
+
+    async def _apply_search(self, query: str) -> None:
+        """Enter: semantic search over PUBLISHED entries (the trigger-embedding
+        index is published-only), unioned with a substring match over the loaded
+        DRAFTS so the cockpit can still surface the drafts it exists to curate."""
+        q = query.strip()
+        if not q:
+            self._filter = ''
+            await self._apply_browse()
+            return
+        try:
+            published = await self._controller.search(q, limit=PIN_CAP_PER_CONTEXT * 5)
+        except Exception as exc:  # noqa: BLE001
+            self.notify(f'search failed: {exc}', severity='error')
+            published = []
+        seen = {str(e.id) for e in published}
+        ql = q.lower()
+        drafts = [
+            e
+            for e in self._entries
+            if e.status != 'published' and str(e.id) not in seen and self._matches(e, ql)
+        ]
+        self._displayed = list(published) + drafts
+        self._mode = 'search'
+        await self._refresh_list()
+        self.notify(f'search: {len(published)} published · {len(drafts)} draft match(es)')
 
     # ----------------------------------------------------------------- actions
     def action_focus_filter(self) -> None:
         self.query_one('#filter', Input).focus()
 
     async def on_input_changed(self, event: Input.Changed) -> None:
+        # Typing always live-narrows the browse set; Enter (below) runs semantic.
         if event.input.id == 'filter':
             self._filter = event.value
-            await self._refresh_list()
+            await self._apply_browse()
+
+    async def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == 'filter':
+            await self._apply_search(event.value)
 
     async def action_cycle_context(self) -> None:
+        if len(self._chain) <= 1:
+            self.notify(
+                'Only the global pin context is loaded — relaunch with '
+                '--project-id <id> and/or --app <id> to curate project/app chains.',
+                severity='warning',
+            )
+            return
         i = self._chain.index(self._active_context)
         self._active_context = self._chain[(i + 1) % len(self._chain)]
         await self._refresh_list()
@@ -470,7 +560,7 @@ class ProceduralCurationApp(App[None]):
                 self.notify(f'Pinned into {ctx}')
         except Exception as exc:  # noqa: BLE001 — incl. the 10/10 cap 422
             self.notify(str(exc), severity='error')
-        await self._reload()
+        await self._refresh_pins_only()
 
     async def action_versions(self) -> None:
         e = self._highlighted_entry()

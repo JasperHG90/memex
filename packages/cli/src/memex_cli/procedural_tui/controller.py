@@ -100,6 +100,39 @@ def build_chain(project_id: str | None, app: str | None) -> list[str]:
     return chain
 
 
+def _normalize_git_remote(url: str) -> str:
+    """host/owner/repo from any remote URL form. Mirrors the Claude Code
+    plugin's ``memex_normalize_git_remote_url`` so a project id derived here
+    matches the one the briefing/plugin pin against."""
+    url = re.sub(r'\.git$', '', url)
+    url = re.sub(r'https://[^@]*@', 'https://', url)  # strip basic-auth
+    url = re.sub(r'^[a-zA-Z][a-zA-Z0-9+.-]*://', '', url)  # strip scheme
+    url = re.sub(r'@([^:/]*):[0-9]+/', r'@\1/', url)  # strip :port
+    url = re.sub(r'^[^@]*@([^:/]*)[:/]', r'\1/', url)  # user@host:path -> host/path
+    return url
+
+
+def resolve_project_id() -> str | None:
+    """Derive a portable project id from the cwd's git remote (the same value
+    the Claude Code plugin uses), so ``procedure review`` shows the project pin
+    context by default. Returns ``None`` when not in a git repo / no remote."""
+    import subprocess
+
+    try:
+        out = subprocess.run(
+            ['git', 'remote', 'get-url', 'origin'],
+            capture_output=True,
+            text=True,
+            timeout=3,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    remote = out.stdout.strip()
+    if out.returncode != 0 or not remote:
+        return None
+    return _normalize_git_remote(remote) or None
+
+
 class ProceduralCurationClient(Protocol):
     """Subset of ``RemoteMemexAPI`` the curation TUI depends on.
 
