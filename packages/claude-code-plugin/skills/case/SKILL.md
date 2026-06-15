@@ -52,11 +52,14 @@ Do **NOT** also `memex_add_note` the same episode — a how-to saved as a note i
 
 ## 5. Report the assignment outcome
 
-`memex_case_submit` returns `note_id` and an `assignment_mode`. Tell the user which one came back:
+`memex_case_submit` returns an `assignment_mode`. Tell the user which one came back:
+- `queued` — the DEFAULT under Claude Code: the case was filed in the background (non-blocking) and the assignment resolves async. You get a `job_id`, not an inline outcome; any escalation / new-procedure draft surfaces later in the lint queue. Report that it's filed + queued.
 - `explicit` — linked to the `case_of` procedure you passed.
 - `auto_assigned` — the server matched it to an existing procedure with a clean signal.
 - `new_procedure_draft` — it seeded a new draft procedure (awaits operator confirmation).
 - `escalated` — the assignment was contested; it's queued in the lint queue (`finding_id`) for human review.
 - `skipped` — assignment is disabled on this server, or there was nothing to assign; the case is still filed.
+
+The non-`queued` modes (with inline `note_id` + assignment outcome) come back only when you pass `background=false` to wait synchronously — do that when the user needs the assignment result in this turn.
 
 State the case (title + outcome) and what happened to it in one or two lines.

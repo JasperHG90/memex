@@ -48,8 +48,12 @@ fi
 # should get the same ambient provenance). CC matchers are usually exact, but
 # defend against config drift.
 _tool_name=$(printf '%s' "$_payload" | jq -r '.tool_name // empty' 2>/dev/null || true)
+# Match the tool SUFFIX, not the exact name: under the Claude Code plugin the
+# runtime tool is namespaced `mcp__plugin_memex_memex__memex_add_note`, while a
+# standalone MCP server exposes `mcp__memex__memex_add_note`. A `*…suffix` glob
+# matches both (the earlier exact match silently no-op'd under the plugin).
 case "$_tool_name" in
-    mcp__memex__memex_add_note | mcp__memex__memex_case_submit) ;;
+    *memex__memex_add_note | *memex__memex_case_submit) ;;
     *)
         echo "{}"
         exit 0
@@ -181,11 +185,16 @@ _updated_input=$(printf '%s' "$_payload" | jq \
     --arg active_vault "$_active_vault" \
     --arg tool "$_tool_name" \
     '
-    if $tool == "mcp__memex__memex_case_submit" then
-        # CaseSubmit forbids extra fields and nests under `payload`: inject
-        # tags ONLY (no background/vault_id — the case vault is implicit).
+    if ($tool | endswith("memex_case_submit")) then
+        # CaseSubmit forbids extra fields and nests under `payload`: inject tags
+        # into `.payload.tags` ONLY. `background` is a TOP-LEVEL tool arg (sibling
+        # of `payload`, not inside CaseSubmit), so default it to true here the same
+        # way add_note does — capture should never block the agent. An explicit
+        # `background:false` is preserved (null-check, not `//`, which is falsy on false).
+        # No vault_id — the case vault is implicit.
         .tool_input
         | .payload.tags = (((.payload.tags // []) + $auto_tags) | unique)
+        | .background = (if (.background == null) then true else .background end)
     else
         .tool_input as $ti
         | ($ti.tags // []) as $existing_tags

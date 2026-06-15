@@ -30,10 +30,12 @@ if ! command -v jq >/dev/null 2>&1; then
 fi
 
 # Only act on memex_add_note (matcher should already gate this; defend
-# against config drift).
+# against config drift). Suffix glob, not exact: matches both the plugin-
+# namespaced runtime tool (`mcp__plugin_memex_memex__memex_add_note`) and a
+# standalone MCP server's `mcp__memex__memex_add_note`.
 _tool_name=$(printf '%s' "$_payload" | jq -r '.tool_name // empty' 2>/dev/null || true)
 case "$_tool_name" in
-    mcp__memex__memex_add_note) ;;
+    *memex__memex_add_note) ;;
     *)
         echo "{}"
         exit 0

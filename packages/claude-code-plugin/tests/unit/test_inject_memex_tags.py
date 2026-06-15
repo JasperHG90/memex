@@ -296,6 +296,63 @@ def test_preserves_explicit_background_true(mock_memex: MockMemex) -> None:
     assert out['hookSpecificOutput']['updatedInput']['background'] is True
 
 
+def test_matches_plugin_namespaced_tool_name(mock_memex: MockMemex) -> None:
+    """Under the Claude Code plugin the runtime tool is namespaced
+    `mcp__plugin_memex_memex__memex_add_note`, not `mcp__memex__…`. The
+    suffix-glob guard must still act on it (the earlier exact match no-op'd)."""
+    _seed_state(mock_memex)
+    payload = _pretooluse_payload(tool_name='mcp__plugin_memex_memex__memex_add_note')
+    result = run_script('inject_memex_tags.sh', stdin=payload, env=mock_memex.env)
+    out = _parse_output(result.stdout)
+    assert 'surface:claude-code' in out['hookSpecificOutput']['updatedInput']['tags']
+
+
+def test_case_submit_injects_payload_tags_and_defaults_background(
+    mock_memex: MockMemex,
+) -> None:
+    """case_submit nests under `payload` (CaseSubmit forbids extra fields), so
+    tags land in `.payload.tags`. `background` is a TOP-LEVEL tool arg and
+    defaults to true — capture must never block the agent."""
+    _seed_state(mock_memex)
+    payload = _pretooluse_payload(
+        tool_name='mcp__plugin_memex_memex__memex_case_submit',
+        tool_input={
+            'payload': {
+                'title': 't',
+                'trigger': 'tr',
+                'outcome': 'success',
+                'tags': ['manual-capture'],
+            },
+            # background omitted
+        },
+    )
+    result = run_script('inject_memex_tags.sh', stdin=payload, env=mock_memex.env)
+    out = _parse_output(result.stdout)
+    updated = out['hookSpecificOutput']['updatedInput']
+    assert updated['background'] is True
+    ptags = updated['payload']['tags']
+    assert 'manual-capture' in ptags  # caller's tag preserved
+    assert 'surface:claude-code' in ptags
+    # tags go into the nested payload, NOT the top level (CaseSubmit shape)
+    assert 'tags' not in updated
+
+
+def test_case_submit_preserves_explicit_background_false(mock_memex: MockMemex) -> None:
+    """An explicit synchronous case_submit (background=false) must survive the
+    default — the agent chose to wait for the assignment outcome inline."""
+    _seed_state(mock_memex)
+    payload = _pretooluse_payload(
+        tool_name='mcp__plugin_memex_memex__memex_case_submit',
+        tool_input={
+            'payload': {'title': 't', 'trigger': 'tr', 'outcome': 'success'},
+            'background': False,
+        },
+    )
+    result = run_script('inject_memex_tags.sh', stdin=payload, env=mock_memex.env)
+    out = _parse_output(result.stdout)
+    assert out['hookSpecificOutput']['updatedInput']['background'] is False
+
+
 def test_defaults_vault_id_to_active_when_absent(mock_memex: MockMemex) -> None:
     _seed_state(mock_memex, active_vault='resolved-vault')
     result = run_script(
