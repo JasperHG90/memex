@@ -4,11 +4,13 @@ This is the consumer half of the §9 dirty-cluster loop (the LLM passes
 live in ``memory/procedural_distillation.py``). For each claimed queue row:
 
 * **procedure** — gather the case cluster behind the target anchor (its
-  ``role='provenance'`` source notes), and — when the cluster has reached
-  N≥3 (§9) — distil the procedure and write the steps/trigger/summary onto
-  the existing draft anchor (a version bump; the anchor was created empty
-  by assignment). Then, once ``(scope, verb)`` has ≥2 procedures, enqueue a
-  strategy derivation (§9: a new case "feeds the shared strategy").
+  ``role='provenance'`` source notes), and — when the cluster has at least
+  ``MIN_CASES_FOR_DISTILLATION`` cases (== 1; amended JG 2026-06-11, so a
+  single case distils a procedure) — distil the procedure and write the
+  steps/trigger/summary onto the existing draft anchor (a version bump; the
+  anchor was created empty by assignment). Then, once ``(scope, verb)`` has
+  ≥2 procedures, enqueue a strategy derivation (a new case "feeds the
+  shared strategy").
 * **strategy** — gather the sibling procedures sharing ``(scope, verb)`` and
   distil the heuristic *above* them, upserting the strategy entry.
 
@@ -258,7 +260,7 @@ class ProceduralDerivationService:
                     'via activate_procedural_entry.'
                 ),
                 vault_id=str(vault_id),
-                evidence={'summary': summary, 'source_cases': source_case_ids},
+                evidence={'procedure_title': title, 'source_cases': source_case_ids},
                 proposed_action={'action_name': 'activate_procedural_entry', 'params': {}},
             )
             status, finding_id = await insert_external_proposal(

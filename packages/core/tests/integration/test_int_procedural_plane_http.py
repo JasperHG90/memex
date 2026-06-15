@@ -493,3 +493,168 @@ async def test_entry_pins_and_cases_enforce_vault_access(http_client, metastore,
         assert r.status_code == 403, r.text
     finally:
         app.dependency_overrides[get_auth_context] = lambda: None
+
+
+# ---------------------------------------------------------------------------
+# cases — full HTTP submit against real Postgres
+#
+# The integration `api` fixture mocks the extraction/memory ENGINES, but the
+# IngestionService (which owns the content-hash idempotency gate) and the
+# case service are real. Wiring `fake_retain_factory` makes the first ingest
+# persist a real note with its content fingerprint, so the gate's skip path
+# is exercised end-to-end; title/date LLM calls fail gracefully (no key
+# needed), exactly as test_int_memex_api relies on.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_case_resubmit_is_content_idempotent(
+    api, http_client, metastore, fake_retain_factory
+):
+    """Submitting byte-identical case content twice files the note once.
+
+    The second POST returns 200 with assignment mode ``skipped`` and the SAME
+    note id — NOT a 500 (the user-reported resubmit crash) and NOT a duplicate
+    provenance edge. ``case_of`` takes the judge-free explicit path, so the
+    flow is fully deterministic.
+    """
+    api.memory.retain.side_effect = fake_retain_factory
+
+    async with metastore.session() as session:
+        vault_id = await _create_vault(session, 'case_idem')
+    # Seed a published procedure to point case_of at (deterministic explicit
+    # assignment — no LLM judge on submit).
+    entry = await api.procedural.create(
+        _entry_dto(vault_id=vault_id, title='case-idem-target', verb='deploy', context='prod')
+    )
+
+    body = {
+        'title': 'Idempotent case submission',
+        'trigger': 'resubmitted the exact same worked episode twice',
+        'situation': 'verifying the content-addressed skip',
+        'actions': ['ran the deploy', 'confirmed health checks'],
+        'outcome': 'success',
+        'lesson': 'identical content should file exactly once',
+        'case_of': str(entry.id),
+    }
+
+    first = await http_client.post('/api/v1/cases', json=body)
+    assert first.status_code == 200, first.text
+    first_body = first.json()
+    assert first_body['assignment']['mode'] == 'explicit', first_body
+    note_id = first_body['note_id']
+    assert note_id
+
+    # Byte-identical re-submit: content-addressed skip, 200 not 500, same id.
+    second = await http_client.post('/api/v1/cases', json=body)
+    assert second.status_code == 200, second.text
+    second_body = second.json()
+    assert second_body['assignment']['mode'] == 'skipped', second_body
+    assert second_body['note_id'] == note_id, 'skip must return the original note id'
+
+
+@pytest.mark.asyncio
+async def test_new_procedure_case_files_activation_proposal(
+    api, http_client, metastore, fake_retain_factory
+):
+    """A case the judge rules a NEW procedure creates a DRAFT anchor AND files
+    the governance lint item to activate it (draft → published via
+    ``activate_procedural_entry``) at submission — so it is reviewable in the
+    lint queue immediately, not only after the Phase-3 derivation worker. The
+    judge is patched for determinism; ingest is real via ``fake_retain``.
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from memex_core.memory.procedural_assignment import AssignmentJudgment
+    from memex_core.memory.sql_models import MaintenanceProposal, ProceduralEntry
+    from memex_core.services.procedural_derivation_service import DISTILLATION_RULE_NAME
+
+    api.memory.retain.side_effect = fake_retain_factory
+
+    golden = AssignmentJudgment(
+        decision='new_procedure',
+        target_entry_id=None,
+        proposed_verb='deploy',
+        proposed_context='staging',
+        separation='clean',
+        runner_up=None,
+        reasoning='no existing procedure matches this episode',
+    )
+
+    body = {
+        'title': 'First time deploying to staging',
+        'trigger': 'needed a brand-new staging deploy procedure',
+        'outcome': 'success',
+        'lesson': 'stage the config before flipping',
+    }
+
+    with patch(
+        'memex_core.services.case_service.judge_assignment',
+        new=AsyncMock(return_value=golden),
+    ):
+        resp = await http_client.post('/api/v1/cases', json=body)
+
+    assert resp.status_code == 200, resp.text
+    rb = resp.json()
+    assert rb['assignment']['mode'] == 'new_procedure_draft', rb
+    entry_id = rb['assignment']['entry_id']
+    finding_id = rb['assignment']['finding_id']
+    assert entry_id, rb
+    assert finding_id, 'activation proposal must be filed at submission'
+
+    async with metastore.session() as session:
+        # The anchor is a draft (invisible to search/briefing until activated).
+        entry = await session.get(ProceduralEntry, uuid.UUID(entry_id))
+        assert entry is not None and entry.status == 'draft', entry
+        # A pending governance proposal targets the draft for activation.
+        proposal = await session.get(MaintenanceProposal, uuid.UUID(finding_id))
+        assert proposal is not None, 'no maintenance proposal row for the draft'
+        assert proposal.target_type == 'procedural_entry'
+        assert proposal.target_id == entry_id
+        assert proposal.rule_name == DISTILLATION_RULE_NAME
+        assert proposal.status == 'pending'
+
+
+@pytest.mark.asyncio
+async def test_case_submit_background_returns_pollable_job(
+    api, http_client, metastore, fake_retain_factory
+):
+    """`background=true` returns 202 with a real job_id, pollable at
+    GET /api/v1/ingestions/{job_id}; the case note id lands in the job's
+    result.note_ids on completion, and a failure would be recorded on the job
+    (not swallowed). Real ingest via fake_retain; case_of keeps it deterministic.
+    """
+    import asyncio
+
+    api.memory.retain.side_effect = fake_retain_factory
+
+    async with metastore.session() as session:
+        vault_id = await _create_vault(session, 'case_bg')
+    entry = await api.procedural.create(
+        _entry_dto(vault_id=vault_id, title='case-bg-target', verb='deploy', context='canary')
+    )
+
+    body = {
+        'title': 'Background case submission',
+        'trigger': 'fired a case without blocking the request',
+        'outcome': 'success',
+        'case_of': str(entry.id),
+    }
+    resp = await http_client.post('/api/v1/cases', params={'background': 'true'}, json=body)
+    assert resp.status_code == 202, resp.text
+    queued = resp.json()
+    job_id = queued['job_id']
+    assert queued['status'] == 'pending'
+
+    # The background task runs off the request path — poll the job to completion.
+    job = None
+    for _ in range(60):
+        jr = await http_client.get(f'/api/v1/ingestions/{job_id}')
+        assert jr.status_code == 200, jr.text
+        job = jr.json()
+        if job['status'] in ('completed', 'failed'):
+            break
+        await asyncio.sleep(0.05)
+
+    assert job is not None and job['status'] == 'completed', job
+    assert job['result'] and job['result']['note_ids'], job

@@ -59,7 +59,7 @@ from memex_core.memory.procedural_assignment import (
 )
 
 if TYPE_CHECKING:
-    from memex_core.api import MemexAPI
+    from memex_core.api import MemexAPI, NoteInput
 
 logger = logging.getLogger('memex.core.services.case_service')
 
@@ -120,7 +120,10 @@ class CaseService:
 
         # Validate an explicit case_of BEFORE filing the note, so a bad
         # pointer fails fast (clean 404) instead of orphaning a stamped
-        # case note when apply_assignment's get() raises post-ingest.
+        # case note when apply_assignment's get() raises post-ingest. This is
+        # EXISTENCE validation only (it serves direct, non-HTTP callers too) —
+        # tenancy/authz on case_of is the server's job (cases.py
+        # check_vault_access), since the service has no auth context.
         if payload.case_of is not None:
             try:
                 await self._api._procedural_repo.get(payload.case_of)
@@ -131,17 +134,24 @@ class CaseService:
                 ) from exc
 
         # 1+2. Compose + ingest via the normal path (extraction runs).
-        from memex_core.api import NoteInput
-
-        markdown = compose_case_markdown(payload)
-        note_input = NoteInput(
-            name=payload.title,
-            description=f'Case ({payload.outcome}): {payload.trigger[:200]}',
-            content=markdown.encode('utf-8'),
-            tags=['case', *payload.tags],
-            author=payload.submitted_by,
-        )
+        note_input = self._build_note_input(payload)
         ingest_result = await self._api.ingest(note_input, vault_id=vault_id)
+
+        # Ingest is content-idempotent: re-submitting byte-identical case
+        # content skips and returns {'status': 'skipped'} with NO 'note_id'.
+        # Treat that as "already filed" rather than KeyError-ing into a 500 —
+        # return the existing case note (its id is the deterministic
+        # idempotency_key) WITHOUT re-stamping/re-assigning, which would
+        # duplicate the provenance edge.
+        if ingest_result.get('status') == 'skipped':
+            return CaseSubmitResult(
+                note_id=UUID(note_input.idempotency_key),
+                vault_id=vault_id,
+                assignment=CaseAssignment(
+                    mode='skipped',
+                    reasoning='identical case content already filed (idempotent skip)',
+                ),
+            )
         note_id = UUID(str(ingest_result['note_id']))
 
         # 3+4. Stamp role + provenance, then assign. A failure here would
@@ -160,6 +170,44 @@ class CaseService:
             raise
 
         return CaseSubmitResult(note_id=note_id, vault_id=vault_id, assignment=assignment)
+
+    async def submit_job(
+        self,
+        *,
+        request: CaseSubmit,
+        vault_id: UUID | str | None = None,
+    ) -> dict[str, Any]:
+        """Adapter for the durable job runner (``JobManager.create_single_job``).
+
+        Runs :meth:`submit` and returns a job-result dict so the tracked
+        ``BatchJob`` records the materialised case note id — queryable at
+        ``GET /api/v1/ingestions/{job_id}``. ``vault_id`` is accepted for the
+        runner's forwarding contract but ignored (the case vault is implicit).
+        If :meth:`submit` raises, the runner records the failure on the job
+        (status ``failed`` + ``error_info``) rather than swallowing it.
+        """
+        result = await self.submit(request)
+        return {
+            'note_id': str(result.note_id),
+            'vault_id': str(result.vault_id),
+            'assignment_mode': result.assignment.mode,
+        }
+
+    def _build_note_input(self, payload: CaseSubmit) -> NoteInput:
+        """Compose the §5.1 case markdown into the NoteInput that gets
+        ingested. Pure function of the payload — no I/O — so the note id is
+        content-addressed and predictable (a byte-identical re-submit maps to
+        the same idempotency key)."""
+        from memex_core.api import NoteInput
+
+        markdown = compose_case_markdown(payload)
+        return NoteInput(
+            name=payload.title,
+            description=f'Case ({payload.outcome}): {payload.trigger[:200]}',
+            content=markdown.encode('utf-8'),
+            tags=['case', *payload.tags],
+            author=payload.submitted_by,
+        )
 
     async def apply_assignment(
         self,
@@ -330,9 +378,15 @@ class CaseService:
             draft = await self._create_draft_anchor(payload, judgment)
             if draft is not None:
                 await self.apply_assignment(note_id=note_id, entry_id=draft.id)
+                # Surface the fresh anchor for activation NOW (draft → published
+                # via the lint queue) rather than waiting on the Phase-3
+                # derivation worker to distill + file it. Without this, a
+                # case-spawned procedure sits invisible with no lint item.
+                finding_id = await self._file_activation_proposal(draft.id, vault_id, payload)
                 return CaseAssignment(
                     mode='new_procedure_draft',
                     entry_id=draft.id,
+                    finding_id=finding_id,
                     decision=judgment.decision,
                     separation=judgment.separation,
                     reasoning=judgment.reasoning,
@@ -456,6 +510,68 @@ class CaseService:
             return None
         except Exception:
             logger.exception('draft anchor creation failed; escalating')
+            return None
+
+    async def _file_activation_proposal(
+        self,
+        entry_id: UUID,
+        vault_id: UUID,
+        payload: CaseSubmit,
+    ) -> UUID | None:
+        """File the governance lint item that activates a case-spawned draft
+        procedure (draft → published) via ``activate_procedural_entry``.
+
+        Filed at submission so the new anchor is reviewable in ``memex lint
+        review`` immediately, not only after the Phase-3 derivation worker
+        distills it. Reuses the derivation rule name + (target, vault) so the
+        partial-unique pending index collapses a later distillation re-file
+        onto this row (no double-nag); the post-resolution cooldown stops a
+        re-nag once a reviewer has activated it. Best-effort: a filing failure
+        is logged, never fatal — the draft is a valid entry, activatable by
+        any other path."""
+        from memex_core.services.lint_external import (
+            ExternalProposalRequest,
+            insert_external_proposal,
+        )
+        from memex_core.services.procedural_derivation_service import (
+            DISTILLATION_RULE_NAME,
+        )
+
+        try:
+            req = ExternalProposalRequest(
+                rule_name=DISTILLATION_RULE_NAME,
+                lint_type='governance',
+                target_type='procedural_entry',
+                target_id=str(entry_id),
+                description=(
+                    f'New procedure anchor from case, ready to activate: {payload.title[:140]}'
+                ),
+                suggested_action=(
+                    'Review the new procedure anchor and activate it '
+                    '(draft → published) via activate_procedural_entry.'
+                ),
+                vault_id=str(vault_id),
+                # Keep evidence to a compact one-line preview; the reviewer reads
+                # the full procedure + source case in the cockpit detail view (it
+                # fetches the entry by target_id), not from a stuffed evidence blob.
+                evidence={
+                    'procedure_title': payload.title,
+                    'case_outcome': payload.outcome,
+                },
+                proposed_action={'action_name': 'activate_procedural_entry', 'params': {}},
+            )
+            status, finding_id = await insert_external_proposal(
+                self._api,
+                req,
+                vault_id=vault_id,
+                actor=payload.submitted_by or 'case_submit',
+            )
+            logger.info('case filed activation proposal: %s (finding=%s)', status, finding_id)
+            return finding_id
+        except Exception:
+            # The draft anchor is already created + attached — a missing lint
+            # breadcrumb only delays activation, never loses the procedure.
+            logger.exception('failed to file activation proposal for draft %s', entry_id)
             return None
 
     async def _escalate(

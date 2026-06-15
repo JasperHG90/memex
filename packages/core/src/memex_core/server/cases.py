@@ -11,10 +11,12 @@ tools or leave it for human review).
 
 from typing import Annotated
 
-from fastapi import APIRouter, Body, Depends
+from fastapi import APIRouter, BackgroundTasks, Body, Depends, Query
+from fastapi.responses import JSONResponse
 
 from memex_common.exceptions import MemexError
 from memex_common.procedural_schemas import CaseSubmit, CaseSubmitResult
+from memex_common.schemas import BatchJobStatus
 from memex_core.api import MemexAPI
 from memex_core.server.auth import (
     AuthContext,
@@ -31,21 +33,38 @@ router = APIRouter(prefix='/api/v1')
 
 @router.post(
     '/cases',
-    response_model=CaseSubmitResult,
+    response_model=None,
+    responses={
+        200: {'model': CaseSubmitResult},
+        202: {'model': BatchJobStatus},
+    },
     dependencies=[Depends(require_write)],
 )
 async def case_submit(
     request: Annotated[CaseSubmit, Body()],
     api: Annotated[MemexAPI, Depends(get_api)],
+    background_tasks: BackgroundTasks,
+    background: Annotated[bool, Query()] = False,
     auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
-):
+) -> CaseSubmitResult | JSONResponse:
     """Submit a worked episode as a case.
 
     The note is composed from the §5.1 episode template and filed into
     the hidden system vault with ``role='case'``. Assignment runs
     synchronously: explicit ``case_of`` wins; otherwise the judge
     auto-assigns on clean separation and escalates everything else to
-    the lint queue (the response's ``assignment.finding_id``).
+    the lint queue (the response's ``assignment.finding_id``). The
+    response carries the assignment outcome so the submitting agent
+    knows whether a lint finding needs its attention.
+
+    ``background=true`` runs the whole ingest+stamp+assign flow off the
+    request path as a tracked job and returns ``202`` with a
+    ``BatchJobStatus.job_id`` you can poll at ``GET /api/v1/ingestions/
+    {job_id}`` (the case note id lands in the job's ``note_ids`` on
+    completion; a failure is recorded on the job, not swallowed). The
+    assignment outcome is NOT part of the job — observe escalations and
+    new-procedure drafts via the lint queue. Validation that must fail
+    fast (a bad ``case_of``) still runs synchronously below.
     """
     # An explicit ``case_of`` links this case to an existing procedure and
     # MUTATES it (provenance edge + outcome counter + derivation enqueue). A
@@ -57,6 +76,23 @@ async def case_submit(
         except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
             raise _handle_error(e, 'Failed to resolve case_of procedure')
         await check_vault_access(auth, [target.vault_id], api, permission=Permission.WRITE)
+
+    if background:
+        # Durable tracked job (not fire-and-forget): the full submit runs under
+        # a BatchJob, pollable at GET /api/v1/ingestions/{job_id}; failures land
+        # on the job row. submit_job returns {'note_id': ...} so the job records
+        # the filed case note.
+        job_id = await api.batch_manager.create_single_job(
+            api.cases.submit_job,
+            vault_id=None,
+            background_tasks=background_tasks,
+            request=request,
+        )
+        return JSONResponse(
+            status_code=202,
+            content=BatchJobStatus(job_id=job_id, status='pending').model_dump(mode='json'),
+        )
+
     with trace_span(
         'memex_core.procedural',
         'cases.submit',

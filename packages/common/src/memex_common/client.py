@@ -1933,15 +1933,28 @@ class RemoteMemexAPI:
         result = await self._get('procedural', params=params)
         return [ProceduralEntryDTO(**row) for row in result]
 
-    async def case_submit(self, payload: CaseSubmit) -> CaseSubmitResult:
+    async def case_submit(
+        self, payload: CaseSubmit, *, background: bool = False
+    ) -> CaseSubmitResult | BatchJobStatus:
         """Submit a worked episode as a case (design §5.1).
 
         The note lands in the hidden `procedural` system vault with
         role='case'; assignment runs synchronously (explicit case_of /
         judge auto-assign / lint escalation — see the result envelope).
+
+        ``background=True`` queues the whole flow server-side as a tracked
+        job and returns a :class:`BatchJobStatus` (202) whose ``job_id`` is
+        pollable at ``GET /api/v1/ingestions/{job_id}``; the case note id
+        appears in the job's ``note_ids`` on completion.
         """
-        result = await self._post('cases', payload)
-        return CaseSubmitResult(**result)
+        params = {'background': 'true'} if background else None
+        response = await self.client.post(
+            'cases', json=payload.model_dump(mode='json'), params=params
+        )
+        response.raise_for_status()
+        if response.status_code == 202:
+            return BatchJobStatus(**response.json())
+        return CaseSubmitResult(**response.json())
 
     async def procedural_derive(self, *, limit: int = 10) -> dict[str, Any]:
         """Drain pending derivation tasks (cases → procedure, procedures →

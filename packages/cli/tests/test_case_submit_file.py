@@ -74,3 +74,18 @@ def test_none_recorded_situation_is_empty():
     p = parse_case_markdown(md)
     assert p['situation'] == ''
     assert p['actions'] == []
+
+
+def test_outcome_token_is_exact_not_prefix():
+    """A lesson whose Outcome section opens with a word that merely STARTS
+    with an outcome token ("Successfully …") must not be misread as that
+    outcome — only an exact leading token (success/failure/mixed) counts."""
+    md = (
+        '## Trigger\nt\n\n## Outcome / Lesson\n'
+        'Successfully avoided the outage. **Lesson:** watch the port\n'
+    )
+    p = parse_case_markdown(md)
+    # 'Successfully' is not the exact token 'success' → no outcome recovered
+    # (parse_case_markdown omits fields it cannot recover).
+    assert p.get('outcome') is None
+    assert 'watch the port' in p['lesson']
