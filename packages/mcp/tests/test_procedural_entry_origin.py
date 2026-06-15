@@ -59,6 +59,16 @@ def test_mcp_entry_round_trips_every_dto_origin(origin: str) -> None:
     assert entry.origin == origin
 
 
+def test_mcp_entry_omits_backing_vault_id() -> None:
+    """The agent-facing entry must NOT expose its backing vault id. Procedures
+    are vault-agnostic knowledge stored in a hidden ``procedural`` system vault;
+    echoing that id leaks storage plumbing the agent must not reason about.
+    Guards both the model shape and the DTO->MCP mapper output."""
+    assert 'vault_id' not in McpProceduralEntry.model_fields
+    entry = _dto_to_mcp_entry(_make_dto('derived'))
+    assert 'vault_id' not in entry.model_dump()
+
+
 def test_mcp_entry_origin_matches_dto_literal() -> None:
     """The MCP origin value set must equal the DTO's OriginLiteral set
     exactly — drift in either direction is the contract bug."""
@@ -77,7 +87,6 @@ def test_mcp_entry_rejects_unknown_origin() -> None:
         _make_dto('seed').model_copy(update={})  # sanity: DTO builds
         McpProceduralEntry(
             id=uuid4(),
-            vault_id=uuid4(),
             kind='procedure',
             scope='global',
             title='x',

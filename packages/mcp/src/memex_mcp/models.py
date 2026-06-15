@@ -488,12 +488,18 @@ class McpProceduralPin(BaseModel):
 class McpProceduralEntry(BaseModel):
     """Public-facing procedural entry. Embedding vectors are omitted — they
     are not meaningful at the LLM-tool boundary; they live in the search path.
+
+    ``vault_id`` is deliberately omitted: procedures are presented to agents as
+    vault-agnostic knowledge, and the entries physically live in a hidden
+    ``procedural`` system vault. Echoing that backing vault id out the tool
+    boundary leaks storage plumbing the agent must not reason about (it would
+    let an agent infer the system vault and the cross-tenant sharing model).
+    The id stays available server-side for the vault-scope guardrail.
     """
 
     model_config = {'extra': 'forbid'}
 
     id: UUID
-    vault_id: UUID
     kind: Literal['procedure', 'strategy']
     scope: str
     verb: str | None = None

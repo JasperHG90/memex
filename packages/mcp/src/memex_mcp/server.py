@@ -4514,14 +4514,17 @@ def _dto_to_mcp_entry(dto: ProceduralEntryCreate) -> McpProceduralEntry:
     """Convert a MemexAPI ProceduralEntryDTO to the MCP-facing shape.
 
     The DTO is the cross-package envelope; the MCP model is the
-    tool-boundary shape. They share the same column set, so this is a
-    field-by-field copy. The McpProceduralEntry model uses ``extra='forbid'``
-    so any new DTO field added without a corresponding MCP field surfaces
-    here rather than silently shipping to clients.
+    tool-boundary shape. They share the same column set EXCEPT ``vault_id``,
+    which is deliberately dropped at this boundary (the backing system vault
+    must not leak to agents — see McpProceduralEntry). The McpProceduralEntry
+    model uses ``extra='forbid'`` so any new DTO field added without a
+    corresponding MCP field surfaces here rather than silently shipping to
+    clients.
     """
     return McpProceduralEntry(
         id=dto.id,
-        vault_id=dto.vault_id,
+        # vault_id intentionally NOT copied — the backing `procedural` system
+        # vault is storage plumbing the agent must not see (see McpProceduralEntry).
         kind=dto.kind,
         scope=dto.scope,
         verb=dto.verb,
