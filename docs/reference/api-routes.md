@@ -1106,6 +1106,162 @@ Prometheus-compatible metrics. Registered by `prometheus-fastapi-instrumentator`
 
 ---
 
+## Cases
+
+One route. A case is a worked episode filed as a note (`role='case'`) into the hidden `procedural` system vault; the caller never names the vault. See the [procedural-memory explanation](../explanation/how-memex-works/procedural-memory.md).
+
+### POST /api/v1/cases
+
+Submit a worked episode as a case. The note is composed from the episode template, filed into the system vault, then assignment runs synchronously. <code-ref path="packages/core/src/memex_core/server/cases.py" lines="34-104" />
+
+- **Auth.** `require_write`. When `case_of` is supplied, the caller must also have write access to the referenced procedure's vault.
+- **Body** (`CaseSubmit`): `title`, `trigger`, `outcome` (`success|failure|mixed`) — required; optional `situation`, `actions` (string list), `lesson`, `project_id`, `case_of` (UUID), `submitted_by`, `tags`.
+- **Query params.** `background` (bool, default false).
+- **Returns.**
+  - 200 `CaseSubmitResult` — `{note_id, vault_id, assignment}`, where `assignment.mode` is one of `explicit`, `auto_assigned`, `new_procedure_draft`, `escalated`, or `skipped`.
+  - 202 `BatchJobStatus` when `background=true` — `{job_id, status}`. Poll at `GET /api/v1/ingestions/{job_id}`; the case note id lands in the job's `note_ids` on completion.
+- **Errors.** 404 when an explicit `case_of` does not resolve to a procedure; standard envelope otherwise. A bad `case_of` fails synchronously even under `background=true`.
+
+---
+
+## Procedural
+
+Procedure and strategy entries alongside notes and KV, anchored on `(kind, scope, verb, context)`. All routes are vault-scoped; a few are operator-only (noted per route). <code-ref path="packages/core/src/memex_core/server/procedural.py" lines="1-21" />
+
+### POST /api/v1/procedural
+
+Create an entry. <code-ref path="packages/core/src/memex_core/server/procedural.py" lines="239-272" />
+
+- **Auth.** `require_write` + vault access on `request.vault_id`.
+- **Body** (`ProceduralEntryCreate`): `vault_id`, `kind` (`procedure|strategy`), `scope`, `title`, `summary`, `trigger`, optional `verb`, `context`, `body`, `tags`, `status`, `origin`.
+- **Returns.** `ProceduralEntryDTO`.
+- **Errors.** 409 identity-anchor conflict on `(kind, scope, verb, context)` — unless the operator set `server.memory.procedural.identity_conflict_mode='upsert'`, in which case the colliding create updates the existing row.
+
+### POST /api/v1/procedural/upsert
+
+Idempotent write on the identity anchor: same anchor updates (new version row); new anchor inserts. <code-ref path="packages/core/src/memex_core/server/procedural.py" lines="669-702" />
+
+- **Auth.** `require_write` + vault access on `request.vault_id`.
+- **Body** (`ProceduralEntryCreate`): same as create.
+- **Returns.** `ProceduralEntryDTO`.
+
+### GET /api/v1/procedural
+
+List entries by lifecycle status, newest first — the enumeration/curation surface (e.g. `?status=draft`). A plain filtered SELECT, no ranking. <code-ref path="packages/core/src/memex_core/server/procedural.py" lines="367-413" />
+
+- **Auth.** `require_read` + vault access on `vault_id`.
+- **Query params.** `status` (`draft|published|deprecated`), `scope`, `kind`, `limit` (1-200, default 50), `vault_id`.
+- **Returns.** `ProceduralEntryDTO[]`.
+- **Errors.** 422 on a bad `status`/`kind` literal.
+
+### POST /api/v1/procedural/search
+
+Hybrid BM25 + vector search (RRF-merged). <code-ref path="packages/core/src/memex_core/server/procedural.py" lines="705-738" />
+
+- **Auth.** `require_read` + vault access on `request.vault_id`.
+- **Body** (`ProceduralSearchRequest`): `query`, optional `scope`, `kind`, `status` (default `published`), `limit`, `vault_id`, `include_pin_chain`, `pin_contexts`.
+- **Returns.** `ProceduralSearchResponse` — `{hits: [{entry, score, matched_via}]}`.
+
+### GET /api/v1/procedural/by-identity
+
+Look up one entry by its `(kind, scope, verb, context)` anchor. Never 404s — an unbound anchor returns 200 with `null` (the "did we already learn this?" probe). <code-ref path="packages/core/src/memex_core/server/procedural.py" lines="275-338" />
+
+- **Auth.** `require_read` + vault access on `vault_id`.
+- **Query params.** `kind` (required), `scope` (required), `verb`, `context`, `vault_id`. A `procedure` requires `context`; a `strategy` requires `context` to be null.
+- **Returns.** `ProceduralEntryDTO` or `null`.
+
+### GET /api/v1/procedural/{entry_id}
+
+Fetch one entry by UUID. <code-ref path="packages/core/src/memex_core/server/procedural.py" lines="416-439" />
+
+- **Auth.** `require_read` + vault access.
+- **Query params.** `vault_id` (optional; mismatch returns 404).
+- **Returns.** `ProceduralEntryDTO`.
+
+### PATCH /api/v1/procedural/{entry_id}
+
+Mutate an entry in place (appends a version row). The identity anchor is immutable. <code-ref path="packages/core/src/memex_core/server/procedural.py" lines="442-474" />
+
+- **Auth.** `require_write` + vault access.
+- **Body** (`ProceduralEntryUpdate`): optional `title`, `summary`, `body`, `trigger`, `tags`, `status`, `edited_by`, `edit_reason`.
+- **Returns.** `ProceduralEntryDTO`.
+
+### POST /api/v1/procedural/{entry_id}/deprecate
+
+Soft-deprecate an entry (status → `deprecated`). <code-ref path="packages/core/src/memex_core/server/procedural.py" lines="477-505" />
+
+- **Auth.** `require_write` + vault access.
+- **Query params.** `superseded_by_id` (UUID, optional), `vault_id` (optional).
+- **Returns.** `ProceduralEntryDTO`.
+
+### POST /api/v1/procedural/{entry_id}/report
+
+Report an enactment outcome (`success|failure|mixed`). Bumps the success/failure/mixed counters + `uses` + `last_used_at` without a version bump — the lighter alternative to a full case submit with `case_of`. <code-ref path="packages/core/src/memex_core/server/procedural.py" lines="508-536" />
+
+- **Auth.** `require_write` + vault access.
+- **Query params.** `outcome` (required), `vault_id` (optional).
+- **Returns.** `ProceduralEntryDTO`.
+
+### POST /api/v1/procedural/derive
+
+Drain pending derivation tasks (cases → procedure, procedures → strategy) synchronously. Used by the background scheduler and exposed for ops + deterministic eval triggering. <code-ref path="packages/core/src/memex_core/server/procedural.py" lines="539-566" />
+
+- **Auth.** `require_write`. Operator-only — a vault-restricted key returns 403, since derivation drains the global queue across all vaults.
+- **Query params.** `limit` (1-100, default 10).
+- **Returns.** `{completed: <int>, queue_ids: [<uuid>, ...]}`.
+
+### POST /api/v1/procedural/{entry_id}/pin
+
+Pin an entry into a context-binding chain. <code-ref path="packages/core/src/memex_core/server/procedural.py" lines="569-600" />
+
+- **Auth.** `require_write` + vault access on the entry's vault.
+- **Body.** `context_key` (required), optional `position` (≥0; omitted appends), `pinned_by`.
+- **Returns.** `ProceduralPinDTO`.
+- **Errors.** 422 when the context holds the cap (10) or the context key violates the grammar (`global | project:<id> | app:<id>`).
+
+### DELETE /api/v1/procedural/{entry_id}/pin
+
+Unpin an entry from a context. Idempotent — 200 with `removed=0` when the entry exists but held no such pin. <code-ref path="packages/core/src/memex_core/server/procedural.py" lines="603-622" />
+
+- **Auth.** `require_write` + vault access.
+- **Query params.** `context_key` (required).
+- **Returns.** `{entry_id, context_key, removed}`.
+
+### GET /api/v1/procedural/pins
+
+Pins for one context, position ascending. <code-ref path="packages/core/src/memex_core/server/procedural.py" lines="341-364" />
+
+- **Auth.** `require_read`. Operator-only — a vault-restricted key returns 403 (pins carry no vault dimension).
+- **Query params.** `context_key` (required), `limit` (1-100, optional).
+- **Returns.** `ProceduralPinDTO[]`.
+
+### GET /api/v1/procedural/{entry_id}/versions
+
+The entry's uncapped version ledger, newest first. <code-ref path="packages/core/src/memex_core/server/procedural.py" lines="625-641" />
+
+- **Auth.** `require_read` + vault access.
+- **Returns.** `ProceduralEntryVersionDTO[]`.
+
+### POST /api/v1/procedural/{entry_id}/rollback
+
+Non-destructive rollback: the requested snapshot is re-applied as a new version row; nothing is deleted. <code-ref path="packages/core/src/memex_core/server/procedural.py" lines="644-666" />
+
+- **Auth.** `require_write` + vault access.
+- **Body.** `version` (≥1, required), optional `rolled_back_by`.
+- **Returns.** `ProceduralEntryDTO`.
+- **Errors.** 404 when the entry has no such version.
+
+### POST /api/v1/procedural/briefing-cards
+
+Pin-chain briefing cards for the session-briefing surface — one card per pinned entry, ordered by pin position. <code-ref path="packages/core/src/memex_core/server/procedural.py" lines="741-794" />
+
+- **Auth.** `require_read` + vault access on `vault_id`.
+- **Body.** `context_keys` (string list, min length 1).
+- **Query params.** `scope` (optional), `limit_per_context` (1-20, default 5), `vault_id` (optional multi-tenancy guard).
+- **Returns.** `ProceduralBriefingCards` — `{cards: [...]}`.
+
+---
+
 ## See also
 
 - [Tutorial: Getting started](../tutorials/getting-started.md)

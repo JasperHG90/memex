@@ -34,6 +34,13 @@ Conventions used throughout:
 | `maintenance_proposals` | optional | Finding ledger emitted by the LintService (nullable vault_id). |
 | `consolidation_ticks` | yes | One row per consolidation tick; orchestrator audit. |
 | `lint_llm_quota` | yes | Hour-bucket counter for the 24-hour rolling LLM-lint cost cap. |
+| `procedural_entries` | yes | Procedures and strategies — the procedural plane's unit of recall. |
+| `procedural_entry_versions` | yes (via entry) | Append-only version ledger; one row per edit. |
+| `procedural_sources` | yes (via entry) | Provenance / evidence / contradiction edges (case → procedure, etc.). |
+| `procedural_pins` | — (context-keyed) | Briefing-chain pins binding entries to a context. |
+| `procedural_derivation_queue` | yes | Async derivation queue: cases in, procedures/strategies out. |
+
+The full schema currently defines 29 `table=True` models; this page documents the persistent ones. (`maintenance_proposals` is the finding ledger the procedural plane's draft-activation flow also writes to.)
 
 ## `vaults`
 
@@ -671,6 +678,138 @@ Indices / constraints:
 - `uq_lint_llm_quota_vault_hour` UNIQUE on `(vault_id, hour_bucket)`.
 - `idx_lint_llm_quota_vault_hour` on `(vault_id, hour_bucket)`.
 - `ck_lint_llm_quota_count_non_negative`: `count >= 0`.
+
+## `procedural_entries`
+
+The unit of recall on the procedural plane: a procedure or strategy with a stable `(kind, scope, verb, context)` identity anchor. A procedure anchors on `(scope, verb, context)`; a strategy anchors on `(scope, verb, NULL)` — the projection over all procedures sharing that scope and verb. Retrieval is anchored on the `trigger`: the trigger embedding is the vector leg of the hybrid search, the tsvector covers the full text. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="1995-2241" />
+
+| Column | Type | Nullable | Default | Notes |
+|--------|------|----------|---------|-------|
+| `id` | UUID | no | `gen_random_uuid()` | Primary key. |
+| `vault_id` | UUID | no | global vault UUID | FK → `vaults.id`, `ON DELETE CASCADE`. |
+| `kind` | text | no | — | `procedure` or `strategy`. Cases are notes, not rows here. |
+| `scope` | text | no | — | `global`, `project:<id>`, or `app:<id>`. No `user` scope. |
+| `verb` | text | yes | NULL | Anchor verb. Required for both kinds. |
+| `context` | text | yes | NULL | Anchor context. Required for procedures; must be NULL for strategies. |
+| `title` | text | no | — | Short imperative title. |
+| `summary` | text | no | — | One-paragraph "when and how to apply". |
+| `body` | text | no | `''` | Full procedural body (steps, code, references). Markdown. |
+| `trigger` | text | yes | NULL | `when_to_use` / `when_to_apply` — the retrieval key. |
+| `trigger_embedding` | Vector(384) | yes | NULL | Embedding of `trigger`; the single vector leg. Recomputed on every trigger change. |
+| `tags` | text[] | no | `ARRAY[]::text[]` | Free-form tags. |
+| `metadata` | jsonb | no | `'{}'` | Maps to `extra_metadata`. Arbitrary metadata. |
+| `status` | text | no | `'draft'` | `draft`, `published`, or `deprecated`. Draft entries are invisible to search/briefing. |
+| `origin` | text | no | `'manual'` | `seed`, `derived`, `authored`, `manual`, or `import`. |
+| `success_count` | int | no | `0` | Cases/reports with outcome=success enacting this entry. |
+| `failure_count` | int | no | `0` | Cases/reports with outcome=failure. |
+| `mixed_count` | int | no | `0` | Cases/reports with outcome=mixed (informational; not in the MW posterior). |
+| `uses` | int | no | `0` | Total enactments (any outcome) — a governance signal. |
+| `last_used_at` | timestamptz | yes | NULL | When this entry was last enacted. |
+| `supersedes_id` | UUID | yes | NULL | FK → `procedural_entries.id` (`SET NULL`). Entry this one supersedes. |
+| `superseded_by_id` | UUID | yes | NULL | FK → `procedural_entries.id` (`SET NULL`). Entry that supersedes this one. |
+| `search_tsvector` | tsvector | — | generated | Generated over title + summary + trigger + body + tags. |
+| `created_at` | timestamptz | no | `now()` | |
+| `updated_at` | timestamptz | no | `now()` (also `ON UPDATE`) | |
+| `published_at` | timestamptz | yes | NULL | Set when status transitions draft → published. |
+
+Constraints:
+
+- `uq_procedural_identity` UNIQUE on `(kind, scope, verb, context)` with `NULLS NOT DISTINCT`.
+- `ck_procedural_kind`: `kind IN ('procedure', 'strategy')`.
+- `ck_procedural_status`: `status IN ('draft', 'published', 'deprecated')`.
+- `ck_procedural_origin`: `origin IN ('seed', 'derived', 'authored', 'manual', 'import')`.
+- `ck_strategy_anchor`: a strategy must have `verb` set and `context` NULL.
+- `ck_procedure_anchor`: a procedure must have both `verb` and `context` set.
+
+There is intentionally no CHECK pairing `trigger` with `trigger_embedding`: an embedder outage degrades to a NULL vector (BM25 still covers the row) rather than failing the write.
+
+## `procedural_entry_versions`
+
+Append-only version ledger for a procedural entry. One row per `update`/`rollback` call; the latest body is always on `procedural_entries` (mutable in place). `version` is monotonic per `entry_id`. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="2244-2299" />
+
+| Column | Type | Nullable | Default | Notes |
+|--------|------|----------|---------|-------|
+| `id` | UUID | no | `gen_random_uuid()` | Primary key. |
+| `entry_id` | UUID | no | — | FK → `procedural_entries.id`, `ON DELETE CASCADE`. |
+| `version` | int | no | — | Monotonic per `entry_id` (1, 2, 3, …). |
+| `title` | text | no | — | Title snapshot. |
+| `summary` | text | no | — | Summary snapshot. |
+| `body` | text | no | `''` | Body snapshot. |
+| `trigger` | text | yes | NULL | Trigger snapshot. |
+| `tags` | text[] | no | `ARRAY[]::text[]` | Tags snapshot. |
+| `metadata` | jsonb | no | `'{}'` | Maps to `extra_metadata`. |
+| `edited_by` | text | yes | NULL | Agent identity or `system` that produced this version. |
+| `edit_reason` | text | yes | NULL | Why the edit was made. |
+| `created_at` | timestamptz | no | `now()` | |
+
+Constraints: `uq_procedural_entry_versions_entry_version` UNIQUE on `(entry_id, version)`.
+
+## `procedural_sources`
+
+Provenance, evidence, and contradiction edges into a procedural entry. A case → procedure edge has role `provenance`; a procedure → evidence-fact edge has role `evidence`; a case arguing against a procedure has role `contradiction`. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="2302-2387" />
+
+| Column | Type | Nullable | Default | Notes |
+|--------|------|----------|---------|-------|
+| `id` | UUID | no | `gen_random_uuid()` | Primary key. |
+| `entry_id` | UUID | no | — | FK → `procedural_entries.id`, `ON DELETE CASCADE`. The entry that draws on the source. |
+| `source_entry_id` | UUID | yes | NULL | FK → `procedural_entries.id`, `ON DELETE CASCADE`. The cited case/entry. |
+| `source_note_id` | UUID | yes | NULL | FK → `notes.id`, `ON DELETE SET NULL`. Backing note. |
+| `source_memory_unit_id` | UUID | yes | NULL | FK → `memory_units.id`, `ON DELETE SET NULL`. Backing unit. |
+| `role` | text | no | — | `provenance`, `evidence`, or `contradiction`. |
+| `weight` | float | no | `1.0` | Edge weight used in RRF aggregation. |
+| `created_at` | timestamptz | no | `now()` | |
+
+Constraints:
+
+- `ck_procedural_sources_role`: `role IN ('provenance', 'evidence', 'contradiction')`.
+- `ck_procedural_sources_weight`: `0.0 <= weight <= 10.0`.
+- `ck_procedural_sources_pointer_set`: at least one of `source_entry_id` / `source_note_id` / `source_memory_unit_id` must be set.
+
+## `procedural_pins`
+
+Context-binding pin: a `(context_key, entry_id, position)` triple. Pins form an implicit chain `global → project:<id> → app:<agent_identity>`. Lower position = higher priority; agents read pins in ascending position order. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="2390-2450" />
+
+| Column | Type | Nullable | Default | Notes |
+|--------|------|----------|---------|-------|
+| `id` | UUID | no | `gen_random_uuid()` | Primary key. |
+| `context_key` | text | no | — | `global`, `project:<uuid>`, or `app:<agent_identity>`. |
+| `entry_id` | UUID | no | — | FK → `procedural_entries.id`, `ON DELETE CASCADE`. |
+| `position` | int | no | — | 0-based. Lower = higher priority. |
+| `pinned_by` | text | yes | NULL | Agent identity or `system` that created the pin. |
+| `created_at` | timestamptz | no | `now()` | |
+
+Constraints:
+
+- `uq_procedural_pins_context_entry` UNIQUE on `(context_key, entry_id)` — one pin per entry per context.
+- `ck_procedural_pins_position_nonneg`: `position >= 0`.
+
+## `procedural_derivation_queue`
+
+Async derivation queue — cases in, procedures/strategies out. Workers claim rows via `SELECT ... FOR UPDATE SKIP LOCKED`, the same leader-election-free pattern the reflection queue uses. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="2453-2543" />
+
+| Column | Type | Nullable | Default | Notes |
+|--------|------|----------|---------|-------|
+| `id` | UUID | no | `gen_random_uuid()` | Primary key. |
+| `vault_id` | UUID | no | global vault UUID | FK → `vaults.id`, `ON DELETE CASCADE`. |
+| `source_entry_ids` | uuid[] | no | `ARRAY[]::uuid[]` | Cases/entries to distil into a procedure/strategy. |
+| `target_kind` | text | no | — | `procedure` or `strategy`. |
+| `target_scope` | text | no | — | Scope label for the derived entry. |
+| `target_verb` | text | yes | NULL | Anchor verb for the derived entry. |
+| `target_context` | text | yes | NULL | Anchor context (NULL for strategy targets). |
+| `status` | text | no | `'pending'` | `pending`, `in_progress`, `completed`, or `failed`. |
+| `attempt_count` | int | no | `0` | Worker attempts so far. |
+| `last_error` | text | yes | NULL | Last failure message. |
+| `result_entry_id` | UUID | yes | NULL | Set when `status=completed`; the derived entry. |
+| `claimed_at` | timestamptz | yes | NULL | Last worker-claim timestamp. |
+| `completed_at` | timestamptz | yes | NULL | |
+| `created_at` | timestamptz | no | `now()` | |
+
+Constraints:
+
+- `ck_derivation_queue_target_kind`: `target_kind IN ('procedure', 'strategy')`.
+- `ck_derivation_queue_status`: `status IN ('pending', 'in_progress', 'completed', 'failed')`.
+- `ck_derivation_queue_attempt_nonneg`: `attempt_count >= 0`.
+- `ck_derivation_queue_strategy_anchor`: a strategy target must have `target_verb` set and `target_context` NULL.
 
 ## See also
 

@@ -2106,3 +2106,302 @@ memex report-bug
 ```
 
 Open a pre-filled GitHub issue page in the default browser to report a bug. Automatically collects and attaches system information (Memex version, Python version, OS).
+
+---
+
+## `case`
+
+Submit worked episodes as cases. A case is a note (`role='case'`) filed into a hidden system vault — the input side of the procedural plane. See the [procedural-memory explanation](../explanation/how-memex-works/procedural-memory.md) for the model.
+
+### `case submit`
+
+```
+memex case submit [OPTIONS]
+```
+
+Submit a worked episode as a case. The case is filed into the hidden system vault — there is no `--vault` flag; the server owns placement. Without `--case-of`, the server judges which procedure the case instances; contested judgments land in the lint queue.
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--file` | `-f` | path | - | Read the case from a markdown file (the `## Trigger` / `## Situation` / `## Actions` / `## Outcome / Lesson` template plus optional YAML frontmatter). Any flag below overrides the parsed value. |
+| `--title` | `-t` | str | - | Case title. Required (flag or file). |
+| `--trigger` | | str | - | What kicked the episode off. Required (flag or file). |
+| `--outcome` | `-o` | str | - | `success`, `failure`, or `mixed`. Required (flag or file). |
+| `--situation` | | str | `""` | Context going in (prior state, constraints). |
+| `--action` | `-a` | str (list) | - | One ordered step per flag. Repeatable. |
+| `--lesson` | | str | `""` | What to do differently / confirm next time. (No short flag.) |
+| `--project-id` | `-p` | str | - | Provenance — recorded in metadata, not a vault binding. |
+| `--case-of` | | str (UUID) | - | UUID of the procedural entry this case instantiates (skips the judge). |
+| `--tag` | | str (list) | - | Repeatable tag. |
+| `--background` | `-b` | bool | `False` | Queue as a tracked job and return a job id (202) instead of waiting. Poll at `GET /api/v1/ingestions/{job_id}`. |
+| `--json` | | bool | `False` | Output as JSON. |
+
+#### Examples
+
+```bash
+# Submit a new episode by flags
+memex case submit \
+  --title "Unstick a hung Nomad deploy" \
+  --trigger "Nomad deploy hangs on stuck allocations" \
+  --action "Drain the job" --action "Wait for allocations to clear" \
+  --action "Re-submit" --outcome success \
+  --lesson "Always drain before re-submitting."
+
+# Submit from a markdown file
+memex case submit --file ./nomad-deploy-case.md
+
+# Attach to a known procedure (skips the judge)
+memex case submit --title "..." --trigger "..." --outcome success \
+  --case-of 7b2e1d4a-0000-0000-0000-000000000000
+
+# Queue as a background job
+memex case submit --file ./case.md --background
+```
+
+---
+
+## `procedural`
+
+Manage procedural-plane entries — procedures (worked how-tos) and strategies (play-books generalising procedures). Identity-anchored on `(kind, scope, verb, context)`; strategies anchor on `(scope, verb)`. Cases are notes — submit them via `memex case submit`.
+
+### `procedure create`
+
+```
+memex procedure create KIND [OPTIONS]
+```
+
+Create a new entry. `KIND` is `procedure` or `strategy`. A procedure requires `--verb` and `--context`; a strategy requires `--verb` and forbids `--context`. `--trigger` is always required (the retrieval key).
+
+#### Arguments
+
+| Name | Required | Description |
+|------|----------|-------------|
+| `KIND` | Yes | `procedure` or `strategy`. |
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--scope` | `-s` | str | - | Identity scope: `global`, `project:<id>`, or `app:<id>`. Required. |
+| `--title` | `-t` | str | - | Entry title. Required. |
+| `--summary` | | str | - | One-paragraph summary. Required. |
+| `--verb` | | str | - | Anchor verb — required for both kinds. |
+| `--context` | `-c` | str | - | Anchor context — required for `procedure`, forbidden for `strategy`. |
+| `--body` | `-b` | str | - | Long-form body (steps, references). |
+| `--trigger` | | str | - | `when_to_use` / `when_to_apply` — the retrieval key. Required. |
+| `--tag` | | str (list) | - | Repeatable tag. |
+| `--vault` | `-v` | str | - | Vault name or UUID. Required. |
+| `--status` | | str | `draft` | `draft`, `published`, or `deprecated`. |
+| `--origin` | | str | `manual` | `manual`, `derived`, `import`, or `seed`. |
+| `--json` | | bool | `False` | Output as JSON. |
+
+### `procedure upsert`
+
+```
+memex procedure upsert KIND [OPTIONS]
+```
+
+Idempotent write on the `(kind, scope, verb, context)` anchor: same anchor updates (and appends a version row); a new anchor inserts. Status is preserved. Same options as `create` minus `--origin`; `--vault` is required.
+
+### `procedure get`
+
+```
+memex procedure get ENTRY_ID [--json]
+```
+
+Fetch a single entry by UUID.
+
+### `procedure get-by-identity`
+
+```
+memex procedure get-by-identity KIND [OPTIONS]
+```
+
+Look up one entry by `(kind, scope, verb, context)`. Exits non-zero on a miss.
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--scope` | `-s` | str | - | Identity scope. |
+| `--verb` | | str | - | Anchor verb. |
+| `--context` | `-c` | str | - | Anchor context. |
+| `--vault` | `-v` | str | - | Vault name or UUID to scope the lookup. |
+| `--json` | | bool | `False` | Output as JSON. |
+
+### `procedure search`
+
+```
+memex procedure search [QUERY] [OPTIONS]
+```
+
+Hybrid BM25 + vector search across the plane. Omit `QUERY` for a filter-only listing.
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--scope` | `-s` | str | - | Restrict to a single scope. |
+| `--kind` | | str | - | `procedure` or `strategy`. Omit for all. |
+| `--status` | | str | `published` | `draft`, `published`, or `deprecated`. |
+| `--limit` | `-l` | int | `10` | Maximum results. |
+| `--json` | | bool | `False` | Output as JSON. |
+
+### `procedure list`
+
+```
+memex procedure list [OPTIONS]
+```
+
+List entries by lifecycle status, newest first. Unlike `search`, needs no query — this is how you enumerate the curation queue (e.g. `--status draft`).
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--status` | | str | - | `draft`, `published`, or `deprecated`. Omit for all. |
+| `--scope` | `-s` | str | - | Restrict to a single scope. |
+| `--kind` | | str | - | `procedure` or `strategy`. Omit for both. |
+| `--vault` | `-v` | str | - | Restrict to a single vault. |
+| `--limit` | `-l` | int | `50` | Maximum entries. |
+| `--json` | | bool | `False` | Output as JSON. |
+
+### `procedure briefing-cards`
+
+```
+memex procedure briefing-cards [OPTIONS]
+```
+
+Pin-chain briefing cards for the session-briefing surface.
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--context-key` | `-c` | str (list) | - | Pin context key. Repeatable. Required. |
+| `--scope` | `-s` | str | - | Restrict to a single scope. |
+| `--limit-per-context` | | int | `5` | Cap per-context card count. |
+| `--json` | | bool | `False` | Output as JSON. |
+
+### `procedure update`
+
+```
+memex procedure update ENTRY_ID [OPTIONS]
+```
+
+Mutate an entry in place (appends a version row). The identity anchor is immutable — for identity changes, create a new entry and deprecate the old one.
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--title` | `-t` | str | - | New title. |
+| `--summary` | | str | - | New summary. |
+| `--body` | `-b` | str | - | New body. |
+| `--trigger` | | str | - | New trigger (recomputes the embedding). |
+| `--tag` | | str (list) | - | Replace tags. Repeatable. |
+| `--status` | | str | - | `draft`, `published`, or `deprecated`. |
+| `--json` | | bool | `False` | Output as JSON. |
+
+### `procedure deprecate`
+
+```
+memex procedure deprecate ENTRY_ID [OPTIONS]
+```
+
+Soft-deprecate an entry (status → `deprecated`).
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--superseded-by` | | str (UUID) | - | UUID of the entry that supersedes this one. |
+| `--force` | `-f` | bool | `False` | Skip the confirmation prompt. |
+
+### `procedure derive`
+
+```
+memex procedure derive [OPTIONS]
+```
+
+Drain the derivation queue once: distil cases → procedures and procedures → strategies. The background scheduler normally does this; run it by hand to materialise drafts now.
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--limit` | `-l` | int | `10` | Max pending derivation tasks to drain this pass. |
+| `--json` | | bool | `False` | Output as JSON. |
+
+### `procedure pin`
+
+```
+memex procedure pin ENTRY_ID [OPTIONS]
+```
+
+Pin an entry into a briefing context chain (cap 10 per context).
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--context` | `-c` | str | - | Pin-chain context: `global`, `project:<id>`, or `app:<id>`. Required. |
+| `--position` | | int | append | 0-based chain position. Omit to append. |
+| `--json` | | bool | `False` | Output as JSON. |
+
+### `procedure unpin`
+
+```
+memex procedure unpin ENTRY_ID --context CONTEXT
+```
+
+Unpin an entry from a context (idempotent). `--context`/`-c` is required.
+
+### `procedure pins`
+
+```
+memex procedure pins --context CONTEXT [--json]
+```
+
+List pins for a context, position ascending. `--context`/`-c` is required.
+
+### `procedure versions`
+
+```
+memex procedure versions ENTRY_ID [--json]
+```
+
+List the entry's uncapped version ledger, newest first.
+
+### `procedure diff`
+
+```
+memex procedure diff ENTRY_ID --from FROM [--to TO]
+```
+
+Unified diff between two ledger versions (body + trigger + title). `--from` is the older version number; `--to` defaults to the newest.
+
+### `procedure rollback`
+
+```
+memex procedure rollback ENTRY_ID --to VERSION [--json]
+```
+
+Non-destructive rollback: the requested snapshot is re-applied as a new version. `--to` names the version number to restore.
+
+### `procedure review`
+
+```
+memex procedure review [OPTIONS]
+```
+
+Launch the procedural-plane curation TUI — browse and search entries, pin/unpin them into the briefing chain, preview the assembled briefing, and diff/rollback the version ledger.
+
+#### Options
+
+| Option | Short | Type | Default | Description |
+|--------|-------|------|---------|-------------|
+| `--project-id` | `-p` | str | - | `project:<id>` context for the briefing chain. |
+| `--app` | `-a` | str | - | `app:<id>` context for the briefing chain. |

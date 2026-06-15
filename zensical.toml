@@ -45,6 +45,7 @@ nav = [
     { "Curation" = [
       "how-to/deprioritize-units.md",
       "how-to/reconsolidate.md",
+      "how-to/submit-cases.md",
       "how-to/linting.md",
       "how-to/maintenance-cockpit.md",
       "how-to/trace-lineage.md",
@@ -75,6 +76,7 @@ nav = [
       "explanation/how-memex-works/synthesis-and-reflection.md",
       "explanation/how-memex-works/feedback.md",
       "explanation/how-memex-works/note-lifecycle.md",
+      "explanation/how-memex-works/procedural-memory.md",
       "explanation/how-memex-works/contradiction-detection.md",
     ]},
     "explanation/identifiers.md",

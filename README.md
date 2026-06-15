@@ -22,7 +22,7 @@
   <img src="https://img.shields.io/badge/python-3.12+-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.12+" />
   <img src="https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square" alt="Apache 2.0" />
   <img src="https://img.shields.io/badge/version-v0.1.6a-green?style=flat-square" alt="v0.1.6a" />
-  <img src="https://img.shields.io/badge/tests-7,701%20passing-brightgreen?style=flat-square" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-7,710%20passing-brightgreen?style=flat-square" alt="Tests" />
 </p>
 
 > [!IMPORTANT]
@@ -147,6 +147,12 @@ Memex is deliberately not an agent. It provides the storage, extraction, and ret
 <sub>The `memex diagnose` CLI inspects the embedding manifold, retrieval ranking signals, vault summary stats, and pending lint backlog. Pair with the OpenTelemetry traces and Prometheus metrics for a full operator view.</sub></p>
 </td>
 </tr>
+<tr>
+<td valign="top">
+<p>🧭 <strong>Procedural Memory (Cases)</strong><br>
+<sub>Beyond facts — capture <em>how your team does things</em>. Submit a worked episode as a <strong>case</strong> (a note with a job) and Memex links it to a reusable <strong>procedure</strong> or drafts a new one; <strong>strategies</strong> pick a procedure for a context. Assignment-judged, draft-then-activate via the lint queue, with success/failure counters per procedure.</sub></p>
+</td>
+</tr>
 </table>
 
 <details>
@@ -259,6 +265,14 @@ Give Claude Code persistent memory across all projects with a single plugin inst
 ### Audit logging
 
 An append-only audit trail backed by the metastore. Every significant action (ingestion, deletion, status change, reflection) is logged with the actor, resource ID, action type, and session ID. Dispatch is non-blocking — audit writes happen in the background without impacting request latency.
+
+### Procedural memory (cases)
+
+Most memory in Memex is *declarative* — facts, events, and observations about what is true. Procedural memory is the other half: *how your team does things*. The `deploy` verb that means "staging" here, the way this repo wants its PRs, the fix that worked last time.
+
+It rides on the same substrate as everything else. A **case** is a note — the exact same Markdown-note row, stored and extracted the same way — but with `role='case'` and a job: it records a *worked episode* (Trigger / Situation / Actions / Outcome + Lesson) instead of describing the world. Submitting one (`memex case submit`) files the note, then runs an assignment step that links it to an existing **procedure** or drafts a new one, and the case's outcome bumps that procedure's success/failure counters. Procedures — and the **strategies** that pick between them for a context — live on a dedicated plane, surface as compact index cards in the session briefing, and graduate from `draft` to `published` through the maintenance lint queue.
+
+The one-line distinction: **a note says what is true; a case says what you did and how it turned out.** Same storage, different job — and the case is what teaches Memex the procedure. (Note that this is distinct from *procedural KV* — `<scope>:procedure:<verb>:<context>` keys hold a user's stated preferences; the procedural plane holds recipes distilled from real episodes.)
 
 </details>
 
@@ -409,6 +423,7 @@ Comprehensive guides and references live in [`docs/`](./docs/index.md). The tree
 - [Attach assets to notes](./docs/how-to/asset-attachments.md): Images, PDFs, audio.
 - [Deprioritize units](./docs/how-to/deprioritize-units.md): Demote without deleting.
 - [Reconsolidate an entity](./docs/how-to/reconsolidate.md): Re-run the 7-phase loop for a single entity.
+- [Submit cases and derive procedures](./docs/how-to/submit-cases.md): Turn a worked episode into a reusable procedure.
 - [Trace lineage](./docs/how-to/trace-lineage.md): Walk from mental model back to source.
 - [Run diagnostics](./docs/how-to/diagnostics.md): Manifold, retrieval, lint backlog.
 - [Backup and export](./docs/how-to/backup-and-export.md): Get your data out at any time.
@@ -426,7 +441,7 @@ Comprehensive guides and references live in [`docs/`](./docs/index.md). The tree
 - [API routes](./docs/reference/api-routes.md): REST surface.
 - [MCP tools](./docs/reference/mcp-tools.md): ~40 tools across asset, note, search, entity, KV, vault, outcome, curation, lint, diagnostics.
 - [Configuration options](./docs/reference/configuration-options.md)
-- [Data model](./docs/reference/data-model.md): The 14-table schema.
+- [Data model](./docs/reference/data-model.md): The full database schema.
 - [Failure modes](./docs/reference/failure-modes.md): What blocks, what degrades gracefully.
 - [Observability](./docs/reference/observability.md): Metrics catalog and span attributes.
 - [Evaluation results](./docs/reference/evaluation-results.md): Internal suites plus external benchmarks.
@@ -443,6 +458,7 @@ Comprehensive guides and references live in [`docs/`](./docs/index.md). The tree
 - [Synthesis and reflection](./docs/explanation/how-memex-works/synthesis-and-reflection.md): The 7-phase loop.
 - [Feedback](./docs/explanation/how-memex-works/feedback.md): Memory Worth, outcome counters, FSFM scoring.
 - [Note lifecycle](./docs/explanation/how-memex-works/note-lifecycle.md): Active, superseded, archived, appended.
+- [Procedural memory plane](./docs/explanation/how-memex-works/procedural-memory.md): Cases, procedures, strategies — recipes distilled from worked episodes.
 
 > **Found a bug?** Run `memex report-bug` to open a pre-filled GitHub issue.
 
