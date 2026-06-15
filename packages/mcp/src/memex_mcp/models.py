@@ -558,14 +558,23 @@ class McpCaseSubmitResult(BaseModel):
     ``assignment_mode='escalated'`` means a contested assignment landed
     in the lint queue (``finding_id``) — resolve via the lint tools or
     leave it for human review (file-then-lint).
+
+    ``assignment_mode='queued'`` means the case was filed in the background
+    (``background=true``): ``job_id`` tracks the durable job and ``note_id`` /
+    assignment fields are absent — the assignment resolves async and any
+    escalation / new-procedure draft surfaces in the lint queue.
+
+    ``vault_id`` is deliberately omitted: the backing ``procedural`` system
+    vault is storage plumbing the agent must not see (mirrors the same
+    redaction on McpProceduralEntry).
     """
 
     model_config = {'extra': 'forbid'}
 
-    note_id: UUID
-    vault_id: UUID
+    note_id: UUID | None = None
+    job_id: UUID | None = None
     assignment_mode: Literal[
-        'explicit', 'auto_assigned', 'new_procedure_draft', 'escalated', 'skipped'
+        'explicit', 'auto_assigned', 'new_procedure_draft', 'escalated', 'skipped', 'queued'
     ]
     entry_id: UUID | None = None
     finding_id: UUID | None = None

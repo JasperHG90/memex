@@ -314,7 +314,9 @@ async def test_mcp_case_submit_projects_result(mock_api, mock_config, mcp_client
 
     parsed = result.structured_content or {}
     assert parsed['note_id'] == str(note_id)
-    assert parsed['vault_id'] == str(vault_id)
+    # vault_id is deliberately NOT surfaced — the backing system vault is
+    # storage plumbing the agent must not see.
+    assert 'vault_id' not in parsed
     assert parsed['assignment_mode'] == 'auto_assigned'
     assert parsed['entry_id'] == str(entry_id)
     assert parsed['separation'] == 'clean'
@@ -354,6 +356,40 @@ async def test_mcp_case_submit_surfaces_escalation(mock_api, mock_config, mcp_cl
     parsed = result.structured_content or {}
     assert parsed['assignment_mode'] == 'escalated'
     assert parsed['finding_id'] == str(finding_id)
+
+
+async def test_mcp_case_submit_background_returns_queued(mock_api, mock_config, mcp_client):
+    """background=true queues the case as a durable job: the tool returns
+    assignment_mode='queued' + the job_id and never blocks on the assignment
+    judge. note_id/assignment fields are absent (assignment resolves async)."""
+    from uuid import uuid4
+
+    from memex_common.schemas import BatchJobStatus
+
+    job_id = uuid4()
+    mock_api.case_submit = AsyncMock(return_value=BatchJobStatus(job_id=job_id, status='pending'))
+
+    result = await mcp_client.call_tool(
+        'memex_case_submit',
+        {
+            'payload': {
+                'title': 'Rotated the API creds',
+                'trigger': 'rotating the project API credentials',
+                'outcome': 'success',
+            },
+            'background': True,
+        },
+    )
+
+    mock_api.case_submit.assert_awaited_once()
+    assert mock_api.case_submit.await_args is not None
+    assert mock_api.case_submit.await_args.kwargs.get('background') is True
+
+    parsed = result.structured_content or {}
+    assert parsed['assignment_mode'] == 'queued'
+    assert parsed['job_id'] == str(job_id)
+    assert parsed.get('note_id') is None
+    assert 'vault_id' not in parsed
 
 
 async def test_mcp_briefing_cards_tool_is_gone(mcp_client):

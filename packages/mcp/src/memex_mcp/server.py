@@ -4738,20 +4738,36 @@ async def memex_procedural_search(
 async def memex_case_submit(
     ctx: Context,
     payload: CaseSubmit,
+    background: Annotated[
+        bool,
+        Field(
+            description='Queue the file+assign flow as a durable background job and '
+            'return immediately (assignment_mode="queued" + job_id) instead of '
+            'blocking on the assignment judge; assignment then resolves async and any '
+            'escalation surfaces in the lint queue. Pass false to wait inline and get '
+            'the assignment outcome in the response. The Claude Code plugin defaults '
+            'this to true so capture never blocks the agent.',
+        ),
+    ] = False,
 ) -> McpCaseSubmitResult:
     """File a worked episode as a case note + run assignment.
 
     The note lands in the hidden `procedural` system vault with
     role='case'; the caller never names the vault. Assignment runs
     synchronously (explicit case_of / judge auto-assign / lint
-    escalation) — see the result's assignment block.
+    escalation) — see the result's assignment block — UNLESS
+    ``background=true``, which queues the whole flow as a tracked job and
+    returns ``assignment_mode='queued'`` + ``job_id`` without blocking.
     """
     try:
         api = get_api(ctx)
-        result = await api.case_submit(payload)
+        result = await api.case_submit(payload, background=background)
+        # background=true → the route returns 202 + a BatchJobStatus; the case
+        # is filed off the request path and assignment resolves async.
+        if isinstance(result, BatchJobStatus):
+            return McpCaseSubmitResult(assignment_mode='queued', job_id=result.job_id)
         return McpCaseSubmitResult(
             note_id=result.note_id,
-            vault_id=result.vault_id,
             assignment_mode=result.assignment.mode,
             entry_id=result.assignment.entry_id,
             finding_id=result.assignment.finding_id,
