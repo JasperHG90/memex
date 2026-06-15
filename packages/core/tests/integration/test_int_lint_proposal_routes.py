@@ -353,6 +353,74 @@ async def test_activate_procedural_entry_exempt_from_attended_gate(
     assert entry.status == 'published'
 
 
+async def _insert_case_assignment_finding(api, *, vault_id: str, note_id: str) -> str:
+    """A pending case_assignment finding targeting a case NOTE — the escalation
+    case_submit files when the judge can't cleanly assign the case."""
+    import json
+
+    finding_id = str(uuid4())
+    async with api.metastore.session() as s:
+        await s.execute(
+            text(
+                'INSERT INTO maintenance_proposals '
+                '(id, vault_id, lint_type, target_type, target_id, rule_name, evidence, '
+                ' suggested_action, status, source) VALUES '
+                "(:id, :vault_id, 'governance', 'note', :target_id, "
+                " 'case_assignment', CAST(:evidence AS jsonb), 'assign', "
+                " 'pending', 'external')"
+            ),
+            {
+                'id': finding_id,
+                'vault_id': vault_id,
+                'target_id': note_id,
+                'evidence': json.dumps({}),
+            },
+        )
+        await s.commit()
+    return finding_id
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_assign_case_exempt_from_attended_gate(http: AsyncClient, api, monkeypatch):
+    """assign_case is a core, REVERSIBLE procedural-curation action (attach a
+    case → procedure, or mint a draft anchor). Like activate_procedural_entry it
+    is exempt from the attended-mode fence, so accepting a case_assignment
+    finding resolves with auth disabled and no ``MEMEX_LINT_ALLOW_UNATTENDED_APPLY``
+    opt-in — otherwise the local/self-host case-curation loop is unusable.
+
+    REGRESSION: the original fix exempted ONLY activate_procedural_entry, so
+    accepting a case_assignment finding still 403'd at the gate ("was fixed,
+    now broken"). This pins the whole reversible procedural-plane curation set.
+    """
+    monkeypatch.delenv('MEMEX_LINT_ALLOW_UNATTENDED_APPLY', raising=False)
+    vault_id = await _create_vault(http)
+    note_id = await _seed_note(api, vault_id)
+    finding_id = await _insert_case_assignment_finding(api, vault_id=vault_id, note_id=note_id)
+
+    resolve = await http.post(
+        f'/api/v1/lint/findings/{finding_id}/resolve',
+        json={
+            'action': 'assign_case',
+            'params': {
+                'mode': 'new_procedure',
+                'scope': 'global',
+                'verb': 'sanitize',
+                'context': f'attended-{uuid4().hex[:8]}',
+                'title': 'Exempt assign_case test procedure',
+            },
+        },
+    )
+    assert resolve.status_code == 200, resolve.text  # NOT 403 — exempt from the gate
+    followup = resolve.json()['resolution']['followup']
+    assert followup['action'] == 'assign_case'
+    # A draft anchor was minted and the case attached to it (reversible).
+    created = followup['applied_state']['created_entry_id']
+    assert created is not None
+    entry = await api.procedural.get(UUID(created))
+    assert entry.status == 'draft'
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_destructive_action_executes_through_resolve(http: AsyncClient, api, monkeypatch):

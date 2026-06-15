@@ -895,15 +895,30 @@ async def lint_resolve(
             'resolution': resolution,
         }
 
-    # Canned-action path — destructive; gate as such. Two actions are exempt:
+    # Canned-action path — destructive; gate as such. The exempt set is the
+    # reversible procedural-plane curation actions plus no_op:
     #   - no_op mutates nothing beyond the status flip the action-less path
     #     already performs ungated (its followup is pure audit);
-    #   - activate_procedural_entry only promotes a procedure/strategy draft →
-    #     published. It is the core human curation action and is reversible
-    #     (undo re-drafts), so gating it behind attended-mode would make the
-    #     procedural curation loop unusable on a local/self-host server with
-    #     auth disabled, with no safety upside the reversibility doesn't cover.
-    _ATTENDED_EXEMPT = ('no_op', 'activate_procedural_entry')
+    #   - activate_procedural_entry promotes a procedure/strategy draft →
+    #     published (undo re-drafts);
+    #   - assign_case attaches a case to a procedure or mints a draft anchor
+    #     (undo detaches + deprecates the draft);
+    #   - create_case files a worked episode + runs assignment (undo archives
+    #     the case + unwinds the assignment);
+    #   - apply_derivation applies a distillation diff as a new version (undo
+    #     restores the prior content).
+    # These are the core human curation actions and are all reversible, so
+    # gating them behind attended-mode would make the procedural curation loop
+    # unusable on a local/self-host server with auth disabled, with no safety
+    # upside the reversibility doesn't cover. Destructive actions (deletes,
+    # merges, deprioritize, kv_delete, record_outcome, …) still gate.
+    _ATTENDED_EXEMPT = (
+        'no_op',
+        'activate_procedural_entry',
+        'assign_case',
+        'create_case',
+        'apply_derivation',
+    )
     action_id = str(action_id_raw)
     if action_id not in _ATTENDED_EXEMPT:
         _require_attended_mode(api)
