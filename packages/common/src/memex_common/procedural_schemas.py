@@ -115,8 +115,17 @@ ShortLabel = Annotated[str, StringConstraints(min_length=1, max_length=256, stri
 # global, two for project:<id> and app:<id>, three for the Hermes
 # per-agent pin context app:hermes:<agent_identity>. NO `user` scope —
 # see module docstring.
+#
+# The <id> charset includes `/` so a git-remote-style project id like
+# `github.com/owner/repo` is a valid scope. That form is the canonical
+# project id everywhere else (KV `project:<id>:…` namespaces and the
+# briefing pin-context chain `project:<id>` built in session_briefing),
+# and a procedural entry's scope MUST equal its pin-context to be matched
+# by the pin chain — so the entry scope grammar has to admit the same id
+# shape. Forbidding `/` here made every project-scoped case assignment 500
+# at ProceduralEntryCreate even though the pin-context used it freely.
 SCOPE_PATTERN = re.compile(
-    r'^(global|project:[A-Za-z0-9._-]+|app:[A-Za-z0-9._-]+(:[A-Za-z0-9._-]+)?)$'
+    r'^(global|project:[A-Za-z0-9._/-]+|app:[A-Za-z0-9._/-]+(:[A-Za-z0-9._/-]+)?)$'
 )
 
 # Anchor verb/context grammar — mirrors the KV procedure-key grammar

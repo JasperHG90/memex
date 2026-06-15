@@ -131,6 +131,23 @@ def test_entry_create_rejects_user_scope():
         ProceduralEntryCreate.model_validate(_base_payload(scope='user'))
 
 
+@pytest.mark.parametrize(
+    'scope',
+    [
+        'project:github.com/JasperHG90/memex',  # git-remote-style id (slashes + dots)
+        'app:hermes:agent/with-slash',
+    ],
+)
+def test_entry_create_accepts_git_remote_style_project_scope(scope):
+    """A git-remote project id (``github.com/owner/repo``) is the canonical
+    project id used by KV namespaces and the briefing pin-context chain. The
+    entry scope MUST admit the same id shape or the pin chain can never match
+    the entry — REGRESSION: the `/` was excluded, so accepting a project-scoped
+    case_assignment 500'd at ProceduralEntryCreate."""
+    entry = ProceduralEntryCreate.model_validate(_base_payload(scope=scope))
+    assert entry.scope == scope
+
+
 def test_entry_create_requires_trigger():
     """The trigger (when_to_use) is the retrieval key (§6, spike §19.1)
     — required for every write."""

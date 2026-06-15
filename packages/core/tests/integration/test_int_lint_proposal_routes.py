@@ -403,8 +403,11 @@ async def test_assign_case_exempt_from_attended_gate(http: AsyncClient, api, mon
         json={
             'action': 'assign_case',
             'params': {
+                # git-remote-style project scope: exercises BOTH the gate
+                # exemption AND the scope grammar admitting `/` end-to-end
+                # (the two bugs that kept project-scoped case accept broken).
                 'mode': 'new_procedure',
-                'scope': 'global',
+                'scope': 'project:github.com/acme/widgets',
                 'verb': 'sanitize',
                 'context': f'attended-{uuid4().hex[:8]}',
                 'title': 'Exempt assign_case test procedure',
