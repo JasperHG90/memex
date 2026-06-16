@@ -1,6 +1,6 @@
 ---
 name: continue
-description: "Resume work from previous /handoff notes. Lists the most recent handoff summaries in a multi-select UI, lets the user pick which are relevant (one, many, or 'load more'), then loads only the selected notes, summarizes them, and asks what the next steps should be. Use at the start of a fresh session, or when the user says 'pick up where we left off', 'continue', 'what was I working on', 'resume', or 'catch me up on this'."
+description: "Resume work from previous /handoff notes. Presents a multi-select list of the most recent handoff summaries, lets the user pick any number of relevant items (or 'load more'), then loads every selected note, summarizes them jointly, and asks what the next steps should be. Use at the start of a fresh session, or when the user says 'pick up where we left off', 'continue', 'what was I working on', 'resume', or 'catch me up on this'."
 argument-hint: "[optional: project or topic to resume]"
 ---
 
@@ -8,7 +8,7 @@ argument-hint: "[optional: project or topic to resume]"
 
 You have been invoked via the `/continue` slash command. This is the companion to `/handoff`: it reads back the technical handoff summaries that `/handoff` writes, so the user can resume a thread across sessions.
 
-Handoffs are notes carrying the `handoff` tag plus the plugin's auto-injected `project:*` tag. `/continue` is a **browse-then-load** flow: present a recency-ordered selectable menu, let the user choose one or more items, then summarize only what they selected and jointly decide next steps.
+Handoffs are notes carrying the `handoff` tag plus the plugin's auto-injected `project:*` tag. `/continue` is a **browse-then-load** flow: present a recency-ordered **multi-select** list, let the user choose **one or more** handoffs, then load and summarize every selected note together and jointly decide next steps.
 
 ## 1. Resolve scope
 
@@ -22,18 +22,19 @@ memex_list_notes(tags=["handoff", "project:<id>"], date_by="created_at", limit=5
 
 `slim=False` keeps each note's `title`, `description`, and timestamp. If the project-scoped list is empty, retry with `tags=["handoff"]` so a first-time-in-this-repo `/continue` still finds cross-project handoffs. If there are none at all, say so plainly and stop — suggest `/handoff` to start leaving them.
 
-Present the results as a multi-select question using `AskUserQuestion`:
+Present the results as a **multi-select** question using `AskUserQuestion`. The user must be able to select several notes at once. Set the question's `multiSelect` flag to `true` — `kind: "multi_select"` alone is not enough:
 
 ```json
 {
   "header": "Recent handoff notes",
   "question": "Which handoff(s) do you want to continue?",
   "kind": "multi_select",
+  "multiSelect": true,
   "options": [
     {
-      "label": "1",
-      "description": "<note title>",
-      "preview": "<one-line summary + status + next step>\n\n<date>",
+      "label": "1. <short note title>",
+      "description": "<status / next step one-liner>",
+      "preview": "<note description + status + next step>\n\n<date>",
       "value": "<note_id>"
     },
     ...
@@ -43,8 +44,8 @@ Present the results as a multi-select question using `AskUserQuestion`:
 
 Guidelines for the options:
 
-- `label` — a short numeric or symbolic identifier (e.g., `1`, `2`, `3`).
-- `description` — the handoff note **title**.
+- `label` — short numeric identifier plus the handoff note **title** (e.g., `1. /handoff and /continue skills`). The title must be visible in the list without selecting the item.
+- `description` — a concise status or next-step signal for the handoff.
 - `preview` — the note `description` plus any obvious status/next-step signal, followed by the date reference. Keep it concise so the side-by-side layout stays readable.
 - `value` — the note `id` returned by `memex_list_notes`.
 
@@ -64,7 +65,7 @@ Do not dump the list as plain text or ask the user to type numbers manually. The
 
 `AskUserQuestion` with `multi_select` returns a list of selected `value`s.
 
-- **One or more note IDs** — read each selected handoff. If a note is over ~500 tokens, paginate via `memex_get_page_indices` + `memex_get_nodes` rather than `memex_read_note` (which errors above that cap).
+- **One or more note IDs** — read **every** selected handoff, not just the first one. If a note is over ~500 tokens, paginate via `memex_get_page_indices` + `memex_get_nodes` rather than `memex_read_note` (which errors above that cap).
 - **`more` selected** — call `memex_list_notes` again with the same tags and a larger `limit` (e.g., 10) and re-present the extended list as a fresh `AskUserQuestion`. Do not read any note yet; wait for a selection. If `more` is selected together with note IDs, treat it as "load more first" — ignore the IDs and reload.
 - **Nothing selected** — repeat the same `AskUserQuestion` once. If the user still selects nothing, stop and ask whether to broaden the scope or create a fresh `/handoff`.
 - **No relevant handoffs** — stop and ask whether to broaden the scope or create a fresh `/handoff`.

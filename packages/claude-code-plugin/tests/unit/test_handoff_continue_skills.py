@@ -73,9 +73,10 @@ def test_continue_is_browse_then_load_not_auto_brief() -> None:
         '/continue must ask the user which handoffs are relevant'
     )
     # The user can pick multiple handoffs.
-    assert 'more' in body.lower() or 'numbers' in body.lower() or 'all' in body.lower(), (
-        '/continue must allow multiple selections or loading more'
-    )
+    assert 'multi_select' in body.lower(), '/continue must use an AskUserQuestion multi-select UI'
+    assert (
+        'one or more' in body.lower() or 'multiple' in body.lower() or 'any number' in body.lower()
+    ), '/continue must explicitly allow multiple handoff selections'
     # Only after selection does the agent read the notes and summarize.
     assert 'read' in body.lower() and 'summarize' in body.lower(), (
         '/continue must read the selected handoffs before summarizing'
