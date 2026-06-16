@@ -217,6 +217,11 @@ class ProceduralEntryDTO(BaseModel):
         default_factory=dict,
         description='Arbitrary metadata — confidence, run_count, last_verified_at, etc.',
     )
+    skill_hints: list[str] = Field(
+        default_factory=list,
+        description='Structured capability hints distilled from step skill_hint fields. '
+        'Agents may map each hint to a local skill; the rendered body remains authoritative.',
+    )
     status: StatusLiteral = 'draft'
     origin: OriginLiteral = 'manual'
     # Phase 2 outcome counters (§18.5). Cards render raw counts (e.g. 9/11 ✓),
@@ -267,6 +272,10 @@ class ProceduralEntryCreate(BaseModel):
     trigger: str | None = None
     tags: list[str] = Field(default_factory=list)
     extra_metadata: dict[str, Any] = Field(default_factory=dict)
+    skill_hints: list[str] = Field(
+        default_factory=list,
+        description='Structured capability hints for agent skill matching.',
+    )
     status: StatusLiteral = (
         'published'  # design: new writes default published (visible to search/briefing)
     )
@@ -321,6 +330,7 @@ class ProceduralEntryUpdate(BaseModel):
     trigger: str | None = None
     tags: list[str] | None = None
     extra_metadata: dict[str, Any] | None = None
+    skill_hints: list[str] | None = None
     status: StatusLiteral | None = None
     supersedes_id: UUID | None = None
     edit_reason: str | None = None
@@ -425,6 +435,14 @@ class CaseSubmit(BaseModel):
         default=None,
         description='Provenance — recorded in doc_metadata, NOT a vault binding (§18.9.0).',
     )
+    scope: ShortLabel = Field(
+        description='Identity scope for the case: "global" | "project:<id>" | "app:<id>". '
+        'Required — the agent must reason about where this episode belongs.',
+    )
+    scope_reasoning: str = Field(
+        min_length=1,
+        description='One-sentence justification for the chosen scope. Required.',
+    )
     case_of: UUID | None = Field(
         default=None,
         description='Procedural entry this case instantiates (explicit assignment).',
@@ -434,6 +452,11 @@ class CaseSubmit(BaseModel):
         description='Submitting app/agent identity (provenance).',
     )
     tags: list[str] = Field(default_factory=list)
+
+    @model_validator(mode='after')
+    def _validate_scope(self) -> 'CaseSubmit':
+        validate_scope_label(self.scope, field_name='scope')
+        return self
 
 
 class CaseAssignment(BaseModel):
@@ -450,6 +473,8 @@ class CaseAssignment(BaseModel):
     finding_id: UUID | None = None
     decision: str | None = None
     separation: str | None = None
+    scope: str | None = None
+    scope_reasoning: str | None = None
     reasoning: str | None = None
 
 

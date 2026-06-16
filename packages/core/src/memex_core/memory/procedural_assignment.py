@@ -66,6 +66,12 @@ class AssignCaseToProcedure(dspy.Signature):
     existing_verbs: str = dspy.InputField(
         desc='Comma-separated verb vocabulary already in use for this scope.'
     )
+    requested_scope: str = dspy.InputField(
+        desc='The scope the submitter chose (global | project:<id> | app:<id>).'
+    )
+    scope_reasoning: str = dspy.InputField(
+        desc="Submitter's one-sentence justification for the chosen scope."
+    )
 
     decision: Literal['instance_of', 'new_procedure'] = dspy.OutputField(
         desc='instance_of: the case enacted one of the candidates. '
@@ -89,6 +95,15 @@ class AssignCaseToProcedure(dspy.Signature):
         desc='entry_id (or proposed anchor) of the second-best option; empty when none.'
     )
     reasoning: str = dspy.OutputField(desc='One short paragraph supporting the decision.')
+    proposed_scope: str = dspy.OutputField(
+        desc='The scope this procedure/strategy should live under. '
+        'Usually matches requested_scope; override only when the episode '
+        'clearly belongs elsewhere. Lowercase scope grammar.'
+    )
+    scope_separation: Literal['clean', 'close_call', 'overlapping'] = dspy.OutputField(
+        desc='REQUIRED self-assessment of how clear the scope choice is '
+        'given the trigger and actions.'
+    )
 
 
 @dataclass(frozen=True)
@@ -102,10 +117,16 @@ class AssignmentJudgment:
     separation: Literal['clean', 'close_call', 'overlapping']
     runner_up: str | None
     reasoning: str
+    proposed_scope: str | None
+    scope_separation: Literal['clean', 'close_call', 'overlapping'] | None
 
     @property
     def is_clean(self) -> bool:
         return self.separation == 'clean'
+
+    @property
+    def is_scope_clean(self) -> bool:
+        return self.scope_separation == 'clean'
 
     def as_dict(self) -> dict[str, str | None]:
         return {
@@ -116,6 +137,8 @@ class AssignmentJudgment:
             'separation': self.separation,
             'runner_up': self.runner_up,
             'reasoning': self.reasoning,
+            'proposed_scope': self.proposed_scope,
+            'scope_separation': self.scope_separation,
         }
 
 
@@ -137,6 +160,8 @@ async def judge_assignment(
     case_summary: str,
     candidates: list[AssignmentCandidate],
     existing_verbs: list[str],
+    requested_scope: str,
+    scope_reasoning: str,
     timeout: int = 60,
 ) -> AssignmentJudgment:
     """Run one assignment judgment. Raises on executor failure — the
@@ -151,6 +176,8 @@ async def judge_assignment(
             'case_summary': case_summary,
             'candidates_json': json.dumps([c.model_dump() for c in candidates]),
             'existing_verbs': ', '.join(sorted(set(existing_verbs))) or '(none yet)',
+            'requested_scope': requested_scope,
+            'scope_reasoning': scope_reasoning,
         },
         operation_name='procedural.assign_case',
         timeout=timeout,
@@ -175,6 +202,11 @@ async def judge_assignment(
             separation = 'overlapping'
             target = None
 
+    proposed_scope = _normalise(result.proposed_scope) or requested_scope
+    scope_separation = _normalise(result.scope_separation) or 'overlapping'
+    if scope_separation not in ('clean', 'close_call', 'overlapping'):
+        scope_separation = 'overlapping'
+
     return AssignmentJudgment(
         decision=decision,  # type: ignore[arg-type]
         target_entry_id=target,
@@ -183,6 +215,8 @@ async def judge_assignment(
         separation=separation,  # type: ignore[arg-type]
         runner_up=_normalise(result.runner_up),
         reasoning=_normalise(result.reasoning) or '',
+        proposed_scope=proposed_scope,
+        scope_separation=scope_separation,  # type: ignore[arg-type]
     )
 
 

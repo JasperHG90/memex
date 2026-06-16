@@ -487,6 +487,8 @@ async def test_entry_pins_and_cases_enforce_vault_access(http_client, metastore,
                 'title': 'cross-vault case',
                 'trigger': 'tried to nudge another vault',
                 'outcome': 'success',
+                'scope': 'project:allowed',
+                'scope_reasoning': 'Case submitted in the allowed vault context.',
                 'case_of': str(other_entry.id),
             },
         )
@@ -535,6 +537,8 @@ async def test_case_resubmit_is_content_idempotent(
         'actions': ['ran the deploy', 'confirmed health checks'],
         'outcome': 'success',
         'lesson': 'identical content should file exactly once',
+        'scope': 'project:alpha',
+        'scope_reasoning': 'Idempotency test is scoped to project alpha.',
         'case_of': str(entry.id),
     }
 
@@ -579,6 +583,8 @@ async def test_new_procedure_case_files_activation_proposal(
         separation='clean',
         runner_up=None,
         reasoning='no existing procedure matches this episode',
+        proposed_scope='global',
+        scope_separation='clean',
     )
 
     body = {
@@ -586,6 +592,8 @@ async def test_new_procedure_case_files_activation_proposal(
         'trigger': 'needed a brand-new staging deploy procedure',
         'outcome': 'success',
         'lesson': 'stage the config before flipping',
+        'scope': 'global',
+        'scope_reasoning': 'Staging deploy procedure should be global.',
     }
 
     with patch(
@@ -638,6 +646,8 @@ async def test_case_submit_background_returns_pollable_job(
         'title': 'Background case submission',
         'trigger': 'fired a case without blocking the request',
         'outcome': 'success',
+        'scope': 'project:bg',
+        'scope_reasoning': 'Background test is scoped to the bg project.',
         'case_of': str(entry.id),
     }
     resp = await http_client.post('/api/v1/cases', params={'background': 'true'}, json=body)
@@ -676,6 +686,8 @@ async def test_case_list_returns_case_notes(api, http_client, metastore, fake_re
         'title': 'Listable case',
         'trigger': 'trigger text for list',
         'outcome': 'success',
+        'scope': 'project:list',
+        'scope_reasoning': 'List test is scoped to the list project.',
         'case_of': str(entry.id),
     }
     resp = await http_client.post('/api/v1/cases', json=body)
@@ -737,6 +749,8 @@ async def test_case_get_returns_case_note_and_404s_non_cases(
         'title': 'Gettable case',
         'trigger': 'trigger text for get',
         'outcome': 'mixed',
+        'scope': 'project:get',
+        'scope_reasoning': 'Get test is scoped to the get project.',
         'case_of': str(entry.id),
     }
     resp = await http_client.post('/api/v1/cases', json=body)

@@ -58,7 +58,11 @@ _HERMES_HARNESS_TOKEN_CAP = 400
 # plane and PROCEDURAL_PLANE grew the case-submission doctrine (cases are
 # notes via ``memex_case_submit``; no briefing tool — pinned cards arrive
 # inside the session briefing automatically). Net delta ~80 chars.
-_TOTAL_STATIC_PREFIX_CHAR_CAP = 12_800
+# Bumped 12,800 → 12,880 when the case-submission scope directive was
+# added (``memex_case_submit requires scope + scope_reasoning``). The extra
+# ~76 chars are load-bearing routing doctrine; within the 10% overflow the
+# user authorises for agent-surface prose.
+_TOTAL_STATIC_PREFIX_CHAR_CAP = 12_880
 
 
 def _approx_tokens(text: str) -> int:

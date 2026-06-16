@@ -1126,7 +1126,13 @@ class TestCreateCaseAction:
     def test_validate_accepts_minimal(self) -> None:
         action = get_action('create_case')
         action.validate(
-            {'title': 't', 'trigger': 'g', 'outcome': 'success'},
+            {
+                'title': 't',
+                'trigger': 'g',
+                'outcome': 'success',
+                'scope': 'global',
+                'scope_reasoning': 'Global scope.',
+            },
             target_type='note',
             target_id=str(uuid4()),
         )
@@ -1162,6 +1168,8 @@ class TestCreateCaseAction:
                 'trigger': 'deploy timed out',
                 'outcome': 'success',
                 'actions': ['raise the health-check port', 'redeploy'],
+                'scope': 'project:demo',
+                'scope_reasoning': 'Deploy timeout was specific to the demo project.',
                 'case_of': str(entry_id),
             },
             target_id=str(uuid4()),

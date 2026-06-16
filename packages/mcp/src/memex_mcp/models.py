@@ -580,3 +580,5 @@ class McpCaseSubmitResult(BaseModel):
     finding_id: UUID | None = None
     separation: str | None = None
     reasoning: str | None = None
+    scope: str | None = None
+    scope_reasoning: str | None = None

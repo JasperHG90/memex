@@ -4773,6 +4773,18 @@ CASE_SUBMIT_SCHEMA: dict[str, Any] = {
                 'type': 'string',
                 'description': 'Provenance — recorded in doc_metadata, NOT a vault binding.',
             },
+            'scope': {
+                'type': 'string',
+                'description': (
+                    'Identity scope for the case: "global" | "project:<id>" | '
+                    '"app:<id>". REQUIRED — the agent must reason about where '
+                    'this episode belongs.'
+                ),
+            },
+            'scope_reasoning': {
+                'type': 'string',
+                'description': ('One-sentence justification for the chosen scope. REQUIRED.'),
+            },
             'case_of': {
                 'type': 'string',
                 'description': (
@@ -4791,7 +4803,7 @@ CASE_SUBMIT_SCHEMA: dict[str, Any] = {
                 'description': 'Optional tags for searchability.',
             },
         },
-        'required': ['title', 'trigger', 'outcome'],
+        'required': ['title', 'trigger', 'outcome', 'scope', 'scope_reasoning'],
     },
 }
 
@@ -4806,6 +4818,8 @@ def handle_case_submit(
         title = _require(args, 'title')
         trigger = _require(args, 'trigger')
         outcome = _require(args, 'outcome')
+        scope = _require(args, 'scope')
+        scope_reasoning = _require(args, 'scope_reasoning')
     except ValueError as e:
         return tool_error(str(e))
 
@@ -4825,6 +4839,8 @@ def handle_case_submit(
         'title': str(title),
         'trigger': str(trigger),
         'outcome': outcome,
+        'scope': str(scope),
+        'scope_reasoning': str(scope_reasoning),
     }
     if args.get('situation') is not None:
         submit_kwargs['situation'] = str(args['situation'])

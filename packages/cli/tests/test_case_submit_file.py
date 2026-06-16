@@ -53,6 +53,8 @@ def test_roundtrip_compose_then_parse():
         actions=['step one', 'step two'],
         outcome='mixed',
         lesson='do Y next time',
+        scope='global',
+        scope_reasoning='Applies everywhere.',
     )
     p = parse_case_markdown(compose_case_markdown(payload))
     assert p['trigger'] == 'when X happens'

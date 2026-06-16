@@ -22,6 +22,8 @@ def _payload() -> CaseSubmit:
         trigger='signing key neared expiry',
         outcome='success',
         lesson='stage the new key before flipping',
+        scope='global',
+        scope_reasoning='Signing-key rotation applies across all projects.',
         submitted_by='memex-cli',
     )
 

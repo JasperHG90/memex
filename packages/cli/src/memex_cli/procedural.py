@@ -717,6 +717,8 @@ def parse_case_markdown(content: str) -> dict[str, Any]:
             ('outcome', 'outcome'),
             ('project_id', 'project_id'),
             ('project', 'project_id'),
+            ('scope', 'scope'),
+            ('scope_reasoning', 'scope_reasoning'),
             ('case_of', 'case_of'),
         ):
             if fm.get(src) and dst not in out:
@@ -796,6 +798,21 @@ async def case_submit(
         str | None,
         typer.Option('--project-id', '-p', help='Provenance — recorded in metadata.'),
     ] = None,
+    scope: Annotated[
+        str | None,
+        typer.Option(
+            '--scope',
+            '-s',
+            help='Identity scope for the case: "global" | "project:<id>" | "app:<id>". REQUIRED.',
+        ),
+    ] = None,
+    scope_reasoning: Annotated[
+        str | None,
+        typer.Option(
+            '--scope-reasoning',
+            help='One-sentence justification for the chosen scope. REQUIRED.',
+        ),
+    ] = None,
     case_of: Annotated[
         str | None,
         typer.Option(
@@ -842,12 +859,20 @@ async def case_submit(
         action = action if action else parsed.get('actions')
         lesson = lesson or parsed.get('lesson', '')
         project_id = project_id or parsed.get('project_id')
+        scope = scope or parsed.get('scope')
+        scope_reasoning = scope_reasoning or parsed.get('scope_reasoning')
         case_of = case_of or parsed.get('case_of')
         tags = tags if tags else parsed.get('tags')
 
     missing = [
         name
-        for name, val in (('--title', title), ('--trigger', trigger), ('--outcome', outcome))
+        for name, val in (
+            ('--title', title),
+            ('--trigger', trigger),
+            ('--outcome', outcome),
+            ('--scope', scope),
+            ('--scope-reasoning', scope_reasoning),
+        )
         if not val
     ]
     if missing:
@@ -875,6 +900,8 @@ async def case_submit(
         outcome=outcome,  # type: ignore[arg-type]
         lesson=lesson,
         project_id=project_id,
+        scope=scope,  # type: ignore[arg-type]
+        scope_reasoning=scope_reasoning,  # type: ignore[arg-type]
         case_of=case_of_uuid,
         submitted_by='memex-cli',
         tags=tags or [],

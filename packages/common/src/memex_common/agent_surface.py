@@ -219,14 +219,17 @@ There is NO procedure create/update tool — procedures and strategies are DERIV
 When you enact a known procedure (pass `case_of=<id>`), or the user asks to "record" / "log how it went" / "make a record" of a run, close the loop with `memex_case_submit` (set `outcome`) — searching or doing is only half of it. For any other task, apply the capture test: file a case only if you'd want these steps back next time; routine work gets nothing.
 </critical_constraint>
 
+<critical_constraint name="consume_skill_hints">
+When a procedure's `skill_hints` field lists capability hints, prefer a skill matching each hint before executing the step; the prose action remains authoritative.
+</critical_constraint>
+
 <example>"Document how we deploy" → `memex_case_submit`, NOT `memex_add_note` (a how-to note is invisible to the plane).</example>
 <example>"What did we decide about retries?" → `memex_memory_search` (fact recall, not how-to).</example>
-<example>followed procedure abc-123 to rotate creds → `memex_case_submit(case_of="abc-123", outcome="success")`.</example>
 
 Two derived kinds, identity anchor `(kind, scope, verb, context)`:
 - `procedure` — a workflow; keyed by `verb`+`context` (e.g. verb=`deploy`, context=`nomad`).
 - `strategy` — a heuristic over the procedures sharing its `(scope, verb)`; `context` FORBIDDEN.
-Search matches `trigger` (when-to-use). Scope: `global` | `project:<id>` | `app:<id>` (no user scope).
+Search matches `trigger` (when-to-use). Scope: `global` | `project:<id>` | `app:<id>` (no user scope). `memex_case_submit` requires `scope` + `scope_reasoning`; assignment is scoped to that label.
 
 Cases are NOTES (role=`case`), filed by `memex_case_submit` in the hidden case vault to feed derivation. Pinned procedures arrive in your session briefing automatically. `memex_procedural_search` defaults to `status="published"`."""
 

@@ -162,6 +162,7 @@ class ProceduralDerivationService:
                 summary=distilled.summary,
                 body=distilled.body,
                 trigger=distilled.trigger,
+                skill_hints=distilled.skill_hints,
                 edited_by='system:derivation',
                 edit_reason=f'Distilled from {len(cases)} cases (§9).',
             ),
@@ -218,6 +219,7 @@ class ProceduralDerivationService:
                         'summary': distilled.summary,
                         'body': distilled.body,
                         'trigger': distilled.trigger,
+                        'skill_hints': distilled.skill_hints,
                     },
                 },
             )

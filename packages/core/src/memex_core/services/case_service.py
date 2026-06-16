@@ -453,7 +453,9 @@ class CaseService:
             await self.apply_assignment(note_id=note_id, entry_id=payload.case_of)
             return CaseAssignment(mode='explicit', entry_id=payload.case_of)
 
-        # Stage 1: candidates by trigger search.
+        # Stage 1: candidates by trigger search (scoped to the agent's
+        # explicit scope so project-scoped episodes don't instance global
+        # procedures and vice versa).
         candidates = await self._candidates(payload)
 
         # Stage 2: judge — any failure is the escalation path (fail-safe).
@@ -465,6 +467,8 @@ class CaseService:
                 case_summary=self._case_summary(payload),
                 candidates=candidates,
                 existing_verbs=await self._existing_verbs(payload),
+                requested_scope=payload.scope,
+                scope_reasoning=payload.scope_reasoning,
             )
         except Exception as exc:
             logger.warning('assignment judge unavailable (%s); escalating to lint', exc)
@@ -478,6 +482,8 @@ class CaseService:
                     entry_id=entry_id,
                     decision=judgment.decision,
                     separation=judgment.separation,
+                    scope=payload.scope,
+                    scope_reasoning=payload.scope_reasoning,
                     reasoning=judgment.reasoning,
                 )
             draft = await self._create_draft_anchor(payload, judgment)
@@ -494,6 +500,8 @@ class CaseService:
                     finding_id=finding_id,
                     decision=judgment.decision,
                     separation=judgment.separation,
+                    scope=payload.scope,
+                    scope_reasoning=payload.scope_reasoning,
                     reasoning=judgment.reasoning,
                 )
             # Anchor proposal was malformed — contested outcome.
@@ -504,6 +512,8 @@ class CaseService:
             finding_id=finding_id,
             decision=judgment.decision if judgment else None,
             separation=judgment.separation if judgment else None,
+            scope=payload.scope,
+            scope_reasoning=payload.scope_reasoning,
             reasoning=judgment.reasoning if judgment else None,
         )
 
@@ -511,6 +521,7 @@ class CaseService:
         response = await self._api._procedural_search.search(
             ProceduralSearchRequest(
                 query=payload.trigger,
+                scope=payload.scope,
                 kind='procedure',
                 status='published',
                 limit=_CANDIDATE_LIMIT,
@@ -534,13 +545,10 @@ class CaseService:
     async def _existing_verbs(self, payload: CaseSubmit) -> list[str]:
         from memex_core.memory.sql_models import ProceduralEntry
 
-        scopes = ['global']
-        if payload.project_id:
-            scopes.append(f'project:{payload.project_id}')
         async with self._api.metastore.session() as session:
             stmt = (
                 select(ProceduralEntry.verb)
-                .where(col(ProceduralEntry.scope).in_(scopes))
+                .where(col(ProceduralEntry.scope) == payload.scope)
                 .where(col(ProceduralEntry.verb).is_not(None))
                 .distinct()
             )
@@ -588,7 +596,7 @@ class CaseService:
                 context,
             )
             return None
-        scope = f'project:{payload.project_id}' if payload.project_id else 'global'
+        scope = payload.scope
         try:
             return await self._api.procedural.create(
                 ProceduralEntryCreate(
@@ -704,7 +712,7 @@ class CaseService:
                     'mode': 'new_procedure',
                     'verb': judgment.proposed_verb or '',
                     'context': judgment.proposed_context or '',
-                    'scope': f'project:{payload.project_id}' if payload.project_id else 'global',
+                    'scope': payload.scope,
                     'title': payload.title,
                 }
 

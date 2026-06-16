@@ -134,7 +134,7 @@ def test_case_submit_schema_registered():
     assert names.count('memex_case_submit') == 1
     assert 'memex_procedural_briefing_cards' not in names
     params = CASE_SUBMIT_SCHEMA['parameters']
-    assert sorted(params['required']) == ['outcome', 'title', 'trigger']
+    assert sorted(params['required']) == ['outcome', 'scope', 'scope_reasoning', 'title', 'trigger']
     assert set(params['properties']) == {
         'title',
         'trigger',
@@ -143,6 +143,8 @@ def test_case_submit_schema_registered():
         'outcome',
         'lesson',
         'project_id',
+        'scope',
+        'scope_reasoning',
         'case_of',
         'submitted_by',
         'tags',
@@ -417,6 +419,8 @@ def test_case_submit_builds_payload_and_dispatches(config, vault_id):
             'outcome': 'success',
             'lesson': 'check cert expiry before rotating',
             'project_id': 'proj-alpha',
+            'scope': 'project:proj-alpha',
+            'scope_reasoning': 'Creds are project-scoped.',
             'case_of': str(case_of),
             'submitted_by': 'hermes',
             'tags': ['rotation'],
@@ -455,7 +459,13 @@ def test_case_submit_minimal_payload_omits_optional_fields(config, vault_id):
 
     out = dispatch(
         'memex_case_submit',
-        {'title': 't', 'trigger': 'tr', 'outcome': 'failure'},
+        {
+            'title': 't',
+            'trigger': 'tr',
+            'outcome': 'failure',
+            'scope': 'global',
+            'scope_reasoning': 'Global.',
+        },
         api=api,
         config=config,
         vault_id=vault_id,
@@ -481,7 +491,14 @@ def test_case_submit_rejects_invalid_case_of_uuid(config, vault_id):
 
     out = dispatch(
         'memex_case_submit',
-        {'title': 't', 'trigger': 'tr', 'outcome': 'mixed', 'case_of': 'not-a-uuid'},
+        {
+            'title': 't',
+            'trigger': 'tr',
+            'outcome': 'mixed',
+            'scope': 'global',
+            'scope_reasoning': 'Global.',
+            'case_of': 'not-a-uuid',
+        },
         api=api,
         config=config,
         vault_id=vault_id,

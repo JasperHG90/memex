@@ -2073,6 +2073,11 @@ class ProceduralEntry(SQLModel, table=True):  # type: ignore
         sa_column=Column('metadata', JSONB, nullable=False, server_default=sql_text("'{}'::jsonb")),
         description='Arbitrary metadata — confidence, run_count, last_verified_at, etc.',
     )
+    skill_hints: list[str] = Field(
+        default_factory=list,
+        sa_column=Column(ARRAY(Text), nullable=False, server_default=sql_text('ARRAY[]::text[]')),
+        description='Capability hints distilled from procedure steps; agents may map them to local skills.',
+    )
 
     status: ProceduralStatus = Field(
         default=ProceduralStatus.DRAFT,
@@ -2274,6 +2279,11 @@ class ProceduralEntryVersion(SQLModel, table=True):  # type: ignore
     extra_metadata: dict[str, Any] = Field(
         default_factory=dict,
         sa_column=Column('metadata', JSONB, nullable=False, server_default=sql_text("'{}'::jsonb")),
+    )
+    skill_hints: list[str] = Field(
+        default_factory=list,
+        sa_column=Column(ARRAY(Text), nullable=False, server_default=sql_text('ARRAY[]::text[]')),
+        description='Capability hints for this version ( mirrors procedural_entries.skill_hints).',
     )
     edited_by: str | None = Field(
         default=None,

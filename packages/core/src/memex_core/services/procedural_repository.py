@@ -268,6 +268,7 @@ class ProceduralRepository:
             trigger_embedding=trigger_embedding or None,
             tags=payload.tags,
             extra_metadata=payload.extra_metadata,
+            skill_hints=payload.skill_hints,
             status=DBProceduralStatus(payload.status),
             origin=DBProceduralOrigin(payload.origin),
             supersedes_id=payload.supersedes_id,
@@ -462,6 +463,8 @@ class ProceduralRepository:
                 entry.tags = payload.tags
             if payload.extra_metadata is not None:
                 entry.extra_metadata = payload.extra_metadata
+            if payload.skill_hints is not None:
+                entry.skill_hints = payload.skill_hints
             if payload.status is not None:
                 entry.status = DBProceduralStatus(payload.status)
             if payload.supersedes_id is not None:
@@ -695,6 +698,7 @@ class ProceduralRepository:
                     existing.trigger_embedding = trigger_embedding or None
                 existing.tags = payload.tags
                 existing.extra_metadata = payload.extra_metadata
+                existing.skill_hints = payload.skill_hints
                 if pre_status != DBProceduralStatus.DEPRECATED:
                     existing.status = DBProceduralStatus(payload.status)
                 if (
@@ -1233,6 +1237,7 @@ class ProceduralRepository:
             trigger=entry.trigger,
             tags=entry.tags,
             extra_metadata=entry.extra_metadata,
+            skill_hints=entry.skill_hints,
             edited_by=edited_by,
             edit_reason=edit_reason,
         )
@@ -1332,6 +1337,7 @@ class ProceduralRepository:
             trigger=entry.trigger,
             tags=list(entry.tags or []),
             extra_metadata=dict(entry.extra_metadata or {}),
+            skill_hints=list(entry.skill_hints or []),
             status=_str(entry.status),  # type: ignore[arg-type]
             origin=_str(entry.origin),  # type: ignore[arg-type]
             success_count=int(entry.success_count or 0),
@@ -1383,6 +1389,7 @@ class ProceduralRepository:
             trigger=row.trigger,
             tags=list(row.tags or []),
             extra_metadata=dict(row.extra_metadata or {}),
+            skill_hints=list(row.skill_hints or []),
             edited_by=row.edited_by,
             edit_reason=row.edit_reason,
             created_at=row.created_at,

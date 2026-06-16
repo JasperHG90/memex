@@ -4773,6 +4773,8 @@ async def memex_case_submit(
             finding_id=result.assignment.finding_id,
             separation=result.assignment.separation,
             reasoning=result.assignment.reasoning,
+            scope=result.assignment.scope,
+            scope_reasoning=result.assignment.scope_reasoning,
         )
     except ToolError:
         raise

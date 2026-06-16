@@ -26,6 +26,8 @@ def _payload() -> CaseSubmit:
         actions=['found the health-check on the wrong port', 'set it to 8080'],
         outcome='success',
         lesson='check the health-check port when a deploy hangs',
+        scope='project:demo',
+        scope_reasoning='The staging deploy timeout was specific to the demo project.',
         submitted_by='memex-cli',
     )
 

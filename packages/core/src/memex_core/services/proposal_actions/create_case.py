@@ -49,6 +49,12 @@ class _CreateCaseParams(BaseModel):
         description='Procedural entry UUID this case instantiates (skip to let the judge assign).',
     )
     project_id: str | None = Field(default=None, description='Provenance project id.')
+    scope: str = Field(
+        description='Identity scope for the case: "global" | "project:<id>" | "app:<id>".',
+    )
+    scope_reasoning: str = Field(
+        description='One-sentence justification for the chosen scope.',
+    )
     tags: list[str] = Field(default_factory=list, description='Extra case tags.')
 
 
@@ -114,6 +120,8 @@ class CreateCaseAction:
             outcome=parsed.outcome,
             lesson=parsed.lesson,
             project_id=parsed.project_id,
+            scope=parsed.scope,
+            scope_reasoning=parsed.scope_reasoning,
             case_of=UUID(str(parsed.case_of)) if parsed.case_of else None,
             submitted_by=actor,
             tags=parsed.tags,

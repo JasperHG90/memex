@@ -172,6 +172,7 @@ class DistilledProcedure:
     body: str  # rendered steps + notes (markdown)
     steps: list[DistilledStep]
     notes: str
+    skill_hints: list[str]
 
 
 @dataclass(frozen=True)
@@ -260,6 +261,9 @@ async def distill_procedure(
     summary = _normalise(result.summary) or ''
     trigger = _normalise(result.when_to_use) or ''
     notes = _normalise(result.notes) or ''
+    skill_hints = [
+        hint for step in steps if (hint := _normalise(getattr(step, 'skill_hint', None)))
+    ]
     return DistilledProcedure(
         title=title,
         summary=summary,
@@ -267,6 +271,7 @@ async def distill_procedure(
         body=_render_steps_markdown(steps, notes),
         steps=steps,
         notes=notes,
+        skill_hints=skill_hints,
     )
 
 
