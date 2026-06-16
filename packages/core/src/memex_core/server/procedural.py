@@ -21,7 +21,7 @@ surface (one card per pin, no ranking).
 """
 
 import time
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, Body, Depends, HTTPException, Query
@@ -388,6 +388,10 @@ async def procedural_list(
         ShortLabel | None,
         Query(description='Optional vault UUID to scope the listing.'),
     ] = None,
+    sort: Annotated[
+        Literal['-created_at', 'created_at'] | None,
+        Query(description='Sort by created_at. Use -created_at for newest first.'),
+    ] = None,
     auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ):
     """List procedural-plane entries by lifecycle status, newest first.
@@ -399,6 +403,11 @@ async def procedural_list(
     query text or a pin context). A plain filtered SELECT: no query, no
     embeddings.
 
+    Query params:
+    - limit: Maximum number of entries to return.
+    - sort: Optional sort. Use -created_at for newest first (default), created_at
+      for oldest first.
+
     ``status`` / ``kind`` are validated by FastAPI against their
     lifecycle / plane literals — a bad value is a 422, not a handler
     500.
@@ -407,7 +416,7 @@ async def procedural_list(
     try:
         vid: UUID | None = UUID(vault_id) if vault_id is not None else None
         return await api.procedural.list_by_status(
-            status=status, scope=scope, kind=kind, vault_id=vid, limit=limit
+            status=status, scope=scope, kind=kind, vault_id=vid, limit=limit, sort=sort
         )
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to list procedural-plane entries')

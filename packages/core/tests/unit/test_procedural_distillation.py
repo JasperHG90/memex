@@ -32,6 +32,35 @@ def test_render_steps_includes_conditions_cites_and_skill_hint():
     assert '## Notes' in body
 
 
+def test_render_steps_caps_inline_citations_and_appends_sources():
+    steps = [
+        DistilledStep(
+            order=1,
+            action='Roll the canary at 10%',
+            source_cases=['c1', 'c2', 'c3', 'c4', 'c5'],
+        ),
+        DistilledStep(order=2, action='Roll back', source_cases=['c6']),
+    ]
+    body = _render_steps_markdown(steps, notes='')
+
+    assert '1. Roll the canary at 10%' in body
+    assert '(cases: c1, c2, c3 and 2 more)' in body
+    assert '## Sources' in body
+    assert '1. `c1`, `c2`, `c3`, `c4`, `c5`' in body
+    assert '2. `c6`' in body
+
+
+def test_render_steps_omits_sources_when_nothing_truncated():
+    steps = [
+        DistilledStep(order=1, action='Roll the canary at 10%', source_cases=['c1', 'c2']),
+        DistilledStep(order=2, action='Roll back', source_cases=['c3']),
+    ]
+    body = _render_steps_markdown(steps, notes='')
+
+    assert '(cases: c1, c2)' in body
+    assert '## Sources' not in body
+
+
 def test_skill_hint_defaults_none_and_is_omitted():
     body = _render_steps_markdown([DistilledStep(order=1, action='Do the thing')], notes='')
     assert '[skill:' not in body  # no hint → no skill annotation

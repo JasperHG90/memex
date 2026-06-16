@@ -102,6 +102,16 @@ def test_case_list_rejects_bad_outcome(runner, mock_config):
     assert 'success|failure|mixed' in result.stdout
 
 
+def test_case_list_forwards_sort(runner, mock_api, mock_config, monkeypatch):
+    mock_api.case_list.return_value = []
+    monkeypatch.setattr('memex_cli.procedural.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(case_app, ['list', '--sort', 'created_at'], obj=mock_config)
+    assert result.exit_code == 0, result.output
+    mock_api.case_list.assert_called_once()
+    assert mock_api.case_list.call_args.kwargs['sort'] == 'created_at'
+
+
 def test_case_view_renders_note(runner, mock_api, mock_config, monkeypatch):
     note = _note_dto()
     mock_api.case_get.return_value = note

@@ -54,7 +54,7 @@ def test_procedural_help_lists_eight_subcommands(runner, strip_ansi):
     for cmd in (
         'create',
         'upsert',
-        'get',
+        'view',
         'get-by-identity',
         'search',
         'list',
@@ -63,6 +63,8 @@ def test_procedural_help_lists_eight_subcommands(runner, strip_ansi):
         'deprecate',
     ):
         assert cmd in text, f'memex procedure help is missing subcommand: {cmd}'
+    # The legacy 'get' name is a hidden alias: still works, but not advertised.
+    assert ' get ' not in text, 'legacy "get" should be hidden from procedure --help'
 
 
 def test_procedural_help_has_no_ticket_marker(runner, strip_ansi):

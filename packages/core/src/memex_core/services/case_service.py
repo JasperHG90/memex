@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import contextlib
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
 import dspy
@@ -204,6 +204,7 @@ class CaseService:
         case_of: UUID | str | None = None,
         submitted_by: str | None = None,
         slim: bool = False,
+        sort: Literal['-created_at', 'created_at'] | None = None,
     ) -> list[Any]:
         """List case notes (``role='case'``) in the hidden procedural system vault.
 
@@ -211,6 +212,12 @@ class CaseService:
         ``doc_metadata`` at submission time. Returns ORM ``Note`` objects with
         ``vault_name`` and (unless ``slim``) ``summaries`` attached so the
         HTTP layer can reuse ``build_note_list_item_dto``.
+
+        Sort behavior:
+        - ``sort=None`` (default): ``COALESCE(publish_date, created_at) DESC``
+          for backward compatibility with note-list behavior.
+        - ``sort='-created_at'``: strict ``created_at DESC``.
+        - ``sort='created_at'``: strict ``created_at ASC``.
         """
         import json
 
@@ -241,11 +248,13 @@ class CaseService:
                     .astext.cast(JSONB)
                     .contains(literal(json.dumps(tags)).cast(JSONB))
                 )
-            stmt = (
-                stmt.order_by(func.coalesce(Note.publish_date, Note.created_at).desc())
-                .offset(offset)
-                .limit(limit)
-            )
+            if sort == 'created_at':
+                stmt = stmt.order_by(col(Note.created_at).asc())
+            elif sort == '-created_at':
+                stmt = stmt.order_by(col(Note.created_at).desc())
+            else:
+                stmt = stmt.order_by(func.coalesce(Note.publish_date, Note.created_at).desc())
+            stmt = stmt.offset(offset).limit(limit)
             notes = list((await session.exec(stmt)).all())
 
             # Attach vault name (single vault, but keep the same shape as notes).

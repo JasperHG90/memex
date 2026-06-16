@@ -41,6 +41,11 @@ logger = logging.getLogger('memex.core.memory.procedural_distillation')
 # available after the first run instead of waiting for a cluster.
 MIN_CASES_FOR_DISTILLATION = 1
 
+# Maximum number of case ids rendered inline per step. Surplus ids are
+# summarized as "and N more" and listed in the body-level Sources appendix so
+# the default reading stays compact without losing full provenance (§9 rule 1).
+MAX_INLINE_CASES = 3
+
 
 # The §9 discipline, verbatim from spike #5's validated prompt (§19.5).
 # Rules 1–5 are the §9 groundedness/generalization discipline; rule 6 is
@@ -202,10 +207,15 @@ def _render_steps_markdown(steps: list[DistilledStep], notes: str | None) -> str
     """Render the cited, conditioned steps into a stable markdown body.
 
     Conditions ride inline (``— when …``) so a guard never reads as an
-    unconditional happy-path step (rule 3/4). Cited case ids are kept as a
-    trailing parenthetical so the body stays auditable against §9 rule 1.
+    unconditional happy-path step (rule 3/4). Cited case ids are capped
+    inline and the full set is moved to a body-level Sources appendix so
+    the default reading stays compact while remaining auditable against §9
+    rule 1.
     """
     lines: list[str] = ['## Steps', '']
+    # step order -> full case id list for the Sources appendix
+    full_sources: dict[int, list[str]] = {}
+    any_truncated = False
     for step in sorted(steps, key=lambda s: s.order):
         action = (step.action or '').strip()
         if not action:
@@ -214,9 +224,16 @@ def _render_steps_markdown(steps: list[DistilledStep], notes: str | None) -> str
         cond = (step.condition or '').strip()
         if cond and cond.lower() not in ('none', 'null'):
             line += f' — when {cond}'
-        cites = [c for c in (step.source_cases or []) if c and str(c).strip()]
+        cites = [str(c).strip() for c in (step.source_cases or []) if c and str(c).strip()]
         if cites:
-            line += f' _(cases: {", ".join(str(c) for c in cites)})_'
+            full_sources[step.order] = cites
+            if len(cites) > MAX_INLINE_CASES:
+                any_truncated = True
+                shown = cites[:MAX_INLINE_CASES]
+                rest = len(cites) - MAX_INLINE_CASES
+                line += f' _(cases: {", ".join(shown)} and {rest} more)_'
+            else:
+                line += f' _(cases: {", ".join(cites)})_'
         hint = (step.skill_hint or '').strip()
         if hint and hint.lower() not in ('none', 'null'):
             # §18.8: advisory capability description; the agent may map it
@@ -227,6 +244,12 @@ def _render_steps_markdown(steps: list[DistilledStep], notes: str | None) -> str
     note_text = (notes or '').strip()
     if note_text and note_text.lower() not in ('none', 'null'):
         body += f'\n\n## Notes\n\n{note_text}'
+    if any_truncated and full_sources:
+        body += '\n\n## Sources\n\n'
+        body += '\n'.join(
+            f'{order}. ' + ', '.join(f'`{c}`' for c in ids)
+            for order, ids in sorted(full_sources.items())
+        )
     return body
 
 

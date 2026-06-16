@@ -1914,6 +1914,7 @@ class RemoteMemexAPI:
         kind: str | None = None,
         vault_id: UUID | None = None,
         limit: int = 50,
+        sort: str | None = None,
     ) -> list[ProceduralEntryDTO]:
         """List entries by lifecycle status, newest first (curation surface).
 
@@ -1930,6 +1931,8 @@ class RemoteMemexAPI:
             params['kind'] = kind
         if vault_id is not None:
             params['vault_id'] = str(vault_id)
+        if sort is not None:
+            params['sort'] = sort
         result = await self._get('procedural', params=params)
         return [ProceduralEntryDTO(**row) for row in result]
 
@@ -1967,6 +1970,7 @@ class RemoteMemexAPI:
         case_of: UUID | None = None,
         submitted_by: str | None = None,
         slim: bool = False,
+        sort: str | None = None,
     ) -> list[NoteListItemDTO]:
         """List case notes (``role='case'``) in the hidden procedural vault.
 
@@ -1986,6 +1990,8 @@ class RemoteMemexAPI:
             params['submitted_by'] = submitted_by
         if slim:
             params['slim'] = 'true'
+        if sort is not None:
+            params['sort'] = sort
         result = await self._get('cases', params=params)
         return [NoteListItemDTO(**row) for row in result]
 

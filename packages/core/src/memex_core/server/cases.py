@@ -10,7 +10,7 @@
 * ``GET /api/v1/cases/{note_id}`` — get a single case note by ID.
 """
 
-from typing import Annotated
+from typing import Annotated, Literal
 from uuid import UUID
 
 from fastapi import APIRouter, BackgroundTasks, Body, Depends, Query
@@ -145,6 +145,10 @@ async def case_list(
         bool,
         Query(description='Drop per-note summaries to keep responses under hook caps.'),
     ] = False,
+    sort: Annotated[
+        Literal['-created_at', 'created_at'] | None,
+        Query(description='Sort by created_at. Use -created_at for newest first.'),
+    ] = None,
     auth: Annotated[AuthContext | None, Depends(get_auth_context)] = None,
 ) -> list[NoteListItemDTO]:
     """List case notes (``role='case'``) in the hidden procedural system vault.
@@ -152,6 +156,11 @@ async def case_list(
     The procedural system vault is implicit — the caller never names it.
     Vault-restricted API keys are checked against it; keys with no vault
     restriction see all cases.
+
+    Query params:
+    - sort: Optional sort. -created_at for newest first (default), created_at
+      for oldest first. When omitted, the default is COALESCE(publish_date,
+      created_at) DESC for backward compatibility with note-list behavior.
     """
     try:
         vault_id = await api.cases._resolve_case_vault()
@@ -170,6 +179,7 @@ async def case_list(
             case_of=case_of,
             submitted_by=submitted_by,
             slim=slim,
+            sort=sort,
         )
     except (MemexError, ValueError, KeyError, RuntimeError, OSError) as e:
         raise _handle_error(e, 'Failed to list cases')

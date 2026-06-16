@@ -287,18 +287,21 @@ async def procedural_upsert(
 
 
 # ---------------------------------------------------------------------------
-# procedural get / get-by-identity / list
+# procedural view / get-by-identity / list
 # ---------------------------------------------------------------------------
 
 
-@app.command('get')
+@app.command('view')
 @async_command
-async def procedural_get(
+async def procedural_view(
     ctx: typer.Context,
     entry_id: Annotated[str, typer.Argument(help='Entry UUID.')],
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
 ):
-    """Fetch a single entry by UUID."""
+    """View a single procedural entry by UUID.
+
+    Alias: ``memex procedure get <id>`` is still accepted.
+    """
     from uuid import UUID
 
     config: MemexConfig = ctx.obj
@@ -308,6 +311,23 @@ async def procedural_get(
         except Exception as e:
             handle_api_error(e)
     _print_entry(entry, json_output=json_output)
+
+
+# Typer does not support async command aliases; unwrap the underlying async
+# function from ``@async_command`` and run it directly so the alias behaves
+# identically to ``memex procedure view``.
+@app.command('get', hidden=True)
+def procedural_get(
+    ctx: typer.Context,
+    entry_id: Annotated[str, typer.Argument(help='Entry UUID.')],
+    json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
+):
+    """Deprecated alias for ``memex procedure view``."""
+    import asyncio
+
+    # ``procedural_view`` is the @async_command wrapper (sync); __wrapped__ is
+    # the actual coroutine. asyncio.run needs the coroutine, not the wrapper.
+    return asyncio.run(procedural_view.__wrapped__(ctx, entry_id, json_output=json_output))
 
 
 @app.command('get-by-identity')
@@ -432,6 +452,13 @@ async def procedural_list(
         int,
         typer.Option('--limit', '-l', help='Maximum number of entries to return.'),
     ] = 50,
+    sort: Annotated[
+        str,
+        typer.Option(
+            '--sort',
+            help='Sort by created_at: -created_at (newest first, default) or created_at (oldest first).',
+        ),
+    ] = '-created_at',
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
 ):
     """List entries by lifecycle status, newest first.
@@ -440,13 +467,19 @@ async def procedural_list(
     curation/governance queue, e.g. drafts awaiting confirmation:
 
         memex procedure list --status draft
+        memex procedure list --sort created_at
     """
     config: MemexConfig = ctx.obj
     vault_id = await _resolve_vault_id(config, vault) if vault is not None else None
     async with get_api_context(config) as api:
         try:
             entries = await api.procedural_list(
-                status=status, scope=scope, kind=kind, vault_id=vault_id, limit=limit
+                status=status,
+                scope=scope,
+                kind=kind,
+                vault_id=vault_id,
+                limit=limit,
+                sort=sort,
             )
         except Exception as e:
             handle_api_error(e)
@@ -463,6 +496,7 @@ async def procedural_list(
     table.add_column('Scope', style='dim')
     table.add_column('Verb', style='dim')
     table.add_column('Status', style='dim')
+    table.add_column('Created At', style='dim')
     for entry in entries:
         table.add_row(
             str(entry.id),
@@ -471,6 +505,7 @@ async def procedural_list(
             entry.scope,
             entry.verb or '-',
             entry.status,
+            entry.created_at.isoformat(),
         )
     console.print(table)
 
@@ -971,7 +1006,7 @@ async def case_list(
     ] = None,
     tag: Annotated[
         list[str] | None,
-        typer.Option('--tag', '-t', help='Repeatable. Filter by tags (AND semantics).'),
+        typer.Option('--tag', help='Repeatable. Filter by tags (AND semantics).'),
     ] = None,
     slim: Annotated[
         bool,
@@ -979,6 +1014,13 @@ async def case_list(
             '--slim', '-s', help='Drop per-note summaries — smaller response, faster query.'
         ),
     ] = False,
+    sort: Annotated[
+        str,
+        typer.Option(
+            '--sort',
+            help='Sort by created_at: -created_at (newest first, default) or created_at (oldest first).',
+        ),
+    ] = '-created_at',
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
     compact: Annotated[
         bool, typer.Option('--compact', help='One line per case: id, outcome, title.')
@@ -1008,6 +1050,7 @@ async def case_list(
                 project_id=project_id,
                 submitted_by=submitted_by,
                 slim=slim,
+                sort=sort,
             )
         except Exception as e:
             handle_api_error(e)

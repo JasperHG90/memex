@@ -42,7 +42,7 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
 from sqlalchemy.exc import IntegrityError
@@ -335,6 +335,7 @@ class ProceduralRepository:
         kind: str | None = None,
         vault_id: UUID | None = None,
         limit: int = 50,
+        sort: Literal['-created_at', 'created_at'] | None = None,
     ) -> list[ProceduralEntryDTO]:
         """List entries by lifecycle status, newest first.
 
@@ -346,8 +347,9 @@ class ProceduralRepository:
 
         This is a plain filtered SELECT: no query, no embeddings.
         ``status=None`` lists every lifecycle state; ``scope`` / ``kind``
-        narrow further. Ordered by ``created_at`` descending (drafts have
-        no ``published_at`` to sort on).
+        narrow further. Ordered by ``created_at`` descending by default
+        (drafts have no ``published_at`` to sort on). Pass
+        ``sort='created_at'`` for oldest first.
         """
         async with self._metastore.session() as session:
             stmt = select(DBProceduralEntry)
@@ -359,7 +361,12 @@ class ProceduralRepository:
                 stmt = stmt.where(col(DBProceduralEntry.kind) == DBProceduralKind(kind))
             if vault_id is not None:
                 stmt = stmt.where(col(DBProceduralEntry.vault_id) == vault_id)
-            stmt = stmt.order_by(col(DBProceduralEntry.created_at).desc()).limit(limit)
+            order = (
+                col(DBProceduralEntry.created_at).asc()
+                if sort == 'created_at'
+                else col(DBProceduralEntry.created_at).desc()
+            )
+            stmt = stmt.order_by(order).limit(limit)
             rows = (await session.exec(stmt)).all()
         return [self._to_dto(r) for r in rows]
 

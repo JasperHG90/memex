@@ -550,3 +550,7 @@ async def test_list_by_status_filters_and_orders_newest_first(metastore):
     # published filter isolates the one published entry.
     published = await repo.list_by_status(status='published', vault_id=vault_id)
     assert {e.id for e in published} == {pub.id}
+
+    # sort='created_at' reverses the default newest-first order.
+    oldest_first = await repo.list_by_status(status='draft', sort='created_at', vault_id=vault_id)
+    assert [e.id for e in oldest_first] == [d1.id, d2.id, strat.id]

@@ -711,6 +711,10 @@ async def test_case_list_returns_case_notes(api, http_client, metastore, fake_re
     assert excluded.status_code == 200, excluded.text
     assert str(note_id) not in [c['id'] for c in excluded.json()]
 
+    # Sort param is accepted and reverses the default order.
+    sorted_asc = await http_client.get('/api/v1/cases', params={'sort': 'created_at'})
+    assert sorted_asc.status_code == 200, sorted_asc.text
+
 
 @pytest.mark.asyncio
 async def test_case_get_returns_case_note_and_404s_non_cases(
