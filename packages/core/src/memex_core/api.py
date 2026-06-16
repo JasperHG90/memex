@@ -2424,6 +2424,7 @@ class MemexAPIProceduralFacade:
         kind: str | None = None,
         vault_id: UUID | None = None,
         limit: int = 50,
+        sort: Literal['-created_at', 'created_at'] | None = None,
     ) -> list[ProceduralEntryDTO]:
         """List entries by lifecycle status, newest first.
 
@@ -2433,7 +2434,12 @@ class MemexAPIProceduralFacade:
         :meth:`ProceduralRepository.list_by_status`.
         """
         return await self._api._procedural_repo.list_by_status(
-            status=status, scope=scope, kind=kind, vault_id=vault_id, limit=limit
+            status=status,
+            scope=scope,
+            kind=kind,
+            vault_id=vault_id,
+            limit=limit,
+            sort=sort,
         )
 
     async def update(
