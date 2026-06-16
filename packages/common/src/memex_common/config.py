@@ -2603,8 +2603,9 @@ class _BareVaultEnvSettingsSource(EnvSettingsSource):
 
     def decode_complex_value(self, field_name: str, field: Any, value: Any) -> Any:
         if field_name == 'vault' and isinstance(value, str):
-            # `MEMEX_VAULT=hermes` → `{'active': 'hermes'}`.
-            return {'active': value}
+            # `MEMEX_VAULT=hermes` → `{'active': 'hermes'}`. Empty strings
+            # are treated as unset so tests can blank out the env var.
+            return {'active': value} if value else None
         return super().decode_complex_value(field_name, field, value)
 
 

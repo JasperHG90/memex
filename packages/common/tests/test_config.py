@@ -83,13 +83,15 @@ class TestVaultConfigResolution:
 
     @pytest.fixture(autouse=True)
     def _isolate_config(self):
-        """Prevent ambient YAML configs from interfering."""
+        """Prevent ambient YAML configs and env vars from interfering."""
         with patch.dict(
             os.environ,
             {
                 'MEMEX_LOAD_LOCAL_CONFIG': 'false',
                 'MEMEX_LOAD_GLOBAL_CONFIG': 'false',
+                'MEMEX_VAULT': '',
             },
+            clear=False,
         ):
             yield
 
@@ -132,6 +134,13 @@ class TestVaultConfigResolution:
         """Empty search list is honored (not treated as None)."""
         config = MemexConfig(vault=VaultConfig(search=[]))
         assert config.read_vaults == []
+
+    def test_bare_env_vault_overrides_server_default(self):
+        """MEMEX_VAULT=foo sets vault.active and therefore write/read vault."""
+        with patch.dict(os.environ, {'MEMEX_VAULT': 'playground'}):
+            config = MemexConfig()
+        assert config.write_vault == 'playground'
+        assert config.read_vaults == ['playground']
 
 
 class TestVaultBareStringCoercion:

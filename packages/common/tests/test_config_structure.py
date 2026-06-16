@@ -60,7 +60,12 @@ def test_config_server_url_derived_from_custom_host_port():
 
 def test_default_model_propagation():
     """All sub-models inherit the server default_model when not explicitly set."""
-    config = MemexConfig()
+    with patch.dict(
+        os.environ,
+        {'MEMEX_SERVER__DEFAULT_MODEL__MODEL': 'gemini/gemini-3-flash-preview'},
+        clear=False,
+    ):
+        config = MemexConfig()
     expected = 'gemini/gemini-3-flash-preview'
     assert config.server.default_model.model == expected
     assert config.server.memory.extraction.model.model == expected
