@@ -10,6 +10,7 @@ from memex_common.vault_policy import (
     coerce_policy,
     is_content,
     is_system,
+    lint_llm_content_enabled,
     reflect_enabled,
     summarize_enabled,
 )
@@ -19,16 +20,19 @@ class TestKindDefaults:
     def test_content_defaults_both_on(self):
         assert reflect_enabled(VaultKind.CONTENT) is True
         assert summarize_enabled(VaultKind.CONTENT) is True
+        assert lint_llm_content_enabled(VaultKind.CONTENT) is True
         assert is_system(VaultKind.CONTENT) is False
 
     def test_system_defaults_both_off(self):
         assert reflect_enabled(VaultKind.SYSTEM) is False
         assert summarize_enabled(VaultKind.SYSTEM) is False
+        assert lint_llm_content_enabled(VaultKind.SYSTEM) is False
         assert is_system(VaultKind.SYSTEM) is True
 
     def test_string_kind_accepted(self):
         assert reflect_enabled('content') is True
         assert reflect_enabled('system') is False
+        assert lint_llm_content_enabled('system') is False
         assert is_system('system') is True
 
 
@@ -42,12 +46,19 @@ class TestPolicyOverride:
         assert summarize_enabled('content', {'summarize': False}) is False
         assert reflect_enabled('content', {'summarize': False}) is True
 
+    def test_override_lint_llm_content(self):
+        assert lint_llm_content_enabled('system', {'lint_llm_content': True}) is True
+        assert lint_llm_content_enabled('content', {'lint_llm_content': False}) is False
+
     def test_missing_key_falls_back_to_kind(self):
         assert reflect_enabled('content', {}) is True
         assert reflect_enabled('system', {}) is False
+        assert lint_llm_content_enabled('content', {}) is True
+        assert lint_llm_content_enabled('system', {}) is False
 
     def test_vault_policy_instance_accepted(self):
         assert reflect_enabled('system', VaultPolicy(reflect=True)) is True
+        assert lint_llm_content_enabled('system', VaultPolicy(lint_llm_content=True)) is True
 
 
 class TestPolicyValidation:
@@ -59,10 +70,13 @@ class TestPolicyValidation:
         # The typed model routes through pydantic; 'false' maps to False,
         # NOT bool('false')==True (the raw footgun this guards against).
         assert VaultPolicy.model_validate({'reflect': 'false'}).reflect is False
+        assert VaultPolicy.model_validate({'lint_llm_content': 'false'}).lint_llm_content is False
 
     def test_non_bool_rejected(self):
         with pytest.raises(ValidationError):
             VaultPolicy.model_validate({'reflect': 'maybe'})
+        with pytest.raises(ValidationError):
+            VaultPolicy.model_validate({'lint_llm_content': 'maybe'})
 
     def test_coerce_none(self):
         assert coerce_policy(None) == VaultPolicy()
@@ -104,6 +118,10 @@ class TestUnknownKindFailOpen:
     def test_summarize_enabled_unknown_kind_defaults_on(self):
         with pytest.warns(UnknownVaultKind):
             assert summarize_enabled('syste') is True
+
+    def test_lint_llm_content_enabled_unknown_kind_defaults_on(self):
+        with pytest.warns(UnknownVaultKind):
+            assert lint_llm_content_enabled('syste') is True
 
     def test_known_kinds_do_not_warn(self):
         # Sanity: the warning is reserved for the unknown branch.

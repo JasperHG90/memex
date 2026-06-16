@@ -10,6 +10,7 @@ from memex_core.config import (
 )
 from memex_core.scheduler import (
     run_scheduler_with_leader_election,
+    periodic_lint_llm_task,
     periodic_reflection_task,
     periodic_vault_summary_task,
 )
@@ -480,3 +481,148 @@ async def test_vault_summary_task_skips_system_vault_without_summarize_override(
     api.vault_summary.get_summary.assert_not_awaited()
     api.vault_summary.regenerate_summary.assert_not_awaited()
     api.vault_summary.update_summary.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@patch('memex_core.scheduler.background_session')
+async def test_lint_llm_task_skips_content_checks_on_system_vault(mock_bg_session) -> None:
+    """System vaults opt out of semantic_contradiction/schema_drift by default,
+    but propose_contradiction_winner still runs."""
+    mock_bg_session.return_value.__aenter__ = AsyncMock(return_value='test-session')
+    mock_bg_session.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    content_vault = MagicMock()
+    content_vault.id = 'content-vault'
+    content_vault.name = 'playground'
+    content_vault.kind = 'content'
+    content_vault.policy = {}
+
+    system_vault = MagicMock()
+    system_vault.id = 'system-vault'
+    system_vault.name = 'procedural'
+    system_vault.kind = 'system'
+    system_vault.policy = {}
+
+    api = MagicMock()
+    api.list_vaults = AsyncMock(return_value=[content_vault, system_vault])
+
+    tick = AsyncMock(
+        return_value=MagicMock(
+            candidates_evaluated=0, findings_emitted=0, deferred=0, deferred_processed=0
+        )
+    )
+    tick_propose_winner = AsyncMock(
+        return_value=MagicMock(candidates_evaluated=0, findings_emitted=0, deferred=0)
+    )
+    api.lint_llm = MagicMock()
+    api.lint_llm.tick = tick
+    api.lint_llm.tick_propose_winner = tick_propose_winner
+    api.lint_llm.clear_calibration_cache = MagicMock()
+
+    cfg = MagicMock()
+    cfg.server.memory.lint_llm.enabled = True
+    cfg.server.memory.lint_llm.cost_cap_per_24h = 100
+    cfg.server.memory.lint_llm.surprise_k = 8
+    cfg.server.memory.lint_llm.checks.semantic_contradiction.enabled = True
+    cfg.server.memory.lint_llm.checks.schema_drift.enabled = True
+    cfg.server.memory.lint_llm.checks.propose_contradiction_winner.enabled = True
+    cfg.server.memory.lint_llm.polarity.enabled = False
+    cfg.server.memory.lint_llm.propose_winner_min_confidence = 0.7
+    api.config = cfg
+    api.lm = MagicMock()
+
+    with (
+        patch(
+            'memex_core.memory.lint_llm.checks.make_semantic_contradiction_check',
+            return_value=AsyncMock(),
+        ),
+        patch(
+            'memex_core.memory.lint_llm.checks.make_schema_drift_check',
+            return_value=AsyncMock(),
+        ),
+        patch(
+            'memex_core.memory.lint_llm.checks.make_propose_contradiction_winner_check',
+            return_value=AsyncMock(),
+        ),
+    ):
+        await periodic_lint_llm_task(api)
+
+    api.list_vaults.assert_awaited_once_with(include_system=True)
+
+    # Content vault: both content checks + propose_winner called.
+    content_calls = [c for c in tick.await_args_list if c.args[0] == 'content-vault']
+    assert len(content_calls) == 2, content_calls
+    content_names = {c.kwargs.get('check_name') for c in content_calls}
+    assert content_names == {'llm_semantic_contradiction', 'llm_schema_drift'}
+
+    # System vault: no content checks, but propose_winner still called.
+    system_calls = [c for c in tick.await_args_list if c.args[0] == 'system-vault']
+    assert len(system_calls) == 0, system_calls
+    propose_calls = [c for c in tick_propose_winner.await_args_list if c.args[0] == 'system-vault']
+    assert len(propose_calls) == 1, propose_calls
+
+    # Propose winner also called for content vault.
+    assert any(c.args[0] == 'content-vault' for c in tick_propose_winner.await_args_list)
+
+
+@pytest.mark.asyncio
+@patch('memex_core.scheduler.background_session')
+async def test_lint_llm_task_system_vault_override_runs_content_checks(mock_bg_session) -> None:
+    """A system vault with policy.lint_llm_content=True runs content checks."""
+    mock_bg_session.return_value.__aenter__ = AsyncMock(return_value='test-session')
+    mock_bg_session.return_value.__aexit__ = AsyncMock(return_value=False)
+
+    system_vault = MagicMock()
+    system_vault.id = 'system-vault'
+    system_vault.name = 'procedural'
+    system_vault.kind = 'system'
+    system_vault.policy = {'lint_llm_content': True}
+
+    api = MagicMock()
+    api.list_vaults = AsyncMock(return_value=[system_vault])
+
+    tick = AsyncMock(
+        return_value=MagicMock(
+            candidates_evaluated=0, findings_emitted=0, deferred=0, deferred_processed=0
+        )
+    )
+    tick_propose_winner = AsyncMock(
+        return_value=MagicMock(candidates_evaluated=0, findings_emitted=0, deferred=0)
+    )
+    api.lint_llm = MagicMock()
+    api.lint_llm.tick = tick
+    api.lint_llm.tick_propose_winner = tick_propose_winner
+    api.lint_llm.clear_calibration_cache = MagicMock()
+
+    cfg = MagicMock()
+    cfg.server.memory.lint_llm.enabled = True
+    cfg.server.memory.lint_llm.cost_cap_per_24h = 100
+    cfg.server.memory.lint_llm.surprise_k = 8
+    cfg.server.memory.lint_llm.checks.semantic_contradiction.enabled = True
+    cfg.server.memory.lint_llm.checks.schema_drift.enabled = True
+    cfg.server.memory.lint_llm.checks.propose_contradiction_winner.enabled = True
+    cfg.server.memory.lint_llm.polarity.enabled = False
+    cfg.server.memory.lint_llm.propose_winner_min_confidence = 0.7
+    api.config = cfg
+    api.lm = MagicMock()
+
+    with (
+        patch(
+            'memex_core.memory.lint_llm.checks.make_semantic_contradiction_check',
+            return_value=AsyncMock(),
+        ),
+        patch(
+            'memex_core.memory.lint_llm.checks.make_schema_drift_check',
+            return_value=AsyncMock(),
+        ),
+        patch(
+            'memex_core.memory.lint_llm.checks.make_propose_contradiction_winner_check',
+            return_value=AsyncMock(),
+        ),
+    ):
+        await periodic_lint_llm_task(api)
+
+    system_calls = [c for c in tick.await_args_list if c.args[0] == 'system-vault']
+    assert len(system_calls) == 2, system_calls
+    names = {c.kwargs.get('check_name') for c in system_calls}
+    assert names == {'llm_semantic_contradiction', 'llm_schema_drift'}

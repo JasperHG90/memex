@@ -474,9 +474,21 @@ async def periodic_lint_llm_task(api: 'MemexAPI'):
 
     async with background_session('bg-sched-lint-llm'):
         try:
-            vaults = await api.list_vaults()
+            from memex_common.vault_policy import lint_llm_content_enabled
+
+            vaults = await api.list_vaults(include_system=True)
             for vault in vaults:
+                run_content_checks = lint_llm_content_enabled(vault.kind, vault.policy)
+                if not run_content_checks and checks:
+                    logger.info(
+                        'Scheduler: Lint_llm content checks skipped for system vault %s '
+                        '(set policy.lint_llm_content=true to opt in)',
+                        vault.name,
+                    )
+
                 for check_name, check in checks:
+                    if not run_content_checks:
+                        continue
                     try:
                         api.lint_llm.clear_calibration_cache()
                         summary = await api.lint_llm.tick(

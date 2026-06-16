@@ -9,7 +9,7 @@ vault-B's lint dashboard via the F8 ``memex_get_lint_flags`` surface.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 from uuid import UUID, uuid4
 
 import pytest
@@ -529,3 +529,132 @@ class TestCollapseClusterWinnerCanonicalNameAmbiguity:
         assert 'ambiguous' in resp.text.lower()
         mock_api.entities.collapse_cluster.assert_not_called()
         mock_api.lint.set_status.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# lint_llm_run system-vault gate
+# ---------------------------------------------------------------------------
+
+
+def _mock_vault(kind: str, policy: dict) -> MagicMock:
+    vault = MagicMock()
+    vault.id = ALLOWED_VAULT
+    vault.name = 'test-vault'
+    vault.kind = kind
+    vault.policy = policy
+    return vault
+
+
+def _lint_llm_config(enabled: bool = True, cost_cap: int = 100) -> SimpleNamespace:
+    checks = SimpleNamespace(
+        semantic_contradiction=SimpleNamespace(enabled=True),
+        schema_drift=SimpleNamespace(enabled=True),
+        propose_contradiction_winner=SimpleNamespace(enabled=True),
+    )
+    memory = SimpleNamespace(
+        lint_llm=SimpleNamespace(
+            enabled=enabled,
+            cost_cap_per_24h=cost_cap,
+            surprise_k=8,
+            checks=checks,
+            polarity=SimpleNamespace(enabled=False),
+            propose_winner_min_confidence=0.7,
+        )
+    )
+    return SimpleNamespace(server=SimpleNamespace(memory=memory))
+
+
+class TestLintLLMRunSystemVaultGate:
+    def test_content_vault_runs_all_enabled_checks(self, mock_api):
+        mock_api.get_vault = AsyncMock(return_value=_mock_vault('content', {}))
+        mock_api.lint_llm.tick = AsyncMock(
+            return_value=SimpleNamespace(
+                candidates_evaluated=1, findings_emitted=0, deferred=0, deferred_processed=0
+            )
+        )
+        mock_api.lint_llm.tick_propose_winner = AsyncMock(
+            return_value=SimpleNamespace(candidates_evaluated=1, findings_emitted=0, deferred=0)
+        )
+        mock_api.lint_llm.clear_calibration_cache = MagicMock()
+        mock_api.config = _lint_llm_config()
+
+        client = _make_client(mock_api, _scoped_writer())
+        resp = client.post(f'/api/v1/lint/llm/run/{ALLOWED_VAULT}')
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        checks = {s['check'] for s in body['summaries']}
+        assert checks == {'semantic_contradiction', 'schema_drift', 'propose_contradiction_winner'}
+        mock_api.lint_llm.tick.assert_any_await(
+            ALLOWED_VAULT,
+            run_llm_check=mock_api.lint_llm.tick.call_args_list[0].kwargs['run_llm_check'],
+            check_name='llm_semantic_contradiction',
+            polarity_classifier=None,
+            skip_quota=True,
+        )
+        mock_api.lint_llm.tick.assert_any_await(
+            ALLOWED_VAULT,
+            run_llm_check=mock_api.lint_llm.tick.call_args_list[1].kwargs['run_llm_check'],
+            check_name='llm_schema_drift',
+            polarity_classifier=None,
+            skip_quota=True,
+        )
+
+    def test_system_vault_skips_content_checks_but_runs_propose_winner(self, mock_api):
+        mock_api.get_vault = AsyncMock(return_value=_mock_vault('system', {}))
+        mock_api.lint_llm.tick = AsyncMock(
+            return_value=SimpleNamespace(
+                candidates_evaluated=1, findings_emitted=0, deferred=0, deferred_processed=0
+            )
+        )
+        mock_api.lint_llm.tick_propose_winner = AsyncMock(
+            return_value=SimpleNamespace(candidates_evaluated=1, findings_emitted=0, deferred=0)
+        )
+        mock_api.config = _lint_llm_config()
+
+        client = _make_client(mock_api, _scoped_writer())
+        resp = client.post(f'/api/v1/lint/llm/run/{ALLOWED_VAULT}')
+        assert resp.status_code == 200, resp.text
+        body = resp.json()
+        checks = {s['check'] for s in body['summaries']}
+        assert checks == {
+            'semantic_contradiction',
+            'schema_drift',
+            'propose_contradiction_winner',
+        }
+        # Content checks were skipped (zero evaluated), propose_winner ran.
+        semantic = next(s for s in body['summaries'] if s['check'] == 'semantic_contradiction')
+        assert semantic['skipped'] is True
+        assert semantic['evaluated'] == 0
+        mock_api.lint_llm.tick.assert_not_awaited()
+        mock_api.lint_llm.tick_propose_winner.assert_awaited_once_with(
+            ALLOWED_VAULT,
+            run_llm_check=mock_api.lint_llm.tick_propose_winner.call_args.kwargs['run_llm_check'],
+        )
+
+    def test_system_vault_override_runs_content_checks(self, mock_api):
+        mock_api.get_vault = AsyncMock(
+            return_value=_mock_vault('system', {'lint_llm_content': True})
+        )
+        mock_api.lint_llm.tick = AsyncMock(
+            return_value=SimpleNamespace(
+                candidates_evaluated=1, findings_emitted=0, deferred=0, deferred_processed=0
+            )
+        )
+        mock_api.lint_llm.tick_propose_winner = AsyncMock(
+            return_value=SimpleNamespace(candidates_evaluated=1, findings_emitted=0, deferred=0)
+        )
+        mock_api.config = _lint_llm_config()
+
+        client = _make_client(mock_api, _scoped_writer())
+        resp = client.post(f'/api/v1/lint/llm/run/{ALLOWED_VAULT}')
+        assert resp.status_code == 200, resp.text
+        mock_api.lint_llm.tick.assert_awaited()
+        assert mock_api.lint_llm.tick.await_count == 2
+
+    def test_missing_vault_returns_404(self, mock_api):
+        mock_api.get_vault = AsyncMock(return_value=None)
+        mock_api.config = _lint_llm_config()
+
+        client = _make_client(mock_api, _scoped_writer())
+        resp = client.post(f'/api/v1/lint/llm/run/{ALLOWED_VAULT}')
+        assert resp.status_code == 404, resp.text

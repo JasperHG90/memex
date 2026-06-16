@@ -1744,8 +1744,15 @@ async def lint_llm_run(
         PolarityRateLimiter,
     )
     from memex_core.memory.models import get_nli_model
+    from memex_common.vault_policy import lint_llm_content_enabled
 
     await check_vault_access(auth, [vault_id], api, permission=Permission.WRITE)
+
+    vault = await api.get_vault(vault_id)
+    if vault is None:
+        raise HTTPException(status_code=404, detail=f'Vault {vault_id} not found')
+
+    run_content_checks = lint_llm_content_enabled(vault.kind, vault.policy)
 
     settings = api.config.server.memory.lint_llm
     if not settings.enabled or settings.cost_cap_per_24h <= 0:
@@ -1789,14 +1796,29 @@ async def lint_llm_run(
             'vault_id': str(vault_id),
             'summaries': [],
             'detail': 'no LLM lint checks enabled',
+            'run_content_checks': run_content_checks,
         }
 
     summaries: list[dict[str, Any]] = []
     for check_name, check in checks:
+        if not run_content_checks:
+            summaries.append(
+                {
+                    'check': check_name,
+                    'evaluated': 0,
+                    'emitted': 0,
+                    'deferred': 0,
+                    'deferred_processed': 0,
+                    'skipped': True,
+                    'reason': 'system vault content checks disabled by default',
+                }
+            )
+            continue
         try:
             s = await api.lint_llm.tick(
                 vault_id,
                 run_llm_check=check,
+                check_name=f'llm_{check_name}',
                 polarity_classifier=(
                     polarity_classifier if check_name == 'semantic_contradiction' else None
                 ),

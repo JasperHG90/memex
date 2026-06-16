@@ -50,6 +50,14 @@ class VaultPolicy(BaseModel):
 
     reflect: bool | None = None
     summarize: bool | None = None
+    lint_llm_content: bool | None = None
+    """Gates content-auditing LLM lint (semantic_contradiction + schema_drift).
+
+    ``propose_contradiction_winner`` is controlled separately by the global
+    ``lint_llm.checks.propose_contradiction_winner.enabled`` config and is
+    intentionally unaffected by this policy knob; it still runs on system
+    vaults such as the procedural case vault.
+    """
 
 
 def coerce_policy(policy: VaultPolicy | dict | None) -> VaultPolicy:
@@ -117,6 +125,22 @@ def summarize_enabled(kind: VaultKind | str, policy: VaultPolicy | dict | None =
     resolved = coerce_policy(policy)
     if resolved.summarize is not None:
         return resolved.summarize
+    return is_content(kind)
+
+
+def lint_llm_content_enabled(
+    kind: VaultKind | str, policy: VaultPolicy | dict | None = None
+) -> bool:
+    """Whether content-auditing LLM lint should run for a vault of this kind+policy.
+
+    Content vaults default on; system vaults default off. A per-vault policy
+    override wins either way. This gates ``semantic_contradiction`` and
+    ``schema_drift`` only — ``propose_contradiction_winner`` uses its own
+    global config switch and is not gated here.
+    """
+    resolved = coerce_policy(policy)
+    if resolved.lint_llm_content is not None:
+        return resolved.lint_llm_content
     return is_content(kind)
 
 
