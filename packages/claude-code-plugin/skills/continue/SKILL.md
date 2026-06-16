@@ -1,14 +1,14 @@
 ---
 name: continue
-description: "Pick up work from a previous /handoff. Reads back the most recent handoff summary for this project, briefs you on where the work stands, and offers other recent handoffs to choose from. Use at the start of a fresh session, or when the user says 'pick up where we left off', 'continue', 'what was I working on', 'resume', or 'catch me up on this'."
+description: "Resume work from previous /handoff notes. Lists the most recent handoff summaries, lets the user pick which are relevant (one, many, or 'load more'), then loads only the selected notes, summarizes them, and asks what the next steps should be. Use at the start of a fresh session, or when the user says 'pick up where we left off', 'continue', 'what was I working on', 'resume', or 'catch me up on this'."
 argument-hint: "[optional: project or topic to resume]"
 ---
 
-# /continue — Pick up from a handoff
+# /continue — Resume from handoff summaries
 
 You have been invoked via the `/continue` slash command. This is the companion to `/handoff`: it reads back the technical handoff summaries that `/handoff` writes, so the user can resume a thread across sessions.
 
-Handoffs are notes carrying the `handoff` tag plus the plugin's auto-injected `project:*` tag. Recency *is* the relevance here — the latest handoff is almost always the one to resume — so list by recency rather than relevance-ranked search.
+Handoffs are notes carrying the `handoff` tag plus the plugin's auto-injected `project:*` tag. `/continue` is a **browse-then-load** flow: present a recency-ordered menu, let the user choose, then summarize only what they selected and jointly decide next steps.
 
 ## 1. Resolve scope
 
@@ -20,21 +20,40 @@ Find the current project's tag (`project:<id>`) in the auto-injected metadata bl
 memex_list_notes(tags=["handoff", "project:<id>"], date_by="created_at", limit=5, slim=False)
 ```
 
-`slim=False` keeps each note's `description` and timestamp, which you need for the candidate list. If the project-scoped list is empty, retry with `tags=["handoff"]` so a first-time-in-this-repo `/continue` still finds cross-project handoffs. If there are none at all, say so plainly and stop — suggest `/handoff` to start leaving them.
+`slim=False` keeps each note's `title`, `description`, and timestamp. If the project-scoped list is empty, retry with `tags=["handoff"]` so a first-time-in-this-repo `/continue` still finds cross-project handoffs. If there are none at all, say so plainly and stop — suggest `/handoff` to start leaving them.
 
-## 3. Brief the latest
+Present the results as a numbered list with:
 
-Read the most recent handoff (the first result). If it's over ~500 tokens, read it via `memex_get_page_indices` + `memex_get_nodes` rather than `memex_read_note` (which errors above that cap). Give the user a tight brief from its summary: what the work was, where it stands, and the next steps. This is the fast path — most of the time this is the handoff they want, and the goal is to get them back up to speed quickly.
-
-## 4. Offer the other threads
-
-Present the next ~3 handoffs as a numbered list so the user can recognize and pick a different thread (an older task, a parallel branch). For each, show:
-
-- its **description** (the crisp one-liner `/handoff` wrote), and
+- the **title**,
+- the **description**,
 - a **date** reference.
 
-Then pause for the user to choose — continue from the latest you just briefed, or pick one of the listed handoffs. Don't narrate the contents of the listed ones; the point is for the user to recognize which thread they mean, not for you to consume it for them.
+Then ask the user to pick:
 
-## 5. On selection
+> Which handoff(s) are relevant? Reply with the number(s) (e.g. `1`, `2, 4`, `all`), or say `more` to load the next batch.
 
-Read the chosen handoff (paginating if large, per Step 3) and resume work from its **Next steps**, carrying any open threads forward. Cite the handoff note's title so the user knows exactly which summary you're resuming from.
+## 3. Handle the user's choice
+
+- **Numbers / `all`** — read each selected handoff. If a note is over ~500 tokens, paginate via `memex_get_page_indices` + `memex_get_nodes` rather than `memex_read_note` (which errors above that cap).
+- **`more` / `next`** — call `memex_list_notes` again with the same tags and a larger `limit` (e.g. 10) and re-present the extended list. Do not read any note yet; wait for a selection.
+- **No relevant handoffs** — stop and ask whether to broaden the scope or create a fresh `/handoff`.
+- **Ambiguous or no reply** — repeat the list and the prompt. Do not guess which handoff to load.
+
+## 4. Summarize the selected handoffs
+
+Once the user has selected one or more handoffs, read them and produce a concise combined summary:
+
+- What each piece of work was about.
+- Where each stands.
+- The threads that connect or conflict across them.
+- The open items that need carrying forward.
+
+Keep citations: mention the handoff note titles so the user knows which summaries fed the brief.
+
+## 5. Ask for next steps
+
+Do not assume what to do next. After the summary, explicitly ask:
+
+> Given the above, what do you want to do next? Continue one of these threads, start something new, or refine the summary?
+
+Wait for the user's direction before taking further action.
