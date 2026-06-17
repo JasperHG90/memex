@@ -31,10 +31,13 @@ Then set the note fields:
 - **description**: ONE crisp sentence naming the work **and** where it stands. `/continue` shows this in its candidate list, so make it stand on its own (e.g. "Vault-routing wired through the CLI and green; the alembic migration for the new column is the next step.").
 - **author**: `"claude-code"`.
 - **tags**: `["handoff"]`. The plugin auto-injects ambient tags (`surface:claude-code`, `session:*`, `project:*`, `git:*`, …) — `project:*` is what scopes the handoff to this repo, so don't repeat or hand-set them.
+- **note_key**: Do NOT set this. The plugin derives it from the Claude Code session id so repeated `/handoff`s in the same session upsert. Passing an explicit `note_key` would break that anchoring.
 
 ## 3. Save
 
 Call `memex_add_note(...)` with the fields above. The plugin defaults `background: true`, which is right — extraction runs async and `/continue` finds the note by tag immediately regardless.
+
+Because this note carries the `handoff` tag, the plugin also anchors it to the current Claude Code session. Running `/handoff` again in the **same** session (including after `claude --resume <SESSION-ID>`) updates the same note rather than creating a duplicate, so the latest handoff always wins. Disjoint `claude` sessions keep separate handoffs.
 
 ## 4. Stay on one plane
 

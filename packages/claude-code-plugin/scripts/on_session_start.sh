@@ -61,6 +61,10 @@ rm -rf "$STATE_DIR/file_edits"
 rm -f "$STATE_DIR"/capture_count_*
 rm -f "$STATE_DIR"/session_note_offset_*
 rm -f "$STATE_DIR"/session_note_created_*
+# Also clear the cached CC session id; it is rewritten below from the
+# current payload. A stale id would cause `/handoff` notes to anchor to
+# the wrong session.
+rm -f "$STATE_DIR/cc_session_id"
 
 # --- Generate session note key ---
 SESSION_NOTE_KEY="session:$(date -u +%Y-%m-%dT%H:%M:%S.%3N 2>/dev/null || date -u +%Y-%m-%dT%H:%M:%S)"

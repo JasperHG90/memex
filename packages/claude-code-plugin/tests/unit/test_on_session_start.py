@@ -52,6 +52,21 @@ def test_caches_model_from_payload(mock_memex: MockMemex, temp_git_repo: Path) -
     assert model_file.read_text().strip() == 'claude-haiku-4-5'
 
 
+def test_caches_cc_session_id_from_payload(mock_memex: MockMemex, temp_git_repo: Path) -> None:
+    """The Claude Code session id is load-bearing for `/handoff` upsert and must
+    be cached alongside model/project state."""
+    run_script(
+        'on_session_start.sh',
+        stdin=_session_start_payload(),
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+    )
+    state_dir = mock_memex.plugin_data / 'memex'
+    cc_session_file = state_dir / 'cc_session_id'
+    assert cc_session_file.exists()
+    assert cc_session_file.read_text().strip() == 'cc-session-xyz'
+
+
 def test_caches_project_id_and_active_vault(mock_memex: MockMemex, temp_git_repo: Path) -> None:
     mock_memex.set_kv('app:claude-code:project:github.com/acme/myapp:vault', 'eng-vault')
     run_script(
@@ -90,6 +105,9 @@ def test_clears_stale_state_on_new_session(mock_memex: MockMemex, temp_git_repo:
     `session_note_created_*` family — otherwise they accumulate over
     hundreds of sessions and the offsets from previous sessions could
     nominally collide on the next session_id reuse.
+
+    Also clears the cached CC session id so `/handoff` notes cannot anchor
+    to a previous session.
     """
     state_dir = mock_memex.plugin_data / 'memex'
     state_dir.mkdir(parents=True, exist_ok=True)
@@ -99,6 +117,7 @@ def test_clears_stale_state_on_new_session(mock_memex: MockMemex, temp_git_repo:
     (state_dir / 'capture_count_oldsession').write_text('a\nb\n')
     (state_dir / 'session_note_offset_oldsession').write_text('42')
     (state_dir / 'session_note_created_oldsession').write_text('')
+    (state_dir / 'cc_session_id').write_text('stale-old-session')
 
     run_script(
         'on_session_start.sh',
@@ -112,6 +131,8 @@ def test_clears_stale_state_on_new_session(mock_memex: MockMemex, temp_git_repo:
     assert not (state_dir / 'capture_count_oldsession').exists()
     assert not (state_dir / 'session_note_offset_oldsession').exists()
     assert not (state_dir / 'session_note_created_oldsession').exists()
+    # The stale CC session id is wiped and rewritten from the current payload.
+    assert (state_dir / 'cc_session_id').read_text().strip() == 'cc-session-xyz'
 
 
 def test_emits_additional_context_with_briefing(mock_memex: MockMemex, temp_git_repo: Path) -> None:

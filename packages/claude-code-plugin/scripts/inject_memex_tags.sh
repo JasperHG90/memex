@@ -166,12 +166,23 @@ fi
 
 # ---------------------------------------------------------------------------
 # Compose updatedInput: preserve everything from tool_input, merge tags,
-# default background and vault_id when not explicitly set.
+# default background and vault_id when not explicitly set, and anchor handoff
+# notes to the Claude Code session id so repeated `/handoff`s upsert.
 # ---------------------------------------------------------------------------
 _active_vault=""
 if [ -f "$STATE_DIR/active_vault" ]; then
     _active_vault=$(cat "$STATE_DIR/active_vault" 2>/dev/null || true)
 fi
+
+# CC session id — cached from SessionStart payload. Used to key handoff notes
+# across `claude --resume <SESSION-ID>` so the latest handoff overwrites earlier
+# ones from the same session, while disjoint sessions stay separate.
+_cc_session_id=""
+if [ -f "$STATE_DIR/cc_session_id" ]; then
+    _cc_session_id=$(cat "$STATE_DIR/cc_session_id" 2>/dev/null || true)
+fi
+# Sanitize for safe use in a Memex note_key (FileStore path component).
+_cc_session_id=$(printf '%s' "$_cc_session_id" | tr -c 'A-Za-z0-9._-' '_' | head -c 128)
 
 # jq logic:
 #   - merged_tags = (existing_tags ∪ auto_tags), deduplicated, existing-first order.
@@ -180,9 +191,13 @@ fi
 #     an explicit `background: false`. Use an explicit null check instead.
 #   - vault_id: if absent OR null OR empty string, fill with active_vault when set;
 #     otherwise preserve the caller's value.
+#   - note_key: for handoff-tagged add_note calls only, when absent AND a
+#     cc_session_id is available, default to `handoff:cc:<session_id>` so the
+#     same Claude Code session's handoffs upsert instead of duplicating.
 _updated_input=$(printf '%s' "$_payload" | jq \
     --argjson auto_tags "$_auto_tags_json" \
     --arg active_vault "$_active_vault" \
+    --arg cc_session_id "$_cc_session_id" \
     --arg tool "$_tool_name" \
     '
     if ($tool | endswith("memex_case_submit")) then
@@ -191,7 +206,7 @@ _updated_input=$(printf '%s' "$_payload" | jq \
         # of `payload`, not inside CaseSubmit), so default it to true here the same
         # way add_note does — capture should never block the agent. An explicit
         # `background:false` is preserved (null-check, not `//`, which is falsy on false).
-        # No vault_id — the case vault is implicit.
+        # No vault_id or note_key — the case vault is implicit and cases are not handoffs.
         .tool_input
         | .payload.tags = (((.payload.tags // []) + $auto_tags) | unique)
         | .background = (if (.background == null) then true else .background end)
@@ -204,10 +219,15 @@ _updated_input=$(printf '%s' "$_payload" | jq \
             then $active_vault
             else $ti.vault_id
            end) as $vault
+        | (if (($ti.note_key // "") == "") and (($merged_tags | index("handoff")) != null) and ($cc_session_id != "")
+            then "handoff:cc:\($cc_session_id)"
+            else $ti.note_key
+           end) as $nk
         | $ti
             | .tags = $merged_tags
             | .background = $bg
             | (if $vault != null and $vault != "" then .vault_id = $vault else . end)
+            | (if $nk != null and $nk != "" then .note_key = $nk else . end)
     end
     ')
 

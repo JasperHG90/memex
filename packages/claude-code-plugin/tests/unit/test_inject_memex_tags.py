@@ -51,6 +51,7 @@ def _seed_state(
     project_id: str = 'github.com/acme/myapp',
     model: str = 'claude-sonnet-4-6',
     active_vault: str = 'eng-vault',
+    cc_session_id: str | None = None,
 ) -> None:
     state = mock.plugin_data / 'memex'
     state.mkdir(parents=True, exist_ok=True)
@@ -58,6 +59,8 @@ def _seed_state(
     (state / 'project_id').write_text(project_id)
     (state / 'model').write_text(model)
     (state / 'active_vault').write_text(active_vault)
+    if cc_session_id is not None:
+        (state / 'cc_session_id').write_text(cc_session_id)
 
 
 def _parse_output(stdout: str) -> dict:
@@ -502,3 +505,130 @@ def test_session_tag_absent_when_state_missing(mock_memex: MockMemex) -> None:
     # No bare-prefix garbage
     for t in tags:
         assert not t.endswith('=')
+
+
+def test_injects_note_key_for_handoff_when_absent(mock_memex: MockMemex) -> None:
+    """Handoff-tagged add_note calls get a deterministic note_key anchored on
+    the cached Claude Code session id, so repeated `/handoff`s in the same
+    session upsert instead of duplicating."""
+    _seed_state(mock_memex, cc_session_id='cc-handoff-123')
+    payload = _pretooluse_payload(
+        tool_input={
+            'title': 'Handoff: thing',
+            'markdown_content': 'm',
+            'description': 'd',
+            'author': 'claude-code',
+            'tags': ['handoff'],
+        }
+    )
+    result = run_script('inject_memex_tags.sh', stdin=payload, env=mock_memex.env)
+    assert result.returncode == 0, result.stderr
+    out = _parse_output(result.stdout)
+    assert out['hookSpecificOutput']['updatedInput']['note_key'] == 'handoff:cc:cc-handoff-123'
+
+
+def test_preserves_explicit_note_key_for_handoff(mock_memex: MockMemex) -> None:
+    """An explicit caller note_key must always win over the handoff default."""
+    _seed_state(mock_memex, cc_session_id='cc-handoff-123')
+    payload = _pretooluse_payload(
+        tool_input={
+            'title': 'Handoff: thing',
+            'markdown_content': 'm',
+            'description': 'd',
+            'author': 'claude-code',
+            'tags': ['handoff'],
+            'note_key': 'custom-handoff-key',
+        }
+    )
+    result = run_script('inject_memex_tags.sh', stdin=payload, env=mock_memex.env)
+    assert result.returncode == 0, result.stderr
+    out = _parse_output(result.stdout)
+    assert out['hookSpecificOutput']['updatedInput']['note_key'] == 'custom-handoff-key'
+
+
+def test_no_note_key_for_handoff_when_cc_session_id_missing(mock_memex: MockMemex) -> None:
+    """Without a cached cc_session_id, handoff notes fall back to the old
+    behavior (create a new note) rather than fabricating a key."""
+    _seed_state(mock_memex)  # cc_session_id intentionally absent
+    payload = _pretooluse_payload(
+        tool_input={
+            'title': 'Handoff: thing',
+            'markdown_content': 'm',
+            'description': 'd',
+            'author': 'claude-code',
+            'tags': ['handoff'],
+        }
+    )
+    result = run_script('inject_memex_tags.sh', stdin=payload, env=mock_memex.env)
+    assert result.returncode == 0, result.stderr
+    out = _parse_output(result.stdout)
+    assert 'note_key' not in out['hookSpecificOutput']['updatedInput']
+
+
+def test_no_note_key_for_non_handoff_note(mock_memex: MockMemex) -> None:
+    """Only handoff-tagged notes get the session-anchored key; ordinary notes
+    are unaffected."""
+    _seed_state(mock_memex, cc_session_id='cc-handoff-123')
+    payload = _pretooluse_payload(
+        tool_input={
+            'title': 't',
+            'markdown_content': 'm',
+            'description': 'd',
+            'author': 'claude-code',
+            'tags': ['manual-capture'],
+        }
+    )
+    result = run_script('inject_memex_tags.sh', stdin=payload, env=mock_memex.env)
+    assert result.returncode == 0, result.stderr
+    out = _parse_output(result.stdout)
+    assert 'note_key' not in out['hookSpecificOutput']['updatedInput']
+
+
+def test_handoff_note_key_sanitizes_unsafe_session_id_chars(mock_memex: MockMemex) -> None:
+    """A CC session id containing path-traversal or control characters must be
+    sanitized before becoming part of a Memex note_key (FileStore path).
+
+    Note: bash command substitution strips null bytes, so the null in the
+    fixture is removed rather than replaced; the test still verifies that
+    the dangerous characters do not survive into the key."""
+    _seed_state(mock_memex, cc_session_id='../etc/passwd\x00nasty')
+    payload = _pretooluse_payload(
+        tool_input={
+            'title': 'Handoff: thing',
+            'markdown_content': 'm',
+            'description': 'd',
+            'author': 'claude-code',
+            'tags': ['handoff'],
+        }
+    )
+    result = run_script('inject_memex_tags.sh', stdin=payload, env=mock_memex.env)
+    assert result.returncode == 0, result.stderr
+    out = _parse_output(result.stdout)
+    note_key = out['hookSpecificOutput']['updatedInput']['note_key']
+    # Bash command substitution strips the null byte; slashes become underscores.
+    assert note_key == 'handoff:cc:.._etc_passwdnasty'
+    assert '/' not in note_key
+    assert '\x00' not in note_key
+    assert '\n' not in note_key
+
+
+def test_handoff_note_key_caps_session_id_length(mock_memex: MockMemex) -> None:
+    """A pathologically long CC session id must be truncated so the generated
+    note_key stays bounded and does not bloat hook JSON / tool payloads."""
+    long_id = 'a' * 500
+    _seed_state(mock_memex, cc_session_id=long_id)
+    payload = _pretooluse_payload(
+        tool_input={
+            'title': 'Handoff: thing',
+            'markdown_content': 'm',
+            'description': 'd',
+            'author': 'claude-code',
+            'tags': ['handoff'],
+        }
+    )
+    result = run_script('inject_memex_tags.sh', stdin=payload, env=mock_memex.env)
+    assert result.returncode == 0, result.stderr
+    out = _parse_output(result.stdout)
+    note_key = out['hookSpecificOutput']['updatedInput']['note_key']
+    assert note_key.startswith('handoff:cc:')
+    assert len(note_key) == len('handoff:cc:') + 128
