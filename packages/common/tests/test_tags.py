@@ -26,6 +26,8 @@ class TestIsProtectedTag:
             'git:dirty',
             'claude:model=claude-opus-4-8',
             'app:claude-code:theme',
+            'cc:plugin=2.3.1',
+            'cc:9b5090d2-c5f9-4f39-9e9e-1ed76dd99c8e',
         ],
     )
     def test_provenance_namespaced_tags_are_protected(self, tag: str):
@@ -57,6 +59,14 @@ class TestIsProtectedTag:
     def test_unknown_namespace_not_protected(self):
         """A colon tag whose prefix is not a known provenance namespace is topical."""
         assert not is_protected_tag('topic:databases')
+
+    def test_empty_namespace_not_protected(self):
+        """A leading-colon tag has an empty namespace segment — not provenance."""
+        assert not is_protected_tag(':foo')
+
+    def test_multi_colon_topical_not_protected(self):
+        """Multi-colon tag with a non-provenance prefix is topical, not stripped."""
+        assert not is_protected_tag('topic:sub:value')
 
     def test_namespaces_are_lowercase(self):
         """Registry invariant: matching normalizes to lower-case."""

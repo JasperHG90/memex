@@ -54,6 +54,9 @@ PROVENANCE_TAG_NAMESPACES: frozenset[str] = frozenset(
         'git',
         'claude',
         'app',
+        # 'cc:plugin=<version>' and 'cc:<session-id>' — Claude Code plugin
+        # provenance/session anchor (inject_memex_tags.sh).
+        'cc',
     }
 )
 
