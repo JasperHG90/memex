@@ -193,6 +193,44 @@ async def test_derive_procedure_fills_draft_then_rolls_up_strategy(api, monkeypa
     assert strat.body  # distilled heuristic written
 
 
+async def test_strategy_derivation_records_procedure_provenance_idempotently(api, monkeypatch):
+    """A derived strategy records ``provenance`` edges to the procedures it was
+    distilled from, and re-derivation does NOT duplicate them.
+
+    Regression for the gap where ``_derive_strategy`` never called
+    ``add_source`` — so a strategy's ``sources`` was always empty and a viewer
+    could not see what it generalised over. ``procedural_sources`` has no
+    unique constraint, so the fix must add only missing edges per sweep.
+    """
+    _patch_distillers(monkeypatch)
+    vault = await _mk_vault(api)
+
+    # Two procedures on (global, deploy) → a strategy rolls up.
+    p1 = await _make_procedure_with_cases(api, vault, verb='deploy', context='nomad', n_cases=2)
+    await api.procedural.derive_pending(limit=10)
+    p2 = await _make_procedure_with_cases(api, vault, verb='deploy', context='k8s', n_cases=2)
+    await api.procedural.derive_pending(limit=10)  # p2 procedure task
+    await api.procedural.derive_pending(limit=10)  # the enqueued strategy task
+
+    strat = await api.procedural.get_by_identity(
+        kind='strategy', scope='global', verb='deploy', context=None, status=None
+    )
+    assert strat is not None
+    # The strategy view surfaces its two backing procedures.
+    edges = {s.source_entry_id for s in strat.sources if s.role == 'provenance'}
+    assert edges == {p1.id, p2.id}, f'strategy must cite its procedures, got {edges}'
+
+    # A 3rd procedure → re-derive. New edge added; existing two NOT duplicated.
+    p3 = await _make_procedure_with_cases(api, vault, verb='deploy', context='ecs', n_cases=2)
+    await api.procedural.derive_pending(limit=10)  # p3 procedure task
+    await api.procedural.derive_pending(limit=10)  # the re-enqueued strategy task
+
+    rederived = await api.procedural.get(strat.id)
+    prov = [s for s in rederived.sources if s.role == 'provenance']
+    assert {s.source_entry_id for s in prov} == {p1.id, p2.id, p3.id}
+    assert len(prov) == 3, f'no duplicate edges on re-derivation, got {len(prov)}'
+
+
 async def test_distillation_files_activation_proposal_then_activate_publishes(api, monkeypatch):
     """§18.6.1: a distilled draft is NOT auto-published — derivation files a
     governance lint proposal, and the activate_procedural_entry action

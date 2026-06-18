@@ -32,6 +32,7 @@ from sqlmodel import col, select
 from memex_common.procedural_schemas import (
     ProceduralEntryCreate,
     ProceduralEntryUpdate,
+    ProceduralSourceCreate,
 )
 from memex_core.memory.procedural_distillation import (
     MIN_CASES_FOR_DISTILLATION,
@@ -361,6 +362,14 @@ class ProceduralDerivationService:
             )
         )
 
+        # Record the procedure → strategy provenance edges so the strategy
+        # surfaces what it was distilled from (the §18.1 procedure→strategy
+        # edge). Re-derivation re-runs with the current sibling set; add only
+        # edges that don't already exist — procedural_sources has no unique
+        # constraint, so a blind insert would accumulate a duplicate edge per
+        # sweep.
+        await self._link_provenance(dto.id, [p['id'] for p in procedures])
+
         # §18.6.1: a still-DRAFT distilled strategy rides the lint surface for
         # confirmation. An already-published strategy re-derived in place (its
         # status is preserved by upsert_by_identity) is already active — filing
@@ -377,6 +386,24 @@ class ProceduralDerivationService:
                 source_case_ids=[p.get('title', '') for p in procedures],
             )
         return dto.id
+
+    async def _link_provenance(self, entry_id: UUID, source_entry_ids: list[str]) -> None:
+        """Idempotently attach ``provenance`` edges from ``entry_id`` to each
+        source entry. Skips edges that already exist so a re-derivation sweep
+        does not accumulate duplicates (``procedural_sources`` carries no
+        unique constraint on ``(entry_id, source_entry_id, role)``)."""
+        existing = await self._api._procedural_repo.list_sources_for_entry(
+            entry_id, role='provenance'
+        )
+        already_linked = {e.source_entry_id for e in existing if e.source_entry_id is not None}
+        for raw_id in source_entry_ids:
+            source_id = UUID(raw_id)
+            if source_id in already_linked:
+                continue
+            await self._api._procedural_repo.add_source(
+                entry_id,
+                ProceduralSourceCreate(source_entry_id=source_id, role='provenance'),
+            )
 
     # -- Cluster gathering ---------------------------------------------
 
@@ -417,6 +444,7 @@ class ProceduralDerivationService:
             ).all()
         return [
             {
+                'id': str(r.id),
                 'title': r.title or '',
                 'trigger': r.trigger or '',
                 'summary': r.summary or '',

@@ -23,6 +23,7 @@ from memex_common.procedural_schemas import (
     ProceduralEntryCreate,
     ProceduralPinCreate,
     ProceduralSearchRequest,
+    ProceduralSourceCreate,
     ProceduralEntryUpdate,
 )
 from memex_core.services.procedural_repository import (
@@ -263,6 +264,57 @@ async def test_upsert_preserves_published_status(metastore):
     )
     assert rewritten.title == 'upsert-pub-rewritten', 'other fields still update'
     assert rewritten.published_at is not None, 'published_at survives the rewrite'
+
+
+@pytest.mark.asyncio
+async def test_get_surfaces_source_edges(metastore):
+    """``get`` populates the DTO ``sources`` so a viewer sees provenance.
+
+    Regression for the gap where ``_to_dto`` never set ``sources``, so every
+    ``procedure view`` returned ``sources: []`` even when the case→procedure /
+    procedure→strategy edges existed in ``procedural_sources``.
+    """
+    async with metastore.session() as session:
+        vault_id = await _create_vault(session, 'proc_sources')
+
+    repo = _repo(metastore)
+    # A strategy and a procedure it is based on (procedure → strategy edge).
+    proc = await repo.upsert_by_identity(
+        _entry_payload(
+            vault_id=vault_id,
+            title='backing-proc',
+            kind='procedure',
+            verb='deploy',
+            context='nomad',
+        )
+    )
+    strat = await repo.upsert_by_identity(
+        _entry_payload(
+            vault_id=vault_id,
+            title='the-strategy',
+            kind='strategy',
+            verb='deploy',
+            context=None,
+        )
+    )
+
+    # Before any edge: empty, not None.
+    assert (await repo.get(strat.id)).sources == []
+
+    await repo.add_source(
+        strat.id, ProceduralSourceCreate(source_entry_id=proc.id, role='provenance')
+    )
+
+    fetched = await repo.get(strat.id)
+    assert len(fetched.sources) == 1, 'get must surface the provenance edge'
+    assert fetched.sources[0].source_entry_id == proc.id
+    assert fetched.sources[0].role == 'provenance'
+
+    # get_by_identity surfaces them too (the read-before-write probe).
+    by_identity = await repo.get_by_identity(
+        kind='strategy', scope='global', verb='deploy', context=None, status=None
+    )
+    assert by_identity is not None and len(by_identity.sources) == 1
 
 
 async def _count_versions(metastore, entry_id: uuid.UUID) -> int:

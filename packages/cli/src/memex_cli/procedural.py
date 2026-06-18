@@ -92,6 +92,18 @@ def _print_entry(entry, json_output: bool) -> None:
         console.print(f'\n{entry.body}')
     if entry.tags:
         console.print(f'\n  [dim]tags:[/dim] {", ".join(entry.tags)}')
+    if entry.sources:
+        # Provenance: what this entry was distilled from — a procedure's
+        # backing cases (note ids), a strategy's backing procedures (entry ids).
+        console.print('\n  [dim]sources:[/dim]')
+        for s in entry.sources:
+            if s.source_entry_id is not None:
+                pointer, ptype = s.source_entry_id, 'procedure'
+            elif s.source_note_id is not None:
+                pointer, ptype = s.source_note_id, 'case'
+            else:
+                pointer, ptype = s.source_memory_unit_id, 'memory-unit'
+            console.print(f'    [dim]{s.role}[/dim] ← {ptype} {pointer}')
     console.print(
         f'  [dim]created:[/dim] {entry.created_at.isoformat()}  '
         f'[dim]updated:[/dim] {entry.updated_at.isoformat()}'
