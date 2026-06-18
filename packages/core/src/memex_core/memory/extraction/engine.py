@@ -19,6 +19,7 @@ from memex_core.config import (
     GLOBAL_VAULT_ID,
 )
 from memex_common.config import CHARS_PER_TOKEN
+from memex_common.tags import is_protected_tag
 from memex_core.memory.extraction.models import (
     RetainContent,
     ExtractedFact,
@@ -161,16 +162,27 @@ def _synthesize_tags(
     page_index_output: PageIndexOutput,
     user_tags: list[str],
 ) -> list[str]:
-    """Merge user-provided tags with LLM-generated block tags."""
+    """Merge user-provided tags with LLM-generated block tags.
+
+    User tags are authoritative and kept verbatim. LLM-inferred block tags are
+    sanitized against the protected-tag registry: a content-inferred tag that
+    collides with a reserved semantic tag (e.g. ``handoff``) or a provenance
+    namespace (e.g. ``project:*``) is dropped, so content *about* a reserved
+    concept cannot mint the reserved tag and poison tag-scoped queries. A caller
+    that genuinely wants such a tag passes it in ``user_tags``.
+    """
     tags: list[str] = list(user_tags) if user_tags else []
     seen: set[str] = {t.strip().lower() for t in tags}
     for block in page_index_output.blocks:
         if block.summary:
             for tag in block.summary.tags:
                 normalized = tag.strip().lower()
-                if normalized and normalized not in seen:
-                    seen.add(normalized)
-                    tags.append(normalized)
+                if not normalized or normalized in seen:
+                    continue
+                if is_protected_tag(normalized):
+                    continue
+                seen.add(normalized)
+                tags.append(normalized)
     return tags[:15]  # Cap at 15 tags
 
 
