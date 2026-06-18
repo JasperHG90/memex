@@ -168,15 +168,19 @@ class ProceduralDerivationService:
             ),
         )
 
-        # §18.6.1: the distilled draft rides the lint surface for confirmation.
-        await self._file_activation_proposal(
-            entry_id=entry_id,
-            vault_id=claim.vault_id,
-            kind='procedure',
-            title=distilled.title,
-            summary=distilled.summary,
-            source_case_ids=[cid for cid, _ in cases],
-        )
+        # §18.6.1: a still-DRAFT distilled procedure rides the lint surface for
+        # confirmation. A re-derivation of an already-published procedure keeps
+        # its status (update() never touches it) and needs no fresh activation
+        # finding — it is already active; activating again is a no-op.
+        if current.status == 'draft':
+            await self._file_activation_proposal(
+                entry_id=entry_id,
+                vault_id=claim.vault_id,
+                kind='procedure',
+                title=distilled.title,
+                summary=distilled.summary,
+                source_case_ids=[cid for cid, _ in cases],
+            )
 
         # §9 dirty event: a (re-)derived procedure feeds its parent strategy.
         await self._maybe_enqueue_strategy(claim)
@@ -357,15 +361,21 @@ class ProceduralDerivationService:
             )
         )
 
-        # §18.6.1: the distilled strategy draft also rides the lint surface.
-        await self._file_activation_proposal(
-            entry_id=dto.id,
-            vault_id=claim.vault_id,
-            kind='strategy',
-            title=distilled.title,
-            summary=distilled.summary,
-            source_case_ids=[p.get('title', '') for p in procedures],
-        )
+        # §18.6.1: a still-DRAFT distilled strategy rides the lint surface for
+        # confirmation. An already-published strategy re-derived in place (its
+        # status is preserved by upsert_by_identity) is already active — filing
+        # another activation finding would re-nag the operator who already
+        # confirmed it (the pending-dedup only suppresses while a prior finding
+        # is still pending, not after it resolved).
+        if dto.status == 'draft':
+            await self._file_activation_proposal(
+                entry_id=dto.id,
+                vault_id=claim.vault_id,
+                kind='strategy',
+                title=distilled.title,
+                summary=distilled.summary,
+                source_case_ids=[p.get('title', '') for p in procedures],
+            )
         return dto.id
 
     # -- Cluster gathering ---------------------------------------------

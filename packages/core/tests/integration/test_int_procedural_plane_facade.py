@@ -219,6 +219,52 @@ async def test_upsert_preserves_deprecated_status(metastore):
     assert rewritten.title == 'upsert-dep-rewritten', 'other fields still update'
 
 
+@pytest.mark.asyncio
+async def test_upsert_preserves_published_status(metastore):
+    """Re-issuing an upsert on a PUBLISHED entry does NOT re-draft it.
+
+    This is the contract behind the distill-activation flow: the operator
+    confirms a distilled draft (draft → published) via the lint surface,
+    then a later derivation sweep re-derives the same identity anchor and
+    upserts it with the worker's default ``status='draft'`` payload. That
+    rewrite must update the content but PRESERVE ``published`` — otherwise
+    the activated procedure/strategy silently reverts to draft (the lint
+    finding shows resolved/accepted, yet the entry is draft again).
+
+    Regression guard for the bug where the rewrite branch only protected
+    ``deprecated`` and demoted ``published`` to ``draft``.
+    """
+    async with metastore.session() as session:
+        vault_id = await _create_vault(session, 'proc_upsert_pub')
+
+    repo = _repo(metastore)
+    # Seed as draft, then promote via update() — mirrors activate_procedural_entry.
+    initial = await repo.upsert_by_identity(
+        _entry_payload(
+            vault_id=vault_id, title='upsert-pub-initial', body='v1 body', status='draft'
+        )
+    )
+    assert initial.status == 'draft'
+    promoted = await repo.update(initial.id, ProceduralEntryUpdate(status='published'))
+    assert promoted.status == 'published'
+    assert promoted.published_at is not None
+
+    # Re-derivation re-sends status='draft'. Status must NOT flip back.
+    rewritten = await repo.upsert_by_identity(
+        _entry_payload(
+            vault_id=vault_id,
+            title='upsert-pub-rewritten',
+            body='v2 body',
+            status='draft',
+        )
+    )
+    assert rewritten.status == 'published', (
+        f'upsert must preserve published status, got {rewritten.status!r}'
+    )
+    assert rewritten.title == 'upsert-pub-rewritten', 'other fields still update'
+    assert rewritten.published_at is not None, 'published_at survives the rewrite'
+
+
 async def _count_versions(metastore, entry_id: uuid.UUID) -> int:
     async with metastore.session() as session:
         result = await session.execute(

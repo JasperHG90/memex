@@ -114,6 +114,7 @@ def _patch_distillers(monkeypatch):
             body='## Steps\n\n1. roll the canary at 10%',
             steps=[],
             notes='',
+            skill_hints=[],
         )
 
     async def fake_strat(lm, *, procedures_markdown, anchor, timeout=120):
@@ -245,6 +246,88 @@ async def test_distillation_files_activation_proposal_then_activate_publishes(ap
     )
     reverted = await api.procedural.get(p1.id)
     assert reverted.status == 'draft'
+
+
+async def test_rederive_after_activation_keeps_published_and_does_not_renag(api, monkeypatch):
+    """Regression: confirming a distilled STRATEGY must STICK across the next
+    derivation sweep.
+
+    The reported bug: a reviewer activates a distilled strategy (draft →
+    published) through the lint surface, then a later derivation re-derives
+    the same ``(kind, scope, verb)`` anchor and the strategy silently reverts
+    to draft — the activate verdict stuck on the finding, but the entry was
+    re-drafted. Strategies are the exposed path because re-derivation writes
+    them via ``upsert_by_identity`` (which carried ``status='draft'``);
+    procedures go through ``update()`` and were already status-safe. Two
+    failure modes are pinned here:
+
+      1. the re-derivation ``upsert`` must PRESERVE ``published`` (no demotion);
+      2. it must NOT file a fresh activation finding for an already-active
+         entry (no re-nag after the operator already confirmed it).
+    """
+    from sqlmodel import col, func, select
+
+    from memex_core.memory.sql_models import MaintenanceProposal
+    from memex_core.services.proposal_actions import get_action
+
+    async def _pending_count(entry_id) -> int:
+        async with api.metastore.session() as session:
+            return (
+                await session.exec(
+                    select(func.count())
+                    .select_from(MaintenanceProposal)
+                    .where(col(MaintenanceProposal.target_type) == 'procedural_entry')
+                    .where(col(MaintenanceProposal.target_id) == str(entry_id))
+                    .where(col(MaintenanceProposal.status) == 'pending')
+                )
+            ).one()
+
+    _patch_distillers(monkeypatch)
+    vault = await _mk_vault(api)
+
+    # Two procedures sharing (global, deploy) → a strategy rolls up above them.
+    await _make_procedure_with_cases(api, vault, verb='deploy', context='nomad', n_cases=2)
+    await api.procedural.derive_pending(limit=10)
+    await _make_procedure_with_cases(api, vault, verb='deploy', context='k8s', n_cases=2)
+    await api.procedural.derive_pending(limit=10)  # p2 procedure task
+    await api.procedural.derive_pending(limit=10)  # the enqueued strategy task
+
+    strat = await api.procedural.get_by_identity(
+        kind='strategy', scope='global', verb='deploy', context=None, status=None
+    )
+    assert strat is not None and strat.status == 'draft'
+    assert await _pending_count(strat.id) == 1  # one activation finding for the strategy
+
+    # Reviewer confirms the strategy: draft → published.
+    action = get_action('activate_procedural_entry')
+    await action.execute(api, {}, target_id=str(strat.id), vault_id=vault, actor='reviewer')
+    assert (await api.procedural.get(strat.id)).status == 'published'
+    # Simulate the lint surface resolving that finding on accept.
+    async with api.metastore.session() as session:
+        rows = (
+            await session.exec(
+                select(MaintenanceProposal).where(
+                    col(MaintenanceProposal.target_id) == str(strat.id)
+                )
+            )
+        ).all()
+        for row in rows:
+            row.status = 'resolved'
+            session.add(row)
+        await session.commit()
+    assert await _pending_count(strat.id) == 0
+
+    # A 3rd procedure on the same (global, deploy) anchor → re-derive the strategy.
+    await _make_procedure_with_cases(api, vault, verb='deploy', context='ecs', n_cases=2)
+    await api.procedural.derive_pending(limit=10)  # p3 procedure task
+    await api.procedural.derive_pending(limit=10)  # the re-enqueued strategy task
+
+    # (1) status preserved across the upsert; (2) no fresh re-nag finding.
+    rederived = await api.procedural.get(strat.id)
+    assert rederived.status == 'published', (
+        f'strategy re-derivation must preserve published, got {rederived.status!r}'
+    )
+    assert await _pending_count(strat.id) == 0, 'no re-nag finding for an already-active strategy'
 
 
 async def test_hand_edit_authors_entry_and_derivation_proposes_not_overwrites(api, monkeypatch):

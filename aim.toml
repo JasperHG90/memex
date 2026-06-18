@@ -1,0 +1,23 @@
+manifest_version = 3
+instruction_template = "default"
+symlinks = [
+    "CLAUDE.md",
+]
+rules = []
+agents = []
+mcp_servers = []
+
+[repos]
+jasperhg90 = "https://github.com/JasperHG90/skills"
+
+[[skill]]
+qualified_name = "jasperhg90/readme-creator"
+repo_alias = "jasperhg90"
+source_path = "skills/documentation/readme-creator"
+target_dir = ".claude/skills/readme-creator"
+
+[[skill]]
+qualified_name = "jasperhg90/doc-write"
+repo_alias = "jasperhg90"
+source_path = "skills/documentation/doc-write"
+target_dir = ".claude/skills/doc-write"

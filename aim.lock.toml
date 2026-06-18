@@ -1,0 +1,43 @@
+manifest_version = 8
+instruction_template = "default"
+agents = []
+mcp_servers = []
+rules = []
+managed_files = [
+    "AGENTS.md",
+    "CLAUDE.md",
+]
+layout_profile = "claude"
+symlinks = [
+    "CLAUDE.md",
+]
+
+[[skill]]
+qualified_name = "jasperhg90/readme-creator"
+repo_alias = "jasperhg90"
+repo_url = "https://github.com/JasperHG90/skills"
+source_path = "skills/documentation/readme-creator"
+target_dir = ".claude/skills/readme-creator"
+history = []
+content_hash = "3e2e2e5a78baadea6631bc9db3e9e6acda2d3c3807d0c9d3705929dd05cd93ab"
+
+[skill.current]
+sha = "e62a750ecbe0b5c58e674f25b01e0a1b7cff5568"
+installed_at = "2026-06-18T18:27:08.431328Z"
+
+[[skill]]
+qualified_name = "jasperhg90/doc-write"
+repo_alias = "jasperhg90"
+repo_url = "https://github.com/JasperHG90/skills"
+source_path = "skills/documentation/doc-write"
+target_dir = ".claude/skills/doc-write"
+history = []
+content_hash = "3a0386265d011ddf80b85ebeaf323eb8722a76fe9bae1bae80473e1c4a736c31"
+
+[skill.current]
+sha = "e62a750ecbe0b5c58e674f25b01e0a1b7cff5568"
+installed_at = "2026-06-18T18:27:08.430121Z"
+
+[managed_region_hashes]
+header = "8209ab5f5a7c8f642c374946c62b4af4bc0abcf6b44bc22fc745ebc94105a7bc"
+guidelines = "9f2811d5c944f66b8dd93552c313b774b0bb2ecc1796783b476131e17e808f69"

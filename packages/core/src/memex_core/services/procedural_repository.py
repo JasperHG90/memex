@@ -306,10 +306,16 @@ class ProceduralRepository:
         *,
         vault_id: UUID | None = None,
     ) -> ProceduralEntryDTO:
-        """Look up a single entry by id. Raises if missing or vault-mismatched."""
+        """Look up a single entry by id. Raises if missing or vault-mismatched.
+
+        The single-entry read surfaces the entry's source edges (provenance /
+        evidence / contradiction) so a viewer can see what it was distilled
+        from — a procedure's backing cases, a strategy's backing procedures.
+        """
         async with self._metastore.session() as session:
             entry = await self._get_entry(session, entry_id, vault_id=vault_id)
-        return self._to_dto(entry)
+            sources = await self._load_sources(session, entry.id)
+        return self._to_dto(entry, sources=sources)
 
     async def get_many(
         self,
@@ -412,9 +418,10 @@ class ProceduralRepository:
             if status is not None:
                 stmt = stmt.where(col(DBProceduralEntry.status) == DBProceduralStatus(status))
             entry = (await session.exec(stmt.limit(1))).first()
-        if entry is None:
-            return None
-        return self._to_dto(entry)
+            if entry is None:
+                return None
+            sources = await self._load_sources(session, entry.id)
+        return self._to_dto(entry, sources=sources)
 
     async def update(
         self,
@@ -688,12 +695,15 @@ class ProceduralRepository:
                 # "I learned something new" loop writes through
                 # upsert without dropping the version ledger.
                 #
-                # Status is preserved unless the caller explicitly
-                # promotes (draft → published) — deprecated stays
-                # deprecated even when a stale upsert payload carries
-                # ``status='draft'`` (a regression that would let a
-                # noisy caller accidentally undelete a superseded
-                # entry).
+                # Status transitions through upsert are PROMOTION-ONLY
+                # (draft → published). A non-draft entry KEEPS its status:
+                # a re-derivation that re-sends the default
+                # ``status='draft'`` payload must neither demote a curated
+                # PUBLISHED entry back to draft — which silently reverted
+                # activated procedures/strategies: the activate verdict stuck
+                # on the lint finding, but the next derivation sweep re-drafted
+                # the entry — nor undelete a DEPRECATED one. Lifecycle changes
+                # on a non-draft entry go through PATCH / :meth:`update`.
                 pre_status = existing.status
                 existing.title = payload.title
                 existing.summary = payload.summary
@@ -706,7 +716,7 @@ class ProceduralRepository:
                 existing.tags = payload.tags
                 existing.extra_metadata = payload.extra_metadata
                 existing.skill_hints = payload.skill_hints
-                if pre_status != DBProceduralStatus.DEPRECATED:
+                if pre_status == DBProceduralStatus.DRAFT:
                     existing.status = DBProceduralStatus(payload.status)
                 if (
                     existing.status == DBProceduralStatus.PUBLISHED
@@ -998,14 +1008,31 @@ class ProceduralRepository:
     ) -> list[ProceduralSourceDTO]:
         """Return source edges attached to the given entry."""
         async with self._metastore.session() as session:
-            stmt = (
-                select(DBProceduralSource)
-                .where(col(DBProceduralSource.entry_id) == entry_id)
-                .order_by(col(DBProceduralSource.created_at).asc())
-            )
-            if role is not None:
-                stmt = stmt.where(col(DBProceduralSource.role) == DBProceduralSourceRole(role))
-            rows = (await session.exec(stmt)).all()
+            return await self._load_sources(session, entry_id, role=role)
+
+    async def _load_sources(
+        self,
+        session: AsyncSession,
+        entry_id: UUID,
+        *,
+        role: str | None = None,
+    ) -> list[ProceduralSourceDTO]:
+        """Load an entry's source edges within an already-open session.
+
+        Single-entry reads (:meth:`get`, :meth:`get_by_identity`) surface
+        provenance/evidence edges so a viewer can see what the entry was
+        distilled from. Ranked list/search paths deliberately skip this — one
+        extra query per row is not worth it for a result set — so their DTO
+        ``sources`` stays the empty default.
+        """
+        stmt = (
+            select(DBProceduralSource)
+            .where(col(DBProceduralSource.entry_id) == entry_id)
+            .order_by(col(DBProceduralSource.created_at).asc())
+        )
+        if role is not None:
+            stmt = stmt.where(col(DBProceduralSource.role) == DBProceduralSourceRole(role))
+        rows = (await session.exec(stmt)).all()
         return [self._source_to_dto(r) for r in rows]
 
     # ------------------------------------------------------------------
@@ -1320,7 +1347,11 @@ class ProceduralRepository:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _to_dto(entry: DBProceduralEntry) -> ProceduralEntryDTO:
+    def _to_dto(
+        entry: DBProceduralEntry,
+        *,
+        sources: list[ProceduralSourceDTO] | None = None,
+    ) -> ProceduralEntryDTO:
         # ``kind``/``status``/``origin`` are typed as Python enums on
         # the SQLModel column annotation but stored as ``String`` in
         # the DB. After ``await session.refresh(entry)`` the values
@@ -1357,6 +1388,7 @@ class ProceduralRepository:
             published_at=entry.published_at,
             created_at=entry.created_at,
             updated_at=entry.updated_at,
+            sources=sources or [],
         )
 
     @staticmethod
