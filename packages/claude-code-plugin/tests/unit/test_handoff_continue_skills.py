@@ -85,3 +85,44 @@ def test_continue_is_browse_then_load_not_auto_brief() -> None:
     assert 'next' in body.lower() and 'ask' in body.lower(), (
         '/continue must ask what the next steps are after summarizing'
     )
+
+
+def test_continue_fits_askuser_question_option_cap() -> None:
+    """AskUserQuestion caps a question at 4 options. The skill must reserve one
+    slot for `more` and so present at most 3 real handoffs — never claim to show
+    5. Pins the fix for the error+retry round trip the old `limit=5` caused."""
+    body = _read_skill('continue')
+    assert 'limit=4' in body, '/continue must fetch limit=4 (3 notes + more = 4 options)'
+    assert '3 most recent' in body.lower(), '/continue must state it shows the 3 most recent, not 5'
+    assert '4 options' in body, '/continue must document the AskUserQuestion 4-option cap'
+
+
+def test_continue_loads_surgically_in_tiers_not_full_fetch() -> None:
+    """The default summary must be built from list_notes output (topic +
+    key_points), escalating to a surgical section fetch only when thin. Guards
+    against a regression to 'read every selected handoff' unconditionally."""
+    body = _read_skill('continue')
+    # Tier 0 default: summarize from the list output already in hand.
+    assert 'key_points' in body, (
+        '/continue must summarize from list_notes key_points by default (Tier 0)'
+    )
+    assert 'Tier 0' in body and 'Tier 1' in body, '/continue must define the tiered load design'
+    # Escalation is on-demand, not unconditional.
+    assert 'escalate' in body.lower() or 'on demand' in body.lower(), (
+        '/continue must escalate the deep fetch on demand, not always'
+    )
+    # The old unconditional-full-fetch instruction must be gone.
+    assert 'read every selected handoff' not in body.lower(), (
+        '/continue must not instruct an unconditional full read of every selected handoff'
+    )
+    # Tier 1 fetches only load-bearing sections, not all of them.
+    assert 'Summary' in body and 'Next steps' in body, (
+        '/continue Tier 1 must name the Summary + Next steps sections to fetch'
+    )
+
+
+def test_continue_more_handler_dedups_client_side() -> None:
+    """memex_list_notes exposes no offset; the `more` handler must dedup against
+    already-shown IDs rather than re-presenting the same first notes."""
+    body = _read_skill('continue')
+    assert 'dedup' in body.lower(), '/continue `more` handler must dedup client-side'

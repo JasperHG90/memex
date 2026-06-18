@@ -17,18 +17,21 @@ Find the current project's tag (`project:<id>`) in the auto-injected metadata bl
 ## 2. List the handoffs
 
 ```text
-memex_list_notes(tags=["handoff", "project:<id>"], date_by="created_at", limit=5, slim=False)
+memex_list_notes(tags=["handoff", "project:<id>"], date_by="created_at", limit=4, slim=False)
 ```
 
-`slim=False` keeps each note's `title`, `description`, and timestamp. If the project-scoped list is empty, retry with `tags=["handoff"]` so a first-time-in-this-repo `/continue` still finds cross-project handoffs. If there are none at all, say so plainly and stop — suggest `/handoff` to start leaving them.
+`slim=False` keeps each note's `title`, `description`, `timestamp`, and extracted `summaries` (`topic` + `key_points`) — these key_points are rich enough to summarize from, so do NOT auto-fetch full note bodies here (see §4 for when to escalate).
 
-Present the results as a **multi-select** question using `AskUserQuestion`. The user must be able to select several notes at once. Set the question's `multiSelect` flag to `true` — `kind: "multi_select"` alone is not enough:
+If the project-scoped list is empty, retry with `tags=["handoff"]` so a first-time-in-this-repo `/continue` still finds cross-project handoffs. If there are none at all, say so plainly and stop — suggest `/handoff` to start leaving them.
+
+Present the results as a **multi-select** question using `AskUserQuestion`. The user must be able to select several notes at once. Set the question's `multiSelect` flag to `true` — `kind: "multi_select"` alone is not enough.
+
+**`AskUserQuestion` caps a single question at 4 options total.** Reserve one slot for the `more` affordance, so present **the 3 most recent handoffs + `more`** — never attempt to show more than 3 real notes in one question.
 
 ```json
 {
-  "header": "Recent handoff notes",
-  "question": "Which handoff(s) do you want to continue?",
-  "kind": "multi_select",
+  "header": "Recent handoffs",
+  "question": "Which handoff(s) do you want to continue? (pick any number)",
   "multiSelect": true,
   "options": [
     {
@@ -37,7 +40,23 @@ Present the results as a **multi-select** question using `AskUserQuestion`. The 
       "preview": "<note description + status + next step>\n\n<date>",
       "value": "<note_id>"
     },
-    ...
+    {
+      "label": "2. <short note title>",
+      "description": "<status / next step one-liner>",
+      "preview": "<note description + status + next step>\n\n<date>",
+      "value": "<note_id>"
+    },
+    {
+      "label": "3. <short note title>",
+      "description": "<status / next step one-liner>",
+      "preview": "<note description + status + next step>\n\n<date>",
+      "value": "<note_id>"
+    },
+    {
+      "label": "more",
+      "description": "Load more handoffs",
+      "value": "more"
+    }
   ]
 }
 ```
@@ -49,31 +68,31 @@ Guidelines for the options:
 - `preview` — the note `description` plus any obvious status/next-step signal, followed by the date reference. Keep it concise so the side-by-side layout stays readable.
 - `value` — the note `id` returned by `memex_list_notes`.
 
-Always append one extra option:
-
-```json
-{
-  "label": "more",
-  "description": "Load more handoffs",
-  "value": "more"
-}
-```
-
 Do not dump the list as plain text or ask the user to type numbers manually. The selection UI is the required presentation.
 
 ## 3. Handle the user's choice
 
-`AskUserQuestion` with `multi_select` returns a list of selected `value`s.
+`AskUserQuestion` with `multiSelect: true` returns a list of selected `value`s.
 
-- **One or more note IDs** — read **every** selected handoff, not just the first one. If a note is over ~500 tokens, paginate via `memex_get_page_indices` + `memex_get_nodes` rather than `memex_read_note` (which errors above that cap).
-- **`more` selected** — call `memex_list_notes` again with the same tags and a larger `limit` (e.g., 10) and re-present the extended list as a fresh `AskUserQuestion`. Do not read any note yet; wait for a selection. If `more` is selected together with note IDs, treat it as "load more first" — ignore the IDs and reload.
+- **One or more note IDs** — proceed to §4 with the selected notes. Do NOT blindly deep-fetch every selected note; load surgically (see §4).
+- **`more` selected** — re-call `memex_list_notes` with the same tags and a larger `limit` (e.g. `limit=10`). The tool exposes no `offset` parameter, so it will return the same first notes again — **dedup client-side against the note IDs you have already shown** and present only the next 3 unseen as a fresh `AskUserQuestion` (still 3 notes + `more`). Do not read any note yet; wait for a selection. If `more` is selected together with note IDs, treat it as "load more first" — ignore the IDs and reload.
 - **Nothing selected** — repeat the same `AskUserQuestion` once. If the user still selects nothing, stop and ask whether to broaden the scope or create a fresh `/handoff`.
 - **No relevant handoffs** — stop and ask whether to broaden the scope or create a fresh `/handoff`.
 - **Ambiguous or no reply** — repeat the `AskUserQuestion`. Do not guess which handoff to load.
 
 ## 4. Summarize the selected handoffs
 
-Once the user has selected one or more handoffs, read them and produce a concise combined summary:
+Load **surgically**, in tiers — do not auto-fetch full note bodies. The default brief is built from what `memex_list_notes(slim=False)` already returned (each note's `topic` + `key_points`), escalating to a full fetch only when needed.
+
+**Tier 0 — list output (default):** the `summaries[].topic` and `summaries[].key_points` from the §2 `list_notes` call are usually enough to state what each handoff is about, where it stands, and the open items. Summarize directly from them. No extra tool call.
+
+**Tier 1 — surgical section fetch (escalate when Tier 0 is thin):** if a selected note's `key_points` are too sparse to state what it is / where it stands / the next step, escalate **that note only**. Call `memex_get_page_indices(note_ids=[...], depth=1)` once for all notes being escalated (batched), then `memex_get_nodes(node_ids=[...])` for **only the `Summary` and `Next steps` node IDs** (batched). Skip `Where it stands` (Tier 0 already covers it) and `Key references` (citation-only). Do not fetch every section of every note — pick the load-bearing sections per note.
+
+**Tier 2 — full fetch (on demand):** only when the user asks to act on a specific file/commit/reference. Fetch the `Key references` (or remaining) nodes for that note then.
+
+Why tiered: the two-step `get_page_indices` → `get_nodes` protocol is inherent to the paginate-over-500 design and can't be collapsed, so defaulting to Tier 0 keeps the common path to `list → select → summarize` and reserves the deep fetch for when it earns its keep.
+
+Produce a concise combined summary:
 
 - What each piece of work was about.
 - Where each stands.
