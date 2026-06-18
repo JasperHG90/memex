@@ -267,6 +267,33 @@ async def test_upsert_preserves_published_status(metastore):
 
 
 @pytest.mark.asyncio
+async def test_upsert_does_not_promote_draft_to_published(metastore):
+    """A rewrite upsert must NOT flip a draft to published.
+
+    Promotion is the §18.6.1 lint-activation gate's job — letting upsert do it
+    would let a re-derivation (or any noisy caller) bypass human confirmation.
+    Upsert rewrites content only; lifecycle goes through PATCH/update.
+    """
+    async with metastore.session() as session:
+        vault_id = await _create_vault(session, 'proc_no_promote')
+
+    repo = _repo(metastore)
+    draft = await repo.upsert_by_identity(
+        _entry_payload(vault_id=vault_id, title='stays-draft', body='v1', status='draft')
+    )
+    assert draft.status == 'draft'
+
+    rewritten = await repo.upsert_by_identity(
+        _entry_payload(vault_id=vault_id, title='still-draft', body='v2', status='published')
+    )
+    assert rewritten.status == 'draft', (
+        f'upsert must not promote draft→published, got {rewritten.status!r}'
+    )
+    assert rewritten.body == 'v2', 'content still updates'
+    assert rewritten.published_at is None, 'no published_at on a non-promotion'
+
+
+@pytest.mark.asyncio
 async def test_get_surfaces_source_edges(metastore):
     """``get`` populates the DTO ``sources`` so a viewer sees provenance.
 

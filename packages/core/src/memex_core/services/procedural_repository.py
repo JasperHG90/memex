@@ -695,16 +695,18 @@ class ProceduralRepository:
                 # "I learned something new" loop writes through
                 # upsert without dropping the version ledger.
                 #
-                # Status transitions through upsert are PROMOTION-ONLY
-                # (draft → published). A non-draft entry KEEPS its status:
-                # a re-derivation that re-sends the default
-                # ``status='draft'`` payload must neither demote a curated
-                # PUBLISHED entry back to draft — which silently reverted
-                # activated procedures/strategies: the activate verdict stuck
-                # on the lint finding, but the next derivation sweep re-drafted
-                # the entry — nor undelete a DEPRECATED one. Lifecycle changes
-                # on a non-draft entry go through PATCH / :meth:`update`.
-                pre_status = existing.status
+                # Status is PRESERVED on every rewrite — upsert updates content
+                # only, never lifecycle. It must not demote a curated PUBLISHED
+                # entry to draft (the bug that silently reverted activated
+                # procedures/strategies on the next derivation sweep: the
+                # activate verdict stuck on the lint finding, but a re-derivation
+                # re-drafted the entry), not undelete a DEPRECATED one, AND not
+                # promote a draft → published (promotion is the §18.6.1
+                # lint-activation gate's job alone — letting upsert do it would
+                # let a re-derivation bypass human confirmation). EVERY lifecycle
+                # change goes through PATCH / :meth:`update`; callers that need
+                # to (re)assert a status after an upsert PATCH explicitly (the
+                # eval seed does exactly this).
                 existing.title = payload.title
                 existing.summary = payload.summary
                 existing.body = payload.body
@@ -716,14 +718,8 @@ class ProceduralRepository:
                 existing.tags = payload.tags
                 existing.extra_metadata = payload.extra_metadata
                 existing.skill_hints = payload.skill_hints
-                if pre_status == DBProceduralStatus.DRAFT:
-                    existing.status = DBProceduralStatus(payload.status)
-                if (
-                    existing.status == DBProceduralStatus.PUBLISHED
-                    and pre_status != DBProceduralStatus.PUBLISHED
-                    and existing.published_at is None
-                ):
-                    existing.published_at = datetime.now(timezone.utc)
+                # NB: ``existing.status`` / ``published_at`` are intentionally
+                # untouched here — see the preservation note above.
                 existing.updated_at = datetime.now(timezone.utc)
                 session.add(existing)
                 await session.flush()

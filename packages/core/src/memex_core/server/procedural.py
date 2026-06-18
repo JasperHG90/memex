@@ -688,8 +688,10 @@ async def procedural_upsert(
     """Idempotent write on the identity anchor.
 
     Same anchor → UPDATE (new version row); new anchor → INSERT.
-    Status is preserved (deprecated stays deprecated). For partial
-    in-place edits use ``PATCH /procedural/{entry_id}``.
+    On UPDATE the lifecycle status is PRESERVED — upsert rewrites content
+    only and never demotes, resurrects, or promotes. Every status change
+    (including draft → published) goes through ``PATCH /procedural/{entry_id}``.
+    A new anchor is INSERTed with the payload's status as-is.
     """
     await _authz_vault(auth, api, request.vault_id, permission=Permission.WRITE)
     with trace_span(

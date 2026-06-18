@@ -237,7 +237,12 @@ class ProceduralEntryDTO(BaseModel):
     created_at: dt.datetime
     updated_at: dt.datetime
 
-    # Lineage / pointer fields surfaced for agent readability.
+    # Lineage / pointer fields surfaced for agent readability. NOTE: only the
+    # single-entry reads (``get`` / ``get_by_identity``) populate ``sources``;
+    # ranked/bulk paths (``search``, ``list_by_status``, ``get_many``) leave it
+    # ``[]`` to avoid a per-row query — so an empty ``sources`` from a list
+    # result means "not loaded", not "no provenance". ``pins`` are populated by
+    # the pin/briefing surfaces, not these reads.
     sources: list[ProceduralSourceDTO] = Field(default_factory=list)
     pins: list[ProceduralPinDTO] = Field(default_factory=list)
 

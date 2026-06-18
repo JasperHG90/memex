@@ -391,7 +391,21 @@ class ProceduralDerivationService:
         """Idempotently attach ``provenance`` edges from ``entry_id`` to each
         source entry. Skips edges that already exist so a re-derivation sweep
         does not accumulate duplicates (``procedural_sources`` carries no
-        unique constraint on ``(entry_id, source_entry_id, role)``)."""
+        unique constraint on ``(entry_id, source_entry_id, role)``).
+
+        Idempotency precondition: the read-then-add-missing is NOT internally
+        atomic, so it relies on derivation running serially — the scheduler
+        gates the worker behind a single Postgres advisory lock and
+        ``process_pending`` processes claims one at a time. If derivation is
+        ever parallelised, add a partial unique index on
+        ``(entry_id, source_entry_id, role)`` + ``ON CONFLICT DO NOTHING`` to
+        make this structural rather than topology-dependent.
+
+        Edges are an append-only audit trail: when a source procedure is later
+        deprecated it drops out of ``_gather_sibling_procedures`` (so the
+        strategy's *content* stops reflecting it) but its provenance edge is
+        intentionally retained as historical support — mirroring the
+        stale-evidence-stays-cited rule for mental-model observations."""
         existing = await self._api._procedural_repo.list_sources_for_entry(
             entry_id, role='provenance'
         )
