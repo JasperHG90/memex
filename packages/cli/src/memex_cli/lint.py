@@ -660,7 +660,7 @@ async def lint_review_cmd(
             max=500,
             help='Maximum number of findings to load into the cockpit.',
         ),
-    ] = 50,
+    ] = 200,
     use_tui: Annotated[
         bool,
         typer.Option(

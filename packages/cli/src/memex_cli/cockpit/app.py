@@ -316,8 +316,10 @@ class HelpScreen(ModalScreen[None]):
             '  [bold]Enter[/bold]       open proposal in REVIEW mode\n'
             '  [bold]d[/bold]           drill-down into unit DETAIL mode\n'
             '  [bold]Space[/bold]       toggle multi-select checkbox\n'
+            '  [bold]a[/bold]           select all (filtered) findings\n'
             '  [bold]Shift+↑/↓[/bold]  toggle-select + move cursor\n'
             '  [bold]Esc[/bold]         deselect all\n'
+            '  [bold]/[/bold]           filter the queue by rule (Esc/All rules clears)\n'
             '  [bold]F5[/bold]          refresh queue from the server\n'
             '  [bold]f[/bold]           toggle flag on highlighted finding\n'
             '  [bold]r[/bold]           reverse a previously-resolved finding\n'
@@ -424,6 +426,53 @@ class ConfirmIrreversibleScreen(ModalScreen[bool]):
         )
 
 
+class _FilterItem(ListItem):
+    """A row in the rule filter picker. ``rule`` is None for the 'All rules' entry."""
+
+    def __init__(self, rule: str | None, label: str) -> None:
+        super().__init__(Label(label))
+        self.rule = rule
+
+
+class FilterScreen(ModalScreen[tuple[str | None] | None]):
+    """Pick a rule_name to filter the queue by (or 'All rules' to clear).
+
+    Dismisses with a 1-tuple ``(rule_or_None,)`` on selection, or ``None`` on
+    cancel — the tuple wrapper lets the caller distinguish "cleared to All"
+    (``(None,)``) from "cancelled" (``None``).
+    """
+
+    BINDINGS = [
+        Binding('escape', 'dismiss(None)', 'Cancel'),
+        Binding('q', 'dismiss(None)', 'Cancel'),
+    ]
+
+    def __init__(self, counts: list[tuple[str, int]], total: int, active: str | None) -> None:
+        super().__init__()
+        self._counts = counts
+        self._total = total
+        self._active = active
+
+    def compose(self) -> ComposeResult:
+        items: list[ListItem] = [_FilterItem(None, f'All rules ({self._total})')]
+        for rule, count in self._counts:
+            mark = '• ' if rule == self._active else '  '
+            items.append(_FilterItem(rule, f'{mark}{rule} ({count})'))
+        yield Vertical(
+            Label('[bold]Filter by rule[/bold]  [dim](Enter select · Esc cancel)[/dim]'),
+            ListView(*items, id='filter-list'),
+            id='filter-modal',
+        )
+
+    def on_mount(self) -> None:
+        self.query_one('#filter-list', ListView).focus()
+
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        item = event.item
+        if isinstance(item, _FilterItem):
+            self.dismiss((item.rule,))
+
+
 # ---------------------------------------------------------------------------
 # Main app
 # ---------------------------------------------------------------------------
@@ -485,6 +534,8 @@ class ProposalCockpitApp(App):
         Binding('f5', 'refresh', 'Refresh', key_display='F5'),
         Binding('f', 'flag', 'Flag'),
         Binding('r', 'reverse', 'Reverse'),
+        Binding('slash', 'filter_rules', 'Filter', key_display='/'),
+        Binding('a', 'select_all', 'Select all'),
     ]
 
     proposals: reactive[list[CockpitProposal]] = reactive(list, init=False)
@@ -494,6 +545,10 @@ class ProposalCockpitApp(App):
         super().__init__()
         self._controller = controller
         self._limit = limit
+        # Full fetched set (unfiltered); ``proposals`` is the displayed (filtered)
+        # view derived from it. ``_rule_filter`` is the active rule_name, None = all.
+        self._all_proposals: list[CockpitProposal] = []
+        self._rule_filter: str | None = None
         self._pending_note: str | None = None
         self._selected_option: CockpitOption | None = None
         self._batch_targets: list[CockpitProposal] = []
@@ -595,7 +650,9 @@ class ProposalCockpitApp(App):
         count = len(self.proposals)
         selected = self._count_selected()
         mode_label = self.mode.upper()
-        if self.mode == 'batch':
+        if self.mode == 'list' and selected:
+            mode_label = f'LIST ({selected} selected)'
+        elif self.mode == 'batch':
             mode_label = f'BATCH ({selected} selected)'
         elif self.mode == 'detail':
             n = len(self._detail_unit_ids)
@@ -609,7 +666,10 @@ class ProposalCockpitApp(App):
         footer = self.query_one(Footer)
         footer.refresh()
         hints = {
-            'list': '[d] Detail  [Enter] Review  [f] Flag  [F5] Refresh  [?] Help  [q] Quit',
+            'list': (
+                '[/] Filter  [a] Select all  [d] Detail  [Enter] Review  [f] Flag  '
+                '[F5] Refresh  [?] Help  [q] Quit'
+            ),
             'review': '[↑↓] Navigate  [Enter] Confirm  [n] Note  [Esc] Back  [q] Quit',
             'note': '[Enter] Submit  [Shift+Enter] Newline  [Esc] Cancel',
             'detail': '[s] View note  [Tab] Cycle units  [Esc] Back  [q] Quit',
@@ -649,22 +709,56 @@ class ProposalCockpitApp(App):
             # would overwrite our retry hint with the normal LIST hint.
             queue = self.query_one('#queue-list', ListView)
             queue.clear()
+            self._all_proposals = []
             self.proposals = []
             self.mode = 'list'
             self._show_load_error(exc)
             return
-        self.proposals = proposals
+        self._all_proposals = proposals
+        # Drop a filter whose rule no longer exists after the refresh, so the
+        # user isn't stranded on an empty filtered view.
+        if self._rule_filter is not None and all(
+            p.rule_name != self._rule_filter for p in proposals
+        ):
+            self._rule_filter = None
+        self._apply_filter_and_render()
+        self.mode = 'list'
+
+    def _apply_filter_and_render(self) -> None:
+        """Rebuild ``#queue-list`` from ``_all_proposals`` under the active rule
+        filter. ``proposals`` stays the displayed (filtered) list so the
+        ListView-index helpers keep working. Rebuilding drops checkbox state
+        (it lives on the queue items), so changing the filter clears any
+        multi-select — intentional, and covered by a test.
+        """
+        if self._rule_filter is None:
+            self.proposals = list(self._all_proposals)
+        else:
+            self.proposals = [p for p in self._all_proposals if p.rule_name == self._rule_filter]
         queue = self.query_one('#queue-list', ListView)
         queue.clear()
-        for proposal in proposals:
+        for proposal in self.proposals:
             queue.append(_ProposalQueueItem(proposal))
-        self.query_one('#queue-label', Label).update(f'[bold]Pending ({len(proposals)})[/bold]')
-        if proposals:
+        self._update_queue_label()
+        # Mirror the empty/non-empty branch explicitly: setting ``index`` to an
+        # already-zero value does not reliably emit Highlighted, so the detail
+        # pane would otherwise go stale after filtering.
+        if self.proposals:
             queue.index = 0
-            self._show_proposal_preview(proposals[0])
+            self._show_proposal_preview(self.proposals[0])
         else:
             self._show_empty_queue()
-        self.mode = 'list'
+
+    def _update_queue_label(self) -> None:
+        label = self.query_one('#queue-label', Label)
+        loaded = len(self._all_proposals)
+        if self._rule_filter is None:
+            label.update(f'[bold]Pending ({loaded})[/bold]')
+        else:
+            label.update(
+                f'[bold]Pending ({len(self.proposals)}/{loaded})[/bold] '
+                f'[dim]· {_esc(self._rule_filter)}[/dim]'
+            )
 
     def _show_load_error(self, exc: Exception) -> None:
         if isinstance(exc, (TimeoutError, asyncio.TimeoutError)):
@@ -1975,6 +2069,34 @@ class ProposalCockpitApp(App):
     def action_flag(self) -> None:
         if self.mode == 'list':
             self._toggle_flag_current()
+
+    def action_filter_rules(self) -> None:
+        if self.mode == 'list':
+            self.run_worker(self._filter_rules_async(), exclusive=True, name='filter_rules')
+
+    async def _filter_rules_async(self) -> None:
+        counts: dict[str, int] = {}
+        for p in self._all_proposals:
+            counts[p.rule_name] = counts.get(p.rule_name, 0) + 1
+        if not counts:
+            return
+        result = await self.push_screen_wait(
+            FilterScreen(sorted(counts.items()), len(self._all_proposals), self._rule_filter)
+        )
+        if result is None:
+            return  # cancelled — leave the current filter untouched
+        (rule,) = result
+        self._rule_filter = rule
+        self._apply_filter_and_render()
+
+    def action_select_all(self) -> None:
+        if self.mode != 'list':
+            return
+        queue = self.query_one('#queue-list', ListView)
+        for child in queue.children:
+            if isinstance(child, _ProposalQueueItem) and not child.checked:
+                child.toggle()
+        self._update_subtitle()
 
     def action_reverse(self) -> None:
         self.run_worker(self._reverse_async(), exclusive=True, name='reverse')

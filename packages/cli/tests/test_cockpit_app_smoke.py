@@ -12,9 +12,9 @@ from uuid import uuid4
 
 import pytest
 
-from textual.widgets import Static
+from textual.widgets import ListView, Static
 
-from memex_cli.cockpit.app import ProposalCockpitApp, _ProposalQueueItem
+from memex_cli.cockpit.app import FilterScreen, ProposalCockpitApp, _ProposalQueueItem
 from memex_cli.cockpit.controller import CockpitController, CockpitProposal
 
 
@@ -693,3 +693,162 @@ async def test_batch_flag_counts_success_and_failure() -> None:
         status = str(app.query_one('#status-bar', Static).render())
         assert '2 flagged' in status
         assert '1 failed' in status
+
+
+# ---------------------------------------------------------------------------
+# Rule-name filter + select-all
+# ---------------------------------------------------------------------------
+
+
+def _mixed_findings() -> list[dict[str, Any]]:
+    # Sorted distinct rules: cold_low_mw_unit, llm_schema_drift,
+    # llm_semantic_contradiction.
+    return [
+        _finding(rule='llm_schema_drift'),
+        _finding(rule='llm_schema_drift'),
+        _finding(rule='llm_semantic_contradiction'),
+        _finding(rule='cold_low_mw_unit'),
+    ]
+
+
+async def _open_filter_and_pick(pilot: Any, app: ProposalCockpitApp, index: int) -> None:
+    """Open the filter picker and select the entry at ``index`` (0 = All rules)."""
+    await pilot.press('slash')
+    await pilot.pause()
+    assert isinstance(app.screen, FilterScreen)
+    app.screen.query_one('#filter-list', ListView).index = index
+    await pilot.press('enter')
+    await app.workers.wait_for_complete()
+    await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_rule_filter_narrows_and_clears() -> None:
+    """`/` -> pick a rule narrows the queue; 'All rules' restores it."""
+    client = _FakeClient(_mixed_findings())
+    app = ProposalCockpitApp(CockpitController(client), limit=50)
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        assert len(app.proposals) == 4
+        assert len(app._all_proposals) == 4
+
+        # Entry 2 in the picker = llm_schema_drift (after 'All rules' at 0,
+        # cold_low_mw_unit at 1).
+        await _open_filter_and_pick(pilot, app, 2)
+        assert app._rule_filter == 'llm_schema_drift'
+        assert len(app.proposals) == 2
+        assert all(p.rule_name == 'llm_schema_drift' for p in app.proposals)
+        # Label reflects shown/loaded under a filter.
+        label = str(app.query_one('#queue-label').render())
+        assert '2/4' in label and 'llm_schema_drift' in label
+
+        # _current_proposal indexes the filtered list correctly.
+        assert app._current_proposal() is app.proposals[0]
+
+        # Select 'All rules' (entry 0) -> full list returns.
+        await _open_filter_and_pick(pilot, app, 0)
+        assert app._rule_filter is None
+        assert len(app.proposals) == 4
+
+
+@pytest.mark.asyncio
+async def test_select_all_respects_filter_and_filter_clears_selection() -> None:
+    """'a' selects every filtered row; changing the filter drops the selection."""
+    client = _FakeClient(_mixed_findings())
+    app = ProposalCockpitApp(CockpitController(client), limit=50)
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await _open_filter_and_pick(pilot, app, 2)  # llm_schema_drift -> 2 rows
+        assert len(app.proposals) == 2
+
+        await pilot.press('a')
+        await pilot.pause()
+        assert app._count_selected() == 2
+
+        # Switching the filter rebuilds the queue and clears the checkboxes.
+        await _open_filter_and_pick(pilot, app, 0)  # All rules
+        assert app._count_selected() == 0
+
+
+@pytest.mark.asyncio
+async def test_filter_survives_refresh_then_resets_when_rule_gone() -> None:
+    """F5 keeps a still-present filter; resets to All when the rule vanishes."""
+    findings = _mixed_findings()
+    client = _FakeClient(findings)
+    app = ProposalCockpitApp(CockpitController(client), limit=50)
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await _open_filter_and_pick(pilot, app, 2)  # llm_schema_drift
+        assert app._rule_filter == 'llm_schema_drift'
+
+        # Refresh with the rule still present -> filter retained.
+        await pilot.press('f5')
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app._rule_filter == 'llm_schema_drift'
+        assert len(app.proposals) == 2
+
+        # Drop the filtered rule from the backing data, refresh -> filter resets.
+        client._findings = [f for f in findings if f['rule_name'] != 'llm_schema_drift']
+        await pilot.press('f5')
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+        assert app._rule_filter is None
+        assert len(app.proposals) == 2  # contradiction + cold_low_mw_unit
+
+
+@pytest.mark.asyncio
+async def test_filter_select_all_batch_dismiss_targets_exactly_filtered_set() -> None:
+    """Headline flow: / -> pick rule -> a -> Enter (batch) -> dismiss the filtered set."""
+    client = _FakeClient(_mixed_findings())  # 2 schema_drift + contradiction + cold
+    app = ProposalCockpitApp(CockpitController(client), limit=50)
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await _open_filter_and_pick(pilot, app, 2)  # llm_schema_drift
+        schema_ids = {p.finding_id for p in app.proposals}
+        assert len(schema_ids) == 2
+
+        await pilot.press('a')  # select all (filtered)
+        await pilot.pause()
+        assert app._count_selected() == 2
+        # LIST subtitle echoes the selection count.
+        assert '2 selected' in app.sub_title
+
+        await pilot.press('enter')  # >1 selected -> BATCH over the filtered rows
+        await pilot.pause()
+        assert app.mode == 'batch'
+        assert {p.finding_id for p in app._batch_targets} == schema_ids
+
+        from memex_cli.cockpit.controller import DISMISS_OPTION
+
+        await app._submit_batch_async(app._batch_targets, DISMISS_OPTION, None)
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+    # Exactly the filtered set was dismissed — no contradiction/cold rows touched.
+    assert {d['finding_id'] for d in client.dismisses} == schema_ids
+
+
+@pytest.mark.asyncio
+async def test_select_all_key_is_inert_in_collapse_mode() -> None:
+    """'a' applies the merge in COLLAPSE mode; it must NOT trigger select-all."""
+    client = _FakeClient([_entity_collapse_finding()])
+    app = ProposalCockpitApp(CockpitController(client), limit=5)
+
+    async with app.run_test(size=(120, 40)) as pilot:
+        await pilot.pause()
+        await pilot.press('enter')  # entity_collapse_cluster -> COLLAPSE mode
+        await pilot.pause()
+        assert app.mode == 'collapse'
+
+        await pilot.press('a')  # apply merge — not select-all
+        await app.workers.wait_for_complete()
+        await pilot.pause()
+
+    # The collapse 'a' resolved the finding (an apply), and select-all never ran
+    # (it is mode-guarded to 'list'); the resolve fired, not a no-op.
+    assert client.resolves, "'a' in collapse mode should apply the merge"
