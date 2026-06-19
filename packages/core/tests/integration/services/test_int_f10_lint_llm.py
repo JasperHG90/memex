@@ -772,3 +772,116 @@ async def test_lint_llm_quota_rejects_negative_count(
         )
         await session.commit()
     await session.rollback()
+
+
+@pytest.mark.asyncio
+async def test_tick_candidates_dedup_one_unit_per_note(
+    session: AsyncSession, metastore, memex_config, filestore
+) -> None:
+    """A note with several extracted units yields at most ONE candidate per
+    tick — prevents a burst of near-identical findings from one document."""
+    svc = _service(metastore, memex_config, filestore)
+    vault_id = await _make_vault(session)
+    note_id = uuid4()
+    await session.execute(
+        text(
+            'INSERT INTO notes (id, vault_id, content_hash, title) '
+            'VALUES (:id, :vid, :hash, :title)'
+        ),
+        {'id': str(note_id), 'vid': str(vault_id), 'hash': uuid4().hex, 'title': 'multi-unit note'},
+    )
+    unit_ids = []
+    for i in range(3):
+        uid = uuid4()
+        unit_ids.append(uid)
+        await session.execute(
+            text(
+                'INSERT INTO memory_units '
+                '(id, note_id, vault_id, text, fact_type, status, embedding, event_date) '
+                "VALUES (:id, :nid, :vid, :text, 'observation', 'active', :emb, :ed)"
+            ),
+            {
+                'id': str(uid),
+                'nid': str(note_id),
+                'vid': str(vault_id),
+                'text': f'multi-unit fact {i}',
+                'emb': str([0.1] * 384),
+                'ed': datetime.now(timezone.utc),
+            },
+        )
+    await session.commit()
+
+    candidates = await svc.list_tick_candidates(vault_id, limit=10, session=session)
+    picked = [u for u in unit_ids if u in candidates]
+    assert len(picked) == 1, f'expected one candidate for the shared note, got {picked}'
+
+
+@pytest.mark.asyncio
+async def test_tick_candidates_exclude_ephemeral_units(
+    session: AsyncSession, metastore, memex_config, filestore
+) -> None:
+    """intent_class='ephemeral' units are transient and not LLM-audited."""
+    svc = _service(metastore, memex_config, filestore)
+    vault_id = await _make_vault(session)
+    durable = await _seed_real_unit(session, vault_id)
+
+    eph_note, eph_unit = uuid4(), uuid4()
+    await session.execute(
+        text(
+            'INSERT INTO notes (id, vault_id, content_hash, title) '
+            'VALUES (:id, :vid, :hash, :title)'
+        ),
+        {'id': str(eph_note), 'vid': str(vault_id), 'hash': uuid4().hex, 'title': 'ephemeral note'},
+    )
+    await session.execute(
+        text(
+            'INSERT INTO memory_units '
+            '(id, note_id, vault_id, text, fact_type, status, embedding, event_date, intent_class) '
+            "VALUES (:id, :nid, :vid, :text, 'observation', 'active', :emb, :ed, 'ephemeral')"
+        ),
+        {
+            'id': str(eph_unit),
+            'nid': str(eph_note),
+            'vid': str(vault_id),
+            'text': 'transient scratch note',
+            'emb': str([0.1] * 384),
+            'ed': datetime.now(timezone.utc),
+        },
+    )
+    await session.commit()
+
+    candidates = await svc.list_tick_candidates(vault_id, limit=10, session=session)
+    assert durable in candidates
+    assert eph_unit not in candidates
+
+
+@pytest.mark.asyncio
+async def test_tick_candidates_keep_noteless_units_independent(
+    session: AsyncSession, metastore, memex_config, filestore
+) -> None:
+    """Units with no source note (note_id NULL) key on their own id under the
+    per-note dedup, so each stays an independent candidate (no false merge)."""
+    svc = _service(metastore, memex_config, filestore)
+    vault_id = await _make_vault(session)
+    ids = []
+    for i in range(2):
+        uid = uuid4()
+        ids.append(uid)
+        await session.execute(
+            text(
+                'INSERT INTO memory_units '
+                '(id, vault_id, text, fact_type, status, embedding, event_date) '
+                "VALUES (:id, :vid, :text, 'observation', 'active', :emb, :ed)"
+            ),
+            {
+                'id': str(uid),
+                'vid': str(vault_id),
+                'text': f'noteless fact {i}',
+                'emb': str([0.1] * 384),
+                'ed': datetime.now(timezone.utc),
+            },
+        )
+    await session.commit()
+
+    candidates = await svc.list_tick_candidates(vault_id, limit=10, session=session)
+    assert ids[0] in candidates and ids[1] in candidates

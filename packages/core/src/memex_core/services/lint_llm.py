@@ -307,22 +307,44 @@ _LOAD_UNIT_AND_TOP_PEER_TEXT_SQL = text("""
 """)
 
 
+# Per-tick candidate selection. Two noise guards beyond the base filters
+# (active / embedded / non-virtual / not-already-pending):
+#   * intent_class IS DISTINCT FROM 'ephemeral' — skip facts the extractor
+#     labelled ephemeral (short-lived tasks / deadlines / transient blockers).
+#     NARROW guard: the intent classifier marks only genuinely short-lived facts
+#     ephemeral and explicitly keeps decision/state facts durable, so this does
+#     NOT suppress session-transcript or reflection content (those are
+#     durable/permanent). It only spares units whose CONTENT decays.
+#   * DISTINCT ON (note) — audit at most ONE unit per source note per tick, so a
+#     single multi-unit note (an RFC / post-mortem with several extracted units)
+#     can't emit a burst of near-identical findings in one tick. The freshest
+#     non-pending unit per note is chosen. This does NOT guarantee sibling
+#     coverage: a freshest unit that clears the gate without producing a finding
+#     keeps winning the per-note pick and shadows its siblings. Accepted — the
+#     LLM lint is best-effort triage, not exhaustive per-unit auditing. Units
+#     with no note (note_id NULL) key on their own id, so each stays independent.
 _SELECT_TICK_CANDIDATES_SQL = text("""
-    SELECT m.id
-    FROM memory_units m
-    WHERE m.vault_id = :vault_id
-      AND m.status = 'active'
-      AND m.embedding IS NOT NULL
-      AND (m.metadata->>'virtual' IS NULL OR m.metadata->>'virtual' != 'true')
-      AND NOT EXISTS (
-          SELECT 1 FROM maintenance_proposals p
-          WHERE p.target_type = 'memory_unit'
-            AND p.target_id = m.id::text
-            AND p.vault_id = :vault_id
-            AND p.source = 'llm'
-            AND p.status = 'pending'
-      )
-    ORDER BY m.created_at DESC, m.id DESC
+    SELECT id
+    FROM (
+        SELECT DISTINCT ON (COALESCE(m.note_id, m.id))
+               m.id, m.created_at
+        FROM memory_units m
+        WHERE m.vault_id = :vault_id
+          AND m.status = 'active'
+          AND m.embedding IS NOT NULL
+          AND (m.metadata->>'virtual' IS NULL OR m.metadata->>'virtual' != 'true')
+          AND m.intent_class IS DISTINCT FROM 'ephemeral'
+          AND NOT EXISTS (
+              SELECT 1 FROM maintenance_proposals p
+              WHERE p.target_type = 'memory_unit'
+                AND p.target_id = m.id::text
+                AND p.vault_id = :vault_id
+                AND p.source = 'llm'
+                AND p.status = 'pending'
+          )
+        ORDER BY COALESCE(m.note_id, m.id), m.created_at DESC, m.id DESC
+    ) per_note
+    ORDER BY per_note.created_at DESC, per_note.id DESC
     LIMIT :limit
 """)
 
