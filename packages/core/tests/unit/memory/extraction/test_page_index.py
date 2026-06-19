@@ -231,6 +231,24 @@ class TestDetectMarkdownHeadersRegex:
         headers = detect_markdown_headers_regex(SAMPLE_MARKDOWN)
         assert [h.id for h in headers] == [0, 1, 2, 3]
 
+    def test_ignores_comment_lines_in_fenced_code(self) -> None:
+        text = (
+            '# Real Header\n\n'
+            'Some prose.\n\n'
+            '```bash\n'
+            '# 1. this is a shell comment, not a header\n'
+            'echo hi\n'
+            '```\n\n'
+            '## Another Real Header\n\n'
+            'More prose.\n'
+        )
+        headers = detect_markdown_headers_regex(text)
+        titles = [h.clean_title for h in headers]
+        assert titles == ['Real Header', 'Another Real Header']
+        # start_index must still point at the real header in the ORIGINAL text.
+        for h in headers:
+            assert text[h.start_index : h.start_index + len(h.exact_text)] == h.exact_text
+
 
 class TestAssessStructureQuality:
     def test_no_headers(self) -> None:
