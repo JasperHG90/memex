@@ -52,8 +52,11 @@ You will see a table with one row per finding. The columns are
 `target_id`, and `vault_id`.
 
 Filter to a single lint type with `--type quality` when the table is
-long. For winner proposals specifically, filter by rule name once you
-inspect the full row (the table itself does not filter by rule).
+long. The `findings` table itself does not filter by rule name — to
+triage one rule at a time (and bulk-dismiss it), use the interactive
+cockpit's rule filter: `memex lint review`, then `/` to pick a rule and
+`a` to select the whole filtered view. See
+[Review proposals in the maintenance cockpit](maintenance-cockpit.md#filter-the-queue-by-rule-and-bulk-clear).
 
 If you are driving Memex through MCP, call `memex_get_lint_flags`
 with the same shape: `vault_id`, `lint_type`, `status` (default

@@ -38,6 +38,30 @@ You will see a two-pane view:
 Move through the queue with `j` / `k` or the arrow keys. The detail
 pane redraws as the highlight changes.
 
+## Filter the queue by rule and bulk-clear
+
+When one rule is flooding the queue (a noisy `llm_schema_drift` or
+`llm_semantic_contradiction` run, say), narrow the view to it instead of
+scrolling past everything else. Press `/` to open the rule picker: it
+lists every rule present in the loaded queue with a count, plus an
+**All rules (N)** entry at the top. Pick a rule and the queue collapses
+to just those findings; the header switches from `Pending (N)` to
+`Pending (shown/loaded) · <rule>`. Pick **All rules** (or press `Esc` in
+the picker) to clear the filter.
+
+The filter is the front half of a bulk-clear. With a rule selected,
+press `a` to select every finding in the filtered view, then resolve or
+dismiss the selection in one batch (`Enter` opens the batch action menu;
+`dismiss` flips them all to `dismissed` in a single submit). This is the
+fastest way to drain a rule you have judged not worth acting on — filter
+to it, `a`, dismiss.
+
+Two honest limits. The filter runs over the findings **loaded** into the
+cockpit, so the counts read "loaded", not the true vault-wide total; the
+queue loads up to `--limit` rows (default 200, max 500). And changing the
+filter rebuilds the queue, which clears any multi-select — select, then
+act, before switching rules.
+
 ## Pick a remediation
 
 Each canned option is numbered. Hit `1` to apply the recommended
@@ -120,7 +144,9 @@ mode. The full map:
 | LIST | `Enter` | Open the highlighted finding in REVIEW |
 | LIST | `d` | Drill into unit DETAIL |
 | LIST | `Space` | Toggle multi-select; `Shift+↑/↓` selects and moves |
+| LIST | `a` | Select all findings in the current (filtered) view |
 | LIST | `Esc` | Deselect all |
+| LIST | `/` | Filter the queue by rule (pick a rule, or "All rules" to clear) |
 | LIST | `f` | Toggle the flag bookmark on the highlighted finding |
 | REVIEW | `↑` / `↓` | Navigate the action list |
 | REVIEW | `Enter` | Confirm the action (opens the note area) |
@@ -205,6 +231,20 @@ scheduler's six-hour tick — and from **external submitters** (agent
 skills posting to `/api/v1/lint/proposals`, shown with
 `source=external`). The cockpit only handles the human-review side of
 the loop: picking, reasoning, executing, and undoing.
+
+To keep the LLM check pass from flooding the queue, its per-tick
+candidate selection applies two guards: it audits **at most one memory
+unit per source note per tick** (so a multi-unit note — an RFC, a
+post-mortem — cannot emit a burst of near-identical findings at once),
+and it skips units the extractor labelled `intent_class='ephemeral'`
+(short-lived facts whose content decays). This narrows volume, not
+coverage of distinct notes; a sibling unit on the same note is eligible
+on a later tick. To cut volume further, raise
+`server.memory.lint_llm.surprise_threshold`, set
+`server.memory.lint_llm.confidence_gate.confidence_min`, or disable a
+noisy check outright with
+`server.memory.lint_llm.checks.<check>.enabled=false` — see the
+[configuration reference](../reference/configuration-options.md#lintllmconfig).
 
 It does not auto-resolve anything. Even on `no_op`, you press a key
 that means "I have read this and have decided not to act." That is by
