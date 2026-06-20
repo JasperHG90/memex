@@ -1,4 +1,4 @@
-manifest_version = 3
+manifest_version = 5
 instruction_template = "default"
 symlinks = [
     "CLAUDE.md",
@@ -7,8 +7,40 @@ rules = []
 agents = []
 mcp_servers = []
 
+[policy]
+
 [repos]
 jasperhg90 = "https://github.com/JasperHG90/skills"
+
+[[skill]]
+qualified_name = "jasperhg90/deep-explain"
+repo_alias = "jasperhg90"
+source_path = "skills/learning/deep-explain"
+target_dir = ".claude/skills/deep-explain"
+
+[[skill]]
+qualified_name = "jasperhg90/doc-write"
+repo_alias = "jasperhg90"
+source_path = "skills/documentation/doc-write"
+target_dir = ".claude/skills/doc-write"
+
+[[skill]]
+qualified_name = "jasperhg90/manifesto"
+repo_alias = "jasperhg90"
+source_path = "skills/architecture/manifesto"
+target_dir = ".claude/skills/manifesto"
+
+[[skill]]
+qualified_name = "jasperhg90/pageindex"
+repo_alias = "jasperhg90"
+source_path = "skills/tools/pageindex"
+target_dir = ".claude/skills/pageindex"
+
+[[skill]]
+qualified_name = "jasperhg90/python-review"
+repo_alias = "jasperhg90"
+source_path = "skills/development/python-review"
+target_dir = ".claude/skills/python-review"
 
 [[skill]]
 qualified_name = "jasperhg90/readme-creator"
@@ -17,7 +49,7 @@ source_path = "skills/documentation/readme-creator"
 target_dir = ".claude/skills/readme-creator"
 
 [[skill]]
-qualified_name = "jasperhg90/doc-write"
+qualified_name = "jasperhg90/terminal-gif"
 repo_alias = "jasperhg90"
-source_path = "skills/documentation/doc-write"
-target_dir = ".claude/skills/doc-write"
+source_path = "skills/documentation/terminal-gif"
+target_dir = ".claude/skills/terminal-gif"
