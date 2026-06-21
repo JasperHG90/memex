@@ -24,11 +24,11 @@ Drop transient details, restatements of what the code already says, and anything
 
 For every learning that survived step 1, pick exactly **one** layer — same shape-first routing as `/remember`, applied per item:
 
-- **Reusable how-to / worked episode** (you worked out HOW to do or fix something — trigger + actions + outcome) → `memex_case_submit` (trigger / situation / actions / outcome / lesson). Probe `memex_procedural_get_by_identity(kind="procedure", scope=…, verb=…, context=…)` first; if it returns an entry, pass its id as `case_of`. The system derives the procedure — you never author one.
+- **Reusable how-to / worked episode** (you worked out HOW to do or fix something — trigger + actions + outcome) → `memex_case_submit` (trigger / situation / actions / outcome / lesson, plus a required `scope` — `global` / `project:<id>` / `app:claude-code` — and a one-line `scope_reasoning`). Probe `memex_procedural_get_by_identity(kind="procedure", scope=…, verb=…, context=…)` first; if it returns an entry, pass its id as `case_of`. The system derives the procedure — you never author one.
 - **Preference / convention / setting** ("we use X here", "always Y before Z") → `memex_kv_put` with a scope-qualified key (`user:` / `project:<id>:` / `app:claude-code:` / `global:`), scope chosen by cue (the `<app>` cue beats "I"/"my").
 - **Durable fact / decision / insight** that belongs as prose → `memex_add_note` (concise, 5–15 lines, `author="claude-code"`, tags include `"learnings"` + 1–3 topic tags).
 
-The plugin's `PreToolUse` hook auto-injects ambient tags and defaults `background=true` / `vault_id` on `memex_add_note` and `memex_case_submit` — don't hand-set those.
+The plugin's `PreToolUse` hook auto-injects ambient tags on `memex_add_note` and `memex_case_submit` (and, on `memex_add_note`, defaults `background=true` and `vault_id`) — don't hand-set those.
 
 ## 3. Distinct from neighbouring skills
 

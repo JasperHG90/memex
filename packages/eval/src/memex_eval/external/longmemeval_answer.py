@@ -17,7 +17,7 @@ workspace prepared with:
 On top of that, the **memex Claude Code plugin** (``packages/
 claude-code-plugin/``) is wired in via the ``--plugin-dir`` flag so
 the subagent has the plugin's skills (``/remember``, ``/recall``,
-``/retro``) and hooks in addition to the raw MCP tools.
+``/learnings``) and hooks in addition to the raw MCP tools.
 
 Falls back to nothing else — ``AnswerMethod.GEMINI_CLI`` is reserved
 for future work and currently raises ``NotImplementedError``.

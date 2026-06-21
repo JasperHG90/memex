@@ -44,7 +44,7 @@ dev form (`MEMEX_LOCAL_PATH` set): `uv run --project "$MEMEX_LOCAL_PATH" --packa
 
 ## 5. The unattended-apply gate
 
-A canned-action `resolve --action` is a **destructive** mutation. The gate is enforced **server-side**, so it fires the same way whether you call via the CLI or MCP: on a local server with `server.auth.enabled=False` and `MEMEX_LINT_ALLOW_UNATTENDED_APPLY` unset, the resolve returns **HTTP 403**. (Action-less `resolve` and `dismiss` are *not* gated.) On a 403, tell the user to restart the server with `MEMEX_LINT_ALLOW_UNATTENDED_APPLY=1` and retry — do not try to route around it.
+A canned-action `resolve --action` is a **destructive** mutation. The gate is enforced **server-side**, so it fires the same way whether you call via the CLI or MCP — including `memex_lint_apply_winner`: on a local server with `server.auth.enabled=False` and `MEMEX_LINT_ALLOW_UNATTENDED_APPLY` unset, the call returns **HTTP 403**. (Action-less `resolve` and `dismiss` are *not* gated.) On a 403, tell the user to restart the server with `MEMEX_LINT_ALLOW_UNATTENDED_APPLY=1` and retry — do not try to route around it.
 
 ## 6. Report
 

@@ -144,6 +144,20 @@ def test_lint_dismiss_calls_client_and_prints_id(runner, mock_config, mock_api, 
         result = runner.invoke(app, ['dismiss', fid], obj=mock_config)
 
     assert result.exit_code == 0, strip_ansi(result.stdout)
-    mock_api.lint_dismiss.assert_awaited_once_with(fid)
+    mock_api.lint_dismiss.assert_awaited_once_with(fid, note=None)
     assert 'dismissed' in strip_ansi(result.stdout).lower()
     assert fid in strip_ansi(result.stdout)
+
+
+def test_lint_dismiss_passes_note(runner, mock_config, mock_api, strip_ansi):
+    """``memex lint dismiss <id> --note <why>`` forwards the note to the client."""
+    fid = '33333333-3333-3333-3333-333333333333'
+    mock_api.lint_dismiss = AsyncMock(return_value={'finding_id': fid, 'status': 'dismissed'})
+
+    with patch('memex_cli.lint.get_api_context') as gac:
+        gac.return_value.__aenter__.return_value = mock_api
+        gac.return_value.__aexit__.return_value = None
+        result = runner.invoke(app, ['dismiss', fid, '--note', 'not a real issue'], obj=mock_config)
+
+    assert result.exit_code == 0, strip_ansi(result.stdout)
+    mock_api.lint_dismiss.assert_awaited_once_with(fid, note='not a real issue')

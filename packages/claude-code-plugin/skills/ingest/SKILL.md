@@ -16,7 +16,7 @@ Retrieve the content of what `$ARGUMENTS` points at (plus any assets), then stor
 
 `$ARGUMENTS` names a path or URL (and optionally a `verbatim`/`summary` mode token).
 
-- **A URL** → fetch the page with `WebFetch` to get its text/markdown. If the page has **binary assets you want to keep** (images, PDFs, diagrams), `WebFetch` cannot return them — download them with a short `Bash` command (`curl -fsSL <asset-url> -o /tmp/<name>` or `wget`) to local paths, and collect those absolute paths.
+- **A URL** → fetch the page with `WebFetch` to get its text/markdown. If the page has **binary assets you want to keep** (images, PDFs, diagrams), `WebFetch` cannot return them — download them with a short `Bash` command (`curl -fsSL <asset-url> -o /tmp/<name>` or `wget`) to local paths, and collect those absolute paths. Confirm each download actually produced a non-empty file before listing it — a missing/failed asset is dropped silently server-side, not reported back.
 - **A local file** → read it with `Read` (read images/PDFs directly too); collect their absolute paths as assets.
 - **A local directory** → read the relevant files; ingest as one note (or ask if it should be several).
 - **Empty `$ARGUMENTS`** → ask which file or URL to ingest.

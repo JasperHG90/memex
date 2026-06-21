@@ -295,13 +295,17 @@ async def lint_run_cmd(
 async def lint_dismiss_cmd(
     ctx: typer.Context,
     finding_id: Annotated[str, typer.Argument(help='Finding UUID to dismiss.')],
+    note: Annotated[
+        str | None,
+        typer.Option('--note', help='Reviewer note stored on the dismissal.'),
+    ] = None,
 ):
     """Flip a pending finding to ``dismissed``."""
     parse_uuid(finding_id, 'finding_id')
     config: MemexConfig = ctx.obj
     async with get_api_context(config) as api:
         try:
-            payload = await api.lint_dismiss(finding_id)
+            payload = await api.lint_dismiss(finding_id, note=note)
         except Exception as e:
             handle_api_error(e)
             return
