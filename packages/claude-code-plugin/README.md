@@ -54,7 +54,10 @@ claude --plugin-dir ./packages/claude-code-plugin
 ## What's included
 
 - **Skills**: slash commands for manual memory capture, retrieval, and curation.
-  - `/remember`, `/recall`, `/retro` — capture by shape, search, and structured session postmortems.
+  - `/remember`, `/recall` — capture by shape, and search.
+  - `/learnings` — distill the session's durable learnings, routed into memory by shape.
+  - `/ingest` — capture a local file or web page (and its assets) into Memex as a note.
+  - `/lint` — review and resolve memory-hygiene findings (stale facts, duplicates, contradictions).
   - `/extract-case` — turn an existing note, file, or URL into a case (gated to genuine how-tos).
   - `/procedure`, `/strategy` — recall a derived procedure, or the cross-procedure strategy for a verb, straight from the procedural plane.
   - `/case` — capture what you just did as a worked episode now (the system derives the procedure).

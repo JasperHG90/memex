@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from memex_common.agent_harnesses import CLAUDE_CODE_HARNESS, HERMES_HARNESS
 
-_TIER_2_CHAR_CAP = 5_600
+_TIER_2_CHAR_CAP = 5_800
 # Bumped 5,150 → 5,600 when the slash-command list gained the four V7
 # procedural-plane commands (/procedure, /strategy, /case, /correct) so the
 # installed .claude/rules harness advertises them — without these lines the
@@ -31,6 +31,11 @@ _TIER_2_CHAR_CAP = 5_600
 # while keeping every routing rule, pinned tool name, and the
 # memex_case_submit workflow model — harness fell 5,839 → 5,277. Ratchet
 # the cap down with the content so cap_is_tight keeps surfacing growth.
+# Bumped 5,600 → 5,800 (the cap had crept 5,500 → 5,600 in an
+# undocumented prior edit) when the slash-command list dropped the
+# outdated `/retro` and gained `/learnings`, `/ingest`, and `/lint` so the
+# installed .claude/rules harness advertises the three new commands —
+# harness rose to 5,729. The +200 chars buys their discovery.
 # Hermes has a tighter natural ceiling — its harness only needs the
 # outcome lexicon + capture cadence. Pin its cap separately so the CC
 # harness's expansion doesn't relax the Hermes budget.

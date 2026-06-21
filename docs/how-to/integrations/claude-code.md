@@ -15,7 +15,7 @@ The plugin is configured in two places: the Memex KV store (per-project vault bi
 
 ### Know which slash commands the plugin adds
 
-The plugin ships eleven skills. Each one is a slash command you type in Claude Code. <code-ref path="packages/claude-code-plugin/skills" lines="1" />
+The plugin ships twelve skills. Each one is a slash command you type in Claude Code. <code-ref path="packages/claude-code-plugin/skills" lines="1" />
 
 | Command | What it does |
 |---|---|
@@ -28,7 +28,9 @@ The plugin ships eleven skills. Each one is a slash command you type in Claude C
 | `/correct [what's wrong]` | Tell Memex a surfaced memory was wrong or stale; records a `not_helpful` outcome and deprioritises it. |
 | `/handoff` | Write a technical handoff summary of the current work so you can resume it later. |
 | `/continue` | Resume from previous `/handoff` notes; pick from a list and load the relevant ones. |
-| `/retro` | Record a session postmortem and propose durable learnings for `CLAUDE.md`. |
+| `/learnings` | Distill the session's durable learnings and route each into memory by shape (KV / case / note). |
+| `/ingest [path\|url]` | Capture a local file or web page's content (and assets) into Memex as a note. |
+| `/lint` | Review and resolve memory-hygiene findings — stale facts, duplicates, contradictions. |
 
 ### Bind a vault to this project
 

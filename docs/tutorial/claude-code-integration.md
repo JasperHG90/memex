@@ -242,7 +242,7 @@ You now have a working Claude Code integration that:
 
 Everything you store lives in your own Memex vault on your own server. The plugin is a thin client over the same MCP tools any other Memex-aware agent uses, so the data is portable.
 
-`/remember` and `/recall` are the two you will reach for most, but the plugin ships more: `/handoff` and `/continue` carry context between sessions, `/case` and `/retro` capture reusable how-to procedures, and `/correct` flags a memory that surfaced wrongly. Run `/help` inside Claude Code to see the full set.
+`/remember` and `/recall` are the two you will reach for most, but the plugin ships more: `/handoff` and `/continue` carry context between sessions, `/case` captures a reusable how-to procedure and `/learnings` distils the session's durable takeaways, `/ingest` pulls a file or web page into memory, `/lint` triages memory-hygiene findings, and `/correct` flags a memory that surfaced wrongly. Run `/help` inside Claude Code to see the full set.
 
 ## Next steps
 

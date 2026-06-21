@@ -21,7 +21,11 @@ argument-hint: "[what to remember]"
    - **author**: `"claude-code"`
    - **tags**: include `"manual-capture"` + 1-3 topic tags (the plugin auto-injects ambient tags — do not repeat them)
 
-4. **Template** (note path only): `memex_list_templates` → `memex_get_template(slug)` → `memex_add_note(..., template=slug)`. Skip for short captures.
+4. **Template** (note path only, for *structured* content — a decision, brief, RFC, reflection): suggest or select a template before writing. Skip for short/quick captures.
+   - Call `memex_list_templates` — it returns a **markdown string** (parse the `- **slug** [source] — name: description` bullets), not JSON.
+   - If one template clearly fits (e.g. an architecture decision → `architectural_decision_record`), auto-select it; otherwise present a short `AskUserQuestion` pick-list of the top candidates plus a "plain note" option.
+   - Fetch the scaffold with `memex_get_template(type=<slug>)` — note the param is named **`type`**, not `slug`, despite the tool's own hint.
+   - `template=<slug>` is provenance/filter metadata only — it does NOT auto-structure the note, so write the body to match the scaffold yourself, then `memex_add_note(..., template=<slug>)`.
 
 5. **Save**: call the tool picked in step 2. For `memex_add_note` the plugin auto-defaults `background: true`; pass it explicitly only if you need synchronous ingestion.
 

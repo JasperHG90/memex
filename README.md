@@ -22,7 +22,7 @@
   <img src="https://img.shields.io/badge/python-3.12+-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.12+" />
   <img src="https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square" alt="Apache 2.0" />
   <img src="https://img.shields.io/badge/version-v1.0.0--rc-green?style=flat-square" alt="v1.0.0-rc" />
-  <img src="https://img.shields.io/badge/tests-7,828%20passing-brightgreen?style=flat-square" alt="Tests" />
+  <img src="https://img.shields.io/badge/tests-7,833%20passing-brightgreen?style=flat-square" alt="Tests" />
 </p>
 
 > [!IMPORTANT]
@@ -126,7 +126,7 @@ Memex is deliberately not an agent. It provides the storage, extraction, and ret
 </td>
 <td valign="top">
 <p>🧩 <strong>Claude Code Plugin</strong><br>
-<sub>One-step persistent memory across all projects. Token-budgeted session briefing, /remember, /recall, and /retro skills, data-driven session hooks, progressive session notes, and Memex MCP server — bundled as a Claude Code plugin.</sub></p>
+<sub>One-step persistent memory across all projects. Token-budgeted session briefing, /remember, /recall, and /learnings skills, data-driven session hooks, progressive session notes, and Memex MCP server — bundled as a Claude Code plugin.</sub></p>
 </td>
 <td valign="top">
 <p>📋 <strong>Audit Logging</strong><br>
@@ -260,7 +260,7 @@ A lightweight namespaced key-value store for structured facts, preferences, and 
 
 ### Claude Code plugin
 
-Give Claude Code persistent memory across all projects with a single plugin install. The plugin bundles the Memex MCP server, `/remember`, `/recall`, and `/retro` slash commands, and session lifecycle hooks with intelligent context injection. A token-budgeted session briefing (`memex briefing`) replaces raw data dumps with a curated knowledge index — KV facts, vault summary, top entities with trend indicators, and available vaults — all within a configurable 1000 or 2000 token budget. Data-driven pre-compact nudges reference actual session stats (write counts, edit spirals, commits), and a progressive session note persists context across compaction boundaries via `note_key`. No per-project configuration needed.
+Give Claude Code persistent memory across all projects with a single plugin install. The plugin bundles the Memex MCP server, `/remember`, `/recall`, and `/learnings` slash commands, and session lifecycle hooks with intelligent context injection. A token-budgeted session briefing (`memex briefing`) replaces raw data dumps with a curated knowledge index — KV facts, vault summary, top entities with trend indicators, and available vaults — all within a configurable 1000 or 2000 token budget. Data-driven pre-compact nudges reference actual session stats (write counts, edit spirals, commits), and a progressive session note persists context across compaction boundaries via `note_key`. No per-project configuration needed.
 
 ### Audit logging
 
@@ -351,7 +351,7 @@ claude plugin install memex@memex
 
 Or from inside Claude Code: `/plugin marketplace add JasperHG90/memex` then `/plugin install memex@memex`.
 
-The plugin provides slash commands — `/remember`, `/recall`, `/retro`, `/handoff`, `/continue`, and more — token-budgeted session briefing, data-driven lifecycle hooks, and the Memex MCP server. See [packages/claude-code-plugin](./packages/claude-code-plugin/) for details.
+The plugin provides slash commands — `/remember`, `/recall`, `/learnings`, `/ingest`, `/lint`, `/handoff`, `/continue`, and more — token-budgeted session briefing, data-driven lifecycle hooks, and the Memex MCP server. See [packages/claude-code-plugin](./packages/claude-code-plugin/) for details.
 
 #### Updating the claude code plugin
 

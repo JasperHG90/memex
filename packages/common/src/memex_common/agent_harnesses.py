@@ -72,7 +72,9 @@ Relationship questions (`"who does X work with?"`, `"what cooccurs with Y?"`, `"
 Slash commands:
 - `/remember [text]` — save to memory (routes to `memex_kv_put` / `memex_case_submit` / `memex_add_note` by shape).
 - `/recall [query]` — search memory (how-to query → `memex_procedural_search`; else `memex_memory_search` + `memex_note_search`).
-- `/retro` — session postmortem; files reusable how-tos as cases.
+- `/learnings` — distill the session's durable learnings; routes each by shape (kv/case/note).
+- `/ingest [path|url]` — capture a file/page's content + assets as a note (extraction runs server-side).
+- `/lint` — review & resolve memory-hygiene findings (read via MCP, resolve via CLI).
 - `/extract-case [note|file|url]` — turn content into a case, if it holds a reusable how-to (gated).
 - `/procedure [how-to]` — recall a derived procedure (`memex_procedural_search` / `…_get_by_identity`).
 - `/strategy [verb]` — recall the cross-procedure strategy for a verb (`memex_procedural_search(kind="strategy")`).

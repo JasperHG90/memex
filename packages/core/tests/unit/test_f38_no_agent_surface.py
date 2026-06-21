@@ -76,7 +76,7 @@ def test_f38_no_hermes_schema() -> None:
 def test_f38_no_claude_code_skill_mention() -> None:
     """No F38 verb is mentioned in the Claude Code plugin's SKILL.md files."""
     plugin_root = plb.Path(__file__).resolve().parents[3] / 'claude-code-plugin' / 'skills'
-    skill_dirs = ('remember', 'recall', 'retro')
+    skill_dirs = ('remember', 'recall', 'learnings', 'ingest', 'lint')
     found_in: dict[str, list[str]] = {}
     for skill in skill_dirs:
         path = plugin_root / skill / 'SKILL.md'
