@@ -52,14 +52,14 @@ curl -X POST http://prometheus.internal:9090/-/reload
 
 ### 4. (Optional) Confirm the metrics path is auth-exempt
 
-Memex ships with `/api/v1/metrics` in the default `auth.exempt_paths` list <code-ref path="packages/common/src/memex_common/config.py" lines="1404-1407" />, so unauthenticated scraping works out of the box. If you have customised `auth.exempt_paths` in your config and removed the metrics route, put it back:
+Memex ships with `/api/v1/metrics` in the default `auth.exempt_paths` list <code-ref path="packages/common/src/memex_common/config.py" lines="1406-1409" />, so unauthenticated scraping works out of the box. If you have customised `auth.exempt_paths` in your config and removed the metrics route, put it back:
 
 ```yaml
 auth:
   enabled: true
   keys:
     - key: "${MEMEX_API_KEY}"
-      policy: read_write
+      policy: writer
   exempt_paths:
     - /api/v1/health
     - /api/v1/ready
@@ -92,7 +92,7 @@ These give you request-rate, latency, and per-route status-code counts for free.
 
 ## Troubleshooting
 
-**401 Unauthorized on `/api/v1/metrics`.** Auth is enabled and someone removed the metrics path from `auth.exempt_paths`. Either add it back as shown above, or add `authorization` to the scrape job. The Memex server itself never requires a key for this path when it appears in `exempt_paths` <code-ref path="packages/common/src/memex_common/config.py" lines="1404-1407" />.
+**401 Unauthorized on `/api/v1/metrics`.** Auth is enabled and someone removed the metrics path from `auth.exempt_paths`. Either add it back as shown above, or add `authorization` to the scrape job. The Memex server itself never requires a key for this path when it appears in `exempt_paths` <code-ref path="packages/common/src/memex_common/config.py" lines="1406-1409" />.
 
 **No `memex_*` series, only `python_…` and `process_…`.** The endpoint is responding but `memex_core.metrics` was never imported in this process. This happens with custom embedders or thin server wrappers that bypass `memex_core.server`. Confirm by hitting the endpoint directly — if `memex_ingestion_total` is missing from the raw text, the module did not load. Restart the server with the standard entrypoint (`memex server start` or `uvicorn memex_core.server:app`); the metrics are registered at import time <code-ref path="packages/core/src/memex_core/metrics.py" lines="1-15" />.
 

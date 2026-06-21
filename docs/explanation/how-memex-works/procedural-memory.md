@@ -72,11 +72,11 @@ Assignment attaches a case to a procedure but leaves the procedure's body empty 
 Two thresholds govern derivation:
 
 - **One case is enough to derive a procedure.** The constant `MIN_CASES_FOR_DISTILLATION` is `1` <code-ref path="packages/core/src/memex_core/memory/procedural_distillation.py" lines="42" />. A single worked episode distils into a usable procedure; you do not have to repeat a task three times before the system learns it <code-ref path="packages/core/src/memex_core/services/procedural_derivation_service.py" lines="123-134" />.
-- **A strategy needs at least two procedures.** Once a `(scope, verb)` pair has two or more procedures, derivation can synthesise a strategy *above* them — the play-book that generalises the specific recipes. The constant `MIN_PROCEDURES_FOR_STRATEGY` is `2` <code-ref path="packages/core/src/memex_core/services/procedural_derivation_service.py" lines="50" />.
+- **A strategy needs at least two procedures.** Once a `(scope, verb)` pair has two or more procedures, derivation can synthesise a strategy *above* them — the play-book that generalises the specific recipes. The constant `MIN_PROCEDURES_FOR_STRATEGY` is `2` <code-ref path="packages/core/src/memex_core/services/procedural_derivation_service.py" lines="53" />.
 
 ### Draft, then activate
 
-Here is the safety valve. A freshly derived procedure or strategy is **not** immediately visible. It is written with `status='draft'`, and draft entries are excluded from search and from the session briefing <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="2077-2081" />.
+Here is the safety valve. A freshly derived procedure or strategy is **not** immediately visible. It is written with `status='draft'`, and draft entries are excluded from search and from the session briefing <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="2082-2086" />.
 
 To become visible, a draft must be **published**. The system surfaces drafts for confirmation through the lint queue: when a draft is created, a `governance` maintenance proposal is filed against it with the `activate_procedural_entry` action pre-selected <code-ref path="packages/core/src/memex_core/services/case_service.py" lines="515-569" />. A reviewer working `memex lint review` accepts the proposal, the action flips the entry `draft → published`, and only then is it retrievable <code-ref path="packages/core/src/memex_core/services/proposal_actions/activate_procedural_entry.py" lines="56-96" />.
 
@@ -92,15 +92,15 @@ You submit one case: trigger "Nomad deploy hangs on stuck allocations", outcome 
 
 The next time someone searches "deploy is stuck on Nomad", the procedure surfaces with the exact steps that worked.
 
-## Procedural plane versus procedural KV
+## The procedural plane versus a stated convention
 
-Memex has *two* things that call themselves procedural, and they are not the same.
+Two things sound procedural, and they are not the same.
 
-**Procedural KV** is a key-value entry under a key shaped `<scope>:procedure:<verb>:<context>` — for example `global:procedure:commit:lint-first` <code-ref path="packages/core/src/memex_core/services/kv.py" lines="89-140" />. It holds a **stated** rule: a preference the user expressed in words. "Always lint before you commit." You write it once, by hand, and it is true because the user said so.
+**A stated convention** is a rule the user expressed in words: "Always lint before you commit." It is one static binding, true because the user said so. It lives in the key-value store under an ordinary descriptive key carrying one of the four namespace prefixes — for example `global:lint:commit` <code-ref path="packages/core/src/memex_core/services/kv.py" lines="58-67" />. There is no `procedure:` namespace; a convention is just a KV entry like any preference or setting.
 
 **The procedural plane** holds **distilled** recipes — procedures and strategies derived from real worked episodes. Nobody states a procedure directly; it emerges from cases. "Here is how the deploy actually got unstuck the three times we did it."
 
-The split is about provenance. A KV procedure is an instruction. A plane procedure is evidence: it carries outcome counters, source edges back to the cases that produced it, and a version ledger of every edit <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="2088-2118" />. When you want to record *what someone told you to do*, that is KV. When you want the system to *learn how a task is done* from doing it, that is the plane.
+The split is about provenance. A convention is an instruction. A plane procedure is evidence: it carries outcome counters, source edges back to the cases that produced it, and a version ledger of every edit <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="2088-2118" />. When you want to record *what someone told you to do*, that is a KV convention. When you want the system to *learn how a task is done* from doing it, that is the plane.
 
 ## Trade-offs
 

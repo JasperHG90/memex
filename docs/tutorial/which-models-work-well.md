@@ -15,7 +15,7 @@ Plan on 45 minutes. You will spend more time waiting on ingestion than typing.
 
 ## Step 1: Capture the baseline
 
-Before you change anything, ingest your test document once under the default config so you have something to compare against. The default extraction model is `gemini/gemini-3-flash-preview` — set in `ServerConfig.default_model` at <code-ref path="packages/common/src/memex_common/config.py" lines="2124-2127" />.
+Before you change anything, ingest your test document once under the default config so you have something to compare against. The default extraction model is `gemini/gemini-3-flash-preview` — set in `ServerConfig.default_model` at <code-ref path="packages/common/src/memex_common/config.py" lines="2328-2331" />.
 
 Create a vault for this tutorial so the four runs do not contaminate your other notes:
 
@@ -33,21 +33,19 @@ memex note add --file test-doc.md
 You will see lines like:
 
 ```
-Adding Note
 Reading file test-doc.md...
 Uploading and summarizing 1 file(s)...
-note_key: test-doc
-status: ingested
-units_extracted: 12
+Note added successfully! UUID: <uuid>
+Extracted 12 memory units.
 ```
 
-The exact count depends on your document. Write down the `units_extracted` number — you will compare it to the other runs. **Twelve facts** is the baseline I will refer to from here on; substitute your own number when you read along.
+The exact count depends on your document. Write down the number from the `Extracted N memory units.` line — you will compare it to the other runs. **Twelve facts** is the baseline I will refer to from here on; substitute your own number when you read along.
 
 Now you have a baseline run on disk. Time to look at what it cost.
 
 ## Step 2: Read the latency and token cost off the metrics endpoint
 
-Memex emits Prometheus metrics for every LLM call. The two you care about for this tutorial are `memex_llm_call_duration_seconds` (a histogram of how long each call took, in seconds) and `memex_llm_calls_total` (a counter of how many calls happened). Both are defined in <code-ref path="packages/core/src/memex_core/metrics.py" lines="170-180" />.
+Memex emits Prometheus metrics for every LLM call. The two you care about for this tutorial are `memex_llm_call_duration_seconds` (a histogram of how long each call took, in seconds) and `memex_llm_calls_total` (a counter of how many calls happened). Both are defined in <code-ref path="packages/core/src/memex_core/metrics.py" lines="182-190" />.
 
 Hit the metrics endpoint:
 
@@ -95,7 +93,7 @@ server:
         api_key: ${ANTHROPIC_API_KEY}
 ```
 
-The `server.memory.extraction.model` field is a `ModelConfig` (defined at <code-ref path="packages/common/src/memex_common/config.py" lines="250-281" />); the nested `.model` string takes any [LiteLLM-format identifier](https://docs.litellm.ai/docs/providers). `api_key` accepts `${VAR}` interpolation so you do not have to paste the secret into the file.
+The `server.memory.extraction.model` field is a `ModelConfig` (defined at <code-ref path="packages/common/src/memex_common/config.py" lines="252-290" />); the nested `.model` string takes any [LiteLLM-format identifier](https://docs.litellm.ai/docs/providers). `api_key` accepts `${VAR}` interpolation so you do not have to paste the secret into the file.
 
 Restart the server so the new config loads:
 
@@ -151,7 +149,7 @@ Two questions to ask the table:
 Now look at quality. Pull the units extracted by each run:
 
 ```bash
-memex memory search --vault models-tutorial "any phrase from test-doc.md" --limit 20 --json | jq '.units[] | {text, source_note_key}'
+memex memory search "any phrase from test-doc.md" --limit 20 --json | jq '.[] | {text, note_id}'
 ```
 
 Compare the unit bodies for `test-doc` against `test-doc-haiku`. Are the same facts captured? Are any rephrased poorly? Is one more precise about quantities or dates?
@@ -173,7 +171,7 @@ server:
         api_key: ${ANTHROPIC_API_KEY}
 ```
 
-The field lives at <code-ref path="packages/common/src/memex_common/config.py" lines="528-531" />. Same `ModelConfig` shape; this one overrides reflection specifically. If you leave it `None`, reflection inherits whatever extraction is using (see the `sync_default_model` validator at <code-ref path="packages/common/src/memex_common/config.py" lines="2360-2377" />).
+The field lives at <code-ref path="packages/common/src/memex_common/config.py" lines="530-533" />. Same `ModelConfig` shape; this one overrides reflection specifically. If you leave it `None`, reflection inherits whatever extraction is using (see the `sync_default_model` validator at <code-ref path="packages/common/src/memex_common/config.py" lines="2564-2581" />).
 
 Restart the server.
 
@@ -182,19 +180,19 @@ To see reflection actually run, you need an entity with enough mentions for the 
 Trigger reflection manually on that entity:
 
 ```bash
-memex entity list --vault models-tutorial
+memex entity list --query "your topic name"
 # pick the entity ID for your topic
 memex memory reconsolidate <entity-uuid>
 ```
 
-The `reconsolidate` command runs the full Hindsight cycle on one entity (see <code-ref path="packages/cli/src/memex_cli/memory.py" lines="230-279" />). Output is JSON — look for the `mental_model` block.
+`memex entity list` takes no `--vault` flag — it ranks entities across every vault on the server, so filter by name with `--query` to find the one you just built up. The `reconsolidate` command runs the full Hindsight cycle on one entity (see <code-ref path="packages/cli/src/memex_cli/memory.py" lines="218-265" />). It accepts `--vault` and falls back to the active vault you exported in Step 1 when you omit it. Output is JSON — look for the `mental_model` block.
 
 Re-run the metrics query. Reflection calls are tagged the same way as extraction calls (the `status` label is the only dimension on the counter), so to isolate them you compare counts before and after. Subtract.
 
 Now read the mental model body itself:
 
 ```bash
-memex memory search --vault models-tutorial "your entity name" --limit 5
+memex memory search "your entity name" --limit 5
 ```
 
 Compare to a Flash-on-reflection run, if you have one to compare against. Sonnet's mental models tend to be more precise about contradictions and more careful about hedging — *"this person worked on X starting around mid-2025, with some ambiguity about the start date"* versus *"this person worked on X in 2025"*. Whether that precision matters depends on what you ask the vault.
@@ -203,7 +201,7 @@ Compare to a Flash-on-reflection run, if you have one to compare against. Sonnet
 
 Embeddings are different. Extraction and reflection models can be swapped freely; runs A and B will produce different facts, but those facts coexist fine. **Embeddings cannot be mixed.** If you change the embedding model, every vector in your database becomes nonsense — the new model's vector space is unrelated to the old one's.
 
-Memex guards against the silent version of this. At server startup, the embedding backend is probed and the output dimension is checked against the database schema's expected width (384, at <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="33" />). If the new model produces a different dimension, the server refuses to start with an explicit error (see <code-ref path="packages/core/src/memex_core/server/__init__.py" lines="183-197" />).
+Memex guards against the silent version of this. At server startup, the embedding backend is probed and the output dimension is checked against the database schema's expected width (384, at <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="35" />). If the new model produces a different dimension, the server refuses to start with an explicit error (see <code-ref path="packages/core/src/memex_core/server/__init__.py" lines="185-199" />).
 
 The guard catches dimension mismatches. It does **not** catch space mismatches — two 384-dimensional models can both pass the startup check yet produce wildly different vectors for the same text. The only safe path is to re-embed everything.
 
@@ -211,7 +209,7 @@ If you want to try OpenAI embeddings on this tutorial vault, do this:
 
 1. Drop the vault first. The whole point is that the old vectors are now stale:
    ```bash
-   memex vault delete models-tutorial --confirm
+   memex vault delete models-tutorial --force
    memex vault create models-tutorial
    ```
 
@@ -224,7 +222,7 @@ If you want to try OpenAI embeddings on this tutorial vault, do this:
        api_key: ${OPENAI_API_KEY}
        dimensions: 384
    ```
-   The `dimensions: 384` is required — OpenAI's `text-embedding-3-small` defaults to 1536 dimensions, which would fail the startup probe. The model supports Matryoshka truncation so you can ask for 384 and get a vector that fits the schema (see [OpenAI's embedding docs](https://platform.openai.com/docs/guides/embeddings)). The `dimensions` field on `LitellmEmbeddingBackend` lives at <code-ref path="packages/common/src/memex_common/config.py" lines="327-331" />.
+   The `dimensions: 384` is required — OpenAI's `text-embedding-3-small` defaults to 1536 dimensions, which would fail the startup probe. The model supports Matryoshka truncation so you can ask for 384 and get a vector that fits the schema (see [OpenAI's embedding docs](https://platform.openai.com/docs/guides/embeddings)). The `dimensions` field on `LitellmEmbeddingBackend` lives at <code-ref path="packages/common/src/memex_common/config.py" lines="329-333" />.
 
 3. Restart the server. Watch the logs for the probe — you should see one line confirming the dimension matched. If the probe fails, the server will refuse to start and tell you exactly which dimension it got.
 

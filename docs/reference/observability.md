@@ -2,7 +2,7 @@
 
 Memex exposes operational telemetry through a Prometheus-compatible `/api/v1/metrics` endpoint (provided by `prometheus-fastapi-instrumentator`). All metrics declared in `packages/core/src/memex_core/metrics.py` are registered with the default registry and surface here automatically.
 
-This page focuses on the reranking-composition metrics needed to tune the `composite_boost_log_clip` configuration knob. Other categories (ingestion, retrieval duration, LLM calls, circuit breaker, reflection queue, lint findings, contradiction resolution, entity-collapse maintenance, FSFM scoring, etc.) are declared in the same module and exposed through the same endpoint without further configuration.
+This page focuses on the reranking-composition metrics needed to tune the `composite_boost_log_clip` configuration knob. Other categories (ingestion, retrieval duration, LLM calls, circuit breaker, reflection queue, lint findings, contradiction resolution, entity-collapse maintenance, FSFM scoring, consolidation (`memex_reconsolidate_total`, `memex_consolidate_total`), procedural plane (`memex_procedural_*` — operations, search duration, briefing cards, identity conflicts, derivation-queue size), etc.) are declared in the same module and exposed through the same endpoint without further configuration.
 
 ## Endpoint
 

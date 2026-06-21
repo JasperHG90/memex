@@ -27,17 +27,13 @@ If you're unsure, leave the vault as content. Flipping `kind` later requires a f
 memex vault create my-integration-buffer --kind system
 ```
 
-Memex prints the confirmation prompt before persisting:
+Because `kind=system` is permanent, the CLI prompts before persisting: <code-ref path="packages/cli/src/memex_cli/vaults.py" lines="191-198" />
 
 ```
-About to create a system vault 'my-integration-buffer'.
-System vaults are silent on default-scope search, briefing, reflection,
-and vault-summary. Extraction and addressability are unaffected.
-The kind cannot be changed after creation.
-Continue? [y/N]:
+Vault kind 'system' is permanent and cannot be changed later. Continue? [y/n]:
 ```
 
-Type `y` to proceed, `N` (or anything else) to abort. The CLI prints the new vault's UUID on success.
+Type `y` to proceed, `n` (or anything else) to abort. The CLI prints the new vault's UUID on success.
 
 To skip the prompt in scripts, pass `--force` (or `-f`):
 
@@ -67,19 +63,16 @@ The same flags work on a content vault — `--no-summarize` on a personal scratc
 A system vault is a normal vault from the caller's perspective. You address it the same way you address a content vault — by name or UUID, on any tool:
 
 ```bash
-# Write into it
-memex note add --vault my-integration-buffer \
-  --title "Webhook payload 2026-06-08T12:00:00Z" \
-  --body '{"event": "...", "ts": "..."}'
+# Write into it (content is the positional argument)
+memex note add '{"event": "...", "ts": "..."}' \
+  --vault my-integration-buffer \
+  --title "Webhook payload 2026-06-08T12:00:00Z"
 
 # Read from it directly
 memex note search "webhook" --vault my-integration-buffer
-
-# Read from it as part of a wider scope
-memex memory search "webhook" --include-system-vaults
 ```
 
-The `--include-system-vaults` flag (and its `?include_system_vaults=true` HTTP/MCP equivalent) is an **unconditional union**: it adds every system vault to the resolved scope, regardless of whether you also passed `--vault`. To read one specific system vault without dragging in the rest, name it (`--vault inbox`) and leave the flag off. If you find yourself reaching for the flag often, consider whether the vault is really a system vault.
+From the CLI, you read a system vault by naming it with `--vault` — there is no CLI flag that folds every system vault into one search. Over HTTP and MCP, the `include_system_vaults=true` parameter does that: an **unconditional union** that adds every system vault to the resolved scope, regardless of whether you also passed a vault. <code-ref path="packages/core/src/memex_core/server/notes.py" lines="183" /> To read one specific system vault, name it (`--vault inbox`) and leave the union off. If you find yourself reaching for the union often, consider whether the vault is really a system vault.
 
 ## Step 4 — Verify visibility is what you expect
 
@@ -108,9 +101,9 @@ The `Kind` column was added in V11; older lists won't have it. Update the CLI (`
 
 The migration moves notes, memory units, entity links, and reflection records. It does not copy the *synthesis* rows (mental models, vault summaries) — those are rebuilt by the scheduler on the new vault if its `policy` allows.
 
-## Programmatic creation (HTTP / MCP)
+## Programmatic creation (HTTP)
 
-The HTTP `POST /api/v1/vaults` endpoint accepts `kind` and `policy` in the request body:
+The HTTP `POST /api/v1/vaults` endpoint accepts `kind` and `policy` in the request body: <code-ref path="packages/core/src/memex_core/server/vaults.py" lines="212-213" />
 
 ```bash
 curl -X POST $MEMEX_SERVER_URL/api/v1/vaults \
@@ -123,7 +116,7 @@ curl -X POST $MEMEX_SERVER_URL/api/v1/vaults \
   }'
 ```
 
-The MCP `memex_create_vault` tool mirrors the same parameters. Both reject unknown `kind` values (`"content"` or `"system"`) and unknown `policy` keys (the typed model uses `extra='forbid'`) with HTTP 400.
+The endpoint rejects any `kind` other than `"content"` or `"system"`, and any unknown `policy` key (the typed model uses `extra='forbid'`), with HTTP 422. <code-ref path="packages/common/src/memex_common/schemas.py" lines="437-467" /> There is no MCP tool for vault creation — use the CLI or this endpoint.
 
 ## Troubleshooting
 
@@ -133,10 +126,10 @@ That's the expected default behavior. Re-run with `--include-system`.
 
 ### Reflection/summary *does* run on my system vault
 
-Check the vault's `policy`:
+Check the vault's `policy`. There is no per-vault `show` command; list the vaults as JSON (with `--include-system`, so the system vault appears) and read the `policy` field on the entry:
 
 ```bash
-memex vault show my-integration-buffer --json
+memex vault list --include-system --json
 ```
 
 If `policy.reflect` or `policy.summarize` is `true` when you expected `false`, you set the flag at creation — the `kind` doesn't override an explicit `policy` setting.

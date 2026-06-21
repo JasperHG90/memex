@@ -39,7 +39,7 @@ Every action satisfies the `ProposalAction` Protocol:
 
 | | |
 |---|---|
-| Target types | `memory_unit`, `mental_model`, `note`, `unit_entity` |
+| Target types | `memory_unit`, `mental_model`, `note`, `unit_entity`, `entity`, `kv` |
 | Reversible | yes (trivially) |
 | Effect | Records the verdict and optional note; no state mutation. |
 | Used by | `llm_schema_drift` (recommended), `cold_low_mw_unit`, `composite_deprioritize_candidate`, `claim_too_aggressive`, `sensitive_unreviewed_unit`, every "Other" mapping that wants pure-audit semantics. |
@@ -119,7 +119,7 @@ merged entities are hard-deleted.
 |---|---|---|
 | `delete_note` | `note` | Hard-deletes the note + memory units + chunks + nodes + links + filestore assets. |
 | `delete_entity` | `entity` | Hard-deletes the entity + mental models + aliases + links + unit-entity rows. |
-| `delete_mental_model` | `entity`, `mental_model` | Hard-deletes this vault's mental model row; the parent entity is untouched. Reflection rebuilds a fresh model from surviving units over time. |
+| `delete_mental_model` | `entity` | Hard-deletes this vault's mental model row; the parent entity is untouched. Reflection rebuilds a fresh model from surviving units over time. |
 
 Containment is layered: the resolve endpoint's attended-mode gate covers
 every canned action, the human picks the action in the review surface,
@@ -127,6 +127,52 @@ and each delete ships a live blast-radius `preview()` (computed from the
 database) that renders before confirmation. Prefer the lifecycle-state
 alternatives (`set_note_status`, `archive_mental_model`,
 `deprioritize_unit`) unless the content must actually go away.
+
+### Procedural plane
+
+These four actions resolve findings on the procedural (procedure /
+strategy) plane. Two introduce the `procedural_entry` target type; the
+two case actions anchor on a `note`.
+
+#### `activate_procedural_entry`
+
+| | |
+|---|---|
+| Target types | `procedural_entry` |
+| Reversible | yes |
+| Params | none |
+| Effect | Promotes a distilled draft procedure/strategy `status` draft → published so it becomes retrievable. Idempotent when the entry is already `published`. |
+| Reverse semantics | Re-drafts the entry (restores the prior status); a no-op when the apply did not activate. |
+
+#### `apply_derivation`
+
+| | |
+|---|---|
+| Target types | `procedural_entry` |
+| Reversible | yes |
+| Params | none |
+| Effect | Applies a proposed distillation diff (`title`, `summary`, `body`, `trigger`) to a hand-authored entry as a NEW version; `origin` stays `authored`. Requires at least one content field in `params`. |
+| Reverse semantics | Restores the prior content as another version (non-destructive). |
+
+#### `create_case`
+
+| | |
+|---|---|
+| Target types | `note` |
+| Reversible | yes |
+| Params | `{title, trigger, outcome: success\|failure\|mixed, situation?, actions?, lesson?, case_of?, project_id?, scope, scope_reasoning, tags?}` |
+| Effect | Synthesizes a worked episode into a new case note and runs assignment — the same flow as a direct case submission, gated behind human review. Anchors on the source note the episode was distilled from. |
+| Reverse semantics | Archives the created case, detaches its provenance edge, deprecates a draft anchor it minted, and dismisses an escalation finding — but the append-only outcome counter the assignment bumped is NOT rolled back. |
+
+#### `assign_case`
+
+| | |
+|---|---|
+| Target types | `note` |
+| Reversible | yes |
+| Params | `{mode: assign\|new_procedure, entry_id?, scope?, verb?, context?, title?}` — `mode=assign` requires `entry_id`; `mode=new_procedure` requires `scope`, `verb`, `context`, `title` |
+| Effect | Attaches the case note to an existing procedural entry (`mode=assign`), or creates a draft procedure anchor and attaches the case to it (`mode=new_procedure`). |
+| Reverse semantics | Detaches the case (removes the provenance edge) and deprecates a draft anchor this resolution created. |
 
 ## Adding a new action
 

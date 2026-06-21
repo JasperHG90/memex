@@ -50,7 +50,7 @@ export MEMEX_SERVER__DEFAULT_MODEL__API_KEY="$OPENAI_API_KEY"
 The default propagates to every stage with `model: null`. To upgrade one stage without touching the others, set its `model` block explicitly. The stages that inherit the default are:
 
 - `server.memory.extraction.model` — fact extraction (every chunk).
-- `server.memory.extraction.text_splitting.model` — PageIndex structural scan on large documents.
+- `server.memory.extraction.text_splitting.model` — PageIndex structural scan on large documents. This field exists only when `text_splitting.strategy` is `page_index`; the `simple` strategy has no model to inherit. <code-ref path="packages/common/src/memex_common/config.py" lines="2570-2572" />
 - `server.memory.reflection.model` — per-entity reflection (Phases 0/1/3/4/6) and vault summarization-by-extension.
 - `server.memory.contradiction.model` — contradiction classification at extraction time.
 - `server.document.model` — document-search skeleton-tree reasoning and answer synthesis.
@@ -71,7 +71,7 @@ server:
         api_key: '${ANTHROPIC_API_KEY}'
 ```
 
-Query expansion does not have its own `model` field. It reuses the extraction model — Memex builds one DSPy LM from `extraction.model` after the default-propagation step and passes it to the retrieval engine. To change the query-expansion model, change the extraction model.
+Query expansion does not have its own `model` field. It reuses the extraction model — Memex builds one DSPy LM from `extraction.model` after the default-propagation step and passes it to the retrieval engine. To change the query-expansion model, change the extraction model. <code-ref path="packages/core/src/memex_core/api.py" lines="445-481" />
 
 Reranking uses a separate model backend (`server.memory.retrieval.reranker`), not a `ModelConfig`. It defaults to the built-in ONNX cross-encoder. To switch to a LiteLLM reranker, see the reranker how-to linked below — the `default_model` setting does not affect it.
 

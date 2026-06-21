@@ -93,9 +93,9 @@ async def main() -> None:
             rule_name='stale-kv-convention',
             lint_type='quality',
             target_type='kv',
-            target_id='global:procedure:deploy:old-way',
-            description='Procedure KV references a deprecated deploy path.',
-            suggested_action='Delete the stale procedure entry.',
+            target_id='global:deploy:default-target',
+            description='KV convention references a deprecated deploy path.',
+            suggested_action='Delete the stale KV entry.',
             proposed_action=ProposedAction(action_name='kv_delete'),
         )
         print(await api.submit_lint_proposals([ad_hoc]))

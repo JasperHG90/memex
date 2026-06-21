@@ -151,7 +151,7 @@ You can run `/recall` with no arguments at all. A `UserPromptExpansion` hook rea
 /recall what is our minimum Python version on this project?
 ```
 
-The skill should now also check the `project:` KV namespace (and any `<scope>:procedure:*` rows under it) and surface the value you wrote.
+The skill should now also check the `project:` KV namespace and surface the value you wrote.
 
 ## Step 6: Record an outcome
 
@@ -208,13 +208,15 @@ Transcript capture is a safety net, not a substitute for `/remember`. With captu
 
 A sibling toggle, `MEMEX_CC_SESSION_BRIEFING=off`, suppresses the briefing fetch on session start instead. Turn it off if you want a faster start and do not need the vault snapshot in every session.
 
-**Check.** Start a new Claude Code session after setting `MEMEX_CC_TRANSCRIPT_CAPTURE=off`. The status line at the top now reads:
+**Check.** Transcript capture has no status-line indicator — the plugin suppresses it silently — so verify by its absence. Start a new Claude Code session after setting `MEMEX_CC_TRANSCRIPT_CAPTURE=off`, run a few exchanges, then exit. Search your vault for the session note:
 
-```
-Memex connected · Transcript capture disabled (MEMEX_CC_TRANSCRIPT_CAPTURE)
+```bash
+memex note search "Session transcript" --vault my-vault
 ```
 
-Run a few exchanges, then exit. There is no new `session:<timestamp>` note in your vault for this run.
+With capture on, each session writes one note titled `Session transcript: session:<timestamp>`. With capture off, no such note appears for this run.
+
+(If you instead set `MEMEX_CC_SESSION_BRIEFING=off`, the session *does* announce it — the start-up status line gains a `· Briefing disabled (MEMEX_CC_SESSION_BRIEFING)` segment.)
 
 ## If a step does not show the expected signal
 
@@ -239,6 +241,8 @@ You now have a working Claude Code integration that:
 - Lets you opt out of expensive behaviours when the session does not warrant them.
 
 Everything you store lives in your own Memex vault on your own server. The plugin is a thin client over the same MCP tools any other Memex-aware agent uses, so the data is portable.
+
+`/remember` and `/recall` are the two you will reach for most, but the plugin ships more: `/handoff` and `/continue` carry context between sessions, `/case` and `/retro` capture reusable how-to procedures, and `/correct` flags a memory that surfaced wrongly. Run `/help` inside Claude Code to see the full set.
 
 ## Next steps
 

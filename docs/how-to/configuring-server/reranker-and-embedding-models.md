@@ -17,9 +17,9 @@ Three knobs sit under `server` in your YAML:
 
 | Field | Discriminator values | Source |
 |---|---|---|
-| `server.embedding_model` | `onnx` (default), `litellm` | <code-ref path="packages/common/src/memex_common/config.py" lines="2129-2133" /> |
-| `server.memory.retrieval.reranker` | `onnx` (default), `litellm`, `disabled` | <code-ref path="packages/common/src/memex_common/config.py" lines="1013-1016" /> |
-| `server.memory.nli.backend` | `onnx` (default), `litellm`, `disabled` | <code-ref path="packages/common/src/memex_common/config.py" lines="425-430" /> |
+| `server.embedding_model` | `onnx` (default), `litellm` | <code-ref path="packages/common/src/memex_common/config.py" lines="2333-2337" /> |
+| `server.memory.retrieval.reranker` | `onnx` (default), `litellm`, `disabled` | <code-ref path="packages/common/src/memex_common/config.py" lines="1015-1018" /> |
+| `server.memory.lint_llm.polarity.backend` | `onnx` (default), `litellm`, `disabled` | <code-ref path="packages/common/src/memex_common/config.py" lines="427-432" /> |
 
 Embedding feeds extraction and every semantic search. Reranker only fires post-retrieval to reorder candidates. They are independent — you can run hosted embeddings with the built-in ONNX reranker, or the reverse.
 
@@ -35,7 +35,7 @@ server:
     dimensions: 384
 ```
 
-The `dimensions` field is critical. Memex's `Vector` columns are fixed at 384 floats wide <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="33" />. If your chosen model emits a different vector width and does not support Matryoshka-style truncation, the database will reject the inserts. Models that DO support dimension reduction (OpenAI `text-embedding-3-*`, Cohere `embed-v3`) accept `dimensions: 384` and return shorter vectors directly.
+The `dimensions` field is critical. Memex's `Vector` columns are fixed at 384 floats wide <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="35" />. If your chosen model emits a different vector width and does not support Matryoshka-style truncation, the database will reject the inserts. Models that DO support dimension reduction (OpenAI `text-embedding-3-*`, Cohere `embed-v3`) accept `dimensions: 384` and return shorter vectors directly.
 
 For a self-hosted provider, add `api_base`:
 
@@ -71,7 +71,7 @@ server:
         type: disabled
 ```
 
-When disabled, retrieval still returns results — they are RRF-fused but not cross-encoder reordered <code-ref path="packages/core/src/memex_core/memory/models/reranking.py" lines="63-64" />. This matches the graceful-degradation contract: optional components fail open.
+When disabled, retrieval still returns results — they are RRF-fused but not cross-encoder reordered <code-ref path="packages/core/src/memex_core/memory/models/reranking.py" lines="66-67" />. This matches the graceful-degradation contract: optional components fail open.
 
 ### 4. Supply the API key
 
@@ -95,7 +95,7 @@ export VOYAGE_API_KEY="..."
 export GEMINI_API_KEY="..."
 ```
 
-Leave `api_key` off in the YAML and LiteLLM will read the env var at call time <code-ref path="packages/common/src/memex_common/config.py" lines="322-326" />. Prefer env vars in production — secrets in YAML show up in backups, log scrapes, and `git diff`.
+Leave `api_key` off in the YAML and LiteLLM will read the env var at call time <code-ref path="packages/common/src/memex_common/config.py" lines="324-328" />. Prefer env vars in production — secrets in YAML show up in backups, log scrapes, and `git diff`.
 
 ### 5. Restart the server
 
@@ -110,7 +110,7 @@ These come from <code-ref path="packages/core/src/memex_core/memory/models/backe
 
 ### 6. About the sigmoid-logit transform (no action needed)
 
-The retrieval engine normalises raw reranker scores to `[0, 1]` with a sigmoid before composing the five boost factors <code-ref path="packages/core/src/memex_core/memory/retrieval/engine.py" lines="1606-1607" />. The built-in ONNX cross-encoder emits raw logits, so the sigmoid lands correctly. LiteLLM rerankers return `relevance_score` already in `[0, 1]` — feeding those through another sigmoid would crush the dynamic range.
+The retrieval engine normalises raw reranker scores to `[0, 1]` with a sigmoid before composing the five boost factors <code-ref path="packages/core/src/memex_core/memory/retrieval/engine.py" lines="1748" />. The built-in ONNX cross-encoder emits raw logits, so the sigmoid lands correctly. LiteLLM rerankers return `relevance_score` already in `[0, 1]` — feeding those through another sigmoid would crush the dynamic range.
 
 The `LiteLLMReranker` adapter handles this for you: it applies the inverse sigmoid (logit) before returning, so the pipeline's downstream sigmoid recovers the provider's original probabilities <code-ref path="packages/core/src/memex_core/memory/models/backends/litellm_reranker.py" lines="78-85" />. There is no knob — you do not need to disable or invert anything. The transform is automatic.
 
@@ -128,7 +128,7 @@ Expect results back within a couple of seconds. Then check the Prometheus endpoi
 curl -s http://localhost:8000/api/v1/metrics | grep memex_cross_encoder_input_count
 ```
 
-`memex_cross_encoder_input_count` is a histogram of how many candidates the reranker actually scored on each call <code-ref path="packages/core/src/memex_core/metrics.py" lines="346-352" />. If the reranker is wired up correctly, the bucket counters increment on every search. Zero observations after a search means the reranker did not fire — usually the backend type is `disabled` or the model failed to load.
+`memex_cross_encoder_input_count` is a histogram of how many candidates the reranker actually scored on each call <code-ref path="packages/core/src/memex_core/metrics.py" lines="359" />. If the reranker is wired up correctly, the bucket counters increment on every search. Zero observations after a search means the reranker did not fire — usually the backend type is `disabled` or the model failed to load.
 
 Cross-check that LiteLLM was used and not the ONNX fallback by grepping the server log for the `LiteLLM embedder initialised` and `LiteLLM reranker initialised` lines from step 5. They print exactly once per process.
 
@@ -136,7 +136,7 @@ Cross-check that LiteLLM was used and not the ONNX fallback by grepping the serv
 
 **`LiteLLM Provider NOT provided` or `Unknown model` at first request.** The `model` field is missing the provider prefix. LiteLLM needs `openai/text-embedding-3-small`, not `text-embedding-3-small`. Add the prefix and restart.
 
-**`pgvector` insert fails with `expected 384 dimensions, not N`.** The new embedding model emits a different vector width and the database column is fixed at 384 <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="33" />. Either set `dimensions: 384` in the embedding config (works for OpenAI `text-embedding-3-*`, Cohere `embed-v3` and other Matryoshka models) or pick a 384-dim model. A wider native model needs a schema migration and a re-embedding pass — out of scope for a config swap.
+**`pgvector` insert fails with `expected 384 dimensions, not N`.** The new embedding model emits a different vector width and the database column is fixed at 384 <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="35" />. Either set `dimensions: 384` in the embedding config (works for OpenAI `text-embedding-3-*`, Cohere `embed-v3` and other Matryoshka models) or pick a 384-dim model. A wider native model needs a schema migration and a re-embedding pass — out of scope for a config swap.
 
 **Old vectors and new vectors will not compare cleanly.** Embedding models are not interchangeable mid-vault. Cosine similarity between an `all-MiniLM-L6-v2` vector and an `openai/text-embedding-3-small` vector is meaningless. After switching the embedding model, run a re-embedding job over existing units, or accept that semantic search recall degrades until older units age out. The reranker is a different story — swapping rerankers is safe at any time, because reranking re-scores raw text, not stored vectors.
 

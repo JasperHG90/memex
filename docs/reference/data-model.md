@@ -6,7 +6,7 @@ Conventions used throughout:
 
 - **Vault-scoped** means the row carries a `vault_id` foreign key to `vaults.id` with `ON DELETE CASCADE`. The default is the well-known global vault UUID `ac9b6a45-d388-5ddb-9fa9-50d4e5bca511`. <code-ref path="packages/common/src/memex_common/config.py" lines="31" />
 - **`created_at` / `updated_at`** use the shared mixin: `TIMESTAMP WITH TIME ZONE`, server default `now()`, and `updated_at` carries `ON UPDATE now()`. <code-ref path="packages/core/src/memex_core/memory/mixins.py" lines="16-26" />
-- **`Vector(384)`** columns hold pgvector embeddings at the project-wide dimension `EMBEDDING_DIMENSION = 384`. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="33" />
+- **`Vector(384)`** columns hold pgvector embeddings at the project-wide dimension `EMBEDDING_DIMENSION = 384`. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="35" />
 - **Numeric defaults** in this doc (intent-class stability days, importance values, exploration weights) reflect the schema's `server_default` and column comments; they may be tuned per deployment in code outside the schema. Treat them as empirical anchors, not contracts.
 
 ## Table index
@@ -34,17 +34,20 @@ Conventions used throughout:
 | `maintenance_proposals` | optional | Finding ledger emitted by the LintService (nullable vault_id). |
 | `consolidation_ticks` | yes | One row per consolidation tick; orchestrator audit. |
 | `lint_llm_quota` | yes | Hour-bucket counter for the 24-hour rolling LLM-lint cost cap. |
+| `lint_rule_telemetry` | optional | Rolled-up per-rule verdict counters; feeds the lint auto-learning loop (nullable vault_id). |
+| `lint_rule_calibration` | optional | Versioned per-rule emission thresholds learned from operator verdicts (nullable vault_id). |
+| `lint_llm_signature` | optional | Versioned compiled DSPy signatures for LLM lint checks (nullable vault_id). |
 | `procedural_entries` | yes | Procedures and strategies — the procedural plane's unit of recall. |
 | `procedural_entry_versions` | yes (via entry) | Append-only version ledger; one row per edit. |
 | `procedural_sources` | yes (via entry) | Provenance / evidence / contradiction edges (case → procedure, etc.). |
 | `procedural_pins` | — (context-keyed) | Briefing-chain pins binding entries to a context. |
 | `procedural_derivation_queue` | yes | Async derivation queue: cases in, procedures/strategies out. |
 
-The full schema currently defines 29 `table=True` models; this page documents the persistent ones. (`maintenance_proposals` is the finding ledger the procedural plane's draft-activation flow also writes to.)
+The full schema currently defines 29 `table=True` models; this page documents all of them. (`maintenance_proposals` is the finding ledger the procedural plane's draft-activation flow also writes to.)
 
 ## `vaults`
 
-Logical isolation boundary. Every vault-scoped table foreign-keys to this row with `ON DELETE CASCADE` — dropping a vault cascades to every note, chunk, memory unit, link, and queue entry that referenced it. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="50-80" />
+Logical isolation boundary. Every vault-scoped table foreign-keys to this row with `ON DELETE CASCADE` — dropping a vault cascades to every note, chunk, memory unit, link, and queue entry that referenced it. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="52-137" />
 
 | Column | Type | Nullable | Default | Notes |
 |--------|------|----------|---------|-------|
@@ -56,11 +59,11 @@ Logical isolation boundary. Every vault-scoped table foreign-keys to this row wi
 
 CHECK constraints:
 
-- `vaults_mw_mode_check`: `mw_mode IN ('stationary', 'ema')`. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="75-80" />
+- `vaults_mw_mode_check`: `mw_mode IN ('stationary', 'ema')`. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="86-89" />
 
 ## `notes`
 
-The raw container for ingested information. One `Note` row becomes one or more `Chunk` rows (and `Node` rows when PageIndex extraction is used), then many `MemoryUnit` rows. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="210-353" />
+The raw container for ingested information. One `Note` row becomes one or more `Chunk` rows (and `Node` rows when PageIndex extraction is used), then many `MemoryUnit` rows. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="241-407" />
 
 | Column | Type | Nullable | Default | Notes |
 |--------|------|----------|---------|-------|
@@ -81,6 +84,7 @@ The raw container for ingested information. One `Note` row becomes one or more `
 | `appended_to` | UUID | yes | NULL | ID of the note this one was appended to. |
 | `archived_at` | timestamptz | yes | NULL | Indexed. Non-NULL means the note was archived; the cascade lives in FSFM via `MemoryUnit.is_deprioritized=true`, not in `status`. |
 | `summary_version_incorporated` | int | yes | NULL | `VaultSummary.version` when this note was last folded into the summary. NULL or `< current version` means pending. |
+| `role` | text | yes | NULL | Procedural-plane provenance discriminator. NULL for ordinary declarative notes. One of `'case'`, `'procedure'`, or `'strategy'` (the V7 cases-as-notes marker). |
 | `created_at` | timestamptz | no | `now()` | |
 | `updated_at` | timestamptz | no | `now()` (also `ON UPDATE`) | |
 
@@ -89,10 +93,12 @@ Indices:
 - `idx_notes_content_hash` on `(content_hash)`.
 - `idx_notes_title_trgm` GIN on `lower(title) gin_trgm_ops` — substring/title-fragment matching.
 - `idx_notes_summary_version` on `(vault_id, summary_version_incorporated)` — drives the "which notes still need to be folded into the summary?" scan.
+- `idx_notes_role` on `(vault_id, role)` partial, `WHERE role IS NOT NULL`.
 
 CHECK constraints:
 
 - `ck_notes_status`: `status IN ('active', 'superseded')`.
+- `ck_notes_role`: `role IS NULL OR role IN ('case', 'procedure', 'strategy')`.
 
 Cascades:
 
@@ -100,7 +106,7 @@ Cascades:
 
 ## `chunks`
 
-Content-addressed paragraph blocks. The chunk carries the embedding; nodes inside the chunk carry the prose. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="356-440" />
+Content-addressed paragraph blocks. The chunk carries the embedding; nodes inside the chunk carry the prose. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="408-494" />
 
 | Column | Type | Nullable | Default | Notes |
 |--------|------|----------|---------|-------|
@@ -136,7 +142,7 @@ JSON shape — `summary`:
 
 ## `nodes`
 
-Section-level text units produced by the PageIndex extraction strategy. Each node maps to a section/subsection in the document hierarchy; many nodes aggregate into one `Chunk`. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="443-536" />
+Section-level text units produced by the PageIndex extraction strategy. Each node maps to a section/subsection in the document hierarchy; many nodes aggregate into one `Chunk`. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="495-606" />
 
 | Column | Type | Nullable | Default | Notes |
 |--------|------|----------|---------|-------|
@@ -168,7 +174,7 @@ CHECK / UNIQUE constraints:
 
 ## `memory_units`
 
-The append-only fact table. The Hindsight "Facts" concept. Memory units extend `MemoryUnitBase` from `memex_common.schemas` — the inheritance is overridden here to attach SQLModel column types. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="539-832" />
+The append-only fact table. The Hindsight "Facts" concept. Memory units extend `MemoryUnitBase` from `memex_common.schemas` — the inheritance is overridden here to attach SQLModel column types. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="607-932" />
 
 | Column | Type | Nullable | Default | Notes |
 |--------|------|----------|---------|-------|
@@ -243,7 +249,7 @@ The `virtual: true` flag marks read-only observation projections of memory units
 
 ## `entities`
 
-Knowledge-graph nodes. Entities are global (not vault-scoped); the per-vault edge structure lives in `unit_entities` and `entity_cooccurrences`. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="865-966" />
+Knowledge-graph nodes. Entities are global (not vault-scoped); the per-vault edge structure lives in `unit_entities` and `entity_cooccurrences`. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="933-1036" />
 
 | Column | Type | Nullable | Default | Notes |
 |--------|------|----------|---------|-------|
@@ -266,7 +272,7 @@ Indices:
 
 ## `entity_aliases`
 
-Alternate names that resolve to a canonical entity. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="969-1005" />
+Alternate names that resolve to a canonical entity. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="1037-1075" />
 
 | Column | Type | Nullable | Default | Notes |
 |--------|------|----------|---------|-------|
@@ -282,7 +288,7 @@ Indices:
 
 ## `unit_entities`
 
-Many-to-many join between memory units and entities. Composite primary key `(unit_id, entity_id)`. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="1008-1063" />
+Many-to-many join between memory units and entities. Composite primary key `(unit_id, entity_id)`. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="1076-1133" />
 
 | Column | Type | Nullable | Default | Notes |
 |--------|------|----------|---------|-------|
@@ -300,7 +306,7 @@ Indices:
 
 ## `entity_cooccurrences`
 
-Cached, undirected edge between two entities — the graph "edge" table. The CHECK constraint `entity_id_1 < entity_id_2` forces every pair into one canonical row (no duplicate "A+B" vs "B+A"). <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="1066-1151" />
+Cached, undirected edge between two entities — the graph "edge" table. The CHECK constraint `entity_id_1 < entity_id_2` forces every pair into one canonical row (no duplicate "A+B" vs "B+A"). <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="1134-1239" />
 
 | Column | Type | Nullable | Default | Notes |
 |--------|------|----------|---------|-------|
@@ -325,7 +331,7 @@ CHECK constraints:
 
 ## `mental_models`
 
-Synthesized per-entity "mental model": a list of observations, structured metadata, an embedding centroid, and Memory Worth counters. One row per `(entity_id, vault_id)`. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="124-207" />
+Synthesized per-entity "mental model": a list of observations, structured metadata, an embedding centroid, and Memory Worth counters. One row per `(entity_id, vault_id)`. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="138-240" />
 
 | Column | Type | Nullable | Default | Notes |
 |--------|------|----------|---------|-------|
@@ -371,7 +377,7 @@ JSON shape — `observations[]` (one element):
 
 ## `memory_links`
 
-Typed edges between memory units. Composite primary key `(from_unit_id, to_unit_id, link_type)` — the same pair may carry multiple typed edges. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="1409-1501" />
+Typed edges between memory units. Composite primary key `(from_unit_id, to_unit_id, link_type)` — the same pair may carry multiple typed edges. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="1477-1576" />
 
 | Column | Type | Nullable | Default | Notes |
 |--------|------|----------|---------|-------|
@@ -400,7 +406,7 @@ CHECK constraints:
 
 ## `reflection_queue`
 
-The deferred work queue for the reflection engine. Workers claim rows via `SELECT ... FOR UPDATE SKIP LOCKED` with leader election via Postgres advisory locks. Two task types share the table: full entity reflection (Phases 0–6) and surgical observation refresh after a memory-unit deprioritization. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="1270-1406" />
+The deferred work queue for the reflection engine. Workers claim rows via `SELECT ... FOR UPDATE SKIP LOCKED` with leader election via Postgres advisory locks. Two task types share the table: full entity reflection (Phases 0–6) and surgical observation refresh after a memory-unit deprioritization. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="1338-1476" />
 
 | Column | Type | Nullable | Default | Notes |
 |--------|------|----------|---------|-------|
@@ -434,7 +440,7 @@ CHECK constraints:
 
 ## `batch_jobs`
 
-Status tracker for asynchronous batch ingestion. The `input_note_keys` array lets `JobManager.create_job` detect overlap with concurrent pending/processing jobs and return HTTP 409 instead of starting a duplicate. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="1172-1267" />
+Status tracker for asynchronous batch ingestion. The `input_note_keys` array lets `JobManager.create_job` detect overlap with concurrent pending/processing jobs and return HTTP 409 instead of starting a duplicate. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="1240-1337" />
 
 | Column | Type | Nullable | Default | Notes |
 |--------|------|----------|---------|-------|
@@ -461,7 +467,7 @@ Indices:
 
 ## `kv_entries`
 
-Namespaced key-value store. Keys MUST start with one of four namespace prefixes: `global:`, `user:`, `project:`, or `app:`. The btree index uses `text_pattern_ops` so prefix queries (`WHERE key LIKE 'project:abc:%'`) hit the index. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="1638-1696" /> Procedural observations live UNDER one of these four scopes as `<scope>:procedure:<verb>:<context-tag>` — bare `procedure:` is rejected (see migration `046_procedure_to_global` which rewrites any legacy bare keys on upgrade).
+Namespaced key-value store. Keys MUST start with one of four namespace prefixes: `global:`, `user:`, `project:`, or `app:`. The btree index uses `text_pattern_ops` so prefix queries (`WHERE key LIKE 'project:abc:%'`) hit the index. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="1706-1772" /> The validator enforces only those four prefixes — `procedure:` is not a namespace, and procedural knowledge is not stored here. Procedures and strategies live in the procedural plane (`procedural_entries`), derived from cases. <code-ref path="packages/common/src/memex_common/kv_utils.py" lines="7-14" />
 
 | Column | Type | Nullable | Default | Notes |
 |--------|------|----------|---------|-------|
@@ -479,11 +485,11 @@ Indices:
 - `idx_kv_key_prefix` btree on `(key)` with `text_pattern_ops` — drives prefix-range scans.
 - `idx_kv_expires_at` btree on `(expires_at)` partial, `WHERE expires_at IS NOT NULL`.
 
-KV entries are not vault-scoped at the table level. Scope lives in the key namespace: `user:`, `project:<id>:`, `app:<app-id>:`, or `global:`. Procedure keys are scoped under one of those four namespaces as `<scope>:procedure:<verb>:<context-tag>` (e.g. `global:procedure:deploy:staging`, `project:<id>:procedure:commit:pr-only`).
+KV entries are not vault-scoped at the table level. Scope lives in the key namespace: `user:`, `project:<id>:`, `app:<app-id>:`, or `global:`. A KV entry holds one static binding — a preference, convention, or setting (e.g. `global:lang:python:min`, `global:lint:commit`). Procedural knowledge is not a KV key form; it lives in the `procedural_entries` table.
 
 ## `vault_summaries`
 
-One row per vault — enforced by the `UNIQUE` constraint on `vault_id`. Cheap-to-compute thematic overview, updated incrementally on note ingestion or regenerated on demand. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="1699-1770" />
+One row per vault — enforced by the `UNIQUE` constraint on `vault_id`. Cheap-to-compute thematic overview, updated incrementally on note ingestion or regenerated on demand. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="1773-1854" />
 
 | Column | Type | Nullable | Default | Notes |
 |--------|------|----------|---------|-------|
@@ -534,7 +540,7 @@ JSON shapes:
 
 ## `note_appends`
 
-One row per atomic delta append to an existing note, keyed on the caller-supplied `append_id` so retries replay the cached outcome without mutating the body twice. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="1773-1826" />
+One row per atomic delta append to an existing note, keyed on the caller-supplied `append_id` so retries replay the cached outcome without mutating the body twice. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="1855-1994" />
 
 | Column | Type | Nullable | Default | Notes |
 |--------|------|----------|---------|-------|
@@ -553,7 +559,7 @@ Indices:
 
 ## `audit_logs`
 
-Append-only security audit trail. Not vault-scoped — covers cross-vault operations like authentication. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="1509-1559" />
+Append-only security audit trail. Not vault-scoped — covers cross-vault operations like authentication. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="1577-1629" />
 
 | Column | Type | Nullable | Default | Notes |
 |--------|------|----------|---------|-------|
@@ -575,7 +581,7 @@ Indices:
 
 ## `outcome_audit_log`
 
-One row per `record_outcome` API call. Records the per-unit verb payload, coverage stats, and exploration tag so signal-quality regressions can be audited offline. Vault-scoped so outcome audit never leaks across tenants. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="1562-1635" />
+One row per `record_outcome` API call. Records the per-unit verb payload, coverage stats, and exploration tag so signal-quality regressions can be audited offline. Vault-scoped so outcome audit never leaks across tenants. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="1630-1705" />
 
 | Column | Type | Nullable | Default | Notes |
 |--------|------|----------|---------|-------|
@@ -610,7 +616,7 @@ The `verb` is the Memory Worth signal — `helpful`, `not_helpful`, or `not_used
 
 ## `maintenance_proposals`
 
-Finding ledger row emitted by the `LintService`. Read-only from the agent surface. The unique partial index on `(rule_name, target_type, target_id, vault_id) WHERE status = 'pending'` makes `LintService.run_rules` idempotent on reruns. `vault_id` is nullable: NULL = global findings; reserved for Tier B. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="1852-1951" />
+Finding ledger row emitted by the `LintService`. Read-only from the agent surface. The unique partial index on `(rule_name, target_type, target_id, vault_id) WHERE status = 'pending'` makes `LintService.run_rules` idempotent on reruns. `vault_id` is nullable: NULL = global findings; reserved for Tier B. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="2581-2687" />
 
 | Column | Type | Nullable | Default | Notes |
 |--------|------|----------|---------|-------|
@@ -642,7 +648,7 @@ CHECK constraints:
 
 ## `consolidation_ticks`
 
-One row per `consolidation_tick(vault_id)` invocation. `services/consolidation.py` is a thin orchestrator over reflection + contradiction + prune-stale; this row is its sole DB write at the end of each tick. `completed_at IS NULL` signals an in-progress tick; the gap between `started_at` and `completed_at` is wall-clock duration. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="1954-2038" />
+One row per `consolidation_tick(vault_id)` invocation. `services/consolidation.py` is a thin orchestrator over reflection + contradiction + prune-stale; this row is its sole DB write at the end of each tick. `completed_at IS NULL` signals an in-progress tick; the gap between `started_at` and `completed_at` is wall-clock duration. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="2688-2779" />
 
 | Column | Type | Nullable | Default | Notes |
 |--------|------|----------|---------|-------|
@@ -664,7 +670,7 @@ Indices:
 
 ## `lint_llm_quota`
 
-Hour-bucket counter for the 24-hour rolling LLM-lint cost cap. One row per `(vault_id, hour_bucket)`. The rolling window is computed by summing the last 24 hour-buckets via the indexed range scan; UPSERT is idempotent through the unique constraint. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="2046-2087" />
+Hour-bucket counter for the 24-hour rolling LLM-lint cost cap. One row per `(vault_id, hour_bucket)`. The rolling window is computed by summing the last 24 hour-buckets via the indexed range scan; UPSERT is idempotent through the unique constraint. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="2885-2928" />
 
 | Column | Type | Nullable | Default | Notes |
 |--------|------|----------|---------|-------|
@@ -679,9 +685,84 @@ Indices / constraints:
 - `idx_lint_llm_quota_vault_hour` on `(vault_id, hour_bucket)`.
 - `ck_lint_llm_quota_count_non_negative`: `count >= 0`.
 
+## `lint_rule_telemetry`
+
+Layer 2 of the lint auto-learning loop: rolled-up per-rule verdict counters over a trailing window. One row per `(rule_name, vault_id, window_start)`; `vault_id IS NULL` is the global rollup across vaults. Read by the calibration and DSPy-compile layers and by `memex lint stats`. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="2780-2884" />
+
+| Column | Type | Nullable | Default | Notes |
+|--------|------|----------|---------|-------|
+| `id` | UUID | no | `gen_random_uuid()` | Primary key. |
+| `rule_name` | text | no | — | Rule that produced the verdicts in this rollup. |
+| `vault_id` | UUID | yes | NULL | Vault scope; NULL = global rollup. Not a foreign key. |
+| `window_start` | timestamptz | no | — | Start of the rolling window (inclusive). |
+| `window_end` | timestamptz | no | — | End of the rolling window (exclusive). |
+| `accept_count` | int | no | `0` | Verdicts where a canned action ran (action_id != `no_op`). |
+| `no_op_count` | int | no | `0` | Verdicts where the operator chose `no_op`. |
+| `dismiss_count` | int | no | `0` | Verdicts the operator dismissed as noise. |
+| `legacy_count` | int | no | `0` | Pre-cockpit rows resolved without a `resolution.followup` block; unclassifiable. |
+| `median_surprise` | float | yes | NULL | Median `evidence.surprise_score` across the window. |
+| `median_time_to_resolve_seconds` | int | yes | NULL | Median seconds between `created_at` and `resolved_at`. |
+| `refreshed_at` | timestamptz | no | `now()` | When the rollup service last (re)wrote this row. |
+
+Indices / constraints:
+
+- `uq_lint_rule_telemetry_rule_vault_window` UNIQUE on `(rule_name, vault_id, window_start)`.
+- `idx_lint_rule_telemetry_rule_window` on `(rule_name, window_end)`.
+- `idx_lint_rule_telemetry_vault_window` on `(vault_id, window_end)`.
+
+## `lint_rule_calibration`
+
+Layer 3 of the lint auto-learning loop: versioned per-rule emission thresholds learned from operator verdicts. The calibration job reads `lint_rule_telemetry`, applies an accept-rate rule, and writes a new row. LLM checks read the latest unsuperseded row per `(rule_name, vault_id)` at emission time. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="2929-3027" />
+
+| Column | Type | Nullable | Default | Notes |
+|--------|------|----------|---------|-------|
+| `id` | UUID | no | `gen_random_uuid()` | Primary key. |
+| `rule_name` | text | no | — | Rule whose thresholds are calibrated. |
+| `vault_id` | UUID | yes | NULL | Vault scope; NULL = global calibration. Not a foreign key. |
+| `version` | int | no | — | Monotonic per `(rule_name, vault_id)`. |
+| `surprise_threshold` | float | yes | NULL | Learned `surprise_score` emission threshold. |
+| `polarity_threshold` | float | yes | NULL | Learned polarity emission threshold. |
+| `learned_at` | timestamptz | no | `now()` | When this calibration row was written. |
+| `learned_from_window_start` | timestamptz | yes | NULL | Start of the telemetry window this row was derived from. |
+| `learned_from_window_end` | timestamptz | yes | NULL | End of that telemetry window. |
+| `superseded_by_version` | int | yes | NULL | Three states: NULL (active), positive int (superseded by that version), `-1` (operator rollback). |
+| `frozen` | bool | no | `false` | When true, auto-calibration skips this rule. |
+| `rationale` | jsonb | yes | NULL | JSON blob explaining the calibration decision. |
+
+Indices / constraints:
+
+- `uq_lint_calibration_rule_vault_version` UNIQUE on `(rule_name, vault_id, version)`.
+- `idx_lint_calibration_active` on `(rule_name, vault_id)` partial, `WHERE superseded_by_version IS NULL`.
+- `ck_lint_rule_calibration_superseded_valid`: `superseded_by_version IS NULL OR superseded_by_version = -1 OR superseded_by_version > 0`.
+
+## `lint_llm_signature`
+
+Layer 4 of the lint auto-learning loop: versioned compiled DSPy signatures for LLM lint checks. The optimizer reads labelled verdicts, compiles a signature, validates against the champion, and promotes the winner. LLM checks load the latest unsuperseded row per `(rule_name, vault_id)` at server startup. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="3028-3125" />
+
+| Column | Type | Nullable | Default | Notes |
+|--------|------|----------|---------|-------|
+| `id` | UUID | no | `gen_random_uuid()` | Primary key. |
+| `rule_name` | text | no | — | Rule this signature was compiled for. |
+| `vault_id` | UUID | yes | NULL | Vault scope; NULL = global signature. Not a foreign key. |
+| `version` | int | no | — | Monotonic per `(rule_name, vault_id)`. |
+| `compiled_program` | jsonb | yes | NULL | Serialised compiled DSPy program. |
+| `demos` | jsonb | yes | NULL | Serialised few-shot demos from the bootstrap. |
+| `base_model` | text | yes | NULL | LM identifier used during compilation. |
+| `validation_score` | float | yes | NULL | Accuracy on the temporal validation split. |
+| `validation_examples` | int | yes | NULL | Number of examples in the validation split. |
+| `promoted_at` | timestamptz | no | `now()` | When this signature was promoted. |
+| `promoted_by` | text | yes | NULL | Actor that promoted this signature. |
+| `superseded_by_version` | int | yes | NULL | Three states: NULL (active), positive int (superseded by that version), `-1` (operator rollback). |
+
+Indices / constraints:
+
+- `uq_lint_llm_signature_rule_vault_version` UNIQUE on `(rule_name, vault_id, version)`.
+- `idx_lint_llm_signature_active` on `(rule_name, vault_id)` partial, `WHERE superseded_by_version IS NULL`.
+- `ck_lint_llm_signature_superseded_valid`: `superseded_by_version IS NULL OR superseded_by_version = -1 OR superseded_by_version > 0`.
+
 ## `procedural_entries`
 
-The unit of recall on the procedural plane: a procedure or strategy with a stable `(kind, scope, verb, context)` identity anchor. A procedure anchors on `(scope, verb, context)`; a strategy anchors on `(scope, verb, NULL)` — the projection over all procedures sharing that scope and verb. Retrieval is anchored on the `trigger`: the trigger embedding is the vector leg of the hybrid search, the tsvector covers the full text. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="1995-2241" />
+The unit of recall on the procedural plane: a procedure or strategy with a stable `(kind, scope, verb, context)` identity anchor. A procedure anchors on `(scope, verb, context)`; a strategy anchors on `(scope, verb, NULL)` — the projection over all procedures sharing that scope and verb. Retrieval is anchored on the `trigger`: the trigger embedding is the vector leg of the hybrid search, the tsvector covers the full text. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="1995-2248" />
 
 | Column | Type | Nullable | Default | Notes |
 |--------|------|----------|---------|-------|
@@ -725,7 +806,7 @@ There is intentionally no CHECK pairing `trigger` with `trigger_embedding`: an e
 
 ## `procedural_entry_versions`
 
-Append-only version ledger for a procedural entry. One row per `update`/`rollback` call; the latest body is always on `procedural_entries` (mutable in place). `version` is monotonic per `entry_id`. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="2244-2299" />
+Append-only version ledger for a procedural entry. One row per `update`/`rollback` call; the latest body is always on `procedural_entries` (mutable in place). `version` is monotonic per `entry_id`. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="2249-2311" />
 
 | Column | Type | Nullable | Default | Notes |
 |--------|------|----------|---------|-------|
@@ -746,7 +827,7 @@ Constraints: `uq_procedural_entry_versions_entry_version` UNIQUE on `(entry_id, 
 
 ## `procedural_sources`
 
-Provenance, evidence, and contradiction edges into a procedural entry. A case → procedure edge has role `provenance`; a procedure → evidence-fact edge has role `evidence`; a case arguing against a procedure has role `contradiction`. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="2302-2387" />
+Provenance, evidence, and contradiction edges into a procedural entry. A case → procedure edge has role `provenance`; a procedure → evidence-fact edge has role `evidence`; a case arguing against a procedure has role `contradiction`. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="2312-2399" />
 
 | Column | Type | Nullable | Default | Notes |
 |--------|------|----------|---------|-------|
@@ -767,7 +848,7 @@ Constraints:
 
 ## `procedural_pins`
 
-Context-binding pin: a `(context_key, entry_id, position)` triple. Pins form an implicit chain `global → project:<id> → app:<agent_identity>`. Lower position = higher priority; agents read pins in ascending position order. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="2390-2450" />
+Context-binding pin: a `(context_key, entry_id, position)` triple. Pins form an implicit chain `global → project:<id> → app:<agent_identity>`. Lower position = higher priority; agents read pins in ascending position order. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="2400-2462" />
 
 | Column | Type | Nullable | Default | Notes |
 |--------|------|----------|---------|-------|
@@ -785,7 +866,7 @@ Constraints:
 
 ## `procedural_derivation_queue`
 
-Async derivation queue — cases in, procedures/strategies out. Workers claim rows via `SELECT ... FOR UPDATE SKIP LOCKED`, the same leader-election-free pattern the reflection queue uses. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="2453-2543" />
+Async derivation queue — cases in, procedures/strategies out. Workers claim rows via `SELECT ... FOR UPDATE SKIP LOCKED`, the same leader-election-free pattern the reflection queue uses. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="2463-2580" />
 
 | Column | Type | Nullable | Default | Notes |
 |--------|------|----------|---------|-------|

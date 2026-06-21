@@ -72,7 +72,7 @@ Recipes for a specific job. Assumes Memex is already installed.
 | [Review and apply lint proposals](how-to/linting.md) | Walk the lint ledger; apply LLM-proposed winners. |
 | [Review proposals in the maintenance cockpit](how-to/maintenance-cockpit.md) | Textual TUI for picking canned remediations + reverse. |
 | [Trace lineage and unit history](how-to/trace-lineage.md) | Follow a fact back to its source note and through its versions. |
-| [Inspect Memex with the diagnose CLI](how-to/diagnostics.md) | UMAP, retrieval breakdown, vault summaries, lint dashboard. |
+| [Inspect Memex with the diagnostics CLI](how-to/diagnostics.md) | UMAP, retrieval breakdown, vault summaries, lint dashboard. |
 
 ### Operations
 

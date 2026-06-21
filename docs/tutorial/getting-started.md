@@ -154,10 +154,10 @@ The `--vault` (`-v`) flag picks the vault. The positional argument is the note's
 
 ```
 Adding Note
-Note added successfully. ID: <uuid>
+Note added successfully! UUID: <uuid>
 ```
 
-On a machine with an LLM API key set, the server now extracts memory units in the background. Without one, the note is still searchable by its raw text — fact extraction simply does not run.
+If extraction finished before the command returned, you also see an `Extracted N memory units.` line. On a machine with an LLM API key set, the server extracts memory units in the background, so that line often appears on a later run rather than this one. Without a key, the note is still searchable by its raw text — fact extraction simply does not run, and no extraction line appears.
 
 You can confirm the note is there:
 

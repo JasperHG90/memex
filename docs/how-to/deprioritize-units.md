@@ -51,7 +51,7 @@ memex_memory_deprioritize(
 )
 ```
 
-`vault_id` is optional and defaults to your active write vault. The return shape is `{"unit_id": "<uuid>", "is_deprioritized": true, "reason": "<reason>"}`. <code-ref path="packages/mcp/src/memex_mcp/server.py" lines="3781-3831" />
+`vault_id` is optional and defaults to your active write vault. The return shape is `{"unit_id": "<uuid>", "is_deprioritized": true, "reason": "<reason>"}`. <code-ref path="packages/mcp/src/memex_mcp/server.py" lines="3903-3972" />
 
 ### 3. Confirm the unit no longer surfaces
 
@@ -67,7 +67,7 @@ Default search excludes deprioritized units. To verify the unit still exists (an
 memex memory view 7f4c2a18-5d1e-4f9b-9c30-2a1b7c8d4e5f
 ```
 
-The `Status:` line still reads `active`. The deprioritized state is a separate boolean that retrieval filters honour by default. From MCP, set `include_deprioritized=true` on `memex_memory_search` to bring hidden units back into one specific result set. <code-ref path="packages/mcp/src/memex_mcp/server.py" lines="1483-1494" />
+The `Status:` line still reads `active`. The deprioritized state is a separate boolean that retrieval filters honour by default. From MCP, set `include_deprioritized=true` on `memex_memory_search` to bring hidden units back into one specific result set. <code-ref path="packages/mcp/src/memex_mcp/server.py" lines="1512-1560" />
 
 ### 4. Restore the unit
 
@@ -79,7 +79,7 @@ memex memory restore 7f4c2a18-5d1e-4f9b-9c30-2a1b7c8d4e5f
 
 The CLI prints `Memory unit <id> restored.` and the unit re-enters default-scope search. Restore writes its own audit row; the deprioritize and restore events both stay in the log. <code-ref path="packages/cli/src/memex_cli/memory.py" lines="200-227" />
 
-The MCP equivalent is `memex_memory_restore(unit_id, vault_id=None)`, which returns `{"unit_id": "<uuid>", "is_deprioritized": false}`. <code-ref path="packages/mcp/src/memex_mcp/server.py" lines="3834-3878" />
+The MCP equivalent is `memex_memory_restore(unit_id, vault_id=None)`, which returns `{"unit_id": "<uuid>", "is_deprioritized": false}`. <code-ref path="packages/mcp/src/memex_mcp/server.py" lines="3976-4014" />
 
 ### 5. Archiving a whole note
 
@@ -89,7 +89,7 @@ If every unit extracted from one note is stale — the meeting that produced the
 memex_set_note_status(note_id="<note-uuid>", status="archived")
 ```
 
-The note's `archived_at` timestamp is set and a cascade flips every unit derived from the note to `is_deprioritized=true`. The units stay `status=active`; they are simply filtered from default search. To bring the note back, call the same tool with `status="active"` — the cascade reverses, `archived_at` clears, and the units rejoin the default surface. <code-ref path="packages/mcp/src/memex_mcp/server.py" lines="387-444" />
+The note's `archived_at` timestamp is set and a cascade flips every unit derived from the note to `is_deprioritized=true`. The units stay `status=active`; they are simply filtered from default search. To bring the note back, call the same tool with `status="active"` — the cascade reverses, `archived_at` clears, and the units rejoin the default surface. <code-ref path="packages/mcp/src/memex_mcp/server.py" lines="443-491" />
 
 `memex_set_note_status` is currently MCP-only; there is no `memex note set-status` CLI command. If you live on the CLI, archive a note via the MCP tool through your agent, or call the underlying HTTP endpoint directly.
 
@@ -103,7 +103,7 @@ You have done the job if:
 
 ## Troubleshooting
 
-**The call returned HTTP 400 with `source_memory_units` in the body.** You passed an observation UUID, not a memory-unit UUID. Observations are read-only projections synthesized by reflection; deprioritizing them directly is not supported. The 400 body lists the underlying memory units that produced the observation — re-issue the deprioritize call against one of those IDs and the observation will refresh asynchronously on the surviving evidence. <code-ref path="packages/core/src/memex_core/services/units.py" lines="216-238" />
+**The call returned HTTP 400 with `source_memory_units` in the body.** You passed an observation UUID, not a memory-unit UUID. Observations are read-only projections synthesized by reflection; deprioritizing them directly is not supported. The 400 body lists the underlying memory units that produced the observation — re-issue the deprioritize call against one of those IDs and the observation will refresh asynchronously on the surviving evidence. <code-ref path="packages/core/src/memex_core/services/units.py" lines="47-90" />
 
 **Auto-band keeps re-flipping the unit.** A background scorer runs the FSFM-inspired curate pass on a timer and flips low-Memory-Worth units to `is_deprioritized=true` on its own. To stop a restored unit from being immediately re-deprioritized, the scorer enforces a cooldown window after every restore audit row — auto-banding is skipped if a `memory_restore` event exists for the unit within `cooldown_days`. If you keep racing the scheduler, lengthen the cooldown in your config, or record an outcome (`memex_record_outcome` with `verb=helpful`) so the unit's Memory Worth climbs out of the auto-band zone. <code-ref path="packages/core/src/memex_core/services/deprioritize_score.py" lines="1-50" />
 

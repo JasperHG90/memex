@@ -15,10 +15,12 @@ One row per suite. "Scope" names the components the suite gates against. "Scenar
 | `acme_corp` | Extraction, retrieval strategies, entity resolution, reflection, MW outcomes, deprioritization, intent classification, KV roundtrip, vault isolation | 40 | 1.0000 (40 / 40) | 2026-05-16 |
 | `ai_research_lab` | Entity resolution edge cases (abbreviated names, titles), graph cooccurrence, cross-document links | 9 | 1.0000 (9 / 9) | 2026-05-16 |
 | `project_nexus` | Contradiction detection, supersession-aware ranking, V1 lint pipeline, surprise-gated LLM lint, inline-note feature | 11 | 1.0000 (11 / 11) | 2026-05-16 |
-| `agent_integration` | Hermes + Claude Code agent surface: triage, synthesis, temporal, entity, survey, faithfulness, navigation, feedback discipline, KV namespace routing, lifecycle choice | 39 | 1.0000 (h x glm-5.1) / 1.0000 (cc x opus-4.7) | 2026-05-18 |
+| `agent_integration` | Hermes + Claude Code agent surface: triage, synthesis, temporal, entity, survey, faithfulness, navigation, feedback discipline, KV namespace routing, lifecycle choice, procedural plane | 48 | 1.0000 (h x glm-5.1) / 1.0000 (cc x opus-4.7) | 2026-05-18 |
 | `retrieval_stability` | Top-k ranking regression: cross-encoder rerank, RRF, MMR, log-additive bounded-boost composition, note-rerank pipeline | 100 | 0.9700 (97 / 100) | 2026-05-18 |
+| `procedural_plane` | V7 procedural plane public contract: identity-anchor uniqueness, procedure/strategy kinds, hybrid search (BM25+vector+RRF), briefing-card pin chain, deprecate lifecycle, case-submit, derivation | 11 | — | — |
+| `maintenance_cockpit` | Lint auto-learning loop (Layers 1-4): cooldown suppression, evidence-blob integrity, telemetry rollup, threshold calibration, auto-apply gate, optimizer compile, external-proposal ingress, catalogue discoverability, routing-proposal lifecycle | 14 | — | — |
 
-Counts cited inline: `acme_corp` <code-ref path="packages/eval/src/memex_eval/suites/acme_corp/__init__.py" lines="111-742" />, `agent_integration` <code-ref path="packages/eval/src/memex_eval/suites/agent_integration/__init__.py" lines="126-1140" />, `ai_research_lab` <code-ref path="packages/eval/src/memex_eval/suites/ai_research_lab/__init__.py" lines="48-160" />, `project_nexus` <code-ref path="packages/eval/src/memex_eval/suites/project_nexus/__init__.py" lines="51-260" />, `retrieval_stability` <code-ref path="packages/eval/src/memex_eval/suites/retrieval_stability/__init__.py" lines="345-360" />.
+Counts cited inline: `acme_corp` <code-ref path="packages/eval/src/memex_eval/suites/acme_corp/__init__.py" lines="111-742" />, `agent_integration` <code-ref path="packages/eval/src/memex_eval/suites/agent_integration/__init__.py" lines="76-1686" />, `ai_research_lab` <code-ref path="packages/eval/src/memex_eval/suites/ai_research_lab/__init__.py" lines="48-155" />, `project_nexus` <code-ref path="packages/eval/src/memex_eval/suites/project_nexus/__init__.py" lines="51-259" />, `retrieval_stability` <code-ref path="packages/eval/src/memex_eval/suites/retrieval_stability/__init__.py" lines="345-360" />, `procedural_plane` <code-ref path="packages/eval/src/memex_eval/suites/procedural_plane/__init__.py" lines="108-576" />, `maintenance_cockpit` <code-ref path="packages/eval/src/memex_eval/suites/maintenance_cockpit/__init__.py" lines="170-934" />.
 
 ---
 
@@ -88,11 +90,11 @@ Tests contradiction detection, supersession ranking, and the lint pipeline on fi
 
 Tests how well an LLM agent — Claude Code via MCP, Hermes via the `memex-hermes-plugin`, or a Claude CLI driven by Ollama — uses Memex's tool surface to answer questions about a vault. Internal suites test the API directly; this suite tests the agent-facing surface.
 
-**Layers** — smoke (3), triage (3), temporal (3), entity (3), survey (2), faithfulness (2), navigation (2), feedback (4), KV (12), lifecycle (4). Suite version 2.0.0.
+**Layers** — smoke (3), triage (3), temporal (3), entity (3), survey (2), faithfulness (2), navigation (2), feedback (5), KV (12), lifecycle (4), procedural (6), procedural_lh (3). Suite version 2.0.0.
 
 | Field | Value |
 |---|---|
-| Scenarios | 39 (incl. one xfail tripwire for the `memex_delete_assets` gap in the Hermes plugin) |
+| Scenarios | 48 (incl. three xfail tripwires for the `delete_assets`, `get_due_for_review`, and `memory_review` gaps in the Hermes plugin) |
 | Headline metric | `suite.pass_rate_non_mutating` |
 | Secondary metric | `metric.graded_score.mean` (use this for model ranking) |
 | Last run | 2026-05-18, single replicate, post-harness-expansion |
@@ -157,6 +159,38 @@ Follow-up work tracked in the suite README: per-query `top_k`, plus recall@k and
 ### Snapshot determinism
 
 The shipped snapshot (~1.8 MB, checked into the repo) preserves `Note.id`, `MemoryUnit.id`, `Chunk.id`, and `Entity.id` verbatim across import. Embeddings are *regenerated* from text at import time using the ONNX backend named in `manifest.json`. On the reference CPU ISA the regeneration is bit-exact; cross-architecture drift (aarch64 capture imported on x86_64 or vice versa) is out of scope for this suite.
+
+---
+
+## `procedural_plane`
+
+Pins the public contract of the V7 procedural plane (procedure / strategy — the third Memex memory plane) and gates write-routing for the agentic surfaces (Hermes briefing block, Claude Code SessionStart hook). Seeded entries are written directly via the `procedural_upsert` setup action, bypassing LLM extraction so the state is deterministic.
+
+**Scope** — identity-anchor uniqueness and idempotency (`(kind, scope, verb, context)` UNIQUE NULLS NOT DISTINCT); the two kinds (`procedure` anchored on `verb`+`context`, `strategy` anchored on `verb` with `context` forbidden); scopes `global` / `project:<id>` / `app:<id>` (no `user` scope); `trigger` as the required retrieval key; hybrid search (BM25 + vector + RRF); the briefing-card pin chain (`global → project → app`, union, sorted by pin position); the deprecate lifecycle (drops from default `status='published'` search, remains reachable via `get`); case-submit filing notes (`role='case'`); and derivation distilling a procedure from cases.
+
+| Field | Value |
+|---|---|
+| Scenarios | 11 |
+| Headline metric | `suite.pass_rate` |
+| Source | `packages/eval/src/memex_eval/suites/procedural_plane/README.md` |
+
+**Prerequisites**: a running Memex server with the procedural plane enabled (`server.memory.procedural.enabled=true`); LLM-free setup path (seeded via `procedural_upsert`).
+
+---
+
+## `maintenance_cockpit`
+
+Regression gates for the lint auto-learning loop (Layers 1-4), exercising the lint lifecycle end-to-end plus the external-proposal ingress against the real `POST /lint/proposals` path.
+
+**Scope** — cooldown suppression (a resolved finding does not re-appear within the 30-day window); evidence-blob integrity (`evidence.resolution.followup` carries action, params, applied_state, prior_state, reviewer note); telemetry verdict rollup (accept/dismiss per-rule counts); threshold calibration (raises `surprise_threshold` above the 0.7 default on low accept_rate; stable in the ~0.5 dead zone); the auto-apply confidence gate (0.95 threshold); the DSPy optimizer compile (`lint_llm_signature` row with version >= 1 and non-null `validation_score`); external-proposal create / dedup / cooldown-after-dismiss / catalogue-action resolution; catalogue discoverability via `GET /lint/actions`; and the `lint_type=routing` proposal lifecycle.
+
+| Field | Value |
+|---|---|
+| Scenarios | 14 |
+| Headline metric | `suite.pass_rate` |
+| Source | `packages/eval/src/memex_eval/suites/maintenance_cockpit/README.md` |
+
+**Prerequisites**: Docker (testcontainer Postgres); NLI polarity classifier enabled (`server.memory.lint_llm.polarity.enabled=true`); LLM API key for the lint LLM pass; `MEMEX_EVAL_MODE=1` for the synthetic-finding scenarios (the external-proposal scenarios need no eval mode).
 
 ---
 

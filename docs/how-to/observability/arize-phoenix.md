@@ -8,7 +8,7 @@ This guide walks you through enabling tracing on an existing Memex server and co
 
 - A running Memex server you can restart and edit config for. See [the configuration guide](configuring-server/default-model.md) if you have not set one up yet.
 - A reachable Phoenix OTLP endpoint. The Phoenix UI defaults to port `6006` and its trace receiver to `http://<host>:6006/v1/traces`. Self-hosted Phoenix (`pip install arize-phoenix && phoenix serve`) and Phoenix Cloud both work.
-- The `tracing` extra installed on `memex-core`. The dependencies live behind an opt-in extra so default installs stay small. <code-ref path="packages/core/pyproject.toml" lines="73-79" />
+- The `tracing` extra installed on `memex-core`. The dependencies live behind an opt-in extra so default installs stay small. <code-ref path="packages/core/pyproject.toml" lines="78-84" />
 
   ```bash
   uv tool install "memex-cli[server,tracing] @ git+https://github.com/JasperHG90/memex.git@latest#subdirectory=packages/cli"
@@ -31,7 +31,7 @@ Tracing lives under `server.tracing` in the config schema. Four fields matter, a
 
 Pick one of two ways to set them.
 
-**Option A — environment variables.** Memex maps nested config to env vars with the prefix `MEMEX_` and the delimiter `__`. <code-ref path="packages/common/src/memex_common/config.py" lines="2397-2400" />
+**Option A — environment variables.** Memex maps nested config to env vars with the prefix `MEMEX_` and the delimiter `__`. <code-ref path="packages/common/src/memex_common/config.py" lines="2655-2657" />
 
 ```bash
 export MEMEX_SERVER__TRACING__ENABLED=true
@@ -64,7 +64,7 @@ YAML supports `${VAR}` interpolation for secrets — keep the API key out of the
 
 ### 2. Restart the server
 
-The tracing exporter is wired during startup; config changes do not hot-reload. <code-ref path="packages/core/src/memex_core/server/__init__.py" lines="92-96" /> Restart with whatever runs your server — `memex server start`, `systemctl restart memex`, your container orchestrator, or a process manager.
+The tracing exporter is wired during startup; config changes do not hot-reload. <code-ref path="packages/core/src/memex_core/server/__init__.py" lines="94-98" /> Restart with whatever runs your server — `memex server start`, `systemctl restart memex`, your container orchestrator, or a process manager.
 
 On boot you should see this log line:
 
@@ -96,7 +96,7 @@ A healthy server returns:
 
 ### Generate traffic with a known session ID
 
-The middleware reads an `X-Session-ID` header from each request and binds it to the active span via the OpenInference `using_session` context manager — so Phoenix can group spans into sessions. <code-ref path="packages/core/src/memex_core/server/__init__.py" lines="334-354" /> Send a search with a session ID you will remember:
+The middleware reads an `X-Session-ID` header from each request and binds it to the active span via the OpenInference `using_session` context manager — so Phoenix can group spans into sessions. <code-ref path="packages/core/src/memex_core/server/__init__.py" lines="342-362" /> Send a search with a session ID you will remember:
 
 ```bash
 curl -s http://localhost:8000/api/v1/memory/search \

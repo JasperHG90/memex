@@ -45,7 +45,7 @@ The half-life is global; per-vault overrides preserve the older `stationary` mod
 
 <code-ref path="packages/core/src/memex_core/memory/retrieval/mw_ema.py" lines="24-43" />
 
-The `unused_co_count` counter is engagement-only — it does NOT enter the posterior. A unit that retrieves often without being used does not get punished for it, but a derived `engagement_rate` is exposed to the curate flow for diagnostics. Folding unused into the posterior would have amounted to declaring un-engagement as failure — a category error: a unit can be correctly retrieved (it is relevant to the query) and still not be load-bearing for the answer (the agent had enough signal elsewhere). The three-verb taxonomy preserves the distinction. (Defaults are literature-precedent; not fine-tuned.)
+The `unused_co_count` counter is engagement-only — it does NOT enter the posterior. A unit that retrieves often without being used does not get punished for it; the count is recorded raw for diagnostics rather than folded into any score. Folding unused into the posterior would have amounted to declaring un-engagement as failure — a category error: a unit can be correctly retrieved (it is relevant to the query) and still not be load-bearing for the answer (the agent had enough signal elsewhere). The three-verb taxonomy preserves the distinction. (Defaults are literature-precedent; not fine-tuned.)
 
 ### The FSFM composite
 
@@ -157,15 +157,11 @@ A concrete call looks like this. Imagine the agent retrieved four units for a "h
 
 The handler bumps `success_co_count` on the first three units and `unused_co_count` on the fourth, writes one audit row with `coverage_ratio = 4/4 = 1.0`, and returns. The reason strings are what the audit log will surface later if you ask the dashboard "why does this unit have a high Memory Worth?" — without them, the posterior is a number without a story.
 
-### Engagement rate: the derived signal
+### The `unused_co_count` signal
 
-Because `unused_co_count` exists separately, a derived `engagement_rate` is exposed to the curate flow:
+`not_used` is tracked on its own counter, `unused_co_count`, and it is deliberately kept out of the Memory Worth posterior. Bumping it does not reset the Beta-Bernoulli decay clock — only `helpful` and `not_helpful` do that — so a unit that surfaces often but rarely earns its place in an answer does not have its score dragged down by the engagement signal alone. <code-ref path="packages/core/src/memex_core/services/outcomes.py" lines="292-298" />
 
-```
-engagement_rate = (helpful + not_helpful) / (helpful + not_helpful + not_used)
-```
-
-A unit with five `helpful` and zero anything-else lands at 1.0 — every retrieval was load-bearing. A unit with two `helpful` and eight `not_used` lands at 0.2 — it surfaces often but rarely matters to the answer. The metric does not enter the FSFM composite directly; it is a diagnostic surface, useful for spotting units that game retrieval ranking without earning their place in answers. The dashboard exposes it; the lint rules do not act on it. A future tuning pass could weight it into the composite, but the current default is to keep it visible-only.
+The count is recorded raw. Memex does not derive a ratio from it today, and the FSFM composite does not read it. It exists so the audit trail can distinguish "this unit was retrieved and ignored" from "this unit was never retrieved" — a distinction a future tuning pass could weight into the composite, but the current default is to keep the count visible-only.
 
 ## Mechanism: one composite, end to end
 
@@ -325,7 +321,7 @@ There are three ways a unit can drop out of default retrieval, and they live on 
 - **`status = 'stale'`** — the supersede-time hard-filter. Set when a note is superseded (`Notes.set_note_status(note_id, 'superseded')`). Cascades from the note to its units. Counter values preserved (P6); FSFM short-circuits to score 0. Reactivation via `set_note_status('active')` flips the unit back.
 - **`Note.archived_at` is not NULL** — the archive-time cascade. Set when a note is archived. Sets the unit's `is_deprioritized = true` via a `_deprioritize_note_units` helper, and the note row carries `archived_at`. Default reads filter `WHERE archived_at IS NULL` so archived notes stay off the agent's default surface without touching status. Reactivation clears `archived_at` and re-activates the units.
 
-The three columns are deliberately orthogonal. A unit can be active and deprioritized (curate-time call). A unit can be stale and not deprioritized (superseded but the note itself was not curated). A unit can be archived (note-level cascade) without ever having been individually deprioritized. The retrieval default-filter applies all three predicates together (`is_deprioritized = false AND status = 'active' AND archived_at IS NULL`), so any one of them hides the unit. Each can be reversed by its own paired tool. (The orthogonality is what makes the audit trail readable: you can always tell whether a unit dropped out because of curation, supersession, or archive.)
+The three columns are deliberately orthogonal. A unit can be active and deprioritized (curate-time call). A unit can be stale and not deprioritized (superseded but the note itself was not curated). A unit can be archived (note-level cascade) without ever having been individually deprioritized. The memory-unit default-filter applies two predicates — `status = 'active' AND is_deprioritized = false`. <code-ref path="packages/core/src/memex_core/memory/retrieval/strategies.py" lines="113-132" /> Archive doesn't need a third predicate on the unit query: the archive cascade sets `is_deprioritized = true` on each unit, so the same `is_deprioritized = false` clause hides it. (The `archived_at IS NULL` clause lives on note and mental-model reads, not on the unit filter.) Each state can be reversed by its own paired tool. (The orthogonality is what makes the audit trail readable: you can always tell whether a unit dropped out because of curation, supersession, or archive.)
 
 ## Trade-offs and alternatives
 

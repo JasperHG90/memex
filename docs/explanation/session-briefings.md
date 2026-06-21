@@ -2,7 +2,7 @@
 
 When an agent boots into a Memex-backed session, the first turn is the most expensive. The agent has no idea what's in the vault, which conventions you've stored, what the top entities are, or which procedures you expect it to follow. It can find out — by calling `memex_get_vault_summary`, `memex_kv_list`, and a handful of survey tools — but only after you've already asked it a question. By the time it answers, you've paid for two or three discovery round-trips on every cold start.
 
-A **session briefing** is the markdown blob Memex injects into the agent's system prompt *before* the first user turn. It is a pre-rendered, token-budgeted snapshot of the things an agent almost always needs to know up front: the vault narrative, top mental models, KV facts, procedures, and the list of vaults available. The agent reads it once and answers from it.
+A **session briefing** is the markdown blob Memex injects into the agent's system prompt *before* the first user turn. It is a pre-rendered, token-budgeted snapshot of the things an agent almost always needs to know up front: the vault narrative, top mental models, KV facts, pinned procedural cards, and the list of vaults available. The agent reads it once and answers from it.
 
 A briefing for a small project vault looks roughly like this:
 
@@ -17,11 +17,11 @@ A briefing for a small project vault looks roughly like this:
 - `project:memex:lang:python`: 3.12
 - `project:memex:style:line-length`: 100
 
-## Procedures
+## Procedural Cards
 
-- **answer:session-briefing** — When the user asks "what's in this vault",
-  answer from the sections rendered above; do not re-fetch with
-  memex_get_vault_summary or memex_kv_list.
+- **procedure/answer:session-briefing** — When the user asks "what's in
+  this vault", answer from the sections rendered above; do not re-fetch
+  with memex_get_vault_summary or memex_kv_list. _(pinned: global)_
 
 ## Vault Overview
 
@@ -73,7 +73,7 @@ Three layers of prose stack to make the prompt the agent sees on turn one. Each 
 | Tier 1a — transport | MCP `instructions=` + per-tool `description=` | The bare protocol facts an MCP client needs | Recomputed each turn |
 | Tier 1b — universal | `compose_universal()` in `memex_common.agent_surface` | Storage model, retrieval routing, KV namespace rules, citation discipline | Deterministic; same bytes every session |
 | Tier 2 — per-agent | `HERMES_HARNESS` and `CLAUDE_CODE_HARNESS` in `memex_common.agent_harnesses` | Slash commands, capture cadence, prohibitions specific to the harness | Deterministic per harness |
-| Briefing — per-vault | `SessionBriefingService.generate()` in `memex_core.services.session_briefing` | Vault overview, top mental models, KV facts, procedures, available vaults | Refreshed by the scheduler |
+| Briefing — per-vault | `SessionBriefingService.generate()` in `memex_core.services.session_briefing` | Vault overview, top mental models, KV facts, pinned procedural cards, available vaults | Refreshed by the scheduler |
 
 The briefing is the only one of these that changes between sessions for the same vault. Tier 1b and Tier 2 are byte-identical given the same harness — that determinism is what lets the prompt-prefix cache survive across sessions. <code-ref path="packages/cli/src/memex_cli/agent_surface.py" lines="29-31" />
 
@@ -89,7 +89,7 @@ The briefing sits *after* the deterministic prefix. Whatever bytes follow the br
 └────────────────────────────────────────────┘
 ```
 
-Tier 2 — newly shipped — includes one rule that depends on the briefing being present. The `answer_from_briefing` constraint tells the agent that if it sees vault overview, themes, top entities, KV facts, procedures, or available-vaults sections rendered above, it should answer overview-shape questions from those sections rather than re-fetching them. <code-ref path="packages/common/src/memex_common/agent_harnesses.py" lines="91-93" /> The briefing isn't decorative: the agent's harness is telling it to *use* what's been pre-loaded.
+Tier 2 — newly shipped — includes one rule that depends on the briefing being present. The `answer_from_briefing` constraint tells the agent that if it sees vault overview, themes, top entities, KV facts, pinned procedural cards, or available-vaults sections rendered above, it should answer overview-shape questions from those sections rather than re-fetching them. <code-ref path="packages/common/src/memex_common/agent_harnesses.py" lines="89-90" /> The briefing isn't decorative: the agent's harness is telling it to *use* what's been pre-loaded.
 
 ## Mechanism: what happens when a Claude Code session starts
 
@@ -119,17 +119,18 @@ If the server is unreachable, the hook emits a `systemMessage` telling you to st
 <code-ref path="packages/claude-code-plugin/scripts/on_session_start.sh" lines="143-148" />
 
 **Step 4 — server composes the briefing.**
-Inside the server, `SessionBriefingService.generate()` fetches four things in parallel:
+Inside the server, `SessionBriefingService.generate()` fetches five things in parallel:
 
 - the `VaultSummary` row,
 - the vault's mental models, sorted by trend-weighted importance,
-- KV entries across the briefing's namespaces (`global`, `user`, `app:claude-code`, and `project:<id>` when scoped) — procedure rows live UNDER those scopes as `<scope>:procedure:<verb>:<context-tag>` and render in their own section,
+- KV entries across the briefing's namespaces (`global`, `user`, `app:claude-code`, and `project:<id>` when scoped),
+- pinned procedural cards from the procedural plane — procedures are NOT KV rows; they live in their own plane and surface here as cards (see below),
 - and the list of available vaults.
 
-<code-ref path="packages/core/src/memex_core/services/session_briefing.py" lines="95-117" />
+<code-ref path="packages/core/src/memex_core/services/session_briefing.py" lines="191-245" />
 
-It then assembles six sections in priority order: header, KV facts, procedures, vault overview, top mental models, and available vaults.
-<code-ref path="packages/core/src/memex_core/services/session_briefing.py" lines="138-172" />
+It then assembles six sections in priority order: header, KV facts, procedural cards, vault overview, top mental models, and available vaults.
+<code-ref path="packages/core/src/memex_core/services/session_briefing.py" lines="265-318" />
 
 **Step 5 — overflow trim if needed.**
 The composed sections get a `len(text) // 4` token estimate.
@@ -140,12 +141,12 @@ If the estimate is over the budget (default 2000 tokens), the service walks a fi
 3. Compact the vault overview to bare theme names.
 4. Drop the overview entirely.
 5. Drop KV namespaces in `app: → user: → project:` order.
-6. Trim procedures oldest-first.
+6. Drop the procedural-cards section, whole.
 7. Drop the available-vaults section.
 
-<code-ref path="packages/core/src/memex_core/services/session_briefing.py" lines="393-491" />
+<code-ref path="packages/core/src/memex_core/services/session_briefing.py" lines="513-586" />
 
-The order isn't arbitrary. It preserves the highest-signal sections — procedures and the vault narrative — until last.
+The order isn't arbitrary. The procedural cards drop as one block rather than getting trimmed bullet by bullet, and they go before the available-vaults section. Both the cards and the vaults list are discovery surfaces the agent can re-fetch on demand, so they yield budget ahead of the KV facts and mental models the agent can't cheaply recover.
 
 **Step 6 — assemble the envelope.**
 Back in the hook, the briefing markdown gets concatenated with the per-session bits: a "Per-project vault" header telling the agent which vault to write to, the auto-generated session-note key, and an "Auto-injected metadata" block listing the tags every `memex_add_note` from this session will inherit.
@@ -162,12 +163,13 @@ The Hermes path is similar in spirit but in-process. `BriefingCache` in the Herm
 The six sections of a briefing aren't computed at briefing time. Each one is a projection of state that already exists in the database:
 
 - The **header** stats come from the `VaultSummary.inventory` JSONB column — note counts, entity counts, the 7-day recent-activity window. The vault-summary service computes those as SQL aggregates over `Note`, `MemoryUnit`, and `Entity` on its scheduled tick.
-- The **KV facts** and **procedures** come from the `KVEntry` table, filtered to the briefing's namespaces (`global`, `user`, `app:claude-code`, and `project:<id>`). Procedure rows — keys shaped like `<scope>:procedure:<verb>:<context-tag>` — live alongside other KV rows but render in their own section because they encode behavioural rules the agent must follow.
+- The **KV facts** come from the `KVEntry` table, filtered to the briefing's namespaces (`global`, `user`, `app:claude-code`, and `project:<id>`).
+- The **procedural cards** are a separate plane, not KV. Each card is a published `ProceduralEntry` reached through a `ProceduralPin` whose `context_key` is on the briefing's pin chain — `global → project:<id> → app:<consumer>`. The search service joins pins to entries, keeps only `status='published'`, and returns them in chain-priority order. <code-ref path="packages/core/src/memex_core/services/procedural_search_service.py" lines="293-322" /> Each card renders as one bullet — `kind/title`, a summary capped at 240 characters, and the pin's `context_key` — so the agent sees the most actionable rules first.
 - The **vault overview** narrative is the LLM-synthesised text in `VaultSummary.narrative`, produced by the `SummarizeVaultSignature` DSPy signature. The **themes** below it come from `VaultSummary.themes`, each carrying a name, note count, description, and trend (growing / stable / dormant).
-- The **top entities** are `MentalModel` rows, sorted by trend-weighted importance — observations with `trend='new'` count 3.0, `strengthening` 2.0, `weakening` 1.5, `stable` 0.5, and `stale` 0.0. <code-ref path="packages/core/src/memex_core/services/session_briefing.py" lines="35-41" /> A model with three new observations outranks one with five stable observations.
+- The **top entities** are `MentalModel` rows, sorted by trend-weighted importance — observations with `trend='new'` count 3.0, `strengthening` 2.0, `weakening` 1.5, `stable` 0.5, and `stale` 0.0. <code-ref path="packages/core/src/memex_core/services/session_briefing.py" lines="33-39" /> A model with three new observations outranks one with five stable observations.
 - The **available vaults** section is `VaultService.list_vaults_with_counts()` — the same query that powers `memex vault list`.
 
-The composition is read-only. The briefing service doesn't trigger reflection, doesn't refresh the vault summary, and doesn't write anything to the database. It reads four sources, formats them, and returns markdown.
+The composition is read-only. The briefing service doesn't trigger reflection, doesn't refresh the vault summary, and doesn't write anything to the database. It reads five sources, formats them, and returns markdown.
 
 ## Trade-offs: why pre-render, why budget, why answer from briefing
 
@@ -189,11 +191,12 @@ It carries enough room for high-signal content (vault narrative, top models, pro
 **Why the overflow ladder instead of hard rejection?**
 A briefing that exceeds budget by 200 tokens shouldn't fail closed and emit nothing. It should degrade.
 
-The degradation order encodes a hypothesis about which sections matter most.
-Procedures are behavioural rules an agent *must* follow, so they degrade last.
+The degradation order encodes a hypothesis about which sections matter most — but also about which the agent can recover for itself.
 Theme descriptions are nice-to-have, so they go first.
+The procedural cards and the available-vaults list drop next, ahead of KV facts and mental models: both are discovery surfaces the agent can re-fetch on demand (the cards through the briefing-cards route, the vault list through `memex_list_vaults`), so losing them costs a round-trip, not knowledge.
+The KV facts and the vault narrative — the things the agent would otherwise have no cheap way to reconstruct — survive longest.
 
-If you find yourself routinely hitting the lower steps — overview dropped, procedures trimmed — that's a signal that the vault's KV state is too big for a 2000-token briefing, not that the briefing service is wrong.
+If you find yourself routinely hitting the lower steps — overview dropped, cards gone — that's a signal that the vault's state is too big for a 2000-token briefing, not that the briefing service is wrong.
 
 **Why the `answer_from_briefing` rule?**
 Without it, agents would re-fetch vault summaries and KV state out of habit, even when the data was rendered above.
@@ -213,7 +216,7 @@ But Hermes and Claude Code need to share the same SSOT objects — `HERMES_HARNE
 
 **The briefing refreshes on the server's cadence, not on session start.**
 The vault-summary refresh is scheduled by `VaultSummaryConfig.interval_seconds`, default 3600 seconds (one hour).
-<code-ref path="packages/common/src/memex_common/config.py" lines="2050-2058" />
+<code-ref path="packages/common/src/memex_common/config.py" lines="2258-2262" />
 
 When a session boots, the briefing service reads the *most recent* persisted `VaultSummary` row. It doesn't trigger a refresh.
 So if the vault has had heavy ingestion in the last hour, the briefing's narrative will lag.
@@ -255,16 +258,16 @@ The CLI prints the exact markdown the hook would emit.
 Two things to look for:
 
 - Does the output contain a `# Session Briefing` header? If not, the server didn't produce a `VaultSummary` row and you need to run `memex vault summary --regenerate`.
-- Does the section you expect to see exist? If it's missing, either the underlying data is absent (no procedures stored, no entities yet) or the overflow ladder dropped it.
+- Does the section you expect to see exist? If it's missing, either the underlying data is absent (no cards pinned, no entities yet) or the overflow ladder dropped it.
 
-**Procedures are the high-leverage section.**
-Of everything in the briefing, the `## Procedures` section is the most directly behaviour-shaping.
+**Procedural cards are the high-leverage section.**
+Of everything in the briefing, the `## Procedural Cards` section is the most directly behaviour-shaping.
 
-A KV row under `global:procedure:answer:session-briefing` becomes a bullet that tells the agent how to handle a class of question.
+A published procedural entry pinned to the `global` context becomes a bullet that tells the agent how to handle a class of question.
 Because it renders in every session for the vault, the agent reads it on every cold start.
 
-If you want to change how an agent behaves across your team's sessions without touching any code, write a procedure KV row.
-The next briefing refresh carries it.
+If you want to change how an agent behaves across your team's sessions without touching any code, pin an entry — `memex procedural pin <entry-id> --context global`.
+The next briefing carries it.
 
 **The budget is not the limit on what Memex knows about your vault.**
 The briefing is a *summary*.

@@ -4,7 +4,7 @@ You want to run Memex on a small VPS, a laptop you also use for other work, or a
 
 Memex's peak memory comes from a handful of contributors that all share one ceiling: ONNX model weights, the Python heap, transient inference tensors during embedding and reranking, and the on-disk file-store connection pool. Every knob below caps one of those contributors.
 
-If you are deploying to a Jetson or another unified-memory edge device with a shared CPU/GPU memory pool, also read [Memory Budget on Unified-Memory Hosts](../configuring-server/low-resource.md) — it covers the GPU-specific levers (`ONNX_GPU_MEM_LIMIT`, cuDNN workspace) this page does not.
+If you are deploying to a Jetson or another unified-memory edge device with a shared CPU/GPU memory pool, also read [Memory Budget on Unified-Memory Hosts](../memory-budget.md) — it covers the GPU-specific levers (`ONNX_GPU_MEM_LIMIT`, cuDNN workspace) this page does not.
 
 ## Prerequisites
 
@@ -75,7 +75,7 @@ server:
 
 The default `reranker_batch_size: 0` tells the ONNX runtime to score every candidate in one call. On a low-resource host, set an explicit batch so the peak is bounded. Eight is a safe starting point.
 
-The three `*_max_concurrency` knobs at the `server` level cap how many in-flight calls each model can have at once. They pair with the batch size: a batch of 8 with concurrency 2 is the worst-case 16 pairs in memory at once. <code-ref path="packages/common/src/memex_common/config.py" lines="2141-2179" />
+The three `*_max_concurrency` knobs at the `server` level cap how many in-flight calls each model can have at once. They pair with the batch size: a batch of 8 with concurrency 2 is the worst-case 16 pairs in memory at once. <code-ref path="packages/common/src/memex_common/config.py" lines="2345-2383" />
 
 ### 4. Cap the reranker score cache
 
@@ -156,6 +156,6 @@ This is the intended behaviour, not a bug. Memex's retrieval is RRF-fused over f
 ## See also
 
 - [Tutorial: Getting started](../../tutorials/getting-started.md)
-- [How-to: Memory budget on unified-memory hosts](../configuring-server/low-resource.md)
+- [How-to: Memory budget on unified-memory hosts](../memory-budget.md)
 - [Reference: configuration](../../reference/configuration-options.md)
 - [Explanation: inference model backends](../../explanation/how-memex-works/retrieval.md)

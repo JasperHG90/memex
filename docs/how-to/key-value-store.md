@@ -1,8 +1,8 @@
 # Use the key-value store
 
-Memex's key-value store is where preferences, conventions, and procedures live — things you want every future session to remember without re-reading a note. Vaults isolate your notes; the KV store does not. A preference you save once is available across every project.
+Memex's key-value store is where preferences, conventions, and settings live — things you want every future session to remember without re-reading a note. Vaults isolate your notes; the KV store does not. A preference you save once is available across every project.
 
-This guide covers picking a namespace, writing a value, reading it back, and listing what's stored. Procedures live UNDER a scope namespace as `<scope>:procedure:<verb>:<context-tag>` (not as a top-level `procedure:` namespace) — they have their own short section at the end because they behave a little differently.
+This guide covers picking a namespace, writing a value, reading it back, and listing what's stored. The KV store holds one static binding per key — a preference, a setting, a convention. It does not hold how-to procedures: those live on the procedural plane, a separate store with its own tools. See [Submit cases and derive procedures](submit-cases.md) when you want to save a reusable workflow.
 
 ## Prerequisites
 
@@ -19,7 +19,8 @@ KV keys are namespaced. The prefix tells Memex (and your future self) what scope
 | One project or repo | `project:<id>:` | `project:github.com/acme/api:lang:python` |
 | Every project you touch (a company-wide standard) | `global:` | `global:lang:python:min_version` |
 | One app you use | `app:<app-id>:` | `app:claude-code:theme` |
-| A learned procedure | `<scope>:procedure:<verb>:<tag>` | `global:procedure:deploy:staging`, `project:<id>:procedure:commit:pr-only` |
+
+The four prefixes above (`global:`, `user:`, `project:`, `app:`) are the only namespaces a KV key may start with. A key that begins with anything else is rejected at write time. <code-ref path="packages/common/src/memex_common/kv_utils.py" lines="14" /> <code-ref path="packages/core/src/memex_core/services/kv.py" lines="58-67" />
 
 The most common mistake is reaching for `user:` for everything. If the value is tied to a specific project or app, use `project:` or `app:` — `user:` is for things that follow *you*, not your work.
 
@@ -41,7 +42,7 @@ From an MCP client (Claude Code, Hermes, Claude Desktop), the tool takes named a
 memex_kv_put(key="user:editor", value="neovim")
 ```
 
-Values are stored as strings. For structured values, encode JSON yourself. The latest write is the active value; for procedure keys (`<scope>:procedure:*`), older versions stay in a capped history (see the section below). For other keys, the write is a plain upsert.
+Values are stored as strings. For structured values, encode JSON yourself. Every write is a plain upsert: the latest write to a key is the active value, and it overwrites whatever was there before. KV keeps no version history. <code-ref path="packages/core/src/memex_core/services/kv.py" lines="83-124" />
 
 Attach a TTL — in seconds — when the value should expire on its own:
 
@@ -84,37 +85,11 @@ memex kv list -p "project:github.com/acme/api:*"
 
 `--namespace` is repeatable: `-n user -n global` lists both. `--pattern` accepts standard `*` globs.
 
-## Procedure keys
+## What does not belong in KV
 
-Procedures are short steps you've learned and want to reuse — *"to deploy to staging, run X then Y"*, *"to debug the auth service, tail logs at Z"*. They live UNDER one of the four scope namespaces as `<scope>:procedure:<verb>:<context-tag>` with two extra rules:
+KV is for one static binding per key. A multi-step workflow you want to recall and reuse — *"to deploy to staging, run X then Y"*, *"the release steps"* — is not a KV value. It belongs on the procedural plane, which derives reusable procedures from the cases you submit. Recall one with `memex procedure search`; record one with `memex case submit`. See [Submit cases and derive procedures](submit-cases.md).
 
-- **Last writer wins.** Overwriting a procedure is the normal update path; Memex keeps the prior versions in capped history.
-- **Naming convention.** The shape `<scope>:procedure:<verb>:<context-tag>` keeps procedures findable when you search later. `global:procedure:deploy:staging` and `global:procedure:debug:auth_service` are clearer than `global:procedure:foo:bar`.
-
-Pick the scope the same way you pick it for any other KV value:
-
-| Scope cue | Scope prefix |
-|---|---|
-| no cue, identity-shaped, or general practice | `global:` (default) |
-| "this repo / project", "in this codebase" | `project:<id>:` |
-| "about me", "I prefer / always" | `user:` |
-| "when I use Claude Code / Hermes" | `app:<app-id>:` |
-
-Set one the same way as any KV entry. The verb and context-tag segments must be lowercase letters, digits, hyphens, or underscores:
-
-```bash
-memex kv put "global:procedure:deploy:staging" "1) git push origin staging  2) await CI green  3) flip the flag"
-memex kv put "project:github.com/acme/api:procedure:commit:pr-only" "All commits via PR; no direct pushes"
-```
-
-Bare `procedure:<verb>:<context>` (no scope prefix) is REJECTED at write time. If you have legacy bare keys, migration `046_procedure_to_global` rewrites them to `global:procedure:*` on the next `db-upgrade`.
-
-When you search procedures, prefer the semantic search — you remember what you wanted to *do*, not the exact key you chose:
-
-```bash
-memex kv search "how do I deploy"
-# → global:procedure:deploy:staging = 1) git push origin staging...  (score 0.94)
-```
+There is no `procedure:` KV namespace. A key containing the word `procedure` is just a plain key with no special handling.
 
 ## Verification
 
@@ -136,7 +111,7 @@ If the read returns what you wrote, the store is wired up.
 
 **A project value is showing up under the wrong project.** The `project:` prefix needs the project identifier you intended. The Claude Code plugin derives it on session start from your git remote (or directory path for non-git projects); the CLI does not — pass the project ID yourself.
 
-**Two writes to the same key produced unexpected results.** The store is last-writer-wins. If two scripts race to write the same key, only the later write is active (the earlier write stays in history). For preferences that need a combined value, write to two different keys and combine them on read.
+**Two writes to the same key produced unexpected results.** The store is last-writer-wins. If two scripts race to write the same key, only the later write survives — the earlier value is overwritten, not kept. For preferences that need a combined value, write to two different keys and combine them on read.
 
 **I don't remember whether I used `user:` or `project:`.** Run `memex kv search "<rough description>"` — the semantic search will find the entry across all namespaces.
 

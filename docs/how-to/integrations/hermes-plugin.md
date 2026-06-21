@@ -48,13 +48,13 @@ export MEMEX_API_KEY=sk-...        # only for secured deployments
 
 ### 3. Bind a vault
 
-The plugin resolves the vault to use per project. On session start, it derives a project ID from the git remote origin URL (or the directory path for non-git projects) and looks up the KV key `project:<project_id>:vault`. To bind a vault, run:
+The plugin resolves the vault to use per project. On session start, it derives a project ID from the git remote origin URL (or the directory path for non-git projects) and looks up the KV key `app:hermes:project:<project_id>:vault`. All plugin state lives under the `app:hermes:` namespace so it does not collide with other apps on the same Memex. <code-ref path="packages/hermes-plugin/src/memex_hermes_plugin/memex/project.py" lines="99-105" /> To bind a vault, run:
 
 ```bash
-memex kv put "project:github.com/acme/myapp:vault" my-vault
+memex kv put "app:hermes:project:github.com/acme/myapp:vault" my-vault
 ```
 
-Use `memex-hermes status` to print the derived project ID for the current directory if you are not sure what to put in the key.
+The project ID is the normalised git remote URL — strip the scheme, basic-auth prefix, and `.git` suffix, so `git@github.com:acme/myapp.git` becomes `github.com/acme/myapp`. For a directory with no git remote it is the path relative to `$HOME`. <code-ref path="packages/hermes-plugin/src/memex_hermes_plugin/memex/project.py" lines="38-55" />
 
 If no per-project binding resolves, the plugin falls back to `vault_id` in `$HERMES_HOME/memex/config.json` (or `MEMEX_VAULT` if set), and finally to the Memex global default. When `create_vaults_on_init` is `true` (the default), a missing vault is auto-created on session start; set it to `false` if you want explicit creates only.
 
@@ -64,11 +64,11 @@ The mode controls what the plugin injects into Hermes' system prompt, what it pr
 
 | Mode | Briefing | Per-turn prefetch | Tools exposed |
 |---|---|---|---|
-| `hybrid` (default) | yes | yes | full surface (~38) |
+| `hybrid` (default) | yes | yes | full surface (53) |
 | `context` | yes | yes | none |
-| `tools` | no | no | primary 8 only |
+| `tools` | no | no | primary 7 only |
 
-`hybrid` is the right default for most deployments. `context` is for agents you want to read from Memex but never write to it (no tool dispatch). `tools` opts out of automatic context and hands the agent the eight primary verbs — `memex_memory_search`, `memex_note_search`, `memex_survey`, `memex_add_note`, `memex_append_note`, `memex_list_entities`, `memex_get_entity_mentions`, `memex_get_entity_cooccurrences` — and trusts it to compose retrieval explicitly. <code-ref path="packages/hermes-plugin/src/memex_hermes_plugin/memex/provider.py" lines="300-328" />
+`hybrid` is the right default for most deployments. `context` is for agents you want to read from Memex but never write to it (no tool dispatch). `tools` opts out of automatic context and hands the agent the seven primary verbs — `memex_memory_search`, `memex_note_search`, `memex_survey`, `memex_add_note`, `memex_list_entities`, `memex_get_entity_mentions`, `memex_get_entity_cooccurrences` — and trusts it to compose retrieval explicitly. The list is deliberately narrow; new tools land in `hybrid` only. <code-ref path="packages/hermes-plugin/src/memex_hermes_plugin/memex/tools.py" lines="1424-1442" />
 
 ### 5. (Optional) Tune the briefing and prefetch
 
@@ -96,31 +96,37 @@ The defaults work; tune only when you need to. The settings below live in `$HERM
 }
 ```
 
-`briefing_budget` accepts `1000` or `2000` only — the server validates other values away. <code-ref path="packages/hermes-plugin/src/memex_hermes_plugin/memex/config.py" lines="80-86" /> `briefing_refresh_cadence` of `0` means "fetch once at session start"; set it to `N` to refetch every N turns. Recall strategies must come from the TEMPR set; the validator rejects unknown names.
+`briefing_budget` accepts `1000` or `2000` only — the validator rejects other values. <code-ref path="packages/hermes-plugin/src/memex_hermes_plugin/memex/config.py" lines="90-96" /> `briefing_refresh_cadence` of `0` means "fetch once at session start"; set it to `N` to refetch every N turns. Recall strategies must come from the TEMPR set; the validator rejects unknown names.
+
+### 6. (Optional) Use the procedural plane
+
+In `hybrid` mode the plugin also exposes Memex's procedural memory — the separate plane for how-to knowledge (workflows, worked episodes) that sits alongside the semantic plane of facts and notes. Four tools cover it: `memex_procedural_search` and `memex_procedural_get` to recall a procedure, `memex_procedural_get_by_identity` to fetch one by its identity anchor, and `memex_case_submit` to file a worked episode the system derives procedures from. <code-ref path="packages/hermes-plugin/src/memex_hermes_plugin/memex/tools.py" lines="4534-4742" />
+
+The `hybrid` briefing also injects the routing rules that tell the agent when to reach for each plane, so an agent in `hybrid` mode uses the procedural tools without further prompting. <code-ref path="packages/hermes-plugin/src/memex_hermes_plugin/memex/briefing.py" lines="121-128" /> These tools are part of the full surface only — `tools` mode's narrow seven-verb set does not include them.
 
 ## Verification
 
 After install, open a Hermes session and check three things.
 
-**The provider loaded.** The session start log should show the briefing block under `## Memex Memory` in the system prompt, with the active vault and project ID on the second line. If the vault is unset, the block says `**No vault bound to this project.**` and prompts you to set the KV key. <code-ref path="packages/hermes-plugin/src/memex_hermes_plugin/memex/briefing.py" lines="109-132" />
+**The provider loaded.** The session start log should show the briefing block under `## Memex Memory` in the system prompt, with the active vault and project ID on the second line. If the vault is unset, the block says `**No vault bound to this project.**` and prompts you to set the KV key. <code-ref path="packages/hermes-plugin/src/memex_hermes_plugin/memex/briefing.py" lines="115-119" />
 
-**The tools registered.** Ask the agent to list its available tools, or just ask for something memory-shaped — "what do you have on `<topic>`?". In `hybrid` mode you should see `memex_memory_search`, `memex_note_search`, and friends in the dispatch. In `context` mode the tools are intentionally hidden (the briefing is doing all the work). In `tools` mode you see exactly the primary eight.
+**The tools registered.** Ask the agent to list its available tools, or just ask for something memory-shaped — "what do you have on `<topic>`?". In `hybrid` mode you should see `memex_memory_search`, `memex_note_search`, and friends in the dispatch. In `context` mode the tools are intentionally hidden (the briefing is doing all the work). In `tools` mode you see exactly the primary seven.
 
 **The transcript is being captured.** End the session. A note keyed `hermes:session:<ISO-timestamp>` should appear in your vault — confirm with `memex note list --vault my-vault` or by searching the title fragment. The capture is idempotent on the note key, so re-running a session does not duplicate.
 
-You can also run `memex-hermes status` to print the resolved config, the derived project ID, and the install location without starting a Hermes session.
+You can also run `memex-hermes status` to print the install state, the active provider, the resolved config path, and whether the server is reachable — without starting a Hermes session.
 
 ## Troubleshooting
 
-**Tool calls return "Memex provider is not initialized."** Hermes called `handle_tool_call` before `initialize` succeeded. The most common cause is the Memex server being unreachable at session start — start it with `memex server start -d` and check `MEMEX_SERVER_URL`. If the server is up, look in the Hermes log for a `Vault resolution failed` line: a malformed `vault_id` in config can leave the provider half-initialized. <code-ref path="packages/hermes-plugin/src/memex_hermes_plugin/memex/provider.py" lines="330-342" />
+**Tool calls return "Memex provider is not initialized."** Hermes called `handle_tool_call` before `initialize` succeeded. The most common cause is the Memex server being unreachable at session start — start it with `memex server start -d` and check `MEMEX_SERVER_URL`. If the server is up, look in the Hermes log for a `Vault resolution failed` line: a malformed `vault_id` in config can leave the provider half-initialized. <code-ref path="packages/hermes-plugin/src/memex_hermes_plugin/memex/provider.py" lines="394-398" />
 
 **The briefing block is missing from the system prompt.** Three causes, in order of likelihood. First, `memory_mode` is `tools` — that mode skips the briefing by design. Second, no vault is bound and the project has no fallback — the briefing renders an empty block with a KV-bind hint instead. Third, the briefing fetch timed out (five seconds) because the server is slow or unreachable; check the Memex server logs.
 
-**Tools missing in chat.** Check `memory_mode`. `context` hides the tools intentionally; switch to `hybrid` or `tools`. If you are in `tools` mode and expected the full surface, switch to `hybrid` — `tools` is the narrow eight-verb mode.
+**Tools missing in chat.** Check `memory_mode`. `context` hides the tools intentionally; switch to `hybrid` or `tools`. If you are in `tools` mode and expected the full surface, switch to `hybrid` — `tools` is the narrow seven-verb mode.
 
 **Permission errors writing under `$HERMES_HOME/plugins/memex/`.** The install may have used `--mode copy` where a symlink was expected, or the reverse. Re-run `memex-hermes install --mode symlink --force` (or `--mode copy --force`) to repair.
 
-**The agent writes to the wrong vault.** Check the resolution chain. Run `memex kv get "project:$(memex-hermes status --project-id):vault"` first; if that returns nothing, the fallback `vault_id` in `$HERMES_HOME/memex/config.json` is winning, or `MEMEX_VAULT` is set in the shell. Bind explicitly with `memex kv put` to make the resolution unambiguous.
+**The agent writes to the wrong vault.** Check the resolution chain. The project ID is the normalised git remote — from the project directory, `git remote get-url origin` and strip the scheme and `.git` suffix. Run `memex kv get "app:hermes:project:<project_id>:vault"` first; if that returns nothing, the fallback `vault_id` in `$HERMES_HOME/memex/config.json` is winning, or `MEMEX_VAULT` is set in the shell. Bind explicitly with `memex kv put` to make the resolution unambiguous.
 
 ## See also
 

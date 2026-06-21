@@ -1,12 +1,12 @@
 # MCP Tools Reference
 
-The Memex MCP server exposes 35 tools to AI assistants via the [Model Context Protocol](https://modelcontextprotocol.io/). The server is implemented with [FastMCP](https://github.com/jlowin/fastmcp).
+The Memex MCP server exposes 55 tools to AI assistants via the [Model Context Protocol](https://modelcontextprotocol.io/). The server is implemented with [FastMCP](https://github.com/jlowin/fastmcp).
 
 ## Progressive Disclosure (Opt-In)
 
-When enabled, `tools/list` returns 3 discovery meta-tools instead of all 35 tool schemas:
+When enabled, `tools/list` returns 3 discovery meta-tools instead of all 55 tool schemas:
 
-- **`memex_tags`** — browse 7 tool categories (`search`, `read`, `write`, `browse`, `assets`, `entities`, `storage`)
+- **`memex_tags`** — browse 10 tool categories (`storage`, `write`, `diagnostics`, `search`, `browse`, `assets`, `read`, `procedural`, `entities`, `templates`)
 - **`memex_search(query, tags=[...])`** — find tools by keyword (BM25), optionally filtered by tag
 - **`memex_get_schema(tools=[...])`** — get parameter details for specific tools
 
@@ -404,6 +404,21 @@ Returns `Image`, `Audio`, `File`, or error strings for each path. Per-item failu
 
 ---
 
+### `memex_resize_image`
+
+Resize an image previously fetched via `memex_get_resources` so it can be forwarded inline. The input path MUST be under the session asset cache; arbitrary filesystem paths are rejected. Allowed input formats: PNG, JPEG, WEBP, GIF.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `local_path` | string | Yes | - | Path returned by `memex_get_resources` (under session cache). |
+| `max_width` | int | No | `1280` | Maximum output width in pixels. |
+| `max_height` | int | No | `1280` | Maximum output height in pixels. |
+| `output_format` | string | No | source | Output format override (`PNG`/`JPEG`/`WEBP`/`GIF`). Defaults to source. |
+
+Returns `local_path` (resized file path) and `size_bytes`.
+
+---
+
 ### `memex_add_assets`
 
 Add one or more file assets to an existing note. Provide local file paths.
@@ -492,6 +507,79 @@ Batch lookup of memory units by ID. Includes contradiction links and supersessio
 | `unit_ids` | string[] | Yes | List of memory unit UUIDs. |
 
 Returns unit text, type, confidence, note ID, and supersession context for each unit.
+
+---
+
+### `memex_get_memory_links`
+
+Get typed relationship links for memory units: temporal, semantic, causal, contradiction, and others. Filter by `link_type` for specific relationships. Use after search to explore relationship chains.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `unit_ids` | string[] | Yes | - | List of memory unit UUIDs. |
+| `link_type` | string | No | - | Filter by link type: `contradicts`, `temporal`, `semantic`, `causal`, etc. |
+| `limit` | int | No | `20` | Max links per unit. |
+
+Returns each link's `unit_id`, `note_id`, `note_title`, `relation`, `weight`, `time`, and `metadata`.
+
+---
+
+### `memex_get_unit_history`
+
+Walk the contradiction graph backward (newer → older) from a memory unit, returning its supersession history as a tree. Use for "how has my view on X evolved" / audit / lineage queries. Returns the negative-evidence path (`contradicts` / `weakens` links), not full confidence evolution. No reranker, boosts, or quality filtering — the graph walk is for completeness, not relevance.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `unit_id` | string | Yes | - | Memory unit UUID to start the walk from (root, depth 0). |
+| `vault_id` | string | Yes | - | Vault UUID or name the unit belongs to. Required for per-vault auth scoping; cross-vault links are filtered out. |
+| `max_depth` | int | No | `10` | Max recursion depth. Nodes reached at the cap are returned with `truncated=true`. |
+
+Returns a `UnitHistoryNodeDTO` tree rooted at the start unit.
+
+---
+
+## Outcome & Memory-Worth Tools
+
+### `memex_record_outcome`
+
+Stamp the result of using an EXISTING memory unit to train Memory Worth scoring. Call when the user confirms a memory held or failed ("that worked", "stop suggesting that") — not for new insights, which become a `memex_add_note`. Bare `success=True` without `units` returns HTTP 400.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `units` | object[] | No | - | Per-unit verb classifications. Each entry: `{unit_id: UUID, verb: "helpful"｜"not_helpful"｜"not_used", reason: str}`. `reason` required for `helpful` and `not_helpful`. |
+| `success` | bool | No | - | Legacy shape (FutureWarning). Prefer `units`. |
+| `unit_ids` | string[] | No | - | Legacy shape (FutureWarning). UUIDs of units actually used. Prefer `units`. |
+| `vault_id` | string | No | from config | Vault UUID or name. Omit to use config defaults. |
+| `outcome_confidence` | float | No | `1.0` | Weight for this outcome signal (0.0–1.0). |
+| `reason` | string | No | - | Free-text reason (logged, not stored on units). |
+| `retrieved_set_size` | int | No | - | Size of the retrieved set the caller was asked to classify. Drives `coverage_ratio` on the audit log; omitting leaves it NULL. |
+
+---
+
+### `memex_memory_deprioritize`
+
+Lower a memory unit's retrieval rank when it is misleading, outdated, or noise — without deleting it (non-destructive). Reversible via `memex_memory_restore`. An observation UUID (`unit_metadata.virtual: true`) returns HTTP 400 with `{source_memory_units: [...]}`; re-issue against a listed MU ID.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `unit_id` | string | Yes | - | Memory unit UUID. |
+| `reason` | string | Yes | - | Why this unit is being deprioritized. Free text; logged to `audit_logs`. |
+| `vault_id` | string | No | active write vault | Vault UUID or name the unit belongs to. Required for vault-scoping; cross-vault calls are rejected. |
+
+Returns `unit_id`, `is_deprioritized: true`, and `reason`.
+
+---
+
+### `memex_memory_restore`
+
+Undo `memex_memory_deprioritize`: flip `is_deprioritized` to false so the unit re-enters default-scope retrieval. Writes an `audit_logs` row.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `unit_id` | string | Yes | - | Memory unit UUID. |
+| `vault_id` | string | No | active write vault | Vault UUID or name the unit belongs to. Required for vault-scoping; cross-vault calls are rejected. |
+
+Returns `unit_id` and `is_deprioritized: false`.
 
 ---
 
@@ -631,3 +719,195 @@ Trace the provenance chain of an entity. Upstream: mental_model → observation 
 | `limit` | int | No | `5` | Max children per node. |
 
 Returns a tree structure showing the provenance chain with entity types, IDs, labels, and children at each level.
+
+---
+
+## Reflection & Consolidation Tools
+
+### `memex_memory_summarize_node`
+
+Trigger reflection synchronously when retrieved facts about a topic conflict, are incomplete, or are scattered and you need a coherent mental model before continuing — the synchronous counterpart to the background reflect loop. Use sparingly (LLM-intensive). Rate-limited per (entity, vault); error envelopes carry `retry_after_seconds`.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `entity_id` | string | Yes | - | Entity UUID to reflect on. |
+| `scope` | string | No | `incremental` | `incremental` (only new evidence) or `full` (re-evaluate all evidence; capped at 100 units). |
+| `vault_id` | string | No | global vault | Vault UUID; defaults to the global vault when `None`. |
+
+Returns a `ReflectionResult` with the updated/new mental model(s).
+
+---
+
+### `memex_memory_reconsolidate`
+
+Re-run contradiction detection across one entity's units and refresh its mental model. Call on concrete contradiction signals for a single entity, or after ingesting a note that supersedes earlier claims. Entity-scoped. For periodic maintenance use `memex_memory_consolidate` instead.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `entity_id` | string | Yes | Entity UUID to reconsolidate. |
+| `vault_id` | string | Yes | Vault UUID — required for vault-scoped resolution. |
+
+Runs under a per-entity advisory lock. Returns `error: "lock_contention"` on HTTP 409, or `abandoned: true` when a concurrent worker refreshed the model.
+
+---
+
+### `memex_memory_consolidate`
+
+Periodic vault-wide maintenance: batch-deprioritize low-Memory-Worth and stale units and write a maintenance ledger entry. Not for in-session conflict resolution — use `memex_memory_reconsolidate` for that. Rate-limited per vault.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `vault_id` | string | Yes | - | Vault UUID to consolidate. |
+| `dry_run` | bool | No | `false` | If true, return a preview without making changes. |
+
+On rate-limit, returns a structured envelope with `retry_after_seconds` rather than raising.
+
+---
+
+## Diagnostics & Lint Tools
+
+### `memex_get_diagnostics_summary`
+
+Vault diagnostics summary: unit counts by status (active/stale/deprioritized), lint pending counts by type, `cluster_count` (null on cold cache), average Memory Worth score, and top-5 retrieved entities. Synchronous (no UMAP block).
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `vault_id` | string | Yes | Vault UUID or name. |
+
+---
+
+### `memex_get_lint_flags`
+
+List pending memory-hygiene findings the linter has detected. Use periodically or when the user asks about memory state. Defaults to the active write vault when `vault_id` is omitted (never falls through to a global all-vault view).
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `vault_id` | string | No | active write vault | Vault UUID or name to scope the query. |
+| `lint_type` | string | No | - | `structural` ｜ `quality` ｜ `governance` ｜ `schema` ｜ `routing`. |
+| `status` | string | No | `pending` | `pending` ｜ `resolved` ｜ `dismissed`. |
+| `limit` | int | No | `20` | Page size (1–200). |
+| `cursor` | string | No | - | Opaque cursor from a prior page; omit on first call. |
+
+Each finding includes `target_id`, `lint_type`, `evidence` (why detected), and `suggested_action`.
+
+---
+
+### `memex_list_lint_actions`
+
+List the closed, read-only catalogue of lint resolution actions. Call before `memex_submit_lint_proposal` with a `proposed_action`: pick one whose `applicable_target_types` contains your `target_type` and shape params against its `params_schema`. The catalogue is closed — actions cannot be registered at runtime.
+
+No parameters.
+
+Each entry: `id`, `name`, `description`, `applicable_target_types`, `reversible`, and `params_schema` (null when parameterless).
+
+---
+
+### `memex_submit_lint_proposal`
+
+File a flagged construct (misrouted note, stale KV entry, duplicate entities) for human review. Submission only creates a PENDING finding — nothing mutates until a human resolves it.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `rule_name` | string | Yes | - | Caller-owned lowercase slug. Internal rule names and the `llm_` prefix are reserved (rejected). |
+| `lint_type` | string | Yes | - | `structural` ｜ `quality` ｜ `governance` ｜ `schema` ｜ `routing`. |
+| `target_type` | string | Yes | - | Construct kind: `note` ｜ `memory_unit` ｜ `entity` ｜ `kv` ｜ … |
+| `target_id` | string | Yes | - | UUID of the targeted construct (KV key for `kv` targets). |
+| `description` | string | Yes | - | Why the rule fired — shown to the reviewer (max 500 chars). |
+| `suggested_action` | string | Yes | - | Free-text remediation summary (max 500 chars). |
+| `vault_id` | string | No | active write vault | Vault UUID or name. |
+| `evidence` | object | No | - | Supporting payload. Keys `resolution` / `rule_metadata` / `proposed_action` are server-owned (rejected). |
+| `proposed_action` | object | No | - | `{action_name, params}` from `memex_list_lint_actions`; must apply to `target_type` and pass its params schema. |
+
+Result status: `created` ｜ `deduplicated` ｜ `cooldown_suppressed` ｜ `rejected`.
+
+---
+
+### `memex_lint_apply_winner`
+
+Apply the recommended action on a winner-proposal lint finding (`rule_name=propose_contradiction_winner`). Use after surfacing the proposal to the user and confirming authority to apply. Each apply captures prior state, so the mutation is reversible via `memex_lint_reverse_winner`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `finding_id` | string | Yes | UUID of the pending winner-proposal finding to apply. |
+
+---
+
+### `memex_lint_reverse_winner`
+
+Reverse a previously applied winner-proposal finding. Reads the prior state captured at apply-time and atomically restores the affected `memory_unit.status`, `note.superseded_by`, or `memory_link.link_type`. Writes a paired audit row; the original finding stays resolved.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `finding_id` | string | Yes | UUID of the previously applied winner-proposal finding to reverse. |
+
+---
+
+## Procedural Plane Tools
+
+### `memex_procedural_search`
+
+Hybrid BM25 + vector search (RRF-merged) across the procedural plane. Call to find a how-to / workflow / strategy for a task you may have done before (deploy, release, rotate creds, migrate). At least one of `query` and `scope` must be set.
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `query` | string | No | - | Search query text. |
+| `scope` | string | No | - | Scope label: `global` ｜ `project:<id>` ｜ `app:<id>`. |
+| `kind` | string | No | - | Filter to `procedure` or `strategy`. |
+| `status` | string | No | `published` | Lifecycle status filter. |
+| `limit` | int | No | `10` | Max hits (1–100). |
+| `bm25_weight` | float | No | `0.5` | BM25 contribution to the RRF merge (0.0–1.0). |
+| `vector_weight` | float | No | `0.5` | Vector contribution to the RRF merge (0.0–1.0). |
+| `include_pin_chain` | bool | No | `false` | Also include entries pinned at `pin_contexts`. |
+| `pin_contexts` | string[] | No | - | Pin contexts to include when `include_pin_chain=true`. |
+| `vault_id` | string | No | - | Vault UUID to scope the search. `None` retains the cross-vault result set for operator/CLI paths. |
+
+Returns hits with `entry_id`, `kind`, `score`, `matched_via` (`bm25`/`vector`/`rrf`/`pin`), `title`, `summary`, `scope`, `verb`, `context`, `trigger`, and `pin_position`.
+
+---
+
+### `memex_procedural_get`
+
+Fetch a single procedural entry by UUID. Returns the full procedure/strategy, or null (also on `vault_id` mismatch). To find one by query use `memex_procedural_search`.
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `entry_id` | string | Yes | Procedural entry UUID. |
+| `vault_id` | string | No | Vault UUID or name. Mismatch with the entry's vault → 404. Omit to skip vault-scope enforcement. |
+
+---
+
+### `memex_procedural_get_by_identity`
+
+Existence probe: fetch a procedural entry by its `(kind, scope, verb, context)` identity anchor. Returns the entry or null. `context` is required for procedures and FORBIDDEN for strategies (strategies anchor on scope+verb only).
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `kind` | string | Yes | `procedure` or `strategy`. |
+| `scope` | string | Yes | Scope label: `global` ｜ `project:<id>` ｜ `app:<id>` (no user scope). |
+| `verb` | string | No | Anchor verb — required for both kinds. |
+| `context` | string | No | Anchor context — required for procedures; MUST be null for strategies. |
+| `vault_id` | string | No | Vault UUID or name for vault-scope enforcement. |
+
+---
+
+### `memex_case_submit`
+
+File a worked episode as a case — the ONLY way to record a how-to / workflow. Never also `memex_add_note` the same content. Cases are notes in a hidden `procedural` system vault (role `case`); procedures are DERIVED from the cases you submit (there is no procedure-write tool).
+
+| Parameter | Type | Required | Default | Description |
+|-----------|------|----------|---------|-------------|
+| `payload.title` | string | Yes | - | Short label for the case. |
+| `payload.trigger` | string | Yes | - | What kicked the episode off — embedded for case↔procedure matching. |
+| `payload.outcome` | string | Yes | - | `success` ｜ `failure` ｜ `mixed`. |
+| `payload.scope` | string | Yes | - | Identity scope: `global` ｜ `project:<id>` ｜ `app:<id>`. |
+| `payload.scope_reasoning` | string | Yes | - | One-sentence justification for the chosen scope. |
+| `payload.situation` | string | No | `""` | Context going in (prior state, constraints). |
+| `payload.actions` | string[] | No | `[]` | Ordered actions taken, one step per item. |
+| `payload.lesson` | string | No | `""` | What to do differently / confirm next time. |
+| `payload.project_id` | string | No | - | Provenance — recorded in `doc_metadata`, not a vault binding. |
+| `payload.case_of` | string | No | - | Procedural entry UUID this case instantiates (explicit assignment; skips the judge). |
+| `payload.submitted_by` | string | No | - | Submitting app/agent identity (provenance). |
+| `payload.tags` | string[] | No | `[]` | Case tags. |
+| `background` | bool | No | `false` | Queue the file+assign flow as a durable background job (`assignment_mode="queued"` + `job_id`) instead of blocking on the assignment judge. |
+
+Without `case_of` the server judges which procedure the case instances; contested judgments land in the lint queue (`assignment_mode="escalated"` + `finding_id`).

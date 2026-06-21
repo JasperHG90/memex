@@ -18,11 +18,11 @@ Run this once per key you want to issue:
 python -c "import secrets; print(secrets.token_urlsafe(32))"
 ```
 
-The string it prints is the shared secret. Treat it like a password — paste it into config or an env var, never into chat, logs, or commits. The generation recipe is the same one the config field suggests <code-ref path="packages/common/src/memex_common/config.py" lines="1336-1341" />.
+The string it prints is the shared secret. Treat it like a password — paste it into config or an env var, never into chat, logs, or commits. The generation recipe is the same one the config field suggests <code-ref path="packages/common/src/memex_common/config.py" lines="1338-1341" />.
 
 ### 2. Add the key to the server config
 
-Auth lives under `server.auth` in your YAML <code-ref path="packages/common/src/memex_common/config.py" lines="2223-2226" />. The minimum to switch auth on is `enabled: true` plus one entry in `keys`:
+Auth lives under `server.auth` in your YAML <code-ref path="packages/common/src/memex_common/config.py" lines="2427-2430" />. The minimum to switch auth on is `enabled: true` plus one entry in `keys`:
 
 ```yaml
 server:
@@ -34,7 +34,7 @@ server:
         description: "ops laptop"
 ```
 
-Each key entry must declare a `policy`. The three built-in policies map to permission sets <code-ref path="packages/common/src/memex_common/config.py" lines="1317-1321" />:
+Each key entry must declare a `policy`. The three built-in policies map to permission sets <code-ref path="packages/common/src/memex_common/config.py" lines="1319-1323" />:
 
 | Policy | Reads | Writes | Deletes |
 |:------|:-----:|:------:|:-------:|
@@ -60,11 +60,11 @@ server:
         description: "daily capture"
 ```
 
-`read_vault_ids` widens read access without granting writes — the effective read scope is `vault_ids ∪ read_vault_ids`, and write or delete checks ignore `read_vault_ids` entirely <code-ref path="packages/core/src/memex_core/server/auth.py" lines="223-268" />. Setting `read_vault_ids` without `vault_ids` is rejected at config load <code-ref path="packages/common/src/memex_common/config.py" lines="1360-1370" />.
+`read_vault_ids` widens read access without granting writes — the effective read scope is `vault_ids ∪ read_vault_ids`, and write or delete checks ignore `read_vault_ids` entirely <code-ref path="packages/core/src/memex_core/server/auth.py" lines="232-277" />. Setting `read_vault_ids` without `vault_ids` is rejected at config load <code-ref path="packages/common/src/memex_common/config.py" lines="1363-1372" />.
 
 ### 4. Keep secrets out of the YAML file (optional)
 
-Prefix any `key` value with `env:` to resolve it from an environment variable at startup <code-ref path="packages/common/src/memex_common/config.py" lines="1372-1387" />:
+Prefix any `key` value with `env:` to resolve it from an environment variable at startup <code-ref path="packages/common/src/memex_common/config.py" lines="1376-1389" />:
 
 ```yaml
 server:
@@ -96,7 +96,7 @@ If you see `API key authentication is disabled.` instead, `enabled` is not `true
 
 ### 6. Send the key on every request
 
-Clients pass the key in the `X-API-Key` header <code-ref path="packages/core/src/memex_core/server/auth.py" lines="142-143" />:
+Clients pass the key in the `X-API-Key` header <code-ref path="packages/core/src/memex_core/server/auth.py" lines="152" />:
 
 ```bash
 curl -H "X-API-Key: paste-the-token-here" http://localhost:8000/api/v1/vaults
@@ -121,7 +121,7 @@ curl -s -o /dev/null -w "%{http_code}\n" \
      http://localhost:8000/api/v1/vaults
 ```
 
-You want `200`, `401`, `200`. The middleware returns `401` when the header is missing and `403` when the header is present but does not match a configured key <code-ref path="packages/core/src/memex_core/server/auth.py" lines="145-166" />.
+You want `200`, `401`, `200`. The middleware returns `401` when the header is missing and `403` when the header is present but does not match a configured key <code-ref path="packages/core/src/memex_core/server/auth.py" lines="152-174" />.
 
 ## Troubleshooting
 
@@ -129,13 +129,13 @@ You want `200`, `401`, `200`. The middleware returns `401` when the header is mi
 
 **`403 Invalid API key.` with a key you just set.** The server is comparing against a different config than the one you edited. Verify the path in `MEMEX_CONFIG_PATH` (or the file in the working directory the server was launched from), then restart. Keys are compared byte-for-byte with constant-time comparison <code-ref path="packages/core/src/memex_core/server/auth.py" lines="52-71" /> — a trailing newline or stray space will fail.
 
-**`403 Access denied to vault <id>.`** The key has `vault_ids` set and the request targets a vault outside that list. For read calls, also confirm whether the vault belongs in `read_vault_ids` instead. Write or delete requests against a `read_vault_ids` vault are denied by design <code-ref path="packages/core/src/memex_core/server/auth.py" lines="223-268" />.
+**`403 Access denied to vault <id>.`** The key has `vault_ids` set and the request targets a vault outside that list. For read calls, also confirm whether the vault belongs in `read_vault_ids` instead. Write or delete requests against a `read_vault_ids` vault are denied by design <code-ref path="packages/core/src/memex_core/server/auth.py" lines="232-277" />.
 
-**An endpoint answers without a key.** Check `server.auth.exempt_paths`. By default the server bypasses auth on `/api/v1/health`, `/api/v1/ready`, and `/api/v1/metrics` <code-ref path="packages/common/src/memex_common/config.py" lines="1404-1407" />. Path matching is exact-string, not prefix — `/api/v1/healthz` is not exempt. Trim or extend the list to match your operations needs.
+**An endpoint answers without a key.** Check `server.auth.exempt_paths`. By default the server bypasses auth on `/api/v1/health`, `/api/v1/ready`, and `/api/v1/metrics` <code-ref path="packages/common/src/memex_common/config.py" lines="1406-1409" />. Path matching is exact-string, not prefix — `/api/v1/healthz` is not exempt. Trim or extend the list to match your operations needs.
 
 **Auth says enabled but no keys are configured.** The startup log shows a warning and every authenticated request returns `403` <code-ref path="packages/core/src/memex_core/server/auth.py" lines="107-111" />. Add at least one entry under `keys` and restart.
 
-**Old `api_keys` field rejected at startup.** The flat `api_keys` shape was removed; each key now carries its own policy. The error message names the new layout <code-ref path="packages/common/src/memex_common/config.py" lines="1417-1429" />.
+**Old `api_keys` field rejected at startup.** The flat `api_keys` shape was removed; each key now carries its own policy. The error message names the new layout <code-ref path="packages/common/src/memex_common/config.py" lines="1421-1432" />.
 
 ## See also
 

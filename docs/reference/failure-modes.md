@@ -19,6 +19,7 @@ The behaviour cited here is verified against the code paths named in each entry'
 | Embedding service | Blocks ingestion | Per-backend exception propagates (no swallow) | Ingestion call returns the error; reads not depending on new embeddings are unaffected |
 | Reflection task LLM call | Retry up to `max_retries`, then dead-letter | Row status moves `PROCESSING → FAILED → DEAD_LETTER`; `last_error` populated | `memex memory dead-letter retry` (CLI) or queue-service replay |
 | Phase 5 CAS abandon | Re-enqueues without retry-count bump | `last_error = 'CAS abandon (concurrent refresh won)'`; row stays at original `retry_count` | Next scheduler tick re-claims via `SKIP LOCKED`; benign concurrency outcome, not a failure |
+| Procedural derivation task | Retry up to `max_attempts`, then fail | Row status moves `PENDING → FAILED`; `last_error` populated; `memex_procedural_derivation_queue_size` gauge | Re-queued to `PENDING` while attempts remain; one poisoned row never blocks the others |
 | Per-entity Postgres advisory lock | Blocks the caller until timeout | `EntityLockTimeoutError.timeout_seconds`; `memex_entity_lock_acquires_total{outcome='timeout'}` | Caller retries; surface as HTTP 409 with `Retry-After` derived from `timeout_seconds` |
 | Per-entity asyncio lock (intra-worker) | Serialises within the worker | Coroutines queue on the `asyncio.Lock`; weak-registry size visible via `_registry_size_for_tests` | Lock released automatically when the holding coroutine exits |
 | Per-vault FSFM auto-band lock | Skip this tick | `memex_fsfm_auto_band_skipped_total{reason='lock_held'}`; `AutoDeprioritizeSummary.skipped_lock_held=True` | Next scheduled tick re-attempts |
@@ -109,6 +110,16 @@ A reflection task that hits an LLM error consumes one of its three retries; a ta
 **Retry policy.** Unbounded by `max_retries` (because no count bumps). Repeated CAS abandons indicate sustained contention, not a fault — the system is doing what it should.
 
 **Observability.** `memex_reflection_cas_abandons_total` counter (declared as `REFLECTION_CAS_ABANDONS_TOTAL`); `Reflection task for entity %s re-enqueued after CAS abandon (retry_count unchanged)` (INFO). <code-ref path="packages/core/src/memex_core/metrics.py" lines="63-67" />
+
+## Procedural derivation task
+
+**Failure trigger.** Any exception raised inside `_process_one` after a derivation queue row is claimed — a missing LLM config, a DSPy parse failure, an empty case cluster, or a provider error during procedure/strategy distillation.
+
+**Behaviour.** `ProceduralDerivationService.process_pending` claims up to `limit` pending rows via `claim_derivation_tasks` and processes each inside a `try/except` at the worker boundary. A row that raises is logged (`derivation task %s failed`, with `exc_info`) and routed to `mark_derivation_failed`; it is excluded from the returned completed list, so one poisoned row never blocks its siblings. <code-ref path="packages/core/src/memex_core/services/procedural_derivation_service.py" lines="86-107" />
+
+**Retry policy.** `mark_derivation_failed` writes the truncated error to `last_error` and parks the row back at `PENDING` while `attempt_count < max_attempts` (default `3`), so the next worker re-claims it. Once `attempt_count >= max_attempts` the row moves to `FAILED` and stays for inspection. <code-ref path="packages/core/src/memex_core/services/procedural_repository.py" lines="1172-1191" />
+
+**Observability.** `derivation task %s failed` (ERROR with traceback); `last_error` column on the row; the `memex_procedural_derivation_queue_size` gauge tracks pending depth. <code-ref path="packages/core/src/memex_core/metrics.py" lines="670-675" />
 
 ## Per-entity Postgres advisory lock
 

@@ -21,7 +21,7 @@ If you already noted the UUID from a prior `memex memory search` or `memex_get_e
 memex entity list --query "Project Atlas" --limit 5
 ```
 
-The output table includes `ID` as its last column — copy the UUID for the entity you mean. Use `--type Person`, `--type Organization`, `--type Concept`, and so on to narrow by entity type when the name alone is ambiguous. <code-ref path="packages/cli/src/memex_cli/entities.py" lines="159-215" />
+The output table includes `ID` as its last column — copy the UUID for the entity you mean. Use `--type Person`, `--type Organization`, `--type Concept`, and so on to narrow by entity type when the name alone is ambiguous. <code-ref path="packages/cli/src/memex_cli/entities.py" lines="161-228" />
 
 ### 2. Reconsolidate the entity
 
@@ -45,7 +45,7 @@ The default vault is your active write vault; pass `--vault <name-or-uuid>` (or 
 }
 ```
 
-`observations_added` tells you how many new mental-model observations the reflection pass wrote on top of the prior version. <code-ref path="packages/cli/src/memex_cli/memory.py" lines="230-279" /> <code-ref path="packages/core/src/memex_core/services/locks.py" lines="277-381" />
+`observations_added` tells you how many new mental-model observations the reflection pass wrote on top of the prior version. <code-ref path="packages/cli/src/memex_cli/memory.py" lines="218-263" /> <code-ref path="packages/core/src/memex_core/services/locks.py" lines="277-381" />
 
 This is LLM-intensive. Contradiction detection plus the full reflection cycle typically costs several LLM calls per linked unit — for a noisy entity with hundreds of units, that adds up. Reconsolidate one entity at a time, with a reason. Batch maintenance is what the scheduler is for.
 
@@ -58,7 +58,7 @@ memex_memory_reconsolidate(
 )
 ```
 
-Both `entity_id` and `vault_id` are required. The return dict matches the CLI shape above. <code-ref path="packages/mcp/src/memex_mcp/server.py" lines="4103-4142" />
+Both `entity_id` and `vault_id` are required. The return dict matches the CLI shape above. <code-ref path="packages/mcp/src/memex_mcp/server.py" lines="4391-4430" />
 
 ### 3. Or: reconsolidate the whole vault
 
@@ -68,7 +68,7 @@ Use `memex memory consolidate` only for periodic vault-wide cleanup. It scans ev
 memex memory consolidate --vault personal --dry-run
 ```
 
-The `--dry-run` flag previews which units would flip without writing. Drop it to apply. <code-ref path="packages/cli/src/memex_cli/memory.py" lines="282-333" />
+The `--dry-run` flag previews which units would flip without writing. Drop it to apply. <code-ref path="packages/cli/src/memex_cli/memory.py" lines="266-313" />
 
 Per-entity cleanup belongs on `memex memory reconsolidate`. The vault command does no contradiction detection and runs no reflection — it is the wrong tool when the goal is "rebuild this entity's mental model".
 
@@ -78,11 +78,11 @@ You have done the job if:
 
 - The JSON return has `abandoned: false` and a non-null `mental_model_id`. The CAS UPDATE on `mental_models.version` succeeded, which means this call's reflection output is the persisted state. <code-ref path="packages/core/src/memex_core/memory/reflect/reflection.py" lines="638-724" />
 - `observations_added` is greater than zero when you expected new mental-model observations. Zero is also a valid result — it means the existing model already covered every unit, nothing fresh to add.
-- `memex entity view <entity_id>` shows an up-to-date mention count and reflects the just-ingested evidence. <code-ref path="packages/cli/src/memex_cli/entities.py" lines="227-274" />
+- `memex entity view <entity_id>` shows an up-to-date mention count and reflects the just-ingested evidence. <code-ref path="packages/cli/src/memex_cli/entities.py" lines="231-280" />
 
 ## Troubleshooting
 
-**You got a 503 with `Retry-After`.** Another reconsolidate (or a scheduler reflection pass on the same entity) is already holding the per-entity advisory lock. The server waited up to `timeout_seconds` (default 30) and gave up. Wait the duration printed in the `Retry-After` header and retry. From an MCP client, the same condition surfaces as `{"error": "lock_contention", ...}` — same fix, retry in a moment. <code-ref path="packages/core/src/memex_core/server/memories.py" lines="324-377" />
+**You got a 503 with `Retry-After`.** Another reconsolidate (or a scheduler reflection pass on the same entity) is already holding the per-entity advisory lock. The server waited up to `timeout_seconds` (default 30) and gave up. Wait the duration printed in the `Retry-After` header and retry. From an MCP client, the same condition surfaces as `{"error": "lock_contention", ...}` — same fix, retry in a moment. <code-ref path="packages/core/src/memex_core/server/memories.py" lines="402-440" />
 
 **The return is `abandoned: true`.** A concurrent worker — usually the scheduled reflection drain — refreshed the mental model between your read and your write. Your reflection pass ran, but its CAS UPDATE on `mental_models.version` lost the race. The current persisted state IS fresh; do not retry. Read the entity back via `memex entity view` or `memex_memory_search` to see the latest model. <code-ref path="packages/core/src/memex_core/services/locks.py" lines="336-365" />
 

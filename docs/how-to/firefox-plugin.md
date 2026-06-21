@@ -50,7 +50,7 @@ After entering your settings, click **Test Connection** to verify the extension 
 1. Navigate to the article you want to capture
 2. Click the **Save to Memex** extension icon
 3. The extension extracts the article content using Readability.js and converts it to Markdown via Turndown
-4. Edit the title if needed, select a vault, and optionally add tags or a description
+4. Edit the title if needed and select a vault. Optionally add tags, additional notes, an author, or a publish date — the form pre-fills the author and date from the page when it can
 5. Click **Save** — the note is sent to the Memex server in the background
 
 ### Saving a PDF
@@ -58,7 +58,7 @@ After entering your settings, click **Test Connection** to verify the extension 
 1. Open a PDF in Firefox
 2. Click the **Save to Memex** extension icon
 3. The raw PDF is uploaded directly to the server, which handles parsing server-side
-4. Edit the title, select a vault, and optionally add tags or a description
+4. Edit the title and select a vault. Optionally add tags, additional notes, an author, or a publish date
 5. Click **Save**
 
 ## API Key Security

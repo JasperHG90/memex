@@ -23,14 +23,16 @@ memex case submit \
   --action "Wait for allocations to clear" \
   --action "Re-submit the job" \
   --outcome success \
-  --lesson "Always drain before re-submitting; don't force-restart."
+  --lesson "Always drain before re-submitting; don't force-restart." \
+  --scope global \
+  --scope-reasoning "Nomad deploys are not project-specific."
 ```
 
-`--title`, `--trigger`, and `--outcome` are required; `--outcome` must be `success`, `failure`, or `mixed`. Pass `--action`/`-a` once per ordered step. <code-ref path="packages/cli/src/memex_cli/procedural.py" lines="843-856" />
+`--title`, `--trigger`, `--outcome`, `--scope`, and `--scope-reasoning` are all required. `--outcome` must be `success`, `failure`, or `mixed`; `--scope` must be `global`, `project:<id>`, or `app:<id>`, and `--scope-reasoning` is a one-sentence justification for the scope you picked. Pass `--action`/`-a` once per ordered step. <code-ref path="packages/cli/src/memex_cli/procedural.py" lines="914-933" />
 
-The case is filed as a note into a hidden system vault — there is no `--vault` flag; the server owns the placement. <code-ref path="packages/cli/src/memex_cli/procedural.py" lines="813-823" />
+The case is filed as a note into a hidden system vault — there is no `--vault` flag; the server owns the placement. <code-ref path="packages/cli/src/memex_cli/procedural.py" lines="883-892" />
 
-On success the CLI prints the filed note id and the assignment outcome — for a brand-new recipe, `seeded draft procedure <id>`. <code-ref path="packages/cli/src/memex_cli/procedural.py" lines="906-917" />
+On success the CLI prints the filed note id and the assignment outcome — for a brand-new recipe, `seeded draft procedure <id>`. <code-ref path="packages/cli/src/memex_cli/procedural.py" lines="985-996" />
 
 ### 1b. (Alternative) Submit from a markdown file
 
@@ -64,11 +66,11 @@ success. **Lesson:** Always drain before re-submitting.
 memex case submit --file ./nomad-deploy-case.md
 ```
 
-Any flag you also pass overrides the parsed value. <code-ref path="packages/cli/src/memex_cli/procedural.py" lines="830-841" />
+Any flag you also pass overrides the parsed value. <code-ref path="packages/cli/src/memex_cli/procedural.py" lines="900-912" />
 
 ### 2. Attach to a known procedure (optional)
 
-If you know which procedure this episode is an instance of, name it with `--case-of <entry-uuid>`. That skips the assignment judge and attaches the case directly, bumping the procedure's outcome counters: <code-ref path="packages/cli/src/memex_cli/procedural.py" lines="794-800" />
+If you know which procedure this episode is an instance of, name it with `--case-of <entry-uuid>`. That skips the assignment judge and attaches the case directly, bumping the procedure's outcome counters: <code-ref path="packages/cli/src/memex_cli/procedural.py" lines="863-869" />
 
 ```bash
 memex case submit --title "..." --trigger "..." --outcome success \
@@ -85,11 +87,11 @@ Assignment creates the procedure anchor but leaves its body empty. Derivation di
 memex procedure derive
 ```
 
-This drains up to `--limit` pending tasks (default 10) and prints how many entries were derived. <code-ref path="packages/cli/src/memex_cli/procedural.py" lines="604-633" /> One case is enough — distillation does not wait for repeats. <code-ref path="packages/core/src/memex_core/memory/procedural_distillation.py" lines="42" />
+This drains up to `--limit` pending tasks (default 10) and prints how many entries were derived. <code-ref path="packages/cli/src/memex_cli/procedural.py" lines="652-687" /> One case is enough — distillation does not wait for repeats. <code-ref path="packages/core/src/memex_core/memory/procedural_distillation.py" lines="42" />
 
 ### 4. Review and activate the draft
 
-A derived procedure is written as a `draft` and stays invisible to search and briefing until a human confirms it. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="2077-2081" /> Confirmation runs through the lint queue, where the new draft appears as a `governance` finding with the `activate_procedural_entry` action pre-selected. <code-ref path="packages/core/src/memex_core/services/case_service.py" lines="515-569" />
+A derived procedure is written as a `draft` and stays invisible to search and briefing until a human confirms it. <code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="1955-1965" /> Confirmation runs through the lint queue, where the new draft appears as a `governance` finding with the `activate_procedural_entry` action pre-selected. <code-ref path="packages/core/src/memex_core/services/case_service.py" lines="643-683" />
 
 Open the review cockpit:
 
@@ -97,7 +99,7 @@ Open the review cockpit:
 memex lint review
 ```
 
-Find the "new procedure anchor, ready to activate" finding, accept it, and pick the `activate_procedural_entry` action. The entry flips `draft → published` and becomes retrievable. The step is reversible — undoing the activation re-drafts the entry. <code-ref path="packages/core/src/memex_core/services/proposal_actions/activate_procedural_entry.py" lines="56-124" />
+Find the "new procedure anchor, ready to activate" finding, accept it, and pick the `activate_procedural_entry` action. The entry flips `draft → published` and becomes retrievable. The step is reversible — undoing the activation re-drafts the entry. <code-ref path="packages/core/src/memex_core/services/proposal_actions/activate_procedural_entry.py" lines="56-134" />
 
 ## Verification
 
@@ -111,7 +113,7 @@ memex procedure list --status published
 memex procedure search "deploy is stuck on Nomad"
 ```
 
-A published entry appears in both. If `procedure search` returns nothing but `procedure list --status draft` shows the entry, activation has not happened yet — go back to step 4. <code-ref path="packages/cli/src/memex_cli/procedural.py" lines="410-442" />
+A published entry appears in both. If `procedure search` returns nothing but `procedure list --status draft` shows the entry, activation has not happened yet — go back to step 4. <code-ref path="packages/cli/src/memex_cli/procedural.py" lines="380-522" />
 
 ## Troubleshooting
 
@@ -123,9 +125,9 @@ MEMEX_LINT_ALLOW_UNATTENDED_APPLY=1 memex server start
 
 Accepted values are `1`, `true`, or `yes`. This is the common local-dev gotcha — a freshly started dev server has auth off, so activation fails until you set this.
 
-**`procedure derive` reports zero entries derived.** Either the queue was already drained, or the anchor has no attached cases yet. Re-run `memex case submit` and confirm the printed assignment mode was `auto-assigned` or `seeded draft procedure` (not `escalated`). An escalated case is waiting in the lint queue for you to assign it via `memex lint review`.
+**`procedure derive` reports zero entries derived.** Either the queue was already drained, or the anchor has no attached cases yet. Re-run `memex case submit` and confirm the printed assignment mode was `auto-assigned` or `seeded draft procedure` (not `escalated`). An escalated case is waiting in the lint queue; the CLI prints the finding id and tells you to assign it with `memex lint resolve --action assign_case` (or triage it in `memex lint review`).
 
-**The case came back as "Already filed".** You submitted byte-identical content; ingest is content-idempotent and skipped the duplicate. Change the content (or accept that the case already exists). <code-ref path="packages/cli/src/memex_cli/procedural.py" lines="899-905" />
+**The case came back as "Already filed".** You submitted byte-identical content; ingest is content-idempotent and skipped the duplicate. Change the content (or accept that the case already exists). <code-ref path="packages/cli/src/memex_cli/procedural.py" lines="977-984" />
 
 ## See also
 

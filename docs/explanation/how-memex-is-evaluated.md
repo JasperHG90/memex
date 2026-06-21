@@ -18,36 +18,40 @@ The Memory Worth score has to reward outcomes without letting popular units run 
 
 Every one of those is a numerical decision that needs a measurement loop behind it.
 
-Memex today has two measurement surfaces.
+The active measurement work is the internal evaluation suite — and, increasingly, how a real agent drives Memex through it.
 
-Neither is large enough to do principled tuning.
+That suite is not large enough to do principled tuning. It is enough to catch the obvious case where you ship a change and something visible breaks.
 
-Both are enough to catch the obvious case where you ship a change and something visible breaks.
+Memex also carries machinery for external benchmarks — borrowed published datasets like LoCoMo and LongMemEval. The code exists, but it is not where the effort goes today, and you should not read its occasional numbers as a maintained scoreboard.
 
 That gap — between "catches regressions" and "tunes defaults" — is the empirical caveat in the design doc, and it carries through everything below.
 
-## Model: two surfaces
+## Model: where the effort goes
 
-You meet Memex's evaluation work in two places. They are not the same shape and they do not answer the same question.
+Memex has two evaluation surfaces, and they are not equal partners. One is live and growing; the other is on-demand tooling that happens to exist.
 
-| Surface | Lives at | Shape | Scale | What it answers |
-|---|---|---|---|---|
-| Internal regression suites | `packages/eval/src/memex_eval/suites/<name>/` | Suite to Scenarios to ExpectedOutcomes | ~30 hand-verified queries per suite; six suites today | "Did this commit break a known-good case?" |
-| External LoCoMo benchmark | `packages/eval/src/memex_eval/external/locomo_*.py` | Question / answer / judge pipeline over a published dataset | One conversation, 50 QA pairs (3 excluded as image-only) | "How does Memex compare to other long-term-memory systems on a published benchmark?" |
+| Surface | Lives at | What it answers | Status |
+|---|---|---|---|
+| Internal evaluation suite | `packages/eval/src/memex_eval/suites/<name>/` | "Did this commit break a known-good case?" and "Can a real agent use the tool surface to answer this?" | Active — almost all new eval work lands here |
+| External benchmarks | `external/locomo_*.py`, `longmemeval_*.py` | "How does Memex score on a published long-memory benchmark?" | Present but not the current focus; run rarely, on demand |
 
-The internal surface owns the corpus. You write a markdown source, you author a scenario against it, you assert what the system should do.
+The internal suite owns its corpus, and it is where the investment goes. It has grown two layers.
 
-The external surface borrows someone else's corpus and asks how Memex scores against published numbers.
+**Retrieval and extraction regression.** A scenario asserts a specific thing about a specific markdown document the author wrote — this query returns "Sarah Chen", these gold units land in the top five. The `api` backend calls the live server directly and the outcome scores the result. Seven suites ship today.
 
-They share the LLM judge (Gemini via DSPy) but otherwise the pipelines are separate.
+**Agent integration.** The same scenario shape, but the answer comes from a *real agent* driving Memex's tool surface — Claude Code over MCP, or Hermes over the plugin — instead of a direct API call. <code-ref path="packages/eval/src/memex_eval/suite/agents.py" lines="777-778" /> The `agent_integration` suite — 38 scenarios across ten groups (triage, temporal, entity, survey, faithfulness, navigation, feedback, KV, lifecycle) — measures whether the agent picks the right tool, cites honestly, and routes each write to the right place. This is the layer under active expansion.
+
+The external surface borrows someone else's corpus. LoCoMo is one long conversation with 50 QA pairs; LongMemEval is 500 questions across six categories. Each has its own answer / judge / report module family, and they share the runner's shape. But the code is the whole story here — these benchmarks are not run on a cadence, and any numbers you see are occasional snapshots, not a maintained scoreboard. Read them as "Memex *can* be compared against published work", not "Memex *does*, continuously".
+
+The internal suite and the external pipelines share the LLM judge (Gemini via DSPy); otherwise they are separate.
 
 ### What you get from each
 
 The internal suite is the one that runs in CI. It runs in seconds against a snapshot-cached vault and gives you a pass-rate per suite. <code-ref path="packages/eval/src/memex_eval/suite/runner.py" lines="1601-1607" /> When a scenario fails, you know which query stopped working and which outcome rule fired. That is enough to bisect a regression; it is not enough to set `mw_alpha`.
 
-The external surface runs on demand against the LoCoMo conversation dataset. <code-ref path="packages/eval/README.md" lines="93-114" /> It produces a five-category score breakdown — single-hop, multi-hop, temporal, open-domain, adversarial — and a Markdown report with retrieval-efficiency plots.
+The external surface runs on demand. The LoCoMo pipeline runs against the LoCoMo conversation dataset. <code-ref path="packages/eval/README.md" lines="93-114" /> It produces a five-category score breakdown — single-hop, multi-hop, temporal, open-domain, adversarial — and a Markdown report with retrieval-efficiency plots. The LongMemEval pipeline runs against its 500-question dataset and scores per cognitive-ability category, with its own ingest, judge, report, and efficiency modules.
 
-The numbers are published in `docs/reference/evaluation-results.md` and updated when the pipeline reruns. The cost of one full LoCoMo pass is dominated by the answering agent (Claude Code calling MCP tools per question), so you do not run it in CI.
+Any numbers live in `docs/reference/evaluation-results.md`, from whenever someone last ran the pipeline — which is seldom. The cost of one full external pass is dominated by the answering agent (Claude Code calling MCP tools per question), so it never runs in CI and is not run on a schedule.
 
 ## Mechanism: a worked example
 
@@ -190,7 +194,7 @@ Run it with `--from-snapshot=auto` so you skip the LLM extraction cost on reruns
 
 Run the LLM judge for ad-hoc work too. Pass `--judge-model` (or set `EVAL_JUDGE_MODEL`) on `memex-eval suite run`; without a reachable judge the runner skips `LLMJudge` and `UsefulAtK` scenarios with `status='skip'`, and you are running a strictly weaker check and calling it green.
 
-Run the LoCoMo benchmark when you change anything that would plausibly move long-conversation recall — multi-hop reasoning, temporal filtering, the answering-agent prompt — and update `docs/reference/evaluation-results.md` if the numbers shift.
+The external benchmarks — LoCoMo, LongMemEval — are available if you want to compare against a published dataset, but they are not part of the routine loop and are run rarely. Reach for the `agent_integration` suite instead when you change the answering-agent prompt or the tool surface; reach for the retrieval suites when you change extraction, retrieval, or reflection.
 
 **What to do when a default moves.**
 
@@ -200,5 +204,5 @@ If you change a default in the design doc, three things have to move with it. Th
 
 - [Tutorial: Getting started](../tutorials/getting-started.md)
 - [How-to: Run the evaluation suite](../how-to/evaluation-results.md)
-- [Reference: LoCoMo evaluation report](../reference/evaluation-results.md)
+- [Reference: evaluation results](../reference/evaluation-results.md)
 - [Explanation: the Hindsight framework](how-memex-works/high-level-architecture.md)

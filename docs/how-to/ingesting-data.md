@@ -41,10 +41,10 @@ Useful flags:
 - `--key, -k` — stable identifier for the note. Re-running with the same key updates the existing note rather than creating a new one. Use this when you want repeatable ingestion (a daily log, a recurring report).
 - `--tag` — repeatable. One tag per flag.
 - `--title, -t` — note title. Defaults to `Quick Note` for inline content.
-- `--date, -d` — ISO 8601 publish date. Backdates the note's facts so they sort correctly in temporal retrieval.
+- `--date` — ISO 8601 publish date. Backdates the note's facts so they sort correctly in temporal retrieval.
 - `--author` — author name written to the note's metadata.
 - `--user-notes, -n` — your own commentary about the note. Extracted with `source_context='user_notes'` so it's distinguishable from the body.
-- `--description` — short summary.
+- `--description, -d` — short summary.
 - `--background, -b` — queue the work and return a job ID instead of waiting.
 
 ## Add a file or a folder
@@ -152,7 +152,7 @@ Useful flags on `sync run`:
 
 ## Drive ingestion from Python
 
-For programmatic use, talk to `MemexAPI` directly. The relevant method is `MemexAPI.ingest(note, vault_id=..., background=False)` <code-ref path="packages/core/src/memex_core/api.py" lines="1092-1142" />. It takes a `NoteInput` <code-ref path="packages/core/src/memex_core/api.py" lines="150-189" /> and returns a dict with the new note ID and extracted unit IDs.
+For programmatic use, talk to `MemexAPI` directly. The relevant method is `MemexAPI.ingest(note, vault_id=..., background=False)` <code-ref path="packages/core/src/memex_core/api.py" lines="1173-1182" />. It takes a `NoteInput` <code-ref path="packages/core/src/memex_core/api.py" lines="173-211" /> and returns a dict with the new note ID and extracted unit IDs.
 
 ```python
 import asyncio
@@ -177,7 +177,7 @@ asyncio.run(main())
 
 `background=True` is rejected by the in-process API — it's accepted only for signature parity with the HTTP wrapper. For background work, talk to the server through `RemoteMemexAPI` or the `/ingestions/batch` REST endpoint instead.
 
-For file or URL ingestion from Python, use `api.ingest_from_file(path, vault_id=...)` <code-ref path="packages/core/src/memex_core/api.py" lines="1075-1090" /> or `api.ingest_from_url(url, vault_id=...)` <code-ref path="packages/core/src/memex_core/api.py" lines="1058-1073" />.
+For file or URL ingestion from Python, use `api.ingest_from_file(path, vault_id=...)` <code-ref path="packages/core/src/memex_core/api.py" lines="1156-1171" /> or `api.ingest_from_url(url, vault_id=...)` <code-ref path="packages/core/src/memex_core/api.py" lines="1139-1154" />.
 
 ## Verify your content is in
 

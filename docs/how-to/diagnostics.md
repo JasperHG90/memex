@@ -62,7 +62,7 @@ Use this when retrieval feels skewed. An entity at the top of the list with a lo
 memex diagnostics findings --vault my-vault | jq '.pending_by_type'
 ```
 
-The lint subcommand emits a JSON pivot over the `maintenance_proposals` table:
+The `findings` subcommand emits a JSON pivot over the `maintenance_proposals` table:
 
 - `counts_by_type_status_source` — full cross-tab of `(lint_type, status, source)`.
 - `pending_by_type` — the pending-only slice, grouped by `lint_type`.
@@ -82,7 +82,7 @@ A growing per-type count means the scanner is producing findings faster than you
 
 ### Agent-driven check
 
-If you only need the summary block and you are calling from an LLM agent, the MCP tool `memex_get_diagnostics_summary` returns the same payload as `memex diagnostics summary`. <code-ref path="packages/mcp/src/memex_mcp/server.py" lines="4191-4220" /> The manifold, retrieval, and lint dashboards are CLI-only.
+If you only need the summary block and you are calling from an LLM agent, the MCP tool `memex_get_diagnostics_summary` returns the same payload as `memex diagnostics summary`. <code-ref path="packages/mcp/src/memex_mcp/server.py" lines="4480-4504" /> The manifold, retrieval, and lint dashboards are CLI-only.
 
 ### Scope the call to a different vault
 
@@ -102,7 +102,7 @@ You ran the right command and got the right shape back when:
 - `summary` returns a JSON object with `unit_counts`, `avg_mw_score`, `manifold_status`, `lint_pending_by_type`, `cluster_count`, and `top_5_retrieved_entities` as keys.
 - `manifold` returns either a payload with `points` (200) or an envelope with `task_id` and `_http_status: 202`.
 - `retrieval` returns `{vault_id, as_of, top_n, entities: [...]}` with `entities` length up to `top_n`.
-- `lint` returns `{vault_id, counts_by_type_status_source, pending_by_type, top_5_pending}`.
+- `findings` returns `{vault_id, counts_by_type_status_source, pending_by_type, top_5_pending}`.
 
 If any command exits non-zero, the CLI prints the API error to stderr — read that line first.
 

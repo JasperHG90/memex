@@ -19,7 +19,7 @@ This tutorial uses no LLM API keys. Search, entity walking, and outcome recordin
 
 Memex disables authentication by default for localhost. To exercise the REST surface the way a real agent will use it, turn auth on and mint a key.
 
-Open the server config (`~/.memex/config.yaml` by default) and add an `auth` block under `server`:
+Open the server config (`~/.config/memex/config.yaml` on Linux, `~/Library/Application Support/memex/config.yaml` on macOS — run `memex config show` if you are unsure) and add an `auth` block under `server`:
 
 ```yaml
 server:

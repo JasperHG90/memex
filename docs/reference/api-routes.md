@@ -97,18 +97,49 @@ The server is FastAPI. The OpenAPI document is served at `/openapi.json`; Swagge
 | POST | `/api/v1/kv/search` | read | Semantic KV search. |
 | DELETE | `/api/v1/kv/delete` | delete | Delete a KV entry. |
 | POST | `/api/v1/outcomes/record` | write | Record per-unit outcome verbs. |
+| POST | `/api/v1/cases` | write | Submit a worked episode as a case. |
+| GET | `/api/v1/cases` | read | List case notes in the procedural system vault. |
+| GET | `/api/v1/cases/{note_id}` | read | Get one case note by ID. |
+| POST | `/api/v1/procedural` | write | Create a procedural entry. |
+| POST | `/api/v1/procedural/upsert` | write | Idempotent write on the identity anchor. |
+| GET | `/api/v1/procedural` | read | List entries by lifecycle status. |
+| POST | `/api/v1/procedural/search` | read | Hybrid BM25 + vector search. |
+| GET | `/api/v1/procedural/by-identity` | read | Look up one entry by its identity anchor. |
+| GET | `/api/v1/procedural/{entry_id}` | read | Fetch one entry by UUID. |
+| PATCH | `/api/v1/procedural/{entry_id}` | write | Mutate an entry in place. |
+| POST | `/api/v1/procedural/{entry_id}/deprecate` | write | Soft-deprecate an entry. |
+| POST | `/api/v1/procedural/{entry_id}/report` | write | Report an enactment outcome. |
+| POST | `/api/v1/procedural/derive` | write | Drain pending derivation tasks. |
+| POST | `/api/v1/procedural/{entry_id}/pin` | write | Pin an entry into a context-binding chain. |
+| DELETE | `/api/v1/procedural/{entry_id}/pin` | write | Unpin an entry from a context. |
+| GET | `/api/v1/procedural/pins` | read | Pins for one context, position ascending. |
+| GET | `/api/v1/procedural/{entry_id}/versions` | read | The entry's version ledger, newest first. |
+| POST | `/api/v1/procedural/{entry_id}/rollback` | write | Non-destructive rollback to a snapshot. |
+| POST | `/api/v1/procedural/briefing-cards` | read | Pin-chain briefing cards for the session-briefing surface. |
 | GET | `/api/v1/lint/status` | read | Pending lint-finding counts. |
 | GET | `/api/v1/lint/findings` | read | List lint findings (offset paging). |
 | GET | `/api/v1/lint/flags` | read | Cursor-paginated agent surface for findings. |
 | GET | `/api/v1/lint/actions` | read | The closed proposal-action catalogue (with params schemas). |
 | POST | `/api/v1/lint/proposals` | write | Externally-submitted lint proposals (single or batch, partial-success). |
 | POST | `/api/v1/lint/findings/{finding_id}/preview` | read | Read-only blast-radius preview of a canned action. |
+| POST | `/api/v1/lint/findings/{finding_id}/flag` | write | Toggle the flagged bookmark on a finding. |
 | POST | `/api/v1/lint/findings/{finding_id}/dismiss` | write | Mark a finding dismissed. |
 | POST | `/api/v1/lint/findings/{finding_id}/resolve` | write | Mark a finding resolved (rule-keyed dispatcher). |
 | POST | `/api/v1/lint/findings/{finding_id}/apply` | write | Apply a winner-proposal action. |
 | POST | `/api/v1/lint/findings/{finding_id}/reverse` | write | Reverse a previously applied winner-proposal. |
 | POST | `/api/v1/lint/run/{vault_id}` | write | Synchronously run V1 lint rules. |
+| POST | `/api/v1/lint/findings/seed` | write | Insert a synthetic finding (eval-only). |
 | POST | `/api/v1/lint/llm/run/{vault_id}` | write | Synchronously run LLM-gated lint checks. |
+| GET | `/api/v1/lint/calibration/telemetry` | read | Per-rule telemetry rollups. |
+| POST | `/api/v1/lint/calibration/refresh` | write | Recompute telemetry for the trailing window. |
+| GET | `/api/v1/lint/calibration/thresholds` | read | List versioned calibration rows. |
+| POST | `/api/v1/lint/calibration/calibrate` | write | Run the threshold calibration job. |
+| POST | `/api/v1/lint/calibration/freeze` | write | Freeze or unfreeze auto-calibration for a rule. |
+| POST | `/api/v1/lint/calibration/rollback` | write | Rollback a rule's calibration to a version. |
+| POST | `/api/v1/lint/optimize/run` | write | Trigger a DSPy signature compile for a rule. |
+| GET | `/api/v1/lint/optimize/signature` | read | Full signature detail (demos + compiled program). |
+| GET | `/api/v1/lint/optimize/history` | read | List signature versions with validation scores. |
+| POST | `/api/v1/lint/optimize/rollback` | write | Rollback a rule's DSPy signature to a version. |
 | POST | `/api/v1/consolidation/tick` | write | Run one or more consolidation ticks. |
 | GET | `/api/v1/consolidation/status` | read | Last-run timestamps per vault. |
 | GET | `/api/v1/diagnostics/manifold/{vault_id}` | read | UMAP projection (warm cache or 202 task ID). |
@@ -647,7 +678,7 @@ Upsert a KV entry. <code-ref path="packages/core/src/memex_core/server/kv.py" li
 
 ### GET /api/v1/kv
 
-List KV entries. <code-ref path="packages/core/src/memex_core/server/kv.py" lines="173-210" />
+List KV entries. <code-ref path="packages/core/src/memex_core/server/kv.py" lines="148-185" />
 
 - **Auth.** `require_read`.
 - **Query params.** `limit` (1-500, default 100), `namespaces` (comma-separated prefixes), `exclude_prefix`, `key_prefix`, `pattern` (trailing `*` only), `include_vectors` (bool, default `false`).
@@ -655,16 +686,16 @@ List KV entries. <code-ref path="packages/core/src/memex_core/server/kv.py" line
 
 ### GET /api/v1/kv/get
 
-Get a KV entry by exact key. <code-ref path="packages/core/src/memex_core/server/kv.py" lines="83-127" />
+Get a KV entry by exact key. <code-ref path="packages/core/src/memex_core/server/kv.py" lines="80-102" />
 
 - **Auth.** `require_read`.
-- **Query params.** `key` (required), `include_history` (bool, default `false`), `include_vectors` (bool, default `false`).
-- **Returns.** `KVEntryDTO` (with `embedding` populated when `include_vectors=true`). For procedure keys (`<scope>:procedure:<verb>:<context-tag>`) with `include_history=true`, the server returns `KVProcedureEntryDTO` carrying the active value plus version + history — procedure envelopes never carry vectors.
+- **Query params.** `key` (required), `include_vectors` (bool, default `false`).
+- **Returns.** `KVEntryDTO` (with `embedding` populated when `include_vectors=true`).
 - **Errors.** 404 unknown key.
 
 ### POST /api/v1/kv/search
 
-Semantic search over KV entries. <code-ref path="packages/core/src/memex_core/server/kv.py" lines="130-153" />
+Semantic search over KV entries. <code-ref path="packages/core/src/memex_core/server/kv.py" lines="105-128" />
 
 - **Auth.** `require_read`.
 - **Body** (`KVSearchRequest`): exactly one of `query` (text — the server embeds it) or `query_embedding` (pre-computed vector); optional `namespaces` (list of prefixes), `limit` (1-500, default 5), `include_vectors` (bool, default `false`).
@@ -703,7 +734,7 @@ Record per-unit outcome verbs against memory units that were used in a turn. <co
 
 ### GET /api/v1/lint/status
 
-Pending finding counts. <code-ref path="packages/core/src/memex_core/server/lint.py" lines="72-106" />
+Pending finding counts. <code-ref path="packages/core/src/memex_core/server/lint.py" lines="146-189" />
 
 - **Auth.** `require_read`. With `scope=vault`, the route also checks vault access.
 - **Query params.** `vault_id` (UUID — required when `scope=vault`), `scope` (`all|vault|global`, default `all`).
@@ -714,7 +745,7 @@ Pending finding counts. <code-ref path="packages/core/src/memex_core/server/lint
 
 ### GET /api/v1/lint/findings
 
-List lint findings (offset paging — CLI surface). <code-ref path="packages/core/src/memex_core/server/lint.py" lines="109-158" />
+List lint findings (offset paging — CLI surface). <code-ref path="packages/core/src/memex_core/server/lint.py" lines="413-475" />
 
 - **Auth.** `require_read` + vault access on `vault_id`.
 - **Query params.** `vault_id`, `lint_type` (`structural|quality|governance|schema`), `status` (`pending|resolved|dismissed`, default `pending`), `limit` (1-500, default 50), `offset` (≥0, default 0).
@@ -722,16 +753,26 @@ List lint findings (offset paging — CLI surface). <code-ref path="packages/cor
 
 ### GET /api/v1/lint/flags
 
-Cursor-paginated agent surface — shape-stable across pages. <code-ref path="packages/core/src/memex_core/server/lint.py" lines="646-694" />
+Cursor-paginated agent surface — shape-stable across pages. <code-ref path="packages/core/src/memex_core/server/lint.py" lines="1862-1910" />
 
 - **Auth.** `require_read` + vault access on `vault_id`.
 - **Query params.** `vault_id`, `lint_type`, `target_type`, `status` (default `pending`), `limit` (1-200, default 20), `cursor` (opaque).
 - **Returns.** `{findings: [...], next_cursor: string | null}`.
 - **Errors.** 503 `{error: "lint_subsystem_not_initialized", message, missing_migration: "025_maintenance_proposals"}` if the maintenance ledger schema is absent; 400 on bad cursor.
 
+### POST /api/v1/lint/findings/{finding_id}/flag
+
+Toggle the `flagged_at` bookmark on a finding. <code-ref path="packages/core/src/memex_core/server/lint.py" lines="734-777" />
+
+- **Auth.** `require_write` + vault access on the finding's own vault; an unscoped key is required for global (NULL-vault) findings.
+- **Path params.** `finding_id` (UUID).
+- **Behaviour.** Sets `flagged_at = now()` when currently NULL; clears to NULL when already flagged. Orthogonal to resolution status — any finding (pending, resolved, dismissed) can be flagged. Non-destructive; no attended-mode gate.
+- **Returns.** `{finding_id, flagged: bool, flagged_at: string | null}`.
+- **Errors.** 404 unknown finding.
+
 ### POST /api/v1/lint/findings/{finding_id}/dismiss
 
-Flip a pending finding to `dismissed`. Idempotent. <code-ref path="packages/core/src/memex_core/server/lint.py" lines="207-226" />
+Flip a pending finding to `dismissed`. Idempotent. <code-ref path="packages/core/src/memex_core/server/lint.py" lines="780-818" />
 
 - **Auth.** `require_write` + vault access on the finding's own vault (looked up first, so a leaked finding ID from another vault returns 403).
 - **Path params.** `finding_id` (UUID).
@@ -740,7 +781,7 @@ Flip a pending finding to `dismissed`. Idempotent. <code-ref path="packages/core
 
 ### POST /api/v1/lint/findings/{finding_id}/resolve
 
-Flip a pending finding to `resolved`. Rule-keyed. <code-ref path="packages/core/src/memex_core/server/lint.py" lines="229-261" />
+Flip a pending finding to `resolved`. Rule-keyed. <code-ref path="packages/core/src/memex_core/server/lint.py" lines="821-1062" />
 
 - **Auth.** `require_write` + vault access (per-finding for ordinary rules; per cluster member for `entity_collapse_cluster`).
 - **Path params.** `finding_id` (UUID).
@@ -753,7 +794,7 @@ Flip a pending finding to `resolved`. Rule-keyed. <code-ref path="packages/core/
 
 ### POST /api/v1/lint/findings/{finding_id}/apply
 
-Apply a winner-proposal finding's recorded action. <code-ref path="packages/core/src/memex_core/server/lint.py" lines="421-448" />
+Apply a winner-proposal finding's recorded action. <code-ref path="packages/core/src/memex_core/server/lint.py" lines="1326-1354" />
 
 - **Auth.** `require_write` + vault access on the finding's vault. Refused with 403 when `server.auth.enabled=false` unless the operator sets `MEMEX_LINT_ALLOW_UNATTENDED_APPLY=1|true|yes`.
 - **Path params.** `finding_id` (UUID).
@@ -762,7 +803,7 @@ Apply a winner-proposal finding's recorded action. <code-ref path="packages/core
 
 ### POST /api/v1/lint/findings/{finding_id}/reverse
 
-Reverse a previously applied winner-proposal by reading `evidence.resolution.prior_state` and atomically restoring rows. <code-ref path="packages/core/src/memex_core/server/lint.py" lines="451-477" />
+Reverse a previously applied winner-proposal by reading `evidence.resolution.prior_state` and atomically restoring rows. <code-ref path="packages/core/src/memex_core/server/lint.py" lines="1356-1443" />
 
 - **Auth.** Same as `apply` (including the `MEMEX_LINT_ALLOW_UNATTENDED_APPLY` gate).
 - **Path params.** `finding_id` (UUID).
@@ -771,21 +812,118 @@ Reverse a previously applied winner-proposal by reading `evidence.resolution.pri
 
 ### POST /api/v1/lint/run/{vault_id}
 
-Synchronously run the V1 lint rule registry for one vault. <code-ref path="packages/core/src/memex_core/server/lint.py" lines="480-524" />
+Synchronously run the V1 lint rule registry for one vault. <code-ref path="packages/core/src/memex_core/server/lint.py" lines="1607-1651" />
 
 - **Auth.** `require_write` + vault access.
 - **Path params.** `vault_id` (UUID).
 - **Returns.** `{vault_id, total_findings, rules: [{name, lint_type, findings_emitted, duration_seconds, error}]}`.
 - **Errors.** 503 lint subsystem not initialized.
 
+### POST /api/v1/lint/findings/seed
+
+Insert a single synthetic `maintenance_proposals` row. Eval-only. <code-ref path="packages/core/src/memex_core/server/lint.py" lines="1654-1717" />
+
+- **Auth.** `require_write` + vault access. Gated by `MEMEX_EVAL_MODE=1|true|yes` — returns 403 when the env var is absent or falsy, so production servers never expose it.
+- **Body.** `vault_id` (UUID, required); optional `rule_name` (default `llm_semantic_contradiction`), `source` (default `llm`), `evidence` (dict), `target_id`, `suggested_action`.
+- **Returns.** `{id, target_id, status: "pending"}`.
+- **Errors.** 403 when `MEMEX_EVAL_MODE` is not set.
+
 ### POST /api/v1/lint/llm/run/{vault_id}
 
-Synchronously run LLM-gated lint checks (semantic contradiction, schema drift, propose-winner) for one vault. <code-ref path="packages/core/src/memex_core/server/lint.py" lines="527-643" />
+Synchronously run LLM-gated lint checks (semantic contradiction, schema drift, propose-winner) for one vault. <code-ref path="packages/core/src/memex_core/server/lint.py" lines="1720-1860" />
 
 - **Auth.** `require_write` + vault access.
 - **Path params.** `vault_id` (UUID).
 - **Returns.** `{vault_id, summaries: [{check, evaluated, emitted, deferred, deferred_processed} | {check, error}]}`. With every check disabled the response is `{vault_id, summaries: [], detail: "no LLM lint checks enabled"}`.
 - **Errors.** 503 when `server.memory.lint_llm.enabled=false` or `cost_cap_per_24h=0`.
+
+### GET /api/v1/lint/calibration/telemetry
+
+Per-rule telemetry rollups used by `memex lint stats`. Read-only. <code-ref path="packages/core/src/memex_core/server/lint.py" lines="1942-1972" />
+
+- **Auth.** `require_read`. With `vault_id`, also checks vault access; the global rollup (`vault_id IS NULL`) requires only READ.
+- **Query params.** `rule` (filter to one `rule_name`), `vault_id`, `include_global` (bool, default `true` — include the cross-vault rollup when `vault_id` is omitted).
+- **Returns.** `{rows: [...]}` — each row carries `rule_name`, `vault_id`, `window_start`, `window_end`, `accept_count`, `no_op_count`, `dismiss_count`, `legacy_count`, `total_count`, `labelled_count`, `accept_rate`, `median_surprise`, `median_time_to_resolve_seconds`, `refreshed_at`.
+
+### POST /api/v1/lint/calibration/refresh
+
+Recompute `lint_rule_telemetry` for the trailing window. <code-ref path="packages/core/src/memex_core/server/lint.py" lines="1975-2011" />
+
+- **Auth.** `require_write` + vault access on `vault_id`.
+- **Query params.** `vault_id` (omit for global-only refresh), `window_days` (1-365, default 30).
+- **Behaviour.** Idempotent. Vault-scoped refreshes also refresh the global (`vault_id NULL`) rollup.
+- **Returns.** `{rows_written, rules_seen, proposals_aggregated, window_start, window_end, vault_id}`.
+
+### GET /api/v1/lint/calibration/thresholds
+
+List versioned per-rule calibration rows learned from verdicts. <code-ref path="packages/core/src/memex_core/server/lint.py" lines="2019-2049" />
+
+- **Auth.** `require_read` + vault access on `vault_id`.
+- **Query params.** `rule` (filter to one `rule_name`), `vault_id`.
+- **Returns.** `{rows: [...]}` — each row carries `id`, `rule_name`, `vault_id`, `version`, `surprise_threshold`, `polarity_threshold`, `learned_at`, `superseded_by_version`, `frozen`, `rationale`.
+
+### POST /api/v1/lint/calibration/calibrate
+
+Run the threshold calibration job now. <code-ref path="packages/core/src/memex_core/server/lint.py" lines="2052-2075" />
+
+- **Auth.** `require_write` + vault access on `vault_id`.
+- **Query params.** `vault_id`.
+- **Behaviour.** Reads telemetry, computes new thresholds, writes versioned calibration rows. Idempotent: unchanged telemetry writes no new rows.
+- **Returns.** `{rules_calibrated, rules_skipped_frozen, rules_skipped_insufficient_data, rules_unchanged, details}`.
+
+### POST /api/v1/lint/calibration/freeze
+
+Freeze or unfreeze auto-calibration for a specific rule. <code-ref path="packages/core/src/memex_core/server/lint.py" lines="2078-2095" />
+
+- **Auth.** `require_write` + vault access on `vault_id`.
+- **Query params.** `rule` (required), `vault_id`, `frozen` (bool, default `true`).
+- **Returns.** `{rule, frozen, updated}`.
+- **Errors.** 400 when `rule` is empty.
+
+### POST /api/v1/lint/calibration/rollback
+
+Rollback a rule's calibration to a specific version. <code-ref path="packages/core/src/memex_core/server/lint.py" lines="2098-2115" />
+
+- **Auth.** `require_write` + vault access on `vault_id`.
+- **Query params.** `rule` (required), `version` (>0, required), `vault_id`.
+- **Returns.** `{rule, version, rolled_back}`.
+- **Errors.** 400 when `rule` is empty or `version` is not >0.
+
+### POST /api/v1/lint/optimize/run
+
+Trigger a DSPy signature compile for a specific rule. <code-ref path="packages/core/src/memex_core/server/lint.py" lines="2123-2154" />
+
+- **Auth.** `require_write` + vault access on `vault_id`. Gated on attended mode (`_require_attended_mode`).
+- **Query params.** `rule` (required), `vault_id`.
+- **Behaviour.** Pulls labelled verdicts, compiles via BootstrapFewShot, validates against the current champion, and promotes the winner.
+- **Returns.** `{rule_name, vault_id, status, new_version, validation_score, champion_score, examples_used, message, warnings}`.
+- **Errors.** 400 when `rule` is empty.
+
+### GET /api/v1/lint/optimize/signature
+
+Full signature detail, including demos and compiled program. <code-ref path="packages/core/src/memex_core/server/lint.py" lines="2157-2176" />
+
+- **Auth.** `require_read` + vault access on `vault_id`.
+- **Query params.** `rule` (required), `version` (>0, required), `vault_id`.
+- **Returns.** The signature detail dict.
+- **Errors.** 400 when `rule` is empty or `version` is not >0; 404 unknown signature.
+
+### GET /api/v1/lint/optimize/history
+
+List signature versions — compiled DSPy programs with validation scores. <code-ref path="packages/core/src/memex_core/server/lint.py" lines="2179-2206" />
+
+- **Auth.** `require_read`.
+- **Query params.** `rule` (filter to one `rule_name`).
+- **Returns.** `{signatures: [...]}` — each carries `id`, `rule_name`, `vault_id`, `version`, `base_model`, `validation_score`, `validation_examples`, `promoted_at`, `promoted_by`, `superseded`.
+
+### POST /api/v1/lint/optimize/rollback
+
+Rollback a rule's DSPy signature to a specific version. <code-ref path="packages/core/src/memex_core/server/lint.py" lines="2209-2227" />
+
+- **Auth.** `require_write` + vault access on `vault_id`. Gated on attended mode (`_require_attended_mode`).
+- **Query params.** `rule` (required), `version` (>0, required), `vault_id`.
+- **Returns.** `{rule, version, rolled_back}`.
+- **Errors.** 400 when `rule` is empty or `version` is not >0.
 
 ---
 
@@ -1108,11 +1246,11 @@ Prometheus-compatible metrics. Registered by `prometheus-fastapi-instrumentator`
 
 ## Cases
 
-One route. A case is a worked episode filed as a note (`role='case'`) into the hidden `procedural` system vault; the caller never names the vault. See the [procedural-memory explanation](../explanation/how-memex-works/procedural-memory.md).
+Three routes. A case is a worked episode filed as a note (`role='case'`) into the hidden `procedural` system vault; the caller never names the vault. See the [procedural-memory explanation](../explanation/how-memex-works/procedural-memory.md).
 
 ### POST /api/v1/cases
 
-Submit a worked episode as a case. The note is composed from the episode template, filed into the system vault, then assignment runs synchronously. <code-ref path="packages/core/src/memex_core/server/cases.py" lines="34-104" />
+Submit a worked episode as a case. The note is composed from the episode template, filed into the system vault, then assignment runs synchronously. <code-ref path="packages/core/src/memex_core/server/cases.py" lines="42-112" />
 
 - **Auth.** `require_write`. When `case_of` is supplied, the caller must also have write access to the referenced procedure's vault.
 - **Body** (`CaseSubmit`): `title`, `trigger`, `outcome` (`success|failure|mixed`) — required; optional `situation`, `actions` (string list), `lesson`, `project_id`, `case_of` (UUID), `submitted_by`, `tags`.
@@ -1121,6 +1259,23 @@ Submit a worked episode as a case. The note is composed from the episode templat
   - 200 `CaseSubmitResult` — `{note_id, vault_id, assignment}`, where `assignment.mode` is one of `explicit`, `auto_assigned`, `new_procedure_draft`, `escalated`, or `skipped`.
   - 202 `BatchJobStatus` when `background=true` — `{job_id, status}`. Poll at `GET /api/v1/ingestions/{job_id}`; the case note id lands in the job's `note_ids` on completion.
 - **Errors.** 404 when an explicit `case_of` does not resolve to a procedure; standard envelope otherwise. A bad `case_of` fails synchronously even under `background=true`.
+
+### GET /api/v1/cases
+
+List case notes (`role='case'`) in the hidden procedural system vault. The caller never names the vault — it is resolved implicitly. <code-ref path="packages/core/src/memex_core/server/cases.py" lines="115-187" />
+
+- **Auth.** `require_read` + vault access on the implicit case vault. Keys with no vault restriction see all cases.
+- **Query params.** `limit` (1-500, default 100), `offset` (≥0, default 0), `outcome` (`success|failure|mixed`), `tags` (repeat, AND semantics), `project_id`, `case_of` (UUID), `submitted_by`, `slim` (bool), `sort` (`-created_at|created_at`). When `sort` is omitted, the default order is `COALESCE(publish_date, created_at) DESC`.
+- **Returns.** `NoteListItemDTO[]`.
+
+### GET /api/v1/cases/{note_id}
+
+Get one case note by ID. <code-ref path="packages/core/src/memex_core/server/cases.py" lines="190-218" />
+
+- **Auth.** `require_read` + vault access on the implicit case vault.
+- **Path params.** `note_id` (UUID).
+- **Returns.** `NoteDTO`.
+- **Errors.** 404 when the note is absent, lives outside the procedural system vault, or is not `role='case'` (so the surface does not leak arbitrary note IDs).
 
 ---
 
@@ -1139,7 +1294,7 @@ Create an entry. <code-ref path="packages/core/src/memex_core/server/procedural.
 
 ### POST /api/v1/procedural/upsert
 
-Idempotent write on the identity anchor: same anchor updates (new version row); new anchor inserts. <code-ref path="packages/core/src/memex_core/server/procedural.py" lines="669-702" />
+Idempotent write on the identity anchor: same anchor updates (new version row); new anchor inserts. <code-ref path="packages/core/src/memex_core/server/procedural.py" lines="678-714" />
 
 - **Auth.** `require_write` + vault access on `request.vault_id`.
 - **Body** (`ProceduralEntryCreate`): same as create.
@@ -1156,7 +1311,7 @@ List entries by lifecycle status, newest first — the enumeration/curation surf
 
 ### POST /api/v1/procedural/search
 
-Hybrid BM25 + vector search (RRF-merged). <code-ref path="packages/core/src/memex_core/server/procedural.py" lines="705-738" />
+Hybrid BM25 + vector search (RRF-merged). <code-ref path="packages/core/src/memex_core/server/procedural.py" lines="716-749" />
 
 - **Auth.** `require_read` + vault access on `request.vault_id`.
 - **Body** (`ProceduralSearchRequest`): `query`, optional `scope`, `kind`, `status` (default `published`), `limit`, `vault_id`, `include_pin_chain`, `pin_contexts`.

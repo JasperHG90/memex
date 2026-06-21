@@ -71,6 +71,7 @@ For the full layering rules (priority order: constructor > env > local YAML > gl
 | `DeprioritizeScoreConfig` | [DeprioritizeScoreConfig](#deprioritizescoreconfig) | FSFM deprio scorer. |
 | `DeprioritizeScoreWeights` | [DeprioritizeScoreWeights](#deprioritizescoreweights) | Component weights for the scorer. |
 | `DeprioritizeScoreThresholds` | [DeprioritizeScoreThresholds](#deprioritizescorethresholds) | Threshold band for the scorer. |
+| `ProceduralConfig` | [ProceduralConfig](#proceduralconfig) | Procedural (procedure / strategy) plane. |
 | `DocumentConfig` | [DocumentConfig](#documentconfig) | Document search and synthesis. |
 | `VaultSummaryConfig` | [VaultSummaryConfig](#vaultsummaryconfig) | Periodic vault summaries. |
 
@@ -447,6 +448,7 @@ Container for the memory engine. Lives at `server.memory`.
 | `lint_llm` | [`LintLLMConfig`](#lintllmconfig) | `__LINT_LLM__*` | LLM-driven lint. |
 | `entity_maintenance` | [`EntityMaintenanceConfig`](#entitymaintenanceconfig) | `__ENTITY_MAINTENANCE__*` | Entity-cluster collapse. |
 | `deprioritize_score` | [`DeprioritizeScoreConfig`](#deprioritizescoreconfig) | `__DEPRIORITIZE_SCORE__*` | FSFM deprio scorer. |
+| `procedural` | [`ProceduralConfig`](#proceduralconfig) | `__PROCEDURAL__*` | Procedural plane. |
 
 ---
 
@@ -902,6 +904,24 @@ FSFM-inspired graph-aware deprioritization scorer. Lives at `server.memory.depri
 | `contradicted_low_credibility_max` | `float` (`[0, 1]`) | `0.3` | `…__THRESHOLDS__CONTRADICTED_LOW_CREDIBILITY_MAX` | Σ source-credibility below which low-credibility-only contradictions escalate. |
 | `high_mw_threshold` | `float` (`[0, 1]`) | `0.7` | `…__THRESHOLDS__HIGH_MW_THRESHOLD` | MW posterior above which a unit counts as "previously high MW". |
 | `high_mw_min_outcomes` | `int` (>= 1) | `5` | `…__THRESHOLDS__HIGH_MW_MIN_OUTCOMES` | Min `(success + failure)` outcomes for the high-MW escalation pattern. |
+
+---
+
+## ProceduralConfig
+
+Procedural (procedure / strategy) plane. Lives at `server.memory.procedural`.
+
+| Key | Type | Default | Env var | Description |
+|---|---|---|---|---|
+| `enabled` | `bool` | `true` | `MEMEX_SERVER__MEMORY__PROCEDURAL__ENABLED` | Kill switch for the plane. When `false`, the HTTP router, MCP tools, and CLI group stay mounted but every entrypoint returns 503 / a typed error. |
+| `search_default_bm25_weight` | `float` (`[0.0, 1.0]`) | `0.5` | `…__SEARCH_DEFAULT_BM25_WEIGHT` | Default RRF weight for the BM25 stream on a procedural-plane search. Per-request `bm25_weight` overrides it. |
+| `search_default_vector_weight` | `float` (`[0.0, 1.0]`) | `0.5` | `…__SEARCH_DEFAULT_VECTOR_WEIGHT` | Default RRF weight for the vector stream on a procedural-plane search. Per-request `vector_weight` overrides it. |
+| `briefing_default_limit_per_context` | `int` (`[1, 20]`) | `5` | `…__BRIEFING_DEFAULT_LIMIT_PER_CONTEXT` | Default per-context cap on `procedural_briefing_cards`. The route clamps any caller-supplied `limit_per_context` to this value. |
+| `default_status` | `Literal["draft","published"]` | `published` | `…__DEFAULT_STATUS` | Default status for entries created via `procedural create` / `procedural upsert` when the caller omits one. `published` makes the entry visible to search + briefing. |
+| `identity_conflict_mode` | `Literal["reject","upsert"]` | `reject` | `…__IDENTITY_CONFLICT_MODE` | How `procedural create` handles an identity-anchor collision. `reject` returns 409; `upsert` overwrites the existing row. `procedural upsert` is unaffected. |
+| `derivation_worker_enabled` | `bool` | `false` | `…__DERIVATION_WORKER_ENABLED` | Enable the background derivation worker. When `false`, derivation runs synchronously inside the create/update/upsert path. |
+| `derivation_worker_batch_size` | `int` (`[1, 256]`) | `16` | `…__DERIVATION_WORKER_BATCH_SIZE` | Pending derivation rows the worker claims per poll (`SELECT … FOR UPDATE SKIP LOCKED`). |
+| `derivation_worker_poll_interval_seconds` | `float` (`(0.0, 3600.0]`) | `5.0` | `…__DERIVATION_WORKER_POLL_INTERVAL_SECONDS` | Idle sleep between worker polls when the queue is empty. The worker drains without sleeping when there is work. |
 
 ---
 

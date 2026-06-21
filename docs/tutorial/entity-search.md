@@ -19,8 +19,12 @@ not the *retrieval* layer. The distinction matters for Step 6.
 - A working `memex` CLI on your `PATH`. Run `memex --help` to confirm.
 - An active vault you do not mind writing four small notes into.
   Run `memex vault list` to see your vaults. The active one has the
-  marker beside it; pass `--vault <name>` on every command below if you
-  want to use a different one.
+  marker beside it. To use a different one, point this shell at it with
+  `export MEMEX_VAULT__ACTIVE=<name>` before you start — the `note add`
+  and `memory search` commands also take a `--vault <name>` flag, but
+  the `entity list`, `entity mentions`, and `entity related` commands
+  do not, so set the active vault rather than relying on a per-command
+  flag.
 - Background extraction enabled (the default). Ingest writes the note;
   a background job extracts facts and entities a few seconds later.
 
@@ -164,7 +168,7 @@ is the count of how often two entities are mentioned in the same memory
 unit. The cached counts mean the lookup is constant-time, no matter how
 big your vault gets.
 
-<code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="1066-1151" />
+<code-ref path="packages/core/src/memex_core/memory/sql_models.py" lines="1134-1180" />
 
 ```bash
 memex entity related <alice-id>
@@ -192,7 +196,7 @@ is a corpus-wide counter. It is **not** "the current best understanding
 of who Alice works with". A high count means lots of historical
 co-mention; it does not say the relationship is current.
 
-<code-ref path="packages/mcp/src/memex_mcp/server.py" lines="2815-2840" />
+<code-ref path="packages/mcp/src/memex_mcp/server.py" lines="2933-2995" />
 
 For the relationship question you started with, the top row is the
 answer: Alice's strongest counterpart in this vault is Bob. The second

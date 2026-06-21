@@ -148,7 +148,7 @@ Two is what you expect here: one `composite_deprioritize_candidate` finding from
 If you wait several minutes and still see zero, the LLM lint pass is probably disabled. Re-check the prerequisites. You can also confirm the pass is configured by looking at the diagnostics view:
 
 ```bash
-memex diagnose lint --vault scratch
+memex diagnostics findings --vault scratch
 ```
 
 This prints a JSON pivot of lint findings by type, status, and source. If the `(lint_type, status, source)` pivot shows zero `quality` rows across the board, no contradiction findings have been emitted yet — keep waiting. If it shows `quality` rows but all are `resolved` or `dismissed`, you may be looking at a vault that already had its findings triaged; switch to a fresh vault.
@@ -298,7 +298,7 @@ Run the search one more time:
 memex memory search "when does the team deploy" --vault scratch
 ```
 
-The older unit is back at `status='active'`, surfacing alongside the newer one. You are back where Step 3 left you, but with two audit rows recording everything that happened. <code-ref path="packages/cli/src/memex_cli/lint.py" lines="270-294" />
+The older unit is back at `status='active'`, surfacing alongside the newer one. You are back where Step 3 left you, but with two audit rows recording everything that happened. <code-ref path="packages/cli/src/memex_cli/lint.py" lines="605-632" />
 
 ## What you built
 

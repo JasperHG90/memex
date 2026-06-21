@@ -7,8 +7,8 @@ You will ingest the three notes, watch them rank identically at first, record on
 ## Prerequisites
 
 - A running Memex server with the HTTP API reachable at `http://localhost:8000` (set a different host with `MEMEX_URL` if you have one).
-- The `memex` CLI installed and configured against that server. Run `memex stats` to confirm.
-- An active vault. `memex vault list` will show one. If none exists, run `memex vault create demo` and `memex vault use demo`.
+- The `memex` CLI installed and configured against that server. Run `memex stats stats` to confirm — it prints document, entity, and reflection-queue counts.
+- An active vault. `memex vault list` will show one. If none exists, run `memex vault create demo`, then point this shell at it with `export MEMEX_VAULT__ACTIVE=demo`.
 - `curl` and `jq` on your shell — used to record outcomes against the HTTP endpoint, since Memex has no CLI for recording outcomes today.
 - About fifteen minutes.
 
@@ -94,7 +94,7 @@ The output is a JSON array of memory-unit objects. Each object has the unit's te
 }
 ```
 
-Every unit has `success_co_count = 0` and `failure_co_count = 0`. You have not told Memex how useful any of them are yet. <code-ref path="packages/common/src/memex_common/schemas.py" lines="568-576" />
+Every unit has `success_co_count = 0` and `failure_co_count = 0`. You have not told Memex how useful any of them are yet. <code-ref path="packages/common/src/memex_common/schemas.py" lines="615-628" />
 
 Memory Worth is computed from these two counters. The formula is the Beta-Bernoulli posterior mean with a uniform prior:
 
@@ -102,7 +102,7 @@ Memory Worth is computed from these two counters. The formula is the Beta-Bernou
 mw_score = (success_co_count + 1) / (success_co_count + failure_co_count + 2)
 ```
 
-For `(0, 0)` the score is `1 / 2 = 0.5`. The retrieval composition then applies a multiplicative boost `mw_boost = 1.0 + alpha * (mw_score - 0.5)`, which at `0.5` is exactly `1.0` — neutral, no rank change. <code-ref path="packages/core/src/memex_core/services/outcomes.py" lines="76-114" />
+For `(0, 0)` the score is `1 / 2 = 0.5`. The retrieval composition then applies a multiplicative boost `mw_boost = 1.0 + alpha * (mw_score - 0.5)`, which at `0.5` is exactly `1.0` — neutral, no rank change. <code-ref path="packages/core/src/memex_core/services/outcomes.py" lines="86-114" />
 
 That is the *cold-start* behaviour. Three units about the same topic land in the result list with effectively the same MW contribution. Their order at this point is decided by the other ranking signals — embedding similarity, keyword match, recency. Memory Worth is silent.
 
@@ -159,8 +159,8 @@ The response reports the counts of rows that were updated:
 
 A few things to notice in the request and the response.
 
-- The `units` field is a list, one entry per unit you classified. Each entry needs a `unit_id`, a `verb`, and a `reason`. A bare `success=true` body is the legacy shape and will print a `FutureWarning`; the per-unit shape is the only one that survives. <code-ref path="packages/core/src/memex_core/services/outcomes.py" lines="42-68" />
-- `reason` is required for `helpful` and `not_helpful`. A missing or empty reason raises a 422 from the endpoint before any database write happens. The reason lives in the audit log, not on the unit — it gives a future operator something to read when they audit why a counter moved.
+- The `units` field is a list, one entry per unit you classified. Each entry needs a `unit_id`, a `verb`, and a `reason`. A bare `success=true` body is the legacy shape and will print a `FutureWarning`; the per-unit shape is the only one that survives. <code-ref path="packages/core/src/memex_core/services/outcomes.py" lines="156-162" />
+- `reason` is required for `helpful` and `not_helpful`. A missing or empty reason raises a 400 from the endpoint before any database write happens — the service rejects the unit (<code-ref path="packages/core/src/memex_core/services/outcomes.py" lines="65-67" />) and the route maps that to a 400 (<code-ref path="packages/core/src/memex_core/server/outcomes.py" lines="153-156" />). The reason lives in the audit log, not on the unit — it gives a future operator something to read when they audit why a counter moved.
 - `entities_updated: 2` is the linked-entity propagation. Each unit you classified mentions entities like `OpenTelemetry` or `statsd`, and Memex bumped per-entity success and failure counters on those entities too. <code-ref path="DESIGN_DOCUMENT.md" lines="495-501" />
 - The verbs cover three cases: `helpful` bumps `success_co_count`, `not_helpful` bumps `failure_co_count`, and `not_used` bumps a third counter (`unused_co_count`) which does NOT enter the Memory Worth formula. Use `not_used` for units that surfaced in your search but were not actually relevant to your answer. <code-ref path="packages/core/src/memex_core/services/outcomes.py" lines="38-54" />
 
@@ -226,7 +226,7 @@ The unhelpful unit is still in the result list. Memory Worth alone does not hide
 
 ### 5. Deprioritize the not-helpful unit
 
-You want the statsd advice off your default surface entirely. Memory Worth has nudged its rank down, but a determined searcher would still find it. Use `memex memory deprioritize` to flip a separate binary flag — `is_deprioritized` — that hides the unit from default-scope retrieval. <code-ref path="packages/cli/src/memex_cli/memory.py" lines="159-197" />
+You want the statsd advice off your default surface entirely. Memory Worth has nudged its rank down, but a determined searcher would still find it. Use `memex memory deprioritize` to flip a separate binary flag — `is_deprioritized` — that hides the unit from default-scope retrieval. <code-ref path="packages/cli/src/memex_cli/memory.py" lines="163-194" />
 
 ```bash
 memex memory deprioritize "$BAD_UNIT" --reason "statsd outdated for 2026 services"
@@ -245,7 +245,7 @@ Deprioritization and Memory Worth live on different axes, on purpose:
 - Memory Worth is a continuous score that nudges ranking up or down. It accumulates from many outcomes and is *append-only* — you cannot un-record an outcome, but new outcomes shift the posterior.
 - Deprioritization is a single boolean column on the unit. Setting it true hides the unit from default search; setting it false brings it back. It is reversible.
 
-The retrieval engine applies the deprioritization filter inside `apply_generic_filters`, before the reranker even sees the unit, so deprioritized units never enter the result set under default scope. <code-ref path="packages/core/src/memex_core/memory/retrieval/strategies.py" lines="99-99" />
+The retrieval engine applies the deprioritization filter inside `apply_generic_filters`, before the reranker even sees the unit, so deprioritized units never enter the result set under default scope. <code-ref path="packages/core/src/memex_core/memory/retrieval/strategies.py" lines="127-130" />
 
 ### 6. Confirm the deprioritized unit no longer surfaces
 
@@ -280,7 +280,7 @@ The `Status: active` line is important. Deprioritized units stay `active` — th
 
 ### 7. Restore the deprioritized unit
 
-Suppose you reconsidered, decided the statsd advice is fine for legacy systems after all, and want it back on your default surface. `memex memory restore` reverses step 5. <code-ref path="packages/cli/src/memex_cli/memory.py" lines="200-227" />
+Suppose you reconsidered, decided the statsd advice is fine for legacy systems after all, and want it back on your default surface. `memex memory restore` reverses step 5. <code-ref path="packages/cli/src/memex_cli/memory.py" lines="196-216" />
 
 ```bash
 memex memory restore "$BAD_UNIT"
@@ -294,7 +294,7 @@ Memory unit <BAD_UNIT> restored.
 
 Re-run the search and you will see the statsd unit back in the result list. Its `is_deprioritized` flag is `false` again in the JSON output. The Memory Worth counters did not change — `success_co_count` is still `0`, `failure_co_count` is still `1`. Restoring undid the visibility flag; it did not undo your outcome judgment. Those are different signals on different axes, and they each retain their own history.
 
-The restore writes an audit row of its own. The FSFM auto-band lint pass reads that audit row and refuses to auto-deprioritize the same unit again within a recent-actions window — so a single restore cannot be silently overridden by the background curator. <code-ref path="packages/core/src/memex_core/services/lint.py" lines="248-256" />
+The restore writes an audit row of its own. The FSFM auto-band lint pass reads that audit row and refuses to auto-deprioritize the same unit again within a recent-actions window — so a single restore cannot be silently overridden by the background curator. <code-ref path="packages/core/src/memex_core/services/lint.py" lines="325-330" />
 
 ## What you built
 

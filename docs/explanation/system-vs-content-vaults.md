@@ -1,6 +1,6 @@
 # About system vaults vs content vaults
 
-Every Memex vault now has a **kind** that classifies what the vault is *for* — and that classification controls which surfaces it shows up on. The vast majority of vaults are **content** vaults: project memos, personal journals, research digests. A small set of **system** vaults exist to glue Memex to its environment: today's example is `inbox`, but anything that captures data on behalf of another component (Hermes session state, the planned procedural case-vault, a third-party integration buffer) is the same shape.
+Every Memex vault now has a **kind** that classifies what the vault is *for* — and that classification controls which surfaces it shows up on. The vast majority of vaults are **content** vaults: project memos, personal journals, research digests. A small set of **system** vaults exist to glue Memex to its environment: today's examples are `inbox` and `procedural`, but anything that captures data on behalf of another component (Hermes session state, a third-party integration buffer) is the same shape.
 
 The two kinds differ on exactly one axis: **visibility on synthesis-and-discovery surfaces**. They do **not** differ on the retention floor — every vault, system or content, gets the same extraction, full-text search, vector search, entity linking, and so on.
 
@@ -57,9 +57,13 @@ The practical effect: a user who types `memex memory search` gets the universe t
 
 `policy` is mutable. It's a typed JSON document with two fields today (`reflect`, `summarize`), each `bool | None` — `None` means "use the kind's default" (true for content, false for system). The policy is the per-vault override; the kind is the tenancy root. A content vault that wants to be invisible on briefings (because it's a personal scratchpad) can set `policy.summarize=false`; a system vault that *should* be reflected on (because its contents are durable enough to want mental models) can set `policy.reflect=true`.
 
-## The `inbox` case-vault precedent (and beyond)
+## The second system vault: `procedural`
 
-The next consumers are already sketched. The procedural-procedural memory work calls for a hidden case-vault — notes that capture a single agent session's outcome for the procedural-mem pipeline. That vault is exactly the same shape: addressable, fully extracted, but silent on the agent-facing synthesis surfaces. The same goes for a future Hermes session vault that captures mid-session scratch state. They all instantiate the same `kind='system'` row; they all rely on the same `policy` override if their use case diverges from the default.
+`inbox` is no longer the only system vault. The procedural memory plane ships a second one, named `procedural` — a hidden case-vault. Cases (notes with `role='case'` that capture a single agent session's outcome) land in it, and the derivation pipeline reads them directly to distil procedures and strategies. <code-ref path="packages/core/src/memex_core/services/case_service.py" lines="385-415" /> It is exactly the same shape as `inbox`: addressable, fully extracted, but silent on the agent-facing synthesis surfaces.
+
+It also shows the `policy` override in action. Reflection is turned **off** for this vault (`policy={'reflect': false}`) because the derivation pipeline consumes the raw cases, not reflected mental models — so reflection over the hidden case vault would do work nobody reads. <code-ref path="packages/core/src/memex_core/services/case_service.py" lines="69-77" /> Migration `063` seeds the vault and migration `064` renames it to `procedural` and heals its policy to reflect-off.
+
+A future Hermes session vault that captures mid-session scratch state would be the same again: one `kind='system'` row, one `policy` override if its use case diverges from the default.
 
 A new "system" vault is a one-line creation:
 
@@ -73,7 +77,7 @@ That single command buys you the right behavior on every surface that knows abou
 
 - Not multi-tenant isolation. Kind lives on the vault; the tenant model is the vault, as it always has been.
 - Not access control. A `require_read` API key sees system vault *names* when it asks for them. There is no kind-based authorization layer; that is a separate concern.
-- Not a replacement for `memex_kv_*`. Procedures and preferences still go to KV, not to a system vault. KV is the right tool when the data is small, namespaced, and queryable by key. A system vault is the right tool when the data is a stream of notes that another pipeline ingests.
+- Not a replacement for `memex_kv_*`. Preferences, conventions, and settings still go to KV, not to a system vault. KV is the right tool when the data is small, namespaced, and queryable by key. A system vault is the right tool when the data is a stream of notes that another pipeline ingests — which is exactly why the procedural plane's cases live in the `procedural` system vault rather than in KV.
 - Not an extension of the *tenant root* concept. A system vault *is* a tenant. It just behaves differently on a small set of surfaces.
 
 The mental model is: **a vault is a tenant; the kind is a contract on what that tenant is for.** Same plumbing, different policy.

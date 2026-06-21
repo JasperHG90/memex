@@ -142,7 +142,7 @@ Search Results (3)
 
 Each row is one *memory unit* — a single claim the extractor lifted out of the document. The `Type` column shows whether the extractor classified the unit as a `fact` (a stable claim), an `event` (something that happened at a time), or another category.
 
-Memory search runs five strategies in parallel — semantic similarity, keyword match (BM25), entity-graph traversal, temporal recency, and mental-model lookup — then fuses their rankings with reciprocal rank fusion <code-ref path="packages/core/src/memex_core/memory/retrieval/engine.py" lines="353-357" />. You can narrow the search by disabling individual strategies:
+Memory search runs five strategies in parallel — semantic similarity, keyword match (BM25), entity-graph traversal, temporal recency, and mental-model lookup — then fuses their rankings with reciprocal rank fusion <code-ref path="packages/core/src/memex_core/memory/retrieval/engine.py" lines="528-536" />. You can narrow the search by disabling individual strategies:
 
 ```bash
 memex memory search "Friday afternoon deploys" --no-mental-model
@@ -202,7 +202,7 @@ From an MCP-aware agent (Claude Code, Hermes), the same call is `memex_survey(qu
 
 ## Step 5: Filter memory search by date
 
-Temporal filtering changes how each tool behaves. The CLI exposes only one knob: `--reference-date`, which anchors relative date phrases ("last week", "yesterday") to a specific point in time. The HTTP and MCP surfaces additionally expose `after` and `before` as hard date filters <code-ref path="packages/common/src/memex_common/schemas.py" lines="293-298" />.
+Temporal filtering changes how each tool behaves. The CLI exposes only one knob: `--reference-date`, which anchors relative date phrases ("last week", "yesterday") to a specific point in time. The HTTP and MCP surfaces additionally expose `after` and `before` as hard date filters <code-ref path="packages/common/src/memex_common/schemas.py" lines="299-302" />.
 
 Try `--reference-date` first. Suppose you want to resolve "last quarter" against the start of 2025:
 

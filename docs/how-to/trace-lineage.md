@@ -22,11 +22,13 @@ memex memory search "JWT rotation cadence" --compact
 
 `--compact` prints one line per result with the unit type and a truncated snippet. Copy the UUID of the unit you want to trace. (For richer output drop `--compact`; for JSON downstream piping, add `--json`.)
 
-If you already know the source note's title, you can also list units linked to it:
+If you already know which note the fact came from, narrow the search to that note's vault and phrase the query around its content:
 
 ```bash
-memex memory links --note-key jwt-rotation-decision
+memex memory search "JWT rotation cadence" --vault security --compact
 ```
+
+Once you have a unit's UUID, `memex memory links <unit_id>` lists the typed links on that unit — useful for spotting the `contradicts` or `weakens` edges you will walk in step 4.
 
 ### 2. Trace upstream — where did this fact come from?
 
@@ -66,7 +68,7 @@ memex_get_unit_history(
 )
 ```
 
-The tool walks backward in time, following `contradicts` and `weakens` edges from the named unit. It returns a `UnitHistoryNodeDTO` tree rooted at the unit (depth 0), with each predecessor nested under `predecessors` and sorted oldest-first by `event_date`. Each non-root node carries a `link_type` of `contradicts` or `weakens`, naming the supersession edge from that node up to its parent. <code-ref path="packages/core/src/memex_core/services/units.py" lines="605-680" />
+The tool walks backward in time, following `contradicts` and `weakens` edges from the named unit. It returns a `UnitHistoryNodeDTO` tree rooted at the unit (depth 0), with each predecessor nested under `predecessors` and sorted oldest-first by `event_date`. Each non-root node carries a `link_type` of `contradicts` or `weakens`, naming the supersession edge from that node up to its parent. <code-ref path="packages/core/src/memex_core/services/units.py" lines="617-680" />
 
 The walk follows the negative-evidence path only. `reinforces` edges point forward in time and are excluded in v1.
 
@@ -84,7 +86,7 @@ memex_get_lineage(
 )
 ```
 
-Returns an `McpLineageNode` tree with `entity_type`, `entity`, and `derived_from` children. <code-ref path="packages/mcp/src/memex_mcp/server.py" lines="2905-2957" />
+Returns an `McpLineageNode` tree with `entity_type`, `entity`, and `derived_from` children. <code-ref path="packages/mcp/src/memex_mcp/server.py" lines="3011-3075" />
 
 ## Verification
 
@@ -113,7 +115,7 @@ The leaf entity id should match the source note you ingested.
 
 **Lineage tree truncates earlier than you expected.** The default `--depth 3` is shallow. Long supersession chains or deep observation pyramids need `--depth 5` or higher. The `--limit` flag caps the number of children expanded per node — increase it when an observation was built from many units and you need to see them all.
 
-**Unit history shows `truncated: true` on a leaf.** The walk hit `max_depth` before reaching a terminal node, or it revisited a node already seen on another branch. Re-run with a larger `max_depth`, or accept that the cap is a deliberate safety net against cycles. <code-ref path="packages/common/src/memex_common/schemas.py" lines="1126-1175" />
+**Unit history shows `truncated: true` on a leaf.** The walk hit `max_depth` before reaching a terminal node, or it revisited a node already seen on another branch. Re-run with a larger `max_depth`, or accept that the cap is a deliberate safety net against cycles. <code-ref path="packages/common/src/memex_common/schemas.py" lines="1195-1242" />
 
 **Supersession chain looks one-sided.** Unit history only walks `contradicts` and `weakens` — the negative-evidence path. `reinforces` links point forward in time and are excluded in v1. If you want to see what reinforced a unit, query downstream lineage on its source note instead.
 

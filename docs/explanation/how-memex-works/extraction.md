@@ -28,13 +28,14 @@ flowchart TD
     Page["PageIndex (large docs > 500 tok)<br/>Hierarchical scan + section summary<br/>Recursive refinement"]
     Diff["Incremental diff (re-ingestion)<br/>Compare hashes vs prior chunks<br/>Only ADDED blocks → LLM (60-80% saved)"]
     Extract["Fact extraction (DSPy LLM, per chunk)<br/>ExtractSemanticFacts signature<br/>3 fact types: world / event / observation"]
-    Classify["Write-time classifier (same LLM call)<br/>intent · risk · claim_type<br/>importance derived from intent"]
-    ER["Entity resolution<br/>Trigram + Double Metaphone +<br/>TF-IDF cooccurrence + temporal decay<br/>(threshold 0.65)"]
-    Dedup["Deduplication<br/>12 h time buckets + embedding similarity<br/>(vault-scoped)"]
     Embed["Embedding (ONNX, 384-dim)<br/>format_for_embedding: 'Type (Context): Text'<br/>(stored raw; D-MEM correction applied at retrieval score time)"]
+    Dedup["Deduplication<br/>12 h time buckets + embedding similarity<br/>(vault-scoped)"]
+    Classify["Write-time classifier (same LLM call)<br/>intent · risk · claim_type<br/>importance derived from intent"]
+    Insert["Persist facts<br/>insert_facts_batch"]
+    ER["Entity resolution<br/>Trigram + Double Metaphone +<br/>TF-IDF cooccurrence + temporal decay<br/>(threshold 0.65)"]
     Link["Relationship linking<br/>Causal (LLM) · Temporal (sequential)<br/>Semantic (cosine > 0.75)"]
-    Contra["Contradiction triage (background async)<br/>LLM classifies: reinforce / weaken / contradict"]
-    Persist["Persist + queue reflection<br/>Priority-scored entry per affected entity"]
+    Queue["Queue reflection<br/>Priority-scored entry per affected entity"]
+    Contra["Contradiction triage (separate background task)<br/>runs after retain() returns, in its own session<br/>LLM classifies: reinforce / weaken / contradict"]
 
     Input --> Format --> Hash --> ChunkDecide
     ChunkDecide -->|small| Simple
@@ -42,17 +43,19 @@ flowchart TD
     Simple --> Diff
     Page --> Diff
     Diff --> Extract
-    Extract --> Classify
-    Classify --> ER
-    Classify --> Dedup
-    ER --> Embed
-    Dedup --> Embed
-    Embed --> Link --> Contra --> Persist
+    Extract --> Embed
+    Embed --> Dedup
+    Dedup --> Classify
+    Classify --> Insert
+    Insert --> ER
+    ER --> Link
+    Link --> Queue
+    Insert -.background task.-> Contra
 ```
 
-Each box is a real module under `packages/core/src/memex_core/memory/extraction/`. Each step is small. The shape — chunk, diff, extract, classify, resolve, dedup, embed, link, triage — is what makes the pipeline robust to the failure modes a naive single-pass extractor cannot handle.
+Most boxes are real modules under `packages/core/src/memex_core/memory/extraction/`; entity resolution is the exception — it lives one level up in `memory/entity_resolver.py`. Each step is small. The shape — chunk, diff, extract, embed, dedup, classify, persist, resolve, link, queue — is what makes the pipeline robust to the failure modes a naive single-pass extractor cannot handle.
 
-A few things to notice in the diagram. The diff stage gates the whole LLM-heavy section: extraction, classification, entity resolution, and dedup only run on what changed. The entity-resolution and dedup steps are independent of each other and run against the same set of facts; both feed into the embed step. Linking and contradiction triage run after embeddings are in place because both depend on similarity comparisons. And the reflection queue is the last action before extraction returns — every other downstream cognition flows out of that handoff.
+A few things to notice in the diagram. The diff stage gates the whole LLM-heavy section: only what changed reaches the extractor. Embedding runs before dedup because dedup compares embeddings, and before the classifier writes its intent/risk labels. Entity resolution and linking run after the facts are persisted, against the inserted unit IDs. The reflection queue is the last action inside `extract_and_persist` before it returns. Contradiction triage is *not* part of this flow at all — it runs as a separate background task that `retain()` prepares after extraction returns, in its own database session. <code-ref path="packages/core/src/memex_core/memory/engine.py" lines="223-235" />
 
 What the diagram does *not* show: persistence at every step. Most stages produce data that gets written to the database in the same transaction as the others. If any stage fails, the whole batch rolls back. There are no half-extracted documents in the data model.
 
@@ -92,7 +95,7 @@ So Memex diffs first. Each chunk carries a content hash. The diff stage compares
 
 For a one-typo edit on a 65-block document, that's one LLM call instead of sixty-five. The design doc puts the typical saving at 60–80%, and for incremental edits it lands there.
 
-For the PageIndex chunker the diff is more careful still. A boundary shift — a header moved a paragraph earlier — would change a block's hash even though every node inside was identical. So the PageIndex diff separates *boundary-shift* blocks (constituent nodes unchanged) from *content-changed* blocks (new or changed nodes), and migrates the facts from the old chunk to the new one without re-extracting. <code-ref path="packages/core/src/memex_core/memory/extraction/pipeline/diffing.py" lines="46-66" />
+For the PageIndex chunker the diff is more careful still. A boundary shift — a header moved a paragraph earlier — would change a block's hash even though every node inside was identical. So the PageIndex diff separates *boundary-shift* blocks (constituent nodes unchanged) from *content-changed* blocks (new or changed nodes), and migrates the facts from the old chunk to the new one without re-extracting. <code-ref path="packages/core/src/memex_core/memory/extraction/pipeline/diffing.py" lines="115-169" />
 
 For our handover paragraph — the first ingest of a brand-new note — there is no prior version. Every block is "added". All of them go to the LLM.
 
@@ -114,7 +117,7 @@ Why DSPy and not a hand-rolled prompt? The signature is the contract: input fiel
 
 Same LLM call, more output fields. Each fact also carries an `intent_class` (`permanent` / `durable` / `ephemeral`), a `risk_class` (`none` / `sensitive` / `private` / `safety`), and optionally a `claim_type` (`resolution` / `contradiction`) when the LLM detects the fact explicitly overrides a prior claim. <code-ref path="packages/core/src/memex_core/memory/extraction/core.py" lines="58-95" />
 
-The classifier *isn't* a separate DSPy signature any more — the fields ride on the extraction signature itself, and a single config flag turns the whole feature off. <code-ref path="packages/common/src/memex_common/config.py" lines="795-808" /> Earlier versions of Memex did run a second classifier call; folding the output fields into `ExtractSemanticFacts` cut the per-chunk LLM count in half without measurably degrading classification quality, because the chunk context the classifier needs is the same chunk context the extractor is already reading.
+The classifier *isn't* a separate DSPy signature any more — the fields ride on the extraction signature itself, and a single config flag turns the whole feature off. <code-ref path="packages/common/src/memex_common/config.py" lines="797-810" /> Earlier versions of Memex did run a second classifier call; folding the output fields into `ExtractSemanticFacts` cut the per-chunk LLM count in half without measurably degrading classification quality, because the chunk context the classifier needs is the same chunk context the extractor is already reading.
 
 Intent is the load-bearing classification. It asks: *will this still be true in four weeks?* "Maria's team owns the rotation" is a durable claim. "I prefer Neovim" is permanent. "By EOD I need the metrics chart" is ephemeral. Memex uses intent to derive `importance` — `permanent → 1.0`, `durable → 0.7`, `ephemeral → 0.3` — which the retrieval-time decay boost reads to decide how much an old fact should still surface. <code-ref path="packages/core/src/memex_core/memory/retrieval/constants.py" lines="21-25" /> The same intent value derives `stability` (the half-life in days the decay term uses): permanent units have no decay; durable units decay over 180 days; ephemeral units decay over 14. <code-ref path="packages/core/src/memex_core/memory/retrieval/constants.py" lines="15-19" />
 
@@ -122,7 +125,7 @@ Note the distinction the intent prompt insists on: *durability is not the same a
 
 Risk does two jobs. Facts marked `safety` are recorded with a counter but currently pass through — blocking is deferred to a pre-flight risk assessment that isn't shipped yet. Facts marked `private` are excluded from default retrieval queries, so a vault that ingests medical or PII content can hold it without it leaking into routine searches. Facts marked `sensitive` are flagged for the linter to review, not filtered. <code-ref path="packages/core/src/memex_core/memory/extraction/classifier.py" lines="33-52" />
 
-`claim_type` is the corrective-claim signal — set only when the LLM sees the fact explicitly negate or resolve a prior claim. For our handover paragraph, the fact "Sam rolled off the payments rotation" should carry `claim_type='contradiction'` with a `claim_target.target_topic` like "payments rotation owner". That signal feeds the contradiction engine a few steps later, narrowing its candidate search to the right prior unit instead of the whole vault. <code-ref path="packages/core/src/memex_core/memory/contradiction/engine.py" lines="30-51" />
+`claim_type` is the corrective-claim signal — set only when the LLM sees the fact explicitly negate or resolve a prior claim. For our handover paragraph, the fact "Sam rolled off the payments rotation" should carry `claim_type='contradiction'` with a `claim_target` that records both a human-readable `target_topic` ("payments rotation owner") and the `target_entity_ids` it refers to. The contradiction engine narrows its candidate search by those `target_entity_ids` a few steps later — restricting the comparison to units that share the named entities instead of scanning the whole vault. <code-ref path="packages/core/src/memex_core/memory/contradiction/engine.py" lines="30-51" />
 
 ### Entity resolution — same person, two spellings
 
@@ -134,7 +137,7 @@ The resolver is multi-factor. For each new entity, it pulls candidates from the 
 - **Cooccurrence** (30%) — how many of the names appearing near this mention also appear near the candidate, weighted TF-IDF style so rare neighbours count more than common ones. A match on "Bob" is weak; a match on "the Sycamore RFC" is strong.
 - **Temporal proximity** (20%) — exponential decay on the time difference between this mention and the candidate's most recent appearance, with a 30-day half-life. An entity nobody has mentioned in eighteen months is less likely to be the same person than one mentioned last week.
 
-If the weighted sum clears 0.65, Memex resolves to the existing entity. Below the threshold, it creates a new one. The threshold is tunable per server. <code-ref path="packages/core/src/memex_core/memory/entity_resolver.py" lines="135-191" />
+If the weighted sum clears 0.65, Memex resolves to the existing entity. Below the threshold, it creates a new one. The threshold is tunable per server. <code-ref path="packages/core/src/memex_core/memory/entity_resolver.py" lines="462-474" />
 
 For our paragraph, "Maria" probably resolves to the existing Person entity from the prior reference. "Sam" likewise. "The payments rotation" resolves to an existing Topic entity if one is there, or creates a new one. The cooccurrence dimension is doing real work here: "Maria" and "Sam" appear together in the same paragraph, and if they already appear together in earlier handover notes, that shared context boosts both resolution scores.
 
@@ -178,7 +181,7 @@ For our paragraph, "Sam rolled off the payments rotation" should flag in triage.
 
 ### Queue reflection
 
-After the units are persisted, Memex enqueues a reflection task per touched entity. Reflection is a separate background loop covered on its own page; for extraction, the relevant point is that the queue is *priority-scored* — entities with more new evidence get reflected sooner — and the enqueue is the last thing extraction does before the request returns. <code-ref path="packages/core/src/memex_core/memory/extraction/engine.py" lines="477-482" />
+After the units are persisted, Memex enqueues a reflection task per touched entity. Reflection is a separate background loop covered on its own page; for extraction, the relevant point is that the queue is *priority-scored* — entities with more new evidence get reflected sooner — and the enqueue is the last thing extraction does before the request returns. <code-ref path="packages/core/src/memex_core/memory/extraction/engine.py" lines="493-496" />
 
 The queue isolation is what lets extraction return in seconds even when downstream reflection takes minutes. The agent gets its acknowledgement; the entity mental models get updated when the scheduler picks them up. Two systems, one transaction boundary at the unit persist, no foreground penalty for the slow work.
 
@@ -275,7 +278,7 @@ If the search returns the fact but at a low rank, the question shifts to scoring
 
 If the fact is in the right shape but tagged with the wrong entity, the entity resolver picked the wrong canonical ID. `memex entity view <entity-id>` and the cooccurrence view from `memex entity related <entity-id>` will tell you which neighbours the resolver weighed when it made the call. If two entities that should be one are still split, the resolution threshold is the dial to turn; if two that should be split have collapsed, the dial goes the other way.
 
-The trace span emitted around extraction (`memex.extraction` with `extraction.note_id` and `extraction.vault_id` attributes) is the single best signal for production debugging. <code-ref path="packages/core/src/memex_core/memory/extraction/engine.py" lines="339-346" /> If you're running with OpenTelemetry, the span will show you which chunks were sent to the LLM, how long extraction took, and where it failed. The contradiction-engine span (`memex.contradiction`) is the second; it shows you triage decisions and which pairs the classifier ran on.
+The trace span emitted around extraction (`memex.extraction` with `extraction.note_id` and `extraction.vault_id` attributes) is the single best signal for production debugging. <code-ref path="packages/core/src/memex_core/memory/extraction/engine.py" lines="351-357" /> If you're running with OpenTelemetry, the span will show you which chunks were sent to the LLM, how long extraction took, and where it failed. The contradiction-engine span (`memex.contradiction`) is the second; it shows you triage decisions and which pairs the classifier ran on.
 
 ### Which chunking strategy to pick
 
