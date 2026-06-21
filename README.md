@@ -21,7 +21,7 @@
   <img src="https://img.shields.io/badge/language-Python-blue?style=flat-square" alt="Python" />
   <img src="https://img.shields.io/badge/python-3.12+-blue?style=flat-square&logo=python&logoColor=white" alt="Python 3.12+" />
   <img src="https://img.shields.io/badge/license-Apache%202.0-blue?style=flat-square" alt="Apache 2.0" />
-  <img src="https://img.shields.io/badge/version-v0.1.6a-green?style=flat-square" alt="v0.1.6a" />
+  <img src="https://img.shields.io/badge/version-v1.0.0--rc-green?style=flat-square" alt="v1.0.0-rc" />
   <img src="https://img.shields.io/badge/tests-7,828%20passing-brightgreen?style=flat-square" alt="Tests" />
 </p>
 
@@ -88,7 +88,7 @@ Memex is deliberately not an agent. It provides the storage, extraction, and ret
 </td>
 <td valign="top">
 <p>🤖 <strong>AI Agent Integration</strong><br>
-<sub>First-class MCP support for Claude Code, Claude Desktop, and any MCP-compatible client. ~40 MCP tools* with progressive disclosure, staleness flags on search results, note relation links, survey-based query decomposition, stdio/HTTP/SSE transports, slim Docker image decoupled from core. <em>*surface is mid-refactor; tool count moves a few up or down release-to-release.</em></sub></p>
+<sub>First-class MCP support for Claude Code, Claude Desktop, and any MCP-compatible client. ~55 MCP tools* with progressive disclosure, staleness flags on search results, note relation links, survey-based query decomposition, stdio/HTTP/SSE transports, slim Docker image decoupled from core. <em>*surface is mid-refactor; tool count moves a few up or down release-to-release.</em></sub></p>
 </td>
 </tr>
 <tr>
@@ -144,7 +144,7 @@ Memex is deliberately not an agent. It provides the storage, extraction, and ret
 </td>
 <td valign="top">
 <p>🔬 <strong>Operator Diagnostics</strong><br>
-<sub>The `memex diagnose` CLI inspects the embedding manifold, retrieval ranking signals, vault summary stats, and pending lint backlog. Pair with the OpenTelemetry traces and Prometheus metrics for a full operator view.</sub></p>
+<sub>The `memex diagnostics` CLI inspects the embedding manifold, retrieval ranking signals, vault summary stats, and pending lint backlog. Pair with the OpenTelemetry traces and Prometheus metrics for a full operator view.</sub></p>
 </td>
 </tr>
 <tr>
@@ -224,7 +224,7 @@ server:
 
 ### AI agent integration
 
-First-class support for Claude Code, Claude Desktop, and any MCP-compatible client. Install the [Claude Code plugin](#claude-code-plugin) for one-step setup across all projects. ~40 MCP tools* with progressive disclosure (3-stage tool discovery by default) cover the full API surface. Search results include staleness flags (fresh/aging/stale/contested) and inline note relation links for relationship discovery. A slim Docker image (`docker/mcp/Dockerfile`) enables containerized MCP deployment with HTTP transport.
+First-class support for Claude Code, Claude Desktop, and any MCP-compatible client. Install the [Claude Code plugin](#claude-code-plugin) for one-step setup across all projects. ~55 MCP tools* with progressive disclosure (3-stage tool discovery by default) cover the full API surface. Search results include staleness flags (fresh/aging/stale/contested) and inline note relation links for relationship discovery. A slim Docker image (`docker/mcp/Dockerfile`) enables containerized MCP deployment with HTTP transport.
 
 <sub>*The MCP surface is mid-refactor; the tool count moves a few up or down release-to-release. See [MCP Tools reference](./docs/reference/mcp-tools.md) for the current inventory.</sub>
 
@@ -272,7 +272,7 @@ Most memory in Memex is *declarative* — facts, events, and observations about 
 
 It rides on the same substrate as everything else. A **case** is a note — the exact same Markdown-note row, stored and extracted the same way — but with `role='case'` and a job: it records a *worked episode* (Trigger / Situation / Actions / Outcome + Lesson) instead of describing the world. Submitting one (`memex case submit`) files the note, then runs an assignment step that links it to an existing **procedure** or drafts a new one, and the case's outcome bumps that procedure's success/failure counters. Procedures — and the **strategies** that pick between them for a context — live on a dedicated plane, surface as compact index cards in the session briefing, and graduate from `draft` to `published` through the maintenance lint queue.
 
-The one-line distinction: **a note says what is true; a case says what you did and how it turned out.** Same storage, different job — and the case is what teaches Memex the procedure. (Note that this is distinct from *procedural KV* — `<scope>:procedure:<verb>:<context>` keys hold a user's stated preferences; the procedural plane holds recipes distilled from real episodes.)
+The one-line distinction: **a note says what is true; a case says what you did and how it turned out.** Same storage, different job — and the case is what teaches Memex the procedure. (This is distinct from the KV store, which holds a user's *stated* one-line preferences and conventions; the procedural plane holds recipes Memex *distils* from real worked episodes.)
 
 </details>
 
@@ -351,7 +351,7 @@ claude plugin install memex@memex
 
 Or from inside Claude Code: `/plugin marketplace add JasperHG90/memex` then `/plugin install memex@memex`.
 
-The plugin provides `/remember`, `/recall`, and `/retro` slash commands, token-budgeted session briefing, data-driven lifecycle hooks, and the Memex MCP server. See [packages/claude-code-plugin](./packages/claude-code-plugin/) for details.
+The plugin provides slash commands — `/remember`, `/recall`, `/retro`, `/handoff`, `/continue`, and more — token-budgeted session briefing, data-driven lifecycle hooks, and the Memex MCP server. See [packages/claude-code-plugin](./packages/claude-code-plugin/) for details.
 
 #### Updating the claude code plugin
 
@@ -419,7 +419,7 @@ Comprehensive guides and references live in [`docs/`](./docs/index.md). The tree
 ### How-to guides — get a job done
 - [Ingest data](./docs/how-to/ingesting-data.md): CLI, API, folder sync, and batch modes.
 - [Retrieve data](./docs/how-to/retrieve-data.md): Search, browse, and filter.
-- [Use the KV store](./docs/how-to/key-value-store.md): Namespaced preferences, project bindings, procedures.
+- [Use the KV store](./docs/how-to/key-value-store.md): Namespaced preferences, project bindings, and conventions.
 - [Attach assets to notes](./docs/how-to/asset-attachments.md): Images, PDFs, audio.
 - [Deprioritize units](./docs/how-to/deprioritize-units.md): Demote without deleting.
 - [Reconsolidate an entity](./docs/how-to/reconsolidate.md): Re-run the 7-phase loop for a single entity.
@@ -439,12 +439,12 @@ Comprehensive guides and references live in [`docs/`](./docs/index.md). The tree
 ### Reference — look it up
 - [CLI commands](./docs/reference/cli-commands.md)
 - [API routes](./docs/reference/api-routes.md): REST surface.
-- [MCP tools](./docs/reference/mcp-tools.md): ~40 tools across asset, note, search, entity, KV, vault, outcome, curation, lint, diagnostics.
+- [MCP tools](./docs/reference/mcp-tools.md): ~55 tools across asset, note, search, entity, KV, vault, outcome, curation, lint, diagnostics, procedural.
 - [Configuration options](./docs/reference/configuration-options.md)
 - [Data model](./docs/reference/data-model.md): The full database schema.
 - [Failure modes](./docs/reference/failure-modes.md): What blocks, what degrades gracefully.
 - [Observability](./docs/reference/observability.md): Metrics catalog and span attributes.
-- [Evaluation results](./docs/reference/evaluation-results.md): Internal suites plus external benchmarks.
+- [Evaluation results](./docs/reference/evaluation-results.md): Internal suites and agent-integration scenarios (external benchmarks run occasionally).
 
 ### Explanation — understand the why
 - [Design principles](./docs/explanation/design-principles.md): P1–P13.
@@ -493,9 +493,16 @@ The `release.yaml` GitHub Action automatically builds all artifacts and creates 
 
 ## Evaluation
 
-Memex is benchmarked against [LoCoMo](https://arxiv.org/abs/2402.17753), an academic benchmark for long-term conversational memory. The benchmark tests fact recall, temporal reasoning, multi-hop inference, and adversarial robustness across 19-session dialogues. Memex is evaluated on a subset of 47 QA pairs from the first conversation only (out of 50 conversations in the full dataset).
+Memex's evaluation centers on an **internal suite** that grows with the system, not on a published leaderboard. It runs two layers:
 
-### LoCoMo results
+- **Retrieval and extraction regression** — hand-verified scenarios assert that a specific query returns the right facts and ranks the right units. Seven suites run in CI in seconds against a snapshot-cached vault.
+- **Agent integration** — the same scenarios, answered by a *real agent* driving Memex's tool surface (Claude Code over MCP, Hermes over the plugin). This measures whether the agent picks the right tool, cites honestly, and routes each write to the right place. It is the layer under active expansion.
+
+This is where the work goes. See [How Memex is evaluated](./docs/explanation/how-memex-is-evaluated.md) for the framework and [`packages/eval`](./packages/eval/README.md) to run it.
+
+### External benchmarks (occasional)
+
+Memex also carries tooling to score against published long-memory datasets — [LoCoMo](https://arxiv.org/abs/2402.17753) and LongMemEval. These run on demand, not on a cadence, so read any numbers as point-in-time snapshots rather than a tracked result. An early LoCoMo run (first conversation, 47 of 50 QA pairs after excluding 3 image-only questions; answering model Claude Opus 4 via Claude Code, judge Gemini 3 Flash, 0–1 graded scale):
 
 | Category | Count | Mean Score |
 |---|---|---|
@@ -506,19 +513,7 @@ Memex is benchmarked against [LoCoMo](https://arxiv.org/abs/2402.17753), an acad
 | **Non-adversarial** | **36** | **0.986** |
 | Adversarial (unweighted) | 11 | 0.773 |
 
-Answering model: Claude Opus 4 via Claude Code. Judging model: Gemini 3 Flash. Scores are on a 0-1 graded scale after manual review of judge assessments. 3 image-dependent questions excluded. Adversarial scores reported separately — see [full evaluation report](./docs/reference/evaluation-report.md) for methodology, retrieval efficiency analysis, and per-question details. See [`packages/eval`](./packages/eval/README.md) for the evaluation framework and reproduction instructions.
-
-### Retrieval efficiency
-
-Memex retrieval adds minimal overhead to agent workflows. Across the 47-question benchmark:
-
-| Metric | Value |
-|---|---|
-| Retrieval tokens per question (median) | **4,609** |
-| Retrieval tokens per question (mean) | 7,592 |
-| Retrieval as % of total tokens | **4.5%** |
-
-95% of token usage is agent overhead (system prompt, tool definitions, conversation history). The Memex MCP tools themselves return compact results — a typical question needs just one `memory_search` call (~2.4K tokens) or a two-stage `memory_search` + `note_search` (~3.4K tokens). Complex multi-hop questions that drill into specific note sections via the page index cost ~6K retrieval tokens.
+Retrieval stayed cheap on that run — a median 4,609 tokens per question, about 4.5% of total token usage, with the rest being agent overhead. Full methodology, retrieval-efficiency analysis, and per-question detail live in the [evaluation results reference](./docs/reference/evaluation-results.md).
 
 ## 🏗️ Architecture
 
@@ -527,7 +522,7 @@ Memex is built as a monorepo:
 - **`packages/cli`**: The interface. Typer CLI commands, including `memex note sync` for folder-based note synchronization.
 - **`packages/mcp`**: The bridge. FastMCP server for AI agent integration.
 - **`packages/common`**: The foundation. Shared models, config, and exceptions.
-- **`packages/eval`**: The benchmark. LoCoMo evaluation framework and retrieval analysis.
+- **`packages/eval`**: The eval harness. Internal regression and agent-integration suites, plus external-benchmark tooling (LoCoMo, LongMemEval).
 - **`packages/claude-code-plugin`**: The plugin. Claude Code plugin for cross-project memory integration.
 - **`packages/firefox-extension`**: The capture. Firefox extension for web content ingestion.
 
