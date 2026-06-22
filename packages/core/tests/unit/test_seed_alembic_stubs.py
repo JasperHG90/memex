@@ -55,8 +55,8 @@ def test_seed_chain_is_linear_and_correct() -> None:
     sd = ScriptDirectory.from_config(cfg)
 
     heads = sd.get_heads()
-    assert heads == ['067_add_skill_hints'], (
-        f'Expected single head 067_add_skill_hints, got {heads}'
+    assert heads == ['068_drop_webhook_tables'], (
+        f'Expected single head 068_drop_webhook_tables, got {heads}'
     )
 
     walk = list(sd.walk_revisions())
@@ -70,6 +70,7 @@ def test_seed_chain_is_linear_and_correct() -> None:
     # 063 (experiential vault seed + KV backfill) precede it linearly from
     # the 053 merge node.
     expected_top10 = [
+        ('068_drop_webhook_tables', '067_add_skill_hints'),
         ('067_add_skill_hints', '066_derivation_queue_vault_fk'),
         ('066_derivation_queue_vault_fk', '065_procedural_outcomes'),
         ('065_procedural_outcomes', '064_two_kind_plane'),
@@ -79,7 +80,6 @@ def test_seed_chain_is_linear_and_correct() -> None:
         ('061_experiential_entries', '060_vault_kind_policy'),
         ('060_vault_kind_policy', '059_drop_inbox_router'),
         ('059_drop_inbox_router', '058_vault_summary_embedding'),
-        ('058_vault_summary_embedding', '057_lint_source_external'),
     ]
     assert top10 == expected_top10, f'Tier A chain mismatch: got {top10}'
 

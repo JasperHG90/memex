@@ -1000,7 +1000,7 @@ class NoteService:
         Delete a document and all associated data.
 
         Uses AsyncTransaction for atomicity across metastore + filestore.
-        ORM cascades handle: memory_units, chunks, unit_entities, memory_links, evidence_log.
+        ORM cascades handle: memory_units, chunks, unit_entities, memory_links.
         FileStore cleanup handles: assets and filestore_path.
         Entity cleanup (orphan removal, mention_count recount, mental model pruning)
         runs as a background task after the transaction commits to avoid lock contention.

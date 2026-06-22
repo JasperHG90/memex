@@ -175,7 +175,6 @@ class StatsService(BaseService):
         """Delete a memory unit and all associated data.
 
         ORM cascades handle: unit_entities, outgoing_links, incoming_links.
-        DB FK cascade handles: evidence_log.
         Entity cleanup (orphan removal, mention_count recount, mental model pruning)
         runs as a background task after the commit to avoid lock contention.
         """
