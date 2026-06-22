@@ -3,9 +3,12 @@ instruction_template = "default"
 symlinks = [
     "CLAUDE.md",
 ]
-rules = []
-agents = []
 mcp_servers = []
+
+[[rule]]
+qualified_name = "jasperhg90/pre-existing-issues"
+repo_alias = "jasperhg90"
+source_path = "rules/pre-existing-issues.md"
 
 [policy]
 
@@ -53,3 +56,33 @@ qualified_name = "jasperhg90/terminal-gif"
 repo_alias = "jasperhg90"
 source_path = "skills/documentation/terminal-gif"
 target_dir = ".claude/skills/terminal-gif"
+
+[[skill]]
+qualified_name = "jasperhg90/release"
+repo_alias = "jasperhg90"
+source_path = "skills/ops/release"
+target_dir = ".claude/skills/release"
+
+[[subagent]]
+qualified_name = "jasperhg90/adversarial-reviewer"
+repo_alias = "jasperhg90"
+source_path = "agents/adversarial-reviewer.md"
+target_path = ".claude/agents/adversarial-reviewer.md"
+
+[[subagent]]
+qualified_name = "jasperhg90/dependency-analyst"
+repo_alias = "jasperhg90"
+source_path = "skills/architecture/blueprint/agents/dependency-analyst.md"
+target_path = ".claude/agents/dependency-analyst.md"
+
+[[subagent]]
+qualified_name = "jasperhg90/feature-planner"
+repo_alias = "jasperhg90"
+source_path = "agents/feature-planner.md"
+target_path = ".claude/agents/feature-planner.md"
+
+[[subagent]]
+qualified_name = "jasperhg90/grader"
+repo_alias = "jasperhg90"
+source_path = "skills/tools/agent-creator/agents/grader.md"
+target_path = ".claude/agents/grader.md"

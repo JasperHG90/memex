@@ -1,8 +1,6 @@
 manifest_version = 11
 instruction_template = "default"
-agents = []
 mcp_servers = []
-rules = []
 managed_files = [
     "AGENTS.md",
     "CLAUDE.md",
@@ -11,38 +9,6 @@ layout_profile = "claude"
 symlinks = [
     "CLAUDE.md",
 ]
-
-[[skill]]
-qualified_name = "jasperhg90/readme-creator"
-repo_alias = "jasperhg90"
-repo_url = "https://github.com/JasperHG90/skills"
-source_path = "skills/documentation/readme-creator"
-target_dir = ".claude/skills/readme-creator"
-content_hash = "3e2e2e5a78baadea6631bc9db3e9e6acda2d3c3807d0c9d3705929dd05cd93ab"
-
-[skill.current]
-sha = "1d92f60fed5599f0f04bbcfe72733b0aa60be7c8"
-installed_at = "2026-06-20T21:20:55.442555Z"
-
-[[skill.history]]
-sha = "e62a750ecbe0b5c58e674f25b01e0a1b7cff5568"
-installed_at = "2026-06-18T18:27:08.431328Z"
-
-[[skill]]
-qualified_name = "jasperhg90/doc-write"
-repo_alias = "jasperhg90"
-repo_url = "https://github.com/JasperHG90/skills"
-source_path = "skills/documentation/doc-write"
-target_dir = ".claude/skills/doc-write"
-content_hash = "3a0386265d011ddf80b85ebeaf323eb8722a76fe9bae1bae80473e1c4a736c31"
-
-[skill.current]
-sha = "1d92f60fed5599f0f04bbcfe72733b0aa60be7c8"
-installed_at = "2026-06-20T21:20:35.751645Z"
-
-[[skill.history]]
-sha = "e62a750ecbe0b5c58e674f25b01e0a1b7cff5568"
-installed_at = "2026-06-18T18:27:08.430121Z"
 
 [[skill]]
 qualified_name = "jasperhg90/deep-explain"
@@ -54,8 +20,21 @@ history = []
 content_hash = "77d5eaa5fb7fc0addfed99147a89bdf0305b2fc0e83dfb46c1a9705763f1b4c9"
 
 [skill.current]
-sha = "f28bad03a9712094322b47bf2ca3b02c2c3004aa"
-installed_at = "2026-06-20T21:20:30.075785Z"
+sha = "7a36f27b25379b01d7e2d264698009656fc84200"
+installed_at = "2026-06-22T18:31:12.982181Z"
+
+[[skill]]
+qualified_name = "jasperhg90/doc-write"
+repo_alias = "jasperhg90"
+repo_url = "https://github.com/JasperHG90/skills"
+source_path = "skills/documentation/doc-write"
+target_dir = ".claude/skills/doc-write"
+history = []
+content_hash = "3a0386265d011ddf80b85ebeaf323eb8722a76fe9bae1bae80473e1c4a736c31"
+
+[skill.current]
+sha = "7a36f27b25379b01d7e2d264698009656fc84200"
+installed_at = "2026-06-22T18:31:12.980915Z"
 
 [[skill]]
 qualified_name = "jasperhg90/manifesto"
@@ -67,8 +46,8 @@ history = []
 content_hash = "5906935b4b3fb44b2d113018526590b3337969fb20a0710c414b7824bf7b4bcb"
 
 [skill.current]
-sha = "516c105a9d8260c80a9d1fd8cb4004fe22a74225"
-installed_at = "2026-06-20T21:20:43.302337Z"
+sha = "7a36f27b25379b01d7e2d264698009656fc84200"
+installed_at = "2026-06-22T18:31:12.983703Z"
 
 [[skill]]
 qualified_name = "jasperhg90/pageindex"
@@ -80,8 +59,8 @@ history = []
 content_hash = "2bd803b32799dd81fdae0b92776ca4a91340ce096b81ac36ae45a77f20704007"
 
 [skill.current]
-sha = "516c105a9d8260c80a9d1fd8cb4004fe22a74225"
-installed_at = "2026-06-20T21:20:47.288371Z"
+sha = "7a36f27b25379b01d7e2d264698009656fc84200"
+installed_at = "2026-06-22T18:31:12.985717Z"
 
 [[skill]]
 qualified_name = "jasperhg90/python-review"
@@ -93,8 +72,21 @@ history = []
 content_hash = "117b037250a0105dd7ff7b63516ff9c44291707ec8583e9ae110b83932689b03"
 
 [skill.current]
-sha = "6ff5b0fcb970e0f83e61ad5d9e48f0324eee7894"
-installed_at = "2026-06-20T21:20:53.526445Z"
+sha = "7a36f27b25379b01d7e2d264698009656fc84200"
+installed_at = "2026-06-22T18:31:12.981621Z"
+
+[[skill]]
+qualified_name = "jasperhg90/readme-creator"
+repo_alias = "jasperhg90"
+repo_url = "https://github.com/JasperHG90/skills"
+source_path = "skills/documentation/readme-creator"
+target_dir = ".claude/skills/readme-creator"
+history = []
+content_hash = "3e2e2e5a78baadea6631bc9db3e9e6acda2d3c3807d0c9d3705929dd05cd93ab"
+
+[skill.current]
+sha = "7a36f27b25379b01d7e2d264698009656fc84200"
+installed_at = "2026-06-22T18:31:12.984667Z"
 
 [[skill]]
 qualified_name = "jasperhg90/terminal-gif"
@@ -106,8 +98,85 @@ history = []
 content_hash = "599a57b4fa4629c81fd9d53b3f7c6617b230fab04cd9dde33d318bb0c1756711"
 
 [skill.current]
-sha = "516c105a9d8260c80a9d1fd8cb4004fe22a74225"
-installed_at = "2026-06-20T21:21:00.776005Z"
+sha = "7a36f27b25379b01d7e2d264698009656fc84200"
+installed_at = "2026-06-22T18:31:12.987133Z"
+
+[[skill]]
+qualified_name = "jasperhg90/release"
+repo_alias = "jasperhg90"
+repo_url = "https://github.com/JasperHG90/skills"
+source_path = "skills/ops/release"
+target_dir = ".claude/skills/release"
+history = []
+content_hash = "27551a57c8a8a9fe0af1187309890b747231c3f1bde802d984ce8e5c7ad145a5"
+
+[skill.current]
+sha = "7a36f27b25379b01d7e2d264698009656fc84200"
+installed_at = "2026-06-22T18:31:12.988856Z"
+
+[[subagent]]
+qualified_name = "jasperhg90/adversarial-reviewer"
+repo_alias = "jasperhg90"
+repo_url = "https://github.com/JasperHG90/skills"
+source_path = "agents/adversarial-reviewer.md"
+target_path = ".claude/agents/adversarial-reviewer.md"
+history = []
+content_hash = "e5491d0c157b6194e561e89c439226b9b90ba8e5f6c2e01abe1794c82d409fc6"
+
+[subagent.current]
+sha = "7a36f27b25379b01d7e2d264698009656fc84200"
+installed_at = "2026-06-22T18:31:12.990990Z"
+
+[[subagent]]
+qualified_name = "jasperhg90/dependency-analyst"
+repo_alias = "jasperhg90"
+repo_url = "https://github.com/JasperHG90/skills"
+source_path = "skills/architecture/blueprint/agents/dependency-analyst.md"
+target_path = ".claude/agents/dependency-analyst.md"
+history = []
+content_hash = "4bc1115997cf13d54e8ed4c86fbc31edd6bd597fb1d6047b08532001ddd5868b"
+
+[subagent.current]
+sha = "7a36f27b25379b01d7e2d264698009656fc84200"
+installed_at = "2026-06-22T18:31:12.993880Z"
+
+[[subagent]]
+qualified_name = "jasperhg90/feature-planner"
+repo_alias = "jasperhg90"
+repo_url = "https://github.com/JasperHG90/skills"
+source_path = "agents/feature-planner.md"
+target_path = ".claude/agents/feature-planner.md"
+history = []
+content_hash = "90ff4c27e96b2d47262dd5d1849f225d49d9bd31f4c3e8fcbb3c3e33585ae244"
+
+[subagent.current]
+sha = "7a36f27b25379b01d7e2d264698009656fc84200"
+installed_at = "2026-06-22T18:31:12.999557Z"
+
+[[subagent]]
+qualified_name = "jasperhg90/grader"
+repo_alias = "jasperhg90"
+repo_url = "https://github.com/JasperHG90/skills"
+source_path = "skills/tools/agent-creator/agents/grader.md"
+target_path = ".claude/agents/grader.md"
+history = []
+content_hash = "f4b8105617960359bc469984233a2159e947114411fbbc79c44b5765a34c1f88"
+
+[subagent.current]
+sha = "7a36f27b25379b01d7e2d264698009656fc84200"
+installed_at = "2026-06-22T18:30:16.237073Z"
+
+[[rule]]
+qualified_name = "jasperhg90/pre-existing-issues"
+repo_alias = "jasperhg90"
+repo_url = "https://github.com/JasperHG90/skills"
+source_path = "rules/pre-existing-issues.md"
+history = []
+content_hash = "dcc55c18052e0fa373567766756108db80508e86d97c2599ef36d44f646fa846"
+
+[rule.current]
+sha = "7a36f27b25379b01d7e2d264698009656fc84200"
+installed_at = "2026-06-22T18:31:13.002042Z"
 
 [managed_region_hashes]
 header = "8209ab5f5a7c8f642c374946c62b4af4bc0abcf6b44bc22fc745ebc94105a7bc"
