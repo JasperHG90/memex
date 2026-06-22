@@ -30,6 +30,7 @@ from memex_mcp._layer_primer_descriptions import (
     LAYER_ROUTING_PRIMER_FRAGMENT as _LAYER_ROUTING_PRIMER,
 )
 from memex_common.agent_surface import MCP_TRANSPORT_INSTRUCTIONS
+from memex_common.kv_utils import VALID_NAMESPACES
 from memex_common.vault_utils import ALL_VAULTS_WILDCARD, expand_vault_scope
 from memex_common.tool_descriptions import (
     MEMEX_CASE_SUBMIT_DESC as _MEMEX_CASE_SUBMIT_DESCRIPTION,
@@ -177,6 +178,40 @@ def _coerce_float(v: Any) -> Any:
         except ValueError:
             pass
     return v
+
+
+def _allowed_asset_roots() -> list[plb.Path]:
+    """Directories that agent-supplied asset paths are confined to.
+
+    Defaults to the server's CWD (the agent's working/project directory).
+    Additional roots can be permitted via the ``MEMEX_MCP_ASSET_ROOTS`` env var
+    (``os.pathsep``-separated absolute paths).
+    """
+    roots = [plb.Path.cwd().resolve()]
+    for raw in os.environ.get('MEMEX_MCP_ASSET_ROOTS', '').split(os.pathsep):
+        raw = raw.strip()
+        if raw:
+            roots.append(plb.Path(raw).expanduser().resolve())
+    return roots
+
+
+def _resolve_confined_asset_path(file_path: str) -> plb.Path:
+    """Resolve an agent-supplied asset path, confined to the allowed roots.
+
+    Guards against a prompt-injected agent exfiltrating sensitive local files
+    (``~/.ssh/id_rsa``, ``/etc/passwd``, …) by ingesting them as note assets.
+    Resolves symlinks before the check so they can't escape a permitted root.
+    Raises ``ToolError`` if the path escapes every allowed root.
+    """
+    resolved = plb.Path(file_path).expanduser().resolve()
+    roots = _allowed_asset_roots()
+    if not any(resolved.is_relative_to(root) for root in roots):
+        raise ToolError(
+            f'Asset path {file_path!r} is outside the allowed roots '
+            f'({", ".join(str(r) for r in roots)}). Set MEMEX_MCP_ASSET_ROOTS '
+            'to permit additional directories.'
+        )
+    return resolved
 
 
 def _to_utc_datetime(dt: datetime | None) -> datetime | None:
@@ -461,7 +496,7 @@ async def memex_set_note_status(
     ctx: Context,
     note_id: Annotated[str, Field(description='Note UUID.')],
     status: Annotated[
-        str,
+        Literal['active', 'superseded', 'archived'],
         Field(description='New status: active, superseded, or archived.'),
     ],
     linked_note_id: Annotated[
@@ -706,7 +741,7 @@ async def memex_add_assets(
 
         files_content: dict[str, bytes] = {}
         for file_path in file_paths:
-            path = plb.Path(file_path)
+            path = _resolve_confined_asset_path(file_path)
             if not path.exists() or not path.is_file():
                 logger.warning(f'Asset file not found or not a file: {file_path}')
                 continue
@@ -1076,7 +1111,7 @@ async def memex_add_note(
         files_content: dict[str, bytes] = {}
         if supporting_files:
             for file_path in supporting_files:
-                path = plb.Path(file_path)
+                path = _resolve_confined_asset_path(file_path)
                 if path.exists() and path.is_file():
                     async with aiofiles.open(path, 'rb') as f:
                         files_content[path.name] = base64.b64encode(await f.read())
@@ -3433,6 +3468,14 @@ async def memex_kv_put(
 ) -> McpKVPutResult:
     """Write an operational pointer to the KV store with embedding generation."""
     try:
+        # Mirror the server-side namespace gate (services/kv.py) client-side so
+        # the LLM gets a fast, clear error instead of a round-trip 4xx.
+        if not key.startswith(tuple(f'{ns}:' for ns in VALID_NAMESPACES)):
+            raise ToolError(
+                f'Invalid key {key!r}: must start with one of '
+                f'{", ".join(f"{ns}:" for ns in VALID_NAMESPACES)}'
+            )
+
         api = get_api(ctx)
 
         # Generate embedding for semantic search via the API layer
