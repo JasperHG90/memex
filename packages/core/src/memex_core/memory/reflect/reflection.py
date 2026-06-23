@@ -13,6 +13,7 @@ import dspy
 from sqlmodel import select, col
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlalchemy import func, update as sa_update
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.exc import InvalidRequestError
 from sqlalchemy.orm import defer
 from sqlalchemy.orm.attributes import flag_modified, set_committed_value
@@ -1372,14 +1373,53 @@ class ReflectionEngine:
         missing_ids = set(entity_ids) - set(models_map.keys())
         if missing_ids:
             entities = await self._batch_get_entities(list(missing_ids))
+            rows = []
             for eid in missing_ids:
                 entity = entities.get(eid)
                 name = entity.canonical_name if entity else 'Unknown'
-                new_model = MentalModel(
-                    entity_id=eid, name=name, observations=[], vault_id=vault_id
+                # id + version are Python-side defaults the ORM would fill; a core
+                # INSERT must supply them. Every other column has a server_default
+                # or is nullable.
+                rows.append(
+                    {
+                        'id': uuid4(),
+                        'entity_id': eid,
+                        'vault_id': vault_id,
+                        'name': name,
+                        'version': 1,
+                    }
                 )
-                self.session.add(new_model)
-                models_map[eid] = new_model
+
+            # Idempotent create. Two reflection workers can claim the same entity
+            # in one scheduler tick and both reach this path; a blind INSERT then
+            # makes the orchestrator commit (reflect_batch, ~30 lines up) raise
+            # UniqueViolationError on the (entity_id, vault_id) index, aborting the
+            # whole batch — the scheduler logs it and only retries after stale-
+            # processing recovery (~30 min). ON CONFLICT DO NOTHING lets the racers
+            # converge on one row instead. The arbiter is the full unique index
+            # ``idx_mental_models_entity_vault_unique``, so no index_where predicate
+            # is needed (unlike the partial-index arbiters elsewhere).
+            await self.session.execute(
+                pg_insert(MentalModel)
+                .values(rows)
+                .on_conflict_do_nothing(index_elements=['entity_id', 'vault_id'])
+            )
+
+            # Re-load to attach the persisted ORM instances — whichever row won the
+            # unique slot (mine or a racer's). Visible within this transaction
+            # before the orchestrator's commit. An entity whose only row is archived
+            # stays absent (the SELECT excludes archived); it degrades to the
+            # per-entity failed path rather than crashing the batch.
+            refreshed = (
+                await self.session.exec(
+                    select(MentalModel)
+                    .where(col(MentalModel.entity_id).in_(missing_ids))
+                    .where(col(MentalModel.vault_id) == vault_id)
+                    .where(col(MentalModel.archived_at).is_(None))
+                )
+            ).all()
+            for m in refreshed:
+                models_map[m.entity_id] = m
 
         return models_map
 
