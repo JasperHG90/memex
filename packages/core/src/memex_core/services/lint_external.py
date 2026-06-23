@@ -28,7 +28,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from uuid import UUID
 
 from pydantic import ConfigDict, field_validator
-from sqlalchemy import cast, func, literal
+from sqlalchemy import cast, func, literal, text
 from sqlalchemy import select as sa_select
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import UUID as PG_UUID
@@ -183,35 +183,24 @@ def _assemble_evidence(req: ExternalProposalRequest, *, actor: str) -> dict[str,
     return evidence
 
 
-async def insert_external_proposal(
-    api: MemexAPI,
-    req: ExternalProposalRequest,
+def _build_external_proposal_stmt(
     *,
     vault_id: UUID | None,
-    actor: str,
-) -> tuple[Literal['created', 'deduplicated', 'cooldown_suppressed'], UUID | None]:
-    """Insert one validated proposal; returns ``(status, finding_id)``.
+    req: ExternalProposalRequest,
+    evidence: dict[str, Any],
+    cooldown_days: int,
+) -> Any:
+    """Build the external-proposal ``INSERT … SELECT … WHERE NOT EXISTS … ON CONFLICT``.
 
-    Status semantics mirror what internal rules get from
-    ``ON CONFLICT DO NOTHING`` plus the post-resolution cooldown:
+    Mirrors :func:`lint.\\_build_insert_finding_stmt` (same single-statement
+    cooldown-guard + conflict-arbiter idiom) with ``source='external'``.
 
-    * ``created`` — fresh pending row, id returned.
-    * ``deduplicated`` — a pending row for the same (rule, target, vault)
-      already covers this; its id is returned so retry-happy callers stay
-      idempotent. ``finding_id`` is always a real pending row.
-    * ``cooldown_suppressed`` — a human resolved/dismissed this same finding
-      within the cooldown window; no row is written, ``finding_id`` is None.
-
-    The cooldown check and the insert are ONE statement — an
-    ``INSERT … SELECT … WHERE NOT EXISTS(<recent resolution>) ON CONFLICT
-    DO NOTHING`` (the contract internal-rule emission uses). That removes the
-    check-then-insert TOCTOU: a concurrent resolution cannot slip between a
-    separate cooldown SELECT and the insert, and the classification below is
-    unambiguous — a failed insert is either a live pending dedup or a
-    cooldown block, never a resolved-row id masquerading as a dedup.
+    The ``index_where`` MUST be the partial index's literal predicate verbatim
+    (``status = 'pending'``). A ``col()`` comparison renders as a bound parameter
+    that Postgres cannot prove implies the index predicate once the prepared
+    statement flips to a generic plan, raising "no unique or exclusion constraint
+    matching the ON CONFLICT specification".
     """
-    cooldown_days = api.config.server.memory.lint.external_proposals.cooldown_days
-    evidence = _assemble_evidence(req, actor=actor)
     mp = MaintenanceProposal
 
     # A resolved/dismissed sibling within the cooldown window suppresses
@@ -249,7 +238,7 @@ async def insert_external_proposal(
         literal('external').label('source'),
     ).where(~recent_resolution)
 
-    insert_stmt = (
+    return (
         pg_insert(mp)
         .from_select(
             [
@@ -267,9 +256,44 @@ async def insert_external_proposal(
         )
         .on_conflict_do_nothing(
             index_elements=['rule_name', 'target_type', 'target_id', 'vault_id'],
-            index_where=col(mp.status) == 'pending',
+            index_where=text("status = 'pending'"),
         )
         .returning(mp.id)
+    )
+
+
+async def insert_external_proposal(
+    api: MemexAPI,
+    req: ExternalProposalRequest,
+    *,
+    vault_id: UUID | None,
+    actor: str,
+) -> tuple[Literal['created', 'deduplicated', 'cooldown_suppressed'], UUID | None]:
+    """Insert one validated proposal; returns ``(status, finding_id)``.
+
+    Status semantics mirror what internal rules get from
+    ``ON CONFLICT DO NOTHING`` plus the post-resolution cooldown:
+
+    * ``created`` — fresh pending row, id returned.
+    * ``deduplicated`` — a pending row for the same (rule, target, vault)
+      already covers this; its id is returned so retry-happy callers stay
+      idempotent. ``finding_id`` is always a real pending row.
+    * ``cooldown_suppressed`` — a human resolved/dismissed this same finding
+      within the cooldown window; no row is written, ``finding_id`` is None.
+
+    The cooldown check and the insert are ONE statement — an
+    ``INSERT … SELECT … WHERE NOT EXISTS(<recent resolution>) ON CONFLICT
+    DO NOTHING`` (the contract internal-rule emission uses). That removes the
+    check-then-insert TOCTOU: a concurrent resolution cannot slip between a
+    separate cooldown SELECT and the insert, and the classification below is
+    unambiguous — a failed insert is either a live pending dedup or a
+    cooldown block, never a resolved-row id masquerading as a dedup.
+    """
+    cooldown_days = api.config.server.memory.lint.external_proposals.cooldown_days
+    evidence = _assemble_evidence(req, actor=actor)
+
+    insert_stmt = _build_external_proposal_stmt(
+        vault_id=vault_id, req=req, evidence=evidence, cooldown_days=cooldown_days
     )
 
     async with api.metastore.session() as session:

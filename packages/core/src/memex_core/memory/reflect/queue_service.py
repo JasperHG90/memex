@@ -3,7 +3,7 @@ import logging
 from uuid import UUID
 from datetime import datetime, timedelta, timezone
 
-from sqlalchemy import and_, func, or_, text as sql_text
+from sqlalchemy import func, or_, text as sql_text
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import select, col, desc
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -422,11 +422,13 @@ class ReflectionQueueService:
         stmt = pg_insert(ReflectionQueue).values(rows)
         stmt = stmt.on_conflict_do_update(
             index_elements=['entity_id', 'vault_id'],
-            index_where=and_(
-                col(ReflectionQueue.task_type) == 'reflect',
-                col(ReflectionQueue.status).in_(
-                    [ReflectionStatus.PENDING, ReflectionStatus.PROCESSING]
-                ),
+            # Must be the index's literal predicate verbatim: a col() comparison
+            # renders as a bound parameter, which Postgres cannot prove implies the
+            # partial-index predicate once the prepared statement flips to a generic
+            # plan -> "no unique or exclusion constraint matching the ON CONFLICT
+            # specification". The literal is provable under any plan.
+            index_where=sql_text(
+                "task_type = 'reflect' AND status IN ('pending', 'processing')"
             ),
             set_={
                 'priority_lane': True,

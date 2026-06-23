@@ -781,7 +781,7 @@ def _build_insert_finding_stmt(
         )
         .on_conflict_do_nothing(
             index_elements=['rule_name', 'target_type', 'target_id', 'vault_id'],
-            index_where=col(mp.status) == 'pending',
+            index_where=text("status = 'pending'"),
         )
         .returning(mp.id)
     )

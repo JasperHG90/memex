@@ -23,6 +23,8 @@ from memex_core.memory.sql_models import Entity, Vault
 from memex_core.services.entities import EntityService
 from memex_core.services.lint_external import (
     ExternalProposalRequest,
+    _assemble_evidence,
+    _build_external_proposal_stmt,
     insert_external_proposal,
 )
 
@@ -424,3 +426,39 @@ async def test_merge_entities_action_resolves_through_registry(session: AsyncSes
         alive = {str(r['id']): r['mention_count'] for r in rows}
     assert set(alive) == {str(winner.id)}
     assert alive[str(winner.id)] == winner.mention_count + loser.mention_count
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_conflict_arbiter_resolves_under_generic_plan(
+    session: AsyncSession, metastore
+):
+    """The ON CONFLICT arbiter must resolve under a *generic* query plan.
+
+    This is the production failure mode that shipped in v1.0.0rc1: when the
+    ``index_where`` predicate is a bound parameter, Postgres cannot prove it
+    implies the partial-index predicate (``status = 'pending'``) once the cached
+    prepared statement flips to a generic plan, and raises "no unique or
+    exclusion constraint matching the ON CONFLICT specification".
+
+    ``SET LOCAL plan_cache_mode = force_generic_plan`` forces the generic plan on
+    the FIRST execution, so this reproduces deterministically. A normal
+    single-execution insert uses a *custom* plan (value substituted) and would
+    pass even against the unfixed bound-parameter code — so forcing the generic
+    plan is load-bearing, not incidental.
+    """
+    vault = await _make_vault(session)
+    req = _routing_request(vault.id)
+    evidence = _assemble_evidence(req, actor='skill:triage-inbox')
+    stmt = _build_external_proposal_stmt(
+        vault_id=vault.id, req=req, evidence=evidence, cooldown_days=30
+    )
+
+    async with metastore.session() as s:
+        await s.execute(text('SET LOCAL plan_cache_mode = force_generic_plan'))
+        # Unfixed code raises asyncpg ProgrammingError here; the literal predicate
+        # resolves the arbiter and returns the new row id.
+        inserted = (await s.execute(stmt)).scalar_one_or_none()
+        await s.commit()
+
+    assert inserted is not None

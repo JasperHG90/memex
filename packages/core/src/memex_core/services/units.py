@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from typing import Any
 from uuid import UUID
 
-from sqlalchemy import and_, cast, literal, text
+from sqlalchemy import cast, literal, text
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlmodel import col, select
@@ -438,16 +438,15 @@ class UnitsService(BaseService):
         if not values_rows:
             return
         insert_stmt = pg_insert(ReflectionQueue).values(values_rows)
-        # index_where uses col(...) wrappers to match the queue_service upsert
-        # form character-for-character; partial-UNIQUE arbiter inference is
-        # text-normalized but consistent col() form removes future-drift risk.
+        # index_where must be the index's literal predicate verbatim: a col()
+        # comparison renders as a bound parameter, which Postgres cannot prove
+        # implies the partial-index predicate once the prepared statement flips to
+        # a generic plan -> "no unique or exclusion constraint matching the ON
+        # CONFLICT specification". The literal is provable under any plan.
         insert_stmt = insert_stmt.on_conflict_do_nothing(
             index_elements=['entity_id', 'vault_id', 'observation_id'],
-            index_where=and_(
-                col(ReflectionQueue.task_type) == 'refresh_observation',
-                col(ReflectionQueue.status).in_(
-                    [ReflectionStatus.PENDING, ReflectionStatus.PROCESSING]
-                ),
+            index_where=text(
+                "task_type = 'refresh_observation' AND status IN ('pending', 'processing')"
             ),
         )
         # ON CONFLICT DO NOTHING returns rowcount = true insert count (conflicts
@@ -600,11 +599,8 @@ class UnitsService(BaseService):
             insert_stmt = pg_insert(ReflectionQueue).values(values_rows)
             insert_stmt = insert_stmt.on_conflict_do_nothing(
                 index_elements=['entity_id', 'vault_id', 'observation_id'],
-                index_where=and_(
-                    col(ReflectionQueue.task_type) == 'refresh_observation',
-                    col(ReflectionQueue.status).in_(
-                        [ReflectionStatus.PENDING, ReflectionStatus.PROCESSING]
-                    ),
+                index_where=text(
+                    "task_type = 'refresh_observation' AND status IN ('pending', 'processing')"
                 ),
             )
             flush_result = await session.execute(insert_stmt)

@@ -153,3 +153,32 @@ async def test_partial_unique_dedupes_concurrent_enqueue_during_processing(metas
         ).all()
         assert len(rows) == 1, f'expected 1 row after dedupe, got {len(rows)}: {rows}'
         assert rows[0].status == ReflectionStatus.PROCESSING
+
+
+@pytest.mark.asyncio
+async def test_priority_reflect_upsert_resolves_arbiter_under_generic_plan(
+    metastore, memex_config
+) -> None:
+    """The ``enqueue_priority_reflect`` ON CONFLICT arbiter must resolve under a
+    *generic* query plan.
+
+    The arbiter's ``index_where`` must be the index's literal predicate
+    (``task_type = 'reflect' AND status IN ('pending', 'processing')``). A
+    ``col()`` comparison renders as a bound parameter that Postgres cannot prove
+    implies the partial-index predicate once the prepared statement flips to a
+    generic plan -> "no unique or exclusion constraint matching the ON CONFLICT
+    specification". ``SET LOCAL plan_cache_mode = force_generic_plan`` forces that
+    plan on the first execution; the sibling custom-plan test above would pass
+    even against the unfixed code.
+    """
+    qs = ReflectionQueueService(config=memex_config.server.memory.reflection)
+
+    async with metastore.session() as session:
+        entity_id, vault_id = await _seed_entity_and_vault(session)
+
+    async with metastore.session() as session:
+        await session.execute(text('SET LOCAL plan_cache_mode = force_generic_plan'))
+        # Unfixed (bound-parameter) code raises ProgrammingError here.
+        inserted = await qs.enqueue_priority_reflect(session, {entity_id}, vault_id)
+        assert inserted == 1
+        await session.commit()
