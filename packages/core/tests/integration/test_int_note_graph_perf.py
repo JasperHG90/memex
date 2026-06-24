@@ -165,3 +165,22 @@ async def test_neighbour_cap_drops_weakest_below_cap(
     assert chunk_strong in chunk_ids, 'top-1 neighbour chunk must survive the cap'
     assert chunk_mid in chunk_ids, 'top-2 neighbour chunk must survive the cap'
     assert chunk_weak not in chunk_ids, 'below-cap (weakest) neighbour chunk must be dropped'
+
+
+@pytest.mark.integration
+@pytest.mark.asyncio
+async def test_real_statement_timeout_is_detected_by_helper(session: AsyncSession) -> None:
+    """Close the loop on the fallback: a REAL Postgres statement_timeout surfaces
+    as the DBAPIError that _is_statement_timeout recognizes. Combined with the
+    mocked control-flow tests (timeout -> rollback -> retry cheap signals), this
+    proves the end-to-end degradation path. SET LOCAL keeps the low timeout
+    transaction-scoped so it can't leak to a pooled connection."""
+    from sqlalchemy.exc import DBAPIError
+
+    from memex_core.memory.retrieval.document_search import _is_statement_timeout
+
+    await session.exec(text("SET LOCAL statement_timeout = '100ms'"))
+    with pytest.raises(DBAPIError) as ei:
+        await session.exec(text('SELECT pg_sleep(1)'))
+    await session.rollback()
+    assert _is_statement_timeout(ei.value), 'a real statement_timeout must be detected'

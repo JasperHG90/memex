@@ -11,9 +11,13 @@ from memex_core.memory.extraction.engine import ExtractionEngine
 
 
 def _make_dbapi_error_with_query_canceled() -> DBAPIError:
-    """Create a DBAPIError wrapping an asyncpg QueryCanceledError."""
-    # Create a fake original exception whose class name is QueryCanceledError
-    orig = type('QueryCanceledError', (Exception,), {})(
+    """Create a DBAPIError shaped like a real statement_timeout.
+
+    The asyncpg dialect wraps the error in a generic adapter ``Error`` carrying
+    SQLSTATE 57014 (query_canceled) — that SQLSTATE, not the type name, is the
+    reliable signal _is_statement_timeout matches.
+    """
+    orig = type('Error', (Exception,), {'sqlstate': '57014'})(
         'canceling statement due to statement timeout'
     )
     err = DBAPIError('statement', {}, orig)
@@ -21,8 +25,8 @@ def _make_dbapi_error_with_query_canceled() -> DBAPIError:
 
 
 def _make_dbapi_error_other() -> DBAPIError:
-    """Create a DBAPIError that is NOT a statement timeout."""
-    orig = type('UniqueViolationError', (Exception,), {})(
+    """Create a DBAPIError that is NOT a statement timeout (unique_violation 23505)."""
+    orig = type('Error', (Exception,), {'sqlstate': '23505'})(
         'duplicate key value violates unique constraint'
     )
     err = DBAPIError('statement', {}, orig)

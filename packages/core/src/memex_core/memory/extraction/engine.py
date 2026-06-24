@@ -75,9 +75,16 @@ logger = logging.getLogger('memex.core.memory.extraction.engine')
 
 
 def _is_statement_timeout(exc: DBAPIError) -> bool:
-    """Check if a DBAPIError wraps an asyncpg QueryCanceledError (statement timeout)."""
+    """Check if a DBAPIError is a Postgres statement_timeout.
+
+    The asyncpg dialect wraps the underlying QueryCanceledError in a generic
+    adapter ``Error`` whose type name is NOT 'QueryCanceledError', so match on the
+    SQLSTATE instead: 57014 == query_canceled (set by statement_timeout). The old
+    type-name check never matched a real wrapped error, so the graceful-skip
+    branches gated on this were effectively dead.
+    """
     orig = getattr(exc, 'orig', None)
-    return type(orig).__name__ == 'QueryCanceledError' if orig else False
+    return getattr(orig, 'sqlstate', None) == '57014'
 
 
 _USER_NOTES_FIELD_RE = re.compile(r'^user_notes:.*\n(?:[ \t]+.*\n)*', re.MULTILINE)

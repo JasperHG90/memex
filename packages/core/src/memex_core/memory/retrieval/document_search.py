@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field as PydanticField
 from sqlalchemy import extract, func, literal, union_all, text, Integer
 from sqlalchemy import cast as sql_cast, String
 from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import defer
 from sqlmodel import select, col
 from sqlmodel.ext.asyncio.session import AsyncSession
@@ -68,6 +69,17 @@ class AnswerFromSections(dspy.Signature):
 
 
 logger = logging.getLogger('memex.core.memory.retrieval.document_search')
+
+
+def _is_statement_timeout(exc: DBAPIError) -> bool:
+    """True if the DBAPIError is a Postgres statement_timeout.
+
+    The asyncpg dialect wraps the underlying QueryCanceledError in a generic
+    adapter ``Error`` whose type name is NOT 'QueryCanceledError', so we match on
+    the SQLSTATE instead: 57014 == query_canceled (set by statement_timeout).
+    """
+    orig = getattr(exc, 'orig', None)
+    return getattr(orig, 'sqlstate', None) == '57014'
 
 
 @dataclass
@@ -159,7 +171,7 @@ class NoteSearchEngine:
         # 3. Run search per query and collect scored chunks
         all_chunk_batches: list[tuple[list[Any], float]] = []
         for q, q_emb, q_weight in zip(queries, all_embeddings, query_weights):
-            chunk_results = await self._search_single_query(
+            chunk_results = await self._search_single_query_with_fallback(
                 session, q, q_emb.tolist(), pool_size, request
             )
             if chunk_results:
@@ -403,7 +415,7 @@ class NoteSearchEngine:
 
         return results
 
-    async def _search_single_query(
+    async def _search_single_query_with_fallback(
         self,
         session: AsyncSession,
         query: str,
@@ -411,8 +423,57 @@ class NoteSearchEngine:
         pool_size: int,
         request: NoteSearchRequest,
     ) -> list[Any]:
-        """Run all active strategies for a single query and fuse via RRF."""
-        active = set(request.strategies)
+        """Run the full hybrid query; on statement_timeout degrade to the cheap
+        signals (semantic + temporal) instead of failing the whole request.
+
+        The graph and keyword CTEs dominate the cost; dropping them lets a slow
+        query still return semantic results. A cancelled statement aborts the
+        transaction, so we roll back before retrying. If the fallback also times
+        out this query contributes nothing — sibling queries may still succeed.
+        """
+        try:
+            return await self._search_single_query(
+                session, query, query_embedding, pool_size, request
+            )
+        except DBAPIError as exc:
+            if not _is_statement_timeout(exc):
+                raise
+            await session.rollback()
+            fallback = {'semantic', 'temporal'} & set(request.strategies)
+            if not fallback:
+                logger.warning(
+                    'Hybrid note-search timed out and no cheap signal is enabled; skipping query'
+                )
+                return []
+            logger.warning(
+                'Hybrid note-search timed out; degrading to %s for this query', sorted(fallback)
+            )
+            try:
+                return await self._search_single_query(
+                    session, query, query_embedding, pool_size, request, active_override=fallback
+                )
+            except DBAPIError as exc2:
+                if not _is_statement_timeout(exc2):
+                    raise
+                await session.rollback()
+                logger.warning('Semantic fallback also timed out; skipping this query')
+                return []
+
+    async def _search_single_query(
+        self,
+        session: AsyncSession,
+        query: str,
+        query_embedding: list[float],
+        pool_size: int,
+        request: NoteSearchRequest,
+        active_override: set[str] | None = None,
+    ) -> list[Any]:
+        """Run all active strategies for a single query and fuse via RRF.
+
+        ``active_override`` lets the timeout fallback re-run with a reduced
+        strategy set (e.g. semantic-only) after the full hybrid times out.
+        """
+        active = active_override if active_override is not None else set(request.strategies)
         weights = request.strategy_weights or {}
 
         cte_selects = []
