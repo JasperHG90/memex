@@ -547,8 +547,10 @@ class NoteSearchEngine:
         permissive_query_str = func.regexp_replace(sql_cast(ts_query_base, String), '&', '|', 'g')
         ts_query = func.to_tsquery('english', permissive_query_str)
 
-        # Search on nodes.text and map to block IDs (chunks) via nodes.block_id
-        ts_vector_node = func.to_tsvector('english', Node.text)
+        # Search on nodes and map to block IDs (chunks) via nodes.block_id.
+        # Use the stored search_tsvector column (GIN-indexed) instead of
+        # to_tsvector('english', text) recomputed per row on recheck + ranking.
+        ts_vector_node = col(Node.search_tsvector)
         rank_node = func.ts_rank_cd(ts_vector_node, ts_query)
 
         node_stmt = (
@@ -566,8 +568,9 @@ class NoteSearchEngine:
         if request.vault_ids:
             node_stmt = node_stmt.where(col(Node.vault_id).in_(request.vault_ids))
 
-        # Also search on chunks.text for backward compat (simple strategy docs)
-        ts_vector_chunk = func.to_tsvector('english', Chunk.text)
+        # Also search on chunks for backward compat (simple strategy docs).
+        # Stored search_tsvector column (GIN-indexed), same as nodes above.
+        ts_vector_chunk = col(Chunk.search_tsvector)
         rank_chunk = func.ts_rank_cd(ts_vector_chunk, ts_query)
 
         chunk_stmt = (

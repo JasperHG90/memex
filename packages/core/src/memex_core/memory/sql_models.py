@@ -429,6 +429,15 @@ class Chunk(SQLModel, table=True):  # type: ignore
         sa_column=Column(Text, nullable=False),
         description='The raw text content of the chunk.',
     )
+    search_tsvector: Any = Field(
+        default=None,
+        sa_column=Column(
+            TSVECTOR,
+            Computed("to_tsvector('english', coalesce(text, ''))", persisted=True),
+        ),
+        description='Stored full-text vector over text (GIN-indexed). Materialized so '
+        'keyword search stops recomputing to_tsvector(text) per row on recheck + ranking.',
+    )
     content_hash: str = Field(
         sa_column=Column(Text, nullable=False, server_default=''),
         description='SHA-256 hash of whitespace-normalized text for incremental diffing.',
@@ -479,8 +488,8 @@ class Chunk(SQLModel, table=True):  # type: ignore
         Index('idx_chunks_note_id', 'note_id'),
         Index('idx_chunks_note_index', 'note_id', 'chunk_index'),
         Index(
-            'idx_chunks_text_tsvector',
-            sql_text("to_tsvector('english', text)"),
+            'idx_chunks_search_tsvector',
+            'search_tsvector',
             postgresql_using='gin',
         ),
         Index(
@@ -527,6 +536,15 @@ class Node(SQLModel, table=True):  # type: ignore
     text: str = Field(
         sa_column=Column(Text, nullable=False),
         description='Full text content of the node.',
+    )
+    search_tsvector: Any = Field(
+        default=None,
+        sa_column=Column(
+            TSVECTOR,
+            Computed("to_tsvector('english', coalesce(text, ''))", persisted=True),
+        ),
+        description='Stored full-text vector over text (GIN-indexed). Materialized so '
+        'keyword search stops recomputing to_tsvector(text) per row on recheck + ranking.',
     )
     summary: dict[str, Any] | None = Field(
         default=None,
@@ -586,8 +604,8 @@ class Node(SQLModel, table=True):  # type: ignore
         Index('idx_nodes_note_id', 'note_id'),
         Index('idx_nodes_block_id', 'block_id'),
         Index(
-            'idx_nodes_text_tsvector',
-            sql_text("to_tsvector('english', text)"),
+            'idx_nodes_search_tsvector',
+            'search_tsvector',
             postgresql_using='gin',
         ),
         # B.2 — partial covering index for the document_search nodes-keyword
