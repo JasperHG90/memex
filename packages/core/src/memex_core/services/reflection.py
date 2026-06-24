@@ -127,8 +127,9 @@ class ReflectionService:
                 entity_session_factory=self.metastore.session,
             )
 
-            models, abandoned_list, _failed_list = await reflector.reflect_batch([request])
+            models, abandoned_list, failed_list = await reflector.reflect_batch([request])
             abandoned_ids = set(abandoned_list)
+            failed_ids = set(failed_list)
             if not models:
                 if request.entity_id in abandoned_ids:
                     # CAS abandon — re-enqueue without retry_count increment,
@@ -146,13 +147,24 @@ class ReflectionService:
                         f'because a concurrent worker advanced the version. '
                         f'Re-enqueued for the next scheduler tick.'
                     )
-                # Real failure (exception in the engine path).
-                await self.queue_service.mark_failed(
-                    session,
-                    entity_id=request.entity_id,
-                    vault_id=request.vault_id,
-                    error=f'Reflection produced no models for entity {request.entity_id}',
-                )
+                if request.entity_id in failed_ids:
+                    # Real failure (exception in the engine path).
+                    await self.queue_service.mark_failed(
+                        session,
+                        entity_id=request.entity_id,
+                        vault_id=request.vault_id,
+                        error=f'Reflection produced no models for entity {request.entity_id}',
+                    )
+                else:
+                    # Skipped: the entity's only mental model is archived — there
+                    # is nothing to reflect. Resolve the queue task rather than
+                    # failing it toward DEAD_LETTER (mirrors reflect_batch_detailed).
+                    logger.info(
+                        f'Resolving reflection task for archived-only entity {request.entity_id}'
+                    )
+                    await self.queue_service.complete_reflection(
+                        session, [request.entity_id], vault_id=request.vault_id
+                    )
                 from memex_core.memory.sql_models import MentalModel
 
                 return ReflectionResult(
@@ -305,6 +317,28 @@ class ReflectionService:
                 )
 
             succeeded_ids = {m.entity_id for m in models}
+
+            # Entities the engine SKIPPED (no ACTIVE mental model — only an
+            # archived one exists) are absent from all three outcome lists by
+            # design (see _process_entity_reflection). Resolve their queue task:
+            # there is nothing to reflect, so completing it stops the row from
+            # sitting in PROCESSING until stale-recovery re-enqueues it forever,
+            # and avoids failing it toward DEAD_LETTER.
+            skipped_by_vault: dict[UUID, list[UUID]] = defaultdict(list)
+            for req in requests:
+                if (
+                    req.entity_id not in succeeded_ids
+                    and req.entity_id not in abandoned_ids
+                    and req.entity_id not in failed_ids
+                ):
+                    skipped_by_vault[req.vault_id].append(req.entity_id)
+            for vid, eids in skipped_by_vault.items():
+                logger.info(
+                    f'Resolving {len(eids)} reflection task(s) for archived-only '
+                    f'entit{"y" if len(eids) == 1 else "ies"} in vault {vid}'
+                )
+                await self.queue_service.complete_reflection(session, eids, vault_id=vid)
+
             results = []
             for model in models:
                 results.append(

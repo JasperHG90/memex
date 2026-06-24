@@ -466,9 +466,26 @@ class ReflectionEngine:
                     if req.limit_recent_memories is None
                     else fetched[: req.limit_recent_memories]
                 )
+                mental_model = models_map.get(eid)
+                if mental_model is None:
+                    # No ACTIVE mental model for this entity. By construction
+                    # (_batch_get_or_create_models) this means its only model is
+                    # archived: an operator soft-deleted it via
+                    # archive_mental_model, and the full (entity_id, vault_id)
+                    # unique index blocks creating a fresh active row. Skip
+                    # cleanly, mirroring the refresh_observation path — return
+                    # None WITHOUT appending to abandoned/failed, leaving the
+                    # entity "unaccounted". reflect_batch_detailed resolves its
+                    # queue task (nothing to reflect) instead of failing it
+                    # toward DEAD_LETTER. Reflecting here would resurrect content
+                    # the operator deliberately archived.
+                    logger.info(
+                        f'Skipping reflection for entity {eid}: only an archived mental model exists'
+                    )
+                    return None
                 outcome = await self._reflect_entity_internal(
                     entity_id=eid,
-                    mental_model=models_map[eid],
+                    mental_model=mental_model,
                     entity=entity,
                     recent_memories=recent_memories,
                     vault_id=req.vault_id,
@@ -1357,8 +1374,12 @@ class ReflectionEngine:
 
         Archived models (``archived_at IS NOT NULL``) are excluded so the
         reflection engine never resurrects content that an operator has
-        soft-deleted via the ``archive_mental_model`` proposal action.
-        Entities whose only model is archived get a new row created here.
+        soft-deleted via the ``archive_mental_model`` proposal action. An entity
+        whose ONLY model is archived is therefore left ABSENT from the returned
+        map — the full ``(entity_id, vault_id)`` unique index blocks a second
+        active row, and reflecting a fresh one would resurrect what the operator
+        archived. ``_process_entity_reflection`` skips such entities and the
+        service resolves their queue task.
         """
         query = (
             select(MentalModel)
