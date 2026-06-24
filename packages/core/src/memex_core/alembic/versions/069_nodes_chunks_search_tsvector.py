@@ -14,6 +14,14 @@ column. The generation expression is identical to the prior functional index
 (``to_tsvector('english', coalesce(text, ''))``), so keyword results/ranking are
 unchanged — only the per-row recompute is removed. Reversible.
 
+LOCK NOTE: ``ADD COLUMN ... GENERATED ... STORED`` takes an ACCESS EXCLUSIVE lock
+and rewrites the table (computing the tsvector for every row), and the two GIN
+index builds also lock. This runs inside Alembic's transaction, so it blocks
+reads+writes on ``nodes``/``chunks`` for the duration. At current scale (nodes
+~17k, chunks ~3k) that is sub-second; on a substantially larger deployment, run
+this in a maintenance window, or split into ``ADD COLUMN`` + ``CREATE INDEX
+CONCURRENTLY`` outside a transaction.
+
 Revision ID: 069_nodes_chunks_search_tsvector
 Revises: 068_drop_webhook_tables
 Create Date: 2026-06-24

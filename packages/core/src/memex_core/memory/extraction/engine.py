@@ -6,7 +6,6 @@ from typing import Any
 from uuid import UUID
 
 import dspy
-from sqlalchemy.exc import DBAPIError
 from sqlmodel.ext.asyncio.session import AsyncSession
 
 import memex_core.config
@@ -72,19 +71,6 @@ from memex_core.processing.titles import resolve_title_from_page_index
 from memex_common.schemas import IntentClass, RiskClass
 
 logger = logging.getLogger('memex.core.memory.extraction.engine')
-
-
-def _is_statement_timeout(exc: DBAPIError) -> bool:
-    """Check if a DBAPIError is a Postgres statement_timeout.
-
-    The asyncpg dialect wraps the underlying QueryCanceledError in a generic
-    adapter ``Error`` whose type name is NOT 'QueryCanceledError', so match on the
-    SQLSTATE instead: 57014 == query_canceled (set by statement_timeout). The old
-    type-name check never matched a real wrapped error, so the graceful-skip
-    branches gated on this were effectively dead.
-    """
-    orig = getattr(exc, 'orig', None)
-    return getattr(orig, 'sqlstate', None) == '57014'
 
 
 _USER_NOTES_FIELD_RE = re.compile(r'^user_notes:.*\n(?:[ \t]+.*\n)*', re.MULTILINE)
@@ -1727,22 +1713,18 @@ class ExtractionEngine:
 
         default_date = facts[0].mentioned_at if facts else datetime.now(timezone.utc)
 
-        try:
-            resolved_ids = await self.entity_resolver.resolve_entities_batch(
-                session, entities_data, default_date
-            )
-        except DBAPIError as e:
-            if _is_statement_timeout(e):
-                # The cancelled statement aborted the transaction; roll back so the
-                # caller can keep using this session for the rest of extract_and_persist
-                # (otherwise the next statement fails with 25P02 in_failed_sql_transaction).
-                await session.rollback()
-                logger.warning(
-                    'Entity resolution timed out (likely lock contention). '
-                    'Skipping — entities will be resolved on next ingestion or reflection cycle.'
-                )
-                return set()
-            raise
+        # Entity resolution + linking share the caller's single ingest transaction,
+        # which has NO savepoint. We therefore CANNOT roll back just this step
+        # without discarding the note's already-persisted facts (insert_facts_batch
+        # ran earlier in the same transaction). So a statement_timeout here
+        # propagates and fails the whole note ingest loudly — the caller's
+        # AsyncTransaction rolls back and surfaces the error — rather than silently
+        # committing a half-written note or rolling back the facts out from under
+        # the later create_links call. (A graceful per-step skip that keeps the
+        # facts would require wrapping these two calls in session.begin_nested().)
+        resolved_ids = await self.entity_resolver.resolve_entities_batch(
+            session, entities_data, default_date
+        )
 
         unit_entity_pairs = []
         unit_timestamps: dict[str, datetime] = {}
@@ -1756,24 +1738,12 @@ class ExtractionEngine:
                 if existing is None or event_dt < existing:
                     unit_timestamps[data['unit_id']] = event_dt
 
-        try:
-            await self.entity_resolver.link_units_to_entities_batch(
-                session,
-                unit_entity_pairs,
-                vault_id=vault_id,
-                unit_timestamps=unit_timestamps or None,
-            )
-        except DBAPIError as e:
-            if _is_statement_timeout(e):
-                # Roll back the aborted transaction so the caller can continue
-                # (see the resolution branch above — avoids 25P02 on the next stmt).
-                await session.rollback()
-                logger.warning(
-                    'Entity linking timed out (likely lock contention). '
-                    'Skipping — links will be created on next ingestion cycle.'
-                )
-                return set()
-            raise
+        await self.entity_resolver.link_units_to_entities_batch(
+            session,
+            unit_entity_pairs,
+            vault_id=vault_id,
+            unit_timestamps=unit_timestamps or None,
+        )
 
         await self._backfill_claim_target_entity_ids(session, unit_ids, facts, unit_entity_pairs)
 
