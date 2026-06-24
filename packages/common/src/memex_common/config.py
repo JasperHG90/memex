@@ -1071,10 +1071,10 @@ class RetrievalConfig(BaseModel):
     )
     graph_max_neighbors: int = Field(
         default=50,
-        description='Max 2nd-order co-occurrence neighbours per query in note-graph '
-        'retrieval (top-N by link_strength). Caps the 2-hop fan-out over hub entities '
-        'that otherwise drives the search statement_timeout. Lower = faster, less '
-        'associative recall.',
+        description='Max 2nd-order co-occurrence neighbours per query in graph '
+        'retrieval (both note-graph and memory-unit graph; top-N by link_strength). '
+        'Caps the 2-hop fan-out over hub entities that otherwise drives the search '
+        'statement_timeout. Lower = faster, less associative recall.',
     )
     exploration_mode: Literal['epsilon_greedy', 'thompson', 'off'] = Field(
         default='epsilon_greedy',
