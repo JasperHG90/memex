@@ -427,9 +427,7 @@ class ReflectionQueueService:
             # partial-index predicate once the prepared statement flips to a generic
             # plan -> "no unique or exclusion constraint matching the ON CONFLICT
             # specification". The literal is provable under any plan.
-            index_where=sql_text(
-                "task_type = 'reflect' AND status IN ('pending', 'processing')"
-            ),
+            index_where=sql_text("task_type = 'reflect' AND status IN ('pending', 'processing')"),
             set_={
                 'priority_lane': True,
                 'priority_score': func.greatest(

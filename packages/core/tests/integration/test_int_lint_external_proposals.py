@@ -430,9 +430,7 @@ async def test_merge_entities_action_resolves_through_registry(session: AsyncSes
 
 @pytest.mark.integration
 @pytest.mark.asyncio
-async def test_conflict_arbiter_resolves_under_generic_plan(
-    session: AsyncSession, metastore
-):
+async def test_conflict_arbiter_resolves_under_generic_plan(session: AsyncSession, metastore):
     """The ON CONFLICT arbiter must resolve under a *generic* query plan.
 
     This is the production failure mode that shipped in v1.0.0rc1: when the
