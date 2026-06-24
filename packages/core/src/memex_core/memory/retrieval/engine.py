@@ -475,6 +475,12 @@ class RetrievalEngine:
         self.queue_service = (
             ReflectionQueueService(config=reflection_config) if reflection_config else None
         )
+        # max_neighbors caps the 2nd-order fan-out; only the entity_cooccurrence
+        # strategy accepts it (causal/link_expansion don't), so forward it only
+        # for that type — the factory passes **kwargs straight to the constructor.
+        graph_kwargs: dict[str, Any] = {}
+        if self.retrieval_config.graph_retriever_type == 'entity_cooccurrence':
+            graph_kwargs['max_neighbors'] = self.retrieval_config.graph_max_neighbors
         self.strategies: dict[str, tuple[RetrievalStrategy, bool]] = {
             'semantic': (SemanticStrategy(), False),  # False = ASC (Distance)
             'keyword': (KeywordStrategy(), True),  # True = DESC (Score)
@@ -485,6 +491,7 @@ class RetrievalEngine:
                     similarity_threshold=self.retrieval_config.similarity_threshold,
                     temporal_decay_days=self.retrieval_config.temporal_decay_days,
                     temporal_decay_base=self.retrieval_config.temporal_decay_base,
+                    **graph_kwargs,
                 ),
                 True,
             ),  # True = DESC
@@ -534,6 +541,13 @@ class RetrievalEngine:
         Retrieve memories and synthesized observations using In-DB RRF.
         If a reranker is available, fetches a larger pool and re-ranks them.
         """
+        # Pin the pg_trgm similarity threshold for the graph strategy's seed-entity
+        # `%` matching. set_limit() mutates a SESSION-scoped GUC the pool does not
+        # reset, so without this the seed cutoff would non-deterministically inherit
+        # a value left by an earlier query on the same pooled connection (e.g.
+        # find_notes_by_title's 0.5). 0.3 == RetrievalConfig.similarity_threshold.
+        await session.exec(text('SELECT set_limit(0.3)'))
+
         _t = time.monotonic
 
         # 1. Query Expansion (Multi-Query)

@@ -616,6 +616,7 @@ class EntityCooccurrenceGraphStrategy:
         enable_semantic_seeding: bool = True,
         semantic_seed_top_k: int = 5,
         semantic_seed_weight: float = 0.7,
+        max_neighbors: int = 50,
     ):
         self.ner_model = ner_model
         self.similarity_threshold = similarity_threshold
@@ -624,6 +625,9 @@ class EntityCooccurrenceGraphStrategy:
         self.enable_semantic_seeding = enable_semantic_seeding
         self.semantic_seed_top_k = semantic_seed_top_k
         self.semantic_seed_weight = semantic_seed_weight
+        # Cap on 2nd-order co-occurrence neighbours (top-N by link_strength),
+        # bounding the same hub fan-out the note variant caps. See get_statement.
+        self.max_neighbors = max_neighbors
 
     def get_statement(
         self, query: str, query_embedding: list[float] | None, limit: int = 60, **kwargs: Any
@@ -728,7 +732,14 @@ class EntityCooccurrenceGraphStrategy:
                 func.ln(neighbor_cooc.c.cooc_count + 1) / func.ln(col(Entity.mention_count) + 2)
             ).label('link_strength'),
         ).join(Entity, col(Entity.id) == neighbor_cooc.c.neighbor_id)
-        co_occurrences = co_occur_stmt.cte('related_entities')
+        # Cap to top-N neighbours by link_strength before the 2nd-order join,
+        # bounding the hub fan-out (neighbor_cooc already aggregates cooccurrence
+        # per neighbour, so this is distinct-neighbour top-N).
+        co_occurrences = (
+            co_occur_stmt.order_by(text('link_strength DESC'))
+            .limit(self.max_neighbors)
+            .cte('related_entities')
+        )
 
         # 4. 2nd Order Memories (Indirect Link)
         second_order = (
@@ -939,56 +950,55 @@ class EntityCooccurrenceNoteGraphStrategy:
         # `UNION ALL` (vs `UNION`) keeps left/right branches disjoint per pair:
         # EntityCooccurrence enforces `CHECK (entity_id_1 < entity_id_2)`
         # (`sql_models.py`), so for a seed S the left branch (entity_id_1 = S)
-        # and right branch (entity_id_2 = S) never match the same row.
-        # CAVEAT: since migration 052 the PK is (entity_id_1, entity_id_2,
-        # vault_id) — a pair {S, N} has ONE row PER VAULT. Under multi-vault /
-        # God-Mode scope a neighbour N therefore appears once per matched vault,
-        # so the top-N cap below counts (neighbour, vault) rows, not distinct
-        # neighbours. The memory-unit variant pre-aggregates with GROUP BY +
-        # SUM(cooccurrence_count); the note variant does not yet (follow-up).
-        link_strength_expr = (
-            func.ln(col(EntityCooccurrence.cooccurrence_count) + 1)
-            / func.ln(col(Entity.mention_count) + 2)
-        ).label('link_strength')
-
-        left_co = (
+        # and right branch (entity_id_2 = S) never match the same row. Since
+        # migration 052 the PK is (entity_id_1, entity_id_2, vault_id) — a pair
+        # {S, N} has one row PER VAULT — so we carry the raw cooccurrence_count
+        # and mention_count here and AGGREGATE per distinct neighbour across
+        # vaults below (GROUP BY + SUM), matching the memory-unit variant, so the
+        # top-N cap counts distinct neighbours rather than (neighbour, vault) rows.
+        left_raw = (
             select(
                 col(EntityCooccurrence.entity_id_2).label('neighbor_id'),
-                link_strength_expr,
+                col(EntityCooccurrence.cooccurrence_count).label('cooc'),
+                col(Entity.mention_count).label('mention'),
             )
-            .join(
-                seed_entities,
-                col(EntityCooccurrence.entity_id_1) == seed_entities.c.id,
-            )
+            .join(seed_entities, col(EntityCooccurrence.entity_id_1) == seed_entities.c.id)
             .join(Entity, col(Entity.id) == col(EntityCooccurrence.entity_id_2))
         )
-        left_co = apply_vault_filters(left_co, EntityCooccurrence.vault_id, **kwargs)
-        left_co = _apply_as_of_filter(left_co, **kwargs)
+        left_raw = apply_vault_filters(left_raw, EntityCooccurrence.vault_id, **kwargs)
+        left_raw = _apply_as_of_filter(left_raw, **kwargs)
 
-        right_co = (
+        right_raw = (
             select(
                 col(EntityCooccurrence.entity_id_1).label('neighbor_id'),
-                link_strength_expr,
+                col(EntityCooccurrence.cooccurrence_count).label('cooc'),
+                col(Entity.mention_count).label('mention'),
             )
-            .join(
-                seed_entities,
-                col(EntityCooccurrence.entity_id_2) == seed_entities.c.id,
-            )
+            .join(seed_entities, col(EntityCooccurrence.entity_id_2) == seed_entities.c.id)
             .join(Entity, col(Entity.id) == col(EntityCooccurrence.entity_id_1))
         )
-        right_co = apply_vault_filters(right_co, EntityCooccurrence.vault_id, **kwargs)
-        right_co = _apply_as_of_filter(right_co, **kwargs)
+        right_raw = apply_vault_filters(right_raw, EntityCooccurrence.vault_id, **kwargs)
+        right_raw = _apply_as_of_filter(right_raw, **kwargs)
 
-        # Cap the neighbour set to the top-N by link_strength BEFORE the 2nd-order
-        # join. An uncapped hub entity (e.g. "Rituals", ~1.9k neighbours) fans out
-        # to ~90k intermediate rows through Chunk->Note->MemoryUnit->UnitEntity and
-        # ~2GB of buffer touches to return 60 results — the dominant driver of the
-        # note-search statement_timeout, multiplied further by multi-seed queries.
-        # Dropped neighbours carry the lowest link_strength (ln(cooc+1)/ln(mention+2))
-        # and contribute ~0 to the final score, so the cap is quality-preserving.
-        # It is a GLOBAL top-N (the UNION ALL has no per-seed grain).
+        raw_neighbors = union_all(left_raw, right_raw).subquery('doc_graph_raw_neighbors')
+
+        # Aggregate cooccurrence per DISTINCT neighbour across vaults, score, then
+        # cap to the top-N by link_strength BEFORE the 2nd-order join. An uncapped
+        # hub (e.g. "Rituals", ~1.9k neighbours) otherwise fans out to ~90k rows
+        # through Chunk->Note->MemoryUnit->UnitEntity (~2GB buffers for 60 results)
+        # — the dominant note-search statement_timeout driver, multiplied by
+        # multi-seed queries. Dropped neighbours carry the lowest link_strength
+        # (ln(sum_cooc+1)/ln(mention+2)) and contribute ~0 to the score, so the cap
+        # is quality-preserving. GLOBAL top-N (the seed set has no per-seed grain).
         co_occurrences = (
-            union_all(left_co, right_co)
+            select(
+                raw_neighbors.c.neighbor_id,
+                (
+                    func.ln(func.sum(raw_neighbors.c.cooc) + 1)
+                    / func.ln(raw_neighbors.c.mention + 2)
+                ).label('link_strength'),
+            )
+            .group_by(raw_neighbors.c.neighbor_id, raw_neighbors.c.mention)
             .order_by(text('link_strength DESC'))
             .limit(self.max_neighbors)
             .cte('doc_graph_related_entities')

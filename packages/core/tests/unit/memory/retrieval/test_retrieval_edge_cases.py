@@ -193,10 +193,16 @@ async def test_resonance_collection_error_still_returns_results(mock_embedder, m
     ):
         mock_rrf.return_value = [MagicMock(id=u1.id, type='unit')]
 
-        # Make session.exec raise on the entity lookup call (step 10)
-        # The first call(s) to session.exec are in _perform_rrf_retrieval
-        # which is mocked, so the only real call is the entity lookup.
-        mock_session.exec.side_effect = RuntimeError('DB error')
+        # Make session.exec raise on the entity lookup call (step 10).
+        # _perform_rrf_retrieval is mocked, so the real exec calls are: the
+        # retrieve()-level `SET set_limit` (let it through) and the entity lookup
+        # (fail it) — proving results still return when resonance collection errors.
+        def _exec_side_effect(stmt, *args, **kwargs):
+            if 'set_limit' in str(stmt):
+                return MagicMock()
+            raise RuntimeError('DB error')
+
+        mock_session.exec.side_effect = _exec_side_effect
 
         request = RetrievalRequest(query='test')
         results, resonance_ctx = await engine.retrieve(mock_session, request)
