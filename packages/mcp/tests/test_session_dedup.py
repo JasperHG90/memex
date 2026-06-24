@@ -274,3 +274,43 @@ async def test_note_search_no_degraded_warning_when_complete(mock_api):
 
     assert not any('degraded' in (item.get('tags') or []) for item in data)
     _session_dedup.clear()
+
+
+@pytest.mark.asyncio
+async def test_memory_search_surfaces_degraded_warning(mock_api):
+    """A degraded memory-search result set (timeout dropped graph/keyword) gets a
+    system-hint warning prepended so the agent knows the results are incomplete."""
+    _session_dedup.clear()
+    result1 = _make_search_result()
+    result1.degraded = True
+    result1.dropped_strategies = ['graph', 'keyword']
+    mock_api.search = AsyncMock(return_value=[result1])
+
+    async with Client(mcp) as client:
+        r = await client.call_tool(
+            'memex_memory_search', {'query': 'test', 'vault_ids': ['test-vault']}
+        )
+        data = parse_tool_result(r)
+
+    assert any('degraded' in (item.get('tags') or []) for item in data), 'degraded hint missing'
+    assert any('Partial results' in (item.get('text') or '') for item in data)
+    _session_dedup.clear()
+
+
+@pytest.mark.asyncio
+async def test_memory_search_no_degraded_warning_when_complete(mock_api):
+    """A normal (non-degraded) memory-search result set gets NO degradation warning."""
+    _session_dedup.clear()
+    result1 = _make_search_result()
+    result1.degraded = False
+    result1.dropped_strategies = []
+    mock_api.search = AsyncMock(return_value=[result1])
+
+    async with Client(mcp) as client:
+        r = await client.call_tool(
+            'memex_memory_search', {'query': 'test', 'vault_ids': ['test-vault']}
+        )
+        data = parse_tool_result(r)
+
+    assert not any('degraded' in (item.get('tags') or []) for item in data)
+    _session_dedup.clear()

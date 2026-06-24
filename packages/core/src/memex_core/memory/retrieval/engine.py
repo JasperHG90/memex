@@ -3,6 +3,7 @@ import logging
 import random
 import time
 from collections import defaultdict
+from contextvars import ContextVar
 from dataclasses import dataclass, field
 from uuid import UUID, uuid5
 import asyncio
@@ -91,6 +92,19 @@ def _is_statement_timeout(exc: DBAPIError) -> bool:
     """
     orig = getattr(exc, 'orig', None)
     return getattr(orig, 'sqlstate', None) == '57014'
+
+
+# Request-scoped accumulator for strategies the memory-search fallback dropped
+# (statement_timeout degradation). The server endpoint sets a fresh set() before
+# calling api.search and reads it after, so it can flag the returned units as
+# degraded. ContextVars are task-local — concurrent requests don't see each
+# other's value — and engine→endpoint runs in the SAME async task server-side,
+# so no signature threading through recall/search/api is needed. (Note-search
+# uses an explicit accumulator instead because its single search() method owns
+# the whole loop; memory's call chain is too deep for that to be clean.)
+_SEARCH_DEGRADED_DROPPED: ContextVar[set[str] | None] = ContextVar(
+    'memex_search_degraded_dropped', default=None
+)
 
 
 LOG_FLOOR_COMPOSITE_BOOST = 1e-9
@@ -1219,6 +1233,12 @@ class RetrievalEngine:
                 raise
             await session.rollback()
             active_names = set(self._resolve_active_strategies(strategies)[0].keys())
+            # Record the dropped expensive strategies so the endpoint can flag the
+            # response as degraded (no-op if no accumulator is set, e.g. exploration
+            # sub-queries or non-server callers).
+            _acc = _SEARCH_DEGRADED_DROPPED.get()
+            if _acc is not None:
+                _acc.update({'graph', 'keyword'} & active_names)
             fallback = [s for s in ('semantic', 'temporal') if s in active_names]
             if not fallback:
                 logger.error(

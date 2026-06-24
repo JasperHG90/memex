@@ -1797,6 +1797,27 @@ async def memex_memory_search(
         # Session-level dedup
         dedup = _get_session_dedup(ctx.session_id)
         output: list[McpFact | McpEvent | McpObservation] = []
+
+        # Surface a degradation warning if a search timeout forced retrieval to drop
+        # the graph/keyword signals — the agent must know the set is INCOMPLETE.
+        # (``is True`` guards against truthy MagicMock attrs in unit tests.)
+        if any(getattr(res, 'degraded', False) is True for res in results):
+            _dropped = sorted(
+                {s for res in results for s in getattr(res, 'dropped_strategies', None) or []}
+            )
+            output.append(
+                McpFact(
+                    id=UUID(int=0),
+                    text=(
+                        f'⚠️ Partial results — a statement timeout forced retrieval to drop the '
+                        f'{", ".join(_dropped) or "graph/keyword"} signal(s); these results are '
+                        'INCOMPLETE. Consider re-running the search or narrowing the query.'
+                    ),
+                    confidence=0.0,
+                    tags=['system-hint', 'degraded'],
+                )
+            )
+
         for res in results:
             mid = str(res.id)
             if not include_seen and mid in dedup.seen_memory_ids:
@@ -2006,7 +2027,9 @@ async def memex_note_search(
         # Surface a degradation warning if a search timeout forced retrieval to drop
         # the graph/keyword signals — the agent must know the set is INCOMPLETE.
         if any(getattr(d, 'degraded', False) is True for d in results):
-            _dropped = sorted({s for d in results for s in getattr(d, 'dropped_strategies', None) or []})
+            _dropped = sorted(
+                {s for d in results for s in getattr(d, 'dropped_strategies', None) or []}
+            )
             output.append(
                 McpNoteSearchResult(
                     note_id=UUID(int=0),

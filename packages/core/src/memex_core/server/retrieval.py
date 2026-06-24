@@ -11,6 +11,7 @@ from memex_common.exceptions import MemexError
 from memex_common.schemas import MemoryUnitDTO, RetrievalRequest
 
 from memex_core.api import MemexAPI
+from memex_core.memory.retrieval.engine import _SEARCH_DEGRADED_DROPPED
 from memex_core.server.auth import AuthContext, check_vault_access, get_auth_context, require_read
 from memex_core.server.common import (
     _handle_error,
@@ -39,31 +40,42 @@ async def search_memories(
     try:
         await check_vault_access(auth, request.vault_ids, api)
         t0 = time.monotonic()
-        units, resonance_task = await api.search(
-            query=request.query,
-            limit=request.limit,
-            vault_ids=request.vault_ids,
-            token_budget=request.token_budget,
-            strategies=request.strategies,
-            include_stale=request.include_stale,
-            include_superseded=request.include_superseded,
-            include_deprioritized=request.include_deprioritized,
-            apply_pre_filter=request.apply_pre_filter,
-            debug=request.debug,
-            after=request.after,
-            before=request.before,
-            tags=request.tags,
-            source_context=request.source_context,
-            reference_date=request.reference_date,
-            expand_query=request.expand_query,
-            # Use ``is not None`` rather than truthiness — IntentClass /
-            # RiskClass subclass ``str``, so an enum member with value ``''``
-            # would be falsy and silently coerce to None. No such member
-            # exists today, but the explicit check is the safe idiom.
-            intent_class=request.intent_class.value if request.intent_class is not None else None,
-            risk_class=request.risk_class.value if request.risk_class is not None else None,
-            include_system_vaults=request.include_system_vaults,
-        )
+        # Capture any strategies the engine's statement_timeout fallback dropped,
+        # so degraded (partial) results are flagged on the returned units. The
+        # ContextVar is task-local; the engine fallback updates this exact set
+        # because it runs in the same async task server-side.
+        dropped: set[str] = set()
+        _tok = _SEARCH_DEGRADED_DROPPED.set(dropped)
+        try:
+            units, resonance_task = await api.search(
+                query=request.query,
+                limit=request.limit,
+                vault_ids=request.vault_ids,
+                token_budget=request.token_budget,
+                strategies=request.strategies,
+                include_stale=request.include_stale,
+                include_superseded=request.include_superseded,
+                include_deprioritized=request.include_deprioritized,
+                apply_pre_filter=request.apply_pre_filter,
+                debug=request.debug,
+                after=request.after,
+                before=request.before,
+                tags=request.tags,
+                source_context=request.source_context,
+                reference_date=request.reference_date,
+                expand_query=request.expand_query,
+                # Use ``is not None`` rather than truthiness — IntentClass /
+                # RiskClass subclass ``str``, so an enum member with value ``''``
+                # would be falsy and silently coerce to None. No such member
+                # exists today, but the explicit check is the safe idiom.
+                intent_class=(
+                    request.intent_class.value if request.intent_class is not None else None
+                ),
+                risk_class=request.risk_class.value if request.risk_class is not None else None,
+                include_system_vaults=request.include_system_vaults,
+            )
+        finally:
+            _SEARCH_DEGRADED_DROPPED.reset(_tok)
         t_search = time.monotonic() - t0
 
         if resonance_task is not None:
@@ -71,6 +83,13 @@ async def search_memories(
 
         t0 = time.monotonic()
         dtos = [build_memory_unit_dto(u, debug=request.debug) for u in units]
+        # Flag partial results when the engine dropped expensive strategies on a
+        # statement_timeout, so the agent knows the answer may be incomplete.
+        if dropped:
+            dropped_sorted = sorted(dropped)
+            for d in dtos:
+                d.degraded = True
+                d.dropped_strategies = dropped_sorted
         t_serialize = time.monotonic() - t0
 
         logger.warning(

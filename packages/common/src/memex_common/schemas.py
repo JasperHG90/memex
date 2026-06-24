@@ -589,6 +589,18 @@ class MemoryUnitDTO(MemoryUnitBase):
         description='Per-strategy attribution when debug=True. None when debug is off.',
     )
 
+    degraded: bool = Field(
+        default=False,
+        description='True when this result set is INCOMPLETE: a statement_timeout forced '
+        'retrieval to drop the graph/keyword signals (see dropped_strategies). The caller '
+        'should treat results as partial and may re-query.',
+    )
+    dropped_strategies: list[str] = Field(
+        default_factory=list,
+        description='Retrieval strategies dropped due to a timeout fallback (e.g. graph, keyword). '
+        'Empty unless degraded is True.',
+    )
+
     confidence: float = Field(
         default=1.0,
         description='Confidence score (0.0-1.0). Clamped by model validator.',

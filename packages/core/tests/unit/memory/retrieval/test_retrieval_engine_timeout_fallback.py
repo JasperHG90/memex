@@ -13,7 +13,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 from sqlalchemy.exc import DBAPIError
 
-from memex_core.memory.retrieval.engine import RetrievalEngine
+from memex_core.memory.retrieval.engine import _SEARCH_DEGRADED_DROPPED, RetrievalEngine
 
 
 class _TimeoutOrig(Exception):
@@ -54,6 +54,45 @@ async def test_rrf_returns_empty_when_fallback_also_times_out() -> None:
 
     assert out == []
     assert session.rollback.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_rrf_records_dropped_strategies_into_contextvar() -> None:
+    """On the timeout fallback the engine records the dropped expensive signals into
+    the request-scoped accumulator, so the server endpoint can flag results degraded."""
+    engine = RetrievalEngine(embedder=MagicMock(), reranker=None)
+    session = AsyncMock()
+    fallback_items = [MagicMock()]
+
+    dropped: set[str] = set()
+    tok = _SEARCH_DEGRADED_DROPPED.set(dropped)
+    try:
+        with patch.object(
+            engine, '_perform_rrf_retrieval_inner', new_callable=AsyncMock
+        ) as inner:
+            inner.side_effect = [_timeout_error(), fallback_items]
+            await engine._perform_rrf_retrieval(session, 'q', [0.0] * 4, 10, {})
+    finally:
+        _SEARCH_DEGRADED_DROPPED.reset(tok)
+
+    assert dropped == {'graph', 'keyword'}
+
+
+@pytest.mark.asyncio
+async def test_rrf_no_contextvar_is_noop() -> None:
+    """With no accumulator set (exploration sub-queries, non-server callers) the
+    fallback still works and does not raise."""
+    engine = RetrievalEngine(embedder=MagicMock(), reranker=None)
+    session = AsyncMock()
+    fallback_items = [MagicMock()]
+
+    # No _SEARCH_DEGRADED_DROPPED.set() — default is None.
+    assert _SEARCH_DEGRADED_DROPPED.get() is None
+    with patch.object(engine, '_perform_rrf_retrieval_inner', new_callable=AsyncMock) as inner:
+        inner.side_effect = [_timeout_error(), fallback_items]
+        out = await engine._perform_rrf_retrieval(session, 'q', [0.0] * 4, 10, {})
+
+    assert out == fallback_items
 
 
 @pytest.mark.asyncio
