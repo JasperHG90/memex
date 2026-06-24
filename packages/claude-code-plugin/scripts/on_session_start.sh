@@ -140,17 +140,34 @@ briefing_args=(briefing --budget 2000 --app claude-code)
 # Guard with -n so the disabled-briefing path (tmp_briefing never assigned)
 # doesn't spawn a noisy `rm -f ""` warning on exit. ---
 tmp_briefing=''
-trap '[ -n "$tmp_briefing" ] && rm -f "$tmp_briefing"' EXIT
+tmp_briefing_err=''
+trap '[ -n "$tmp_briefing" ] && rm -f "$tmp_briefing"; [ -n "$tmp_briefing_err" ] && rm -f "$tmp_briefing_err"' EXIT
 
 # --- Fetch dynamic session briefing (per-vault state from the server) ---
 briefing_content=""
 if [ "$_briefing_disabled" -eq 0 ]; then
     tmp_briefing=$(mktemp)
+    tmp_briefing_err=$(mktemp)
 
-    if ! memex "${briefing_args[@]}" > "$tmp_briefing" 2>/dev/null; then
-        cat <<'EOF'
-{"systemMessage": "Memex server is not reachable. Start it with:\n  memex server start -d\n\nMemex MCP tools will not work until the server is running."}
+    if ! memex "${briefing_args[@]}" > "$tmp_briefing" 2>"$tmp_briefing_err"; then
+        # Don't blame the server for every failure. An old `memex` that doesn't
+        # understand a newer plugin's flags (e.g. `--app`), a missing CLI, or bad
+        # args all exit non-zero too — the old code piped stderr to /dev/null and
+        # always printed "server unreachable", which sent debugging down the wrong
+        # path. Classify from CLI presence + the captured stderr instead.
+        if ! command -v memex >/dev/null 2>&1; then
+            cat <<'EOF'
+{"systemMessage": "Memex CLI not found on PATH — MCP tools will not work. Install or upgrade it (e.g. `uv tool upgrade memex` / `pipx upgrade memex`)."}
 EOF
+        elif grep -qiE 'no such option|no such command|unexpected extra argument|missing argument|usage:' "$tmp_briefing_err"; then
+            cat <<'EOF'
+{"systemMessage": "Memex briefing failed: the installed `memex` CLI doesn't understand this plugin's briefing command — a plugin/CLI version mismatch (the plugin is newer than your CLI). Upgrade the CLI to match: `uv tool upgrade memex` (or `pipx upgrade memex`). Run `memex briefing --budget 2000 --app claude-code` to see the exact error."}
+EOF
+        else
+            cat <<'EOF'
+{"systemMessage": "Memex server is not reachable. Start it with:\n  memex server start -d\n\nMemex MCP tools will not work until the server is running. (If the server IS running, run `memex briefing --budget 2000 --app claude-code` manually to see the real error.)"}
+EOF
+        fi
         exit 0
     fi
 
