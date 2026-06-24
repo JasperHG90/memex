@@ -725,6 +725,7 @@ class RetrievalEngine:
                     strategies=request.strategies,
                     strategy_weights=request.strategy_weights,
                     debug_ctx=debug_ctx,
+                    record_degraded=True,
                 )
             else:
                 items = await self._perform_rrf_retrieval(
@@ -736,6 +737,7 @@ class RetrievalEngine:
                     strategies=request.strategies,
                     strategy_weights=request.strategy_weights,
                     debug_ctx=debug_ctx,
+                    record_degraded=True,
                 )
             # Weighted candidates for multi-query fusion
             all_ranked_items.append((items, q_weight))
@@ -768,6 +770,7 @@ class RetrievalEngine:
                         strategies=request.strategies,
                         strategy_weights=request.strategy_weights,
                         debug_ctx=debug_ctx,
+                        record_degraded=True,
                     )
                 else:
                     items = await self._perform_rrf_retrieval(
@@ -779,6 +782,7 @@ class RetrievalEngine:
                         strategies=request.strategies,
                         strategy_weights=request.strategy_weights,
                         debug_ctx=debug_ctx,
+                        record_degraded=True,
                     )
                 all_ranked_items.append((items, q_weight))
             fused_items = self._fuse_multi_query_results(all_ranked_items, candidate_depth)
@@ -1207,6 +1211,7 @@ class RetrievalEngine:
         strategies: list[str] | None = None,
         strategy_weights: dict[str, float] | None = None,
         debug_ctx: DebugContext | None = None,
+        record_degraded: bool = False,
     ) -> Sequence[Any]:
         """RRF retrieval with graceful degradation on statement_timeout.
 
@@ -1234,11 +1239,16 @@ class RetrievalEngine:
             await session.rollback()
             active_names = set(self._resolve_active_strategies(strategies)[0].keys())
             # Record the dropped expensive strategies so the endpoint can flag the
-            # response as degraded (no-op if no accumulator is set, e.g. exploration
-            # sub-queries or non-server callers).
-            _acc = _SEARCH_DEGRADED_DROPPED.get()
-            if _acc is not None:
-                _acc.update({'graph', 'keyword'} & active_names)
+            # response as degraded — but ONLY for the primary retrieval
+            # (``record_degraded=True``). Supplementary passes (exploration bypass,
+            # mental-model sub-fetch) run AFTER the main results are already complete
+            # and at a deeper, more timeout-prone depth; letting them write would
+            # falsely flag a complete result set as partial. No-op when no accumulator
+            # is set (non-server callers: CLI, eval, direct api).
+            if record_degraded:
+                _acc = _SEARCH_DEGRADED_DROPPED.get()
+                if _acc is not None:
+                    _acc.update({'graph', 'keyword'} & active_names)
             fallback = [s for s in ('semantic', 'temporal') if s in active_names]
             if not fallback:
                 logger.error(
@@ -1405,6 +1415,7 @@ class RetrievalEngine:
         strategies: list[str] | None = None,
         strategy_weights: dict[str, float] | None = None,
         debug_ctx: DebugContext | None = None,
+        record_degraded: bool = False,
     ) -> Sequence[Any]:
         """Run RRF independently per fact type, then interleave results.
 
@@ -1445,6 +1456,7 @@ class RetrievalEngine:
                         strategies=unit_only_strategies,
                         strategy_weights=strategy_weights,
                         debug_ctx=debug_ctx,
+                        record_degraded=record_degraded,
                     )
 
             per_type_results = list(await asyncio.gather(*[_run_ft(ft) for ft in fact_types]))
@@ -1461,6 +1473,7 @@ class RetrievalEngine:
                     strategies=unit_only_strategies,
                     strategy_weights=strategy_weights,
                     debug_ctx=debug_ctx,
+                    record_degraded=record_degraded,
                 )
                 per_type_results.append(result)
 
@@ -1476,6 +1489,7 @@ class RetrievalEngine:
                 strategies=['mental_model'],
                 strategy_weights=strategy_weights,
                 debug_ctx=debug_ctx,
+                record_degraded=record_degraded,
             )
             mm_results = mm_items
 

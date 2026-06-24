@@ -58,8 +58,9 @@ async def test_rrf_returns_empty_when_fallback_also_times_out() -> None:
 
 @pytest.mark.asyncio
 async def test_rrf_records_dropped_strategies_into_contextvar() -> None:
-    """On the timeout fallback the engine records the dropped expensive signals into
-    the request-scoped accumulator, so the server endpoint can flag results degraded."""
+    """On the timeout fallback the PRIMARY retrieval (record_degraded=True) records the
+    dropped expensive signals into the request-scoped accumulator, so the server
+    endpoint can flag results degraded."""
     engine = RetrievalEngine(embedder=MagicMock(), reranker=None)
     session = AsyncMock()
     fallback_items = [MagicMock()]
@@ -67,11 +68,11 @@ async def test_rrf_records_dropped_strategies_into_contextvar() -> None:
     dropped: set[str] = set()
     tok = _SEARCH_DEGRADED_DROPPED.set(dropped)
     try:
-        with patch.object(
-            engine, '_perform_rrf_retrieval_inner', new_callable=AsyncMock
-        ) as inner:
+        with patch.object(engine, '_perform_rrf_retrieval_inner', new_callable=AsyncMock) as inner:
             inner.side_effect = [_timeout_error(), fallback_items]
-            await engine._perform_rrf_retrieval(session, 'q', [0.0] * 4, 10, {})
+            await engine._perform_rrf_retrieval(
+                session, 'q', [0.0] * 4, 10, {}, record_degraded=True
+            )
     finally:
         _SEARCH_DEGRADED_DROPPED.reset(tok)
 
@@ -79,9 +80,32 @@ async def test_rrf_records_dropped_strategies_into_contextvar() -> None:
 
 
 @pytest.mark.asyncio
+async def test_rrf_does_not_record_when_record_degraded_false() -> None:
+    """A SUPPLEMENTARY pass (exploration bypass / mental-model sub-fetch, the
+    default record_degraded=False) must NOT touch the accumulator even when one is
+    set — otherwise a bypass-only timeout would falsely flag complete main results
+    as degraded. This is the false-positive guard."""
+    engine = RetrievalEngine(embedder=MagicMock(), reranker=None)
+    session = AsyncMock()
+    fallback_items = [MagicMock()]
+
+    dropped: set[str] = set()
+    tok = _SEARCH_DEGRADED_DROPPED.set(dropped)
+    try:
+        with patch.object(engine, '_perform_rrf_retrieval_inner', new_callable=AsyncMock) as inner:
+            inner.side_effect = [_timeout_error(), fallback_items]
+            out = await engine._perform_rrf_retrieval(session, 'q', [0.0] * 4, 10, {})
+    finally:
+        _SEARCH_DEGRADED_DROPPED.reset(tok)
+
+    assert out == fallback_items, 'fallback still degrades silently'
+    assert dropped == set(), 'supplementary pass must not record into the accumulator'
+
+
+@pytest.mark.asyncio
 async def test_rrf_no_contextvar_is_noop() -> None:
-    """With no accumulator set (exploration sub-queries, non-server callers) the
-    fallback still works and does not raise."""
+    """With no accumulator set (non-server callers) the fallback still works and does
+    not raise, even for the primary path."""
     engine = RetrievalEngine(embedder=MagicMock(), reranker=None)
     session = AsyncMock()
     fallback_items = [MagicMock()]
@@ -90,7 +114,9 @@ async def test_rrf_no_contextvar_is_noop() -> None:
     assert _SEARCH_DEGRADED_DROPPED.get() is None
     with patch.object(engine, '_perform_rrf_retrieval_inner', new_callable=AsyncMock) as inner:
         inner.side_effect = [_timeout_error(), fallback_items]
-        out = await engine._perform_rrf_retrieval(session, 'q', [0.0] * 4, 10, {})
+        out = await engine._perform_rrf_retrieval(
+            session, 'q', [0.0] * 4, 10, {}, record_degraded=True
+        )
 
     assert out == fallback_items
 

@@ -85,6 +85,10 @@ async def search_memories(
         dtos = [build_memory_unit_dto(u, debug=request.debug) for u in units]
         # Flag partial results when the engine dropped expensive strategies on a
         # statement_timeout, so the agent knows the answer may be incomplete.
+        # LIMITATION: the signal rides on the per-unit DTOs, so a fallback that
+        # returns ZERO units cannot carry it (same as the note-search path). An
+        # empty degraded response is indistinguishable from a genuine no-match here;
+        # the loud server-side ERROR log remains the operator signal for that case.
         if dropped:
             dropped_sorted = sorted(dropped)
             for d in dtos:
