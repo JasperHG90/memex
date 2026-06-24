@@ -168,11 +168,14 @@ class NoteSearchEngine:
         else:
             pool_size = max(limit * 2, CANDIDATE_POOL_SIZE)
 
-        # 3. Run search per query and collect scored chunks
+        # 3. Run search per query and collect scored chunks. `dropped` accumulates
+        # any strategies a per-query timeout fallback removed, surfaced below as
+        # NoteSearchResult.degraded so the caller/agent knows the result is partial.
         all_chunk_batches: list[tuple[list[Any], float]] = []
+        dropped: set[str] = set()
         for q, q_emb, q_weight in zip(queries, all_embeddings, query_weights):
             chunk_results = await self._search_single_query_with_fallback(
-                session, q, q_emb.tolist(), pool_size, request
+                session, q, q_emb.tolist(), pool_size, request, dropped
             )
             if chunk_results:
                 all_chunk_batches.append((chunk_results, q_weight))
@@ -249,6 +252,13 @@ class NoteSearchEngine:
             for r in results:
                 r.related_notes = related_map.get(r.note_id, [])
                 r.links = links_map.get(r.note_id, [])
+
+        if dropped:
+            # A timeout fallback ran without the graph/keyword signal — flag every
+            # result so the caller/agent treats the set as incomplete.
+            for r in results:
+                r.degraded = True
+                r.dropped_strategies = sorted(dropped)
 
         return results
 
@@ -422,6 +432,7 @@ class NoteSearchEngine:
         query_embedding: list[float],
         pool_size: int,
         request: NoteSearchRequest,
+        dropped: set[str],
     ) -> list[Any]:
         """Run the full hybrid query; on statement_timeout degrade to the cheap
         signals (semantic + temporal) instead of failing the whole request.
@@ -430,6 +441,8 @@ class NoteSearchEngine:
         query still return semantic results. A cancelled statement aborts the
         transaction, so we roll back before retrying. If the fallback also times
         out this query contributes nothing — sibling queries may still succeed.
+        ``dropped`` is a caller-owned accumulator of the strategies removed on
+        degradation, surfaced as ``NoteSearchResult.degraded`` so the agent knows.
         """
         try:
             return await self._search_single_query(
@@ -439,14 +452,19 @@ class NoteSearchEngine:
             if not _is_statement_timeout(exc):
                 raise
             await session.rollback()
+            # Record the degradation for the response signal regardless of branch.
+            dropped.update({'graph', 'keyword'} & set(request.strategies))
             fallback = {'semantic', 'temporal'} & set(request.strategies)
             if not fallback:
-                logger.warning(
-                    'Hybrid note-search timed out and no cheap signal is enabled; skipping query'
+                logger.error(
+                    'Hybrid note-search hit statement_timeout and no cheap signal is enabled; '
+                    'this query returns NOTHING (incomplete results).'
                 )
                 return []
-            logger.warning(
-                'Hybrid note-search timed out; degrading to %s for this query', sorted(fallback)
+            logger.error(
+                'Hybrid note-search hit statement_timeout — retrying WITHOUT the graph + keyword '
+                'strategies (degraded to %s). Results for this query are INCOMPLETE.',
+                sorted(fallback),
             )
             try:
                 return await self._search_single_query(
@@ -456,7 +474,7 @@ class NoteSearchEngine:
                 if not _is_statement_timeout(exc2):
                     raise
                 await session.rollback()
-                logger.warning('Semantic fallback also timed out; skipping this query')
+                logger.error('Semantic fallback ALSO timed out; this query returns nothing.')
                 return []
 
     async def _search_single_query(

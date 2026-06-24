@@ -1268,6 +1268,17 @@ class NoteSearchResult(BaseModel):
     )
     related_notes: list[RelatedNoteDTO] = Field(default_factory=list)
     links: list[MemoryLinkDTO] = Field(default_factory=list)
+    degraded: bool = Field(
+        default=False,
+        description='True when this result set is INCOMPLETE: a statement_timeout forced '
+        'retrieval to drop the graph/keyword signals (see dropped_strategies). The caller '
+        'should treat results as partial and may re-query.',
+    )
+    dropped_strategies: list[str] = Field(
+        default_factory=list,
+        description='Retrieval strategies dropped due to a timeout fallback (e.g. graph, keyword). '
+        'Empty unless degraded is True.',
+    )
 
 
 class NoteSearchRequest(BaseModel):

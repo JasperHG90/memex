@@ -2002,6 +2002,25 @@ async def memex_note_search(
         # Session-level dedup
         dedup = _get_session_dedup(ctx.session_id)
         output: list[McpNoteSearchResult] = []
+
+        # Surface a degradation warning if a search timeout forced retrieval to drop
+        # the graph/keyword signals — the agent must know the set is INCOMPLETE.
+        if any(getattr(d, 'degraded', False) is True for d in results):
+            _dropped = sorted({s for d in results for s in getattr(d, 'dropped_strategies', None) or []})
+            output.append(
+                McpNoteSearchResult(
+                    note_id=UUID(int=0),
+                    title='⚠️ Partial results — search degraded',
+                    score=0.0,
+                    description=(
+                        f'A statement timeout forced retrieval to drop the '
+                        f'{", ".join(_dropped) or "graph/keyword"} signal(s); these results are '
+                        'INCOMPLETE. Consider re-running the search or narrowing the query.'
+                    ),
+                    tags=['system-hint', 'degraded'],
+                )
+            )
+
         for doc in results:
             nid = str(doc.note_id)
             if not include_seen and nid in dedup.seen_note_ids:

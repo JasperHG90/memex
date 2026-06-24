@@ -1221,11 +1221,16 @@ class RetrievalEngine:
             active_names = set(self._resolve_active_strategies(strategies)[0].keys())
             fallback = [s for s in ('semantic', 'temporal') if s in active_names]
             if not fallback:
-                logger.warning(
-                    'Memory retrieval timed out and no cheap signal is enabled; returning none'
+                logger.error(
+                    'Memory search hit statement_timeout and no cheap signal is enabled; '
+                    'this query returns NOTHING (incomplete results).'
                 )
                 return []
-            logger.warning('Memory retrieval timed out; degrading to %s for this query', fallback)
+            logger.error(
+                'Memory search hit statement_timeout — retrying WITHOUT the graph + keyword '
+                'strategies (degraded to %s). Results for this query are INCOMPLETE.',
+                fallback,
+            )
             try:
                 return await self._perform_rrf_retrieval_inner(
                     session,
@@ -1241,7 +1246,7 @@ class RetrievalEngine:
                 if not _is_statement_timeout(exc2):
                     raise
                 await session.rollback()
-                logger.warning('Semantic fallback also timed out; returning none for this query')
+                logger.error('Semantic fallback ALSO timed out; this query returns nothing.')
                 return []
 
     async def _perform_rrf_retrieval_inner(

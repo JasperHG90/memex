@@ -37,15 +37,20 @@ async def test_fallback_degrades_to_cheap_signals_on_timeout() -> None:
     session = AsyncMock()
     fallback_results = [MagicMock()]
 
+    dropped: set[str] = set()
     with patch.object(engine, '_search_single_query', new_callable=AsyncMock) as inner:
         inner.side_effect = [_timeout_error(), fallback_results]
-        out = await engine._search_single_query_with_fallback(session, 'x', [0.0] * 4, 10, request)
+        out = await engine._search_single_query_with_fallback(
+            session, 'x', [0.0] * 4, 10, request, dropped
+        )
 
     assert out == fallback_results, 'returns the fallback results instead of raising'
     session.rollback.assert_awaited()  # aborted txn cleared before retry
     # The retry dropped graph + keyword, keeping only the cheap signals.
     _, kwargs = inner.call_args
     assert kwargs.get('active_override') == {'semantic', 'temporal'}
+    # The dropped strategies are recorded for the degraded response signal.
+    assert dropped == {'graph', 'keyword'}
 
 
 @pytest.mark.asyncio
@@ -54,12 +59,16 @@ async def test_returns_empty_when_fallback_also_times_out() -> None:
     request = NoteSearchRequest(query='x')
     session = AsyncMock()
 
+    dropped: set[str] = set()
     with patch.object(engine, '_search_single_query', new_callable=AsyncMock) as inner:
         inner.side_effect = [_timeout_error(), _timeout_error()]
-        out = await engine._search_single_query_with_fallback(session, 'x', [0.0] * 4, 10, request)
+        out = await engine._search_single_query_with_fallback(
+            session, 'x', [0.0] * 4, 10, request, dropped
+        )
 
     assert out == [], 'both timed out -> this query contributes nothing, but no raise'
     assert session.rollback.await_count == 2
+    assert dropped == {'graph', 'keyword'}
 
 
 @pytest.mark.asyncio
@@ -72,4 +81,6 @@ async def test_non_timeout_db_error_propagates() -> None:
     with patch.object(engine, '_search_single_query', new_callable=AsyncMock) as inner:
         inner.side_effect = DBAPIError('stmt', {}, ValueError('not a timeout'))
         with pytest.raises(DBAPIError):
-            await engine._search_single_query_with_fallback(session, 'x', [0.0] * 4, 10, request)
+            await engine._search_single_query_with_fallback(
+                session, 'x', [0.0] * 4, 10, request, set()
+            )
