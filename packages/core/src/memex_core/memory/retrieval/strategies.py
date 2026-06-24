@@ -936,12 +936,16 @@ class EntityCooccurrenceNoteGraphStrategy:
         # UNION ALL of two single-side joins — each branch uses its own
         # btree, and the planner sees the small per-side cardinality.
         #
-        # `UNION ALL` (vs `UNION`) is safe here because EntityCooccurrence
-        # enforces `CHECK (entity_id_1 < entity_id_2)` at
-        # `sql_models.py:1164` — each unordered pair {X, Y} appears in
-        # exactly one row, so for any given seed S the left branch
-        # (entity_id_1 = S) and the right branch (entity_id_2 = S) match
-        # disjoint sets of rows. No (neighbor_id, link_strength) duplicates.
+        # `UNION ALL` (vs `UNION`) keeps left/right branches disjoint per pair:
+        # EntityCooccurrence enforces `CHECK (entity_id_1 < entity_id_2)`
+        # (`sql_models.py`), so for a seed S the left branch (entity_id_1 = S)
+        # and right branch (entity_id_2 = S) never match the same row.
+        # CAVEAT: since migration 052 the PK is (entity_id_1, entity_id_2,
+        # vault_id) — a pair {S, N} has ONE row PER VAULT. Under multi-vault /
+        # God-Mode scope a neighbour N therefore appears once per matched vault,
+        # so the top-N cap below counts (neighbour, vault) rows, not distinct
+        # neighbours. The memory-unit variant pre-aggregates with GROUP BY +
+        # SUM(cooccurrence_count); the note variant does not yet (follow-up).
         link_strength_expr = (
             func.ln(col(EntityCooccurrence.cooccurrence_count) + 1)
             / func.ln(col(Entity.mention_count) + 2)

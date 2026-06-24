@@ -616,6 +616,14 @@ class NoteSearchEngine:
             .limit(pool_size)
         )
 
+        # Pin the pg_trgm similarity threshold for this query's seed-entity `%`
+        # matching (build_seed_entity_cte). set_limit() mutates a SESSION-scoped
+        # GUC that the connection pool does NOT reset, so without this the seed
+        # cutoff would non-deterministically inherit whatever an earlier query on
+        # the same pooled connection set (e.g. find_notes_by_title's 0.5). 0.3
+        # matches RetrievalConfig.similarity_threshold and entity_resolver.
+        await session.exec(text('SELECT set_limit(0.3)'))
+
         result = await session.exec(final_stmt)
         return list(result.all())
 

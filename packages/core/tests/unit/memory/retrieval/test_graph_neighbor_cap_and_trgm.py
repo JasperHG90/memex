@@ -68,9 +68,14 @@ def test_note_graph_caps_neighbors_by_max_neighbors() -> None:
         dialect=postgresql.dialect()
     )
     sql = str(compiled)
-    assert 'doc_graph_related_entities' in sql
-    assert 'LIMIT' in sql
-    # The cap value is bound as a parameter on the neighbour CTE.
+    compact = ' '.join(sql.split())
+    # Structural: the neighbour CTE is ordered by link_strength and LIMITed — this
+    # exact fragment is unique to the cap (the final union orders by `score DESC`),
+    # so it goes red if the .order_by(...).limit(...) cap is removed. Not a
+    # coincidental param-value match.
+    assert 'doc_graph_related_entities' in compact
+    assert 'ORDER BY link_strength DESC LIMIT' in compact
+    # And the cap value is the configured one.
     assert distinctive_cap in list(compiled.params.values())
 
 
