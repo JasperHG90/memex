@@ -14,6 +14,7 @@ import numpy as np
 import tiktoken
 from cachetools import TTLCache
 from sqlalchemy import func, literal, text, union_all
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.orm import defer, selectinload
 from sqlalchemy.sql.elements import TextClause
 from sqlmodel import select, col
@@ -78,6 +79,19 @@ from memex_core.metrics import (
 )
 
 logger = logging.getLogger('memex.core.memory.retrieval.engine')
+
+
+def _is_statement_timeout(exc: DBAPIError) -> bool:
+    """True if the DBAPIError is a Postgres statement_timeout.
+
+    The asyncpg dialect wraps the QueryCanceledError in a generic adapter ``Error``
+    whose type name is NOT 'QueryCanceledError', so match on SQLSTATE 57014
+    (query_canceled). (Same helper as document_search; kept local to avoid a
+    cross-engine import.)
+    """
+    orig = getattr(exc, 'orig', None)
+    return getattr(orig, 'sqlstate', None) == '57014'
+
 
 LOG_FLOOR_COMPOSITE_BOOST = 1e-9
 
@@ -1170,6 +1184,67 @@ class RetrievalEngine:
         return result.all()
 
     async def _perform_rrf_retrieval(
+        self,
+        session: AsyncSession,
+        query: str,
+        query_embedding: list[float],
+        limit: int,
+        filters: dict[str, Any],
+        strategies: list[str] | None = None,
+        strategy_weights: dict[str, float] | None = None,
+        debug_ctx: DebugContext | None = None,
+    ) -> Sequence[Any]:
+        """RRF retrieval with graceful degradation on statement_timeout.
+
+        On a Postgres statement_timeout (the graph strategy's seed/2-hop work is
+        the usual culprit) the aborted transaction is rolled back and the query is
+        retried with only the cheap signals (semantic + temporal), so memory search
+        degrades to partial results instead of failing with QueryCanceledError —
+        mirroring the note-search fallback in document_search. Non-timeout errors
+        propagate; for normal queries the path is unchanged.
+        """
+        try:
+            return await self._perform_rrf_retrieval_inner(
+                session,
+                query,
+                query_embedding,
+                limit,
+                filters,
+                strategies,
+                strategy_weights,
+                debug_ctx,
+            )
+        except DBAPIError as exc:
+            if not _is_statement_timeout(exc):
+                raise
+            await session.rollback()
+            active_names = set(self._resolve_active_strategies(strategies)[0].keys())
+            fallback = [s for s in ('semantic', 'temporal') if s in active_names]
+            if not fallback:
+                logger.warning(
+                    'Memory retrieval timed out and no cheap signal is enabled; returning none'
+                )
+                return []
+            logger.warning('Memory retrieval timed out; degrading to %s for this query', fallback)
+            try:
+                return await self._perform_rrf_retrieval_inner(
+                    session,
+                    query,
+                    query_embedding,
+                    limit,
+                    filters,
+                    fallback,
+                    strategy_weights,
+                    debug_ctx,
+                )
+            except DBAPIError as exc2:
+                if not _is_statement_timeout(exc2):
+                    raise
+                await session.rollback()
+                logger.warning('Semantic fallback also timed out; returning none for this query')
+                return []
+
+    async def _perform_rrf_retrieval_inner(
         self,
         session: AsyncSession,
         query: str,

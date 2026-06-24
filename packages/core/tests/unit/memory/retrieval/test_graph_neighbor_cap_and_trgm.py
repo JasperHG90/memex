@@ -130,3 +130,26 @@ def test_seed_query_truncated_before_like_and_windowing() -> None:
     # LIKE pattern is '%<truncated>%'; nothing should carry the full 40k query.
     assert str_params, 'fallback should bind at least the LIKE/% query param'
     assert max(len(v) for v in str_params) <= 1024 + 4, 'query must be truncated before binding'
+
+
+def test_seed_cap_is_noop_for_normal_query() -> None:
+    """No retrieval degradation for normal queries: a sub-cap entity list passes
+    through unchanged — every name is retained, none dropped. The cap only bites
+    pathological document-as-query searches."""
+    from memex_core.memory.retrieval.strategies import build_seed_entity_cte
+
+    names = [{'word': w} for w in ('mcp', 'anthropic', 'claude', 'rituals', 'memex')]
+    cte = build_seed_entity_cte(
+        query='how does mcp work with anthropic claude',
+        ner_model=None,
+        similarity_threshold=0.3,
+        include_ilike=False,
+        enable_semantic_seeding=False,
+        pre_extracted_entities=names,
+    )
+    compiled = select(cte.c.id).compile(
+        dialect=postgresql.dialect(), compile_kwargs={'render_postcompile': True}
+    )
+    bound = set(compiled.params.values())
+    for w in ('mcp', 'anthropic', 'claude', 'rituals', 'memex'):
+        assert w in bound, f'sub-cap query must retain every seed name; missing {w!r}'
