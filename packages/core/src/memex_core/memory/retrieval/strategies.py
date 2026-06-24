@@ -327,6 +327,17 @@ def build_semantic_seed_cte(
 # ---------------------------------------------------------------------------
 
 
+# Safety bounds for seed-entity resolution. A document-sized search query (e.g.
+# an agent passing a whole note as the query string) otherwise makes NER emit
+# thousands of names; the per-name OR/IN below then produces a multi-thousand-
+# parameter statement that times out (observed: ~3,200 params in prod, note-search
+# path). These cap the query length used for NER/windowing/LIKE and the distinct
+# seed-name count. For normal queries (< the cap) both are no-ops. Promotable to
+# config if a deployment needs tuning.
+_MAX_SEED_QUERY_CHARS = 1024
+_MAX_SEED_ENTITIES = 64
+
+
 def _build_ner_seeds(
     query: str,
     ner_model: FastNERModel | None,
@@ -348,25 +359,29 @@ def _build_ner_seeds(
     Returns:
         A ``Select | CompoundSelect`` producing a single ``id`` column.
     """
+    # Bound the query used for NER prediction, token windowing, and the LIKE
+    # fallback. A document-sized query otherwise explodes all three.
+    query = query[:_MAX_SEED_QUERY_CHARS]
+
     extracted_names: list[str] = []
     extracted_phonetics: list[str] = []
 
     if pre_extracted_entities is not None:
         extracted_names = [e['word'] for e in pre_extracted_entities]
-        for name in extracted_names:
-            p_code = get_phonetic_code(name)
-            if p_code:
-                extracted_phonetics.append(p_code)
     elif ner_model:
         try:
-            extracted = ner_model.predict(query)
-            extracted_names = [e['word'] for e in extracted]
-            for name in extracted_names:
-                p_code = get_phonetic_code(name)
-                if p_code:
-                    extracted_phonetics.append(p_code)
+            extracted_names = [e['word'] for e in ner_model.predict(query)]
         except (ValueError, RuntimeError, OSError) as e:
             logger.warning(f'NER extraction failed: {e}. Falling back to naive search.')
+
+    # Dedupe + top-K cap: bounds the per-name OR/IN explosion regardless of the
+    # caller. Covers BOTH the pre-extracted list (the MU engine runs NER on the
+    # full, untruncated query and passes it in) and our own predict above.
+    extracted_names = list(dict.fromkeys(extracted_names))[:_MAX_SEED_ENTITIES]
+    for name in extracted_names:
+        p_code = get_phonetic_code(name)
+        if p_code:
+            extracted_phonetics.append(p_code)
 
     if extracted_names:
         logger.info(f'NER found entities: {extracted_names}')
@@ -451,7 +466,9 @@ def _build_ner_seeds(
 
     seed_selects: list[Select] = [seed_from_canonical, seed_from_alias]
     if _windows:
-        window_list = list(_windows)
+        # Cap the window IN-list too (query is already truncated, but bound it
+        # explicitly so the equality IN can't grow unbounded).
+        window_list = list(_windows)[:_MAX_SEED_ENTITIES]
         seed_selects.append(
             select(col(Entity.id).label('id')).where(
                 func.lower(col(Entity.canonical_name)).in_(window_list)
