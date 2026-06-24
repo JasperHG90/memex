@@ -112,21 +112,11 @@ YAML example:
 server_url: http://host.docker.internal:8000
 ```
 
-### Pin the Memex CLI to a specific version
+### Which Memex CLI the plugin uses
 
-The plugin's hooks invoke `uvx memex-cli@latest` by default. To pin to a specific tag or branch — useful when you want a stable target across the team or are reproducing a bug against an older release:
+The plugin's hooks and MCP server invoke the `memex` you installed yourself (`uv tool install "memex-cli[mcp,server] @ …"`, on PATH) — it does not build its own copy from a git ref. To change versions, upgrade your install: `uv tool upgrade memex-cli` (or re-run `uv tool install … --refresh` pinned to a specific tag).
 
-```jsonc
-{
-  "env": {
-    "MEMEX_PLUGIN_VERSION": "v0.42.0"
-  }
-}
-```
-
-The resolver validates the ref against `git ls-remote` and caches the result for 24 hours, so a typo surfaces as a startup error rather than a silent miss. Unset the variable to return to `latest`.
-
-If you want to point at a local Memex checkout (for plugin development), set `MEMEX_LOCAL_PATH` to the workspace path instead. That overrides `MEMEX_PLUGIN_VERSION` and runs the CLI via `uv run` against your local code.
+If you want to point at a local Memex checkout (for plugin development), set `MEMEX_LOCAL_PATH` to the workspace path. The plugin then runs the CLI via `uv run --project` against your local code instead of the PATH install.
 
 ### Set a per-user default vault
 

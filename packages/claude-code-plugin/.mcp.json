@@ -5,7 +5,7 @@
       "command": "bash",
       "args": [
         "-c",
-        "if [ -n \"${MEMEX_LOCAL_PATH:-}\" ]; then exec uv run --project \"$MEMEX_LOCAL_PATH\" --package memex-cli memex mcp run; else exec uvx --from \"memex-cli[mcp] @ git+https://github.com/JasperHG90/memex.git@${MEMEX_PLUGIN_VERSION:-latest}#subdirectory=packages/cli\" memex mcp run; fi"
+        "if [ -n \"${MEMEX_LOCAL_PATH:-}\" ]; then exec uv run --project \"$MEMEX_LOCAL_PATH\" --package memex-cli memex mcp run; elif command -v memex >/dev/null 2>&1; then exec memex mcp run; else echo 'Memex CLI not found on PATH. The plugin uses the memex you install yourself: uv tool install \"memex-cli[mcp,server] @ git+https://github.com/JasperHG90/memex.git@latest#subdirectory=packages/cli\"' >&2; exit 1; fi"
       ]
     }
   }

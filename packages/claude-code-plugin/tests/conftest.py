@@ -26,6 +26,10 @@ def mock_memex(tmp_path: Path) -> Iterator[MockMemex]:
     """Per-test PATH shim for the Memex CLI."""
     bin_dir = tmp_path / 'bin'
     bin_dir.mkdir()
+    # The hook now invokes the `memex` you installed (on PATH) directly, so
+    # shim `memex`. Keep the `uvx` shim too: MEMEX_LOCAL_PATH tests assert it
+    # is NOT invoked, and it dispatches to the same mock_memex if it ever is.
+    (bin_dir / 'memex').symlink_to(FIXTURES_DIR / 'mock_memex')
     (bin_dir / 'uvx').symlink_to(FIXTURES_DIR / 'mock_uvx')
 
     calls_file = tmp_path / 'calls.jsonl'

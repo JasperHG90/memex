@@ -303,90 +303,52 @@ def test_agent_surface_install_failure_does_not_block_briefing(
     assert not (temp_git_repo / '.claude' / 'rules' / 'memex-agent-surface.md').is_file()
 
 
-def test_uvx_missing_emits_exactly_one_json_document(
+def test_memex_missing_emits_exactly_one_json_document(
     mock_memex: MockMemex, temp_git_repo: Path, tmp_path: Path
 ) -> None:
-    """When ``uvx`` is absent, ``resolve_config.sh`` emits the
-    user-actionable systemMessage AND signals
-    ``MEMEX_HOOK_ALREADY_EMITTED=1``. The outer hook MUST exit before
-    writing a second JSON document — Claude Code's SessionStart contract
-    is one document per invocation. Pinned here so a future refactor that
-    drops the flag set / check fails CI rather than silently doubling
-    output."""
-    # Construct a PATH that contains NO uvx (use only system bins).
-    sandbox_bin = tmp_path / 'no-uvx'
+    """When the `memex` CLI is absent from PATH, ``resolve_config.sh`` emits
+    the user-actionable install systemMessage AND signals
+    ``MEMEX_HOOK_ALREADY_EMITTED=1``. The outer hook MUST exit before writing
+    a second JSON document — Claude Code's SessionStart contract is one
+    document per invocation. Pinned so a future refactor that drops the flag
+    set / check fails CI rather than silently doubling output."""
+    import shutil
+
+    # Construct a PATH that contains NO memex (use only system bins).
+    sandbox_bin = tmp_path / 'no-memex'
     sandbox_bin.mkdir()
-    env_no_uvx = dict(mock_memex.env)
-    env_no_uvx['PATH'] = f'{sandbox_bin}:/usr/bin:/bin'
+    env_no_memex = dict(mock_memex.env)
+    env_no_memex['PATH'] = f'{sandbox_bin}:/usr/bin:/bin'
+    if shutil.which('memex', path=env_no_memex['PATH']) is not None:
+        import pytest
+
+        pytest.skip('a real `memex` is on the system PATH; cannot test the missing-CLI branch')
 
     result = run_script(
         'on_session_start.sh',
         stdin=_session_start_payload(),
-        env=env_no_uvx,
+        env=env_no_memex,
         cwd=temp_git_repo,
     )
 
     # Exactly one parseable JSON document on stdout.
     docs = [line for line in result.stdout.split('}\n{') if line.strip()]
-    # `split` above handles two adjacent JSON objects on the SAME line; we also
-    # handle them on separate lines by checking total parseability.
     stdout = result.stdout.strip()
     assert stdout, f'no stdout emitted; stderr={result.stderr!r}'
-    # Strict single-document check: the entire stdout must parse as one
-    # JSON object.
     try:
         parsed = json.loads(stdout)
     except json.JSONDecodeError as e:
         raise AssertionError(
-            f'stdout is not a single JSON document — uvx-missing path emitted '
+            f'stdout is not a single JSON document — memex-missing path emitted '
             f'≥2 documents. stdout={stdout!r}; parse error={e!r}; '
             f'split-detection: {docs!r}'
         ) from None
 
-    # And it must be the uvx-missing systemMessage, not a downstream one.
+    # And it must be the install systemMessage, not a misleading "server
+    # unreachable" or a downstream one.
     assert 'systemMessage' in parsed
-    assert 'uvx' in parsed['systemMessage']
-
-
-def test_bad_plugin_version_emits_exactly_one_json_document(
-    mock_memex: MockMemex, temp_git_repo: Path
-) -> None:
-    """When ``MEMEX_PLUGIN_VERSION`` pins a non-existent tag,
-    ``resolve_config.sh`` emits the user-actionable systemMessage AND sets
-    ``MEMEX_HOOK_ALREADY_EMITTED=1`` so the outer hook exits before writing
-    a second JSON document. Same invariant as the uvx-missing path; the
-    bad-ref path uses inline ``jq -n`` rather than the
-    ``_memex_emit_systemMessage`` helper, which historically bypassed the
-    flag set. Pinned here so the parity holds."""
-    env = dict(mock_memex.env)
-    env['MEMEX_PLUGIN_VERSION'] = 'this-tag-cannot-exist-xyz-' + str(id(env))
-
-    result = run_script(
-        'on_session_start.sh',
-        stdin=_session_start_payload(),
-        env=env,
-        cwd=temp_git_repo,
-    )
-
-    stdout = result.stdout.strip()
-    if not stdout:
-        # If ls-remote returns "ok" from a stale cache, the bad ref isn't
-        # rejected. Skip rather than red the suite — the fix path is exercised
-        # only when ls-remote (or its cache) actually rejects.
-        import pytest
-
-        pytest.skip(f'bad-ref not rejected by validator; stderr={result.stderr!r}')
-
-    try:
-        parsed = json.loads(stdout)
-    except json.JSONDecodeError as e:
-        raise AssertionError(
-            f'stdout is not a single JSON document — bad-ref path emitted '
-            f'≥2 documents. stdout={stdout!r}; parse error={e!r}'
-        ) from None
-
-    assert 'systemMessage' in parsed
-    assert 'MEMEX_PLUGIN_VERSION' in parsed['systemMessage']
+    assert 'Memex CLI not found' in parsed['systemMessage']
+    assert 'uv tool install' in parsed['systemMessage']
 
 
 def test_temp_files_cleaned_up_on_success(mock_memex: MockMemex, temp_git_repo: Path) -> None:

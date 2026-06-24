@@ -2,14 +2,14 @@
 # resolve_config.sh — Memex CLI wrapper + project / vault resolution helpers.
 #
 # Source this from hook scripts. Defines:
-#   memex                           — wrapper around the uvx-pinned Memex CLI.
+#   memex                           — wrapper around the installed Memex CLI.
 #   memex_resolve_project_id        — derive a portable project identifier.
 #   memex_resolve_active_vault      — Hermes-style hierarchical vault lookup.
 #   memex_kv_namespace_migrate      — one-time migration of the project vault key.
 
 # When sourced from a hook that emits its own JSON on stdout (e.g., a
 # PreToolUse hook returning ``updatedInput``), an early system message here
-# would corrupt the hook output. Surface uvx-missing or bad-version errors
+# would corrupt the hook output. Surface CLI-not-installed errors
 # *only* when the caller explicitly opts in via MEMEX_RESOLVE_VERBOSE=1, or
 # from the SessionStart hook (where the message is the only output anyway).
 _memex_emit_systemMessage() {
@@ -26,7 +26,7 @@ _memex_emit_systemMessage() {
 }
 
 # MEMEX_LOCAL_PATH escape hatch — point at a local Memex workspace checkout
-# instead of `uvx`-installing from GitHub. Used by the eval suite to run
+# instead of the PATH-installed CLI. Used by the eval suite to run
 # claude-code against the same code path Hermes runs against.
 if [ -n "${MEMEX_LOCAL_PATH:-}" ]; then
     if ! command -v uv >/dev/null 2>&1; then
@@ -50,89 +50,17 @@ EOF
 else
     _memex_local_path=""
 
-    if ! command -v uvx >/dev/null 2>&1; then
+    # Use the `memex` you installed (`uv tool install "memex-cli[mcp,server] @ …"`,
+    # see the plugin README). The hook does NOT build its own copy from a git ref:
+    # that produced a SECOND, divergent install — possibly stale (older than your
+    # real one) or missing extras like `click` — and every such failure was
+    # misreported as "server unreachable". The installed CLI is the single source
+    # of truth; there is no version pinning here.
+    if ! command -v memex >/dev/null 2>&1; then
         _memex_emit_systemMessage <<'EOF'
-{"systemMessage": "❌ `uvx` is not on PATH. Hooks require it to run the Memex CLI.\n\nInstall uv: https://docs.astral.sh/uv/getting-started/installation/"}
+{"systemMessage": "❌ Memex CLI not found on PATH.\n\nThe Claude Code plugin uses the `memex` you install yourself — it does not bundle one. Install it with uv:\n\n  uv tool install \"memex-cli[mcp,server] @ git+https://github.com/JasperHG90/memex.git@latest#subdirectory=packages/cli\"\n\nThen restart Claude Code. Full setup: https://github.com/JasperHG90/memex/blob/main/packages/claude-code-plugin/README.md"}
 EOF
         # Stub out memex so callers can still source us safely; calls just fail.
-        memex() { return 1; }
-        return 0 2>/dev/null || exit 0
-    fi
-
-    _memex_ref="${MEMEX_PLUGIN_VERSION:-latest}"
-    _memex_pkg="memex-cli @ git+https://github.com/JasperHG90/memex.git@${_memex_ref}#subdirectory=packages/cli"
-fi
-
-# Validate a non-`latest` ref against the remote, with a day-grained on-disk
-# cache so we don't hit `git ls-remote` on every hook invocation. The remote
-# tag/branch list does not change minute-to-minute from a hook's perspective;
-# a 24-hour cache TTL is fine. The previous unconditional `git ls-remote`
-# made a network call on EVERY PreToolUse / PreCompact / SessionEnd when the
-# user pinned MEMEX_PLUGIN_VERSION to a specific tag.
-_memex_validate_ref() {
-    local _ref="$1"
-    local _state_dir="${CLAUDE_PLUGIN_DATA:-${HOME}/.claude/.state}/memex"
-    local _cache_dir="${_state_dir}/refcache"
-    local _safe_ref
-    _safe_ref=$(printf '%s' "$_ref" | tr -c 'A-Za-z0-9._-' '_')
-    local _cache_file="${_cache_dir}/${_safe_ref}"
-
-    if [ -f "$_cache_file" ]; then
-        # Fresh = < 24h old. `find -mmin +1440` matches files OLDER than 24h;
-        # if it matches nothing, the cache is fresh.
-        if ! find "$_cache_file" -mmin +1440 2>/dev/null | grep -q .; then
-            case "$(cat "$_cache_file" 2>/dev/null)" in
-                ok) return 0 ;;
-                bad) return 1 ;;
-            esac
-        fi
-    fi
-
-    mkdir -p "$_cache_dir" 2>/dev/null || true
-    # Bound the network call: SessionStart is latency-sensitive and a hung
-    # DNS / proxy could otherwise stall it indefinitely. 5s is plenty for
-    # an `ls-remote` against a single ref. Match the gtimeout-on-macOS
-    # probe used by `memex()` so this works on Apple machines too.
-    local _ls_cmd=(git ls-remote --tags --heads https://github.com/JasperHG90/memex.git "$_ref")
-    local _ls_status=0
-    if command -v timeout >/dev/null 2>&1; then
-        timeout 5 "${_ls_cmd[@]}" 2>/dev/null | grep -q . || _ls_status=$?
-    elif command -v gtimeout >/dev/null 2>&1; then
-        gtimeout 5 "${_ls_cmd[@]}" 2>/dev/null | grep -q . || _ls_status=$?
-    else
-        "${_ls_cmd[@]}" 2>/dev/null | grep -q . || _ls_status=$?
-    fi
-    if [ "$_ls_status" -eq 0 ]; then
-        echo ok > "$_cache_file" 2>/dev/null || true
-        return 0
-    fi
-    # Don't cache "bad" on a timeout (exit 124) — the ref may be valid and
-    # the network just hung. Only cache deterministic "ref doesn't exist"
-    # verdicts so transient outages don't pin a false negative for 24h.
-    if [ "$_ls_status" -ne 124 ]; then
-        echo bad > "$_cache_file" 2>/dev/null || true
-    fi
-    return 1
-}
-
-if [ -z "$_memex_local_path" ] && [ "$_memex_ref" != "latest" ]; then
-    if ! _memex_validate_ref "$_memex_ref"; then
-        # Build the diagnostic JSON via `printf` + `jq --arg` rather than an
-        # unquoted heredoc. The previous `<<EOF` form would expand `$(...)`
-        # / backticks embedded in MEMEX_PLUGIN_VERSION (so a contributor
-        # mistyping `MEMEX_PLUGIN_VERSION='$(date)'` would silently see
-        # `MEMEX_PLUGIN_VERSION='<today>'`) and would corrupt JSON if the
-        # value contained `"`. `printf '%s' "$var"` substitutes the value
-        # as opaque text, and `jq --arg` JSON-escapes it.
-        if [ "${MEMEX_RESOLVE_VERBOSE:-0}" = "1" ] && command -v jq >/dev/null 2>&1; then
-            _diag_msg=$(printf "❌ MEMEX_PLUGIN_VERSION='%s' does not exist as a tag or branch on github.com/JasperHG90/memex.\n\nAvailable tags: https://github.com/JasperHG90/memex/tags\n\nUnset the variable to use the default (latest)." "$_memex_ref")
-            jq -n --arg msg "$_diag_msg" '{systemMessage: $msg}'
-            unset _diag_msg
-            # Signal to the sourcing hook script that we already emitted a JSON
-            # document on stdout — Claude Code SessionStart accepts exactly one.
-            # Mirrors the invariant maintained by ``_memex_emit_systemMessage``.
-            export MEMEX_HOOK_ALREADY_EMITTED=1
-        fi
         memex() { return 1; }
         return 0 2>/dev/null || exit 0
     fi
@@ -160,18 +88,29 @@ memex() {
     # `gtimeout(1)` is the homebrew/coreutils name. Probe both before
     # falling back to an unbounded call so a hung server can't quietly
     # stall hooks on Apple machines.
-    local _cmd
+    #
+    # `timeout`/`gtimeout` exec the program named in their argv against PATH,
+    # so `timeout … memex …` runs the INSTALLED binary, not this shell function
+    # (functions are invisible to a separate exec). The unbounded fallback would
+    # re-enter this function, so it uses `command memex` to bypass the function
+    # and reach the real binary.
     if [ -n "$_memex_local_path" ]; then
-        _cmd=(uv run --project "$_memex_local_path" --package memex-cli memex "$@")
+        local _runner=(uv run --project "$_memex_local_path" --package memex-cli memex)
+        if command -v timeout >/dev/null 2>&1; then
+            timeout "$_timeout" "${_runner[@]}" "$@"
+        elif command -v gtimeout >/dev/null 2>&1; then
+            gtimeout "$_timeout" "${_runner[@]}" "$@"
+        else
+            "${_runner[@]}" "$@"
+        fi
     else
-        _cmd=(uvx --from "$_memex_pkg" memex "$@")
-    fi
-    if command -v timeout >/dev/null 2>&1; then
-        timeout "$_timeout" "${_cmd[@]}"
-    elif command -v gtimeout >/dev/null 2>&1; then
-        gtimeout "$_timeout" "${_cmd[@]}"
-    else
-        "${_cmd[@]}"
+        if command -v timeout >/dev/null 2>&1; then
+            timeout "$_timeout" memex "$@"
+        elif command -v gtimeout >/dev/null 2>&1; then
+            gtimeout "$_timeout" memex "$@"
+        else
+            command memex "$@"
+        fi
     fi
 }
 

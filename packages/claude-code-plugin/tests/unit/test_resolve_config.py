@@ -6,6 +6,7 @@ that sources the file and prints the result.
 
 from __future__ import annotations
 
+import shutil
 import subprocess
 from pathlib import Path
 
@@ -153,41 +154,53 @@ def test_active_vault_falls_back_to_agent(mock_memex: MockMemex, temp_git_repo: 
     assert result.stdout.strip() == 'agent-vault'
 
 
-def test_invalid_plugin_version_does_not_expand_dollar_in_diagnostic(
+def test_missing_memex_cli_emits_install_diagnostic(
     mock_memex: MockMemex, tmp_path: Path
 ) -> None:
-    """A bad MEMEX_PLUGIN_VERSION must NOT be subject to shell `$(...)`
-    expansion when the diagnostic message is built. The old `<<EOF` heredoc
-    form would have evaluated `$(echo …)` embedded in the env var.
+    """When `memex` is not on PATH, the resolver must emit CLEAR install
+    instructions — not the old misleading "server unreachable" — and stub
+    memex() so sourcing still succeeds.
 
-    Disambiguating sentinel: ``$(echo XYZ)`` becomes literal ``XYZ`` under
-    expansion but stays as the full ``$(echo XYZ)`` token if untouched. We
-    assert that the *opening token* ``$(echo `` appears in the output —
-    bash never emits it after a successful command substitution, so its
-    presence is proof the heredoc did not run the substitution.
+    Guards against the regression where the hook built its own
+    `uvx --from git@latest` copy (stale / missing extras) instead of using
+    the CLI the user installed.
     """
-    bad = '$(echo SHOULDNOTRUN)'
+    empty_bin = tmp_path / 'empty_bin'
+    empty_bin.mkdir()
     env = {
         **mock_memex.env,
-        'MEMEX_PLUGIN_VERSION': bad,
+        # PATH WITHOUT the mock `memex`/`uvx` shims (bin_dir dropped) — only
+        # system coreutils, so `command -v memex` genuinely fails.
+        'PATH': f'{empty_bin}:/usr/bin:/bin',
         'MEMEX_RESOLVE_VERBOSE': '1',
     }
-    # Block the network: pre-write the ref-cache `bad` verdict so the
-    # validation short-circuits without an outbound github.com call.
-    state_dir = mock_memex.plugin_data / 'memex' / 'refcache'
-    state_dir.mkdir(parents=True, exist_ok=True)
-    safe = ''.join(c if c.isalnum() or c in '._-' else '_' for c in bad)
-    (state_dir / safe).write_text('bad')
-    result = subprocess.run(
-        ['bash', '-c', f'source "{PLUGIN_ROOT}/scripts/resolve_config.sh" 2>&1'],
+    if shutil.which('memex', path=env['PATH']) is not None:
+        pytest.skip('a real `memex` is on the system PATH; cannot test the missing-CLI branch')
+
+    result = _run_resolver(
+        'memex briefing >/dev/null 2>&1; echo "stub_rc=$?"',
         env=env,
-        capture_output=True,
-        text=True,
-        timeout=15.0,
     )
-    # Literal `$(echo ` substring is the proof: bash strips this opener
-    # when it runs the substitution; if we see it, no expansion happened.
-    assert '$(echo' in result.stdout, f'`$(echo …)` was shell-expanded! stdout={result.stdout!r}'
+    assert result.returncode == 0, result.stderr
+    assert 'Memex CLI not found' in result.stdout
+    assert 'uv tool install' in result.stdout
+    # The stubbed memex() returns non-zero so callers fail cleanly.
+    assert 'stub_rc=1' in result.stdout
+
+
+def test_present_memex_cli_dispatches_to_path_binary(
+    mock_memex: MockMemex, temp_git_repo: Path
+) -> None:
+    """With `memex` on PATH (the installed CLI), the wrapper dispatches to it
+    directly — recorded by the mock — rather than building a git copy."""
+    result = _run_resolver(
+        'memex briefing --budget 100 >/dev/null 2>&1; echo done',
+        env=mock_memex.env,
+        cwd=temp_git_repo,
+    )
+    assert result.returncode == 0, result.stderr
+    briefing_calls = mock_memex.calls_matching('briefing')
+    assert len(briefing_calls) == 1, f'expected one briefing dispatch, got {mock_memex.calls()!r}'
 
 
 def test_active_vault_falls_back_to_env_var(mock_memex: MockMemex, temp_git_repo: Path) -> None:

@@ -33,13 +33,13 @@ Work one finding at a time. For each:
 - **Contradiction winner-proposals** (`propose_contradiction_winner`) are MCP-native:
   - apply → `memex_lint_apply_winner(finding_id)`
   - undo → `memex_lint_reverse_winner(finding_id)`
-- **Everything else** (generic resolve/dismiss has no MCP verb) → shell the `memex` CLI via `Bash`. Mirror the plugin's launcher: if `MEMEX_LOCAL_PATH` is set use the dev form, else the `uvx` form.
+- **Everything else** (generic resolve/dismiss has no MCP verb) → shell the `memex` CLI via `Bash`. Mirror the plugin's launcher: if `MEMEX_LOCAL_PATH` is set use the dev form, else the installed `memex` on PATH.
   - resolve with an action → `memex lint resolve <finding_id> --action <action_id> --params '<json>' --note "<why>"`
   - pure accept (status flip only) → `memex lint resolve <finding_id> --note "<why>"`
   - dismiss → `memex lint dismiss <finding_id> --note "<why>"`
   - undo a reversible action → `memex lint reverse <finding_id>`
 
-uvx form (prod): `uvx --from "memex-cli[mcp] @ git+https://github.com/JasperHG90/memex.git@${MEMEX_PLUGIN_VERSION:-latest}#subdirectory=packages/cli" memex lint resolve …`
+prod form: `memex lint resolve …` (the `memex` you installed via `uv tool install`, on PATH)
 dev form (`MEMEX_LOCAL_PATH` set): `uv run --project "$MEMEX_LOCAL_PATH" --package memex-cli memex lint resolve …`
 
 ## 5. The unattended-apply gate

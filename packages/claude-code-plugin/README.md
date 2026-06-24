@@ -150,8 +150,7 @@ The plugin is configured entirely through environment variables (set in your she
 | `MEMEX_SERVER_URL` | `http://127.0.0.1:8000` | Memex server URL used by both the hooks and the MCP server. Set this when your server runs elsewhere (e.g. `host.docker.internal` from a devcontainer). |
 | `MEMEX_VAULT__ACTIVE` | unset | Server-side default active vault. Read by the Memex CLI's config layer (`~/.memex.yaml`). |
 | `MEMEX_VAULT` | unset | Per-session vault override (rung 4 in the resolution chain — see "Per-project vault binding" below). Wins over the server default but loses to project/user/agent KV bindings. |
-| `MEMEX_PLUGIN_VERSION` | `latest` | Pin the plugin's `uvx`-installed memex-cli to a specific git tag or branch (e.g. `v0.42.0`, `main`). Validated against `git ls-remote` with a 24h on-disk cache. |
-| `MEMEX_LOCAL_PATH` | unset | **Dev mode** — point at a local Memex workspace checkout instead of `uvx`-installing from GitHub. Overrides `MEMEX_PLUGIN_VERSION`. Used by the eval suite to run Claude Code against the same code path Hermes runs. |
+| `MEMEX_LOCAL_PATH` | unset | **Dev mode** — run the CLI from a local Memex workspace checkout (`uv run --project`) instead of the `memex` installed on PATH. Used by the eval suite to run Claude Code against the same code path Hermes runs. |
 | `MEMEX_CC_AGENT_ID` | unset | Subagent identity. Enables the `app:claude-code:agent:<id>:vault` resolution rung (rung 3, between project and user). |
 | `MEMEX_CC_TIMEOUT` | `8` (seconds, clamped to [1, 600]) | Hard timeout per `memex` CLI call from hooks. Protects SessionEnd/PreCompact from a hung server. |
 | `MEMEX_CC_TRANSCRIPT_CAPTURE` | `on` | Toggle the SessionEnd + PreCompact transcript-capture hooks. Set to `off`/`0`/`false`/`no`/`disabled` to disable. Useful when transcripts are large and you don't want to pay the extraction cost. |
@@ -168,8 +167,7 @@ Paste into `~/.claude/settings.json` (or per-project `.claude/settings.local.jso
 {
   "env": {
     "MEMEX_CC_TRANSCRIPT_CAPTURE": "off",
-    "MEMEX_CC_SESSION_BRIEFING": "off",
-    "MEMEX_PLUGIN_VERSION": "v0.42.0"
+    "MEMEX_CC_SESSION_BRIEFING": "off"
   }
 }
 ```
