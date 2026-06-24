@@ -107,9 +107,16 @@ class NoteSearchEngine:
         self.reranker = reranker
         _config = retrieval_config or RetrievalConfig()
         self._relation_config = _config.relations
+        # max_neighbors is specific to the entity_cooccurrence strategy; the
+        # causal / link_expansion strategies don't accept it, so only forward it
+        # for that type (the factory passes **kwargs straight to the constructor).
+        graph_kwargs: dict[str, Any] = {}
+        if _config.graph_retriever_type == 'entity_cooccurrence':
+            graph_kwargs['max_neighbors'] = _config.graph_max_neighbors
         self.graph_strategy = get_note_graph_strategy(
             type=_config.graph_retriever_type,
             ner_model=ner_model,
+            **graph_kwargs,
         )
         self.expander = QueryExpander(lm=lm) if lm else None
 

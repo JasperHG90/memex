@@ -56,7 +56,11 @@ def test_graph_strategy_unions():
     # Graph strategy returns a union_all statement
     sql = str(stmt.compile())
     assert 'UNION ALL' in sql
-    assert 'similarity' in sql or 'ilike' in sql
+    # Fuzzy seed matching uses LIKE + the sargable pg_trgm `%` operator, NOT the
+    # non-sargable similarity() function (which defeated the trigram index into a
+    # seqscan — removed in the note-search perf fix; shared via build_seed_entity_cte).
+    assert 'LIKE' in sql
+    assert 'similarity(' not in sql
 
 
 def test_mental_model_strategy_fallback():

@@ -390,10 +390,12 @@ def _build_ner_seeds(
                 conds_canonical.append(
                     func.lower(col(Entity.canonical_name)).like(f'%{escaped}%', escape='\\')
                 )
-                conds_canonical.append(
-                    func.similarity(func.lower(col(Entity.canonical_name)), lowered)
-                    > similarity_threshold
-                )
+                # pg_trgm `%` operator: sargable via the gin_trgm_ops index on
+                # lower(canonical_name). The prior `similarity(...) > const` form is
+                # NOT index-sargable, so OR-ing it with the LIKE defeated the index
+                # and seqscanned all entities (~51ms/term). Match cutoff is the
+                # pg_trgm.similarity_threshold GUC (DB default 0.3 == prior constant).
+                conds_canonical.append(func.lower(col(Entity.canonical_name)).op('%')(lowered))
 
         seed_from_canonical = select(col(Entity.id).label('id')).where(or_(*conds_canonical))
 
@@ -407,10 +409,7 @@ def _build_ner_seeds(
                 conds_alias.append(
                     func.lower(col(EntityAlias.name)).like(f'%{escaped}%', escape='\\')
                 )
-                conds_alias.append(
-                    func.similarity(func.lower(col(EntityAlias.name)), lowered)
-                    > similarity_threshold
-                )
+                conds_alias.append(func.lower(col(EntityAlias.name)).op('%')(lowered))
 
         seed_from_alias = select(col(EntityAlias.canonical_id).label('id')).where(or_(*conds_alias))
     else:
@@ -422,15 +421,13 @@ def _build_ner_seeds(
         seed_from_canonical = select(col(Entity.id).label('id')).where(
             or_(
                 func.lower(col(Entity.canonical_name)).like(f'%{query_escaped}%', escape='\\'),
-                func.similarity(func.lower(col(Entity.canonical_name)), query_lower)
-                > similarity_threshold,
+                func.lower(col(Entity.canonical_name)).op('%')(query_lower),
             )
         )
         seed_from_alias = select(col(EntityAlias.canonical_id).label('id')).where(
             or_(
                 func.lower(col(EntityAlias.name)).like(f'%{query_escaped}%', escape='\\'),
-                func.similarity(func.lower(col(EntityAlias.name)), query_lower)
-                > similarity_threshold,
+                func.lower(col(EntityAlias.name)).op('%')(query_lower),
             )
         )
 
@@ -863,6 +860,7 @@ class EntityCooccurrenceNoteGraphStrategy:
         enable_semantic_seeding: bool = True,
         semantic_seed_top_k: int = 5,
         semantic_seed_weight: float = 0.7,
+        max_neighbors: int = 50,
     ):
         self.ner_model = ner_model
         self.similarity_threshold = similarity_threshold
@@ -871,6 +869,10 @@ class EntityCooccurrenceNoteGraphStrategy:
         self.enable_semantic_seeding = enable_semantic_seeding
         self.semantic_seed_top_k = semantic_seed_top_k
         self.semantic_seed_weight = semantic_seed_weight
+        # Cap on 2nd-order co-occurrence neighbours per query (top-N by
+        # link_strength), bounding the 2-hop fan-out that drives the search
+        # statement_timeout on hub entities. See get_statement.
+        self.max_neighbors = max_neighbors
 
     def get_statement(
         self, query: str, query_embedding: list[float] | None, limit: int = 60, **kwargs: Any
@@ -973,7 +975,20 @@ class EntityCooccurrenceNoteGraphStrategy:
         right_co = apply_vault_filters(right_co, EntityCooccurrence.vault_id, **kwargs)
         right_co = _apply_as_of_filter(right_co, **kwargs)
 
-        co_occurrences = union_all(left_co, right_co).cte('doc_graph_related_entities')
+        # Cap the neighbour set to the top-N by link_strength BEFORE the 2nd-order
+        # join. An uncapped hub entity (e.g. "Rituals", ~1.9k neighbours) fans out
+        # to ~90k intermediate rows through Chunk->Note->MemoryUnit->UnitEntity and
+        # ~2GB of buffer touches to return 60 results — the dominant driver of the
+        # note-search statement_timeout, multiplied further by multi-seed queries.
+        # Dropped neighbours carry the lowest link_strength (ln(cooc+1)/ln(mention+2))
+        # and contribute ~0 to the final score, so the cap is quality-preserving.
+        # It is a GLOBAL top-N (the UNION ALL has no per-seed grain).
+        co_occurrences = (
+            union_all(left_co, right_co)
+            .order_by(text('link_strength DESC'))
+            .limit(self.max_neighbors)
+            .cte('doc_graph_related_entities')
+        )
 
         second_order = (
             select(Chunk.id)
