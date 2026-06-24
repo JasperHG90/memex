@@ -1,5 +1,5 @@
 {
-  "alembic_head": "065_procedural_outcomes",
+  "alembic_head": "069_nodes_chunks_search_tsvector",
   "embedding_model": {
     "dim": 384,
     "hash": "main",

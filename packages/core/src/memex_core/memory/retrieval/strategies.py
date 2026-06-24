@@ -377,6 +377,9 @@ def _build_ner_seeds(
     # Dedupe + top-K cap: bounds the per-name OR/IN explosion regardless of the
     # caller. Covers BOTH the pre-extracted list (the MU engine runs NER on the
     # full, untruncated query and passes it in) and our own predict above.
+    # The kept names are the first K in NER/document order (no relevance ranking
+    # available) — fine for a safety cap, since this only trims pathological
+    # document-as-query searches; normal queries are sub-cap no-ops.
     extracted_names = list(dict.fromkeys(extracted_names))[:_MAX_SEED_ENTITIES]
     for name in extracted_names:
         p_code = get_phonetic_code(name)

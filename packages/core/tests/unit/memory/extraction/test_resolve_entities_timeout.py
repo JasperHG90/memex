@@ -66,6 +66,8 @@ async def test_resolve_entities_returns_empty_on_timeout(
     result = await extraction_engine._resolve_entities(session, [str(uuid4())], facts)
 
     assert result == set()
+    # Must roll back the aborted txn so the caller can keep using the session.
+    session.rollback.assert_awaited()
     extraction_engine.entity_resolver.link_units_to_entities_batch.assert_not_called()
 
 
@@ -97,3 +99,4 @@ async def test_link_entities_returns_empty_on_timeout(
     result = await extraction_engine._resolve_entities(session, [str(uuid4())], facts)
 
     assert result == set()
+    session.rollback.assert_awaited()

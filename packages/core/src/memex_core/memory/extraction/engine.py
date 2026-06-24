@@ -1733,6 +1733,10 @@ class ExtractionEngine:
             )
         except DBAPIError as e:
             if _is_statement_timeout(e):
+                # The cancelled statement aborted the transaction; roll back so the
+                # caller can keep using this session for the rest of extract_and_persist
+                # (otherwise the next statement fails with 25P02 in_failed_sql_transaction).
+                await session.rollback()
                 logger.warning(
                     'Entity resolution timed out (likely lock contention). '
                     'Skipping — entities will be resolved on next ingestion or reflection cycle.'
@@ -1761,6 +1765,9 @@ class ExtractionEngine:
             )
         except DBAPIError as e:
             if _is_statement_timeout(e):
+                # Roll back the aborted transaction so the caller can continue
+                # (see the resolution branch above — avoids 25P02 on the next stmt).
+                await session.rollback()
                 logger.warning(
                     'Entity linking timed out (likely lock contention). '
                     'Skipping — links will be created on next ingestion cycle.'
