@@ -53,6 +53,38 @@ async def test_list_notes_with_tags_filter(mock_api, _note_factory):
 
 
 @pytest.mark.asyncio
+async def test_list_notes_wildcard_lists_all_content_vaults(mock_api, _note_factory):
+    """vault_id="*" expands to all CONTENT vaults via the plural vault_ids path,
+    instead of erroring (the singular resolver rejects "*") or silently pinning
+    the first default read vault. This is what lets /continue sweep all vaults."""
+    from types import SimpleNamespace
+
+    v1, v2, sysv = uuid4(), uuid4(), uuid4()
+    mock_api.list_vaults = AsyncMock(
+        return_value=[
+            SimpleNamespace(id=v1, kind='content'),
+            SimpleNamespace(id=v2, kind='content'),
+            SimpleNamespace(id=sysv, kind='system'),
+        ]
+    )
+    mock_api.list_notes = AsyncMock(return_value=[_note_factory(title='Handoff')])
+
+    async with Client(mcp) as client:
+        result = await client.call_tool(
+            'memex_list_notes',
+            {'vault_id': '*', 'tags': ['handoff']},
+        )
+        data = parse_tool_result(result)
+
+    assert len(data) == 1
+    call_kwargs = mock_api.list_notes.call_args.kwargs
+    # Wildcard routes through the plural vault_ids path (content vaults only),
+    # not the singular vault_id; system vaults stay out.
+    assert call_kwargs['vault_id'] is None
+    assert set(call_kwargs['vault_ids']) == {v1, v2}
+
+
+@pytest.mark.asyncio
 async def test_list_notes_with_status_filter(mock_api, _note_factory):
     """memex_list_notes passes status parameter to api.list_notes."""
     mock_api.list_notes = AsyncMock(return_value=[_note_factory(title='Archived Note')])

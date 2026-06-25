@@ -2523,7 +2523,12 @@ async def memex_list_notes(
     ctx: Context,
     vault_id: Annotated[
         str | None,
-        Field(description='Vault UUID or name. Omit to use config defaults.'),
+        Field(
+            description=(
+                'Vault UUID or name to scope to, or "*" for ALL content vaults. '
+                'Omit to use config defaults.'
+            )
+        ),
     ] = None,
     after: Annotated[
         str | None,
@@ -2585,7 +2590,15 @@ async def memex_list_notes(
     try:
         api = get_api(ctx)
         vault_id = vault_id or _default_read_vaults(ctx)[0]
-        resolved_vault_id = await _resolve_vault_id(api, vault_id)
+        # "*" scopes across ALL content vaults (plural path); a named/UUID vault
+        # resolves to a single scope. Keeps browse flows honest about cross-vault
+        # listing instead of silently pinning the first default read vault.
+        resolved_vault_id: UUID | None = None
+        resolved_vault_ids: list[UUID] | None = None
+        if vault_id == ALL_VAULTS_WILDCARD:
+            resolved_vault_ids = await _resolve_vault_ids(api, [ALL_VAULTS_WILDCARD])
+        else:
+            resolved_vault_id = await _resolve_vault_id(api, vault_id)
 
         parsed_after = None
         parsed_before = None
@@ -2604,6 +2617,7 @@ async def memex_list_notes(
             limit=limit,
             offset=0,
             vault_id=resolved_vault_id,
+            vault_ids=resolved_vault_ids,
             after=parsed_after,
             before=parsed_before,
             template=template,

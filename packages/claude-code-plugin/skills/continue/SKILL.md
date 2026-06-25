@@ -10,19 +10,36 @@ You have been invoked via the `/continue` slash command. This is the companion t
 
 Handoffs are notes carrying the `handoff` tag plus the plugin's auto-injected `project:*` tag. `/continue` is a **browse-then-load** flow: present a recency-ordered **multi-select** list, let the user choose **one or more** handoffs, then load and summarize every selected note together and jointly decide next steps.
 
-## 1. Resolve scope
+## 1. Resolve scope — vault first, then project tag
 
-Find the current project's tag (`project:<id>`) in the auto-injected metadata block of the SessionStart context — the same tag `/handoff` stamped onto its notes. If `$ARGUMENTS` names a different project or a topic, use it to narrow. If you can't resolve a project tag, fall back to all `handoff`-tagged notes.
+`/handoff` writes its notes into the **project's vault** (the `PreToolUse` hook stamps `vault_id` automatically). So `/continue` MUST list from that same vault — listing without a `vault_id` queries the server's default read scope, which is usually NOT the project vault, and returns nothing even when the briefing shows the vault has notes. This is the #1 cause of "no handoffs found".
+
+Read two things from the SessionStart context:
+- **The active project vault** — the "Per-project vault" block (`This project uses vault \`<vault>\``). This is the `vault_id` to scope to.
+- **The project tag** — the `project:<id>` tag in the auto-injected metadata block, the same tag `/handoff` stamps on each note.
+
+<critical_constraint name="continue_vault_scope">
+Vault-scope rule for EVERY `memex_list_notes` call in this skill:
+- **A project vault is set → pass `vault_id="<that vault>"`.** Never omit it when a project vault is known.
+- **No project vault is set → omit `vault_id`** (the server's default / global read scope).
+- **The user explicitly asks for every project's handoffs (all vaults) → pass `vault_id="*"`** (the wildcard expands to all content vaults). Use `"*"` only on explicit request, or as the final broaden step in §2 — never as the default.
+</critical_constraint>
+
+If `$ARGUMENTS` names a different project or topic, use it to narrow the tag filter (and the vault, if it names one).
 
 ## 2. List the handoffs
 
 ```text
-memex_list_notes(tags=["handoff", "project:<id>"], date_by="created_at", limit=4, slim=False)
+memex_list_notes(vault_id="<project vault>", tags=["handoff", "project:<id>"], date_by="created_at", limit=4, slim=False)
 ```
 
 `slim=False` keeps each note's `title`, `description`, `timestamp`, and extracted `summaries` (`topic` + `key_points`) — these key_points are rich enough to summarize from, so do NOT auto-fetch full note bodies here (see §4 for when to escalate).
 
-If the project-scoped list is empty, retry with `tags=["handoff"]` so a first-time-in-this-repo `/continue` still finds cross-project handoffs. If there are none at all, say so plainly and stop — suggest `/handoff` to start leaving them.
+If that list is empty, broaden **in order** (per the scope rule above):
+1. Drop the project tag — `memex_list_notes(vault_id="<project vault>", tags=["handoff"], …)` — in case the handoffs in this vault carry a different `project:*` tag.
+2. Only if still empty, widen the vault — `memex_list_notes(vault_id="*", tags=["handoff"], …)` — so a first-time-in-this-repo `/continue` still finds cross-project handoffs.
+
+If there are none at all, say so plainly and stop — suggest `/handoff` to start leaving them.
 
 Present the results as a **multi-select** question using `AskUserQuestion`. The user must be able to select several notes at once. Set the question's `multiSelect` flag to `true` — `kind: "multi_select"` alone is not enough.
 
@@ -75,7 +92,7 @@ Do not dump the list as plain text or ask the user to type numbers manually. The
 `AskUserQuestion` with `multiSelect: true` returns a list of selected `value`s.
 
 - **One or more note IDs** — proceed to §4 with the selected notes. Do NOT blindly deep-fetch every selected note; load surgically (see §4).
-- **`more` selected** — re-call `memex_list_notes` with the same tags and a larger `limit` (e.g. `limit=10`). The tool exposes no `offset` parameter, so it will return the same first notes again — **dedup client-side against the note IDs you have already shown** and present only the next 3 unseen as a fresh `AskUserQuestion` (still 3 notes + `more`). Do not read any note yet; wait for a selection. If `more` is selected together with note IDs, treat it as "load more first" — ignore the IDs and reload.
+- **`more` selected** — re-call `memex_list_notes` with the **same `vault_id` and tags** (per the §1 scope rule) and a larger `limit` (e.g. `limit=10`). The tool exposes no `offset` parameter, so it will return the same first notes again — **dedup client-side against the note IDs you have already shown** and present only the next 3 unseen as a fresh `AskUserQuestion` (still 3 notes + `more`). Do not read any note yet; wait for a selection. If `more` is selected together with note IDs, treat it as "load more first" — ignore the IDs and reload.
 - **Nothing selected** — repeat the same `AskUserQuestion` once. If the user still selects nothing, stop and ask whether to broaden the scope or create a fresh `/handoff`.
 - **No relevant handoffs** — stop and ask whether to broaden the scope or create a fresh `/handoff`.
 - **Ambiguous or no reply** — repeat the `AskUserQuestion`. Do not guess which handoff to load.
