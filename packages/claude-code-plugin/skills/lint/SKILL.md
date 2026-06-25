@@ -12,7 +12,7 @@ The linter scans the vault and files **advisory** findings (nothing is auto-appl
 
 ## 1. List pending findings
 
-Call `memex_get_lint_flags(lint_type=<from $ARGUMENTS if given>, status="pending", limit=…)`. It defaults to the active write vault (never global). Each finding carries `finding_id`, `target_id`, `target_type` (`memory_unit` / `note` / `mental_model` / `entity` / `kv` / `unit_entity`), `lint_type`, `evidence`, `suggested_action`, and `target_text`/`target_label`.
+Call `memex_get_lint_flags(lint_type=<from $ARGUMENTS if given>, status="pending", limit=…)`. It defaults to the active write vault (never global). Each finding carries `id` (the finding's identifier — pass it as the `finding_id` argument to every apply/resolve/dismiss/reverse call below), `rule_name` (the type discriminator — e.g. `propose_contradiction_winner`, the field §4 routes on), `target_id`, `target_type` (`memory_unit` / `note` / `mental_model` / `entity` / `kv` / `unit_entity`), `lint_type`, `evidence`, `suggested_action`, and `target_text`/`target_label`.
 
 Findings are cursor-paginated — you only see the loaded window. If you summarize counts or offer "resolve all of rule X", say explicitly that it covers the loaded page, not the whole vault.
 
@@ -30,7 +30,7 @@ Work one finding at a time. For each:
 
 ## 4. Apply the verdict
 
-- **Contradiction winner-proposals** (`propose_contradiction_winner`) are MCP-native:
+- **Contradiction winner-proposals** (findings where `rule_name == "propose_contradiction_winner"` — NOT matched on `suggested_action`, which is free-text prose) are MCP-native. Pass the finding's `id` as `finding_id`:
   - apply → `memex_lint_apply_winner(finding_id)`
   - undo → `memex_lint_reverse_winner(finding_id)`
 - **Everything else** (generic resolve/dismiss has no MCP verb) → shell the `memex` CLI via `Bash`. Mirror the plugin's launcher: if `MEMEX_LOCAL_PATH` is set use the dev form, else the installed `memex` on PATH.

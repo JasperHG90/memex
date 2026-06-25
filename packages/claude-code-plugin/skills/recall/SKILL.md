@@ -12,8 +12,9 @@ argument-hint: "[search query]"
    - If neither is available, ask the user.
 
 2. **Search strategy**:
+   - **Vault scope (applies to every search/list call below)**: if the SessionStart "Per-project vault" block names a vault, pass it — `memex_memory_search`/`memex_note_search`/`memex_list_entities` scope via `vault_ids=["<that vault>"]`. If no project vault is set, omit `vault_ids` (server default). To search every vault, pass `vault_ids=["*"]`. (Listing without it queries the server's default read scope, which is usually NOT the project vault — the cause of "nothing found" when the briefing shows the vault has content.)
    - **How-to queries first** ("how do I X?", "how do we deploy?", "what's the checklist for Y?"): call **`memex_procedural_search` ONLY** (see "Procedure recall" below). Do NOT also run `memex_memory_search` / `memex_note_search` for a how-to — the procedural plane is the only home for how-tos.
-   - **Otherwise** (facts, decisions, context): `memex_memory_search` AND `memex_note_search` in parallel. If insufficient, retry with `expand_query=true`.
+   - **Otherwise** (facts, decisions, context): `memex_memory_search` AND `memex_note_search` in parallel (both scoped per the rule above). If insufficient, retry with `expand_query=true`.
    - If still nothing, try `memex_list_entities`. If all fail, say so — do not guess.
    - **Historical queries** ("how has X evolved?", "show me everything/hidden"): use `memex_get_unit_history(unit_id)` or `memex_memory_search(apply_pre_filter=False)`.
 
@@ -23,9 +24,9 @@ argument-hint: "[search query]"
    - **Pinned cards**: the highest-value procedures are already in your SessionStart briefing (pin chain `global → project:<id> → app:claude-code`) — answer from there before searching.
    - **Procedural search**: `memex_procedural_search(query="...", kind="procedure")` for hybrid BM25+vector search; `memex_procedural_get_by_identity(kind="procedure", scope="global", verb="...", context="...")` for an exact anchor lookup. The plane carries `procedure` / `strategy` kinds under the identity anchor `(kind, scope, verb, context)`; strategies anchor on `(scope, verb)` with no context.
 
-5. **Memory hygiene**: when asked about stale facts, call `memex_get_lint_flags(vault_id=...)`. Act autonomously on low-risk findings. When a finding has `rule_name='propose_contradiction_winner'`, call `memex_lint_apply_winner` after surfacing the proposal to the user.
+5. **Memory hygiene**: when asked about stale facts, call `memex_get_lint_flags` (omit `vault_id` to use the active vault, or pass the project vault). Each finding's id is the `id` field; `rule_name` discriminates the type. Surface findings for the user to act on — do NOT apply autonomously: a canned `resolve --action` / `memex_lint_apply_winner` is server-gated and returns **HTTP 403** unless the server runs with `MEMEX_LINT_ALLOW_UNATTENDED_APPLY=1`. For the full resolve/dismiss workflow use `/lint`.
 
-6. **Diagnostics**: "how is this vault doing?" → `memex_get_diagnostics_summary(vault_id=...)` — returns cluster count, top entities, and MW score distribution.
+6. **Diagnostics**: "how is this vault doing?" → `memex_get_diagnostics_summary` (omit `vault_id` for the active vault, or pass the project vault) — returns cluster count, top entities, and MW score distribution.
 
 ## Transcript-aware fallback contract
 

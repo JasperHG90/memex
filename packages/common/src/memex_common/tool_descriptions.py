@@ -167,8 +167,8 @@ MEMEX_KV_SEARCH_DESC = (
     'lookup use memex_kv_get.\n'
     '\n'
     'Required: query (str).\n'
-    'Optional: top_k (default 10), prefix to scope to a namespace (e.g. "user:", '
-    '"project:<id>:"). KV holds preferences/settings/conventions — NOT how-tos; '
+    'Optional: limit (default 5); namespaces (list of prefixes to scope by, e.g. '
+    '["user", "project:<id>"]). KV holds preferences/settings/conventions — NOT how-tos; '
     'recall a how-to with memex_procedural_search.'
 )
 

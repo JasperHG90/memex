@@ -54,7 +54,7 @@ Bare `success=true`/`success=false` without `units` returns HTTP 400.
 
 | Tool | When |
 | --- | --- |
-| `memex_case_submit` | File a worked episode as a case NOTE (hidden system vault). Required: `title`, `trigger`, `outcome`. Pass `case_of=<procedure-id>` when known; contested assignments land in the lint queue (`assignment.mode="escalated"`). **This is the agent's ONLY procedural write.** |
+| `memex_case_submit` | File a worked episode as a case NOTE (hidden system vault). Required: `title`, `trigger`, `outcome`, `scope` (`global`/`project:<id>`/`app:<id>`), `scope_reasoning` (one line) — the call 422s without `scope`/`scope_reasoning`. Pass `case_of=<procedure-id>` when known; contested assignments land in the lint queue (`assignment.mode="escalated"`). **This is the agent's ONLY procedural write.** |
 | `memex_procedural_get_by_identity` | Probe by `(kind, scope, verb, context)`. Returns `null` on miss — the cheap "do we already have a procedure for this?" check. If it returns an entry, pass its id as `case_of` when you submit the case. |
 | `memex_procedural_get` | Fetch a single derived procedure by UUID. |
 | `memex_procedural_search` | Hybrid BM25 + vector search (RRF-merged) over derived procedures. Required: `query`. |
@@ -74,7 +74,9 @@ existing = memex_procedural_get_by_identity(kind="procedure", scope="global", ve
 # 2. file the worked episode; link it to the procedure if one already exists
 case_of = existing["id"] if existing is not None else None
 memex_case_submit(title="Rotated project API creds", trigger="rotating the project API credentials",
-                  outcome="...", case_of=case_of)
+                  outcome="...", scope="global", scope_reasoning="creds rotation is a cross-project routine",
+                  case_of=case_of)
+# scope + scope_reasoning are REQUIRED (422 without them).
 # the system derives/updates the procedure from this case — you do not write one.
 ```
 

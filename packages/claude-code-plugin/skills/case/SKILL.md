@@ -44,9 +44,13 @@ Pick `scope` by where the how-to belongs: `project:<id>` for a project-specific 
 memex_case_submit(
   title=..., trigger=..., situation=..., actions=[...],
   outcome="success|failure|mixed", lesson=...,
+  scope="global|project:<id>|app:<id>",   # REQUIRED — the same scope you probed in §3
+  scope_reasoning="<one line: why this scope>",  # REQUIRED
   case_of=<id-if-found>,
 )
 ```
+
+`scope` and `scope_reasoning` are **required** — `memex_case_submit` rejects the call (HTTP 422) without them. Reuse the `scope` you chose in §3 (the `<app>` cue beats "I"/"my").
 
 Do **NOT** also `memex_add_note` the same episode — a how-to saved as a note is invisible to the procedural plane. The plugin auto-injects ambient tags (surface / session / project / git / model / plugin); don't set them yourself.
 

@@ -28,7 +28,7 @@ Compose the note as a genuine technical writeup. Lead with prose — explain the
 Then set the note fields:
 
 - **title**: `Handoff: <short descriptor of the work>` — recognizable at a glance.
-- **description**: ONE crisp sentence naming the work **and** where it stands. `/continue` shows this in its candidate list, so make it stand on its own (e.g. "Vault-routing wired through the CLI and green; the alembic migration for the new column is the next step.").
+- **description**: ONE crisp sentence naming the work **and** where it stands — the note's one-line gist (surfaced in `memex_note_search` results). Make it stand on its own (e.g. "Vault-routing wired through the CLI and green; the alembic migration for the new column is the next step."). NOTE: `/continue` builds its candidate previews from the note's **extracted `summaries`** (`memex_list_notes` returns no `description` field), so also keep the body's **Summary** section self-contained — that is what `/continue` actually renders.
 - **author**: `"claude-code"`.
 - **tags**: `["handoff"]`. The plugin auto-injects ambient tags (`surface:claude-code`, `session:*`, `project:*`, `git:*`, …) — `project:*` is what scopes the handoff to this repo, so don't repeat or hand-set them.
 - **note_key**: Do NOT set this. The plugin derives it from the Claude Code session id so repeated `/handoff`s in the same session upsert. Passing an explicit `note_key` would break that anchoring.

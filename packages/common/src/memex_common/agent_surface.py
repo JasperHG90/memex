@@ -134,7 +134,7 @@ Triggers: success — "that worked", "that fixed it", "yes, that did it", "perfe
 1. **Disambiguate** — ambiguous scope (multiple candidates, no temporal anchor)? ASK before writing.
 2. **Route** — title → `memex_find_note`; content → `memex_memory_search`. Pick one:
    - A entity-anchored: `memex_list_entities` → `memex_get_entity_mentions`.
-   - B cross-note: `memex_memory_search(top_k=30)`. `top_k` must be ≥30 (top_k=30 — outcome judging needs a wide candidate pool; the default 10 misses the unit you're stamping).
+   - B cross-note: `memex_memory_search(limit=30)`. `limit` must be ≥30 (limit=30 — outcome judging needs a wide candidate pool; the default 10 misses the unit you're stamping).
    - C single-note: `memex_get_page_indices` → `memex_get_memory_units(chunk_ids=…)`.
 3. **Judge** — READ unit bodies; pick outcome-relevant subset. NEVER bulk-write.
 4. **+5. Paired writes** on the judged subset:

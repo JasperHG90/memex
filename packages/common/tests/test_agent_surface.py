@@ -141,7 +141,7 @@ _REQUIRED_KEYWORDS: tuple[str, ...] = (
     'scope qualifier',
     # 5-step flow anchors.
     'Disambiguate',
-    'top_k',
+    'limit',
     # Citation discipline.
     'Cite',
     # Retrieval routing tool names.

@@ -14,7 +14,12 @@ If there's no concrete referent in scope — a vague "that was wrong" with nothi
 
 ## 2. Find the candidate unit(s)
 
-Search for the unit(s) the correction is about: `memex_memory_search(query="...", top_k=30)` (use `top_k >= 30` — corrections need a wide candidate set). **READ the unit bodies** and pick the specific subset the correction applies to. Do not bulk-act on the whole result set.
+Search for the unit(s) the correction is about: `memex_memory_search(query="...", limit=30, vault_ids=["<project vault>"])`.
+
+- `limit` is the result-count param (NOT `top_k`); use `limit >= 30` — corrections need a wide candidate set.
+- Scope to the project vault: pass `vault_ids=["<that vault>"]` (the vault from the SessionStart "Per-project vault" block). This is also the vault `memex_memory_deprioritize` targets by default in §4, so the candidate set and the write line up. If no project vault is set, omit `vault_ids` (server default); to search every vault, pass `vault_ids=["*"]`.
+
+**READ the unit bodies** and pick the specific subset the correction applies to. Do not bulk-act on the whole result set.
 
 ## 3. Resolve observations BEFORE acting
 

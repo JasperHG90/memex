@@ -29,7 +29,9 @@ There are exactly **two narrow carve-outs** — and a learning only leaves the n
 - **Reusable how-to / worked episode** — you worked out HOW to do or fix something (trigger + actions + outcome), and you'd re-run those steps next time → `memex_case_submit` (trigger / situation / actions / outcome / lesson, plus a required `scope` — `global` / `project:<id>` / `app:claude-code` — and a one-line `scope_reasoning`). Probe `memex_procedural_get_by_identity(kind="procedure", scope=…, verb=…, context=…)` first; if it returns an entry, pass its id as `case_of`. The system derives the procedure — you never author one.
 - **Preference / convention / setting** — ONE static binding ("we use X here", "always Y before Z") → `memex_kv_put` with a scope-qualified key (`user:` / `project:<id>:` / `app:claude-code:` / `global:`), scope chosen by cue (the `<app>` cue beats "I"/"my").
 
-Everything else — every finding, diagnosis, "the real constraint is X not Y", "approach A beats B", "this is why Z happens" — is an insight → `memex_add_note` (concise, 5–15 lines, `author="claude-code"`, tags include `"learnings"` + 1–3 topic tags). When an item could be read as either an insight or a carve-out, **write the note** (and add the case/KV too if it also genuinely fits — they are not mutually exclusive).
+Everything else — every finding, diagnosis, "the real constraint is X not Y", "approach A beats B", "this is why Z happens" — is an insight → `memex_add_note` (concise, 5–15 lines, `author="claude-code"`, tags include `"learnings"` + 1–3 topic tags).
+
+**Each learning gets exactly ONE plane by its shape — never write the same learning to two planes.** A reusable how-to is a case and **NOT also a note** (a how-to saved as a note is invisible to the procedural plane — the #1 mistake); a setting is KV and not a note. The "write the note" default resolves *insight-vs-skip* ("is this durable enough to keep?") — NOT *insight-vs-how-to*: if a learning is genuinely a repeatable procedure, file the case and stop; if it's a static setting, write the KV and stop.
 
 <critical_constraint name="insight_must_be_a_note">
 A distilled insight is NOT captured until it is a `memex_add_note`. None of these count as its home:
@@ -43,7 +45,7 @@ The plugin's `PreToolUse` hook auto-injects ambient tags on `memex_add_note` and
 
 ## 3. Verify before reporting
 
-Self-check: if step 1 surfaced **any** durable insight/finding/lesson and you wrote **zero** `memex_add_note` calls this run, you mis-routed — you shunted insights into KV/cases/handoffs. Stop, re-route them as notes, then report. (The only way to legitimately write zero notes is if *every* surviving learning was a pure reusable how-to or a pure one-line setting — rare.)
+Self-check: if step 1 surfaced **any** insight/finding/conclusion and you wrote **zero** `memex_add_note` calls this run, you mis-routed — you shunted an insight into KV/a case/a handoff. Stop, write it as a note, then report. (Zero notes IS correct when every surviving learning was genuinely a reusable how-to → case or a one-line setting → KV; the gate only fires when an *insight* got no note — it does not push how-tos or settings into notes.)
 
 ## 4. Distinct from neighbouring skills
 

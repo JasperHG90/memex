@@ -54,19 +54,19 @@ Present the results as a **multi-select** question using `AskUserQuestion`. The 
     {
       "label": "1. <short note title>",
       "description": "<status / next step one-liner>",
-      "preview": "<note description + status + next step>\n\n<date>",
+      "preview": "<from summaries[].topic + key_points: what it's about + where it stands>\n\n<date>",
       "value": "<note_id>"
     },
     {
       "label": "2. <short note title>",
       "description": "<status / next step one-liner>",
-      "preview": "<note description + status + next step>\n\n<date>",
+      "preview": "<from summaries[].topic + key_points: what it's about + where it stands>\n\n<date>",
       "value": "<note_id>"
     },
     {
       "label": "3. <short note title>",
       "description": "<status / next step one-liner>",
-      "preview": "<note description + status + next step>\n\n<date>",
+      "preview": "<from summaries[].topic + key_points: what it's about + where it stands>\n\n<date>",
       "value": "<note_id>"
     },
     {
@@ -81,8 +81,8 @@ Present the results as a **multi-select** question using `AskUserQuestion`. The 
 Guidelines for the options:
 
 - `label` — short numeric identifier plus the handoff note **title** (e.g., `1. /handoff and /continue skills`). The title must be visible in the list without selecting the item.
-- `description` — a concise status or next-step signal for the handoff.
-- `preview` — the note `description` plus any obvious status/next-step signal, followed by the date reference. Keep it concise so the side-by-side layout stays readable.
+- `description` — a concise status or next-step signal, composed from the note's `summaries[].topic`/`key_points`.
+- `preview` — built from the note's `summaries` (`topic` + `key_points`) followed by the date reference. NOTE: `memex_list_notes` returns `title`, `created_at`, and `summaries` — there is **no** note `description` field on the result, so compose previews from `summaries`, never from a (nonexistent) `description`. Keep it concise so the side-by-side layout stays readable.
 - `value` — the note `id` returned by `memex_list_notes`.
 
 Do not dump the list as plain text or ask the user to type numbers manually. The selection UI is the required presentation.

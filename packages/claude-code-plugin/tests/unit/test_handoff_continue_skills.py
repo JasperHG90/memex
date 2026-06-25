@@ -181,3 +181,60 @@ def test_learnings_mandates_note_for_insights() -> None:
         '/learnings must include a verify gate flagging zero-notes-after-insights as '
         'a mis-route'
     )
+
+
+def test_learnings_forbids_cross_plane_double_write() -> None:
+    """The note-mandate must NOT license writing the SAME learning to two planes
+    (e.g. a how-to as both a case AND a note — the #1 documented mistake)."""
+    body = _read_skill('learnings')
+    assert 'NOT also a note' in body, (
+        '/learnings must state a how-to is a case and NOT also a note'
+    )
+    assert 'two planes' in body, '/learnings must forbid one learning on two planes'
+
+
+@pytest.mark.parametrize('name', ['case', 'extract-case', 'remember'])
+def test_case_submit_skills_document_required_scope(name: str) -> None:
+    """memex_case_submit REQUIRES scope + scope_reasoning (CaseSubmit, extra='forbid',
+    no defaults) — a call without them is a 422. Every skill that documents a
+    case_submit call must show both fields, or it teaches an erroring call."""
+    body = _read_skill(name)
+    assert 'memex_case_submit' in body
+    assert 'scope_reasoning' in body, (
+        f'/{name} documents memex_case_submit without the REQUIRED scope_reasoning field'
+    )
+    # `scope` (as a kwarg/field) must be present, not just inside "scope_reasoning".
+    assert re.search(r'\bscope\b(?!_reasoning)', body), (
+        f'/{name} must document the REQUIRED scope field on memex_case_submit'
+    )
+
+
+def test_correct_uses_limit_not_top_k() -> None:
+    """memex_memory_search's count param is `limit`, not `top_k` (which FastMCP
+    rejects as an unknown kwarg). /correct's candidate search must use limit."""
+    body = _read_skill('correct')
+    # No call form passing top_k= (a clarifying "(NOT top_k)" mention is fine).
+    assert not re.search(r'top_k\s*=', body), '/correct must not pass the non-existent top_k= param'
+    assert re.search(r'limit\s*=\s*30', body), '/correct must use limit=30 for the wide candidate set'
+
+
+@pytest.mark.parametrize('name', ['recall', 'correct'])
+def test_search_skills_document_vault_scope(name: str) -> None:
+    """Search/correct must scope reads to the project vault (vault_ids), with the
+    "*" all-vaults escape — otherwise they query the server default read scope and
+    silently miss the project's memory."""
+    body = _read_skill(name)
+    assert 'vault_ids' in body, f'/{name} must scope searches via vault_ids'
+    assert '"*"' in body or "'*'" in body or '["*"]' in body, (
+        f'/{name} must document the "*" all-vaults escape'
+    )
+
+
+def test_lint_exposes_rule_name_and_id_fields() -> None:
+    """Lint findings key on `id` (passed as finding_id) and `rule_name` (the
+    discriminator). The winner branch must route on rule_name, not suggested_action."""
+    body = _read_skill('lint')
+    assert 'rule_name' in body, '/lint must expose rule_name as the discriminator'
+    assert re.search(r'rule_name\s*==\s*["\']propose_contradiction_winner', body), (
+        '/lint winner-apply must route on rule_name == "propose_contradiction_winner"'
+    )

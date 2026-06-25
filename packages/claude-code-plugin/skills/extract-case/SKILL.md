@@ -12,7 +12,7 @@ Cases feed Memex's procedural plane: the system derives a reusable procedure fro
 
 `$ARGUMENTS` tells you what to read. Read the actual content first — never judge from the title or URL alone.
 
-- **A Memex note** (a `note_key` like `session:2026-…`, or a UUID): `memex_find_note` / `memex_read_note` (use `memex_get_page_indices` + `memex_get_nodes` if it's over ~500 tokens).
+- **A Memex note**: by **UUID** → `memex_read_note(note_id=<uuid>)` (use `memex_get_page_indices` + `memex_get_nodes` if it's over ~500 tokens). By **title fragment** → `memex_find_note(query="<title>")` to get the UUID first. Note: these tools take a UUID or a title — there is no note_key→UUID resolver, so to act on a `note_key` (e.g. the session note `session:2026-…`) search for it by title with `memex_find_note` / `memex_note_search` and use the returned id.
 - **A local markdown/text file** (a path): read it with the `Read` tool.
 - **A URL**: fetch it with `WebFetch`.
 - **Empty `$ARGUMENTS`**: ask which note/file/URL to use, or offer the current session note.
@@ -69,9 +69,13 @@ There is no procedure-write tool — you never author the procedure; `case_of` o
 memex_case_submit(
   title=..., trigger=..., situation=..., actions=[...],
   outcome="success|failure|mixed", lesson=...,
+  scope="global|project:<id>|app:<id>",   # REQUIRED — the scope you probed in §4
+  scope_reasoning="<one line: why this scope>",  # REQUIRED
   case_of=<id-if-found>,
 )
 ```
+
+`scope` and `scope_reasoning` are **required** — the call 422s without them. Reuse the `scope` you probed in §4 (probe the plausible `project:<id>`/`app:<id>` scope before `global`; an exact-anchor lookup misses on the wrong scope).
 
 The plugin auto-injects ambient tags (git / session / project / model). The system derives or updates the procedure from this case in the background.
 
