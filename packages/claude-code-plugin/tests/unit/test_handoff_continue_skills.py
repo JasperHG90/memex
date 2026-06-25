@@ -126,3 +126,58 @@ def test_continue_more_handler_dedups_client_side() -> None:
     already-shown IDs rather than re-presenting the same first notes."""
     body = _read_skill('continue')
     assert 'dedup' in body.lower(), '/continue `more` handler must dedup client-side'
+
+
+def test_continue_vault_scopes_list_notes() -> None:
+    """The #1 /continue failure: listing handoffs without a vault_id queries the
+    server's default read scope, not the project vault where /handoff wrote them —
+    so it finds nothing even when the vault has handoffs. The skill must scope to
+    the project vault and document the all-vaults wildcard."""
+    body = _read_skill('continue')
+    assert 'continue_vault_scope' in body, (
+        '/continue must carry the load-bearing vault-scope constraint'
+    )
+    # Lists must pass a vault_id (project vault), not omit it.
+    assert 'vault_id="<project vault>"' in body, (
+        '/continue list_notes calls must scope to the project vault'
+    )
+    # The all-vaults broaden must use the documented wildcard, not omission.
+    assert 'vault_id="*"' in body, '/continue must document the "*" all-vaults wildcard'
+
+
+def test_learnings_has_valid_frontmatter() -> None:
+    fm = _frontmatter(_read_skill('learnings'))
+    assert re.search(r'^name:\s*learnings\s*$', fm, re.MULTILINE), (
+        'frontmatter name must be `learnings` and match the directory'
+    )
+    assert re.search(r'^description:\s*\S', fm, re.MULTILINE), 'description required'
+    assert re.search(r'^argument-hint:\s*\S', fm, re.MULTILINE), 'argument-hint required'
+
+
+def test_learnings_mandates_note_for_insights() -> None:
+    """The #1 failure mode: distilling session insights but routing them to a
+    handoff / KV / case instead of writing them as notes. The skill must make the
+    note the enforced home for an insight — not one of three equal options."""
+    body = _read_skill('learnings')
+
+    # The note tool must be present AND framed as mandatory for insights.
+    assert 'memex_add_note' in body, '/learnings must write insights as notes'
+    assert 'insight_must_be_a_note' in body, (
+        '/learnings must carry the load-bearing constraint that an insight is not '
+        'captured until it is a memex_add_note'
+    )
+
+    # The non-substitution rule must name all three wrong homes explicitly, so an
+    # agent cannot rationalize "already captured" via a handoff/KV/case.
+    constraint_zone = body[body.index('insight_must_be_a_note') :]
+    for wrong_home in ('handoff', 'memex_kv_put', 'memex_case_submit'):
+        assert wrong_home in constraint_zone, (
+            f'the non-substitution rule must explicitly reject {wrong_home!r} as an '
+            "insight's home"
+        )
+
+    # A completion gate: zero notes after finding insights == mis-routed.
+    assert re.search(r'zero\b[^\n]*memex_add_note', body), (
+        '/learnings must include a verify gate flagging zero-notes-after-insights as '
+        'a mis-route'
+    )
