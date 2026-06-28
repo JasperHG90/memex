@@ -203,7 +203,14 @@ auto_tag_instruction="
 
 Every \`memex_add_note\` call from this session is auto-tagged with: \`surface:claude-code\`, \`session:${SESSION_NOTE_KEY#session:}\`, \`project:${project_id}\`, plus git context (\`git:branch=...\`, \`git:sha=...\`, \`git:repo=...\`, \`git:dirty\` when applicable) and \`claude:model=...\`. \`background\` defaults to \`true\` unless you explicitly pass \`false\`. Pre-existing tags you supply are preserved."
 
-additional_context="${briefing_content}${vault_instruction}${session_note_instruction}${auto_tag_instruction}"
+# Order matters: Claude Code v2.1.x silently truncates `additionalContext`
+# above 10K chars (see the agent-surface note above). The briefing can be up
+# to ~2000 tokens (~8K chars), so if it led, the small but load-bearing
+# instructions behind it — especially the per-project vault block that
+# `/continue` and write calls depend on — could be cut off. Put the compact,
+# always-needed blocks (vault, session note, auto-tag) FIRST so they always
+# survive; the larger briefing trails and absorbs any truncation itself.
+additional_context="${vault_instruction}${session_note_instruction}${auto_tag_instruction}${briefing_content}"
 
 [ -n "$project_vault" ] && status="${status} (vault: ${project_vault})"
 

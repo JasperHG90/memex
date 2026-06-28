@@ -101,7 +101,7 @@ fi
 # The hook emits BOTH so the user sees what's being matched (per the plan's
 # "explicit, not magical" requirement) and the skill has unambiguous text to search.
 _announce="No \`/recall\` query supplied — composing from the last ${_n} turns of this conversation."
-_context=$(printf '%s\n\n%s\n\n--- Composed query (last %d turns) ---\n%s\n--- End composed query ---\n\nUse the composed query above as the search query for `memex_memory_search` and `memex_note_search`. Print a one-line summary of the query before searching so the user can see it.' \
+_context=$(printf '%s\n\n%s\n\n--- Composed query (last %d turns) ---\n%s\n--- End composed query ---\n\nUse the composed query above as your recall query, routed per the /recall skill: a how-to query ("how do I X", "what is the checklist for Y") → `memex_procedural_search` ONLY; otherwise → `memex_memory_search` and `memex_note_search` (scoped to the project vault via `vault_ids` when one is set). Print a one-line summary of the query before searching so the user can see it.' \
     "$_announce" \
     "" \
     "$_n" \
