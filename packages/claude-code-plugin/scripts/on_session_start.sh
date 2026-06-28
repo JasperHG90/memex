@@ -171,10 +171,14 @@ EOF
         exit 0
     fi
 
-    # Command substitution strips trailing newlines, so re-append one to guarantee
-    # a stable separator before the vault/session/auto-tag instructions that follow.
-    briefing_content="$(cat "$tmp_briefing")
-"
+    # The briefing now TRAILS the vault/session/auto-tag blocks (see the
+    # assembly below), and those blocks end without a newline. Prepend a blank
+    # line so the briefing's leading `# Session Briefing` heading starts on its
+    # own line instead of gluing onto the end of the auto-tag paragraph. No
+    # trailing newline is needed — nothing follows the briefing.
+    briefing_content="
+
+$(cat "$tmp_briefing")"
 fi
 status="🧠 Memex connected${agent_surface_install_warning}"
 [ "$_briefing_disabled" -eq 1 ] && status="${status} · Briefing disabled (MEMEX_CC_SESSION_BRIEFING)"

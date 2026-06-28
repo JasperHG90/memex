@@ -155,6 +155,19 @@ def test_emits_additional_context_with_briefing(mock_memex: MockMemex, temp_git_
     # The new namespaced KV key should appear in the "no vault set" branch
     # (not relevant here, but sanity-check the project_id is referenced)
     assert 'github.com/acme/myapp' in ctx
+    # The compact vault block must LEAD the briefing so it survives Claude Code's
+    # additionalContext truncation (collapsed to a ~2KB preview above 10K chars).
+    assert ctx.index('### Per-project vault') < ctx.index('Memex briefing'), (
+        'the per-project vault block must precede the briefing so truncation cannot drop it'
+    )
+    # The briefing heading must start its own line, not glue onto the end of the
+    # auto-tag block (regression guard for the reorder separator).
+    assert 'preserved.## Memex briefing' not in ctx, (
+        'briefing heading is glued onto the auto-tag block — missing separator'
+    )
+    assert '\n\n## Memex briefing' in ctx, (
+        'briefing must be separated from the preceding block by a blank line'
+    )
 
 
 # ---------------------------------------------------------------------------
