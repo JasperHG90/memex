@@ -1,88 +1,162 @@
-manifest_version = 5
-instruction_template = "default"
+manifest_version = 11
+layout_profile = "claude"
 symlinks = [
     "CLAUDE.md",
 ]
 mcp_servers = []
+targets = []
 
-[[rule]]
-qualified_name = "jasperhg90/pre-existing-issues"
-repo_alias = "jasperhg90"
-source_path = "rules/pre-existing-issues.md"
+[archetype]
+qualified_name = "default"
+risk_acknowledged = false
 
 [policy]
+scope = "local"
 
 [repos]
-jasperhg90 = "https://github.com/JasperHG90/skills"
+1385a5f1be8c889c = "https://github.com/athola/claude-night-market"
+4290899e4697f267 = "https://github.com/jasperhg90/skills"
+8b8de8ec329cb5d5 = "https://github.com/jasperhg90/memex"
+
+[[rule]]
+qualified_name = "1385a5f1be8c889c/slop-scan-for-docs"
+repo_alias = "1385a5f1be8c889c"
+source_path = ".claude/rules/slop-scan-for-docs.md"
+pin = "b226e39776d69a4b16faebd78d5d2973679df198"
+risk_acknowledged = false
+
+[[rule]]
+qualified_name = "4290899e4697f267/adversarial-reviews"
+repo_alias = "4290899e4697f267"
+source_path = "rules/adversarial-reviews.md"
+pin = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
+risk_acknowledged = false
+
+[[rule]]
+qualified_name = "4290899e4697f267/pre-existing-issues"
+repo_alias = "4290899e4697f267"
+source_path = "rules/pre-existing-issues.md"
+pin = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
+risk_acknowledged = false
+
+[[rule]]
+qualified_name = "4290899e4697f267/prek-code-quality"
+repo_alias = "4290899e4697f267"
+source_path = "rules/prek-code-quality.md"
+pin = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
+risk_acknowledged = false
+
+[[rule]]
+qualified_name = "4290899e4697f267/python-testing"
+repo_alias = "4290899e4697f267"
+source_path = "rules/python-testing.md"
+pin = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
+risk_acknowledged = false
+
+[[rule]]
+qualified_name = "4290899e4697f267/uv-installer"
+repo_alias = "4290899e4697f267"
+source_path = "rules/uv-installer.md"
+pin = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
+risk_acknowledged = false
 
 [[skill]]
-qualified_name = "jasperhg90/deep-explain"
-repo_alias = "jasperhg90"
-source_path = "skills/learning/deep-explain"
-target_dir = ".claude/skills/deep-explain"
-
-[[skill]]
-qualified_name = "jasperhg90/doc-write"
-repo_alias = "jasperhg90"
-source_path = "skills/documentation/doc-write"
-target_dir = ".claude/skills/doc-write"
-
-[[skill]]
-qualified_name = "jasperhg90/manifesto"
-repo_alias = "jasperhg90"
-source_path = "skills/architecture/manifesto"
-target_dir = ".claude/skills/manifesto"
-
-[[skill]]
-qualified_name = "jasperhg90/pageindex"
-repo_alias = "jasperhg90"
+qualified_name = "4290899e4697f267/pageindex"
+repo_alias = "4290899e4697f267"
 source_path = "skills/tools/pageindex"
 target_dir = ".claude/skills/pageindex"
+risk_acknowledged = false
 
 [[skill]]
-qualified_name = "jasperhg90/python-review"
-repo_alias = "jasperhg90"
-source_path = "skills/development/python-review"
-target_dir = ".claude/skills/python-review"
-
-[[skill]]
-qualified_name = "jasperhg90/readme-creator"
-repo_alias = "jasperhg90"
-source_path = "skills/documentation/readme-creator"
-target_dir = ".claude/skills/readme-creator"
-
-[[skill]]
-qualified_name = "jasperhg90/terminal-gif"
-repo_alias = "jasperhg90"
+qualified_name = "4290899e4697f267/terminal-gif"
+repo_alias = "4290899e4697f267"
 source_path = "skills/documentation/terminal-gif"
 target_dir = ".claude/skills/terminal-gif"
+risk_acknowledged = false
 
 [[skill]]
-qualified_name = "jasperhg90/release"
-repo_alias = "jasperhg90"
+qualified_name = "4290899e4697f267/manifesto"
+repo_alias = "4290899e4697f267"
+source_path = "skills/architecture/manifesto"
+target_dir = ".claude/skills/manifesto"
+pin = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
+risk_acknowledged = false
+
+[[skill]]
+qualified_name = "4290899e4697f267/deep-explain"
+repo_alias = "4290899e4697f267"
+source_path = "skills/learning/deep-explain"
+target_dir = ".claude/skills/deep-explain"
+pin = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
+risk_acknowledged = false
+
+[[skill]]
+qualified_name = "4290899e4697f267/doc-write"
+repo_alias = "4290899e4697f267"
+source_path = "skills/documentation/doc-write"
+target_dir = ".claude/skills/doc-write"
+pin = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
+risk_acknowledged = false
+
+[[skill]]
+qualified_name = "4290899e4697f267/python-review"
+repo_alias = "4290899e4697f267"
+source_path = "skills/development/python-review"
+target_dir = ".claude/skills/python-review"
+pin = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
+risk_acknowledged = false
+
+[[skill]]
+qualified_name = "4290899e4697f267/readme-creator"
+repo_alias = "4290899e4697f267"
+source_path = "skills/documentation/readme-creator"
+target_dir = ".claude/skills/readme-creator"
+pin = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
+risk_acknowledged = false
+
+[[skill]]
+qualified_name = "4290899e4697f267/release"
+repo_alias = "4290899e4697f267"
 source_path = "skills/ops/release"
 target_dir = ".claude/skills/release"
+pin = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
+risk_acknowledged = false
 
 [[subagent]]
-qualified_name = "jasperhg90/adversarial-reviewer"
-repo_alias = "jasperhg90"
-source_path = "agents/adversarial-reviewer.md"
-target_path = ".claude/agents/adversarial-reviewer.md"
-
-[[subagent]]
-qualified_name = "jasperhg90/dependency-analyst"
-repo_alias = "jasperhg90"
+qualified_name = "4290899e4697f267/dependency-analyst"
+repo_alias = "4290899e4697f267"
 source_path = "skills/architecture/blueprint/agents/dependency-analyst.md"
 target_path = ".claude/agents/dependency-analyst.md"
+risk_acknowledged = false
 
 [[subagent]]
-qualified_name = "jasperhg90/feature-planner"
-repo_alias = "jasperhg90"
-source_path = "agents/feature-planner.md"
-target_path = ".claude/agents/feature-planner.md"
-
-[[subagent]]
-qualified_name = "jasperhg90/grader"
-repo_alias = "jasperhg90"
+qualified_name = "4290899e4697f267/grader"
+repo_alias = "4290899e4697f267"
 source_path = "skills/tools/agent-creator/agents/grader.md"
 target_path = ".claude/agents/grader.md"
+risk_acknowledged = false
+
+[[subagent]]
+qualified_name = "4290899e4697f267/adversarial-reviewer"
+repo_alias = "4290899e4697f267"
+source_path = "agents/adversarial-reviewer.md"
+target_path = ".claude/agents/adversarial-reviewer.md"
+pin = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
+risk_acknowledged = false
+
+[[subagent]]
+qualified_name = "4290899e4697f267/feature-planner"
+repo_alias = "4290899e4697f267"
+source_path = "agents/feature-planner.md"
+target_path = ".claude/agents/feature-planner.md"
+pin = "7e0ee1b4260c1bbe9b4c917ccc6a6aa5e169609c"
+risk_acknowledged = false
+
+[[plugin]]
+qualified_name = "8b8de8ec329cb5d5/memex"
+repo_alias = "8b8de8ec329cb5d5"
+flavor = "claude"
+source_path = "packages/claude-code-plugin"
+marketplace_name = "memex"
+pin = "df13d6b1a7ae5e6f4bcd8b7b0e6c7268dc937494"
+risk_acknowledged = false
