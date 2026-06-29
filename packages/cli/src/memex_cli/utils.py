@@ -4,6 +4,7 @@ import asyncio
 import importlib
 import json
 import logging
+from enum import Enum
 from functools import wraps
 from typing import Annotated, Any, Callable, Coroutine, NoReturn, TypeVar, AsyncGenerator
 from contextlib import asynccontextmanager
@@ -38,6 +39,43 @@ VaultScopeOption = Annotated[
     str | None,
     typer.Option('--vault', '-v', help='Vault scope (name or UUID). Omit for the global scope.'),
 ]
+
+
+class ListFormat(str, Enum):
+    """How a list/search command renders its results — one axis, four views.
+
+    This replaces the old pile of overlapping boolean flags (``--minimal``,
+    ``--compact``, ``--json``) which modelled a single choice as several
+    independent switches. ``--slim`` is a SEPARATE axis (it controls how much
+    is fetched, not how it is printed) and stays its own option.
+    """
+
+    table = 'table'  # rich table — human default
+    ids = 'ids'  # one id per line — pipe-friendly
+    line = 'line'  # one compact line per item
+    json = 'json'  # structured JSON for downstream tooling
+
+
+ListFormatOption = Annotated[
+    ListFormat,
+    typer.Option(
+        '--format',
+        help=(
+            'Output view: table (default, human), ids (one id per line), '
+            'line (one line per item), json (structured).'
+        ),
+    ),
+]
+
+
+def resolve_list_format(output_format: ListFormat, json_flag: bool) -> ListFormat:
+    """Resolve the effective list format.
+
+    ``--json`` is kept as a documented shorthand for ``--format json`` (it is
+    the universal flag across every other command in the CLI); when set it
+    wins over ``--format``.
+    """
+    return ListFormat.json if json_flag else output_format
 
 # Lazy loaded subcommands map: command_name -> import_path:object_name
 LAZY_SUBCOMMANDS: dict[str, str] = {
