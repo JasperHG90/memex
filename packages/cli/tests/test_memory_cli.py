@@ -121,6 +121,53 @@ def test_memory_search_risk_forwarded_to_api(runner, mock_api, mock_config, monk
     assert kwargs.get('intent_class') is None
 
 
+def test_memory_search_format_ids(runner, mock_api, mock_config, monkeypatch):
+    """memory search --format ids prints the unit id but not the unit body text."""
+    uid = uuid4()
+    mock_api.search.return_value = [
+        MemoryUnitDTO(id=uid, text='Python is a language', fact_type='world'),
+    ]
+    monkeypatch.setattr('memex_cli.memory.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(app, ['search', 'query', '--format', 'ids'], obj=mock_config)
+    assert result.exit_code == 0, result.output
+    assert str(uid) in result.stdout
+    assert 'Python is a language' not in result.stdout
+
+
+def test_memory_search_format_line(runner, mock_api, mock_config, monkeypatch):
+    """memory search --format line prints fact_type + truncated text per result."""
+    uid = uuid4()
+    mock_api.search.return_value = [
+        MemoryUnitDTO(id=uid, text='Python is a language', fact_type='world'),
+    ]
+    monkeypatch.setattr('memex_cli.memory.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(app, ['search', 'query', '--format', 'line'], obj=mock_config)
+    assert result.exit_code == 0, result.output
+    assert 'Python is a language' in result.stdout
+    # The fact_type is bracket-escaped, so a literal '[' survives into the
+    # output instead of being parsed away as a Rich markup tag.
+    assert '[' in result.stdout
+
+
+def test_memory_search_json_flag_overrides_format(runner, mock_api, mock_config, monkeypatch):
+    """--json wins over --format ids (shorthand precedence)."""
+    uid = uuid4()
+    mock_api.search.return_value = [
+        MemoryUnitDTO(id=uid, text='A fact', fact_type='world'),
+    ]
+    monkeypatch.setattr('memex_cli.memory.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(app, ['search', 'query', '--format', 'ids', '--json'], obj=mock_config)
+    assert result.exit_code == 0, result.output
+    # search prints a "Searching: <query>" status line before the payload; the
+    # JSON array starts at the first '['.
+    payload = result.stdout[result.stdout.index('[') :]
+    data = json.loads(payload)
+    assert data[0]['id'] == str(uid)
+
+
 def test_memory_search_intent_invalid_rejected_locally(runner, mock_api, mock_config, monkeypatch):
     """Bad --intent values must be rejected before the API roundtrip with exit code 2."""
     monkeypatch.setattr('memex_cli.memory.get_api_context', lambda config: mock_api)

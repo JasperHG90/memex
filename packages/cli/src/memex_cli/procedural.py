@@ -31,11 +31,14 @@ from memex_common.procedural_schemas import (
     ProceduralSearchRequest,
 )
 from memex_cli.utils import (
+    ListFormat,
+    ListFormatOption,
     async_command,
     emit_json,
     get_api_context,
     handle_api_error,
     normalize_project_id,
+    resolve_list_format,
 )
 
 console = Console()
@@ -1023,7 +1026,9 @@ async def case_list(
     slim: Annotated[
         bool,
         typer.Option(
-            '--slim', '-s', help='Drop per-note summaries — smaller response, faster query.'
+            '--slim',
+            '-s',
+            help='Drop per-note summaries from the response (only affects --format json output).',
         ),
     ] = False,
     sort: Annotated[
@@ -1033,10 +1038,8 @@ async def case_list(
             help='Sort by created_at: -created_at (newest first, default) or created_at (oldest first).',
         ),
     ] = '-created_at',
+    output_format: ListFormatOption = ListFormat.table,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
-    compact: Annotated[
-        bool, typer.Option('--compact', help='One line per case: id, outcome, title.')
-    ] = False,
 ):
     """List case notes in the hidden procedural system vault.
 
@@ -1067,15 +1070,23 @@ async def case_list(
         except Exception as e:
             handle_api_error(e)
 
-    if json_output:
+    fmt = resolve_list_format(output_format, json_output)
+
+    if fmt == ListFormat.json:
         emit_json([c.model_dump(mode='json') for c in cases])
         return
 
-    if compact:
+    if fmt == ListFormat.ids:
+        for c in cases:
+            console.print(str(c.id))
+        return
+
+    if fmt == ListFormat.line:
         for c in cases:
             meta = c.doc_metadata or {}
             oc = meta.get('outcome', '-')
-            console.print(f'{c.id}  [{oc}]  {c.name or c.title or "Untitled"}')
+            # Escape the outcome brackets so Rich does not parse [outcome] as markup.
+            console.print(f'{c.id}  \\[{oc}]  {c.name or c.title or "Untitled"}')
         return
 
     table = Table(title='Cases')

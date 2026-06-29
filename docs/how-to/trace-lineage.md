@@ -17,15 +17,15 @@ Memex stores facts append-only. When a new note contradicts an older fact, the o
 You rarely have the UUID memorised. Start with a content search:
 
 ```bash
-memex memory search "JWT rotation cadence" --compact
+memex memory search "JWT rotation cadence" --format line
 ```
 
-`--compact` prints one line per result with the unit type and a truncated snippet. Copy the UUID of the unit you want to trace. (For richer output drop `--compact`; for JSON downstream piping, add `--json`.)
+`--format line` prints one line per result with the unit type and a truncated snippet. Copy the UUID of the unit you want to trace. (For richer output use the default `--format table`; for JSON downstream piping, add `--json`.)
 
 If you already know which note the fact came from, narrow the search to that note's vault and phrase the query around its content:
 
 ```bash
-memex memory search "JWT rotation cadence" --vault security --compact
+memex memory search "JWT rotation cadence" --vault security --format line
 ```
 
 Once you have a unit's UUID, `memex memory links <unit_id>` lists the typed links on that unit — useful for spotting the `contradicts` or `weakens` edges you will walk in step 4.

@@ -4,6 +4,39 @@ import httpx
 from unittest.mock import MagicMock
 
 
+def test_vault_list_format_ids(runner, mock_api, mock_config, monkeypatch):
+    """vault list --format ids prints one vault name per line."""
+    v = MagicMock()
+    v.name = 'personal'
+    mock_api.list_vaults.return_value = [v]
+    monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(app, ['list', '--format', 'ids'], obj=mock_config)
+    assert result.exit_code == 0, result.output
+    assert 'personal' in result.stdout
+
+
+def test_vault_list_format_line(runner, mock_api, mock_config, monkeypatch):
+    """vault list --format line renders the markdown table with note counts."""
+    v = MagicMock()
+    v.name = 'personal'
+    v.access = None
+    v.is_active = True
+    v.mw_mode = 'stationary'
+    v.description = 'my vault'
+    mock_api.list_vaults_with_counts.return_value = [
+        {'vault': v, 'note_count': 3, 'last_note_added_at': None}
+    ]
+    monkeypatch.setattr('memex_cli.vaults.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(app, ['list', '--format', 'line'], obj=mock_config)
+    assert result.exit_code == 0, result.output
+    assert 'personal' in result.stdout
+    assert '3' in result.stdout
+    # The markdown-counts path must be used, not the rich table.
+    mock_api.list_vaults_with_counts.assert_called_once()
+
+
 def test_create_vault_passes_name_and_description_positionally(
     runner, mock_api, strip_ansi, monkeypatch
 ):

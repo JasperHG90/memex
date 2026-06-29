@@ -7,13 +7,27 @@ import pytest
 import typer
 
 from memex_cli.utils import (
+    ListFormat,
     async_command,
     emit_json,
     handle_api_error,
     merge_overrides,
     normalize_project_id,
     resolve_active_vault,
+    resolve_list_format,
 )
+
+
+def test_resolve_list_format_returns_format_when_json_flag_unset():
+    assert resolve_list_format(ListFormat.ids, False) is ListFormat.ids
+    assert resolve_list_format(ListFormat.line, False) is ListFormat.line
+    assert resolve_list_format(ListFormat.table, False) is ListFormat.table
+
+
+def test_resolve_list_format_json_flag_wins_over_format():
+    # --json is a shorthand that overrides --format, even an explicit non-default.
+    assert resolve_list_format(ListFormat.ids, True) is ListFormat.json
+    assert resolve_list_format(ListFormat.table, True) is ListFormat.json
 
 
 def test_normalize_project_id_strips_scope_prefix():

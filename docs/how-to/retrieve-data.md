@@ -83,8 +83,8 @@ Memex can summarize the top results for you:
 memex memory search "rotation cadence" --answer
 ```
 
-Add `--json` for machine-readable output, `--minimal` for unit IDs only,
-or `--compact` for one line per result.
+Pick the output view with `--format`: `json` for machine-readable output,
+`ids` for unit IDs only, or `line` for one line per result (`table` is the default).
 
 ## Note search — find a source document
 

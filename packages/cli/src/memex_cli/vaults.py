@@ -11,7 +11,15 @@ from rich.console import Console
 from rich.table import Table
 
 from memex_common.config import MemexConfig
-from memex_cli.utils import emit_json, get_api_context, async_command, handle_api_error
+from memex_cli.utils import (
+    ListFormat,
+    ListFormatOption,
+    emit_json,
+    get_api_context,
+    async_command,
+    handle_api_error,
+    resolve_list_format,
+)
 
 console = Console()
 
@@ -33,14 +41,8 @@ app.add_typer(snapshot_app, name='snapshot')
 @async_command
 async def list_vaults(
     ctx: typer.Context,
+    output_format: ListFormatOption = ListFormat.table,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
-    minimal: Annotated[
-        bool, typer.Option('--minimal', help='Output one vault name per line.')
-    ] = False,
-    compact: Annotated[
-        bool,
-        typer.Option('--compact', help='Output as a plain markdown table with note counts.'),
-    ] = False,
     include_system: Annotated[
         bool,
         typer.Option('--include-system', help='Also list system vaults (inbox, etc.).'),
@@ -48,11 +50,15 @@ async def list_vaults(
 ):
     """
     List available vaults (content vaults by default; --include-system for all).
+
+    For vaults, --format ids prints one vault name per line and --format line
+    prints a plain markdown table with note counts.
     """
     config: MemexConfig = ctx.obj
+    fmt = resolve_list_format(output_format, json_output)
 
     async with get_api_context(config) as api:
-        if compact:
+        if fmt == ListFormat.line:
             try:
                 rows = await api.list_vaults_with_counts(include_system=include_system)
             except Exception as e:
@@ -94,12 +100,12 @@ async def list_vaults(
         except Exception as e:
             handle_api_error(e)
 
-    if minimal:
+    if fmt == ListFormat.ids:
         for v in vaults:
             console.print(v.name)
         return
 
-    if json_output:
+    if fmt == ListFormat.json:
         emit_json([v.model_dump() for v in vaults])
         return
 

@@ -50,7 +50,7 @@ Behind the scenes Memex extracts memory units from the note body. Each unit is o
 Wait a few seconds for extraction to finish, then check that the unit landed:
 
 ```bash
-memex memory search "Friday deploy schedule" --vault scratch --compact
+memex memory search "Friday deploy schedule" --vault scratch --format line
 ```
 
 You should see one row whose text mentions the 5pm Friday deploy. The output looks like:
@@ -65,11 +65,11 @@ Grab the unit id for use later:
 
 ```bash
 OLD_UNIT_ID=$(memex memory search "5pm Friday deploy" \
-  --vault scratch --minimal --limit 1)
+  --vault scratch --format ids --limit 1)
 echo "$OLD_UNIT_ID"
 ```
 
-The `--minimal` flag prints only the unit id, which makes it easy to capture into a shell variable. You will see a UUID like `b3a1e8e0-...`.
+The `--format ids` flag prints only the unit id, which makes it easy to capture into a shell variable. You will see a UUID like `b3a1e8e0-...`.
 
 ## Step 2: Ingest the contradicting note three weeks later
 

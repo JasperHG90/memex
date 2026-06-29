@@ -16,6 +16,8 @@ from rich.panel import Panel
 from rich.markdown import Markdown
 
 from memex_cli.utils import (
+    ListFormat,
+    ListFormatOption,
     VaultOption,
     async_command,
     emit_json,
@@ -23,6 +25,7 @@ from memex_cli.utils import (
     get_api_context,
     handle_api_error,
     parse_uuid,
+    resolve_list_format,
 )
 from memex_common.config import MemexConfig
 from memex_common.schemas import (
@@ -366,11 +369,8 @@ async def search_memory(
     answer: Annotated[
         bool, typer.Option('--answer', '-a', help='Generate an AI answer from results.')
     ] = False,
+    output_format: ListFormatOption = ListFormat.table,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
-    minimal: Annotated[bool, typer.Option('--minimal', help='Output unit IDs only.')] = False,
-    compact: Annotated[
-        bool, typer.Option('--compact', help='One line per result: type + truncated text.')
-    ] = False,
     no_semantic: Annotated[
         bool, typer.Option('--no-semantic', help='Exclude semantic (vector) strategy.')
     ] = False,
@@ -508,18 +508,20 @@ async def search_memory(
             console.print('[yellow]No results found.[/yellow]')
             return
 
-        if minimal:
+        fmt = resolve_list_format(output_format, json_output)
+
+        if fmt == ListFormat.ids:
             for unit in results:
                 console.print(str(unit.id))
             return
 
-        if compact:
+        if fmt == ListFormat.line:
             for unit in results:
                 text = unit.text.replace('\n', ' ')[:200]
                 console.print(f'- \\[{unit.fact_type}] {text}')
             return
 
-        if json_output:
+        if fmt == ListFormat.json:
             emit_json([u.model_dump(exclude={'embedding'}) for u in results])
             return
 

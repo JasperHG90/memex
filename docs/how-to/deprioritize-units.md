@@ -21,10 +21,10 @@ Search for content that surfaces the unit, then capture its UUID from the JSON o
 memex memory search "deploy hook on the staging job" --json | jq '.[] | {id, fact_type, text}'
 ```
 
-Pick the entry that matches and copy its `id`. The minimal output mode is convenient when you already know which result is the right one and you want only the UUID:
+Pick the entry that matches and copy its `id`. The `ids` output mode is convenient when you already know which result is the right one and you want only the UUID:
 
 ```bash
-memex memory search "deploy hook on the staging job" --minimal | head -1
+memex memory search "deploy hook on the staging job" --format ids | head -1
 ```
 
 If nothing in the default results matches, retry with `--include-stale` or with `--no-keyword` / `--no-semantic` to vary the strategy mix; the full flag list is in the CLI reference.

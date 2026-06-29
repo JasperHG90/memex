@@ -179,7 +179,9 @@ async def list_entities(
     slim: Annotated[
         bool,
         typer.Option(
-            '--slim', '-s', help='Drop entity description — smaller response, faster query.'
+            '--slim',
+            '-s',
+            help='Drop entity descriptions from the response (only affects --json output).',
         ),
     ] = False,
 ):

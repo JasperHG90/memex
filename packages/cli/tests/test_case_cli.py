@@ -85,15 +85,27 @@ def test_case_list_json_output(runner, mock_api, mock_config, monkeypatch):
     assert data[0]['id'] == str(item.id)
 
 
-def test_case_list_compact_output(runner, mock_api, mock_config, monkeypatch):
+def test_case_list_line_output(runner, mock_api, mock_config, monkeypatch):
     item = _list_item_dto(name='compact-case')
     mock_api.case_list.return_value = [item]
     monkeypatch.setattr('memex_cli.procedural.get_api_context', lambda config: mock_api)
 
-    result = runner.invoke(case_app, ['list', '--compact'], obj=mock_config)
+    result = runner.invoke(case_app, ['list', '--format', 'line'], obj=mock_config)
     assert result.exit_code == 0, result.output
     assert str(item.id) in result.stdout
     assert 'compact-case' in result.stdout
+
+
+def test_case_list_ids_output(runner, mock_api, mock_config, monkeypatch):
+    """--format ids prints one case id per line and nothing else."""
+    item = _list_item_dto(name='ids-case')
+    mock_api.case_list.return_value = [item]
+    monkeypatch.setattr('memex_cli.procedural.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(case_app, ['list', '--format', 'ids'], obj=mock_config)
+    assert result.exit_code == 0, result.output
+    assert result.stdout.strip() == str(item.id)
+    assert 'ids-case' not in result.stdout
 
 
 def test_case_list_rejects_bad_outcome(runner, mock_config):

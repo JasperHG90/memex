@@ -164,14 +164,13 @@ Search the knowledge base using TEMPR retrieval strategies.
 | `--limit` | | int | `5` | Maximum number of results to return. |
 | `--budget` | `-b` | int | - | Token budget for retrieval context. |
 | `--answer` | `-a` | bool | `False` | Generate an AI-synthesized answer from results. |
-| `--json` | | bool | `False` | Output results as JSON. |
-| `--minimal` | | bool | `False` | Output memory unit IDs only (one per line). |
+| `--format` | | `table\|ids\|line\|json` | `table` | Output view: `table` (default), `ids` (unit IDs, one per line), `line` (type + truncated text per result), `json`. |
+| `--json` | | bool | `False` | Shorthand for `--format json`. |
 | `--no-semantic` | | bool | `False` | Exclude semantic (vector) strategy. |
 | `--no-keyword` | | bool | `False` | Exclude keyword (BM25) strategy. |
 | `--no-graph` | | bool | `False` | Exclude graph (entity) strategy. |
 | `--no-temporal` | | bool | `False` | Exclude temporal strategy. |
 | `--no-mental-model` | | bool | `False` | Exclude mental model strategy. |
-| `--compact` | | bool | `False` | One line per result: type + truncated text. |
 | `--include-stale` | | bool | `False` | Include stale memory units in results. |
 | `--source-context` | | str | - | Filter by source context (e.g. `"user_notes"`). |
 
@@ -663,10 +662,10 @@ List all notes in the current vault.
 | `--vault` | `-v` | str (list) | - | Vault(s) to filter by. Repeatable. Use `"*"` for all vaults. |
 | `--after` | | str | - | Only notes on/after this date (ISO 8601). |
 | `--before` | | str | - | Only notes on/before this date (ISO 8601). |
-| `--json` | | bool | `False` | Output as JSON. |
-| `--minimal` | | bool | `False` | Output one note ID per line. |
-| `--compact` | | bool | `False` | One line per note: title, date, description. |
+| `--format` | | `table\|ids\|line\|json` | `table` | Output view: `table` (default), `ids` (one note ID per line), `line` (one line per note: title, date, description), `json`. |
+| `--json` | | bool | `False` | Shorthand for `--format json`. |
 | `--template` | | str | - | Filter by template slug (e.g. `"general_note"`). |
+| `--slim` | `-s` | bool | `False` | Drop per-note summaries from the response (only affects `--format json` output). |
 
 ---
 
@@ -686,9 +685,9 @@ Show most recently created notes.
 | `--vault` | `-v` | str (list) | - | Vault(s) to filter by. Repeatable. Use `"*"` for all vaults. |
 | `--after` | | str | - | Only notes on/after this date (ISO 8601). |
 | `--before` | | str | - | Only notes on/before this date (ISO 8601). |
-| `--json` | | bool | `False` | Output as JSON. |
-| `--minimal` | | bool | `False` | Output one note ID per line. |
-| `--compact` | | bool | `False` | One line per note: title, date, description. |
+| `--format` | | `table\|ids\|line\|json` | `table` | Output view: `table` (default), `ids` (one note ID per line), `line` (one line per note: title, date, description), `json`. |
+| `--json` | | bool | `False` | Shorthand for `--format json`. |
+| `--slim` | `-s` | bool | `False` | Drop per-note summaries from the response (only affects `--format json` output). |
 
 ---
 
@@ -716,8 +715,8 @@ Search for notes using multi-channel fusion (Reciprocal Rank Fusion). Results in
 | `--vault` | `-v` | str (list) | - | Vault(s) to search. Repeatable. Use `"*"` for all vaults. |
 | `--reason` | | bool | `False` | Run skeleton-tree identification; shows relevant sections with reasoning. |
 | `--summarize` | | bool | `False` | Synthesize a full answer from matched sections (implies `--reason`). |
-| `--json` | | bool | `False` | Output as JSON. |
-| `--minimal` | | bool | `False` | Output note IDs only. |
+| `--format` | | `table\|ids\|line\|json` | `table` | Output view: `table` (default), `ids` (note IDs only), `line` (score + title + ID per result), `json`. |
+| `--json` | | bool | `False` | Shorthand for `--format json`. |
 | `--no-semantic` | | bool | `False` | Exclude semantic (vector) strategy. |
 | `--no-keyword` | | bool | `False` | Exclude keyword (BM25) strategy. |
 | `--no-graph` | | bool | `False` | Exclude graph (entity) strategy. |
@@ -1777,8 +1776,9 @@ List all available vaults. Also displays the currently active (write) vault and 
 
 | Option | Type | Default | Description |
 |--------|------|---------|-------------|
-| `--json` | bool | `False` | Output as JSON. |
-| `--minimal` | bool | `False` | Output one vault name per line. |
+| `--format` | `table\|ids\|line\|json` | `table` | Output view: `table` (default), `ids` (one vault name per line), `line` (markdown table with note counts), `json`. |
+| `--json` | bool | `False` | Shorthand for `--format json`. |
+| `--include-system` | bool | `False` | Also list system vaults (inbox, etc.). |
 
 ---
 

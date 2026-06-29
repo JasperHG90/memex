@@ -60,6 +60,7 @@ ListFormatOption = Annotated[
     ListFormat,
     typer.Option(
         '--format',
+        '-f',
         help=(
             'Output view: table (default, human), ids (one id per line), '
             'line (one line per item), json (structured).'
@@ -76,6 +77,7 @@ def resolve_list_format(output_format: ListFormat, json_flag: bool) -> ListForma
     wins over ``--format``.
     """
     return ListFormat.json if json_flag else output_format
+
 
 # Lazy loaded subcommands map: command_name -> import_path:object_name
 LAZY_SUBCOMMANDS: dict[str, str] = {

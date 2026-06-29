@@ -77,6 +77,85 @@ def test_note_list_invalid_date_by_rejected(runner, mock_api, mock_config, monke
     assert 'Invalid --date-by' in result.stdout
 
 
+def test_note_list_format_ids(runner, mock_api, mock_config, monkeypatch):
+    """--format ids prints one note id per line and nothing else."""
+    nid = uuid4()
+    mock_api.list_notes.return_value = [
+        NoteDTO(id=nid, name='My Note', created_at=datetime.now(timezone.utc), vault_id=uuid4())
+    ]
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(note_app, ['list', '--format', 'ids'], obj=mock_config)
+    assert result.exit_code == 0, result.output
+    assert result.stdout.strip() == str(nid)
+    assert 'My Note' not in result.stdout
+
+
+def test_note_list_format_line(runner, mock_api, mock_config, monkeypatch):
+    """--format line prints one descriptive line per note (title + id)."""
+    nid = uuid4()
+    mock_api.list_notes.return_value = [
+        NoteDTO(id=nid, name='My Note', created_at=datetime.now(timezone.utc), vault_id=uuid4())
+    ]
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(note_app, ['list', '--format', 'line'], obj=mock_config)
+    assert result.exit_code == 0, result.output
+    assert 'My Note' in result.stdout
+    assert str(nid) in result.stdout
+
+
+def test_note_list_json_flag_overrides_format(runner, mock_api, mock_config, monkeypatch):
+    """--json wins over --format ids (shorthand precedence)."""
+    nid = uuid4()
+    mock_api.list_notes.return_value = [
+        NoteDTO(id=nid, name='My Note', created_at=datetime.now(timezone.utc), vault_id=uuid4())
+    ]
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(note_app, ['list', '--format', 'ids', '--json'], obj=mock_config)
+    assert result.exit_code == 0, result.output
+    data = json.loads(result.stdout)
+    assert data[0]['id'] == str(nid)
+
+
+def test_note_search_format_line(runner, mock_api, mock_config, monkeypatch):
+    """note search --format line prints score + title + id per result."""
+    from memex_common.schemas import BlockSummaryDTO, NoteSearchResult
+
+    nid = uuid4()
+    mock_api.search_notes.return_value = [
+        NoteSearchResult(
+            note_id=nid,
+            metadata={'name': 'Found Note'},
+            summaries=[BlockSummaryDTO(topic='a topic')],
+            score=0.42,
+        )
+    ]
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(note_app, ['search', 'query', '--format', 'line'], obj=mock_config)
+    assert result.exit_code == 0, result.output
+    assert 'Found Note' in result.stdout
+    assert str(nid) in result.stdout
+
+
+def test_note_search_format_ids(runner, mock_api, mock_config, monkeypatch):
+    """note search --format ids prints one note id per line."""
+    from memex_common.schemas import NoteSearchResult
+
+    nid = uuid4()
+    mock_api.search_notes.return_value = [
+        NoteSearchResult(note_id=nid, metadata={'name': 'Found Note'}, score=0.42)
+    ]
+    monkeypatch.setattr('memex_cli.notes.get_api_context', lambda config: mock_api)
+
+    result = runner.invoke(note_app, ['search', 'query', '--format', 'ids'], obj=mock_config)
+    assert result.exit_code == 0, result.output
+    assert result.stdout.strip() == str(nid)
+    assert 'Found Note' not in result.stdout
+
+
 def test_note_view(runner, mock_api, monkeypatch):
     d_id = uuid4()
     mock_api.get_note.return_value = NoteDTO(

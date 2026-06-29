@@ -31,12 +31,15 @@ from memex_common.schemas import (
 import httpx
 
 from memex_cli.utils import (
+    ListFormat,
+    ListFormatOption,
     VaultOption,
     emit_json,
     get_api_context,
     async_command,
     handle_api_error,
     parse_uuid,
+    resolve_list_format,
 )
 
 console = Console()
@@ -464,13 +467,8 @@ async def list_notes(
             ),
         ),
     ] = 'created_at',
+    output_format: ListFormatOption = ListFormat.table,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
-    minimal: Annotated[
-        bool, typer.Option('--minimal', help='Output one note ID per line.')
-    ] = False,
-    compact: Annotated[
-        bool, typer.Option('--compact', help='One line per note: title, date, description.')
-    ] = False,
     template: Annotated[
         str | None,
         typer.Option('--template', help='Filter by template slug (e.g. "general_note").'),
@@ -478,13 +476,16 @@ async def list_notes(
     slim: Annotated[
         bool,
         typer.Option(
-            '--slim', '-s', help='Drop per-note summaries — smaller response, faster query.'
+            '--slim',
+            '-s',
+            help='Drop per-note summaries from the response (only affects --format json output).',
         ),
     ] = False,
 ):
     """
     List all notes.
     """
+    fmt = resolve_list_format(output_format, json_output)
     from datetime import datetime
 
     from memex_common.vault_utils import ALL_VAULTS_WILDCARD
@@ -533,17 +534,17 @@ async def list_notes(
         except Exception as e:
             handle_api_error(e)
 
-    if minimal:
+    if fmt == ListFormat.ids:
         for d in notes:
             console.print(str(d.id))
         return
 
-    if compact:
+    if fmt == ListFormat.line:
         for d in notes:
             _print_compact_note(d)
         return
 
-    if json_output:
+    if fmt == ListFormat.json:
         emit_json([d.model_dump() for d in notes])
         return
 
@@ -596,17 +597,14 @@ async def list_recent(
             ),
         ),
     ] = 'created_at',
+    output_format: ListFormatOption = ListFormat.table,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
-    minimal: Annotated[
-        bool, typer.Option('--minimal', help='Output one note ID per line.')
-    ] = False,
-    compact: Annotated[
-        bool, typer.Option('--compact', help='One line per note: title, date, description.')
-    ] = False,
     slim: Annotated[
         bool,
         typer.Option(
-            '--slim', '-s', help='Drop per-note summaries — smaller response, faster query.'
+            '--slim',
+            '-s',
+            help='Drop per-note summaries from the response (only affects --format json output).',
         ),
     ] = False,
 ):
@@ -618,6 +616,7 @@ async def list_recent(
     from memex_common.vault_utils import ALL_VAULTS_WILDCARD
 
     config: MemexConfig = ctx.obj
+    fmt = resolve_list_format(output_format, json_output)
 
     if date_by not in ('coalesce', 'created_at', 'publish_date'):
         console.print(
@@ -659,17 +658,17 @@ async def list_recent(
         except Exception as e:
             handle_api_error(e)
 
-    if minimal:
+    if fmt == ListFormat.ids:
         for d in notes:
             console.print(str(d.id))
         return
 
-    if compact:
+    if fmt == ListFormat.line:
         for d in notes:
             _print_compact_note(d)
         return
 
-    if json_output:
+    if fmt == ListFormat.json:
         emit_json([d.model_dump() for d in notes])
         return
 
@@ -701,7 +700,9 @@ def _print_compact_note(d: Any) -> None:
     if len(desc) > 120:
         desc = desc[:117] + '...'
     suffix = f': {desc}' if desc else ''
-    console.print(f'- **{title}**{vault_tag} ({date}) [{note_id}]{suffix}')
+    # Escape the id brackets so Rich does not parse [uuid] as a markup tag and
+    # swallow the id (matches the escaping in memory search's line view).
+    console.print(f'- **{title}**{vault_tag} ({date}) \\[{note_id}]{suffix}')
 
 
 @app.command('find')
@@ -1226,8 +1227,8 @@ async def search_notes(
         bool,
         typer.Option('--summarize', help='Synthesize a full answer (implies --reason).'),
     ] = False,
+    output_format: ListFormatOption = ListFormat.table,
     json_output: Annotated[bool, typer.Option('--json', help='Output as JSON.')] = False,
-    minimal: Annotated[bool, typer.Option('--minimal', help='Output note IDs only.')] = False,
     no_semantic: Annotated[
         bool, typer.Option('--no-semantic', help='Exclude semantic (vector) strategy.')
     ] = False,
@@ -1298,12 +1299,28 @@ async def search_notes(
         console.print('[yellow]No notes found.[/yellow]')
         return
 
-    if minimal:
+    fmt = resolve_list_format(output_format, json_output)
+
+    if fmt == ListFormat.ids:
         for doc in results:
             console.print(str(doc.note_id))
         return
 
-    if json_output:
+    if fmt == ListFormat.line:
+        for doc in results:
+            metadata = doc.metadata or {}
+            title = (
+                metadata.get('name')
+                or metadata.get('title')
+                or metadata.get('filename')
+                or 'Untitled'
+            )
+            score_str = f'{doc.score:.3f}' if doc.score > 0 else '-'
+            # Escape the id brackets so Rich does not parse [uuid] as markup.
+            console.print(f'{score_str}  {title}  \\[{doc.note_id}]')
+        return
+
+    if fmt == ListFormat.json:
         emit_json([r.model_dump() for r in results])
         return
 
