@@ -41,13 +41,13 @@ from memex_hermes_plugin.memex.templates import LAYER_ROUTING_PROMPT_FRAGMENT
 # ---------------------------------------------------------------------------
 
 
-_LAYER_NAMES = ('Episodic', 'Semantic', 'Conceptual', 'Procedural-observations')
+_LAYER_NAMES = ('Episodic', 'Semantic', 'Conceptual', 'Procedural')
 
 _CANONICAL_TOOL_PER_LAYER = {
     'Episodic': 'memex_note_search',
     'Semantic': 'memex_memory_search',
     'Conceptual': 'memex_survey',
-    'Procedural-observations': 'memex_kv_search',
+    'Procedural': 'memex_procedural_search',
 }
 
 
