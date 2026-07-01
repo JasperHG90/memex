@@ -30,7 +30,13 @@ from memex_core.server.auth import (
 )
 
 
-def _build_unit(vault_id: str, embedding: list[float] | None = None):
+def _build_unit(
+    vault_id: str,
+    embedding: list[float] | None = None,
+    *,
+    created_at=None,
+    event_date=None,
+):
     """ORM-shape namespace that ``build_memory_unit_dto`` can serialize."""
     return SimpleNamespace(
         id=uuid4(),
@@ -41,7 +47,8 @@ def _build_unit(vault_id: str, embedding: list[float] | None = None):
         fact_type='world',
         status='active',
         mentioned_at=None,
-        event_date=None,
+        event_date=event_date,
+        created_at=created_at,
         occurred_start=None,
         occurred_end=None,
         unit_metadata={},
@@ -105,6 +112,25 @@ class TestGetMemoryUnitsByIdsEndpoint:
         )
         assert resp.status_code == 200
         assert resp.json()[0]['embedding'] is None
+
+    def test_created_at_and_event_date_serialized(self, client_with_stubbed_api) -> None:
+        """build_memory_unit_dto surfaces the ORM row's created_at + event_date."""
+        from datetime import datetime, timezone
+
+        client, mock_api, vault_id, _ = client_with_stubbed_api
+        created = datetime(2026, 6, 30, 18, 5, tzinfo=timezone.utc)
+        event = datetime(2026, 5, 24, tzinfo=timezone.utc)
+        mock_api.get_memory_units_by_ids = AsyncMock(
+            return_value=[_build_unit(vault_id, created_at=created, event_date=event)]
+        )
+        resp = client.post(
+            '/api/v1/memories/by-ids',
+            json={'unit_ids': [str(uuid4())], 'vault_id': vault_id},
+        )
+        assert resp.status_code == 200, resp.text
+        body = resp.json()[0]
+        assert datetime.fromisoformat(body['created_at']) == created
+        assert datetime.fromisoformat(body['event_date']) == event
 
     def test_include_vectors_true_populates_embedding(self, client_with_stubbed_api) -> None:
         client, mock_api, vault_id, _ = client_with_stubbed_api

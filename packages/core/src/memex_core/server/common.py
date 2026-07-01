@@ -356,6 +356,8 @@ def build_memory_unit_dto(
         mentioned_at=unit.mentioned_at or getattr(unit, 'event_date', None),
         occurred_start=unit.occurred_start,
         occurred_end=unit.occurred_end,
+        created_at=getattr(unit, 'created_at', None),
+        event_date=getattr(unit, 'event_date', None),
         vault_id=unit.vault_id,
         metadata=unit.unit_metadata,
         score=getattr(unit, 'score', None),

@@ -1365,13 +1365,16 @@ def compute_staleness(
     Priority: CONTESTED > confidence-based STALE > time-based (FRESH / AGING / STALE).
 
     Date fallback chain (resolved in ``_build_memory_unit_model``):
-        1. ``event_date`` — only present on the SQL model (MemoryUnit), not on
-           MemoryUnitDTO. Will be None when the DTO comes from the HTTP API.
-        2. ``mentioned_at`` — set on observations; for world facts the server's
+        1. ``mentioned_at`` — set on observations; for world facts the server's
            ``build_memory_unit_dto`` copies ``event_date`` into this field as a
            fallback (see ``memex_core.server.common``), so it is normally
            populated even for world facts.
-        3. ``occurred_start`` — set on events with a specific occurrence time.
+        2. ``occurred_start`` — set on events with a specific occurrence time.
+
+    ``event_date`` is surfaced on the DTO for output but is deliberately NOT the
+    head of this chain: ``mentioned_at`` already carries the event_date fallback,
+    and anchoring on the raw event_date would shift staleness for units whose
+    ``mentioned_at`` differs from it.
 
     If none of these dates are available (all None), staleness falls back to
     confidence alone: >= 0.7 → AGING, < 0.5 → STALE. This avoids penalising
@@ -1493,6 +1496,8 @@ def _build_memory_unit_model(
         'intent_class': getattr(res, 'intent_class', 'durable'),
         'risk_class': getattr(res, 'risk_class', 'none'),
         'exploration': bool(unit_metadata.get('exploration', False)),
+        'created_at': getattr(res, 'created_at', None),
+        'event_date': getattr(res, 'event_date', None),
     }
 
     links_raw = unit_metadata.get('links', [])
@@ -1506,16 +1511,16 @@ def _build_memory_unit_model(
     base_kwargs['links'] = contradiction_links
 
     # Staleness date fallback chain — see compute_staleness docstring for semantics.
-    # event_date: only on SQL model (None on DTO from HTTP API)
     # mentioned_at: observations; also backfilled from event_date for world facts
-    # occurred_start: events with a specific occurrence time
-    event_date = (
-        getattr(res, 'event_date', None)
-        or getattr(res, 'mentioned_at', None)
-        or getattr(res, 'occurred_start', None)
-    )
+    #   (see build_memory_unit_dto), so it already carries the event_date anchor.
+    # occurred_start: events with a specific occurrence time.
+    # NB: res.event_date is now surfaced on the DTO for output, but is deliberately
+    # NOT the head of this chain — feeding it in would shift the staleness anchor
+    # for units whose mentioned_at differs from event_date, changing behavior
+    # product-wide. mentioned_at-first preserves the prior effective behavior.
+    staleness_anchor = getattr(res, 'mentioned_at', None) or getattr(res, 'occurred_start', None)
     base_kwargs['staleness'] = compute_staleness(
-        event_date=event_date,
+        event_date=staleness_anchor,
         confidence=base_kwargs['confidence'],
         superseded_by=getattr(res, 'superseded_by', None) or [],
         links=links_raw,
@@ -2118,6 +2123,8 @@ async def memex_note_search(
                         tags=metadata.get('tags', []),
                         source_uri=metadata.get('source_uri'),
                         has_assets=metadata.get('has_assets', False),
+                        created_at=metadata.get('created_at'),
+                        publish_date=metadata.get('publish_date'),
                         related_notes=related_notes,
                         links=links,
                     )
@@ -2372,6 +2379,8 @@ async def memex_get_notes_metadata(
                     vault_name=meta.get('vault_name'),
                     tags=meta.get('tags', []),
                     has_assets=meta.get('has_assets', False),
+                    created_at=meta.get('created_at'),
+                    publish_date=meta.get('publish_date'),
                 )
             )
 

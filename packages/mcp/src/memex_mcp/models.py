@@ -137,6 +137,8 @@ class McpMemoryUnitBase(BaseModel):
     intent_class: str = 'durable'
     risk_class: str = 'none'
     exploration: bool = False
+    created_at: datetime | None = None
+    event_date: datetime | None = None
 
     @field_validator('tags', mode='before')
     @classmethod
@@ -218,6 +220,8 @@ class McpNoteSearchResult(BaseModel):
     tags: list[str] = []
     source_uri: str | None = None
     has_assets: bool = False
+    created_at: datetime | None = None
+    publish_date: datetime | None = None
     related_notes: list[McpRelatedNote] = Field(default_factory=list)
     links: list[McpMemoryLink] = Field(default_factory=list)
     previously_returned: bool = False
@@ -272,6 +276,8 @@ class McpNoteMetadata(BaseModel):
     vault_name: str | None = None
     tags: list[str] = []
     has_assets: bool = False
+    created_at: datetime | None = None
+    publish_date: datetime | None = None
 
 
 class McpNode(BaseModel):

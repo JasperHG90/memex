@@ -633,6 +633,11 @@ class NoteService:
 
                 metadata = dict(metadata)
                 metadata['has_assets'] = bool(doc.assets)
+                # created_at is always set (row creation time); the publish_date
+                # column wins when present but preserves any page_index value.
+                metadata['created_at'] = doc.created_at.isoformat() if doc.created_at else None
+                if doc.publish_date:
+                    metadata['publish_date'] = doc.publish_date.isoformat()
                 metadata.setdefault('vault_id', str(doc.vault_id))
                 vault = await session.get(Vault, doc.vault_id)
                 if vault:
@@ -739,6 +744,11 @@ class NoteService:
                     continue
                 metadata = dict(metadata)
                 metadata['has_assets'] = bool(doc.assets)
+                # created_at is always set (row creation time); the publish_date
+                # column wins when present but preserves any page_index value.
+                metadata['created_at'] = doc.created_at.isoformat() if doc.created_at else None
+                if doc.publish_date:
+                    metadata['publish_date'] = doc.publish_date.isoformat()
                 metadata.setdefault('vault_id', str(doc.vault_id))
                 vault_name = vault_map.get(doc.vault_id)
                 if vault_name:

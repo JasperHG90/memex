@@ -428,6 +428,9 @@ class TestNoteSearchEngine:
             ['Specific unique content for metadata passthrough test.'],
             doc_metadata=meta,
         )
+        pub = datetime(2024, 3, 15, tzinfo=timezone.utc)
+        doc.publish_date = pub
+        session.add(doc)
         await session.commit()
 
         request = NoteSearchRequest(
@@ -441,6 +444,9 @@ class TestNoteSearchEngine:
         assert doc_result is not None
         assert doc_result.metadata.get('source') == 'test'
         assert doc_result.metadata.get('name') == 'My Research Note'
+        # Timestamps for recency ranking without a follow-up metadata lookup.
+        assert doc_result.metadata.get('created_at') is not None
+        assert doc_result.metadata.get('publish_date') == pub.isoformat()
 
     async def test_graph_with_entity_alias(
         self, session: AsyncSession, search_engine, embedder

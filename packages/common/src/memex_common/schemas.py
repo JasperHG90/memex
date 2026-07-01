@@ -510,6 +510,13 @@ class MemoryUnitBase(VaultMixin):
     occurred_end: dt.datetime | None = Field(
         default=None, description='The end datetime of when the fact/event occurred.'
     )
+    created_at: dt.datetime | None = Field(
+        default=None, description='When the memory unit was captured (row creation time).'
+    )
+    event_date: dt.datetime | None = Field(
+        default=None,
+        description='The date when the memory unit was created or is semantically relevant.',
+    )
 
 
 class SupersessionInfo(BaseModel):

@@ -814,6 +814,12 @@ class NoteSearchEngine:
                 for key in ('description', 'tags', 'publish_date', 'source_uri'):
                     if key in pi_meta and pi_meta[key]:
                         metadata.setdefault(key, pi_meta[key])
+            # Authoritative timestamps from the note row so callers can rank by
+            # recency without a follow-up metadata lookup. The note column wins
+            # over any publish_date carried in page_index metadata.
+            metadata['created_at'] = doc.created_at.isoformat() if doc.created_at else None
+            if doc.publish_date:
+                metadata['publish_date'] = doc.publish_date.isoformat()
             metadata.setdefault('has_assets', bool(doc.assets))
             metadata['vault_id'] = str(doc.vault_id)
 
