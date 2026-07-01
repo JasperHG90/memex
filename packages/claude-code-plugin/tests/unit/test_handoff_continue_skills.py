@@ -172,14 +172,12 @@ def test_learnings_mandates_note_for_insights() -> None:
     constraint_zone = body[body.index('insight_must_be_a_note') :]
     for wrong_home in ('handoff', 'memex_kv_put', 'memex_case_submit'):
         assert wrong_home in constraint_zone, (
-            f'the non-substitution rule must explicitly reject {wrong_home!r} as an '
-            "insight's home"
+            f"the non-substitution rule must explicitly reject {wrong_home!r} as an insight's home"
         )
 
     # A completion gate: zero notes after finding insights == mis-routed.
     assert re.search(r'zero\b[^\n]*memex_add_note', body), (
-        '/learnings must include a verify gate flagging zero-notes-after-insights as '
-        'a mis-route'
+        '/learnings must include a verify gate flagging zero-notes-after-insights as a mis-route'
     )
 
 
@@ -187,9 +185,7 @@ def test_learnings_forbids_cross_plane_double_write() -> None:
     """The note-mandate must NOT license writing the SAME learning to two planes
     (e.g. a how-to as both a case AND a note — the #1 documented mistake)."""
     body = _read_skill('learnings')
-    assert 'NOT also a note' in body, (
-        '/learnings must state a how-to is a case and NOT also a note'
-    )
+    assert 'NOT also a note' in body, '/learnings must state a how-to is a case and NOT also a note'
     assert 'two planes' in body, '/learnings must forbid one learning on two planes'
 
 
@@ -215,7 +211,9 @@ def test_correct_uses_limit_not_top_k() -> None:
     body = _read_skill('correct')
     # No call form passing top_k= (a clarifying "(NOT top_k)" mention is fine).
     assert not re.search(r'top_k\s*=', body), '/correct must not pass the non-existent top_k= param'
-    assert re.search(r'limit\s*=\s*30', body), '/correct must use limit=30 for the wide candidate set'
+    assert re.search(r'limit\s*=\s*30', body), (
+        '/correct must use limit=30 for the wide candidate set'
+    )
 
 
 @pytest.mark.parametrize('name', ['recall', 'correct'])

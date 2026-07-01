@@ -47,8 +47,7 @@ async def _indexes(conn, names: tuple[str, ...]) -> set[str]:
     rows = (
         await conn.execute(
             text(
-                'SELECT relname FROM pg_class WHERE relname = ANY(:names) '
-                "AND relkind::text = 'i'"
+                "SELECT relname FROM pg_class WHERE relname = ANY(:names) AND relkind::text = 'i'"
             ),
             {'names': list(names)},
         )

@@ -154,9 +154,7 @@ def test_active_vault_falls_back_to_agent(mock_memex: MockMemex, temp_git_repo: 
     assert result.stdout.strip() == 'agent-vault'
 
 
-def test_missing_memex_cli_emits_install_diagnostic(
-    mock_memex: MockMemex, tmp_path: Path
-) -> None:
+def test_missing_memex_cli_emits_install_diagnostic(mock_memex: MockMemex, tmp_path: Path) -> None:
     """When `memex` is not on PATH, the resolver must emit CLEAR install
     instructions — not the old misleading "server unreachable" — and stub
     memex() so sourcing still succeeds.
