@@ -83,7 +83,7 @@ from memex_mcp.models import (
 )
 from memex_common.procedural_schemas import (
     CaseSubmit,
-    ProceduralEntryCreate,
+    ProceduralEntryDTO,
     ProceduralSearchRequest,
 )
 from memex_common.templates import TemplateRegistry, BUILTIN_PROMPTS_DIR
@@ -4618,7 +4618,7 @@ async def memex_get_diagnostics_summary(
 # --- Procedural plane  ---
 
 
-def _dto_to_mcp_entry(dto: ProceduralEntryCreate) -> McpProceduralEntry:
+def _dto_to_mcp_entry(dto: ProceduralEntryDTO) -> McpProceduralEntry:
     """Convert a MemexAPI ProceduralEntryDTO to the MCP-facing shape.
 
     The DTO is the cross-package envelope; the MCP model is the
@@ -4652,10 +4652,10 @@ def _dto_to_mcp_entry(dto: ProceduralEntryCreate) -> McpProceduralEntry:
         updated_at=dto.updated_at,
         sources=[
             McpProceduralSource(
-                note_id=s.note_id,
-                memory_unit_id=s.memory_unit_id,
+                entry_id=s.source_entry_id,
+                note_id=s.source_note_id,
+                memory_unit_id=s.source_memory_unit_id,
                 role=str(s.role),
-                excerpt=s.excerpt,
             )
             for s in dto.sources
         ],

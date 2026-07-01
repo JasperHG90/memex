@@ -32,6 +32,7 @@ from memex_common.procedural_schemas import (
     ProceduralSearchHit,
     ProceduralSearchRequest,
     ProceduralSearchResponse,
+    ProceduralSourceDTO,
 )
 
 
@@ -56,6 +57,7 @@ def _make_entry_dto(
     body: str = 'Step 1: ... Step 2: ...',
     trigger: str | None = None,
     status: str = 'published',
+    sources: list[ProceduralSourceDTO] | None = None,
 ) -> ProceduralEntryDTO:
     """Build a fully-populated ProceduralEntryDTO for projection tests.
 
@@ -86,7 +88,7 @@ def _make_entry_dto(
         published_at=None,
         created_at=dt.datetime.now(dt.timezone.utc),
         updated_at=dt.datetime.now(dt.timezone.utc),
-        sources=[],
+        sources=sources if sources is not None else [],
         pins=[],
     )
 
@@ -198,6 +200,84 @@ async def test_mcp_get_by_identity_returns_null_on_miss(mock_api, mock_config, m
     # result surfaces as empty content. Assert the tool didn't crash
     # and didn't fall through to a search call.
     assert not mock_api.procedural_search.await_count
+
+
+# ---------------------------------------------------------------------------
+# memex_procedural_get — source projection (source_note_id → note_id)
+# ---------------------------------------------------------------------------
+
+
+async def test_mcp_get_projects_sources(mock_api, mock_config, mcp_client):
+    """``get`` / ``get_by_identity`` are the ONLY reads that populate
+    ``.sources``; ``search`` leaves it ``[]``. The projection must map the
+    DTO's ``source_note_id`` / ``source_memory_unit_id`` onto the MCP
+    source's ``note_id`` / ``memory_unit_id``.
+
+    A previous bug read ``s.note_id`` / ``s.memory_unit_id`` / ``s.excerpt``
+    off the ``ProceduralSourceDTO`` — none of which exist on it — so every
+    entry with a provenance edge (i.e. every real derived procedure)
+    crashed with ``'ProceduralSourceDTO' object has no attribute
+    'note_id'``. The bug hid because every projection test built the entry
+    with ``sources=[]``, the one shape that skips the comprehension.
+    """
+    from uuid import uuid4
+
+    note_id, mu_id, proc_id, entry_id = uuid4(), uuid4(), uuid4(), uuid4()
+    dto = _make_entry_dto(
+        entry_id=entry_id,
+        sources=[
+            ProceduralSourceDTO(
+                id=uuid4(),
+                entry_id=entry_id,
+                source_note_id=note_id,
+                role='provenance',
+                created_at=dt.datetime.now(dt.timezone.utc),
+            ),
+            ProceduralSourceDTO(
+                id=uuid4(),
+                entry_id=entry_id,
+                source_memory_unit_id=mu_id,
+                role='evidence',
+                created_at=dt.datetime.now(dt.timezone.utc),
+            ),
+            # A strategy's backing-procedure edge carries ONLY
+            # source_entry_id — the shape the CLI renders as "procedure"
+            # and the MCP boundary used to drop (a null-pointer source).
+            ProceduralSourceDTO(
+                id=uuid4(),
+                entry_id=entry_id,
+                source_entry_id=proc_id,
+                role='provenance',
+                created_at=dt.datetime.now(dt.timezone.utc),
+            ),
+        ],
+    )
+
+    mock_api.procedural_get = AsyncMock(return_value=dto)
+
+    result = await mcp_client.call_tool(
+        'memex_procedural_get',
+        {'entry_id': str(entry_id)},
+    )
+
+    mock_api.procedural_get.assert_awaited_once()
+    # A single-model return is wrapped under a ``result`` key by FastMCP.
+    parsed = (result.structured_content or {}).get('result', {})
+    sources = parsed.get('sources', [])
+    assert len(sources) == 3
+    assert sources[0]['note_id'] == str(note_id)
+    assert sources[0]['entry_id'] is None
+    assert sources[0]['memory_unit_id'] is None
+    assert sources[0]['role'] == 'provenance'
+    assert sources[1]['memory_unit_id'] == str(mu_id)
+    assert sources[1]['note_id'] is None
+    assert sources[1]['entry_id'] is None
+    assert sources[1]['role'] == 'evidence'
+    # The strategy→procedure edge surfaces its target, not a dangling null.
+    assert sources[2]['entry_id'] == str(proc_id)
+    assert sources[2]['note_id'] is None
+    assert sources[2]['memory_unit_id'] is None
+    assert sources[2]['role'] == 'provenance'
 
 
 # ---------------------------------------------------------------------------

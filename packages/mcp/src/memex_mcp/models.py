@@ -472,14 +472,20 @@ class McpSurveyResult(BaseModel):
 
 
 class McpProceduralSource(BaseModel):
-    """Source pointer on an procedural entry."""
+    """Source pointer on an procedural entry.
+
+    Exactly one pointer is set (DB CHECK): ``entry_id`` for a strategy's
+    backing procedure, ``note_id`` for a case, ``memory_unit_id`` for a
+    fact. Mirrors the DTO's ``source_entry_id`` / ``source_note_id`` /
+    ``source_memory_unit_id``.
+    """
 
     model_config = {'extra': 'forbid'}
 
+    entry_id: UUID | None = None
     note_id: UUID | None = None
     memory_unit_id: UUID | None = None
     role: str
-    excerpt: str | None = None
 
 
 class McpProceduralPin(BaseModel):
